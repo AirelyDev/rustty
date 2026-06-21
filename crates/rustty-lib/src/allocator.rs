@@ -1,0 +1,558 @@
+//! PORT NOTE: Ports ghostty `src/lib/allocator.zig`.
+//!
+//! This file defines the C allocator ABI (`VTable`, `Allocator`) used by the C
+//! libghostty (libgvt) APIs, plus the bridge to/from the Zig allocator
+//! interface. In rustty the "Zig allocator interface" is modeled by the
+//! `ZigAllocator` trait below (alloc/resize/remap/free over `*mut u8` +
+//! `Alignment`), so we preserve the SAME vtable/ABI semantics exactly: the
+//! extern `VTable` and `Allocator` structs keep their C layout (`#[repr(C)]`),
+//! the function-pointer signatures match `callconv(.c)`, and `from_zig`/`zig`
+//! round-trip a Zig allocator through the C struct, byte-identical in layout.
+
+use std::ffi::c_void;
+
+/// Convenience functions
+pub mod convenience;
+
+/// PORT NOTE: `std.mem.Alignment` — an enum whose integer value is the
+/// log2 of the alignment. Crossing the C boundary it is a `u8`
+/// (`@intFromEnum`/`@enumFromInt`). We model it as a transparent `u8`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Alignment(pub u8);
+
+impl Alignment {
+    pub fn from_byte_units(n: usize) -> Alignment {
+        debug_assert!(n.is_power_of_two());
+        Alignment(n.trailing_zeros() as u8)
+    }
+
+    pub fn to_byte_units(self) -> usize {
+        1usize << self.0
+    }
+}
+
+/// PORT NOTE: The Rust embodiment of a Zig `[]u8` slice — a `(ptr, len)` pair
+/// with NO Rust aliasing/borrow guarantees (exactly like Zig). We use this
+/// instead of `&mut [u8]` in the allocator interface so that freeing/realloc'ing
+/// the underlying memory does not deallocate behind a live, "strongly
+/// protected" Rust reference (which is Undefined Behavior under Stacked
+/// Borrows). This matches Zig's `memory: []u8` byte-for-byte.
+#[derive(Debug, Clone, Copy)]
+pub struct ZigSlice {
+    pub ptr: *mut u8,
+    pub len: usize,
+}
+
+impl ZigSlice {
+    pub fn new(ptr: *mut u8, len: usize) -> ZigSlice {
+        ZigSlice { ptr, len }
+    }
+}
+
+/// PORT NOTE: The Zig allocator interface (`std.mem.Allocator`) modeled as a
+/// Rust trait. `ptr` (the Zig allocator's context) is `self`; the four methods
+/// mirror `std.mem.Allocator.VTable`. `ret_addr`/`ra` is the return address
+/// hint (unused by most allocators), preserved for ABI fidelity.
+pub trait ZigAllocator {
+    /// `alloc(ctx, len, alignment, ret_addr) ?[*]u8`
+    fn alloc(&self, len: usize, alignment: Alignment, ra: usize) -> *mut u8;
+    /// `resize(ctx, memory, alignment, new_len, ret_addr) bool`
+    fn resize(&self, memory: ZigSlice, alignment: Alignment, new_len: usize, ra: usize) -> bool;
+    /// `remap(ctx, memory, alignment, new_len, ret_addr) ?[*]u8`
+    fn remap(
+        &self,
+        memory: ZigSlice,
+        alignment: Alignment,
+        new_len: usize,
+        ra: usize,
+    ) -> *mut u8;
+    /// `free(ctx, memory, alignment, ret_addr) void`
+    fn free(&self, memory: ZigSlice, alignment: Alignment, ra: usize);
+}
+
+/// PORT NOTE: The Rust embodiment of a `*const std.mem.Allocator` value — a
+/// stable holder for the fat `&dyn ZigAllocator` pointer that the C `Allocator`
+/// stores (by thin pointer) in `ctx`. `from_zig` takes `&ZigAllocatorRef`; the
+/// ref must remain pointer-stable for the lifetime of the resulting
+/// `Allocator`, exactly mirroring the reference's pointer-stability contract.
+pub struct ZigAllocatorRef<'a> {
+    inner: &'a dyn ZigAllocator,
+}
+
+impl<'a> ZigAllocatorRef<'a> {
+    pub fn new(inner: &'a dyn ZigAllocator) -> ZigAllocatorRef<'a> {
+        ZigAllocatorRef { inner }
+    }
+}
+
+/// The VTable required by the C interface.
+/// C: RusttyAllocatorVtable
+#[repr(C)]
+pub struct VTable {
+    pub alloc: extern "C" fn(*mut c_void, len: usize, alignment: u8, ret_addr: usize) -> *mut u8,
+    pub resize: extern "C" fn(
+        *mut c_void,
+        memory: *mut u8,
+        memory_len: usize,
+        alignment: u8,
+        new_len: usize,
+        ret_addr: usize,
+    ) -> bool,
+    pub remap: extern "C" fn(
+        *mut c_void,
+        memory: *mut u8,
+        memory_len: usize,
+        alignment: u8,
+        new_len: usize,
+        ret_addr: usize,
+    ) -> *mut u8,
+    pub free: extern "C" fn(
+        *mut c_void,
+        memory: *mut u8,
+        memory_len: usize,
+        alignment: u8,
+        ret_addr: usize,
+    ),
+}
+
+/// Returns an allocator to use for the given possibly-null C allocator,
+/// ensuring some allocator is always returned.
+///
+/// PORT NOTE: The reference selects libc / wasm / SMP allocators based on
+/// comptime build flags. In rustty the default backend is the global Rust
+/// allocator (`GlobalZigAllocator`), which serves the same role: a single,
+/// always-available process allocator. A non-null `c_alloc` is honored exactly
+/// as the reference (`c_alloc.zig()`).
+pub fn default(c_alloc_: Option<&Allocator>) -> Box<dyn ZigAllocator> {
+    // If we're given an allocator, use it.
+    if let Some(c_alloc) = c_alloc_ {
+        return Box::new(c_alloc.zig());
+    }
+
+    // Tests always use the test allocator so we can detect leaks.
+    // (rustty: Miri performs leak detection; the global allocator is used.)
+
+    // If we have libc, use that. We prefer libc if we have it because
+    // its generally fast but also lets the embedder easily override
+    // malloc/free with custom allocators like mimalloc or something.
+
+    // Wasm
+
+    // No libc, use the preferred allocator for releases which is the
+    // Zig SMP allocator.
+    Box::new(GlobalZigAllocator)
+}
+
+/// The Allocator interface for custom memory allocation strategies
+/// within C librustty APIs.
+///
+/// This -- purposely -- matches the Zig allocator interface. We do this
+/// for two reasons: (1) Zig's allocator interface is well proven in
+/// the real world to be flexible and useful, and (2) it allows us to
+/// easily convert C allocators to Zig allocators and vice versa, since
+/// we're written in Zig.
+///
+/// C: RusttyAllocator
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Allocator {
+    pub ctx: *mut c_void,
+    pub vtable: *const VTable,
+}
+
+impl Allocator {
+    /// Create a C allocator from a Zig allocator. This requires that
+    /// the Zig allocator be pointer-stable for the lifetime of the
+    /// C allocator.
+    ///
+    /// PORT NOTE: The reference stores `@ptrCast(@constCast(zig_alloc))` — a
+    /// thin pointer to a `*const std.mem.Allocator` (a `{ptr, vtable}` pair) —
+    /// in `ctx`. The Rust equivalent of `std.mem.Allocator` is `&dyn
+    /// ZigAllocator`, which is itself a fat (two-word) pointer that does not fit
+    /// in a single `ctx` word. So `ctx` points at the fat pointer's storage:
+    /// the caller passes a `&ZigAllocatorRef` holding that fat pointer (the
+    /// moral `*const std.mem.Allocator`), and it must outlive this `Allocator`.
+    pub fn from_zig(zig_alloc: &ZigAllocatorRef) -> Allocator {
+        Allocator {
+            ctx: zig_alloc as *const ZigAllocatorRef as *mut c_void,
+            vtable: &ZIG_ALLOCATOR_VTABLE,
+        }
+    }
+
+    /// Create a Zig allocator from this C allocator. This requires
+    /// a pointer to a Zig allocator vtable that we can populate with
+    /// our callbacks.
+    pub fn zig(&self) -> CAllocatorAsZig {
+        CAllocatorAsZig {
+            // self.ptr = @ptrCast(@constCast(self))
+            ctx: self as *const Allocator as *mut Allocator,
+        }
+    }
+}
+
+/// PORT NOTE: The Zig allocator obtained from `Allocator.zig()`. Its `ptr` is
+/// the `Allocator` itself; its vtable (`zig_vtable`) forwards each call to the
+/// C `vtable`. This is the Rust embodiment of `std.mem.Allocator{ .ptr = self,
+/// .vtable = &zig_vtable }`.
+pub struct CAllocatorAsZig {
+    ctx: *mut Allocator,
+}
+
+impl CAllocatorAsZig {
+    /// PORT NOTE: convenience mirroring Zig's `alloc.alloc(u8, n)` — allocate
+    /// `n` bytes with byte (1) alignment as a slice. Returns null ptr on
+    /// failure (Zig returns `error.OutOfMemory`).
+    pub fn alloc_bytes(&self, n: usize) -> *mut u8 {
+        self.alloc(n, Alignment(0), 0)
+    }
+}
+
+impl ZigAllocator for CAllocatorAsZig {
+    fn alloc(&self, len: usize, alignment: Alignment, ra: usize) -> *mut u8 {
+        // const self: *Allocator = @ptrCast(@alignCast(ctx));
+        let s: &Allocator = unsafe { &*self.ctx };
+        unsafe {
+            ((*s.vtable).alloc)(
+                s.ctx,
+                len,
+                alignment.0, // @intFromEnum(alignment)
+                ra,
+            )
+        }
+    }
+
+    fn resize(&self, old_mem: ZigSlice, alignment: Alignment, new_len: usize, ra: usize) -> bool {
+        let s: &Allocator = unsafe { &*self.ctx };
+        unsafe {
+            ((*s.vtable).resize)(
+                s.ctx,
+                old_mem.ptr,
+                old_mem.len,
+                alignment.0, // @intFromEnum(alignment)
+                new_len,
+                ra,
+            )
+        }
+    }
+
+    fn remap(
+        &self,
+        old_mem: ZigSlice,
+        alignment: Alignment,
+        new_len: usize,
+        ra: usize,
+    ) -> *mut u8 {
+        let s: &Allocator = unsafe { &*self.ctx };
+        unsafe {
+            ((*s.vtable).remap)(
+                s.ctx,
+                old_mem.ptr,
+                old_mem.len,
+                alignment.0, // @intFromEnum(alignment)
+                new_len,
+                ra,
+            )
+        }
+    }
+
+    fn free(&self, old_mem: ZigSlice, alignment: Alignment, ra: usize) {
+        let s: &Allocator = unsafe { &*self.ctx };
+        unsafe {
+            ((*s.vtable).free)(
+                s.ctx,
+                old_mem.ptr,
+                old_mem.len,
+                alignment.0, // @intFromEnum(alignment)
+                ra,
+            )
+        }
+    }
+}
+
+/// vtable for the Zig allocator interface to map our extern
+/// allocator to Zig's allocator interface.
+///
+/// PORT NOTE: In the reference this is `Allocator.zig_vtable`, a
+/// `std.mem.Allocator.VTable`. In rustty the mapping is provided by the
+/// `impl ZigAllocator for CAllocatorAsZig` above (the moral equivalent of the
+/// four `zig_vtable` callbacks), so no separate static is required.
+
+/// An allocator implementation that wraps a Zig allocator so that
+/// it can be exposed to C.
+///
+/// PORT NOTE: `ctx` is a `*const dyn ZigAllocator` (the Zig allocator passed to
+/// `from_zig`). Each callback reconstitutes the trait object and forwards.
+static ZIG_ALLOCATOR_VTABLE: VTable = VTable {
+    alloc: zig_allocator_alloc,
+    resize: zig_allocator_resize,
+    remap: zig_allocator_remap,
+    free: zig_allocator_free,
+};
+
+extern "C" fn zig_allocator_alloc(
+    ctx: *mut c_void,
+    len: usize,
+    alignment: u8,
+    ra: usize,
+) -> *mut u8 {
+    // const zig_alloc: *const std.mem.Allocator = @ptrCast(@alignCast(ctx));
+    let zig_alloc: &dyn ZigAllocator = unsafe { (*(ctx as *const ZigAllocatorRef)).inner };
+    zig_alloc.alloc(
+        len,
+        Alignment(alignment), // @enumFromInt(alignment)
+        ra,
+    )
+}
+
+extern "C" fn zig_allocator_resize(
+    ctx: *mut c_void,
+    memory: *mut u8,
+    memory_len: usize,
+    alignment: u8,
+    new_len: usize,
+    ra: usize,
+) -> bool {
+    let zig_alloc: &dyn ZigAllocator = unsafe { (*(ctx as *const ZigAllocatorRef)).inner };
+    let mem = ZigSlice::new(memory, memory_len);
+    zig_alloc.resize(
+        mem, // memory[0..memory_len]
+        Alignment(alignment), // @enumFromInt(alignment)
+        new_len,
+        ra,
+    )
+}
+
+extern "C" fn zig_allocator_remap(
+    ctx: *mut c_void,
+    memory: *mut u8,
+    memory_len: usize,
+    alignment: u8,
+    new_len: usize,
+    ra: usize,
+) -> *mut u8 {
+    let zig_alloc: &dyn ZigAllocator = unsafe { (*(ctx as *const ZigAllocatorRef)).inner };
+    let mem = ZigSlice::new(memory, memory_len);
+    zig_alloc.remap(
+        mem, // memory[0..memory_len]
+        Alignment(alignment), // @enumFromInt(alignment)
+        new_len,
+        ra,
+    )
+}
+
+extern "C" fn zig_allocator_free(
+    ctx: *mut c_void,
+    memory: *mut u8,
+    memory_len: usize,
+    alignment: u8,
+    ra: usize,
+) {
+    let zig_alloc: &dyn ZigAllocator = unsafe { (*(ctx as *const ZigAllocatorRef)).inner };
+    let mem = ZigSlice::new(memory, memory_len);
+    zig_alloc.free(
+        mem, // memory[0..memory_len]
+        Alignment(alignment), // @enumFromInt(alignment)
+        ra,
+    )
+}
+
+/// PORT NOTE: The default process allocator backed by Rust's global allocator.
+/// This is the rustty analog of `std.heap.c_allocator`/`smp_allocator`: a
+/// single, always-available allocator. Each allocation stores nothing extra;
+/// callers pass the original `(ptr, len, alignment)` back on free, exactly like
+/// the Zig allocator contract (and like libc-via-Zig in the reference).
+pub struct GlobalZigAllocator;
+
+impl GlobalZigAllocator {
+    fn layout(len: usize, alignment: Alignment) -> std::alloc::Layout {
+        std::alloc::Layout::from_size_align(len, alignment.to_byte_units()).unwrap()
+    }
+}
+
+impl ZigAllocator for GlobalZigAllocator {
+    fn alloc(&self, len: usize, alignment: Alignment, _ra: usize) -> *mut u8 {
+        if len == 0 {
+            // Match Zig: a zero-length alloc returns a valid, aligned,
+            // dereference-free pointer (the alignment itself).
+            return alignment.to_byte_units() as *mut u8;
+        }
+        let layout = Self::layout(len, alignment);
+        unsafe { std::alloc::alloc(layout) }
+    }
+
+    fn resize(&self, memory: ZigSlice, _alignment: Alignment, new_len: usize, _ra: usize) -> bool {
+        // In-place resize: only succeed when shrinking-or-equal, matching a
+        // conservative allocator that cannot grow in place.
+        new_len <= memory.len
+    }
+
+    fn remap(
+        &self,
+        memory: ZigSlice,
+        alignment: Alignment,
+        new_len: usize,
+        _ra: usize,
+    ) -> *mut u8 {
+        if memory.len == 0 {
+            return self.alloc(new_len, alignment, _ra);
+        }
+        let old_layout = Self::layout(memory.len, alignment);
+        unsafe { std::alloc::realloc(memory.ptr, old_layout, new_len) }
+    }
+
+    fn free(&self, memory: ZigSlice, alignment: Alignment, _ra: usize) {
+        if memory.len == 0 {
+            return;
+        }
+        let layout = Self::layout(memory.len, alignment);
+        unsafe { std::alloc::dealloc(memory.ptr, layout) }
+    }
+}
+
+/// PORT NOTE: A fixed-buffer allocator mirroring `std.heap.FixedBufferAllocator`,
+/// used by the "fba allocator" test. Hands out aligned slices from a fixed
+/// backing buffer; `free`/`resize` are no-ops except for the last allocation,
+/// which is the behavior the test relies upon (alloc then free the tail).
+pub struct FixedBufferAllocator {
+    buf: *mut u8,
+    cap: usize,
+    end_index: std::cell::Cell<usize>,
+}
+
+impl FixedBufferAllocator {
+    pub fn init(buf: &mut [u8]) -> FixedBufferAllocator {
+        FixedBufferAllocator {
+            buf: buf.as_mut_ptr(),
+            cap: buf.len(),
+            end_index: std::cell::Cell::new(0),
+        }
+    }
+}
+
+impl ZigAllocator for FixedBufferAllocator {
+    fn alloc(&self, len: usize, alignment: Alignment, _ra: usize) -> *mut u8 {
+        let align = alignment.to_byte_units();
+        let start = self.end_index.get();
+        // PORT NOTE: compute the alignment adjustment relative to the buffer
+        // base, then derive the result pointer from `self.buf` via `.add` so it
+        // keeps provenance from the backing buffer (no usize->ptr round-trip).
+        let base = self.buf as usize + start;
+        let aligned = (base + align - 1) / align * align;
+        let adjust = aligned - (self.buf as usize);
+        let new_end = adjust + len;
+        if new_end > self.cap {
+            return std::ptr::null_mut();
+        }
+        self.end_index.set(new_end);
+        unsafe { self.buf.add(adjust) }
+    }
+
+    fn resize(&self, memory: ZigSlice, _alignment: Alignment, new_len: usize, _ra: usize) -> bool {
+        let is_last = (memory.ptr as usize + memory.len)
+            == (self.buf as usize + self.end_index.get());
+        if !is_last {
+            return new_len <= memory.len;
+        }
+        let new_end = (memory.ptr as usize - self.buf as usize) + new_len;
+        if new_end > self.cap {
+            return false;
+        }
+        self.end_index.set(new_end);
+        true
+    }
+
+    fn remap(
+        &self,
+        memory: ZigSlice,
+        alignment: Alignment,
+        new_len: usize,
+        ra: usize,
+    ) -> *mut u8 {
+        if self.resize(memory, alignment, new_len, ra) {
+            memory.ptr
+        } else {
+            std::ptr::null_mut()
+        }
+    }
+
+    fn free(&self, memory: ZigSlice, _alignment: Alignment, _ra: usize) {
+        let is_last = (memory.ptr as usize + memory.len)
+            == (self.buf as usize + self.end_index.get());
+        if is_last {
+            self.end_index.set(self.end_index.get() - memory.len);
+        }
+    }
+}
+
+/// PORT NOTE: A process-static `ZigAllocatorRef` wrapping the global allocator,
+/// so `c_allocator()` can return a pointer-stable `Allocator` exactly like the
+/// reference's `const c_allocator`. `GlobalZigAllocator` is a zero-sized type
+/// with no interior state, so sharing the static across threads is sound — we
+/// wrap it to assert `Sync` (the global allocator is itself thread-safe).
+static GLOBAL_ZIG_ALLOCATOR: GlobalZigAllocator = GlobalZigAllocator;
+
+struct SyncAllocatorRef(ZigAllocatorRef<'static>);
+// SAFETY: the wrapped allocator (GlobalZigAllocator) is a stateless ZST whose
+// methods only touch the (thread-safe) global allocator.
+unsafe impl Sync for SyncAllocatorRef {}
+
+static C_ALLOCATOR_REF: SyncAllocatorRef = SyncAllocatorRef(ZigAllocatorRef {
+    inner: &GLOBAL_ZIG_ALLOCATOR,
+});
+
+/// libc Allocator, requires linking libc
+///
+/// PORT NOTE: `c_allocator: Allocator = .fromZig(&std.heap.c_allocator)`. In
+/// rustty the backing allocator is the global Rust allocator held in a process
+/// static (`C_ALLOCATOR_REF`), so the returned `Allocator` is pointer-stable
+/// for the whole program, matching the reference's `const`. Used by the
+/// "c allocator" test.
+pub fn c_allocator() -> Allocator {
+    Allocator::from_zig(&C_ALLOCATOR_REF.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn c_allocator() {
+        // PORT NOTE: The reference skips this test without libc
+        // (`return error.SkipZigTest`). rustty always has the global allocator
+        // backing `c_allocator`, so the test runs. We build the backend on the
+        // stack so its pointer stays stable for the Allocator's lifetime.
+        let backend = GlobalZigAllocator;
+        let backend_ref = ZigAllocatorRef::new(&backend);
+        let c_alloc = Allocator::from_zig(&backend_ref);
+
+        let alloc = c_alloc.zig();
+        let ptr = alloc.alloc_bytes(10);
+        assert!(!ptr.is_null());
+        let str_len = 10usize;
+        // defer alloc.free(str);
+        let mem = ZigSlice::new(ptr, str_len);
+        assert_eq!(10, mem.len);
+        alloc.free(mem, Alignment(0), 0);
+    }
+
+    #[test]
+    fn fba_allocator() {
+        let mut buf: [u8; 1024] = [0; 1024];
+        let fba = FixedBufferAllocator::init(&mut buf);
+        let zig_alloc = fba;
+
+        // Convert the Zig allocator to a C interface
+        let zig_alloc_ref = ZigAllocatorRef::new(&zig_alloc);
+        let c_alloc: Allocator = Allocator::from_zig(&zig_alloc_ref);
+
+        // Convert back to Zig so we can test it.
+        let alloc = c_alloc.zig();
+        let ptr = alloc.alloc_bytes(10);
+        assert!(!ptr.is_null());
+        let str_len = 10usize;
+        // defer alloc.free(str);
+        let mem = ZigSlice::new(ptr, str_len);
+        assert_eq!(10, mem.len);
+        alloc.free(mem, Alignment(0), 0);
+    }
+}
