@@ -1,0 +1,316 @@
+#!/usr/bin/env python3
+"""
+check_baseline_regression.py — GATE G8 (no perf/mem/size/startup regression) [R5]
+
+DoP id:  G8  (DEFINITION_OF_PARITY §1, "Perf / memory / size / startup not worse
+              than BASELINE.json")
+Reads:   .port/phase-0/baseline/BASELINE.json  (frozen Phase-0 reference metrics)
+         a METRICS file (the candidate rustty measurement; --metrics PATH)
+Pass:    for every metric in both files, rustty is within tolerance of baseline.
+
+Metric model:
+  BASELINE.json carries:
+    * benchmarks[]: each {id, metric, throughput_MiB_per_s | <metric-key>, median_s}
+        - throughput metrics: HIGHER is better (regression = lower)
+        - time metrics (median_s, *_s): LOWER is better (regression = higher)
+    * binary_sizes_bytes{}: {label: {bytes}}  (LOWER-or-equal is the fence;
+        default 0% tolerance for size per DoP)
+  The METRICS file (produced by the future rustty bench/size run) uses the SAME
+  shape: {"benchmarks": [...], "binary_sizes_bytes": {...}, "memory": {...},
+          "startup": {...}}. Only metrics present in BOTH files are compared
+  (a metric absent from the candidate is reported as NOT-MEASURED, never green).
+
+Tolerances (BASELINE.json has no `tol` field, so these documented defaults apply,
+overridable via --tol-time/--tol-rss/--tol-size; DoP: 0% for size, small band
+for time/RSS):
+    size:    0%   (a larger artifact is an immediate regression)
+    time:    +7%  (median wall noise band on the M-series host)
+    throughput: -7%
+    rss:     +7%
+    startup: +10%
+A regression is reported as  REGRESS <metric>: baseline=<x> now=<y> (+z%).
+
+MODES:
+  default (progress): if --metrics is omitted OR the file is absent, the gate is
+    in progress mode: it prints the baseline it WOULD compare against and exits 0
+    (no candidate metrics yet => nothing can regress). It NEVER fabricates a green
+    pass for a real regression.
+  --metrics PATH: compare the candidate file vs baseline; RED on any regression.
+  --strict: same comparison; additionally RED if the candidate is MISSING any
+    baseline benchmark id or size label (no silent drop of a measured axis).
+  --self-test: built-in flip proof.
+"""
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _gatelib as G  # noqa: E402
+
+DEFAULTS = {
+    "size": 0.0,        # fraction; 0 => no growth allowed
+    "time": 0.07,
+    "throughput": 0.07,
+    "rss": 0.07,
+    "startup": 0.10,
+}
+
+# benchmark metric keys whose direction is "higher is better"
+HIGHER_BETTER = {"throughput_MiB_per_s", "throughput", "ops_per_s", "clones_per_s"}
+# keys whose direction is "lower is better"
+LOWER_BETTER = {"median_s", "min_s", "mean_s", "ns_per_op", "seconds", "wall_s"}
+
+
+def bench_index(obj):
+    """{id: (metric_key, value, direction)} for a benchmarks[] list."""
+    out = {}
+    for b in obj.get("benchmarks", []) or []:
+        bid = b.get("id")
+        if bid is None:
+            continue
+        mkey = b.get("metric")
+        # pick the value: prefer the named metric key, else median_s
+        val = None
+        direction = None
+        if mkey and mkey in b:
+            val = b[mkey]
+            direction = "higher" if mkey in HIGHER_BETTER else "lower"
+        elif "median_s" in b:
+            val = b["median_s"]
+            mkey = "median_s"
+            direction = "lower"
+        if val is None:
+            continue
+        out[bid] = (mkey, float(val), direction)
+    return out
+
+
+def size_index(obj):
+    """{label: bytes} from binary_sizes_bytes."""
+    out = {}
+    for label, info in (obj.get("binary_sizes_bytes", {}) or {}).items():
+        if isinstance(info, dict):
+            b = info.get("bytes")
+        else:
+            b = info
+        if isinstance(b, (int, float)):
+            out[label] = float(b)
+    return out
+
+
+def pct(base, now):
+    if base == 0:
+        return 0.0 if now == 0 else float("inf")
+    return (now - base) / base
+
+
+def run(args):
+    G.banner("G8", "no perf/memory/size/startup regression vs BASELINE.json")
+    try:
+        baseline = G.load_baseline()
+    except G.Blocked as b:
+        G.emit(G.BLOCKED_STATE, str(b))
+        return 3
+
+    tol = dict(DEFAULTS)
+    if args.tol_time is not None:
+        tol["time"] = args.tol_time
+        tol["throughput"] = args.tol_time
+    if args.tol_rss is not None:
+        tol["rss"] = args.tol_rss
+    if args.tol_size is not None:
+        tol["size"] = args.tol_size
+
+    base_bench = bench_index(baseline)
+    base_size = size_index(baseline)
+
+    if not args.metrics or not os.path.exists(args.metrics):
+        # progress mode: nothing to compare
+        if args.metrics and not os.path.exists(args.metrics):
+            print(f"NOTE: metrics file '{args.metrics}' not found -> progress mode")
+        else:
+            print("NOTE: no --metrics candidate supplied -> progress mode")
+        print(f"baseline benchmarks: {len(base_bench)}; baseline size labels: {len(base_size)}")
+        for bid, (mkey, val, direction) in list(base_bench.items())[:8]:
+            print(f"  baseline bench {bid}: {mkey}={val} ({direction}-is-better)")
+        for label, b in list(base_size.items())[:8]:
+            print(f"  baseline size  {label}: {int(b)} bytes")
+        G.emit(G.GREEN, "progress mode: no candidate metrics; nothing can regress")
+        return 0
+
+    try:
+        with open(args.metrics, encoding="utf-8") as fh:
+            cand = json.load(fh)
+    except Exception as e:  # noqa: BLE001
+        G.emit(G.BLOCKED_STATE, f"metrics file unreadable: {e}")
+        return 3
+
+    cand_bench = bench_index(cand)
+    cand_size = size_index(cand)
+
+    regressions = []
+    missing = []
+    compared = 0
+
+    # benchmarks
+    for bid, (mkey, bval, direction) in base_bench.items():
+        if bid not in cand_bench:
+            missing.append(("bench", bid))
+            continue
+        _ckey, cval, _cd = cand_bench[bid]
+        compared += 1
+        t = tol["throughput"] if direction == "higher" else tol["time"]
+        if direction == "higher":
+            # regression if cval < bval*(1-t)
+            if cval < bval * (1 - t):
+                regressions.append((f"bench {bid} ({mkey})", bval, cval, pct(bval, cval)))
+        else:
+            # lower is better: regression if cval > bval*(1+t)
+            if cval > bval * (1 + t):
+                regressions.append((f"bench {bid} ({mkey})", bval, cval, pct(bval, cval)))
+
+    # sizes (0% tolerance default)
+    for label, bbytes in base_size.items():
+        if label not in cand_size:
+            missing.append(("size", label))
+            continue
+        cbytes = cand_size[label]
+        compared += 1
+        if cbytes > bbytes * (1 + tol["size"]):
+            regressions.append((f"size {label}", bbytes, cbytes, pct(bbytes, cbytes)))
+
+    # optional memory / startup top-level scalar maps {name: value} (lower better)
+    for axis, key in (("rss", "memory"), ("startup", "startup")):
+        bmap = baseline.get(key)
+        cmap = cand.get(key)
+        if isinstance(bmap, dict) and isinstance(cmap, dict):
+            for name, bv in bmap.items():
+                if not isinstance(bv, (int, float)):
+                    continue
+                if name not in cmap or not isinstance(cmap[name], (int, float)):
+                    missing.append((axis, name))
+                    continue
+                compared += 1
+                cv = cmap[name]
+                if cv > bv * (1 + tol[axis]):
+                    regressions.append((f"{axis} {name}", bv, cv, pct(bv, cv)))
+
+    print(f"compared {compared} metrics; regressions {len(regressions)}; "
+          f"missing-from-candidate {len(missing)}")
+    for (name, bval, cval, p) in regressions:
+        print(f"    REGRESS {name}: baseline={bval} now={cval} ({p*100:+.2f}%)")
+    if args.strict:
+        for (axis, name) in missing:
+            print(f"    NOT-MEASURED {axis}: {name} (present in baseline, absent in candidate)")
+
+    if regressions:
+        G.emit(G.RED, "metric(s) regressed beyond tolerance; see REGRESS above")
+        return 1
+    if args.strict and missing:
+        G.emit(G.RED, "candidate is missing baseline metrics (strict); see NOT-MEASURED")
+        return 1
+    G.emit(G.GREEN, f"no regression beyond tolerance across {compared} metrics")
+    return 0
+
+
+def self_test():
+    import tempfile
+
+    print("=== G8 SELF-TEST ===")
+    tmp = tempfile.mkdtemp(prefix="g8_selftest_")
+    base_path = os.path.join(tmp, "BASELINE.json")
+    baseline = {
+        "benchmarks": [
+            {"id": "terminal-parser/utf8", "metric": "throughput_MiB_per_s",
+             "throughput_MiB_per_s": 250.0, "median_s": 0.25},
+        ],
+        "binary_sizes_bytes": {"libvt.a": {"bytes": 1000000}},
+    }
+    with open(base_path, "w") as fh:
+        json.dump(baseline, fh)
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    # We invoke the *installed* script but point it at a temp baseline via a
+    # small wrapper: copy script+lib into a synthetic phase-0 layout.
+    import shutil
+    gates = os.path.join(tmp, ".port", "tools", "gates")
+    bdir = os.path.join(tmp, ".port", "phase-0", "baseline")
+    os.makedirs(gates)
+    os.makedirs(bdir)
+    shutil.copy(os.path.join(here, "_gatelib.py"), gates)
+    shutil.copy(os.path.join(here, "check_baseline_regression.py"), gates)
+    shutil.copy(base_path, os.path.join(bdir, "BASELINE.json"))
+    script = os.path.join(gates, "check_baseline_regression.py")
+
+    def write_metrics(throughput, size_bytes):
+        p = os.path.join(tmp, "metrics.json")
+        with open(p, "w") as fh:
+            json.dump({
+                "benchmarks": [
+                    {"id": "terminal-parser/utf8", "metric": "throughput_MiB_per_s",
+                     "throughput_MiB_per_s": throughput, "median_s": 0.25},
+                ],
+                "binary_sizes_bytes": {"libvt.a": {"bytes": size_bytes}},
+            }, fh)
+        return p
+
+    def invoke(*extra):
+        return subprocess.run([sys.executable, script, *extra],
+                              capture_output=True, text=True)
+
+    import subprocess
+    ok = True
+
+    # (a) no metrics => progress GREEN
+    r = invoke()
+    print(f"[a] no metrics -> exit {r.returncode} (expect 0)")
+    ok &= (r.returncode == 0)
+
+    # (b) within tolerance (same throughput, same size) => GREEN
+    m = write_metrics(250.0, 1000000)
+    r = invoke("--metrics", m)
+    print(f"[b] equal metrics -> exit {r.returncode} (expect 0)")
+    ok &= (r.returncode == 0)
+
+    # (c) throughput collapses 50% => RED
+    m = write_metrics(125.0, 1000000)
+    r = invoke("--metrics", m)
+    print(f"[c] throughput -50% -> exit {r.returncode} (expect non-zero), REGRESS: {'REGRESS' in r.stdout}")
+    ok &= (r.returncode != 0 and "REGRESS" in r.stdout)
+
+    # (d) size grows 1 byte (0% tol) => RED
+    m = write_metrics(250.0, 1000001)
+    r = invoke("--metrics", m)
+    print(f"[d] size +1B (0% tol) -> exit {r.returncode} (expect non-zero)")
+    ok &= (r.returncode != 0 and "REGRESS" in r.stdout)
+
+    # (e) throughput within 7% band (245) => GREEN
+    m = write_metrics(245.0, 1000000)
+    r = invoke("--metrics", m)
+    print(f"[e] throughput -2% (within band) -> exit {r.returncode} (expect 0)")
+    ok &= (r.returncode == 0)
+
+    shutil.rmtree(tmp, ignore_errors=True)
+    print("SELF-TEST:", "PASS" if ok else "FAIL")
+    return 0 if ok else 1
+
+
+def main():
+    ap = argparse.ArgumentParser(description="G8 — no regression vs BASELINE.json")
+    ap.add_argument("--baseline", help="(ignored; canonical phase-0 baseline path)")
+    ap.add_argument("--metrics", help="candidate rustty metrics JSON (same shape)")
+    ap.add_argument("--measure", help="(reserved; live measurement not run here)")
+    ap.add_argument("--tol-time", type=float, default=None)
+    ap.add_argument("--tol-rss", type=float, default=None)
+    ap.add_argument("--tol-size", type=float, default=None)
+    ap.add_argument("--strict", action="store_true")
+    ap.add_argument("--self-test", action="store_true")
+    args = ap.parse_args()
+    if args.self_test:
+        sys.exit(self_test())
+    sys.exit(run(args))
+
+
+if __name__ == "__main__":
+    main()

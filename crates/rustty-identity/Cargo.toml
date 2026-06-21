@@ -15,4 +15,12 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+# R2 parity profile. When enabled, EVERY identity value flips from the rustty
+# defaults to the reference ghostty values, so the differential harness produces
+# byte-for-byte identical output to the reference oracle (no canonicalization
+# hacks). This feature is for the parity harness ONLY — never enable it for a
+# published rustty artifact. Default profile (feature off) = rustty.
+identity-ghostty = []
+
 [dependencies]

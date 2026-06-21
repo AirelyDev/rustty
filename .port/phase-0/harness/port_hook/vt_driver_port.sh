@@ -24,7 +24,8 @@
 #   `rustty-bench`/a harness crate — point RUSTTY_VT_DRIVER at it (or drop a
 #   binary at bin/vt_driver_port). It MUST be built with `--features
 #   identity-ghostty` so emitted identity tokens match the reference byte-exact.
-#   This wrapper then forwards argv+stdin to it unchanged.
+#   This wrapper then forwards argv+stdin to it unchanged. build_port_driver.sh
+#   produces exactly such a binary from the SAME ref_driver/vt_driver.c source.
 set -euo pipefail
 
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,9 +33,18 @@ HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Resolution order for a real port driver:
 #   1. $RUSTTY_VT_DRIVER (explicit override)
 #   2. bin/vt_driver_port (built artifact, if/when it exists)
+#   3. opt-in auto-build via build_port_driver.sh (RUSTTY_AUTOBUILD_PORT=1), which
+#      compiles vt_driver.c against rustty's librustty-vt.a (identity-ghostty).
 PORT_BIN="${RUSTTY_VT_DRIVER:-}"
 if [ -z "$PORT_BIN" ] && [ -x "$HARNESS_DIR/bin/vt_driver_port" ]; then
   PORT_BIN="$HARNESS_DIR/bin/vt_driver_port"
+fi
+if [ -z "$PORT_BIN" ] && [ "${RUSTTY_AUTOBUILD_PORT:-0}" = "1" ]; then
+  # Best-effort: try to materialize the port driver now. If rustty-vt-c is still
+  # a stub this fails honestly and we fall through to the empty stub (100% gate).
+  if bash "$HARNESS_DIR/build_port_driver.sh" >&2; then
+    [ -x "$HARNESS_DIR/bin/vt_driver_port" ] && PORT_BIN="$HARNESS_DIR/bin/vt_driver_port"
+  fi
 fi
 
 if [ -n "$PORT_BIN" ] && [ -x "$PORT_BIN" ]; then

@@ -1,9 +1,11 @@
 # zlib-sys — vendored C dependency (R3: self-contained, no ghostty dep)
 #
-# This crate will vendor copied C sources from the SAME upstream library the
-# reference uses (zlib compression) and build them standalone via `cc` + `bindgen`.
+# This crate vendors copied C sources from the SAME upstream library the
+# reference uses (zlib 1.3.1 compression) and builds them standalone via `cc`.
 # `links` declares the native lib so Cargo enforces one-version linking.
-# STUB: no C is compiled yet (see build.rs).
+# Phase-1 vendor-proof slice: the `adler32` checksum translation unit is
+# vendored under `vendor/` and compiled here, proving the R3 C-vendoring
+# toolchain end-to-end (copied C -> cc -> FFI -> `cargo test -p zlib-sys`).
 [package]
 name = "zlib-sys"
 version.workspace = true
@@ -21,4 +23,7 @@ workspace = true
 [dependencies]
 
 [build-dependencies]
-# TODO(R3): add `cc` and `bindgen` here when the vendored C source lands.
+# R3: compile the vendored C standalone. `cc` invokes the host C compiler with
+# the reference's portable flags. (bindgen is added when a larger header surface
+# needs auto-generated bindings; the proof slice hand-writes the thin FFI.)
+cc = "1"

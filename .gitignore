@@ -34,3 +34,7 @@
 #         (the ghostty-bench / ghostty-gen binaries + libs/headers).
 /.port/phase-0/baseline/bench-rf-cache/
 /.port/phase-0/baseline/bench-releasefast/
+
+# Python bytecode cache
+__pycache__/
+*.pyc

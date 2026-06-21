@@ -1,0 +1,94 @@
+# rustty CI — mirrors .port/tools/ci.sh so CI is REAL, not a paper gate.
+#
+# Governed by .port/PORT_RULES.md (R1-R5) and
+# .port/phase-0/plan/DEFINITION_OF_PARITY.md. The single source of truth for the
+# check sequence is .port/tools/ci.sh; this workflow only sets up the toolchain
+# and invokes it. Do NOT add checks here that are not in ci.sh (and vice-versa):
+# keeping them in lockstep is what makes "CI is real".
+#
+# R3: NO dependency on the ghostty tree. The reference oracle (the differential
+# harness's vt_driver_ref, which links libghostty-vt.a) is used ONLY by the G4
+# control gate; when it is unavailable in CI, G4 reports PROGRESS (exit 78) and
+# does not fail the build. The rustty crates themselves never link the reference.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: rustty-ci (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS is the primary dev/parity target (CoreText/Metal); Linux is the
+        # GTK/OpenGL target. Both run the identical ci.sh.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout (rustty only — ghostty is NOT a dependency, R3)
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # rust-toolchain.toml pins the channel + rustfmt/clippy components;
+          # this action respects it. Components listed for belt-and-suspenders.
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Set up Python 3 (gate scripts + harness)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Show tool versions
+        run: |
+          rustc --version
+          cargo --version
+          cargo fmt --version
+          cargo clippy --version
+          python3 --version
+
+      # The single entry. ci.sh runs (collecting all failures):
+      #   cargo fmt --check  -> clippy -D warnings -> build --workspace ->
+      #   test --workspace   -> every gate in .port/tools/gates/.
+      # It exits non-zero iff a HARD-FAIL check is red. Progress gates
+      # (G1 check_tests_ported, G2 check_assertions, G3 check_comments_fidelity,
+      # G8 check_baseline_regression, G9 check_parity_surface) print progress and
+      # never fail CI while crates are unported (they self-flip to RED only when
+      # a *claimed-done* crate regresses). G7 (check_acyclic) and G4
+      # (run_differential — the harness control + empty-divergence proof) are
+      # hard-fail. See .port/tools/CI.md for the full classification.
+      #
+      # Oracle-arch note: the differential harness reference driver
+      # (.port/phase-0/harness/bin/vt_driver_ref) is a Mach-O arm64 binary built
+      # against libghostty-vt.a (the external oracle, R3 — never a Cargo dep).
+      # On the macos-latest (arm64) leg it runs and G4's control/empty-divergence
+      # proof is enforced HARD. On a leg where it cannot execute (e.g. Linux, or
+      # x86 macOS), G4 reports BLOCKED -> surfaced as a WARNING, never a fake
+      # green. The macOS leg is the binding differential check.
+      - name: Run rustty CI (.port/tools/ci.sh)
+        run: bash .port/tools/ci.sh
