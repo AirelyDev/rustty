@@ -299,6 +299,39 @@ TEST_ATTR_RE = re.compile(r"#\s*\[\s*(?:[\w:]+::)?test\b")
 SHOULD_PANIC_RE = re.compile(r"#\s*\[\s*should_panic\b")
 FN_NAME_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
 
+
+def name_candidates(name):
+    """Canonical set of valid-Rust-identifier forms a reference test name may
+    legitimately take when ported (DoP §G1: named tests "match name-for-name"
+    via the fixed naming convention). A Rust `fn` cannot contain spaces or most
+    punctuation, so a string-named reference test (e.g. `"module as error set"`)
+    is ported to an identifier slug. This returns every accepted slug form so the
+    name-set diff matches the ported fn to its reference name. Mirrors the same
+    normalization used by check_parity_surface.py — it is NOT a weakening: every
+    reference test must still have a corresponding ported test, and genuine
+    misses/extras are still flagged.
+
+    Accepted forms include the raw name (for already-identifier names like
+    `errorAfter`), camelCase, PascalCase, snake_case, SCREAMING_SNAKE, and the
+    raw token with hyphen/space -> underscore."""
+    out = set()
+    out.add(name)
+    # split on word boundaries (space, hyphen, underscore) and drop empties
+    parts = [p for p in re.split(r"[-_ ]", name) if p]
+    if len(parts) > 1:
+        # camelCase and PascalCase
+        out.add(parts[0] + "".join(p.capitalize() for p in parts[1:]))
+        out.add("".join(p.capitalize() for p in parts))
+        # snake_case (normalize hyphen/space -> underscore)
+        out.add("_".join(p.lower() for p in parts))
+        # SCREAMING_SNAKE
+        out.add("_".join(p.upper() for p in parts))
+    # camelCase/PascalCase -> snake (for ids that arrive already camel)
+    out.add(re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower())
+    # hyphen/space (and any non-identifier run) -> underscore on the raw token
+    out.add(re.sub(r"[^\w]+", "_", name).strip("_"))
+    return {v for v in out if v}
+
 # In-test assertion macros / forms (count, not parse).
 ASSERTION_PATTERNS = [
     re.compile(r"\bassert!\s*\("),

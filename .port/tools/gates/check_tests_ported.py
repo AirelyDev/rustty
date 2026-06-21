@@ -109,8 +109,20 @@ def run(args):
             for fset in ref_names[crate].values():
                 ref_set |= fset
             ported_set = set(ported_names)
-            missing = sorted(ref_set - ported_set)
-            extra = sorted(ported_set - ref_set)
+            # A reference test name is considered ported if ANY of its accepted
+            # identifier slug forms (DoP §G1 naming convention) appears as a
+            # ported fn name. Rust fn names cannot contain spaces/punctuation, so
+            # a string-named reference test is matched against its slug forms.
+            remaining = set(ported_set)
+            for nm in sorted(ref_set):
+                cands = G.name_candidates(nm)
+                hit = cands & ported_set
+                if hit:
+                    remaining -= hit
+                else:
+                    missing.append(nm)
+            missing = sorted(missing)
+            extra = sorted(remaining)
 
         crate_red = False
         if claimed_done:
