@@ -16,3 +16,6 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# Version/identity source-of-truth (R2). identity has no deps so this adds no
+# cycle; BREAK #3 keeps build-config a leaf above only util/identity.
+rustty-identity = { workspace = true }

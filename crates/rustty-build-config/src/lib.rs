@@ -2,7 +2,190 @@
 //!
 //! PORTS: ghostty src/build_config.zig (comptime build config + backend enums defined here, not pulled up).
 //!
-//! PORT STATUS: stub
+//! PORT STATUS: done
 //!
-//! Scaffold only — no real logic yet (R1: every line/comment/test{} ported as
-//! the crate is carved, leaves-first, under the acyclicity gate per R4).
+//! Build options, available at comptime. Used to configure features. This
+//! will reproduce some of the fields from builtin and build_options just
+//! so we can limit the amount of imports we need AND give us the ability
+//! to shim logic and values into them later.
+//!
+//! # BREAK #3 (R4 cycle-break)
+//!
+//! In the reference, `src/build_config.zig` imports the backend enums from
+//! the upper-tier modules: `apprt.Runtime` (`src/apprt/runtime.zig`),
+//! `font.Backend` (`src/font/backend.zig`), and `renderer.Backend`
+//! (`src/renderer/backend.zig`). That makes the build-config module sit
+//! *above* apprt/font/renderer in the import graph, which would create a
+//! cycle once those crates depend on build-config for their feature flags.
+//!
+//! To break the cycle, this crate is the single source of truth: the backend
+//! enums (`Runtime`/app-runtime, `font::Backend`, `renderer::Backend`, plus
+//! the supporting `ReleaseChannel`, `Artifact`, `ExeEntrypoint`, and
+//! `WasmTarget`) are DEFINED HERE, and the `rustty-apprt`, `rustty-font`, and
+//! `rustty-renderer` crates re-export / import them from build-config (not the
+//! reverse). This is a behaviour-preserving structural relocation only (R4):
+//! the enum definitions, their `default()` selection logic, and the
+//! `has*()` capability predicates are ported verbatim from the reference enum
+//! files; their `test {}` blocks remain owned by the apprt/font/renderer
+//! crates per the Phase-0 inventory contract.
+//!
+//! Version/identity are pulled from `rustty-identity` (R2).
+//!
+//! NO dependency on the ghostty tree (R3) — the reference is an external
+//! oracle only. No upward deps (R4).
+
+#![forbid(unsafe_code)]
+
+pub mod apprt;
+pub mod build;
+pub mod font;
+pub mod os;
+pub mod renderer;
+
+pub use build::{Config, ExeEntrypoint, ReleaseChannel};
+pub use os::wasm::Target as WasmTarget;
+
+/// The release channel for this build.
+///
+/// Reference: `release_channel = std.meta.stringToEnum(ReleaseChannel,
+/// @tagName(options.release_channel)).?`. In the reference this is resolved
+/// from the `build_options` generated at `zig build` time; here the release
+/// channel is derived from the identity version string in the same way the
+/// build script computes it (see [`ReleaseChannel::from_version`]): a version
+/// with no pre-release component is `stable`, otherwise `tip`.
+pub const fn release_channel() -> ReleaseChannel {
+    ReleaseChannel::from_version_pre(version_pre())
+}
+
+/// The semantic version of this build.
+///
+/// Reference: `pub const version = options.app_version;`. Pulled from the
+/// `rustty-identity` source-of-truth crate (R2) rather than the Zig
+/// `build_options`.
+pub const VERSION: &str = rustty_identity::VERSION;
+
+/// The semantic version of this build, as a string.
+///
+/// Reference: `pub const version_string = options.app_version_string;`.
+pub const VERSION_STRING: &str = rustty_identity::VERSION;
+
+/// Returns the pre-release component of [`VERSION`], if any.
+///
+/// A semantic version `MAJOR.MINOR.PATCH[-PRE][+BUILD]` has a pre-release
+/// component only when a `-` separator appears before any `+`. This mirrors the
+/// reference channel derivation in `build/Config.zig`'s `addOptions`:
+/// `const pre = self.version.pre orelse break :channel .stable; if (pre.len ==
+/// 0) break :channel .stable; break :channel .tip;`.
+const fn version_pre() -> Option<&'static str> {
+    // `const fn` can't iterate `str` ergonomically, so operate on bytes.
+    let bytes = VERSION.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            // A build-metadata separator ends the search with no pre-release.
+            b'+' => return None,
+            // A pre-release separator: everything after it (up to a `+`) is the
+            // pre-release component. We only need to know whether it's
+            // non-empty, so report a non-empty marker.
+            b'-' => {
+                if i + 1 < bytes.len() {
+                    return Some("pre");
+                }
+                return None;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The artifact we're producing. This can be used to determine if we're
+/// building a standalone exe, an embedded lib, etc.
+///
+/// Reference: `pub const artifact = Artifact.detect();`. The reference detects
+/// this from `builtin.output_mode`/`builtin.target` at comptime; in the Rust
+/// port the artifact is selected by the host crate (the `rustty` binary vs the
+/// `librustty` library vs the wasm module) via [`Artifact`].
+pub const fn artifact() -> Artifact {
+    Artifact::detect()
+}
+
+/// The bundle ID for the app. This is used in many places and is currently
+/// hardcoded here. We could make this configurable in the future if there
+/// is a reason to do so.
+///
+/// On macOS, this must match the App bundle ID. We can get that dynamically
+/// via an API but I don't want to pay the cost of that at runtime.
+///
+/// On GTK, this should match the various folders with resources.
+///
+/// There are many places that don't use this variable so simply swapping
+/// this variable is NOT ENOUGH to change the bundle ID. I just wanted to
+/// avoid it in Zig coe as much as possible.
+//
+// (R2) Pulled from the `rustty-identity` source-of-truth crate; the reference
+// hardcodes `"com.mitchellh.ghostty"` here.
+pub const BUNDLE_ID: &str = rustty_identity::BUNDLE_ID;
+
+/// True if we should have "slow" runtime safety checks. The initial motivation
+/// for this was terminal page/pagelist integrity checks. These were VERY
+/// slow but very thorough. But they made it so slow that the terminal couldn't
+/// be used for real work. We'd love to have an option to run a build with
+/// safety checks that could be used for real work. This lets us do that.
+///
+/// Reference: `std.debug.runtime_safety and switch (builtin.mode) { .Debug =>
+/// true, .ReleaseSafe, .ReleaseSmall, .ReleaseFast => false }`. In Rust,
+/// "runtime safety" maps to debug-assertions: slow safety checks are on only
+/// in debug builds.
+pub const SLOW_RUNTIME_SAFETY: bool = cfg!(debug_assertions);
+
+/// True if runtime safety checks are enabled.
+///
+/// Reference: `switch (builtin.mode) { .Debug, .ReleaseSafe => true,
+/// .ReleaseFast, .ReleaseSmall => false }`. Rust's `debug_assertions` is the
+/// equivalent toggle (on for Debug/ReleaseSafe-style builds, off for optimized
+/// release builds).
+pub const IS_DEBUG: bool = cfg!(debug_assertions);
+
+/// The artifact we're producing. This can be used to determine if we're
+/// building a standalone exe, an embedded lib, etc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Artifact {
+    /// Standalone executable
+    Exe,
+
+    /// Embeddable library
+    Lib,
+
+    /// The WASM-targeted module.
+    WasmModule,
+}
+
+impl Artifact {
+    /// Reference: `Artifact.detect()`.
+    ///
+    /// ```text
+    /// if (builtin.target.cpu.arch.isWasm()) {
+    ///     assert(builtin.output_mode == .Obj);
+    ///     assert(builtin.link_mode == .Static);
+    ///     return .wasm_module;
+    /// }
+    /// return switch (builtin.output_mode) {
+    ///     .Exe => .exe,
+    ///     .Lib => .lib,
+    ///     else => { ... @compileError("unsupported artifact output mode"); },
+    /// };
+    /// ```
+    ///
+    /// In the Rust port the artifact is determined by the compilation target:
+    /// a wasm target produces the wasm module; otherwise the default is the
+    /// standalone executable (the embeddable `lib` is selected by the
+    /// `librustty` crate which overrides this at its own seam).
+    pub const fn detect() -> Artifact {
+        if cfg!(target_arch = "wasm32") {
+            return Artifact::WasmModule;
+        }
+        Artifact::Exe
+    }
+}

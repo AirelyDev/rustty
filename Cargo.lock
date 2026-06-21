@@ -99,6 +99,9 @@ dependencies = [
 [[package]]
 name = "rustty-build-config"
 version = "0.1.0"
+dependencies = [
+ "rustty-identity",
+]
 
 [[package]]
 name = "rustty-cfg-fmt"
