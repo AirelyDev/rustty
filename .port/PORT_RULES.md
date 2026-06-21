@@ -79,3 +79,26 @@ proves uneconomical.
 Never weaken, skip, xfail, or loosen a test or gate. A red gate that cannot be
 made green honestly → STOP and surface a precise blocker. Parity is the
 invariant; performance is the gradient (Goal 2, only after Goal 1 is locked).
+
+## R6 — Memory safety & leak gate: the right tool per job (Miri primary)
+
+Memory safety/UB/leak detection uses the correct tool for each crate, not a
+custom reimplementation:
+
+- **Pure-Rust crates → Miri** (`cargo +nightly miri test -p <crate>`): the PRIMARY
+  gate. Catches UB (use-after-free, OOB, uninit, invalid aliasing) AND leaks —
+  strictly stronger than the reference's `std.testing.allocator` leak check.
+  Installed and validated (`miri 0.1.0`).
+- **Rust↔C FFI crates → AddressSanitizer** (`-Zsanitizer=address`): Miri can't run
+  foreign C, so ASan covers UB across the boundary (simd, font, renderer, config,
+  crash, inspector).
+- **FFI leak detection → Linux CI** (LSan/valgrind): unavailable on arm64 macOS, so
+  deferred to the Linux CI box — documented, never skipped.
+- The tracking-allocator approach is **removed** — it was a wrong default chosen
+  only because Miri appeared uninstalled. Gate runner: `.port/tools/gates/check_leaks.sh`.
+- Miri is slow (interpreted): it gates per-crate completion + CI; fast native
+  `cargo test` gates assertion parity on every porting iteration.
+
+General principle (per user guidance): pick the right, considered tool for each
+job, weigh tradeoffs (OS/arch matters), and escalate only when a tradeoff is a
+genuine judgment call for the user. See memory `right-tool-for-the-job`.

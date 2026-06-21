@@ -147,27 +147,34 @@ rustty's canonical VT output diverges from the reference, and no panic/abort/lea
   or crash repro) is a blocker; the artifact is the precise reproducing input.
   Regression corpus (`fuzz/corpus/vt_diff/`) must replay clean on every run.
 
-### G6 — Leak-free
+### G6 — Memory safety (UB + leaks)
 
-No memory leaks in the test suite (mirrors `std.testing.allocator` in the
-reference, which fails a test on any leak).
+No memory leaks AND no undefined behavior in the test suite. This supersedes the
+reference's `std.testing.allocator` leak check with a strictly stronger tool: Miri
+catches leaks *and* UB (use-after-free, OOB, uninitialized reads, invalid
+aliasing). **Right tool per job** (see PORT_RULES R6):
 
-- **Check (primary):**
-  `cargo test --workspace --features leak-track` with the tracking global
-  allocator installed (counts alloc/free per test; asserts net-zero at test end).
-- **Check (secondary, where applicable):**
-  `cargo +nightly miri test -p rustty-vt -p rustty-datastruct -p rustty-unicode -p rustty-util`
-  (Miri on the pure-Rust, no-FFI crates; FFI crates are excluded because Miri
-  cannot cross the C boundary — those rely on the tracking allocator + ASan).
+- **Pure-Rust crates → Miri (PRIMARY):**
+  `cargo +nightly miri test -p <crate>` — catches UB + leaks. Applies to
+  rustty-util, build-config, identity, datastruct, unicode, lib, global,
+  render-types, cfg-fmt, args, terminfo, vt, vt-c, input, core, apprt-api, cli,
+  termio, bench, synthetic (everything not in the FFI set).
+- **Rust↔C FFI crates → AddressSanitizer:**
   `RUSTFLAGS="-Zsanitizer=address" cargo +nightly test -p <ffi-crate> --target <host>`
-  for crates with C deps (freetype/harfbuzz/oniguruma/etc., per R3).
-- **Pass condition:** all of the above exit 0 with zero leak reports / zero ASan
-  errors / zero Miri UB diagnostics. Any leak is a blocker.
-- **Note (today):** `cargo miri` is **not installed** on this machine. The gate
-  requires `rustup component add miri` (nightly) before it can run; until then the
-  Miri sub-gate is **BLOCKED, not waived** — the tracking-allocator sub-gate still
-  runs and must pass. Surface the missing component as a tooling blocker, never as
-  a passed gate.
+  for crates that link C (rustty-simd, font, renderer, config, crash, inspector).
+  Miri cannot execute foreign C, so ASan covers UB across the boundary.
+- **FFI leak detection → Linux CI:** LSan/valgrind do not run on arm64 macOS, so
+  leak checks for the FFI crates are performed on the Linux CI box (LSan/valgrind)
+  — documented, not skipped.
+- **Runner:** `.port/tools/gates/check_leaks.sh --crate <name>` picks the right
+  tool automatically; `--all-done` runs it for every `PORT STATUS: done` crate;
+  `--self-test` proves Miri catches a leak and a UB.
+- **Pass condition:** all selected runs exit 0 with zero leak / zero UB / zero
+  ASan reports. Any leak or UB is a blocker.
+- **Status:** Miri **installed and validated** (`miri 0.1.0`); the tracking-allocator
+  approach has been **removed** (Miri is the correct, stronger tool). Miri runs are
+  slower (interpreted), so they gate per-crate completion + CI, while fast native
+  `cargo test` gates assertion parity on every iteration.
 
 ### G7 — Crate graph acyclic (`cycle_check.py` exit 0)
 
@@ -206,8 +213,10 @@ No regression on the four non-functional axes vs the frozen Phase-0 baseline.
   - **perf:** `ghostty-bench`/`rustty-bench` actions (`codepoint-width`,
     `grapheme-break`, `screen-clone`, `terminal-parser`, `terminal-stream`,
     `is-symbol`, `osc-parser`) — throughput / ns-per-op.
-  - **memory:** peak RSS over a fixed corpus replay + per-test tracking-allocator
-    high-water (from G6 instrumentation).
+  - **memory:** peak RSS over a fixed corpus replay (OS-level `/usr/bin/time -l`
+    max RSS on macOS) + optional heap high-water via a profiling allocator
+    (dhat/jemalloc-stats) when a finer breakdown is needed. (Distinct from the G6
+    correctness gate, which is Miri/ASan, not a perf measurement.)
   - **size:** `librustty-vt.{a,dylib}` and `rustty` binary byte sizes vs the
     reference `libghostty-vt.a` (12,065,920 B) / `.0.1.0.dylib` (5,742,200 B)
     captured in `build-summary.md`.
@@ -255,7 +264,7 @@ topological order in the design spec §5). A crate is "parity-complete" only whe
 | **P-T** (tests ported) | every `test{}` in `<files>` → a Rust test, name-for-name | `check_tests_ported.py --crate <crate>` + `cargo test -p rustty-<crate> -- --list` | per-file ported == contract; count == sum of `test_blocks` over `<files>`; name-set delta empty |
 | **P-A** (assertions) | assertion-for-assertion within each ported test | `check_assertions.py --crate <crate>` | per-test `rust >= ref`; none weakened |
 | **P-C** (comments) | zero comment delta over `<files>` | `fidelity_critic.py --crate <crate>` | per-file delta == 0 |
-| **P-PASS** (green) | the ported tests actually pass + leak-free | `cargo test -p rustty-<crate> --features leak-track` (+ `cargo miri test -p rustty-<crate>` if no-FFI) | exit 0; zero leaks/UB |
+| **P-PASS** (green) | the ported tests actually pass + memory-safe | `cargo test -p rustty-<crate>` (fast, correctness) + `check_leaks.sh --crate rustty-<crate>` (Miri pure-Rust / ASan FFI) | exit 0; zero leaks/UB |
 | **P-DIFF** (differential) | crate's behavior matches oracle on its corpus slice | crate-scoped harness run (vt/config/input/font/render/terminfo slices) | zero diffs |
 | **P-FUZZ** (where input-driven) | differential fuzz target for the crate clean | `cargo fuzz run <crate>_diff` | zero artifacts (only for vt, config-parse, input-encode, osc, etc.) |
 | **P-DAG** (acyclic) | the crate adds no new cross-crate runtime cycle | `cycle_check.py` after the crate lands; `cargo build -p rustty-<crate>` | runtime SCC count not increased; Cargo resolves |
@@ -331,7 +340,7 @@ the rename actually took effect), so R2 is itself gated.
 | G3 comments | inventory.json + identity map | `fidelity_critic.py` | per-file delta==0 |
 | G4 differential VT | corpora/cvt + harness | `diff_vt.py` (rustty `--features identity-ghostty`) | zero diffs |
 | G5 differential fuzz | fuzz corpus | `cargo fuzz run vt_diff` | zero new artifacts |
-| G6 leak-free | — | `cargo test --features leak-track` (+ miri/ASan) | zero leaks/UB |
+| G6 memory-safe | — | `check_leaks.sh --all-done` (Miri pure-Rust / ASan FFI) | zero leaks/UB |
 | G7 acyclic | tools/cycle_check.py | `cycle_check.py` (SCC line) + `cargo build` | runtime SCCs==0; Cargo resolves |
 | G8 no-regress | BASELINE.json | `check_baseline.py` | every metric <= baseline*(1+tol) |
 | G9 surface | parity-surface.json | `check_surface.py` + `infocmp` | uncovered set empty |

@@ -1,0 +1,47 @@
+{
+  "phase": 1,
+  "generated_utc": "2026-06-21",
+  "verdict": "GREEN",
+  "gate": {
+    "cargo_build_workspace_green": true,
+    "cargo_test_workspace_green": true,
+    "acyclic_gate_green_real_graph": true,
+    "every_gate_red_on_injection_then_green": true,
+    "no_ghostty_cargo_dep": true,
+    "worktree_isolation_available": true,
+    "gate_result": "GREEN"
+  },
+  "workspace": {
+    "members_total": 43,
+    "parity_crates": 29,
+    "sys_crates": 13,
+    "xtask": 1,
+    "toolchain": "1.93.1",
+    "crate_graph": { "crates": 29, "edges": 93, "cross_crate_cycles": 0 }
+  },
+  "gates_self_test": [
+    { "gate": "G7", "injection": "vt<->vt-c cycle", "clean": 0, "injected": 1, "reverted": 0, "caught": true },
+    { "gate": "G1", "injection": "datastruct done 0/76 tests", "clean": 0, "injected": 1, "reverted": 0, "caught": true },
+    { "gate": "G3", "injection": "util done 8/218 comment lines", "clean": 0, "injected": 1, "reverted": 0, "caught": true },
+    { "gate": "G2", "injection": "args assertions 8->2", "clean": 0, "injected": 1, "reverted": 0, "caught": true },
+    { "gate": "G8", "injection": "-51% throughput / +1 byte size", "clean": 0, "injected": 1, "reverted": 0, "caught": true }
+  ],
+  "sys_vendor_pattern": { "proven_on": "zlib-sys", "method": "cc + bindgen, vendored adler32.c, links=z", "test": "4/4 bit-exact" },
+  "cbindgen": { "header": "include/rustty.h", "prefix": "rustty_", "ghostty_symbols": 0 },
+  "identity_dual_profile": { "default": "rustty", "feature_identity_ghostty": "ghostty", "tests_pass": true },
+  "git": { "commits": ["00c7ede", "33f8ff1"], "tree_clean": true },
+  "deliverables": {
+    "scaffold_summary": "/Users/gael/projects/rustty/.port/phase-1/scaffold-summary.md",
+    "selftest": "/Users/gael/projects/rustty/.port/phase-1/selftest.md",
+    "cbindgen_identity": "/Users/gael/projects/rustty/.port/phase-1/cbindgen-identity.md",
+    "gates_dir": "/Users/gael/projects/rustty/.port/tools/gates/",
+    "ci": "/Users/gael/projects/rustty/.port/tools/ci.sh"
+  },
+  "nonblocking_followups": [
+    "sys build scripts beyond zlib-sys are stubs (per-crate C vendoring in Phase 2)",
+    "G6 leak gate: use tracking global allocator in tests (cargo miri not installed)",
+    "256M corpora goldens committed; consider Git LFS",
+    "cargo metadata --no-deps does not catch cycles; G7 script is the binding check"
+  ],
+  "open_blockers": []
+}
