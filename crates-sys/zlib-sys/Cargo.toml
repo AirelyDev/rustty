@@ -1,0 +1,24 @@
+# zlib-sys — vendored C dependency (R3: self-contained, no ghostty dep)
+#
+# This crate will vendor copied C sources from the SAME upstream library the
+# reference uses (zlib compression) and build them standalone via `cc` + `bindgen`.
+# `links` declares the native lib so Cargo enforces one-version linking.
+# STUB: no C is compiled yet (see build.rs).
+[package]
+name = "zlib-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+links = "z"
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[build-dependencies]
+# TODO(R3): add `cc` and `bindgen` here when the vendored C source lands.

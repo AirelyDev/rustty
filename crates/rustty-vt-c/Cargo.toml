@@ -1,0 +1,25 @@
+# rustty-vt-c — port crate (parity port order)
+#
+# Crate IDENTITY is `rustty-vt-c` (R4). This is NOT the published artifact name; the
+# library/binary artifacts are renamed to the `rustty` product identity later (R2).
+# NO dependency on the ghostty tree (R3) — reference is an external oracle only.
+[package]
+name = "rustty-vt-c"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+# The C ABI layer: a shared lib (cdylib) and static lib (staticlib) for the
+# librustty-vt.{so,dylib,a} outputs, plus rlib so other Rust crates can link it.
+# cbindgen later emits include/rustty.h + rustty/vt/* with rustty_* symbols (R2).
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+rustty-vt = { workspace = true }

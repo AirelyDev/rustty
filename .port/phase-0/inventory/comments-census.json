@@ -1,0 +1,5533 @@
+{
+  "_meta": {
+    "description": "R1 comment-fidelity baseline census of the READ-ONLY ghostty reference. Every comment line in src/**.zig is counted and classified. This is the contract the port's fidelity critic diffs against; no comment may be dropped.",
+    "source_root": "/Users/gael/projects/ghostty/src",
+    "ghostty_pin": "4749c4e93731067049bfbf2e4572061cef2bdd17",
+    "zig_version": "0.15.2",
+    "files_scanned": 512,
+    "files_with_comments": 491,
+    "generator": "census_comments.py",
+    "classes": {
+      "doc-module": "//!  top-level/module doc comment",
+      "doc-decl": "///  declaration doc comment (//// is a plain line comment)",
+      "line": "//   ordinary line comment"
+    },
+    "notes": "`//` inside string literals, char literals, and multiline string content (\\\\...) is NOT counted as a comment. A comment may carry multiple tags (todo_fixme, note, spec, ascii_diagram); tags are non-exclusive overlays, not a partition."
+  },
+  "totals": {
+    "total_comment_lines": 42069,
+    "by_class": {
+      "doc-module": 1006,
+      "doc-decl": 18268,
+      "line": 22795
+    },
+    "total_todo_fixme": 109,
+    "total_note_family": 109,
+    "total_spec_citation": 244,
+    "total_ascii_diagram": 446,
+    "files_with_license_headers": 4
+  },
+  "files_with_license_headers": [
+    "datastruct/comparison.zig",
+    "font/embedded.zig",
+    "font/sprite/draw/branch.zig",
+    "input/keycodes.zig"
+  ],
+  "license_header_details": [
+    {
+      "file": "datastruct/comparison.zig",
+      "matches": [
+        {
+          "line": 2,
+          "text": "// stdlib, distributed under the MIT license, copyright (c) Zig contributors"
+        }
+      ]
+    },
+    {
+      "file": "font/embedded.zig",
+      "matches": [
+        {
+          "line": 6,
+          "text": "//! redistribution and include their license as necessary."
+        }
+      ]
+    },
+    {
+      "file": "font/sprite/draw/branch.zig",
+      "matches": [
+        {
+          "line": 8,
+          "text": "//! NOTE: Kitty is GPL licensed, and its code was not referenced"
+        }
+      ]
+    },
+    {
+      "file": "input/keycodes.zig",
+      "matches": [
+        {
+          "line": 2,
+          "text": "// BSD-style license that can be found in the LICENSE file."
+        }
+      ]
+    }
+  ],
+  "todo_fixme_locations": [
+    {
+      "file": "Command.zig",
+      "line": 288,
+      "text": "// TODO: In the case of having FDs instead of pty, need to set up"
+    },
+    {
+      "file": "Surface.zig",
+      "line": 2096,
+      "text": "// TODO: need to handle when scrolling and the cursor is not"
+    },
+    {
+      "file": "apprt/action.zig",
+      "line": 566,
+      "text": "// TODO: check non-exhaustive enums"
+    },
+    {
+      "file": "apprt/action.zig",
+      "line": 857,
+      "text": "// TODO: check non-non-exhaustive enums"
+    },
+    {
+      "file": "apprt/gtk/class/application.zig",
+      "line": 2679,
+      "text": "// TODO: pass surface ID when we have that"
+    },
+    {
+      "file": "apprt/gtk/class/command_palette.zig",
+      "line": 585,
+      "text": "// TODO: Replace with surface id whenever Ghostty adds one"
+    },
+    {
+      "file": "apprt/gtk/class/global_shortcuts.zig",
+      "line": 179,
+      "text": "// action for now. TODO: remove this restriction"
+    },
+    {
+      "file": "apprt/gtk/class/global_shortcuts.zig",
+      "line": 382,
+      "text": "// TODO: XDG recommends updating the signal subscription if the actual"
+    },
+    {
+      "file": "apprt/gtk/class/surface.zig",
+      "line": 881,
+      "text": "// TODO: pass the surface with the action"
+    },
+    {
+      "file": "apprt/gtk/class/tab.zig",
+      "line": 219,
+      "text": "// TODO: We should make our \"no surfaces\" state more aesthetically"
+    },
+    {
+      "file": "apprt/gtk/class/window.zig",
+      "line": 377,
+      "text": "// TODO: accept the surface that toggled the command palette"
+    },
+    {
+      "file": "apprt/gtk/class/window.zig",
+      "line": 1615,
+      "text": "// TODO: connect close page handler to tab to check for confirmation"
+    },
+    {
+      "file": "apprt/gtk/class/window.zig",
+      "line": 2008,
+      "text": "/// TODO: accept the surface that toggled the command palette as a parameter"
+    },
+    {
+      "file": "apprt/gtk/class/window.zig",
+      "line": 2063,
+      "text": "// TODO: accept the surface that toggled the command palette as a"
+    },
+    {
+      "file": "apprt/gtk/class/window.zig",
+      "line": 2080,
+      "text": "// TODO: accept the surface that toggled the command palette as a"
+    },
+    {
+      "file": "apprt/gtk/key.zig",
+      "line": 534,
+      "text": "// TODO: media keys"
+    },
+    {
+      "file": "apprt/gtk/winproto/x11.zig",
+      "line": 348,
+      "text": "// FIXME: Maybe we should switch to libxcb one day."
+    },
+    {
+      "file": "apprt/surface.zig",
+      "line": 20,
+      "text": "/// TODO: we should change this to a \"WriteReq\" style structure in"
+    },
+    {
+      "file": "build/SharedDeps.zig",
+      "line": 690,
+      "text": "// FIXME: replace with `zxdg_decoration_v1` once GTK merges https://gitlab.gnome.org/GNOME/gtk/-/merge_requests/6398"
+    },
+    {
+      "file": "build/UnicodeTables.zig",
+      "line": 24,
+      "text": "// TODO: x86_64 self-hosted crashes"
+    },
+    {
+      "file": "build/UnicodeTables.zig",
+      "line": 38,
+      "text": "// TODO: x86_64 self-hosted crashes"
+    },
+    {
+      "file": "cli/args.zig",
+      "line": 14,
+      "text": "// TODO:"
+    },
+    {
+      "file": "cli/list_themes.zig",
+      "line": 49,
+      "text": "// TODO: use Unicode-aware comparison"
+    },
+    {
+      "file": "config/Config.zig",
+      "line": 1417,
+      "text": "/// TODO: This can't currently be set!"
+    },
+    {
+      "file": "font/Atlas.zig",
+      "line": 92,
+      "text": "/// TODO: figure out optimal prealloc based on real world usage"
+    },
+    {
+      "file": "font/Collection.zig",
+      "line": 1185,
+      "text": "// TODO(fontmem): test explicit/implicit"
+    },
+    {
+      "file": "font/Collection.zig",
+      "line": 1269,
+      "text": "// TODO: Also test CJK fallback sizing, we don't currently have a CJK test font."
+    },
+    {
+      "file": "font/discovery.zig",
+      "line": 1250,
+      "text": "// FIXME: Disabled for now because SF Pro is not available in CI"
+    },
+    {
+      "file": "font/face/web_canvas.zig",
+      "line": 232,
+      "text": "// TODO: this can't be right"
+    },
+    {
+      "file": "font/main.zig",
+      "line": 47,
+      "text": "// TODO: we need to modify the build config for wasm builds. the issue"
+    },
+    {
+      "file": "font/main.zig",
+      "line": 72,
+      "text": "/// TODO: Add user configuration for this instead of hard-coding it."
+    },
+    {
+      "file": "font/shaper/web_canvas.zig",
+      "line": 82,
+      "text": "// TODO: memory check that cell_buf can fit results"
+    },
+    {
+      "file": "font/sprite/draw/symbols_for_legacy_computing.zig",
+      "line": 739,
+      "text": "// TODO: This doesn't align properly for most cell sizes, fix that."
+    },
+    {
+      "file": "font/sprite/draw/symbols_for_legacy_computing.zig",
+      "line": 779,
+      "text": "// TODO: This doesn't align properly for most cell sizes, fix that."
+    },
+    {
+      "file": "font/sprite/draw/symbols_for_legacy_computing_supplement.zig",
+      "line": 254,
+      "text": "/// TODO: These two characters should be easy, but it's not clear how they're"
+    },
+    {
+      "file": "input/Binding.zig",
+      "line": 102,
+      "text": "// TODO: We should change this parser into a real state machine"
+    },
+    {
+      "file": "input/keycodes.zig",
+      "line": 215,
+      "text": "// TODO(garykac):"
+    },
+    {
+      "file": "input/keycodes.zig",
+      "line": 288,
+      "text": "// TODO(garykac): Verify Mac intl keyboard."
+    },
+    {
+      "file": "input/keycodes.zig",
+      "line": 297,
+      "text": "// TODO(garykac): CapsLock requires special handling for each platform."
+    },
+    {
+      "file": "input/keycodes.zig",
+      "line": 531,
+      "text": "// TODO(garykac): Many XF86 keys have multiple scancodes mapping to them."
+    },
+    {
+      "file": "input/keycodes.zig",
+      "line": 536,
+      "text": "// TODO(garykac): Find appropriate mappings for:"
+    },
+    {
+      "file": "inspector/Inspector.zig",
+      "line": 40,
+      "text": "// TODO: This will have to be recalculated for different screen DPIs."
+    },
+    {
+      "file": "inspector/widgets/termio.zig",
+      "line": 103,
+      "text": "// TODO: Eventually"
+    },
+    {
+      "file": "os/desktop.zig",
+      "line": 60,
+      "text": "// TODO: This should have some logic to detect this. Perhaps std.builtin.subsystem"
+    },
+    {
+      "file": "os/mach.zig",
+      "line": 132,
+      "text": "// TODO: if the next_mmap_addr_hint is within the remapped range, update it"
+    },
+    {
+      "file": "os/mach.zig",
+      "line": 139,
+      "text": "// TODO: if the next_mmap_addr_hint is within the unmapped range, update it"
+    },
+    {
+      "file": "os/shell.zig",
+      "line": 92,
+      "text": "// TODO: Actually use a buffer here"
+    },
+    {
+      "file": "os/shell.zig",
+      "line": 103,
+      "text": "// TODO: This is a very naive implementation and does not really make"
+    },
+    {
+      "file": "pty.zig",
+      "line": 56,
+      "text": "// TODO: This should be removed. This is only temporary until we have"
+    },
+    {
+      "file": "renderer/OpenGL.zig",
+      "line": 173,
+      "text": "// TODO(mitchellh): this does nothing today to allow libghostty"
+    },
+    {
+      "file": "renderer/OpenGL.zig",
+      "line": 212,
+      "text": "// TODO(mitchellh): this does nothing today to allow libghostty"
+    },
+    {
+      "file": "renderer/OpenGL.zig",
+      "line": 232,
+      "text": "// TODO: see threadEnter"
+    },
+    {
+      "file": "renderer/OpenGL.zig",
+      "line": 408,
+      "text": "// TODO: Generate mipmaps for image textures and use"
+    },
+    {
+      "file": "renderer/OpenGL.zig",
+      "line": 413,
+      "text": "// TODO: Separate out background image options, use"
+    },
+    {
+      "file": "renderer/generic.zig",
+      "line": 329,
+      "text": "/// TODO: Make this an optional and only create it"
+    },
+    {
+      "file": "renderer/metal/RenderPass.zig",
+      "line": 158,
+      "text": "// TODO: Maybe in the future add info to the pipeline struct which"
+    },
+    {
+      "file": "renderer/metal/shaders.zig",
+      "line": 232,
+      "text": "/// TODO: Maybe put these in a packed struct, like for OpenGL."
+    },
+    {
+      "file": "renderer/opengl/RenderPass.zig",
+      "line": 61,
+      "text": "/// TODO: Errors are silently ignored in this function, maybe they shouldn't be?"
+    },
+    {
+      "file": "renderer/row.zig",
+      "line": 3,
+      "text": "// TODO: Test neverExtendBg function"
+    },
+    {
+      "file": "renderer/shadertoy.zig",
+      "line": 394,
+      "text": "// TODO: Replace this with an aligned version of Writer.Allocating"
+    },
+    {
+      "file": "renderer/shadertoy.zig",
+      "line": 414,
+      "text": "// TODO: Replace this with an aligned version of Writer.Allocating"
+    },
+    {
+      "file": "simd/vt.zig",
+      "line": 156,
+      "text": "// TODO: many more test cases"
+    },
+    {
+      "file": "simd/vt.zig",
+      "line": 171,
+      "text": "// TODO: many more test cases"
+    },
+    {
+      "file": "surface_mouse.zig",
+      "line": 60,
+      "text": "// TODO: As we unravel mouse state, we can fix this to be more explicit."
+    },
+    {
+      "file": "surface_mouse.zig",
+      "line": 77,
+      "text": "// TODO: This could be updated eventually to be a true transition table if"
+    },
+    {
+      "file": "synthetic/cli.zig",
+      "line": 84,
+      "text": "// TODO: Make this a command line option."
+    },
+    {
+      "file": "terminal/PageList.zig",
+      "line": 951,
+      "text": "/// TODO: docs"
+    },
+    {
+      "file": "terminal/PageList.zig",
+      "line": 5392,
+      "text": "/// TODO: Unit tests."
+    },
+    {
+      "file": "terminal/PageList.zig",
+      "line": 5419,
+      "text": "/// TODO: Unit tests."
+    },
+    {
+      "file": "terminal/Screen.zig",
+      "line": 597,
+      "text": "// TODO: Should we increase the capacity further in this case?"
+    },
+    {
+      "file": "terminal/Screen.zig",
+      "line": 619,
+      "text": "// TODO: Should we increase the capacity further in this case?"
+    },
+    {
+      "file": "terminal/Screen.zig",
+      "line": 1218,
+      "text": "/// TODO: test"
+    },
+    {
+      "file": "terminal/Screen.zig",
+      "line": 2333,
+      "text": "// FIXME: increaseCapacity should not do this."
+    },
+    {
+      "file": "terminal/Screen.zig",
+      "line": 2757,
+      "text": "/// TODO: test this"
+    },
+    {
+      "file": "terminal/SelectionGesture.zig",
+      "line": 805,
+      "text": "// TODO(qwerasd): this can/should probably be refactored, it's a bit"
+    },
+    {
+      "file": "terminal/SelectionGesture.zig",
+      "line": 817,
+      "text": "// TODO: Clamp selection to the screen area, don't"
+    },
+    {
+      "file": "terminal/Tabstops.zig",
+      "line": 127,
+      "text": "// TODO: needs interval to set new tabstops"
+    },
+    {
+      "file": "terminal/Terminal.zig",
+      "line": 710,
+      "text": "// TODO: spacers should use a bgcolor only cell"
+    },
+    {
+      "file": "terminal/Terminal.zig",
+      "line": 713,
+      "text": "// TODO: non-utf8 handling, gr"
+    },
+    {
+      "file": "terminal/Terminal.zig",
+      "line": 795,
+      "text": "// TODO: this case was not handled in the old terminal implementation"
+    },
+    {
+      "file": "terminal/Terminal.zig",
+      "line": 1408,
+      "text": "/// TODO: test"
+    },
+    {
+      "file": "terminal/Terminal.zig",
+      "line": 1413,
+      "text": "/// TODO: test"
+    },
+    {
+      "file": "terminal/Terminal.zig",
+      "line": 1715,
+      "text": "// TODO: Create an optimized version that can scroll N times"
+    },
+    {
+      "file": "terminal/Terminal.zig",
+      "line": 1828,
+      "text": "// TODO(qwerasd): `insertLines` and `deleteLines` are 99% identical,"
+    },
+    {
+      "file": "terminal/Terminal.zig",
+      "line": 2399,
+      "text": "// TODO(qwerasd): This isn't actually correct if you take in to account"
+    },
+    {
+      "file": "terminal/formatter.zig",
+      "line": 796,
+      "text": "/// this formatting. (TODO: A function to do this)"
+    },
+    {
+      "file": "terminal/formatter.zig",
+      "line": 917,
+      "text": "// TODO: if unavailable, we should add to our trailing state"
+    },
+    {
+      "file": "terminal/hash_map.zig",
+      "line": 814,
+      "text": "// TODO: replace with pointer subtraction once supported by zig"
+    },
+    {
+      "file": "terminal/kitty/graphics_storage.zig",
+      "line": 34,
+      "text": "/// TODO: This isn't good enough, it's perfectly legal for programs"
+    },
+    {
+      "file": "terminal/page.zig",
+      "line": 967,
+      "text": "// TODO(qwerasd): verify the assumption that `addWithId`"
+    },
+    {
+      "file": "terminal/parse_table.zig",
+      "line": 358,
+      "text": "// TODO: enable this but it thinks we're in runtime right now"
+    },
+    {
+      "file": "terminal/search/Thread.zig",
+      "line": 33,
+      "text": "// TODO: Some stuff that could be improved:"
+    },
+    {
+      "file": "terminal/stream.zig",
+      "line": 232,
+      "text": "// TODO: Before shipping an ABI-compatible libghostty, verify this."
+    },
+    {
+      "file": "terminal/stream.zig",
+      "line": 942,
+      "text": "// TODO: test"
+    },
+    {
+      "file": "terminal/stream.zig",
+      "line": 963,
+      "text": "// TODO: test"
+    },
+    {
+      "file": "terminal/stream.zig",
+      "line": 1078,
+      "text": "// TODO: test"
+    },
+    {
+      "file": "terminal/stream.zig",
+      "line": 1096,
+      "text": "// TODO: test"
+    },
+    {
+      "file": "terminal/stream.zig",
+      "line": 1341,
+      "text": "// TODO: test"
+    },
+    {
+      "file": "terminal/stream.zig",
+      "line": 1492,
+      "text": "// TODO: test"
+    },
+    {
+      "file": "terminal/stream.zig",
+      "line": 1591,
+      "text": "// TODO: test"
+    },
+    {
+      "file": "terminal/stream.zig",
+      "line": 2086,
+      "text": "// TODO: support slots '-', '.', '/'"
+    },
+    {
+      "file": "terminal/tmux/control.zig",
+      "line": 206,
+      "text": "// TODO(tmuxcc): do this before merge?"
+    },
+    {
+      "file": "terminal/tmux/viewer.zig",
+      "line": 18,
+      "text": "// TODO: A list of TODOs as I think about them."
+    },
+    {
+      "file": "terminal/tmux/viewer.zig",
+      "line": 667,
+      "text": "// TODO: errdefer cleanup"
+    },
+    {
+      "file": "terminal/tmux/viewer.zig",
+      "line": 1149,
+      "text": "// TODO: We need to gracefully handle overflow of our"
+    },
+    {
+      "file": "termio/Exec.zig",
+      "line": 331,
+      "text": "// TODO: support on windows"
+    },
+    {
+      "file": "termio/Termio.zig",
+      "line": 588,
+      "text": "// TODO: fix this"
+    },
+    {
+      "file": "termio/stream_handler.zig",
+      "line": 457,
+      "text": "// TODO"
+    },
+    {
+      "file": "unicode/grapheme.zig",
+      "line": 85,
+      "text": "/// TODO: this is hard to build with newer zig build, so"
+    }
+  ],
+  "per_file": {
+    "App.zig": {
+      "doc-module": 3,
+      "doc-decl": 89,
+      "line": 87,
+      "total": 179,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "Command.zig": {
+      "doc-module": 16,
+      "doc-decl": 58,
+      "line": 84,
+      "total": 158,
+      "todo_fixme": 1,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "Surface.zig": {
+      "doc-module": 11,
+      "doc-decl": 347,
+      "line": 920,
+      "total": 1278,
+      "todo_fixme": 1,
+      "note": 3,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt.zig": {
+      "doc-module": 10,
+      "doc-decl": 4,
+      "line": 0,
+      "total": 14,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/action.zig": {
+      "doc-module": 0,
+      "doc-decl": 191,
+      "line": 51,
+      "total": 242,
+      "todo_fixme": 2,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/embedded.zig": {
+      "doc-module": 5,
+      "doc-decl": 183,
+      "line": 117,
+      "total": 305,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 2,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/App.zig": {
+      "doc-module": 0,
+      "doc-decl": 16,
+      "line": 4,
+      "total": 20,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/Surface.zig": {
+      "doc-module": 0,
+      "doc-decl": 4,
+      "line": 2,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/adw_version.zig": {
+      "doc-module": 0,
+      "doc-decl": 16,
+      "line": 11,
+      "total": 27,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/build/blueprint.zig": {
+      "doc-module": 6,
+      "doc-decl": 0,
+      "line": 4,
+      "total": 10,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/build/gresource.zig": {
+      "doc-module": 5,
+      "doc-decl": 30,
+      "line": 7,
+      "total": 42,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/build/info.zig": {
+      "doc-module": 0,
+      "doc-decl": 3,
+      "line": 0,
+      "total": 3,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/cgroup.zig": {
+      "doc-module": 0,
+      "doc-decl": 4,
+      "line": 6,
+      "total": 10,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class.zig": {
+      "doc-module": 2,
+      "doc-decl": 86,
+      "line": 8,
+      "total": 96,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/application.zig": {
+      "doc-module": 0,
+      "doc-decl": 124,
+      "line": 259,
+      "total": 383,
+      "todo_fixme": 1,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/clipboard_confirmation_dialog.zig": {
+      "doc-module": 0,
+      "doc-decl": 7,
+      "line": 11,
+      "total": 18,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/close_confirmation_dialog.zig": {
+      "doc-module": 0,
+      "doc-decl": 5,
+      "line": 5,
+      "total": 10,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/command_palette.zig": {
+      "doc-module": 0,
+      "doc-decl": 34,
+      "line": 44,
+      "total": 78,
+      "todo_fixme": 1,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/config.zig": {
+      "doc-module": 0,
+      "doc-decl": 23,
+      "line": 2,
+      "total": 25,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/config_errors_dialog.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 5,
+      "total": 5,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/debug_warning.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 0,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/dialog.zig": {
+      "doc-module": 0,
+      "doc-decl": 8,
+      "line": 3,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/global_shortcuts.zig": {
+      "doc-module": 0,
+      "doc-decl": 23,
+      "line": 81,
+      "total": 104,
+      "todo_fixme": 2,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/imgui_widget.zig": {
+      "doc-module": 0,
+      "doc-decl": 42,
+      "line": 44,
+      "total": 86,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/inspector_widget.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 35,
+      "total": 41,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/inspector_window.zig": {
+      "doc-module": 0,
+      "doc-decl": 5,
+      "line": 24,
+      "total": 29,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/key_state_overlay.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 9,
+      "total": 15,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/resize_overlay.zig": {
+      "doc-module": 0,
+      "doc-decl": 25,
+      "line": 18,
+      "total": 43,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/search_overlay.zig": {
+      "doc-module": 0,
+      "doc-decl": 25,
+      "line": 18,
+      "total": 43,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/split_tree.zig": {
+      "doc-module": 0,
+      "doc-decl": 75,
+      "line": 168,
+      "total": 243,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/surface.zig": {
+      "doc-module": 0,
+      "doc-decl": 201,
+      "line": 460,
+      "total": 661,
+      "todo_fixme": 1,
+      "note": 2,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/surface_child_exited.zig": {
+      "doc-module": 0,
+      "doc-decl": 7,
+      "line": 10,
+      "total": 17,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/surface_scrolled_window.zig": {
+      "doc-module": 0,
+      "doc-decl": 4,
+      "line": 8,
+      "total": 12,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/tab.zig": {
+      "doc-module": 0,
+      "doc-decl": 24,
+      "line": 39,
+      "total": 63,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/title_dialog.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 12,
+      "total": 14,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/class/window.zig": {
+      "doc-module": 0,
+      "doc-decl": 70,
+      "line": 231,
+      "total": 301,
+      "todo_fixme": 5,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/ext.zig": {
+      "doc-module": 4,
+      "doc-decl": 8,
+      "line": 1,
+      "total": 13,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/ext/actions.zig": {
+      "doc-module": 0,
+      "doc-decl": 15,
+      "line": 3,
+      "total": 18,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/ext/slice.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 0,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/flatpak.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 1,
+      "total": 1,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/gsettings.zig": {
+      "doc-module": 0,
+      "doc-decl": 10,
+      "line": 0,
+      "total": 10,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/gtk_version.zig": {
+      "doc-module": 0,
+      "doc-decl": 19,
+      "line": 11,
+      "total": 30,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/ipc/DBus.zig": {
+      "doc-module": 1,
+      "doc-decl": 11,
+      "line": 16,
+      "total": 28,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/ipc/new_window.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 18,
+      "total": 18,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/ipc/toggle_quick_terminal.zig": {
+      "doc-module": 0,
+      "doc-decl": 12,
+      "line": 0,
+      "total": 12,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/key.zig": {
+      "doc-module": 0,
+      "doc-decl": 15,
+      "line": 46,
+      "total": 61,
+      "todo_fixme": 1,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/media.zig": {
+      "doc-module": 0,
+      "doc-decl": 16,
+      "line": 16,
+      "total": 32,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/portal.zig": {
+      "doc-module": 0,
+      "doc-decl": 8,
+      "line": 4,
+      "total": 12,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/portal/OpenURI.zig": {
+      "doc-module": 2,
+      "doc-decl": 45,
+      "line": 11,
+      "total": 58,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/post_fork.zig": {
+      "doc-module": 0,
+      "doc-decl": 5,
+      "line": 0,
+      "total": 5,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/pre_exec.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 0,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/weak_ref.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 3,
+      "total": 9,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/winproto.zig": {
+      "doc-module": 0,
+      "doc-decl": 13,
+      "line": 0,
+      "total": 13,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/winproto/BlurRegion.zig": {
+      "doc-module": 0,
+      "doc-decl": 3,
+      "line": 32,
+      "total": 35,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/winproto/noop.zig": {
+      "doc-module": 0,
+      "doc-decl": 3,
+      "line": 0,
+      "total": 3,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/winproto/wayland.zig": {
+      "doc-module": 1,
+      "doc-decl": 16,
+      "line": 18,
+      "total": 35,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/winproto/wayland/Globals.zig": {
+      "doc-module": 0,
+      "doc-decl": 9,
+      "line": 17,
+      "total": 26,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/gtk/winproto/x11.zig": {
+      "doc-module": 1,
+      "doc-decl": 10,
+      "line": 45,
+      "total": 56,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/ipc.zig": {
+      "doc-module": 2,
+      "doc-decl": 20,
+      "line": 23,
+      "total": 45,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/none.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 0,
+      "total": 1,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/runtime.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 5,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/structs.zig": {
+      "doc-module": 0,
+      "doc-decl": 24,
+      "line": 3,
+      "total": 27,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "apprt/surface.zig": {
+      "doc-module": 0,
+      "doc-decl": 51,
+      "line": 7,
+      "total": 58,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "benchmark/Benchmark.zig": {
+      "doc-module": 1,
+      "doc-decl": 27,
+      "line": 17,
+      "total": 45,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "benchmark/CApi.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 0,
+      "total": 1,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "benchmark/CodepointWidth.zig": {
+      "doc-module": 5,
+      "doc-decl": 14,
+      "line": 7,
+      "total": 26,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "benchmark/GraphemeBreak.zig": {
+      "doc-module": 3,
+      "doc-decl": 12,
+      "line": 4,
+      "total": 19,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "benchmark/IsSymbol.zig": {
+      "doc-module": 3,
+      "doc-decl": 10,
+      "line": 4,
+      "total": 17,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "benchmark/OscParser.zig": {
+      "doc-module": 1,
+      "doc-decl": 7,
+      "line": 2,
+      "total": 10,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "benchmark/ScreenClone.zig": {
+      "doc-module": 4,
+      "doc-decl": 16,
+      "line": 19,
+      "total": 39,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "benchmark/TerminalParser.zig": {
+      "doc-module": 1,
+      "doc-decl": 9,
+      "line": 8,
+      "total": 18,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "benchmark/TerminalStream.zig": {
+      "doc-module": 13,
+      "doc-decl": 13,
+      "line": 9,
+      "total": 35,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "benchmark/cli.zig": {
+      "doc-module": 0,
+      "doc-decl": 15,
+      "line": 3,
+      "total": 18,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "benchmark/options.zig": {
+      "doc-module": 1,
+      "doc-decl": 4,
+      "line": 2,
+      "total": 7,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/CombineArchivesStep.zig": {
+      "doc-module": 3,
+      "doc-decl": 5,
+      "line": 3,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/Config.zig": {
+      "doc-module": 0,
+      "doc-decl": 32,
+      "line": 96,
+      "total": 128,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/GhosttyBench.zig": {
+      "doc-module": 1,
+      "doc-decl": 0,
+      "line": 5,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/GhosttyDist.zig": {
+      "doc-module": 0,
+      "doc-decl": 20,
+      "line": 53,
+      "total": 73,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/GhosttyDocs.zig": {
+      "doc-module": 2,
+      "doc-decl": 5,
+      "line": 0,
+      "total": 7,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/GhosttyExe.zig": {
+      "doc-module": 0,
+      "doc-decl": 8,
+      "line": 13,
+      "total": 21,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/GhosttyFrameData.zig": {
+      "doc-module": 2,
+      "doc-decl": 3,
+      "line": 1,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/GhosttyI18n.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 25,
+      "total": 27,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/GhosttyLib.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 29,
+      "total": 31,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/GhosttyLibVt.zig": {
+      "doc-module": 0,
+      "doc-decl": 21,
+      "line": 40,
+      "total": 61,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/GhosttyResources.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 64,
+      "total": 66,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/GhosttyWebdata.zig": {
+      "doc-module": 2,
+      "doc-decl": 0,
+      "line": 0,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/GhosttyXCFramework.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 16,
+      "total": 16,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/GhosttyXcodebuild.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 27,
+      "total": 27,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/GhosttyZig.zig": {
+      "doc-module": 2,
+      "doc-decl": 8,
+      "line": 13,
+      "total": 23,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/GitVersion.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 6,
+      "total": 12,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/HelpStrings.zig": {
+      "doc-module": 0,
+      "doc-decl": 4,
+      "line": 1,
+      "total": 5,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/LibtoolStep.zig": {
+      "doc-module": 2,
+      "doc-decl": 8,
+      "line": 5,
+      "total": 15,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/LipoStep.zig": {
+      "doc-module": 2,
+      "doc-decl": 4,
+      "line": 0,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/MetallibStep.zig": {
+      "doc-module": 0,
+      "doc-decl": 5,
+      "line": 2,
+      "total": 7,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/SharedDeps.zig": {
+      "doc-module": 0,
+      "doc-decl": 7,
+      "line": 105,
+      "total": 112,
+      "todo_fixme": 1,
+      "note": 2,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/UnicodeTables.zig": {
+      "doc-module": 0,
+      "doc-decl": 5,
+      "line": 3,
+      "total": 8,
+      "todo_fixme": 2,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/XCFrameworkStep.zig": {
+      "doc-module": 3,
+      "doc-decl": 7,
+      "line": 3,
+      "total": 13,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/combine_archives.zig": {
+      "doc-module": 10,
+      "doc-decl": 0,
+      "line": 1,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/gtk.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 3,
+      "total": 4,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/main.zig": {
+      "doc-module": 3,
+      "doc-decl": 0,
+      "line": 3,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/uucode_config.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 10,
+      "total": 10,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/wasm_patch_growable_table.zig": {
+      "doc-module": 9,
+      "doc-decl": 17,
+      "line": 45,
+      "total": 71,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/webgen/main_commands.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 4,
+      "total": 4,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/webgen/main_config.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 9,
+      "total": 15,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/xcframework.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 0,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build/zig.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 1,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "build_config.zig": {
+      "doc-module": 4,
+      "doc-decl": 29,
+      "line": 0,
+      "total": 33,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/CommaSplitter.zig": {
+      "doc-module": 18,
+      "doc-decl": 8,
+      "line": 12,
+      "total": 38,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/Pager.zig": {
+      "doc-module": 7,
+      "doc-decl": 7,
+      "line": 4,
+      "total": 18,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/action.zig": {
+      "doc-module": 0,
+      "doc-decl": 21,
+      "line": 5,
+      "total": 26,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/args.zig": {
+      "doc-module": 0,
+      "doc-decl": 78,
+      "line": 113,
+      "total": 191,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/boo.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 19,
+      "total": 25,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/crash_report.zig": {
+      "doc-module": 0,
+      "doc-decl": 7,
+      "line": 3,
+      "total": 10,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/diagnostics.zig": {
+      "doc-module": 0,
+      "doc-decl": 23,
+      "line": 4,
+      "total": 27,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/edit_config.zig": {
+      "doc-module": 0,
+      "doc-decl": 21,
+      "line": 20,
+      "total": 41,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/explain_config.zig": {
+      "doc-module": 0,
+      "doc-decl": 22,
+      "line": 5,
+      "total": 27,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/ghostty.zig": {
+      "doc-module": 0,
+      "doc-decl": 22,
+      "line": 20,
+      "total": 42,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/help.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 3,
+      "total": 9,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/list_actions.zig": {
+      "doc-module": 0,
+      "doc-decl": 10,
+      "line": 0,
+      "total": 10,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/list_colors.zig": {
+      "doc-module": 0,
+      "doc-decl": 9,
+      "line": 15,
+      "total": 24,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/list_fonts.zig": {
+      "doc-module": 0,
+      "doc-decl": 31,
+      "line": 9,
+      "total": 40,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/list_keybinds.zig": {
+      "doc-module": 0,
+      "doc-decl": 23,
+      "line": 29,
+      "total": 52,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/list_themes.zig": {
+      "doc-module": 0,
+      "doc-decl": 41,
+      "line": 8,
+      "total": 49,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "cli/new_window.zig": {
+      "doc-module": 0,
+      "doc-decl": 71,
+      "line": 9,
+      "total": 80,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/show_config.zig": {
+      "doc-module": 0,
+      "doc-decl": 36,
+      "line": 0,
+      "total": 36,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/show_face.zig": {
+      "doc-module": 0,
+      "doc-decl": 27,
+      "line": 9,
+      "total": 36,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 2,
+      "ascii_diagram": 0
+    },
+    "cli/ssh-cache/DiskCache.zig": {
+      "doc-module": 0,
+      "doc-decl": 26,
+      "line": 81,
+      "total": 107,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/ssh-cache/Entry.zig": {
+      "doc-module": 0,
+      "doc-decl": 3,
+      "line": 10,
+      "total": 13,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/ssh.zig": {
+      "doc-module": 0,
+      "doc-decl": 113,
+      "line": 17,
+      "total": 130,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 4,
+      "ascii_diagram": 0
+    },
+    "cli/ssh_cache.zig": {
+      "doc-module": 0,
+      "doc-decl": 43,
+      "line": 48,
+      "total": 91,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/toggle_quick_terminal.zig": {
+      "doc-module": 0,
+      "doc-decl": 21,
+      "line": 0,
+      "total": 21,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/validate_config.zig": {
+      "doc-module": 0,
+      "doc-decl": 12,
+      "line": 1,
+      "total": 13,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "cli/version.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 3,
+      "total": 5,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 2,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/CApi.zig": {
+      "doc-module": 0,
+      "doc-decl": 12,
+      "line": 3,
+      "total": 15,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/ClipboardCodepointMap.zig": {
+      "doc-module": 0,
+      "doc-decl": 14,
+      "line": 2,
+      "total": 16,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/Config.zig": {
+      "doc-module": 0,
+      "doc-decl": 3625,
+      "line": 488,
+      "total": 4113,
+      "todo_fixme": 1,
+      "note": 7,
+      "spec": 21,
+      "ascii_diagram": 3
+    },
+    "config/ErrorList.zig": {
+      "doc-module": 0,
+      "doc-decl": 5,
+      "line": 0,
+      "total": 5,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/RepeatableStringMap.zig": {
+      "doc-module": 0,
+      "doc-decl": 8,
+      "line": 5,
+      "total": 13,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/Wasm.zig": {
+      "doc-module": 0,
+      "doc-decl": 3,
+      "line": 0,
+      "total": 3,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/c_get.zig": {
+      "doc-module": 0,
+      "doc-decl": 10,
+      "line": 5,
+      "total": 15,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/command.zig": {
+      "doc-module": 0,
+      "doc-decl": 43,
+      "line": 9,
+      "total": 52,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/conditional.zig": {
+      "doc-module": 0,
+      "doc-decl": 9,
+      "line": 4,
+      "total": 13,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/edit.zig": {
+      "doc-module": 0,
+      "doc-decl": 18,
+      "line": 14,
+      "total": 32,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/file_load.zig": {
+      "doc-module": 0,
+      "doc-decl": 22,
+      "line": 13,
+      "total": 35,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/formatter.zig": {
+      "doc-module": 0,
+      "doc-decl": 3,
+      "line": 7,
+      "total": 10,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/formatter_file.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 9,
+      "total": 15,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/io.zig": {
+      "doc-module": 0,
+      "doc-decl": 13,
+      "line": 12,
+      "total": 25,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/key.zig": {
+      "doc-module": 0,
+      "doc-decl": 4,
+      "line": 2,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/path.zig": {
+      "doc-module": 0,
+      "doc-decl": 39,
+      "line": 22,
+      "total": 61,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/string.zig": {
+      "doc-module": 0,
+      "doc-decl": 7,
+      "line": 5,
+      "total": 12,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 1
+    },
+    "config/theme.zig": {
+      "doc-module": 0,
+      "doc-decl": 38,
+      "line": 17,
+      "total": 55,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "config/url.zig": {
+      "doc-module": 0,
+      "doc-decl": 23,
+      "line": 38,
+      "total": 61,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "crash/dir.zig": {
+      "doc-module": 0,
+      "doc-decl": 7,
+      "line": 2,
+      "total": 9,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "crash/main.zig": {
+      "doc-module": 3,
+      "doc-decl": 0,
+      "line": 1,
+      "total": 4,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "crash/sentry.zig": {
+      "doc-module": 0,
+      "doc-decl": 26,
+      "line": 64,
+      "total": 90,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "crash/sentry_envelope.zig": {
+      "doc-module": 0,
+      "doc-decl": 81,
+      "line": 31,
+      "total": 112,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "datastruct/array_list_collection.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 2,
+      "total": 4,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "datastruct/blocking_queue.zig": {
+      "doc-module": 2,
+      "doc-decl": 45,
+      "line": 23,
+      "total": 70,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "datastruct/cache_table.zig": {
+      "doc-module": 0,
+      "doc-decl": 58,
+      "line": 10,
+      "total": 68,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "datastruct/circ_buf.zig": {
+      "doc-module": 0,
+      "doc-decl": 32,
+      "line": 89,
+      "total": 121,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "datastruct/comparison.zig": {
+      "doc-module": 0,
+      "doc-decl": 10,
+      "line": 16,
+      "total": 26,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "datastruct/intrusive_linked_list.zig": {
+      "doc-module": 0,
+      "doc-decl": 38,
+      "line": 22,
+      "total": 60,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "datastruct/lru.zig": {
+      "doc-module": 0,
+      "doc-decl": 35,
+      "line": 27,
+      "total": 62,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "datastruct/main.zig": {
+      "doc-module": 2,
+      "doc-decl": 0,
+      "line": 0,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "datastruct/message_data.zig": {
+      "doc-module": 0,
+      "doc-decl": 14,
+      "line": 2,
+      "total": 16,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "datastruct/segmented_pool.zig": {
+      "doc-module": 0,
+      "doc-decl": 15,
+      "line": 8,
+      "total": 23,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "datastruct/split_tree.zig": {
+      "doc-module": 0,
+      "doc-decl": 155,
+      "line": 248,
+      "total": 403,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "extra/bash.zig": {
+      "doc-module": 0,
+      "doc-decl": 11,
+      "line": 2,
+      "total": 13,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "extra/fish.zig": {
+      "doc-module": 1,
+      "doc-decl": 2,
+      "line": 1,
+      "total": 4,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "extra/sublime.zig": {
+      "doc-module": 0,
+      "doc-decl": 3,
+      "line": 0,
+      "total": 3,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "extra/vim.zig": {
+      "doc-module": 0,
+      "doc-decl": 3,
+      "line": 0,
+      "total": 3,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "extra/zsh.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 12,
+      "total": 14,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "fastmem.zig": {
+      "doc-module": 0,
+      "doc-decl": 31,
+      "line": 0,
+      "total": 31,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "file_type.zig": {
+      "doc-module": 0,
+      "doc-decl": 13,
+      "line": 0,
+      "total": 13,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/Atlas.zig": {
+      "doc-module": 15,
+      "doc-decl": 51,
+      "line": 96,
+      "total": 162,
+      "todo_fixme": 1,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/CodepointMap.zig": {
+      "doc-module": 0,
+      "doc-decl": 24,
+      "line": 3,
+      "total": 27,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "font/CodepointResolver.zig": {
+      "doc-module": 11,
+      "doc-decl": 94,
+      "line": 54,
+      "total": 159,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 2,
+      "ascii_diagram": 0
+    },
+    "font/Collection.zig": {
+      "doc-module": 15,
+      "doc-decl": 188,
+      "line": 125,
+      "total": 328,
+      "todo_fixme": 2,
+      "note": 1,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "font/DeferredFace.zig": {
+      "doc-module": 6,
+      "doc-decl": 48,
+      "line": 46,
+      "total": 100,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/Glyph.zig": {
+      "doc-module": 1,
+      "doc-decl": 85,
+      "line": 102,
+      "total": 188,
+      "todo_fixme": 0,
+      "note": 7,
+      "spec": 0,
+      "ascii_diagram": 1
+    },
+    "font/Metrics.zig": {
+      "doc-module": 0,
+      "doc-decl": 125,
+      "line": 111,
+      "total": 236,
+      "todo_fixme": 0,
+      "note": 4,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/SharedGrid.zig": {
+      "doc-module": 18,
+      "doc-decl": 37,
+      "line": 63,
+      "total": 118,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/SharedGridSet.zig": {
+      "doc-module": 9,
+      "doc-decl": 51,
+      "line": 67,
+      "total": 127,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/backend.zig": {
+      "doc-module": 0,
+      "doc-decl": 17,
+      "line": 9,
+      "total": 26,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/discovery.zig": {
+      "doc-module": 0,
+      "doc-decl": 86,
+      "line": 140,
+      "total": 226,
+      "todo_fixme": 1,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/embedded.zig": {
+      "doc-module": 6,
+      "doc-decl": 14,
+      "line": 1,
+      "total": 21,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/face.zig": {
+      "doc-module": 0,
+      "doc-decl": 14,
+      "line": 4,
+      "total": 18,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/face/coretext.zig": {
+      "doc-module": 0,
+      "doc-decl": 49,
+      "line": 172,
+      "total": 221,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "font/face/freetype.zig": {
+      "doc-module": 5,
+      "doc-decl": 43,
+      "line": 225,
+      "total": 273,
+      "todo_fixme": 0,
+      "note": 2,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "font/face/web_canvas.zig": {
+      "doc-module": 0,
+      "doc-decl": 42,
+      "line": 75,
+      "total": 117,
+      "todo_fixme": 1,
+      "note": 1,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "font/glyf_rasterize.zig": {
+      "doc-module": 5,
+      "doc-decl": 89,
+      "line": 52,
+      "total": 146,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 15
+    },
+    "font/glyf_rasterize_png_test.zig": {
+      "doc-module": 0,
+      "doc-decl": 23,
+      "line": 23,
+      "total": 46,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 9
+    },
+    "font/library.zig": {
+      "doc-module": 2,
+      "doc-decl": 3,
+      "line": 2,
+      "total": 7,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/main.zig": {
+      "doc-module": 0,
+      "doc-decl": 7,
+      "line": 7,
+      "total": 14,
+      "todo_fixme": 2,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/nerd_font_attributes.zig": {
+      "doc-module": 5,
+      "doc-decl": 1,
+      "line": 0,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/opentype/glyf.zig": {
+      "doc-module": 0,
+      "doc-decl": 188,
+      "line": 185,
+      "total": 373,
+      "todo_fixme": 0,
+      "note": 2,
+      "spec": 0,
+      "ascii_diagram": 2
+    },
+    "font/opentype/head.zig": {
+      "doc-module": 0,
+      "doc-decl": 96,
+      "line": 0,
+      "total": 96,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/opentype/hhea.zig": {
+      "doc-module": 0,
+      "doc-decl": 32,
+      "line": 0,
+      "total": 32,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/opentype/os2.zig": {
+      "doc-module": 0,
+      "doc-decl": 132,
+      "line": 1,
+      "total": 133,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 4,
+      "ascii_diagram": 0
+    },
+    "font/opentype/post.zig": {
+      "doc-module": 0,
+      "doc-decl": 26,
+      "line": 0,
+      "total": 26,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/opentype/sfnt.zig": {
+      "doc-module": 0,
+      "doc-decl": 52,
+      "line": 4,
+      "total": 56,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/opentype/svg.zig": {
+      "doc-module": 0,
+      "doc-decl": 14,
+      "line": 7,
+      "total": 21,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/shape.zig": {
+      "doc-module": 0,
+      "doc-decl": 29,
+      "line": 4,
+      "total": 33,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/shaper/Cache.zig": {
+      "doc-module": 10,
+      "doc-decl": 8,
+      "line": 5,
+      "total": 23,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/shaper/coretext.zig": {
+      "doc-module": 0,
+      "doc-decl": 46,
+      "line": 370,
+      "total": 416,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 2,
+      "ascii_diagram": 0
+    },
+    "font/shaper/feature.zig": {
+      "doc-module": 0,
+      "doc-decl": 37,
+      "line": 52,
+      "total": 89,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/shaper/harfbuzz.zig": {
+      "doc-module": 0,
+      "doc-decl": 27,
+      "line": 381,
+      "total": 408,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 2,
+      "ascii_diagram": 0
+    },
+    "font/shaper/noop.zig": {
+      "doc-module": 0,
+      "doc-decl": 8,
+      "line": 9,
+      "total": 17,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/shaper/run.zig": {
+      "doc-module": 0,
+      "doc-decl": 28,
+      "line": 100,
+      "total": 128,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/shaper/web_canvas.zig": {
+      "doc-module": 0,
+      "doc-decl": 31,
+      "line": 33,
+      "total": 64,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/sprite.zig": {
+      "doc-module": 0,
+      "doc-decl": 7,
+      "line": 1,
+      "total": 8,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 4,
+      "ascii_diagram": 0
+    },
+    "font/sprite/Face.zig": {
+      "doc-module": 12,
+      "doc-decl": 14,
+      "line": 75,
+      "total": 101,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/sprite/canvas.zig": {
+      "doc-module": 2,
+      "doc-decl": 28,
+      "line": 39,
+      "total": 69,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/sprite/draw/block.zig": {
+      "doc-module": 6,
+      "doc-decl": 0,
+      "line": 33,
+      "total": 39,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 34
+    },
+    "font/sprite/draw/box.zig": {
+      "doc-module": 12,
+      "doc-decl": 2,
+      "line": 217,
+      "total": 231,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 158
+    },
+    "font/sprite/draw/braille.zig": {
+      "doc-module": 23,
+      "doc-decl": 11,
+      "line": 5,
+      "total": 39,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 1
+    },
+    "font/sprite/draw/branch.zig": {
+      "doc-module": 16,
+      "doc-decl": 3,
+      "line": 81,
+      "total": 100,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 2,
+      "ascii_diagram": 0
+    },
+    "font/sprite/draw/common.zig": {
+      "doc-module": 4,
+      "doc-decl": 45,
+      "line": 16,
+      "total": 65,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/sprite/draw/geometric_shapes.zig": {
+      "doc-module": 13,
+      "doc-decl": 3,
+      "line": 17,
+      "total": 33,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 16
+    },
+    "font/sprite/draw/powerline.zig": {
+      "doc-module": 9,
+      "doc-decl": 18,
+      "line": 4,
+      "total": 31,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/sprite/draw/special.zig": {
+      "doc-module": 6,
+      "doc-decl": 0,
+      "line": 64,
+      "total": 70,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "font/sprite/draw/symbols_for_legacy_computing.zig": {
+      "doc-module": 20,
+      "doc-decl": 14,
+      "line": 172,
+      "total": 206,
+      "todo_fixme": 2,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "font/sprite/draw/symbols_for_legacy_computing_supplement.zig": {
+      "doc-module": 48,
+      "doc-decl": 22,
+      "line": 76,
+      "total": 146,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "global.zig": {
+      "doc-module": 0,
+      "doc-decl": 22,
+      "line": 55,
+      "total": 77,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "helpgen.zig": {
+      "doc-module": 3,
+      "doc-decl": 0,
+      "line": 8,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "input.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 2,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "input/Binding.zig": {
+      "doc-module": 2,
+      "doc-decl": 700,
+      "line": 371,
+      "total": 1073,
+      "todo_fixme": 1,
+      "note": 3,
+      "spec": 3,
+      "ascii_diagram": 0
+    },
+    "input/KeymapDarwin.zig": {
+      "doc-module": 0,
+      "doc-decl": 43,
+      "line": 55,
+      "total": 98,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "input/KeymapNoop.zig": {
+      "doc-module": 2,
+      "doc-decl": 0,
+      "line": 0,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "input/Link.zig": {
+      "doc-module": 4,
+      "doc-decl": 24,
+      "line": 0,
+      "total": 28,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "input/command.zig": {
+      "doc-module": 0,
+      "doc-decl": 30,
+      "line": 17,
+      "total": 47,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "input/config.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 0,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "input/function_keys.zig": {
+      "doc-module": 7,
+      "doc-decl": 27,
+      "line": 18,
+      "total": 52,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 3,
+      "ascii_diagram": 0
+    },
+    "input/helpgen_actions.zig": {
+      "doc-module": 3,
+      "doc-decl": 4,
+      "line": 3,
+      "total": 10,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "input/key.zig": {
+      "doc-module": 0,
+      "doc-decl": 98,
+      "line": 43,
+      "total": 141,
+      "todo_fixme": 0,
+      "note": 2,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "input/key_encode.zig": {
+      "doc-module": 0,
+      "doc-decl": 66,
+      "line": 259,
+      "total": 325,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 12,
+      "ascii_diagram": 0
+    },
+    "input/key_mods.zig": {
+      "doc-module": 0,
+      "doc-decl": 62,
+      "line": 51,
+      "total": 113,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "input/keyboard.zig": {
+      "doc-module": 0,
+      "doc-decl": 22,
+      "line": 6,
+      "total": 28,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "input/keycodes.zig": {
+      "doc-module": 0,
+      "doc-decl": 15,
+      "line": 227,
+      "total": 242,
+      "todo_fixme": 5,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "input/kitty.zig": {
+      "doc-module": 0,
+      "doc-decl": 17,
+      "line": 1,
+      "total": 18,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 3,
+      "ascii_diagram": 0
+    },
+    "input/mouse.zig": {
+      "doc-module": 0,
+      "doc-decl": 40,
+      "line": 1,
+      "total": 41,
+      "todo_fixme": 0,
+      "note": 2,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "input/mouse_encode.zig": {
+      "doc-module": 0,
+      "doc-decl": 43,
+      "line": 29,
+      "total": 72,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "input/paste.zig": {
+      "doc-module": 0,
+      "doc-decl": 34,
+      "line": 34,
+      "total": 68,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 5,
+      "ascii_diagram": 0
+    },
+    "inspector/Inspector.zig": {
+      "doc-module": 3,
+      "doc-decl": 8,
+      "line": 14,
+      "total": 25,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "inspector/widgets.zig": {
+      "doc-module": 0,
+      "doc-decl": 13,
+      "line": 17,
+      "total": 30,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "inspector/widgets/key.zig": {
+      "doc-module": 0,
+      "doc-decl": 16,
+      "line": 26,
+      "total": 42,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "inspector/widgets/page.zig": {
+      "doc-module": 0,
+      "doc-decl": 7,
+      "line": 6,
+      "total": 13,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "inspector/widgets/pagelist.zig": {
+      "doc-module": 0,
+      "doc-decl": 3,
+      "line": 4,
+      "total": 7,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "inspector/widgets/renderer.zig": {
+      "doc-module": 0,
+      "doc-decl": 3,
+      "line": 5,
+      "total": 8,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "inspector/widgets/screen.zig": {
+      "doc-module": 0,
+      "doc-decl": 17,
+      "line": 11,
+      "total": 28,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 2,
+      "ascii_diagram": 0
+    },
+    "inspector/widgets/style.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 0,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "inspector/widgets/surface.zig": {
+      "doc-module": 0,
+      "doc-decl": 10,
+      "line": 25,
+      "total": 35,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "inspector/widgets/terminal.zig": {
+      "doc-module": 0,
+      "doc-decl": 13,
+      "line": 13,
+      "total": 26,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "inspector/widgets/termio.zig": {
+      "doc-module": 0,
+      "doc-decl": 33,
+      "line": 38,
+      "total": 71,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "lib/allocator.zig": {
+      "doc-module": 0,
+      "doc-decl": 30,
+      "line": 10,
+      "total": 40,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "lib/allocator/convenience.zig": {
+      "doc-module": 11,
+      "doc-decl": 0,
+      "line": 1,
+      "total": 12,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "lib/enum.zig": {
+      "doc-module": 0,
+      "doc-decl": 19,
+      "line": 8,
+      "total": 27,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "lib/string.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 2,
+      "total": 4,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "lib/struct.zig": {
+      "doc-module": 0,
+      "doc-decl": 13,
+      "line": 0,
+      "total": 13,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "lib/target.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 0,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "lib/union.zig": {
+      "doc-module": 0,
+      "doc-decl": 23,
+      "line": 2,
+      "total": 25,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "lib_vt.zig": {
+      "doc-module": 9,
+      "doc-decl": 17,
+      "line": 20,
+      "total": 46,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "main.zig": {
+      "doc-module": 0,
+      "doc-decl": 3,
+      "line": 0,
+      "total": 3,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "main_build_data.zig": {
+      "doc-module": 7,
+      "doc-decl": 0,
+      "line": 4,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "main_c.zig": {
+      "doc-module": 0,
+      "doc-decl": 14,
+      "line": 34,
+      "total": 48,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "main_ghostty.zig": {
+      "doc-module": 2,
+      "doc-decl": 3,
+      "line": 31,
+      "total": 36,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "main_wasm.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 6,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "math.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 0,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/TempDir.zig": {
+      "doc-module": 2,
+      "doc-decl": 9,
+      "line": 7,
+      "total": 18,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/args.zig": {
+      "doc-module": 0,
+      "doc-decl": 15,
+      "line": 11,
+      "total": 26,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/cf_release_thread.zig": {
+      "doc-module": 4,
+      "doc-decl": 22,
+      "line": 20,
+      "total": 46,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/cgroup.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 5,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/dbus.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 4,
+      "total": 10,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/desktop.zig": {
+      "doc-module": 0,
+      "doc-decl": 15,
+      "line": 23,
+      "total": 38,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/env.zig": {
+      "doc-module": 0,
+      "doc-decl": 20,
+      "line": 7,
+      "total": 27,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/file.zig": {
+      "doc-module": 0,
+      "doc-decl": 25,
+      "line": 8,
+      "total": 33,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/flatpak.zig": {
+      "doc-module": 0,
+      "doc-decl": 55,
+      "line": 27,
+      "total": 82,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/homedir.zig": {
+      "doc-module": 0,
+      "doc-decl": 8,
+      "line": 15,
+      "total": 23,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/hostname.zig": {
+      "doc-module": 0,
+      "doc-decl": 8,
+      "line": 17,
+      "total": 25,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "os/i18n.zig": {
+      "doc-module": 0,
+      "doc-decl": 37,
+      "line": 21,
+      "total": 58,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/i18n_locales.zig": {
+      "doc-module": 0,
+      "doc-decl": 25,
+      "line": 3,
+      "total": 28,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/kernel_info.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 3,
+      "total": 3,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/locale.zig": {
+      "doc-module": 0,
+      "doc-decl": 22,
+      "line": 39,
+      "total": 61,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/mach.zig": {
+      "doc-module": 0,
+      "doc-decl": 8,
+      "line": 7,
+      "total": 15,
+      "todo_fixme": 2,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/macos.zig": {
+      "doc-module": 0,
+      "doc-decl": 10,
+      "line": 10,
+      "total": 20,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/main.zig": {
+      "doc-module": 3,
+      "doc-decl": 0,
+      "line": 2,
+      "total": 5,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/mouse.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 2,
+      "total": 3,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/open.zig": {
+      "doc-module": 0,
+      "doc-decl": 8,
+      "line": 16,
+      "total": 24,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/passwd.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 21,
+      "total": 23,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/path.zig": {
+      "doc-module": 0,
+      "doc-decl": 3,
+      "line": 8,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/pipe.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 0,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/resourcesdir.zig": {
+      "doc-module": 0,
+      "doc-decl": 23,
+      "line": 22,
+      "total": 45,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/shell.zig": {
+      "doc-module": 0,
+      "doc-decl": 8,
+      "line": 10,
+      "total": 18,
+      "todo_fixme": 2,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/string_encoding.zig": {
+      "doc-module": 0,
+      "doc-decl": 8,
+      "line": 2,
+      "total": 10,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/systemd.zig": {
+      "doc-module": 0,
+      "doc-decl": 32,
+      "line": 21,
+      "total": 53,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/uri.zig": {
+      "doc-module": 0,
+      "doc-decl": 11,
+      "line": 34,
+      "total": 45,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/wasm.zig": {
+      "doc-module": 1,
+      "doc-decl": 8,
+      "line": 0,
+      "total": 9,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/wasm/log.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 12,
+      "total": 13,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/wasm/target.zig": {
+      "doc-module": 0,
+      "doc-decl": 4,
+      "line": 3,
+      "total": 7,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/windows.zig": {
+      "doc-module": 0,
+      "doc-decl": 3,
+      "line": 3,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "os/xdg.zig": {
+      "doc-module": 2,
+      "doc-decl": 11,
+      "line": 15,
+      "total": 28,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "pty.zig": {
+      "doc-module": 0,
+      "doc-decl": 44,
+      "line": 33,
+      "total": 77,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "quirks.zig": {
+      "doc-module": 7,
+      "doc-decl": 14,
+      "line": 14,
+      "total": 35,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer.zig": {
+      "doc-module": 8,
+      "doc-decl": 5,
+      "line": 1,
+      "total": 14,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/Metal.zig": {
+      "doc-module": 1,
+      "doc-decl": 35,
+      "line": 52,
+      "total": 88,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/OpenGL.zig": {
+      "doc-module": 1,
+      "doc-decl": 38,
+      "line": 41,
+      "total": 80,
+      "todo_fixme": 5,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/Options.zig": {
+      "doc-module": 1,
+      "doc-decl": 7,
+      "line": 0,
+      "total": 8,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/Overlay.zig": {
+      "doc-module": 0,
+      "doc-decl": 33,
+      "line": 32,
+      "total": 65,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/State.zig": {
+      "doc-module": 1,
+      "doc-decl": 28,
+      "line": 10,
+      "total": 39,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/Thread.zig": {
+      "doc-module": 2,
+      "doc-decl": 46,
+      "line": 128,
+      "total": 176,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/WebGL.zig": {
+      "doc-module": 1,
+      "doc-decl": 0,
+      "line": 0,
+      "total": 1,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/backend.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 0,
+      "total": 1,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/cell.zig": {
+      "doc-module": 0,
+      "doc-decl": 71,
+      "line": 84,
+      "total": 155,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "renderer/cursor.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 19,
+      "total": 25,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/generic.zig": {
+      "doc-module": 0,
+      "doc-decl": 227,
+      "line": 536,
+      "total": 763,
+      "todo_fixme": 1,
+      "note": 5,
+      "spec": 4,
+      "ascii_diagram": 1
+    },
+    "renderer/image.zig": {
+      "doc-module": 0,
+      "doc-decl": 95,
+      "line": 102,
+      "total": 197,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 4,
+      "ascii_diagram": 0
+    },
+    "renderer/link.zig": {
+      "doc-module": 0,
+      "doc-decl": 8,
+      "line": 22,
+      "total": 30,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/message.zig": {
+      "doc-module": 0,
+      "doc-decl": 23,
+      "line": 5,
+      "total": 28,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/metal/Frame.zig": {
+      "doc-module": 1,
+      "doc-decl": 13,
+      "line": 12,
+      "total": 26,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/metal/IOSurfaceLayer.zig": {
+      "doc-module": 2,
+      "doc-decl": 9,
+      "line": 23,
+      "total": 34,
+      "todo_fixme": 0,
+      "note": 2,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/metal/Pipeline.zig": {
+      "doc-module": 1,
+      "doc-decl": 10,
+      "line": 9,
+      "total": 20,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/metal/RenderPass.zig": {
+      "doc-module": 1,
+      "doc-decl": 15,
+      "line": 21,
+      "total": 37,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/metal/Sampler.zig": {
+      "doc-module": 1,
+      "doc-decl": 5,
+      "line": 3,
+      "total": 9,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/metal/Target.zig": {
+      "doc-module": 3,
+      "doc-decl": 10,
+      "line": 9,
+      "total": 22,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/metal/Texture.zig": {
+      "doc-module": 1,
+      "doc-decl": 12,
+      "line": 11,
+      "total": 24,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/metal/api.zig": {
+      "doc-module": 7,
+      "doc-decl": 29,
+      "line": 7,
+      "total": 43,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/metal/buffer.zig": {
+      "doc-module": 0,
+      "doc-decl": 20,
+      "line": 16,
+      "total": 36,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/metal/shaders.zig": {
+      "doc-module": 0,
+      "doc-decl": 54,
+      "line": 16,
+      "total": 70,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/opengl/Frame.zig": {
+      "doc-module": 1,
+      "doc-decl": 12,
+      "line": 3,
+      "total": 16,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/opengl/Pipeline.zig": {
+      "doc-module": 1,
+      "doc-decl": 5,
+      "line": 1,
+      "total": 7,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/opengl/RenderPass.zig": {
+      "doc-module": 1,
+      "doc-decl": 11,
+      "line": 7,
+      "total": 19,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/opengl/Sampler.zig": {
+      "doc-module": 1,
+      "doc-decl": 3,
+      "line": 0,
+      "total": 4,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/opengl/Target.zig": {
+      "doc-module": 3,
+      "doc-decl": 8,
+      "line": 0,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/opengl/Texture.zig": {
+      "doc-module": 1,
+      "doc-decl": 10,
+      "line": 0,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/opengl/buffer.zig": {
+      "doc-module": 0,
+      "doc-decl": 18,
+      "line": 6,
+      "total": 24,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/opengl/shaders.zig": {
+      "doc-module": 0,
+      "doc-decl": 57,
+      "line": 15,
+      "total": 72,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/row.zig": {
+      "doc-module": 0,
+      "doc-decl": 3,
+      "line": 17,
+      "total": 20,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/shadertoy.zig": {
+      "doc-module": 0,
+      "doc-decl": 17,
+      "line": 25,
+      "total": 42,
+      "todo_fixme": 2,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "renderer/size.zig": {
+      "doc-module": 0,
+      "doc-decl": 76,
+      "line": 36,
+      "total": 112,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "simd/base64.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 1,
+      "total": 3,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "simd/base64_scalar.zig": {
+      "doc-module": 0,
+      "doc-decl": 12,
+      "line": 3,
+      "total": 15,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "simd/codepoint_width.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 35,
+      "total": 35,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "simd/main.zig": {
+      "doc-module": 2,
+      "doc-decl": 0,
+      "line": 0,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "simd/vt.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 82,
+      "total": 84,
+      "todo_fixme": 2,
+      "note": 0,
+      "spec": 7,
+      "ascii_diagram": 0
+    },
+    "stb/main.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 2,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "surface_mouse.zig": {
+      "doc-module": 0,
+      "doc-decl": 34,
+      "line": 33,
+      "total": 67,
+      "todo_fixme": 2,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "synthetic/Bytes.zig": {
+      "doc-module": 1,
+      "doc-decl": 13,
+      "line": 0,
+      "total": 14,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "synthetic/Generator.zig": {
+      "doc-module": 0,
+      "doc-decl": 8,
+      "line": 3,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "synthetic/Osc.zig": {
+      "doc-module": 0,
+      "doc-decl": 27,
+      "line": 9,
+      "total": 36,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "synthetic/Utf8.zig": {
+      "doc-module": 0,
+      "doc-decl": 22,
+      "line": 6,
+      "total": 28,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "synthetic/cli.zig": {
+      "doc-module": 0,
+      "doc-decl": 14,
+      "line": 6,
+      "total": 20,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "synthetic/cli/Ascii.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 2,
+      "total": 3,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "synthetic/cli/Osc.zig": {
+      "doc-module": 0,
+      "doc-decl": 5,
+      "line": 0,
+      "total": 5,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "synthetic/cli/Utf8.zig": {
+      "doc-module": 0,
+      "doc-decl": 9,
+      "line": 2,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "synthetic/main.zig": {
+      "doc-module": 14,
+      "doc-decl": 0,
+      "line": 0,
+      "total": 14,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/PageList.zig": {
+      "doc-module": 3,
+      "doc-decl": 543,
+      "line": 1899,
+      "total": 2445,
+      "todo_fixme": 3,
+      "note": 5,
+      "spec": 0,
+      "ascii_diagram": 25
+    },
+    "terminal/Parser.zig": {
+      "doc-module": 4,
+      "doc-decl": 40,
+      "line": 57,
+      "total": 101,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 2,
+      "ascii_diagram": 0
+    },
+    "terminal/Screen.zig": {
+      "doc-module": 0,
+      "doc-decl": 384,
+      "line": 1374,
+      "total": 1758,
+      "todo_fixme": 5,
+      "note": 3,
+      "spec": 3,
+      "ascii_diagram": 51
+    },
+    "terminal/ScreenSet.zig": {
+      "doc-module": 0,
+      "doc-decl": 21,
+      "line": 7,
+      "total": 28,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/Selection.zig": {
+      "doc-module": 1,
+      "doc-decl": 59,
+      "line": 142,
+      "total": 202,
+      "todo_fixme": 0,
+      "note": 2,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/SelectionGesture.zig": {
+      "doc-module": 0,
+      "doc-decl": 274,
+      "line": 303,
+      "total": 577,
+      "todo_fixme": 2,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/StringMap.zig": {
+      "doc-module": 0,
+      "doc-decl": 9,
+      "line": 27,
+      "total": 36,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/Tabstops.zig": {
+      "doc-module": 9,
+      "doc-decl": 20,
+      "line": 13,
+      "total": 42,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/Terminal.zig": {
+      "doc-module": 3,
+      "doc-decl": 329,
+      "line": 1431,
+      "total": 1763,
+      "todo_fixme": 8,
+      "note": 4,
+      "spec": 25,
+      "ascii_diagram": 41
+    },
+    "terminal/UTF8Decoder.zig": {
+      "doc-module": 8,
+      "doc-decl": 10,
+      "line": 13,
+      "total": 31,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/ansi.zig": {
+      "doc-module": 0,
+      "doc-decl": 25,
+      "line": 8,
+      "total": 33,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/apc.zig": {
+      "doc-module": 0,
+      "doc-decl": 29,
+      "line": 19,
+      "total": 48,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 2,
+      "ascii_diagram": 0
+    },
+    "terminal/apc/glyph.zig": {
+      "doc-module": 149,
+      "doc-decl": 0,
+      "line": 0,
+      "total": 149,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 2,
+      "ascii_diagram": 0
+    },
+    "terminal/apc/glyph/Glossary.zig": {
+      "doc-module": 0,
+      "doc-decl": 56,
+      "line": 34,
+      "total": 90,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 2,
+      "ascii_diagram": 0
+    },
+    "terminal/apc/glyph/execute.zig": {
+      "doc-module": 0,
+      "doc-decl": 14,
+      "line": 0,
+      "total": 14,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/apc/glyph/request.zig": {
+      "doc-module": 0,
+      "doc-decl": 100,
+      "line": 22,
+      "total": 122,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 4,
+      "ascii_diagram": 0
+    },
+    "terminal/apc/glyph/response.zig": {
+      "doc-module": 0,
+      "doc-decl": 50,
+      "line": 10,
+      "total": 60,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/bitmap_allocator.zig": {
+      "doc-module": 0,
+      "doc-decl": 41,
+      "line": 107,
+      "total": 148,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 1
+    },
+    "terminal/build_options.zig": {
+      "doc-module": 0,
+      "doc-decl": 24,
+      "line": 11,
+      "total": 35,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/allocator.zig": {
+      "doc-module": 0,
+      "doc-decl": 10,
+      "line": 1,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/build_info.zig": {
+      "doc-module": 0,
+      "doc-decl": 3,
+      "line": 0,
+      "total": 3,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/cell.zig": {
+      "doc-module": 0,
+      "doc-decl": 30,
+      "line": 0,
+      "total": 30,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/formatter.zig": {
+      "doc-module": 0,
+      "doc-decl": 9,
+      "line": 9,
+      "total": 18,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/grid_ref.zig": {
+      "doc-module": 0,
+      "doc-decl": 5,
+      "line": 6,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/grid_ref_tracked.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 0,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/key_encode.zig": {
+      "doc-module": 0,
+      "doc-decl": 8,
+      "line": 22,
+      "total": 30,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 4,
+      "ascii_diagram": 0
+    },
+    "terminal/c/key_event.zig": {
+      "doc-module": 0,
+      "doc-decl": 4,
+      "line": 13,
+      "total": 17,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/kitty_graphics.zig": {
+      "doc-module": 0,
+      "doc-decl": 23,
+      "line": 66,
+      "total": 89,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/main.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 2,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/modes.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 0,
+      "total": 1,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/mouse_encode.zig": {
+      "doc-module": 0,
+      "doc-decl": 7,
+      "line": 5,
+      "total": 12,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/mouse_event.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 4,
+      "total": 10,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/osc.zig": {
+      "doc-module": 0,
+      "doc-decl": 4,
+      "line": 3,
+      "total": 7,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/render.zig": {
+      "doc-module": 0,
+      "doc-decl": 22,
+      "line": 13,
+      "total": 35,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/result.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 0,
+      "total": 1,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/row.zig": {
+      "doc-module": 0,
+      "doc-decl": 20,
+      "line": 0,
+      "total": 20,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/selection.zig": {
+      "doc-module": 0,
+      "doc-decl": 17,
+      "line": 0,
+      "total": 17,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "terminal/c/selection_gesture.zig": {
+      "doc-module": 0,
+      "doc-decl": 9,
+      "line": 14,
+      "total": 23,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/sgr.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 6,
+      "total": 8,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/size_report.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 0,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/style.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 0,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/sys.zig": {
+      "doc-module": 0,
+      "doc-decl": 27,
+      "line": 9,
+      "total": 36,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/c/terminal.zig": {
+      "doc-module": 0,
+      "doc-decl": 45,
+      "line": 105,
+      "total": 150,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 5,
+      "ascii_diagram": 0
+    },
+    "terminal/c/types.zig": {
+      "doc-module": 6,
+      "doc-decl": 10,
+      "line": 3,
+      "total": 19,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/charsets.zig": {
+      "doc-module": 0,
+      "doc-decl": 11,
+      "line": 8,
+      "total": 19,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "terminal/color.zig": {
+      "doc-module": 0,
+      "doc-decl": 121,
+      "line": 93,
+      "total": 214,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 4,
+      "ascii_diagram": 0
+    },
+    "terminal/csi.zig": {
+      "doc-module": 0,
+      "doc-decl": 7,
+      "line": 5,
+      "total": 12,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/cursor.zig": {
+      "doc-module": 0,
+      "doc-decl": 8,
+      "line": 3,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 5,
+      "ascii_diagram": 0
+    },
+    "terminal/dcs.zig": {
+      "doc-module": 0,
+      "doc-decl": 21,
+      "line": 18,
+      "total": 39,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/device_attributes.zig": {
+      "doc-module": 0,
+      "doc-decl": 39,
+      "line": 5,
+      "total": 44,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 7,
+      "ascii_diagram": 0
+    },
+    "terminal/device_status.zig": {
+      "doc-module": 0,
+      "doc-decl": 10,
+      "line": 1,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/focus.zig": {
+      "doc-module": 0,
+      "doc-decl": 6,
+      "line": 0,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/formatter.zig": {
+      "doc-module": 0,
+      "doc-decl": 166,
+      "line": 593,
+      "total": 759,
+      "todo_fixme": 2,
+      "note": 0,
+      "spec": 8,
+      "ascii_diagram": 1
+    },
+    "terminal/hash_map.zig": {
+      "doc-module": 31,
+      "doc-decl": 75,
+      "line": 59,
+      "total": 165,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/highlight.zig": {
+      "doc-module": 6,
+      "doc-decl": 45,
+      "line": 5,
+      "total": 56,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/hyperlink.zig": {
+      "doc-module": 0,
+      "doc-decl": 32,
+      "line": 7,
+      "total": 39,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/kitty.zig": {
+      "doc-module": 1,
+      "doc-decl": 0,
+      "line": 0,
+      "total": 1,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/kitty/color.zig": {
+      "doc-module": 0,
+      "doc-decl": 4,
+      "line": 0,
+      "total": 4,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/kitty/graphics.zig": {
+      "doc-module": 17,
+      "doc-decl": 0,
+      "line": 0,
+      "total": 17,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "terminal/kitty/graphics_command.zig": {
+      "doc-module": 0,
+      "doc-decl": 47,
+      "line": 166,
+      "total": 213,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 2,
+      "ascii_diagram": 0
+    },
+    "terminal/kitty/graphics_exec.zig": {
+      "doc-module": 0,
+      "doc-decl": 19,
+      "line": 67,
+      "total": 86,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/kitty/graphics_image.zig": {
+      "doc-module": 0,
+      "doc-decl": 45,
+      "line": 70,
+      "total": 115,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/kitty/graphics_render.zig": {
+      "doc-module": 0,
+      "doc-decl": 9,
+      "line": 0,
+      "total": 9,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/kitty/graphics_storage.zig": {
+      "doc-module": 0,
+      "doc-decl": 60,
+      "line": 89,
+      "total": 149,
+      "todo_fixme": 1,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/kitty/graphics_unicode.zig": {
+      "doc-module": 2,
+      "doc-decl": 59,
+      "line": 144,
+      "total": 205,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 2,
+      "ascii_diagram": 0
+    },
+    "terminal/kitty/key.zig": {
+      "doc-module": 1,
+      "doc-decl": 14,
+      "line": 7,
+      "total": 22,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/lib.zig": {
+      "doc-module": 0,
+      "doc-decl": 7,
+      "line": 0,
+      "total": 7,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/main.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 1,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/modes.zig": {
+      "doc-module": 8,
+      "doc-decl": 39,
+      "line": 15,
+      "total": 62,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 2,
+      "ascii_diagram": 0
+    },
+    "terminal/mouse.zig": {
+      "doc-module": 0,
+      "doc-decl": 10,
+      "line": 12,
+      "total": 22,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "terminal/osc.zig": {
+      "doc-module": 5,
+      "doc-decl": 101,
+      "line": 24,
+      "total": 130,
+      "todo_fixme": 0,
+      "note": 1,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/encoding.zig": {
+      "doc-module": 1,
+      "doc-decl": 7,
+      "line": 0,
+      "total": 8,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/parsers/change_window_icon.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 0,
+      "total": 1,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/parsers/change_window_title.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 4,
+      "total": 5,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/parsers/clipboard_operation.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 0,
+      "total": 1,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/parsers/color.zig": {
+      "doc-module": 0,
+      "doc-decl": 24,
+      "line": 67,
+      "total": 91,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 7,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/parsers/context_signal.zig": {
+      "doc-module": 6,
+      "doc-decl": 25,
+      "line": 21,
+      "total": 52,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/parsers/hyperlink.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 0,
+      "total": 1,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/parsers/iterm2.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 19,
+      "total": 21,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/parsers/kitty_clipboard_protocol.zig": {
+      "doc-module": 3,
+      "doc-decl": 6,
+      "line": 12,
+      "total": 21,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/parsers/kitty_color.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 0,
+      "total": 1,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/parsers/kitty_text_sizing.zig": {
+      "doc-module": 2,
+      "doc-decl": 1,
+      "line": 7,
+      "total": 10,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/parsers/mouse_shape.zig": {
+      "doc-module": 0,
+      "doc-decl": 0,
+      "line": 1,
+      "total": 1,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/parsers/osc9.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 17,
+      "total": 18,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 3,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/parsers/report_pwd.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 0,
+      "total": 1,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/parsers/rxvt_extension.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 1,
+      "total": 2,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/osc/parsers/semantic_prompt.zig": {
+      "doc-module": 1,
+      "doc-decl": 49,
+      "line": 51,
+      "total": 101,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 5,
+      "ascii_diagram": 0
+    },
+    "terminal/page.zig": {
+      "doc-module": 0,
+      "doc-decl": 374,
+      "line": 440,
+      "total": 814,
+      "todo_fixme": 1,
+      "note": 4,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "terminal/parse_table.zig": {
+      "doc-module": 10,
+      "doc-decl": 8,
+      "line": 78,
+      "total": 96,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 2,
+      "ascii_diagram": 0
+    },
+    "terminal/point.zig": {
+      "doc-module": 0,
+      "doc-decl": 13,
+      "line": 32,
+      "total": 45,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/ref_counted_set.zig": {
+      "doc-module": 0,
+      "doc-decl": 141,
+      "line": 86,
+      "total": 227,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/render.zig": {
+      "doc-module": 0,
+      "doc-decl": 129,
+      "line": 176,
+      "total": 305,
+      "todo_fixme": 0,
+      "note": 4,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/search.zig": {
+      "doc-module": 1,
+      "doc-decl": 0,
+      "line": 3,
+      "total": 4,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/search/Thread.zig": {
+      "doc-module": 8,
+      "doc-decl": 68,
+      "line": 124,
+      "total": 200,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/search/active.zig": {
+      "doc-module": 0,
+      "doc-decl": 24,
+      "line": 18,
+      "total": 42,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/search/pagelist.zig": {
+      "doc-module": 0,
+      "doc-decl": 47,
+      "line": 52,
+      "total": 99,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/search/screen.zig": {
+      "doc-module": 0,
+      "doc-decl": 82,
+      "line": 235,
+      "total": 317,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/search/sliding_window.zig": {
+      "doc-module": 0,
+      "doc-decl": 90,
+      "line": 217,
+      "total": 307,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/search/viewport.zig": {
+      "doc-module": 0,
+      "doc-decl": 36,
+      "line": 42,
+      "total": 78,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/selection_codepoints.zig": {
+      "doc-module": 0,
+      "doc-decl": 2,
+      "line": 24,
+      "total": 26,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 1
+    },
+    "terminal/sgr.zig": {
+      "doc-module": 1,
+      "doc-decl": 30,
+      "line": 84,
+      "total": 115,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "terminal/size.zig": {
+      "doc-module": 0,
+      "doc-decl": 47,
+      "line": 20,
+      "total": 67,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/size_report.zig": {
+      "doc-module": 0,
+      "doc-decl": 7,
+      "line": 4,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/stream.zig": {
+      "doc-module": 0,
+      "doc-decl": 67,
+      "line": 251,
+      "total": 318,
+      "todo_fixme": 9,
+      "note": 0,
+      "spec": 3,
+      "ascii_diagram": 0
+    },
+    "terminal/stream_terminal.zig": {
+      "doc-module": 0,
+      "doc-decl": 49,
+      "line": 144,
+      "total": 193,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 15,
+      "ascii_diagram": 0
+    },
+    "terminal/style.zig": {
+      "doc-module": 0,
+      "doc-decl": 72,
+      "line": 22,
+      "total": 94,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/sys.zig": {
+      "doc-module": 10,
+      "doc-decl": 6,
+      "line": 0,
+      "total": 16,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/tmux.zig": {
+      "doc-module": 1,
+      "doc-decl": 0,
+      "line": 0,
+      "total": 1,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/tmux/control.zig": {
+      "doc-module": 4,
+      "doc-decl": 51,
+      "line": 53,
+      "total": 108,
+      "todo_fixme": 1,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/tmux/layout.zig": {
+      "doc-module": 0,
+      "doc-decl": 37,
+      "line": 48,
+      "total": 85,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/tmux/output.zig": {
+      "doc-module": 0,
+      "doc-decl": 61,
+      "line": 2,
+      "total": 63,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminal/tmux/viewer.zig": {
+      "doc-module": 0,
+      "doc-decl": 220,
+      "line": 267,
+      "total": 487,
+      "todo_fixme": 3,
+      "note": 1,
+      "spec": 0,
+      "ascii_diagram": 83
+    },
+    "terminal/x11_color.zig": {
+      "doc-module": 0,
+      "doc-decl": 5,
+      "line": 7,
+      "total": 12,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "terminfo/Source.zig": {
+      "doc-module": 5,
+      "doc-decl": 21,
+      "line": 22,
+      "total": 48,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 2,
+      "ascii_diagram": 0
+    },
+    "terminfo/ghostty.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 71,
+      "total": 72,
+      "todo_fixme": 0,
+      "note": 2,
+      "spec": 6,
+      "ascii_diagram": 0
+    },
+    "terminfo/main.zig": {
+      "doc-module": 6,
+      "doc-decl": 0,
+      "line": 0,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "termio.zig": {
+      "doc-module": 18,
+      "doc-decl": 0,
+      "line": 0,
+      "total": 18,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "termio/Exec.zig": {
+      "doc-module": 3,
+      "doc-decl": 84,
+      "line": 333,
+      "total": 420,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "termio/Options.zig": {
+      "doc-module": 1,
+      "doc-decl": 16,
+      "line": 0,
+      "total": 17,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "termio/Termio.zig": {
+      "doc-module": 4,
+      "doc-decl": 75,
+      "line": 92,
+      "total": 171,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "termio/Thread.zig": {
+      "doc-module": 11,
+      "doc-decl": 30,
+      "line": 53,
+      "total": 94,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "termio/backend.zig": {
+      "doc-module": 0,
+      "doc-decl": 9,
+      "line": 2,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "termio/mailbox.zig": {
+      "doc-module": 0,
+      "doc-decl": 15,
+      "line": 25,
+      "total": 40,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 1
+    },
+    "termio/message.zig": {
+      "doc-module": 0,
+      "doc-decl": 39,
+      "line": 1,
+      "total": 40,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "termio/shell_integration.zig": {
+      "doc-module": 0,
+      "doc-decl": 43,
+      "line": 86,
+      "total": 129,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "termio/stream_handler.zig": {
+      "doc-module": 0,
+      "doc-decl": 40,
+      "line": 178,
+      "total": 218,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 14,
+      "ascii_diagram": 0
+    },
+    "tripwire.zig": {
+      "doc-module": 64,
+      "doc-decl": 52,
+      "line": 21,
+      "total": 137,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 1
+    },
+    "unicode/grapheme.zig": {
+      "doc-module": 0,
+      "doc-decl": 18,
+      "line": 9,
+      "total": 27,
+      "todo_fixme": 1,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "unicode/lut.zig": {
+      "doc-module": 0,
+      "doc-decl": 18,
+      "line": 15,
+      "total": 33,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 1,
+      "ascii_diagram": 0
+    },
+    "unicode/props.zig": {
+      "doc-module": 5,
+      "doc-decl": 7,
+      "line": 2,
+      "total": 14,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "unicode/props_table.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 5,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "unicode/props_uucode.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 10,
+      "total": 11,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "unicode/symbols_table.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 5,
+      "total": 6,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    },
+    "unicode/symbols_uucode.zig": {
+      "doc-module": 0,
+      "doc-decl": 1,
+      "line": 9,
+      "total": 10,
+      "todo_fixme": 0,
+      "note": 0,
+      "spec": 0,
+      "ascii_diagram": 0
+    }
+  }
+}

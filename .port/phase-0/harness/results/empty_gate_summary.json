@@ -1,0 +1,9 @@
+{
+  "gate": "empty_workspace_divergence",
+  "fixtures": 11,
+  "control_mean_divergence_pct": 0.0,
+  "empty_divergence_pct": 100.0,
+  "threshold_pct": 99.9,
+  "cases_below_100": 0,
+  "pass": true
+}

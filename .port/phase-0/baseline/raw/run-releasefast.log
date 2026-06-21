@@ -1,0 +1,113 @@
+## terminal-parser/utf8  cmd: /Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +terminal-parser --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.2562s
+   rep 2: 0.2581s
+   rep 3: 0.2543s
+   rep 4: 0.2571s
+   rep 5: 0.2563s
+   rep 6: 0.2556s
+   rep 7: 0.2551s
+## terminal-stream/ascii  cmd: /Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +terminal-stream --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii.bin
+   rep 1: 0.5397s
+   rep 2: 0.5310s
+   rep 3: 0.5274s
+   rep 4: 0.5226s
+   rep 5: 0.5406s
+   rep 6: 0.5388s
+   rep 7: 0.5537s
+## codepoint-width.noop/utf8  cmd: /Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +codepoint-width --mode=noop --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.0049s
+   rep 2: 0.0045s
+   rep 3: 0.0045s
+   rep 4: 0.0046s
+   rep 5: 0.0045s
+   rep 6: 0.0043s
+   rep 7: 0.0048s
+## codepoint-width.table/utf8  cmd: /Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +codepoint-width --mode=table --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.2280s
+   rep 2: 0.2282s
+   rep 3: 0.2315s
+   rep 4: 0.2268s
+   rep 5: 0.2354s
+   rep 6: 0.2330s
+   rep 7: 0.2319s
+## codepoint-width.simd/utf8  cmd: /Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +codepoint-width --mode=simd --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.4990s
+   rep 2: 0.4958s
+   rep 3: 0.4939s
+   rep 4: 0.4915s
+   rep 5: 0.4904s
+   rep 6: 0.5104s
+   rep 7: 0.4898s
+## codepoint-width.wcwidth/utf8  cmd: /Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +codepoint-width --mode=wcwidth --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.2528s
+   rep 2: 0.2535s
+   rep 3: 0.2533s
+   rep 4: 0.2544s
+   rep 5: 0.2556s
+   rep 6: 0.2562s
+   rep 7: 0.2546s
+## grapheme-break.noop/utf8  cmd: /Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +grapheme-break --mode=noop --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.2240s
+   rep 2: 0.2236s
+   rep 3: 0.2248s
+   rep 4: 0.2246s
+   rep 5: 0.2239s
+   rep 6: 0.2238s
+   rep 7: 0.2245s
+## grapheme-break.table/utf8  cmd: /Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +grapheme-break --mode=table --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.2482s
+   rep 2: 0.2471s
+   rep 3: 0.2473s
+   rep 4: 0.2478s
+   rep 5: 0.2480s
+   rep 6: 0.2465s
+   rep 7: 0.2470s
+## is-symbol.table/utf8  cmd: /Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +is-symbol --mode=table --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.2327s
+   rep 2: 0.2299s
+   rep 3: 0.2303s
+   rep 4: 0.2317s
+   rep 5: 0.2316s
+   rep 6: 0.2312s
+   rep 7: 0.2297s
+## is-symbol.uucode/utf8  cmd: /Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +is-symbol --mode=uucode --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.2228s
+   rep 2: 0.2239s
+   rep 3: 0.2235s
+   rep 4: 0.2218s
+   rep 5: 0.2221s
+   rep 6: 0.2222s
+   rep 7: 0.2225s
+## osc-parser/osc-parser  cmd: /Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +osc-parser --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/osc-parser.bin
+   rep 1: 0.0552s
+   rep 2: 0.0552s
+   rep 3: 0.0551s
+   rep 4: 0.0558s
+   rep 5: 0.0552s
+   rep 6: 0.0546s
+   rep 7: 0.0550s
+## screen-clone.noop/small  cmd: /Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +screen-clone --mode=noop --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii-small.bin
+   rep 1: 0.0057s
+   rep 2: 0.0072s
+   rep 3: 0.0061s
+   rep 4: 0.0063s
+   rep 5: 0.0065s
+   rep 6: 0.0057s
+   rep 7: 0.0057s
+## screen-clone.clone/small  cmd: /Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +screen-clone --mode=clone --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii-small.bin
+   rep 1: 0.0490s
+   rep 2: 0.0527s
+   rep 3: 0.0515s
+   rep 4: 0.0492s
+   rep 5: 0.0493s
+   rep 6: 0.0493s
+   rep 7: 0.0503s
+## screen-clone.render/small  cmd: /Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +screen-clone --mode=render --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii-small.bin
+   rep 1: 0.0164s
+   rep 2: 0.0163s
+   rep 3: 0.0163s
+   rep 4: 0.0169s
+   rep 5: 0.0162s
+   rep 6: 0.0168s
+   rep 7: 0.0161s
+DONE

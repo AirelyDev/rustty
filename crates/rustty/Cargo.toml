@@ -1,0 +1,25 @@
+# rustty — the binary crate (parity port order, member 27)
+#
+# Produces the `rustty` binary (R2). Crate IDENTITY `rustty` IS the published
+# product name here. NO dependency on the ghostty tree (R3).
+[package]
+name = "rustty"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "rustty"
+path = "src/main.rs"
+
+[dependencies]
+# Entry points fan out only: cli, apprt, core (wired as the upper tiers land).
+rustty-cli = { workspace = true }
+rustty-apprt = { workspace = true }
+rustty-core = { workspace = true }

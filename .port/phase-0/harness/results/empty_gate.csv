@@ -1,0 +1,12 @@
+fixture,byte_divergence_pct
+basic_text.vt,100.0
+clear_screen.vt,100.0
+cursor_moves.vt,100.0
+fuzz_01-plain-text-slice.vt,100.0
+fuzz_03-csi-cursor-sgr.vt,100.0
+fuzz_10-sgr-256-rgb.vt,100.0
+fuzz_11-utf8-multibyte.vt,100.0
+fuzz_16-c1-controls.vt,100.0
+fuzz_17-tab-backspace.vt,100.0
+fuzz_21-osc-hyperlink.vt,100.0
+sgr_styles.vt,100.0

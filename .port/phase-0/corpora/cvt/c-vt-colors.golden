@@ -1,0 +1,23 @@
+Before setting defaults:
+  foreground   effective: (not set)  default: (not set)
+  background   effective: (not set)  default: (not set)
+  cursor       effective: (not set)  default: (not set)
+  palette[0]   effective: #1D1F21  default: #1D1F21
+
+After setting defaults:
+  foreground   effective: #DDDDDD  default: #DDDDDD
+  background   effective: #1E1E2E  default: #1E1E2E
+  cursor       effective: #F5E0DC  default: #F5E0DC
+  palette[0]   effective: #45475A  default: #45475A
+
+After OSC foreground override:
+  foreground   effective: #FF0000  default: #DDDDDD
+  background   effective: #1E1E2E  default: #1E1E2E
+  cursor       effective: #F5E0DC  default: #F5E0DC
+  palette[0]   effective: #45475A  default: #45475A
+
+After clearing foreground default:
+  foreground   effective: #FF0000  default: (not set)
+  background   effective: #1E1E2E  default: #1E1E2E
+  cursor       effective: #F5E0DC  default: #F5E0DC
+  palette[0]   effective: #45475A  default: #45475A

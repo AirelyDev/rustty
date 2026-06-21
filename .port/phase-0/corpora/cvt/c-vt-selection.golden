@@ -1,0 +1,8 @@
+word: status
+double-click drag: git status
+line: git status
+output: On branch main
+nothing to commit, working tree clean
+all: $ git status
+On branch main
+nothing to commit, working tree clean

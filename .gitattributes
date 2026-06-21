@@ -1,0 +1,27 @@
+# Normalize line endings; let git detect text vs binary automatically.
+* text=auto
+
+# Explicit text types (LF in the repo)
+*.rs    text eol=lf
+*.toml  text eol=lf
+*.md    text eol=lf
+*.py    text eol=lf
+*.sh    text eol=lf
+*.c     text eol=lf
+*.h     text eol=lf
+*.zig   text eol=lf
+*.json  text eol=lf
+*.csv   text eol=lf
+
+# VT corpus / golden fixtures are byte-exact: treat as binary so git never
+# rewrites them (escape sequences, control bytes must round-trip exactly).
+*.vt        binary
+*.golden    binary
+*.bin       binary
+
+# Generated/large binaries
+*.a         binary
+*.so        binary
+*.dylib     binary
+*.wasm      binary
+*.png       binary

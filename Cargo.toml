@@ -1,0 +1,118 @@
+# rustty — virtual Cargo workspace
+#
+# Zig→Rust port of Ghostty (codename `rustty`) at 100% functional parity.
+# Reference oracle (READ-ONLY): /Users/gael/projects/ghostty @ 4749c4e (Zig 0.15.2).
+# Governed by .port/PORT_RULES.md (R1 fidelity, R2 identity-rename, R3
+# self-contained / no ghostty Cargo dep, R4 acyclic crate graph, R5 gates
+# invariant) and docs/superpowers/specs/2026-06-21-rustty-crate-structure-design.md.
+#
+# Members are listed in the strict leaves-first topological order from
+# .port/phase-0/plan/PORT_PLAN.md (Section 1). A crate depends only on crates
+# that appear earlier in this list (R4: acyclic, gate-enforced by
+# .port/tools/cycle_check.py). The `-sys` crates and `xtask` are independent of
+# the parity port order (built on demand).
+#
+# IMPORTANT: NO crate here depends on the ghostty tree as a Cargo dependency (R3).
+# The reference is used only as an external oracle by the differential harness.
+
+[workspace]
+resolver = "2"
+members = [
+    # ----- 29 parity port-order crates (strict topological order) -----
+    "crates/rustty-util",          #  1
+    "crates/rustty-build-config",  #  2
+    "crates/rustty-identity",      #  3
+    "crates/rustty-datastruct",    #  4
+    "crates/rustty-unicode",       #  5
+    "crates/rustty-simd",          #  6
+    "crates/rustty-lib",           #  7
+    "crates/rustty-global",        #  8
+    "crates/rustty-render-types",  #  9
+    "crates/rustty-os",            # 10
+    "crates/rustty-vt",            # 11  <- crown jewel
+    "crates/rustty-vt-c",          # 12
+    "crates/rustty-crash",         # 13
+    "crates/rustty-cfg-fmt",       # 14
+    "crates/rustty-args",          # 15
+    "crates/rustty-apprt-api",     # 16
+    "crates/rustty-font",          # 17
+    "crates/rustty-input",         # 18
+    "crates/rustty-inspector",     # 19
+    "crates/rustty-renderer",      # 20
+    "crates/rustty-config",        # 21
+    "crates/rustty-terminfo",      # 22
+    "crates/rustty-termio",        # 23
+    "crates/rustty-core",          # 24
+    "crates/rustty-apprt",         # 25
+    "crates/rustty-cli",           # 26
+    "crates/rustty",               # 27  <- bin (produces the `rustty` binary)
+    "crates/rustty-bench",         # 28
+    "crates/rustty-synthetic",     # 29
+
+    # ----- supporting -sys crates (R3: vendored C, cc + bindgen) -----
+    "crates-sys/freetype-sys",
+    "crates-sys/harfbuzz-sys",
+    "crates-sys/fontconfig-sys",
+    "crates-sys/oniguruma-sys",
+    "crates-sys/simdutf-sys",
+    "crates-sys/highway-sys",
+    "crates-sys/glslang-sys",
+    "crates-sys/spirv-cross-sys",
+    "crates-sys/wuffs-sys",
+    "crates-sys/zlib-sys",
+    "crates-sys/libpng-sys",
+    "crates-sys/sentry-sys",
+    "crates-sys/dcimgui-sys",
+
+    # ----- build orchestration (replaces src/build/) -----
+    "xtask",
+]
+
+# Shared package metadata inherited by every member via `field.workspace = true`.
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.93"
+license = "MIT"
+repository = "https://github.com/airely/rustty"
+authors = ["rustty contributors"]
+
+[workspace.dependencies]
+# Internal crates are referenced by path so members can declare each other as
+# `dep.workspace = true` once real wiring lands. Versions track the workspace.
+rustty-util = { path = "crates/rustty-util" }
+rustty-build-config = { path = "crates/rustty-build-config" }
+rustty-identity = { path = "crates/rustty-identity" }
+rustty-datastruct = { path = "crates/rustty-datastruct" }
+rustty-unicode = { path = "crates/rustty-unicode" }
+rustty-simd = { path = "crates/rustty-simd" }
+rustty-lib = { path = "crates/rustty-lib" }
+rustty-global = { path = "crates/rustty-global" }
+rustty-render-types = { path = "crates/rustty-render-types" }
+rustty-os = { path = "crates/rustty-os" }
+rustty-vt = { path = "crates/rustty-vt" }
+rustty-vt-c = { path = "crates/rustty-vt-c" }
+rustty-crash = { path = "crates/rustty-crash" }
+rustty-cfg-fmt = { path = "crates/rustty-cfg-fmt" }
+rustty-args = { path = "crates/rustty-args" }
+rustty-apprt-api = { path = "crates/rustty-apprt-api" }
+rustty-font = { path = "crates/rustty-font" }
+rustty-input = { path = "crates/rustty-input" }
+rustty-inspector = { path = "crates/rustty-inspector" }
+rustty-renderer = { path = "crates/rustty-renderer" }
+rustty-config = { path = "crates/rustty-config" }
+rustty-terminfo = { path = "crates/rustty-terminfo" }
+rustty-termio = { path = "crates/rustty-termio" }
+rustty-core = { path = "crates/rustty-core" }
+rustty-apprt = { path = "crates/rustty-apprt" }
+rustty-cli = { path = "crates/rustty-cli" }
+
+# Workspace-wide lints. Kept conservative for the scaffold phase; tightened as
+# real ported code lands. R1/R5: never weaken to pass — lint exceptions must be
+# justified per-occurrence, not blanket-allowed here.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+unused_must_use = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

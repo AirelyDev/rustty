@@ -1,0 +1,85 @@
+## terminal-parser/utf8  cmd: /Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +terminal-parser --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.2479s
+   rep 2: 0.2472s
+   rep 3: 0.2471s
+   rep 4: 0.2481s
+   rep 5: 0.2484s
+## terminal-stream/ascii  cmd: /Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +terminal-stream --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii.bin
+   rep 1: 30.1704s
+   rep 2: 29.8459s
+   rep 3: 30.8716s
+   rep 4: 31.7960s
+   rep 5: 34.8374s
+## codepoint-width.noop/utf8  cmd: /Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +codepoint-width --mode=noop --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.0103s
+   rep 2: 0.0104s
+   rep 3: 0.0112s
+   rep 4: 0.0100s
+   rep 5: 0.0110s
+## codepoint-width.table/utf8  cmd: /Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +codepoint-width --mode=table --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.3154s
+   rep 2: 0.3042s
+   rep 3: 0.3104s
+   rep 4: 0.3229s
+   rep 5: 0.3037s
+## codepoint-width.simd/utf8  cmd: /Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +codepoint-width --mode=simd --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.7882s
+   rep 2: 0.7147s
+   rep 3: 0.7346s
+   rep 4: 0.7337s
+   rep 5: 0.7388s
+## codepoint-width.wcwidth/utf8  cmd: /Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +codepoint-width --mode=wcwidth --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.3322s
+   rep 2: 0.3414s
+   rep 3: 0.3327s
+   rep 4: 0.3414s
+   rep 5: 0.3409s
+## grapheme-break.noop/utf8  cmd: /Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +grapheme-break --mode=noop --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.3068s
+   rep 2: 0.3045s
+   rep 3: 0.3045s
+   rep 4: 0.2960s
+   rep 5: 0.3163s
+## grapheme-break.table/utf8  cmd: /Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +grapheme-break --mode=table --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.3335s
+   rep 2: 0.3340s
+   rep 3: 0.3359s
+   rep 4: 0.3322s
+   rep 5: 0.3356s
+## is-symbol.table/utf8  cmd: /Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +is-symbol --mode=table --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.3067s
+   rep 2: 0.3108s
+   rep 3: 0.3088s
+   rep 4: 0.3193s
+   rep 5: 0.3195s
+## is-symbol.uucode/utf8  cmd: /Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +is-symbol --mode=uucode --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin
+   rep 1: 0.3007s
+   rep 2: 0.2930s
+   rep 3: 0.3007s
+   rep 4: 0.3037s
+   rep 5: 0.2947s
+## osc-parser/osc-parser  cmd: /Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +osc-parser --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/osc-parser.bin
+   rep 1: 0.0860s
+   rep 2: 0.0756s
+   rep 3: 0.0740s
+   rep 4: 0.0788s
+   rep 5: 0.0793s
+## screen-clone.noop/small  cmd: /Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +screen-clone --mode=noop --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii-small.bin
+   rep 1: 0.6782s
+   rep 2: 0.6567s
+   rep 3: 0.6489s
+   rep 4: 0.7106s
+   rep 5: 0.6665s
+## screen-clone.clone/small  cmd: /Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +screen-clone --mode=clone --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii-small.bin
+   rep 1: 5.3470s
+   rep 2: 5.4863s
+   rep 3: 5.5476s
+   rep 4: 5.8045s
+   rep 5: 5.1903s
+## screen-clone.render/small  cmd: /Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +screen-clone --mode=render --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii-small.bin
+   rep 1: 0.7250s
+   rep 2: 0.7071s
+   rep 3: 0.7358s
+   rep 4: 0.6677s
+   rep 5: 0.7189s
+DONE

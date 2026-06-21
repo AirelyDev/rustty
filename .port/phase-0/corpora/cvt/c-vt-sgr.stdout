@@ -1,0 +1,12 @@
+Bold enabled
+Foreground color: 1
+
+Parsing Kakoune SGR sequence:
+ESC[4:3;38;2;51;51;51;48;2;170;170;170;58;2;255;97;136m
+
+Attribute 1: Underline style = curly
+Attribute 2: Foreground RGB = (51, 51, 51)
+Attribute 3: Background RGB = (170, 170, 170)
+Attribute 4: Underline color RGB = (255, 97, 136)
+
+Total attributes parsed: 4

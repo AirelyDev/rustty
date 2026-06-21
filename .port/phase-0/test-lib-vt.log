@@ -1,0 +1,125 @@
+test-lib-vt
++- run test stderr
+[terminal_apc] (warn): kitty graphics protocol error: error.InvalidFormat
+[terminal_apc] (warn): kitty graphics protocol error: error.Overflow
+[terminal_apc] (warn): kitty graphics protocol error: error.Overflow
+[terminal_apc] (warn): kitty graphics protocol error: error.Overflow
+[terminal_apc] (warn): kitty graphics protocol error: error.OutOfMemory
+[terminal_apc] (warn): glyph protocol error: error.InvalidFormat
+[page] (warn): page integrity violation y=0 grapheme data but row not marked
+[page] (warn): page integrity violation style ref count mismatch id=1 expected=10 actual=9
+[page] (warn): page integrity violation zero row count
+[page] (warn): page integrity violation zero col count
+[parser] (warn): CSI colon or mixed separators only allowed for 'm' command, got: terminal.Parser.Action{ .csi_dispatch = .{ .intermediates = {  }, .params = { 38, 2 }, .params_sep = .{ .mask = 1 }, .final = 104 } }
+[terminal] (warn): zero-width character with no prior character, ignoring
+[terminal] (warn): restoreCursor error updating style err=error.OutOfSpace
+[stream] (warn): invalid cursor tabulation control: ESC [ ? {  } W
+[stream] (warn): invalid cursor right command: ESC [  { 5, 4 } C
+[stream] (warn): ignoring unimplemented CSI C with intermediates: ?
+[stream] (warn): invalid set mode command: ESC [   { 6 } h
+[stream] (warn): invalid set mode command: ESC [ > { 5 } h
+[stream] (warn): unimplemented mode: 6
+[stream] (warn): unimplemented mode: 6
+[stream] (warn): unimplemented restore mode: 42
+[stream] (warn): invalid erase display command: ESC [ > { 0 } J
+[stream] (warn): invalid erase line command: ESC [ < { 1 } K
+[stream] (warn): ignoring unimplemented CSI p with intermediates: ? 
+[stream] (warn): ignoring unimplemented CSI p with intermediates: 
+[stream] (warn): ignoring unimplemented CSI p with intermediates: 
+[stream] (warn): invalid XTSHIFTESCAPE command: ESC [ > { 2 } s
+[stream] (warn): unknown CSI s with intermediate: ESC [   { 1 } s
+[stream] (warn): change title request: invalid utf-8, ignoring request
+[stream] (warn): ignoring unimplemented CSI @: ESC [ ? { 42 } @
+[stream] (warn): invalid cursor right command: ESC [  { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } C
+[stream] (warn): ignoring CSI t with unimplemented parameter: ESC [  { 19 } t
+[stream] (warn): ignoring CSI 22/23 t with extra parameters: ESC [  { 22, 1 } t
+[stream] (warn): ignoring CSI 22/23 t with extra parameters: ESC [  { 23, 1 } t
+[stream] (warn): invalid cursor tabulation control: ESC [  { 2 } W
+[stream] (warn): invalid cursor tabulation control: ESC [  { 5 } W
+[stream] (warn): invalid cursor tabulation control: ESC [ > {  } W
+[stream] (warn): invalid cursor tabulation control: ESC [  { 99 } W
+[stream] (warn): invalid cursor tabulation control: ESC [ ? { 2 } W
+[stream] (warn): invalid cursor tabulation control: ESC [ ? { 1, 2, 3 } W
+[stream] (warn): invalid tab clear mode: 65535
+[kitty_text_sizing] (warn): invalid value for key 's': error.InvalidValue
+[kitty_text_sizing] (warn): invalid value for key 'w': error.InvalidValue
+[kitty_text_sizing] (warn): invalid value for key 'v': error.InvalidValue
+[kitty_text_sizing] (warn): invalid value for key 'n': error.InvalidValue
+[kitty_text_sizing] (warn): payload is not escape code safe UTF-8
+[osc_context_signal] (warn): OSC 3008: expected 'start=' or 'end=' prefix, got: bogus=abc1
+[osc_context_signal] (warn): OSC 3008: missing context ID
+[osc_context_signal] (warn): OSC 3008: context ID length 65 out of range (1-64)
+[osc] (warn): An allocator is required to process OSC 4 but none was provided.
+[tripwire] (warn): untripped point=read
+[osc_hyperlink] (warn): unknown hyperlink option: ''
+[osc_hyperlink] (warn): unknown hyperlink option: ''
+[osc_kitty_color] (warn): invalid color format in kitty color protocol: #xxxyyzz
+[osc] (warn): An allocator is required to process OSC 21 but none was provided.
+[osc_kitty_color] (warn): invalid color format in kitty color protocol: #xxxyyzz
+[osc_kitty_color] (warn): invalid color format in kitty color protocol: #xxxyyzz
+[osc_kitty_color] (warn): zero length key in kitty color protocol
+[kitty_gfx] (warn): erroneous kitty graphics response: ENOENT: image not found
+[kitty_gfx] (warn): erroneous kitty graphics response: ENOENT: image not found
+test-lib-vt
++- run test stderr
+[terminal_apc] (warn): kitty graphics protocol error: error.InvalidFormat
+[terminal_apc] (warn): kitty graphics protocol error: error.Overflow
+[terminal_apc] (warn): kitty graphics protocol error: error.Overflow
+[terminal_apc] (warn): kitty graphics protocol error: error.Overflow
+[terminal_apc] (warn): kitty graphics protocol error: error.OutOfMemory
+[terminal_apc] (warn): glyph protocol error: error.InvalidFormat
+[page] (warn): page integrity violation y=0 grapheme data but row not marked
+[page] (warn): page integrity violation style ref count mismatch id=1 expected=10 actual=9
+[page] (warn): page integrity violation zero row count
+[page] (warn): page integrity violation zero col count
+[parser] (warn): CSI colon or mixed separators only allowed for 'm' command, got: terminal.Parser.Action{ .csi_dispatch = .{ .intermediates = {  }, .params = { 38, 2 }, .params_sep = .{ .mask = 1 }, .final = 104 } }
+[terminal] (warn): zero-width character with no prior character, ignoring
+[terminal] (warn): restoreCursor error updating style err=error.OutOfSpace
+[stream] (warn): invalid cursor tabulation control: ESC [ ? {  } W
+[stream] (warn): invalid cursor right command: ESC [  { 5, 4 } C
+[stream] (warn): ignoring unimplemented CSI C with intermediates: ?
+[stream] (warn): invalid set mode command: ESC [   { 6 } h
+[stream] (warn): invalid set mode command: ESC [ > { 5 } h
+[stream] (warn): unimplemented mode: 6
+[stream] (warn): unimplemented mode: 6
+[stream] (warn): unimplemented restore mode: 42
+[stream] (warn): invalid erase display command: ESC [ > { 0 } J
+[stream] (warn): invalid erase line command: ESC [ < { 1 } K
+[stream] (warn): ignoring unimplemented CSI p with intermediates: ? 
+[stream] (warn): ignoring unimplemented CSI p with intermediates: 
+[stream] (warn): ignoring unimplemented CSI p with intermediates: 
+[stream] (warn): invalid XTSHIFTESCAPE command: ESC [ > { 2 } s
+[stream] (warn): unknown CSI s with intermediate: ESC [   { 1 } s
+[stream] (warn): change title request: invalid utf-8, ignoring request
+[stream] (warn): ignoring unimplemented CSI @: ESC [ ? { 42 } @
+[stream] (warn): invalid cursor right command: ESC [  { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } C
+[stream] (warn): ignoring CSI t with unimplemented parameter: ESC [  { 19 } t
+[stream] (warn): ignoring CSI 22/23 t with extra parameters: ESC [  { 22, 1 } t
+[stream] (warn): ignoring CSI 22/23 t with extra parameters: ESC [  { 23, 1 } t
+[stream] (warn): invalid cursor tabulation control: ESC [  { 2 } W
+[stream] (warn): invalid cursor tabulation control: ESC [  { 5 } W
+[stream] (warn): invalid cursor tabulation control: ESC [ > {  } W
+[stream] (warn): invalid cursor tabulation control: ESC [  { 99 } W
+[stream] (warn): invalid cursor tabulation control: ESC [ ? { 2 } W
+[stream] (warn): invalid cursor tabulation control: ESC [ ? { 1, 2, 3 } W
+[stream] (warn): invalid tab clear mode: 65535
+[kitty_text_sizing] (warn): invalid value for key 's': error.InvalidValue
+[kitty_text_sizing] (warn): invalid value for key 'w': error.InvalidValue
+[kitty_text_sizing] (warn): invalid value for key 'v': error.InvalidValue
+[kitty_text_sizing] (warn): invalid value for key 'n': error.InvalidValue
+[kitty_text_sizing] (warn): payload is not escape code safe UTF-8
+[osc_context_signal] (warn): OSC 3008: expected 'start=' or 'end=' prefix, got: bogus=abc1
+[osc_context_signal] (warn): OSC 3008: missing context ID
+[osc_context_signal] (warn): OSC 3008: context ID length 65 out of range (1-64)
+[osc] (warn): An allocator is required to process OSC 4 but none was provided.
+[tripwire] (warn): untripped point=read
+[osc_hyperlink] (warn): unknown hyperlink option: ''
+[osc_hyperlink] (warn): unknown hyperlink option: ''
+[osc_kitty_color] (warn): invalid color format in kitty color protocol: #xxxyyzz
+[osc] (warn): An allocator is required to process OSC 21 but none was provided.
+[osc_kitty_color] (warn): invalid color format in kitty color protocol: #xxxyyzz
+[osc_kitty_color] (warn): invalid color format in kitty color protocol: #xxxyyzz
+[osc_kitty_color] (warn): zero length key in kitty color protocol
+[kitty_gfx] (warn): erroneous kitty graphics response: ENOENT: image not found
+[kitty_gfx] (warn): erroneous kitty graphics response: ENOENT: image not found
+EXIT_CODE=0

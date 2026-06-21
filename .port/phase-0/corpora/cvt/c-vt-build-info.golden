@@ -1,0 +1,9 @@
+SIMD: enabled
+Kitty graphics: enabled
+Tmux control mode: disabled
+Version: 0.1.0-dev
+Version major: 0
+Version minor: 1
+Version patch: 0
+Version pre  : dev
+Version build: (none)

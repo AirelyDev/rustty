@@ -1,0 +1,189 @@
+{
+  "phase": 0,
+  "generated_utc": "2026-06-21",
+  "reference": {
+    "path": "/Users/gael/projects/ghostty",
+    "pin": "4749c4e93731067049bfbf2e4572061cef2bdd17",
+    "zig_version": "0.15.2",
+    "read_only_verified_clean": true
+  },
+  "verdict": "GREEN",
+  "gate": {
+    "green_conditions": {
+      "reference_test_suite_passed": true,
+      "test_count_contract_matches": true,
+      "baseline_populated": true,
+      "diff_harness_100pct_divergence_vs_empty": true
+    },
+    "gate_result": "GREEN"
+  },
+  "test_count_contract": {
+    "critic_rederived_raw_grep": 3234,
+    "critic_rederived_lexical_scanner": 3234,
+    "extractor_count_tests_summary_json": 3234,
+    "matches": true,
+    "breakdown": {
+      "anonymous": 76,
+      "string_named": 3113,
+      "identifier_named": 45,
+      "named_total": 3158,
+      "total": 3234
+    },
+    "files_with_tests": 279,
+    "assertions_total": 11975,
+    "wrong_number_in_deliverables": 3189,
+    "wrong_number_explanation": "3189 = 3113 string-named + 76 anonymous; omits 45 identifier-named test-blocks"
+  },
+  "audit_checklist": {
+    "1_rederive_test_count_match": {
+      "pass": true,
+      "critic": 3234,
+      "extractor": 3234
+    },
+    "2_extractor_edge_cases": {
+      "pass": true,
+      "note": "// test { in renderer/opengl/shaders.zig:252 correctly excluded; 3234 bodies captured with balanced-brace matching; multi-line/conditional counted"
+    },
+    "3_comment_census_full_coverage": {
+      "pass": true,
+      "files_scanned": 512,
+      "test_files": 279,
+      "superset": true
+    },
+    "4_corpora_manifest_and_formatter_golden": {
+      "pass": true,
+      "formatter_golden_bytes": 184,
+      "manifest_reproduce_refs": 26
+    },
+    "5_diff_harness_gate_ran": {
+      "pass": true,
+      "rerun_live": true,
+      "empty_divergence_pct": 100.0,
+      "control_divergence_pct": 0.0,
+      "fixtures": 11,
+      "exit_code": 0
+    },
+    "6_baseline_real_numbers": {
+      "pass": true,
+      "binary_sizes_real": true,
+      "throughput_benchmarks": 28
+    },
+    "7_topo_sort_and_dop_commands": {
+      "pass": true,
+      "crates": 29,
+      "topo_valid": true,
+      "dop_gates_with_commands": "G1-G9"
+    },
+    "8_full_zig_build_test_passed": {
+      "pass": true,
+      "exit_code": 0,
+      "real_failures": 0
+    }
+  },
+  "deliverables": {
+    "build": {
+      "test_run_log": "/Users/gael/projects/rustty/.port/phase-0/test-run.log",
+      "test_lib_vt_log": "/Users/gael/projects/rustty/.port/phase-0/test-lib-vt.log",
+      "build_summary": "/Users/gael/projects/rustty/.port/phase-0/build-summary.md",
+      "exit_code": 0
+    },
+    "inventory": {
+      "tests_jsonl": "/Users/gael/projects/rustty/.port/phase-0/inventory/tests.jsonl",
+      "tests_summary": "/Users/gael/projects/rustty/.port/phase-0/inventory/tests-summary.json",
+      "comments_census": "/Users/gael/projects/rustty/.port/phase-0/inventory/comments-census.json",
+      "parity_surface": "/Users/gael/projects/rustty/.port/phase-0/inventory/parity-surface.json",
+      "extract_tests_py": "/Users/gael/projects/rustty/.port/phase-0/inventory/extract_tests.py",
+      "census_comments_py": "/Users/gael/projects/rustty/.port/phase-0/inventory/census_comments.py",
+      "counts": {
+        "test_blocks": 3234,
+        "files_with_tests": 279,
+        "assertions": 11975,
+        "comment_lines": 42069,
+        "comment_files_scanned": 512,
+        "todo_fixme": 109,
+        "spec_citation": 244,
+        "ascii_diagram": 446,
+        "license_files": 4,
+        "config_public": 203,
+        "config_total": 209,
+        "keybind_actions": 85,
+        "cli_actions": 18,
+        "terminfo_caps": 268,
+        "modes": 41,
+        "sgr": 31,
+        "osc": 25,
+        "csi": 37,
+        "esc": 23,
+        "dcs": 3
+      }
+    },
+    "baseline": {
+      "baseline_json": "/Users/gael/projects/rustty/.port/phase-0/baseline/BASELINE.json",
+      "methodology": "/Users/gael/projects/rustty/.port/phase-0/baseline/METHODOLOGY.md",
+      "binary_sizes_bytes": {
+        "libghostty_vt_a": 12065920,
+        "libghostty_vt_dylib": 5742200,
+        "bench_debug": 1628128,
+        "bench_releasefast": 1553824,
+        "full_test_exe": 102264336,
+        "ghostty_main_gui": null
+      },
+      "benchmark_count": 28,
+      "sample_throughput": {
+        "terminal-parser/utf8_MiB_s": 249.83,
+        "osc-parser_MiB_s": 1160.22,
+        "terminal-stream/ascii_MiB_s": 118.77
+      },
+      "startup_proxy_ms": 9.285084,
+      "documented_unmeasured": [
+        "GUI +version startup",
+        "GUI frame timing",
+        "peak RSS"
+      ]
+    },
+    "corpora": {
+      "manifest_md": "/Users/gael/projects/rustty/.port/phase-0/corpora/MANIFEST.md",
+      "manifest_sha256": "/Users/gael/projects/rustty/.port/phase-0/corpora/MANIFEST.sha256",
+      "formatter_golden": "/Users/gael/projects/rustty/.port/phase-0/corpora/cvt/c-vt-formatter.golden",
+      "golden_counts": {
+        "cvt": 21,
+        "config": 6,
+        "terminfo": 6,
+        "total": 33
+      }
+    },
+    "harness": {
+      "design_md": "/Users/gael/projects/rustty/.port/phase-0/harness/DESIGN.md",
+      "fuzz_inventory_md": "/Users/gael/projects/rustty/.port/phase-0/harness/FUZZ-INVENTORY.md",
+      "ref_driver_bin": "/Users/gael/projects/rustty/.port/phase-0/harness/bin/vt_driver_ref",
+      "gate_script": "/Users/gael/projects/rustty/.port/phase-0/harness/gate_empty_divergence.sh",
+      "gate_summary": "/Users/gael/projects/rustty/.port/phase-0/harness/results/empty_gate_summary.json",
+      "empty_divergence_pct": 100.0,
+      "control_divergence_pct": 0.0,
+      "fixtures": 11,
+      "gate_pass": true
+    },
+    "plan": {
+      "port_plan_md": "/Users/gael/projects/rustty/.port/phase-0/plan/PORT_PLAN.md",
+      "definition_of_parity_md": "/Users/gael/projects/rustty/.port/phase-0/plan/DEFINITION_OF_PARITY.md",
+      "crates": 29,
+      "topo_valid": true,
+      "port_plan_test_count": 3234,
+      "dop_test_count": 3189
+    }
+  },
+  "blockers": [
+    {
+      "id": "B1",
+      "severity": "blocker",
+      "title": "Test-count contract frozen at WRONG number 3189 instead of 3234",
+      "detail": "build-summary.md and plan/DEFINITION_OF_PARITY.md (G1 pass condition) use 3189, omitting the 45 identifier-named test-blocks. Authoritative inventory + critic re-derivation = 3234. Under a literal '== 3189' reading a correct 3234-test port would FALSELY FAIL G1; under '>= 3189' a port missing up to 45 reference tests would PASS. Violates R1 no-exceptions delta rule.",
+      "files_to_fix": [
+        "/Users/gael/projects/rustty/.port/phase-0/plan/DEFINITION_OF_PARITY.md",
+        "/Users/gael/projects/rustty/.port/phase-0/build-summary.md"
+      ],
+      "correct_value": 3234,
+      "note": "Inventory data (tests-summary.json/tests.jsonl) and PORT_PLAN.md are already correct; this is a prose number fix only."
+    }
+  ]
+}

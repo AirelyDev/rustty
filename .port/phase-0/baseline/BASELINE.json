@@ -1,0 +1,746 @@
+{
+  "schema": "rustty-phase0-baseline/v1",
+  "generated_utc": "2026-06-21T22:17:16.328453+00:00",
+  "machine": {
+    "model": "Mac16,7",
+    "cpu": "Apple M4 Pro",
+    "arch": "arm64",
+    "logical_cores": 14,
+    "memory_bytes": 51539607552,
+    "memory_GB": 48,
+    "os": "macOS 26.5.1 (build 25F80)",
+    "kernel": "Darwin 25.5.0"
+  },
+  "reference": {
+    "tree": "/Users/gael/projects/ghostty",
+    "read_only": true,
+    "pinned_commit": "4749c4e93731067049bfbf2e4572061cef2bdd17",
+    "zig_version": "0.15.2",
+    "git_status": "clean (verified: git status --short empty; HEAD == 4749c4e)"
+  },
+  "methodology": "Performance baseline for the ghostty reference oracle on Apple M4 Pro (arm64), captured in isolation (no other heavy work concurrent). BENCHMARKS: the build stage produced a single multiplexed `ghostty-bench` runner (NOT separate ghostty-bench-* binaries); it dispatches by a `+<action>` subcommand (actions: terminal-parser, terminal-stream, codepoint-width, grapheme-break, is-symbol, osc-parser, screen-clone). Each action reads a `--data <file>` corpus, runs its step EXACTLY ONCE (Benchmark.RunMode .once), and PRINTS NOTHING (the internal RunResult is discarded). The only measurable signal is therefore the end-to-end process wall-clock, which we measure with time.monotonic() deltas around subprocess.run INSIDE one Python process (run_benchmarks.py). [A first bash attempt that spawned a separate `python -c time.monotonic()` for the start and end timestamps produced garbage/negative durations because monotonic clocks are not comparable across processes; that data was discarded and the harness rewritten.] Corpora were pre-generated once with `ghostty-gen` (deterministic seed=42 for utf8) and truncated to fixed sizes (64 MiB for data-throughput benches; 256 KiB for screen-clone). Per AGENTS.md, generation is NOT piped into benchmarking. stderr is discarded (terminal stream/parser emit per-byte warn logs on control bytes; we use clean printable ASCII for the stream benches and utf8 for the unicode benches). Each config: 1 warmup (discarded) + N timed reps; median reported (also min/max and all reps). OPTIMIZE MODE: the build stage built bench binaries with default optimize = DEBUG (`zig build -Demit-bench=true`, no -Doptimize). AGENTS.md explicitly warns Debug benchmarks are 'very slow and not representative'. We therefore report BOTH: (a) ReleaseFast (N=7) as the REPRESENTATIVE HEADLINE baseline, built isolated under phase-0 with `-Doptimize=ReleaseFast -Demit-macos-app=false` (ghostty tree untouched), and (b) Debug (N=5) as the literal as-built-in-build-stage numbers. Use ReleaseFast for any parity/perf comparison; Debug is recorded for completeness only. STARTUP: the main GUI `ghostty` binary was NOT built in the build stage, so `ghostty +version` cannot be timed here (documented TODO). The available proxy is the no-arg `ghostty-bench` invocation (process spawn + Zig runtime init + arg parse + immediate NoAction exit), median of 15 runs after 3 warmups; this is dominated by macOS process-spawn overhead and should not be read as terminal GUI startup. hyperfine is NOT installed on this machine; the Python harness substitutes for it.",
+  "binary_sizes_bytes": {
+    "ghostty (main GUI binary)": {
+      "path": "/Users/gael/projects/ghostty/zig-out/bin/ghostty",
+      "bytes": null,
+      "note": "NOT BUILT in the build stage (no -Demit-macos-app / GUI emit was requested); file absent. See blockers."
+    },
+    "ghostty-bench (Debug, as-built in build stage)": {
+      "path": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-bench",
+      "bytes": 1628128,
+      "note": "Built by `zig build -Demit-bench=true` (default optimize = Debug)."
+    },
+    "ghostty-gen (Debug, as-built)": {
+      "path": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-gen",
+      "bytes": 133816
+    },
+    "ghostty-bench (ReleaseFast, built for this baseline)": {
+      "path": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench",
+      "bytes": 1553824,
+      "note": "Built isolated (own --prefix/--cache-dir under phase-0) with `-Demit-bench=true -Demit-macos-app=false -Doptimize=ReleaseFast`. Ghostty source tree untouched (git status clean)."
+    },
+    "ghostty-gen (ReleaseFast)": {
+      "path": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-gen",
+      "bytes": 134424
+    },
+    "libghostty-vt.a (static)": {
+      "path": "/Users/gael/projects/ghostty/zig-out/lib/libghostty-vt.a",
+      "bytes": 12065920
+    },
+    "libghostty-vt.0.1.0.dylib (shared)": {
+      "path": "/Users/gael/projects/ghostty/zig-out/lib/libghostty-vt.0.1.0.dylib",
+      "bytes": 5742200,
+      "note": "libghostty-vt.dylib and libghostty-vt.0.dylib are symlinks to this."
+    },
+    "ghostty-test (full unit-test exe)": {
+      "path": "/Users/gael/projects/ghostty/.zig-cache/o/5af398d32c1eb089d635e876d5b6045a/ghostty-test",
+      "bytes": 102264336,
+      "note": "Test exe is a .zig-cache artifact (Debug, with test runner + safety); not emitted to zig-out. Path is content-addressed and may change on rebuild."
+    },
+    "test (lib-vt test exe #1)": {
+      "path": "/Users/gael/projects/ghostty/.zig-cache/o/fe49850024a96233fb7b1c05ecb6305d/test",
+      "bytes": 31816760,
+      "note": "From `zig build test-lib-vt`; .zig-cache artifact, content-addressed."
+    },
+    "test (lib-vt test exe #2)": {
+      "path": "/Users/gael/projects/ghostty/.zig-cache/o/7bc3f32e3cf38e802aa4418276bfd2d3/test",
+      "bytes": 30947912,
+      "note": ".zig-cache artifact, content-addressed."
+    }
+  },
+  "startup": {
+    "ghostty_plus_version_GUI": {
+      "status": "NOT MEASURED (TODO)",
+      "reason": "Main GUI `ghostty` binary not built in the build stage (no GUI emit requested); `zig-out/bin/ghostty` absent. Measuring real startup requires building the macOS app/GUI binary, which was out of scope for the build stage.",
+      "reproduce_when_available": "build ghostty, then time `ghostty +version` (median of N)."
+    },
+    "proxy_no_gui_process_startup": {
+      "ghostty-bench(Debug,no-action)": {
+        "reps_ms": [
+          7.536500000000002,
+          4.6622080000000015,
+          10.973375000000008,
+          5.467083999999997,
+          13.769832999999995,
+          13.168042000000005,
+          7.831416999999993,
+          5.651500000000004,
+          10.041166000000004,
+          7.733291000000003,
+          6.604041000000005,
+          7.196792000000007,
+          9.321041000000003,
+          9.503167000000007,
+          7.64920899999999
+        ],
+        "median_ms": 7.733291000000003,
+        "min_ms": 4.6622080000000015,
+        "max_ms": 13.769832999999995,
+        "n": 15
+      },
+      "ghostty-bench(ReleaseFast,no-action)": {
+        "reps_ms": [
+          6.487666000000003,
+          10.640167000000005,
+          11.819875000000007,
+          9.975041999999961,
+          9.955500000000006,
+          9.53370800000003,
+          7.667874999999991,
+          11.206833999999999,
+          5.304332999999994,
+          7.687875000000011,
+          10.325500000000043,
+          7.440000000000002,
+          9.285084,
+          4.770500000000011,
+          6.355124999999962
+        ],
+        "median_ms": 9.285084,
+        "min_ms": 4.770500000000011,
+        "max_ms": 11.819875000000007,
+        "n": 15
+      }
+    },
+    "proxy_note": "no-action `ghostty-bench` exits immediately with 'error: NoAction'; measures binary load + Zig runtime init + CLI arg parse, dominated by OS process spawn. Not a substitute for GUI startup.",
+    "proxy_reproduce": "python3 -c \"import time,subprocess,statistics as s; t=[(lambda a,b: (b-a))(time.monotonic(), (subprocess.run([B],stdout=-3,stderr=-3) or time.monotonic())) for _ in range(15)]\"  # see run-startup in METHODOLOGY.md"
+  },
+  "benchmarks": [
+    {
+      "id": "terminal-parser/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +terminal-parser --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 7,
+      "reps_s": [
+        0.25616995800000003,
+        0.258106458,
+        0.254318916,
+        0.2571126659999998,
+        0.2563305410000001,
+        0.25564204200000007,
+        0.25506879100000024
+      ],
+      "median_s": 0.25616995800000003,
+      "min_s": 0.254318916,
+      "max_s": 0.258106458,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 249.8341355078022
+    },
+    {
+      "id": "terminal-stream/ascii",
+      "optimize": "ReleaseFast",
+      "corpus": "ascii.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +terminal-stream --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii.bin",
+      "n_reps": 7,
+      "reps_s": [
+        0.5396732499999999,
+        0.530951,
+        0.5274370419999999,
+        0.5226331250000005,
+        0.54057625,
+        0.5388481250000003,
+        0.5536554169999999
+      ],
+      "median_s": 0.5388481250000003,
+      "min_s": 0.5226331250000005,
+      "max_s": 0.5536554169999999,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 118.77187101653172
+    },
+    {
+      "id": "codepoint-width.noop/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +codepoint-width --mode=noop --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 7,
+      "reps_s": [
+        0.004928500000000113,
+        0.004521666999999674,
+        0.004474042000000011,
+        0.0045876670000000175,
+        0.004510374999999733,
+        0.00429237499999946,
+        0.004753958000000225
+      ],
+      "median_s": 0.004521666999999674,
+      "min_s": 0.00429237499999946,
+      "max_s": 0.004928500000000113,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 14154.071938513964
+    },
+    {
+      "id": "codepoint-width.table/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +codepoint-width --mode=table --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 7,
+      "reps_s": [
+        0.22797287499999985,
+        0.22815162499999975,
+        0.23147200000000012,
+        0.22683204199999984,
+        0.2354252499999996,
+        0.23303816700000013,
+        0.2319052500000005
+      ],
+      "median_s": 0.23147200000000012,
+      "min_s": 0.22683204199999984,
+      "max_s": 0.2354252499999996,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 276.49132508467534
+    },
+    {
+      "id": "codepoint-width.simd/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +codepoint-width --mode=simd --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 7,
+      "reps_s": [
+        0.4990240840000002,
+        0.49584729200000055,
+        0.4939146250000004,
+        0.49152462500000027,
+        0.4904091659999992,
+        0.5104085420000004,
+        0.48979787499999894
+      ],
+      "median_s": 0.4939146250000004,
+      "min_s": 0.48979787499999894,
+      "max_s": 0.5104085420000004,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 129.57704987982478
+    },
+    {
+      "id": "codepoint-width.wcwidth/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +codepoint-width --mode=wcwidth --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 7,
+      "reps_s": [
+        0.252848375000001,
+        0.2535051250000002,
+        0.2533286659999998,
+        0.25436358299999995,
+        0.2556119169999995,
+        0.2562243749999986,
+        0.25457445800000045
+      ],
+      "median_s": 0.25436358299999995,
+      "min_s": 0.252848375000001,
+      "max_s": 0.2562243749999986,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 251.60834442247975
+    },
+    {
+      "id": "grapheme-break.noop/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +grapheme-break --mode=noop --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 7,
+      "reps_s": [
+        0.2240322920000004,
+        0.22358958400000084,
+        0.2247778329999992,
+        0.22459933300000046,
+        0.2239183330000003,
+        0.22375829199999941,
+        0.22450145899999896
+      ],
+      "median_s": 0.2240322920000004,
+      "min_s": 0.22358958400000084,
+      "max_s": 0.2247778329999992,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 285.6731028757224
+    },
+    {
+      "id": "grapheme-break.table/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +grapheme-break --mode=table --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 7,
+      "reps_s": [
+        0.24816683400000272,
+        0.2471139579999999,
+        0.2473416670000006,
+        0.2477676250000016,
+        0.2480342499999999,
+        0.24652733299999952,
+        0.24701979199999968
+      ],
+      "median_s": 0.2473416670000006,
+      "min_s": 0.24652733299999952,
+      "max_s": 0.24816683400000272,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 258.751389429262
+    },
+    {
+      "id": "is-symbol.table/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +is-symbol --mode=table --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 7,
+      "reps_s": [
+        0.2326873749999976,
+        0.22985849999999886,
+        0.2302517910000006,
+        0.23167879100000022,
+        0.23164949999999962,
+        0.23120295899999732,
+        0.22972245900000132
+      ],
+      "median_s": 0.23120295899999732,
+      "min_s": 0.22972245900000132,
+      "max_s": 0.2326873749999976,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 276.8130662203192
+    },
+    {
+      "id": "is-symbol.uucode/utf8",
+      "optimize": "ReleaseFast",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +is-symbol --mode=uucode --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 7,
+      "reps_s": [
+        0.22278850000000006,
+        0.22386354200000014,
+        0.22345100000000073,
+        0.22176904199999825,
+        0.22205083300000084,
+        0.22222245800000096,
+        0.22246174999999724
+      ],
+      "median_s": 0.22246174999999724,
+      "min_s": 0.22176904199999825,
+      "max_s": 0.22386354200000014,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 287.68990624231265
+    },
+    {
+      "id": "osc-parser/osc-parser",
+      "optimize": "ReleaseFast",
+      "corpus": "osc-parser.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +osc-parser --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/osc-parser.bin",
+      "n_reps": 7,
+      "reps_s": [
+        0.055181333000000166,
+        0.055247458000000194,
+        0.05509179199999892,
+        0.05583999999999989,
+        0.05516199999999927,
+        0.054568417000002256,
+        0.05504058400000034
+      ],
+      "median_s": 0.05516199999999927,
+      "min_s": 0.054568417000002256,
+      "max_s": 0.05583999999999989,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 1160.21899133463
+    },
+    {
+      "id": "screen-clone.noop/small",
+      "optimize": "ReleaseFast",
+      "corpus": "ascii-small.bin",
+      "corpus_bytes": 0,
+      "cmd": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +screen-clone --mode=noop --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii-small.bin",
+      "n_reps": 7,
+      "reps_s": [
+        0.005656041999998251,
+        0.007187667000000175,
+        0.0060807079999989355,
+        0.006295791999999523,
+        0.00645387500000183,
+        0.005711165999997547,
+        0.005686416999999722
+      ],
+      "median_s": 0.0060807079999989355,
+      "min_s": 0.005656041999998251,
+      "max_s": 0.007187667000000175,
+      "metric": "clones_per_s (fixed 1000-iteration step loop; data-independent)",
+      "clones_per_s": 164454.53391285604
+    },
+    {
+      "id": "screen-clone.clone/small",
+      "optimize": "ReleaseFast",
+      "corpus": "ascii-small.bin",
+      "corpus_bytes": 0,
+      "cmd": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +screen-clone --mode=clone --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii-small.bin",
+      "n_reps": 7,
+      "reps_s": [
+        0.0489857090000001,
+        0.052676042000001644,
+        0.05152379100000104,
+        0.04922791600000309,
+        0.049347749999999024,
+        0.0493197909999985,
+        0.050260041999997895
+      ],
+      "median_s": 0.049347749999999024,
+      "min_s": 0.0489857090000001,
+      "max_s": 0.052676042000001644,
+      "metric": "clones_per_s (fixed 1000-iteration step loop; data-independent)",
+      "clones_per_s": 20264.348425207223
+    },
+    {
+      "id": "screen-clone.render/small",
+      "optimize": "ReleaseFast",
+      "corpus": "ascii-small.bin",
+      "corpus_bytes": 0,
+      "cmd": "/Users/gael/projects/rustty/.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench +screen-clone --mode=render --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii-small.bin",
+      "n_reps": 7,
+      "reps_s": [
+        0.01636804199999986,
+        0.016314083000001034,
+        0.01625508300000078,
+        0.016947083999998114,
+        0.01616625000000127,
+        0.016848082999999292,
+        0.01609416699999855
+      ],
+      "median_s": 0.016314083000001034,
+      "min_s": 0.01609416699999855,
+      "max_s": 0.016947083999998114,
+      "metric": "clones_per_s (fixed 1000-iteration step loop; data-independent)",
+      "clones_per_s": 61296.733625784334
+    },
+    {
+      "id": "terminal-parser/utf8",
+      "optimize": "Debug",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +terminal-parser --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 5,
+      "reps_s": [
+        0.247912542,
+        0.24716120900000005,
+        0.24710233400000015,
+        0.248072375,
+        0.24838104199999989
+      ],
+      "median_s": 0.247912542,
+      "min_s": 0.24710233400000015,
+      "max_s": 0.24838104199999989,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 258.1555555184457
+    },
+    {
+      "id": "terminal-stream/ascii",
+      "optimize": "Debug",
+      "corpus": "ascii.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +terminal-stream --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii.bin",
+      "n_reps": 5,
+      "reps_s": [
+        30.170416917000004,
+        29.84585125000001,
+        30.871646374999997,
+        31.79600220799999,
+        34.837361958
+      ],
+      "median_s": 30.871646374999997,
+      "min_s": 29.84585125000001,
+      "max_s": 34.837361958,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 2.0730996728385533
+    },
+    {
+      "id": "codepoint-width.noop/utf8",
+      "optimize": "Debug",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +codepoint-width --mode=noop --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 5,
+      "reps_s": [
+        0.010348625000005995,
+        0.010370875000006663,
+        0.011209457999996175,
+        0.010047124999999824,
+        0.010985666999999921
+      ],
+      "median_s": 0.010370875000006663,
+      "min_s": 0.010047124999999824,
+      "max_s": 0.011209457999996175,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 6171.128279914557
+    },
+    {
+      "id": "codepoint-width.table/utf8",
+      "optimize": "Debug",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +codepoint-width --mode=table --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 5,
+      "reps_s": [
+        0.3154009589999873,
+        0.3041865419999965,
+        0.31039416699999833,
+        0.32292766699998765,
+        0.30370341700000836
+      ],
+      "median_s": 0.31039416699999833,
+      "min_s": 0.30370341700000836,
+      "max_s": 0.32292766699998765,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 206.18944169785362
+    },
+    {
+      "id": "codepoint-width.simd/utf8",
+      "optimize": "Debug",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +codepoint-width --mode=simd --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 5,
+      "reps_s": [
+        0.7881677910000064,
+        0.7146975830000031,
+        0.7346120419999806,
+        0.7336874169999987,
+        0.7388298340000006
+      ],
+      "median_s": 0.7346120419999806,
+      "min_s": 0.7146975830000031,
+      "max_s": 0.7881677910000064,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 87.12081526156317
+    },
+    {
+      "id": "codepoint-width.wcwidth/utf8",
+      "optimize": "Debug",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +codepoint-width --mode=wcwidth --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 5,
+      "reps_s": [
+        0.3321520000000078,
+        0.34142600000001266,
+        0.332652582999998,
+        0.34138037499999996,
+        0.3408658339999988
+      ],
+      "median_s": 0.3408658339999988,
+      "min_s": 0.3321520000000078,
+      "max_s": 0.34142600000001266,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 187.7571572632305
+    },
+    {
+      "id": "grapheme-break.noop/utf8",
+      "optimize": "Debug",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +grapheme-break --mode=noop --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 5,
+      "reps_s": [
+        0.30683074999998894,
+        0.30451770799999167,
+        0.30446695900002396,
+        0.2960437920000061,
+        0.31630920800000695
+      ],
+      "median_s": 0.30451770799999167,
+      "min_s": 0.2960437920000061,
+      "max_s": 0.31630920800000695,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 210.16840176664456
+    },
+    {
+      "id": "grapheme-break.table/utf8",
+      "optimize": "Debug",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +grapheme-break --mode=table --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 5,
+      "reps_s": [
+        0.33345666599998935,
+        0.3339633329999856,
+        0.33588329200000544,
+        0.3321845840000037,
+        0.3355517500000076
+      ],
+      "median_s": 0.3339633329999856,
+      "min_s": 0.3321845840000037,
+      "max_s": 0.33588329200000544,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 191.6378047406862
+    },
+    {
+      "id": "is-symbol.table/utf8",
+      "optimize": "Debug",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +is-symbol --mode=table --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 5,
+      "reps_s": [
+        0.3066702079999857,
+        0.31079500000001303,
+        0.3088040829999841,
+        0.3192982500000028,
+        0.31948033300000134
+      ],
+      "median_s": 0.31079500000001303,
+      "min_s": 0.3066702079999857,
+      "max_s": 0.31948033300000134,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 205.92351871811746
+    },
+    {
+      "id": "is-symbol.uucode/utf8",
+      "optimize": "Debug",
+      "corpus": "utf8.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +is-symbol --mode=uucode --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/utf8.bin",
+      "n_reps": 5,
+      "reps_s": [
+        0.3006566669999984,
+        0.2930119170000012,
+        0.30068316700001674,
+        0.3037230409999836,
+        0.2947445000000073
+      ],
+      "median_s": 0.3006566669999984,
+      "min_s": 0.2930119170000012,
+      "max_s": 0.3037230409999836,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 212.8673900319674
+    },
+    {
+      "id": "osc-parser/osc-parser",
+      "optimize": "Debug",
+      "corpus": "osc-parser.bin",
+      "corpus_bytes": 67108864,
+      "cmd": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +osc-parser --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/osc-parser.bin",
+      "n_reps": 5,
+      "reps_s": [
+        0.08602525000000583,
+        0.07564629199998762,
+        0.07399841699998433,
+        0.07881712500000049,
+        0.07932895799999073
+      ],
+      "median_s": 0.07881712500000049,
+      "min_s": 0.07399841699998433,
+      "max_s": 0.08602525000000583,
+      "metric": "throughput_MiB_per_s",
+      "throughput_MiB_per_s": 812.0062740172216
+    },
+    {
+      "id": "screen-clone.noop/small",
+      "optimize": "Debug",
+      "corpus": "ascii-small.bin",
+      "corpus_bytes": 0,
+      "cmd": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +screen-clone --mode=noop --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii-small.bin",
+      "n_reps": 5,
+      "reps_s": [
+        0.6781865830000129,
+        0.6566796660000023,
+        0.6489139589999979,
+        0.7105917090000275,
+        0.6665079999999932
+      ],
+      "median_s": 0.6665079999999932,
+      "min_s": 0.6489139589999979,
+      "max_s": 0.7105917090000275,
+      "metric": "clones_per_s (fixed 1000-iteration step loop; data-independent)",
+      "clones_per_s": 1500.357084986242
+    },
+    {
+      "id": "screen-clone.clone/small",
+      "optimize": "Debug",
+      "corpus": "ascii-small.bin",
+      "corpus_bytes": 0,
+      "cmd": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +screen-clone --mode=clone --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii-small.bin",
+      "n_reps": 5,
+      "reps_s": [
+        5.346963666000022,
+        5.486308874999992,
+        5.5475753329999975,
+        5.80448179199999,
+        5.190295416999987
+      ],
+      "median_s": 5.486308874999992,
+      "min_s": 5.190295416999987,
+      "max_s": 5.80448179199999,
+      "metric": "clones_per_s (fixed 1000-iteration step loop; data-independent)",
+      "clones_per_s": 182.27191045637247
+    },
+    {
+      "id": "screen-clone.render/small",
+      "optimize": "Debug",
+      "corpus": "ascii-small.bin",
+      "corpus_bytes": 0,
+      "cmd": "/Users/gael/projects/ghostty/zig-out/bin/ghostty-bench +screen-clone --mode=render --data=/Users/gael/projects/rustty/.port/phase-0/baseline/corpora/ascii-small.bin",
+      "n_reps": 5,
+      "reps_s": [
+        0.7249711669999783,
+        0.7070652919999816,
+        0.7357875829999898,
+        0.6677251669999862,
+        0.7188553329999934
+      ],
+      "median_s": 0.7188553329999934,
+      "min_s": 0.6677251669999862,
+      "max_s": 0.7357875829999898,
+      "metric": "clones_per_s (fixed 1000-iteration step loop; data-independent)",
+      "clones_per_s": 1391.1004816876127
+    }
+  ],
+  "metrics_unmeasured_TODO": [
+    {
+      "metric": "GUI frame timing / render FPS",
+      "reason": "requires a display + the GUI renderer (Metal); the GUI binary was not built and frame timing needs an on-screen window. Out of scope for headless Phase-0."
+    },
+    {
+      "metric": "peak RSS / memory high-water mark per benchmark",
+      "reason": "the bench binary does not report RSS and the benchmark step runs once with no instrumentation; capturing peak RSS reliably needs /usr/bin/time -l per run or a sampler, which was not part of the as-built tooling. Can be added: wrap each bench in `/usr/bin/time -l` and parse 'maximum resident set size'."
+    },
+    {
+      "metric": "ghostty +version GUI startup",
+      "reason": "GUI binary not built (see startup section)."
+    }
+  ],
+  "reproduce": {
+    "host_metadata": "sysctl -n machdep.cpu.brand_string hw.model hw.ncpu hw.memsize; sw_vers; uname -mrs; zig version",
+    "generate_corpora": "ghostty-gen +utf8 --seed=42  > utf8.full   (cap to 64 MiB via head -c 67108864); ghostty-gen +ascii          > ascii.full  (cap 64 MiB); ghostty-gen +osc --style=parser --p-valid=0.5 > osc-parser.full (cap 64 MiB); head -c 262144 ascii.bin > ascii-small.bin. NOTE: ghostty-gen streams forever; run it to a file in the background and KILL it once the file exceeds the target, then head -c to the exact size. Action names REQUIRE a leading '+'.",
+    "run_releasefast": "python3 run_benchmarks.py <releasefast>/bin/ghostty-bench raw/results-releasefast.jsonl 7",
+    "run_debug": "python3 run_benchmarks.py /Users/gael/projects/ghostty/zig-out/bin/ghostty-bench raw/results-debug.jsonl 5",
+    "build_releasefast_bench": "cd /Users/gael/projects/ghostty && zig build -Demit-bench=true -Demit-macos-app=false -Doptimize=ReleaseFast --prefix <phase0>/baseline/bench-releasefast --cache-dir <phase0>/baseline/bench-rf-cache",
+    "binary_sizes": "stat -f '%N %z' <each path in binary_sizes_bytes>",
+    "per_benchmark": "each benchmarks[].cmd is the exact command; throughput = corpus_bytes / median_s; screen-clone metric = 1000 / median_s clones/s."
+  },
+  "blockers": [
+    "Main GUI `ghostty` binary was not built in the build stage -> `ghostty +version` startup and any GUI/frame-timing metric cannot be measured here (documented TODOs, NOT fabricated).",
+    "Build-stage bench binaries are DEBUG (default optimize); not performance-representative per ghostty AGENTS.md. Mitigated by also building+measuring ReleaseFast (headline). No parity blocker.",
+    "hyperfine not installed; substituted with a single-process Python monotonic harness (run_benchmarks.py)."
+  ]
+}

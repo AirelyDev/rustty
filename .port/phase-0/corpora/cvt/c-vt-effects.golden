@@ -1,0 +1,9 @@
+Sending BEL:
+  bell! (count=1)
+Sending title change:
+  title changed (cursor at col 0)
+Sending DECRQM query:
+  write_pty (8 bytes): [?7;1$y
+Sending another BEL:
+  bell! (count=2)
+Total bells: 2

@@ -1,0 +1,6 @@
+Safe to paste
+Unsafe! Contains newline
+Data with escape sequence is UNSAFE
+Empty data is safe
+Encoded 23 bytes: [200~hello
+world[201~

@@ -1,0 +1,95 @@
+test
++- xcodebuild test stderr
+--- xcodebuild: WARNING: Using the first of multiple matching destinations:
+{ platform:macOS, arch:arm64, id:00006040-0002191922A0801C, name:My Mac }
+{ platform:macOS, arch:x86_64, id:00006040-0002191922A0801C, name:My Mac }
+{ platform:macOS, name:Any Mac }
+2026-06-21 14:27:45.427 xcodebuild[86334:3125565] [MT] IDETestOperationsObserverDebug: 2.184 elapsed -- Testing started completed.
+2026-06-21 14:27:45.427 xcodebuild[86334:3125565] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-06-21 14:27:45.427 xcodebuild[86334:3125565] [MT] IDETestOperationsObserverDebug: 2.184 sec, +2.184 sec -- end
+test
++- run test ghostty-test stderr
+[tripwire] (warn): untripped point=read
+[osc] (warn): An allocator is required to process OSC 4 but none was provided.
+[page] (warn): page integrity violation y=0 grapheme data but row not marked
+[page] (warn): page integrity violation style ref count mismatch id=1 expected=10 actual=9
+[page] (warn): page integrity violation zero row count
+[page] (warn): page integrity violation zero col count
+[terminal] (warn): zero-width character with no prior character, ignoring
+[terminal] (warn): restoreCursor error updating style err=error.OutOfSpace
+[stream] (warn): invalid cursor right command: ESC [  { 5, 4 } C
+[stream] (warn): ignoring unimplemented CSI C with intermediates: ?
+[stream] (warn): invalid set mode command: ESC [   { 6 } h
+[stream] (warn): invalid set mode command: ESC [ > { 5 } h
+[stream] (warn): unimplemented mode: 6
+[stream] (warn): unimplemented mode: 6
+[stream] (warn): unimplemented restore mode: 42
+[stream] (warn): invalid erase display command: ESC [ > { 0 } J
+[stream] (warn): invalid erase line command: ESC [ < { 1 } K
+[stream] (warn): ignoring unimplemented CSI p with intermediates: ? 
+[stream] (warn): ignoring unimplemented CSI p with intermediates: 
+[stream] (warn): ignoring unimplemented CSI p with intermediates: 
+[stream] (warn): invalid XTSHIFTESCAPE command: ESC [ > { 2 } s
+[stream] (warn): unknown CSI s with intermediate: ESC [   { 1 } s
+[stream] (warn): change title request: invalid utf-8, ignoring request
+[stream] (warn): ignoring unimplemented CSI @: ESC [ ? { 42 } @
+[stream] (warn): invalid cursor right command: ESC [  { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } C
+[stream] (warn): ignoring CSI t with unimplemented parameter: ESC [  { 19 } t
+[stream] (warn): ignoring CSI 22/23 t with extra parameters: ESC [  { 22, 1 } t
+[stream] (warn): ignoring CSI 22/23 t with extra parameters: ESC [  { 23, 1 } t
+[stream] (warn): invalid cursor tabulation control: ESC [  { 2 } W
+[stream] (warn): invalid cursor tabulation control: ESC [  { 5 } W
+[stream] (warn): invalid cursor tabulation control: ESC [ > {  } W
+[stream] (warn): invalid cursor tabulation control: ESC [  { 99 } W
+[stream] (warn): invalid cursor tabulation control: ESC [ ? { 2 } W
+[stream] (warn): invalid cursor tabulation control: ESC [ ? { 1, 2, 3 } W
+[stream] (warn): invalid tab clear mode: 65535
+[parser] (warn): CSI colon or mixed separators only allowed for 'm' command, got: terminal.Parser.Action{ .csi_dispatch = .{ .intermediates = {  }, .params = { 38, 2 }, .params_sep = .{ .mask = 1 }, .final = 104 } }
+[kitty_text_sizing] (warn): invalid value for key 's': error.InvalidValue
+[kitty_text_sizing] (warn): invalid value for key 'w': error.InvalidValue
+[kitty_text_sizing] (warn): invalid value for key 'v': error.InvalidValue
+[kitty_text_sizing] (warn): invalid value for key 'n': error.InvalidValue
+[kitty_text_sizing] (warn): payload is not escape code safe UTF-8
+[osc_context_signal] (warn): OSC 3008: expected 'start=' or 'end=' prefix, got: bogus=abc1
+[osc_context_signal] (warn): OSC 3008: missing context ID
+[osc_context_signal] (warn): OSC 3008: context ID length 65 out of range (1-64)
+[io_exec] (warn): failed to get username, not using a login shell
+[io_exec] (warn): failed to read passwd, not using a login shell err=error.Fail
+[io_exec] (warn): failed to read passwd, not using a login shell err=error.Fail
+[io_exec] (warn): failed to read passwd, not using a login shell err=error.Fail
+[terminal_apc] (warn): kitty graphics protocol error: error.InvalidFormat
+[terminal_apc] (warn): kitty graphics protocol error: error.Overflow
+[terminal_apc] (warn): kitty graphics protocol error: error.Overflow
+[terminal_apc] (warn): kitty graphics protocol error: error.Overflow
+[terminal_apc] (warn): kitty graphics protocol error: error.OutOfMemory
+[terminal_apc] (warn): glyph protocol error: error.InvalidFormat
+[terminal_tmux] (warn): tmux control mode error=
+[terminal_tmux] (warn): tmux control mode error=%error not really
+hello
+[shell_integration] (warn): unable to open /Users/gael/projects/ghostty/.zig-cache/tmp/DamwvcJmwv7pUeya/shell-integration/bash/ghostty.bash: error.FileNotFound
+[shell_integration] (warn): unable to open /Users/gael/projects/ghostty/.zig-cache/tmp/whXRpGiOIYbtVYvQ/shell-integration: error.FileNotFound
+[shell_integration] (warn): unable to open /Users/gael/projects/ghostty/.zig-cache/tmp/-AbF4v7FFifRBNnO/shell-integration: error.FileNotFound
+[shell_integration] (warn): unable to open /Users/gael/projects/ghostty/.zig-cache/tmp/dAg1XEE4p6TEwGDn/shell-integration/zsh: error.FileNotFound
+[stream] (warn): invalid cursor tabulation control: ESC [ ? {  } W
+[font_shaper] (warn): failed to parse font feature setting: "aalt=2x,"
+[font_shaper] (warn): failed to parse font feature setting: " toolong,"
+[font_shaper] (warn): failed to parse font feature setting: " sht,"
+[font_shaper] (warn): failed to parse font feature setting: " -kern 1,"
+[font_shaper] (warn): failed to parse font feature setting: " -kern on,"
+[font_shaper] (warn): failed to parse font feature setting: " aalt=o,"
+[font_shaper] (warn): failed to parse font feature setting: " aalt=ofn,"
+[osc_hyperlink] (warn): unknown hyperlink option: ''
+[osc_hyperlink] (warn): unknown hyperlink option: ''
+[osc_kitty_color] (warn): invalid color format in kitty color protocol: #xxxyyzz
+[osc] (warn): An allocator is required to process OSC 21 but none was provided.
+[osc_kitty_color] (warn): invalid color format in kitty color protocol: #xxxyyzz
+[osc_kitty_color] (warn): invalid color format in kitty color protocol: #xxxyyzz
+[osc_kitty_color] (warn): zero length key in kitty color protocol
+[kitty_gfx] (warn): erroneous kitty graphics response: ENOENT: image not found
+[kitty_gfx] (warn): erroneous kitty graphics response: ENOENT: image not found
+[default] (warn): Invalid timestamp in cache entry: invalid err=error.InvalidCharacter
+[default] (warn): Invalid timestamp in cache entry: 999999999999999999999999999999999999999999999999 err=error.Overflow
+[ssh] (warn): ssh -G output missing hostname
+[ssh] (warn): ssh -G output missing user
+[ssh] (warn): ssh -G output missing user
+EXIT_CODE=0

@@ -1,0 +1,4528 @@
+{
+  "_meta": {
+    "reference": "/Users/gael/projects/ghostty",
+    "reference_rev": "4749c4e93731067049bfbf2e4572061cef2bdd17",
+    "zig_version": "0.15.2",
+    "generated_for": "phase-0 parity surface census",
+    "note": "All counts parsed directly from reference source; no fabrication."
+  },
+  "summary": {
+    "config_options_user_facing": 203,
+    "config_fields_internal": 6,
+    "config_fields_total": 209,
+    "keybind_actions": 85,
+    "keybind_actions_void": 54,
+    "keybind_actions_with_payload": 31,
+    "command_palette_default_commands": 88,
+    "cli_actions": 18,
+    "terminfo_entry_names": 3,
+    "terminfo_capabilities": 268,
+    "terminfo_capabilities_by_type": {
+      "boolean": 15,
+      "numeric": 5,
+      "string": 248
+    },
+    "terminal_modes": 41,
+    "terminal_modes_ansi": 4,
+    "terminal_modes_dec": 37,
+    "sgr_attributes": 31,
+    "osc_command_kinds": 25,
+    "osc_subparsers": 15,
+    "osc_numeric_codes_referenced": 10,
+    "csi_final_byte_handlers": 37,
+    "esc_final_byte_handlers": 23,
+    "dcs_command_kinds": 3,
+    "dcs_decrqss_subvalues": 5,
+    "dcs_recognized_hook_sequences": 3,
+    "c0_control_codes": 13
+  },
+  "config_options": {
+    "source": "src/config/Config.zig",
+    "user_facing": [
+      {
+        "name": "language",
+        "type": "?[:0]const u8",
+        "default": "null",
+        "line": 119
+      },
+      {
+        "name": "font-family",
+        "type": "RepeatableString",
+        "default": ".{}",
+        "line": 169
+      },
+      {
+        "name": "font-family-bold",
+        "type": "RepeatableString",
+        "default": ".{}",
+        "line": 170
+      },
+      {
+        "name": "font-family-italic",
+        "type": "RepeatableString",
+        "default": ".{}",
+        "line": 171
+      },
+      {
+        "name": "font-family-bold-italic",
+        "type": "RepeatableString",
+        "default": ".{}",
+        "line": 172
+      },
+      {
+        "name": "font-style",
+        "type": "FontStyle",
+        "default": ".{ .default = {} }",
+        "line": 186
+      },
+      {
+        "name": "font-style-bold",
+        "type": "FontStyle",
+        "default": ".{ .default = {} }",
+        "line": 187
+      },
+      {
+        "name": "font-style-italic",
+        "type": "FontStyle",
+        "default": ".{ .default = {} }",
+        "line": 188
+      },
+      {
+        "name": "font-style-bold-italic",
+        "type": "FontStyle",
+        "default": ".{ .default = {} }",
+        "line": 189
+      },
+      {
+        "name": "font-synthetic-style",
+        "type": "FontSyntheticStyle",
+        "default": ".{}",
+        "line": 221
+      },
+      {
+        "name": "font-feature",
+        "type": "RepeatableString",
+        "default": ".{}",
+        "line": 245
+      },
+      {
+        "name": "font-size",
+        "type": "f32",
+        "default": "switch (builtin.os.tag) { // On macOS we default a little bigger since this tends to look better. This // is purely subjective but this is easy to modify. .macos => 13, else => 12, }",
+        "line": 263
+      },
+      {
+        "name": "font-variation",
+        "type": "RepeatableFontVariation",
+        "default": ".{}",
+        "line": 288
+      },
+      {
+        "name": "font-variation-bold",
+        "type": "RepeatableFontVariation",
+        "default": ".{}",
+        "line": 289
+      },
+      {
+        "name": "font-variation-italic",
+        "type": "RepeatableFontVariation",
+        "default": ".{}",
+        "line": 290
+      },
+      {
+        "name": "font-variation-bold-italic",
+        "type": "RepeatableFontVariation",
+        "default": ".{}",
+        "line": 291
+      },
+      {
+        "name": "font-codepoint-map",
+        "type": "RepeatableCodepointMap",
+        "default": ".{}",
+        "line": 309
+      },
+      {
+        "name": "clipboard-codepoint-map",
+        "type": "RepeatableClipboardCodepointMap",
+        "default": ".{}",
+        "line": 333
+      },
+      {
+        "name": "font-thicken",
+        "type": "bool",
+        "default": "false",
+        "line": 337
+      },
+      {
+        "name": "font-thicken-strength",
+        "type": "u8",
+        "default": "255",
+        "line": 347
+      },
+      {
+        "name": "font-shaping-break",
+        "type": "FontShapingBreak",
+        "default": ".{}",
+        "line": 374
+      },
+      {
+        "name": "alpha-blending",
+        "type": "AlphaBlending",
+        "default": "if (builtin.os.tag == .macos) .native else .@\"linear-corrected\"",
+        "line": 400
+      },
+      {
+        "name": "adjust-cell-width",
+        "type": "?MetricModifier",
+        "default": "null",
+        "line": 430
+      },
+      {
+        "name": "adjust-cell-height",
+        "type": "?MetricModifier",
+        "default": "null",
+        "line": 431
+      },
+      {
+        "name": "adjust-font-baseline",
+        "type": "?MetricModifier",
+        "default": "null",
+        "line": 435
+      },
+      {
+        "name": "adjust-underline-position",
+        "type": "?MetricModifier",
+        "default": "null",
+        "line": 439
+      },
+      {
+        "name": "adjust-underline-thickness",
+        "type": "?MetricModifier",
+        "default": "null",
+        "line": 442
+      },
+      {
+        "name": "adjust-strikethrough-position",
+        "type": "?MetricModifier",
+        "default": "null",
+        "line": 446
+      },
+      {
+        "name": "adjust-strikethrough-thickness",
+        "type": "?MetricModifier",
+        "default": "null",
+        "line": 449
+      },
+      {
+        "name": "adjust-overline-position",
+        "type": "?MetricModifier",
+        "default": "null",
+        "line": 453
+      },
+      {
+        "name": "adjust-overline-thickness",
+        "type": "?MetricModifier",
+        "default": "null",
+        "line": 456
+      },
+      {
+        "name": "adjust-cursor-thickness",
+        "type": "?MetricModifier",
+        "default": "null",
+        "line": 459
+      },
+      {
+        "name": "adjust-cursor-height",
+        "type": "?MetricModifier",
+        "default": "null",
+        "line": 463
+      },
+      {
+        "name": "adjust-box-thickness",
+        "type": "?MetricModifier",
+        "default": "null",
+        "line": 466
+      },
+      {
+        "name": "adjust-icon-height",
+        "type": "?MetricModifier",
+        "default": "null",
+        "line": 480
+      },
+      {
+        "name": "grapheme-width-method",
+        "type": "GraphemeWidthMethod",
+        "default": ".unicode",
+        "line": 507
+      },
+      {
+        "name": "freetype-load-flags",
+        "type": "FreetypeLoadFlags",
+        "default": ".{}",
+        "line": 538
+      },
+      {
+        "name": "theme",
+        "type": "?Theme",
+        "default": "null",
+        "line": 593
+      },
+      {
+        "name": "background",
+        "type": "Color",
+        "default": ".{ .r = 0x28, .g = 0x2C, .b = 0x34 }",
+        "line": 597
+      },
+      {
+        "name": "foreground",
+        "type": "Color",
+        "default": ".{ .r = 0xFF, .g = 0xFF, .b = 0xFF }",
+        "line": 601
+      },
+      {
+        "name": "background-image",
+        "type": "?Path",
+        "default": "null",
+        "line": 618
+      },
+      {
+        "name": "background-image-opacity",
+        "type": "f32",
+        "default": "1.0",
+        "line": 639
+      },
+      {
+        "name": "background-image-position",
+        "type": "BackgroundImagePosition",
+        "default": ".center",
+        "line": 657
+      },
+      {
+        "name": "background-image-fit",
+        "type": "BackgroundImageFit",
+        "default": ".contain",
+        "line": 687
+      },
+      {
+        "name": "background-image-repeat",
+        "type": "bool",
+        "default": "false",
+        "line": 698
+      },
+      {
+        "name": "selection-foreground",
+        "type": "?TerminalColor",
+        "default": "null",
+        "line": 707
+      },
+      {
+        "name": "selection-background",
+        "type": "?TerminalColor",
+        "default": "null",
+        "line": 708
+      },
+      {
+        "name": "selection-clear-on-typing",
+        "type": "bool",
+        "default": "true",
+        "line": 725
+      },
+      {
+        "name": "selection-clear-on-copy",
+        "type": "bool",
+        "default": "false",
+        "line": 737
+      },
+      {
+        "name": "selection-word-chars",
+        "type": "SelectionWordChars",
+        "default": ".{}",
+        "line": 763
+      },
+      {
+        "name": "minimum-contrast",
+        "type": "f64",
+        "default": "1",
+        "line": 776
+      },
+      {
+        "name": "palette",
+        "type": "Palette",
+        "default": ".{}",
+        "line": 794
+      },
+      {
+        "name": "palette-generate",
+        "type": "bool",
+        "default": "false",
+        "line": 818
+      },
+      {
+        "name": "palette-harmonious",
+        "type": "bool",
+        "default": "false",
+        "line": 836
+      },
+      {
+        "name": "cursor-color",
+        "type": "?TerminalColor",
+        "default": "null",
+        "line": 851
+      },
+      {
+        "name": "cursor-opacity",
+        "type": "f64",
+        "default": "1.0",
+        "line": 858
+      },
+      {
+        "name": "cursor-style",
+        "type": "terminal.CursorStyle",
+        "default": ".block",
+        "line": 875
+      },
+      {
+        "name": "cursor-style-blink",
+        "type": "?bool",
+        "default": "null",
+        "line": 894
+      },
+      {
+        "name": "cursor-text",
+        "type": "?TerminalColor",
+        "default": "null",
+        "line": 902
+      },
+      {
+        "name": "cursor-click-to-move",
+        "type": "bool",
+        "default": "true",
+        "line": 916
+      },
+      {
+        "name": "mouse-hide-while-typing",
+        "type": "bool",
+        "default": "false",
+        "line": 922
+      },
+      {
+        "name": "scroll-to-bottom",
+        "type": "ScrollToBottom",
+        "default": ".default",
+        "line": 938
+      },
+      {
+        "name": "mouse-shift-capture",
+        "type": "MouseShiftCapture",
+        "default": ".false",
+        "line": 965
+      },
+      {
+        "name": "mouse-reporting",
+        "type": "bool",
+        "default": "true",
+        "line": 977
+      },
+      {
+        "name": "mouse-scroll-multiplier",
+        "type": "MouseScrollMultiplier",
+        "default": ".default",
+        "line": 992
+      },
+      {
+        "name": "background-opacity",
+        "type": "f64",
+        "default": "1.0",
+        "line": 1003
+      },
+      {
+        "name": "background-opacity-cells",
+        "type": "bool",
+        "default": "false",
+        "line": 1019
+      },
+      {
+        "name": "background-blur",
+        "type": "BackgroundBlur",
+        "default": ".false",
+        "line": 1061
+      },
+      {
+        "name": "unfocused-split-opacity",
+        "type": "f64",
+        "default": "0.7",
+        "line": 1072
+      },
+      {
+        "name": "unfocused-split-fill",
+        "type": "?Color",
+        "default": "null",
+        "line": 1081
+      },
+      {
+        "name": "split-divider-color",
+        "type": "?Color",
+        "default": "null",
+        "line": 1087
+      },
+      {
+        "name": "split-preserve-zoom",
+        "type": "SplitPreserveZoom",
+        "default": ".{}",
+        "line": 1103
+      },
+      {
+        "name": "search-foreground",
+        "type": "TerminalColor",
+        "default": ".{ .color = .{ .r = 0, .g = 0, .b = 0 } }",
+        "line": 1116
+      },
+      {
+        "name": "search-background",
+        "type": "TerminalColor",
+        "default": ".{ .color = .{ .r = 0xFF, .g = 0xE0, .b = 0x82 } }",
+        "line": 1117
+      },
+      {
+        "name": "search-selected-foreground",
+        "type": "TerminalColor",
+        "default": ".{ .color = .{ .r = 0, .g = 0, .b = 0 } }",
+        "line": 1131
+      },
+      {
+        "name": "search-selected-background",
+        "type": "TerminalColor",
+        "default": ".{ .color = .{ .r = 0xF2, .g = 0xA5, .b = 0x7E } }",
+        "line": 1132
+      },
+      {
+        "name": "command",
+        "type": "?Command",
+        "default": "null",
+        "line": 1163
+      },
+      {
+        "name": "initial-command",
+        "type": "?Command",
+        "default": "null",
+        "line": 1199
+      },
+      {
+        "name": "notify-on-command-finish",
+        "type": "NotifyOnCommandFinish",
+        "default": ".never",
+        "line": 1218
+      },
+      {
+        "name": "notify-on-command-finish-action",
+        "type": "NotifyOnCommandFinishAction",
+        "default": ".{ .bell = true, .notify = false, }",
+        "line": 1232
+      },
+      {
+        "name": "notify-on-command-finish-after",
+        "type": "Duration",
+        "default": ".{ .duration = 5 * std.time.ns_per_s }",
+        "line": 1269
+      },
+      {
+        "name": "env",
+        "type": "RepeatableStringMap",
+        "default": ".{}",
+        "line": 1307
+      },
+      {
+        "name": "input",
+        "type": "RepeatableReadableIO",
+        "default": ".{}",
+        "line": 1350
+      },
+      {
+        "name": "wait-after-command",
+        "type": "bool",
+        "default": "false",
+        "line": 1358
+      },
+      {
+        "name": "abnormal-command-exit-runtime",
+        "type": "u32",
+        "default": "250",
+        "line": 1367
+      },
+      {
+        "name": "scrollback-limit",
+        "type": "usize",
+        "default": "10_000_000, // 10MB  /// Control when the scrollbar is shown to scroll the scrollback buffer. /// /// The default value is `system`. /// /// Valid values: /// ///   * `system` - Respect the system settings for when to show scrollbars. ///     For example, on macOS, this will respect the \"Scrollbar behavior\" ///     system setting which by default usually only shows scrollbars while ///     actively scrolling or hovering the gutter. /// ///   * `never` - Never show a scrollbar. You can still scroll using the mouse",
+        "line": 1388
+      },
+      {
+        "name": "scrollbar",
+        "type": "Scrollbar",
+        "default": ".system",
+        "line": 1404
+      },
+      {
+        "name": "link",
+        "type": "RepeatableLink",
+        "default": ".{}",
+        "line": 1418
+      },
+      {
+        "name": "link-url",
+        "type": "bool",
+        "default": "true",
+        "line": 1426
+      },
+      {
+        "name": "link-previews",
+        "type": "LinkPreviews",
+        "default": ".true",
+        "line": 1436
+      },
+      {
+        "name": "maximize",
+        "type": "bool",
+        "default": "false",
+        "line": 1443
+      },
+      {
+        "name": "fullscreen",
+        "type": "Fullscreen",
+        "default": ".false",
+        "line": 1469
+      },
+      {
+        "name": "title",
+        "type": "?[:0]const u8",
+        "default": "null",
+        "line": 1485
+      },
+      {
+        "name": "class",
+        "type": "?[:0]const u8",
+        "default": "null",
+        "line": 1507
+      },
+      {
+        "name": "x11-instance-name",
+        "type": "?[:0]const u8",
+        "default": "null",
+        "line": 1515
+      },
+      {
+        "name": "working-directory",
+        "type": "?WorkingDirectory",
+        "default": "null",
+        "line": 1537
+      },
+      {
+        "name": "keybind",
+        "type": "Keybinds",
+        "default": ".{}",
+        "line": 1871
+      },
+      {
+        "name": "key-remap",
+        "type": "KeyRemapSet",
+        "default": ".empty",
+        "line": 1917
+      },
+      {
+        "name": "window-padding-x",
+        "type": "WindowPadding",
+        "default": ".{ .top_left = 2, .bottom_right = 2 }",
+        "line": 1936
+      },
+      {
+        "name": "window-padding-y",
+        "type": "WindowPadding",
+        "default": ".{ .top_left = 2, .bottom_right = 2 }",
+        "line": 1955
+      },
+      {
+        "name": "window-padding-balance",
+        "type": "WindowPaddingBalance",
+        "default": ".false",
+        "line": 1978
+      },
+      {
+        "name": "window-padding-color",
+        "type": "WindowPaddingColor",
+        "default": ".background",
+        "line": 1999
+      },
+      {
+        "name": "window-vsync",
+        "type": "bool",
+        "default": "true",
+        "line": 2014
+      },
+      {
+        "name": "window-inherit-working-directory",
+        "type": "bool",
+        "default": "true",
+        "line": 2019
+      },
+      {
+        "name": "tab-inherit-working-directory",
+        "type": "bool",
+        "default": "true",
+        "line": 2024
+      },
+      {
+        "name": "split-inherit-working-directory",
+        "type": "bool",
+        "default": "true",
+        "line": 2029
+      },
+      {
+        "name": "window-inherit-font-size",
+        "type": "bool",
+        "default": "true",
+        "line": 2035
+      },
+      {
+        "name": "window-decoration",
+        "type": "WindowDecoration",
+        "default": ".auto",
+        "line": 2089
+      },
+      {
+        "name": "window-title-font-family",
+        "type": "?[:0]const u8",
+        "default": "null",
+        "line": 2099
+      },
+      {
+        "name": "window-subtitle",
+        "type": "WindowSubtitle",
+        "default": ".false",
+        "line": 2110
+      },
+      {
+        "name": "window-theme",
+        "type": "WindowTheme",
+        "default": ".auto",
+        "line": 2130
+      },
+      {
+        "name": "window-colorspace",
+        "type": "WindowColorspace",
+        "default": ".srgb",
+        "line": 2142
+      },
+      {
+        "name": "window-height",
+        "type": "u32",
+        "default": "0",
+        "line": 2171
+      },
+      {
+        "name": "window-width",
+        "type": "u32",
+        "default": "0",
+        "line": 2172
+      },
+      {
+        "name": "window-position-x",
+        "type": "?i16",
+        "default": "null",
+        "line": 2197
+      },
+      {
+        "name": "window-position-y",
+        "type": "?i16",
+        "default": "null",
+        "line": 2198
+      },
+      {
+        "name": "window-save-state",
+        "type": "WindowSaveState",
+        "default": ".default",
+        "line": 2230
+      },
+      {
+        "name": "window-step-resize",
+        "type": "bool",
+        "default": "false",
+        "line": 2235
+      },
+      {
+        "name": "window-new-tab-position",
+        "type": "WindowNewTabPosition",
+        "default": ".current",
+        "line": 2243
+      },
+      {
+        "name": "window-show-tab-bar",
+        "type": "WindowShowTabBar",
+        "default": ".auto",
+        "line": 2266
+      },
+      {
+        "name": "window-titlebar-background",
+        "type": "?Color",
+        "default": "null",
+        "line": 2273
+      },
+      {
+        "name": "window-titlebar-foreground",
+        "type": "?Color",
+        "default": "null",
+        "line": 2280
+      },
+      {
+        "name": "resize-overlay",
+        "type": "ResizeOverlay",
+        "default": ".@\"after-first\"",
+        "line": 2293
+      },
+      {
+        "name": "resize-overlay-position",
+        "type": "ResizeOverlayPosition",
+        "default": ".center",
+        "line": 2307
+      },
+      {
+        "name": "resize-overlay-duration",
+        "type": "Duration",
+        "default": ".{ .duration = 750 * std.time.ns_per_ms }",
+        "line": 2341
+      },
+      {
+        "name": "focus-follows-mouse",
+        "type": "bool",
+        "default": "false",
+        "line": 2349
+      },
+      {
+        "name": "clipboard-read",
+        "type": "ClipboardAccess",
+        "default": ".ask",
+        "line": 2361
+      },
+      {
+        "name": "clipboard-write",
+        "type": "ClipboardAccess",
+        "default": ".allow",
+        "line": 2362
+      },
+      {
+        "name": "clipboard-trim-trailing-spaces",
+        "type": "bool",
+        "default": "true",
+        "line": 2368
+      },
+      {
+        "name": "clipboard-paste-protection",
+        "type": "bool",
+        "default": "true",
+        "line": 2373
+      },
+      {
+        "name": "clipboard-paste-bracketed-safe",
+        "type": "bool",
+        "default": "true",
+        "line": 2379
+      },
+      {
+        "name": "title-report",
+        "type": "bool",
+        "default": "false",
+        "line": 2390
+      },
+      {
+        "name": "image-storage-limit",
+        "type": "u32",
+        "default": "320 * 1000 * 1000",
+        "line": 2399
+      },
+      {
+        "name": "copy-on-select",
+        "type": "CopyOnSelect",
+        "default": "switch (builtin.os.tag) { .linux => .true, .macos => .true, else => .false, }",
+        "line": 2416
+      },
+      {
+        "name": "right-click-action",
+        "type": "RightClickAction",
+        "default": ".@\"context-menu\"",
+        "line": 2433
+      },
+      {
+        "name": "middle-click-action",
+        "type": "MiddleClickAction",
+        "default": ".@\"primary-paste\"",
+        "line": 2443
+      },
+      {
+        "name": "click-repeat-interval",
+        "type": "u32",
+        "default": "0",
+        "line": 2449
+      },
+      {
+        "name": "config-file",
+        "type": "RepeatablePath",
+        "default": ".{}",
+        "line": 2478
+      },
+      {
+        "name": "config-default-files",
+        "type": "bool",
+        "default": "true",
+        "line": 2491
+      },
+      {
+        "name": "confirm-close-surface",
+        "type": "ConfirmCloseSurface",
+        "default": ".true",
+        "line": 2499
+      },
+      {
+        "name": "quit-after-last-window-closed",
+        "type": "bool",
+        "default": "builtin.os.tag == .linux",
+        "line": 2510
+      },
+      {
+        "name": "quit-after-last-window-closed-delay",
+        "type": "?Duration",
+        "default": "null",
+        "line": 2551
+      },
+      {
+        "name": "initial-window",
+        "type": "bool",
+        "default": "true",
+        "line": 2558
+      },
+      {
+        "name": "undo-timeout",
+        "type": "Duration",
+        "default": ".{ .duration = 5 * std.time.ns_per_s }",
+        "line": 2606
+      },
+      {
+        "name": "quick-terminal-position",
+        "type": "QuickTerminalPosition",
+        "default": ".top",
+        "line": 2625
+      },
+      {
+        "name": "quick-terminal-size",
+        "type": "QuickTerminalSize",
+        "default": ".{}",
+        "line": 2648
+      },
+      {
+        "name": "gtk-quick-terminal-layer",
+        "type": "QuickTerminalLayer",
+        "default": ".top",
+        "line": 2676
+      },
+      {
+        "name": "gtk-quick-terminal-namespace",
+        "type": "[:0]const u8",
+        "default": "\"ghostty-quick-terminal\"",
+        "line": 2686
+      },
+      {
+        "name": "quick-terminal-screen",
+        "type": "QuickTerminalScreen",
+        "default": ".main",
+        "line": 2714
+      },
+      {
+        "name": "quick-terminal-animation-duration",
+        "type": "f64",
+        "default": "0.2",
+        "line": 2721
+      },
+      {
+        "name": "quick-terminal-autohide",
+        "type": "bool",
+        "default": "switch (builtin.os.tag) { .linux => false, .macos => true, else => false, }",
+        "line": 2731
+      },
+      {
+        "name": "quick-terminal-space-behavior",
+        "type": "QuickTerminalSpaceBehavior",
+        "default": ".move",
+        "line": 2757
+      },
+      {
+        "name": "quick-terminal-keyboard-interactivity",
+        "type": "QuickTerminalKeyboardInteractivity",
+        "default": ".@\"on-demand\"",
+        "line": 2787
+      },
+      {
+        "name": "shell-integration",
+        "type": "ShellIntegration",
+        "default": ".detect",
+        "line": 2813
+      },
+      {
+        "name": "shell-integration-features",
+        "type": "ShellIntegrationFeatures",
+        "default": ".{}",
+        "line": 2858
+      },
+      {
+        "name": "command-palette-entry",
+        "type": "RepeatableCommand",
+        "default": ".{}",
+        "line": 2901
+      },
+      {
+        "name": "osc-color-report-format",
+        "type": "OSCColorReportFormat",
+        "default": ".@\"16-bit\"",
+        "line": 2920
+      },
+      {
+        "name": "vt-kam-allowed",
+        "type": "bool",
+        "default": "false",
+        "line": 2928
+      },
+      {
+        "name": "custom-shader",
+        "type": "RepeatablePath",
+        "default": ".{}",
+        "line": 3049
+      },
+      {
+        "name": "custom-shader-animation",
+        "type": "CustomShaderAnimation",
+        "default": ".true",
+        "line": 3067
+      },
+      {
+        "name": "bell-features",
+        "type": "BellFeatures",
+        "default": ".{}",
+        "line": 3122
+      },
+      {
+        "name": "bell-audio-path",
+        "type": "?Path",
+        "default": "null",
+        "line": 3131
+      },
+      {
+        "name": "bell-audio-volume",
+        "type": "f64",
+        "default": "0.5",
+        "line": 3138
+      },
+      {
+        "name": "app-notifications",
+        "type": "AppNotifications",
+        "default": ".{}",
+        "line": 3167
+      },
+      {
+        "name": "macos-non-native-fullscreen",
+        "type": "NonNativeFullscreen",
+        "default": ".false",
+        "line": 3198
+      },
+      {
+        "name": "macos-window-buttons",
+        "type": "MacWindowButtons",
+        "default": ".visible",
+        "line": 3219
+      },
+      {
+        "name": "macos-titlebar-style",
+        "type": "MacTitlebarStyle",
+        "default": ".transparent",
+        "line": 3261
+      },
+      {
+        "name": "macos-titlebar-proxy-icon",
+        "type": "MacTitlebarProxyIcon",
+        "default": ".visible",
+        "line": 3282
+      },
+      {
+        "name": "macos-dock-drop-behavior",
+        "type": "MacOSDockDropBehavior",
+        "default": ".@\"new-tab\"",
+        "line": 3297
+      },
+      {
+        "name": "macos-option-as-alt",
+        "type": "?inputpkg.OptionAsAlt",
+        "default": "null",
+        "line": 3331
+      },
+      {
+        "name": "macos-window-shadow",
+        "type": "bool",
+        "default": "true",
+        "line": 3336
+      },
+      {
+        "name": "macos-hidden",
+        "type": "MacHidden",
+        "default": ".never",
+        "line": 3358
+      },
+      {
+        "name": "macos-auto-secure-input",
+        "type": "bool",
+        "default": "true",
+        "line": 3376
+      },
+      {
+        "name": "macos-secure-input-indication",
+        "type": "bool",
+        "default": "true",
+        "line": 3386
+      },
+      {
+        "name": "macos-applescript",
+        "type": "bool",
+        "default": "true",
+        "line": 3396
+      },
+      {
+        "name": "macos-icon",
+        "type": "MacAppIcon",
+        "default": ".official",
+        "line": 3431
+      },
+      {
+        "name": "macos-custom-icon",
+        "type": "?[:0]const u8",
+        "default": "null",
+        "line": 3437
+      },
+      {
+        "name": "macos-icon-frame",
+        "type": "MacAppIconFrame",
+        "default": ".aluminum",
+        "line": 3450
+      },
+      {
+        "name": "macos-icon-ghost-color",
+        "type": "?Color",
+        "default": "null",
+        "line": 3458
+      },
+      {
+        "name": "macos-icon-screen-color",
+        "type": "?ColorList",
+        "default": "null",
+        "line": 3470
+      },
+      {
+        "name": "macos-shortcuts",
+        "type": "MacShortcuts",
+        "default": ".ask",
+        "line": 3494
+      },
+      {
+        "name": "linux-cgroup",
+        "type": "LinuxCgroup",
+        "default": "if (builtin.os.tag == .linux) .@\"single-instance\" else .never",
+        "line": 3523
+      },
+      {
+        "name": "linux-cgroup-memory-limit",
+        "type": "?u64",
+        "default": "null",
+        "line": 3541
+      },
+      {
+        "name": "linux-cgroup-processes-limit",
+        "type": "?u64",
+        "default": "null",
+        "line": 3554
+      },
+      {
+        "name": "linux-cgroup-hard-fail",
+        "type": "bool",
+        "default": "false",
+        "line": 3567
+      },
+      {
+        "name": "gtk-opengl-debug",
+        "type": "bool",
+        "default": "builtin.mode == .Debug",
+        "line": 3573
+      },
+      {
+        "name": "gtk-single-instance",
+        "type": "GtkSingleInstance",
+        "default": ".default",
+        "line": 3603
+      },
+      {
+        "name": "gtk-titlebar",
+        "type": "bool",
+        "default": "true",
+        "line": 3611
+      },
+      {
+        "name": "gtk-tabs-location",
+        "type": "GtkTabsLocation",
+        "default": ".top",
+        "line": 3621
+      },
+      {
+        "name": "gtk-titlebar-hide-when-maximized",
+        "type": "bool",
+        "default": "false",
+        "line": 3627
+      },
+      {
+        "name": "gtk-toolbar-style",
+        "type": "GtkToolbarStyle",
+        "default": ".raised",
+        "line": 3637
+      },
+      {
+        "name": "gtk-titlebar-style",
+        "type": "GtkTitlebarStyle",
+        "default": ".native",
+        "line": 3652
+      },
+      {
+        "name": "gtk-wide-tabs",
+        "type": "bool",
+        "default": "true",
+        "line": 3658
+      },
+      {
+        "name": "gtk-custom-css",
+        "type": "RepeatablePath",
+        "default": ".{}",
+        "line": 3681
+      },
+      {
+        "name": "desktop-notifications",
+        "type": "bool",
+        "default": "true",
+        "line": 3685
+      },
+      {
+        "name": "progress-style",
+        "type": "bool",
+        "default": "true",
+        "line": 3690
+      },
+      {
+        "name": "bold-color",
+        "type": "?BoldColor",
+        "default": "null",
+        "line": 3709
+      },
+      {
+        "name": "faint-opacity",
+        "type": "f64",
+        "default": "0.5",
+        "line": 3716
+      },
+      {
+        "name": "term",
+        "type": "[]const u8",
+        "default": "\"xterm-ghostty\"",
+        "line": 3724
+      },
+      {
+        "name": "enquiry-response",
+        "type": "[]const u8",
+        "default": "\"\"",
+        "line": 3728
+      },
+      {
+        "name": "async-backend",
+        "type": "AsyncBackend",
+        "default": ".auto",
+        "line": 3758
+      },
+      {
+        "name": "auto-update",
+        "type": "?AutoUpdate",
+        "default": "null",
+        "line": 3783
+      },
+      {
+        "name": "auto-update-channel",
+        "type": "?build_config.ReleaseChannel",
+        "default": "null",
+        "line": 3805
+      }
+    ],
+    "internal": [
+      {
+        "name": "_arena",
+        "type": "?ArenaAllocator",
+        "default": "null",
+        "line": 3808
+      },
+      {
+        "name": "_diagnostics",
+        "type": "cli.DiagnosticList",
+        "default": ".{}",
+        "line": 3812
+      },
+      {
+        "name": "_conditional_state",
+        "type": "conditional.State",
+        "default": ".{}",
+        "line": 3816
+      },
+      {
+        "name": "_conditional_set",
+        "type": "std.EnumSet(conditional.Key)",
+        "default": ".{}",
+        "line": 3820
+      },
+      {
+        "name": "_replay_steps",
+        "type": "std.ArrayListUnmanaged(Replay.Step)",
+        "default": ".{}",
+        "line": 3825
+      },
+      {
+        "name": "_xdg-terminal-exec",
+        "type": "bool",
+        "default": "false",
+        "line": 3828
+      }
+    ]
+  },
+  "keybind_actions": {
+    "source": "src/input/Binding.zig (Action union); palette in src/input/command.zig",
+    "actions": [
+      {
+        "name": "ignore",
+        "payload": null,
+        "line": 309
+      },
+      {
+        "name": "unbind",
+        "payload": null,
+        "line": 315
+      },
+      {
+        "name": "csi",
+        "payload": "[]const u8",
+        "line": 323
+      },
+      {
+        "name": "esc",
+        "payload": "[]const u8",
+        "line": 326
+      },
+      {
+        "name": "text",
+        "payload": "[]const u8",
+        "line": 333
+      },
+      {
+        "name": "cursor_key",
+        "payload": "CursorKey",
+        "line": 337
+      },
+      {
+        "name": "reset",
+        "payload": null,
+        "line": 347
+      },
+      {
+        "name": "copy_to_clipboard",
+        "payload": "CopyToClipboard",
+        "line": 373
+      },
+      {
+        "name": "paste_from_clipboard",
+        "payload": null,
+        "line": 376
+      },
+      {
+        "name": "paste_from_selection",
+        "payload": null,
+        "line": 379
+      },
+      {
+        "name": "copy_url_to_clipboard",
+        "payload": null,
+        "line": 382
+      },
+      {
+        "name": "copy_title_to_clipboard",
+        "payload": null,
+        "line": 386
+      },
+      {
+        "name": "increase_font_size",
+        "payload": "f32",
+        "line": 392
+      },
+      {
+        "name": "decrease_font_size",
+        "payload": "f32",
+        "line": 398
+      },
+      {
+        "name": "reset_font_size",
+        "payload": null,
+        "line": 401
+      },
+      {
+        "name": "set_font_size",
+        "payload": "f32",
+        "line": 407
+      },
+      {
+        "name": "search",
+        "payload": "[]const u8",
+        "line": 415
+      },
+      {
+        "name": "search_selection",
+        "payload": null,
+        "line": 420
+      },
+      {
+        "name": "navigate_search",
+        "payload": "NavigateSearch",
+        "line": 426
+      },
+      {
+        "name": "start_search",
+        "payload": null,
+        "line": 430
+      },
+      {
+        "name": "end_search",
+        "payload": null,
+        "line": 433
+      },
+      {
+        "name": "clear_screen",
+        "payload": null,
+        "line": 436
+      },
+      {
+        "name": "select_all",
+        "payload": null,
+        "line": 439
+      },
+      {
+        "name": "scroll_to_top",
+        "payload": null,
+        "line": 442
+      },
+      {
+        "name": "scroll_to_bottom",
+        "payload": null,
+        "line": 445
+      },
+      {
+        "name": "scroll_to_selection",
+        "payload": null,
+        "line": 448
+      },
+      {
+        "name": "scroll_to_row",
+        "payload": "usize",
+        "line": 452
+      },
+      {
+        "name": "scroll_page_up",
+        "payload": null,
+        "line": 455
+      },
+      {
+        "name": "scroll_page_down",
+        "payload": null,
+        "line": 458
+      },
+      {
+        "name": "scroll_page_fractional",
+        "payload": "f32",
+        "line": 467
+      },
+      {
+        "name": "scroll_page_lines",
+        "payload": "i16",
+        "line": 476
+      },
+      {
+        "name": "adjust_selection",
+        "payload": "AdjustSelection",
+        "line": 508
+      },
+      {
+        "name": "jump_to_prompt",
+        "payload": "i16",
+        "line": 515
+      },
+      {
+        "name": "write_scrollback_file",
+        "payload": "WriteScreen",
+        "line": 537
+      },
+      {
+        "name": "write_screen_file",
+        "payload": "WriteScreen",
+        "line": 543
+      },
+      {
+        "name": "write_selection_file",
+        "payload": "WriteScreen",
+        "line": 551
+      },
+      {
+        "name": "new_window",
+        "payload": null,
+        "line": 557
+      },
+      {
+        "name": "new_tab",
+        "payload": null,
+        "line": 560
+      },
+      {
+        "name": "previous_tab",
+        "payload": null,
+        "line": 563
+      },
+      {
+        "name": "next_tab",
+        "payload": null,
+        "line": 566
+      },
+      {
+        "name": "last_tab",
+        "payload": null,
+        "line": 569
+      },
+      {
+        "name": "goto_tab",
+        "payload": "usize",
+        "line": 575
+      },
+      {
+        "name": "move_tab",
+        "payload": "isize",
+        "line": 588
+      },
+      {
+        "name": "toggle_tab_overview",
+        "payload": null,
+        "line": 595
+      },
+      {
+        "name": "prompt_surface_title",
+        "payload": null,
+        "line": 598
+      },
+      {
+        "name": "prompt_tab_title",
+        "payload": null,
+        "line": 603
+      },
+      {
+        "name": "set_surface_title",
+        "payload": "[]const u8",
+        "line": 608
+      },
+      {
+        "name": "set_tab_title",
+        "payload": "[]const u8",
+        "line": 613
+      },
+      {
+        "name": "new_split",
+        "payload": "SplitDirection",
+        "line": 629
+      },
+      {
+        "name": "goto_split",
+        "payload": "SplitFocusDirection",
+        "line": 634
+      },
+      {
+        "name": "goto_window",
+        "payload": "GotoWindow",
+        "line": 637
+      },
+      {
+        "name": "toggle_split_zoom",
+        "payload": null,
+        "line": 644
+      },
+      {
+        "name": "toggle_readonly",
+        "payload": null,
+        "line": 654
+      },
+      {
+        "name": "resize_split",
+        "payload": "SplitResizeParameter",
+        "line": 659
+      },
+      {
+        "name": "equalize_splits",
+        "payload": null,
+        "line": 662
+      },
+      {
+        "name": "reset_window_size",
+        "payload": null,
+        "line": 669
+      },
+      {
+        "name": "inspector",
+        "payload": "InspectorMode",
+        "line": 674
+      },
+      {
+        "name": "show_gtk_inspector",
+        "payload": null,
+        "line": 679
+      },
+      {
+        "name": "show_on_screen_keyboard",
+        "payload": null,
+        "line": 687
+      },
+      {
+        "name": "open_config",
+        "payload": null,
+        "line": 694
+      },
+      {
+        "name": "reload_config",
+        "payload": null,
+        "line": 701
+      },
+      {
+        "name": "close_surface",
+        "payload": null,
+        "line": 707
+      },
+      {
+        "name": "close_tab",
+        "payload": "CloseTabMode",
+        "line": 727
+      },
+      {
+        "name": "close_window",
+        "payload": null,
+        "line": 733
+      },
+      {
+        "name": "close_all_windows",
+        "payload": null,
+        "line": 740
+      },
+      {
+        "name": "toggle_maximize",
+        "payload": null,
+        "line": 746
+      },
+      {
+        "name": "toggle_fullscreen",
+        "payload": null,
+        "line": 749
+      },
+      {
+        "name": "toggle_window_decorations",
+        "payload": null,
+        "line": 754
+      },
+      {
+        "name": "toggle_window_float_on_top",
+        "payload": null,
+        "line": 762
+      },
+      {
+        "name": "toggle_secure_input",
+        "payload": null,
+        "line": 773
+      },
+      {
+        "name": "toggle_mouse_reporting",
+        "payload": null,
+        "line": 784
+      },
+      {
+        "name": "toggle_command_palette",
+        "payload": null,
+        "line": 794
+      },
+      {
+        "name": "toggle_quick_terminal",
+        "payload": null,
+        "line": 846
+      },
+      {
+        "name": "toggle_visibility",
+        "payload": null,
+        "line": 855
+      },
+      {
+        "name": "toggle_background_opacity",
+        "payload": null,
+        "line": 865
+      },
+      {
+        "name": "check_for_updates",
+        "payload": null,
+        "line": 870
+      },
+      {
+        "name": "undo",
+        "payload": null,
+        "line": 894
+      },
+      {
+        "name": "redo",
+        "payload": null,
+        "line": 899
+      },
+      {
+        "name": "end_key_sequence",
+        "payload": null,
+        "line": 913
+      },
+      {
+        "name": "activate_key_table",
+        "payload": "[]const u8",
+        "line": 925
+      },
+      {
+        "name": "activate_key_table_once",
+        "payload": "[]const u8",
+        "line": 935
+      },
+      {
+        "name": "deactivate_key_table",
+        "payload": null,
+        "line": 940
+      },
+      {
+        "name": "deactivate_all_key_tables",
+        "payload": null,
+        "line": 944
+      },
+      {
+        "name": "quit",
+        "payload": null,
+        "line": 947
+      },
+      {
+        "name": "crash",
+        "payload": "CrashThread",
+        "line": 971
+      }
+    ],
+    "command_palette_default_count": 88
+  },
+  "cli_actions": {
+    "source": "src/cli/ghostty.zig (Action enum), src/cli/action.zig (detection)",
+    "actions": [
+      {
+        "name": "version",
+        "invocation": "+version",
+        "impl_file": "cli/version.zig",
+        "line": 31
+      },
+      {
+        "name": "help",
+        "invocation": "+help",
+        "impl_file": "cli/help.zig",
+        "line": 34
+      },
+      {
+        "name": "list-fonts",
+        "invocation": "+list-fonts",
+        "impl_file": "cli/list_fonts.zig",
+        "line": 37
+      },
+      {
+        "name": "list-keybinds",
+        "invocation": "+list-keybinds",
+        "impl_file": "cli/list_keybinds.zig",
+        "line": 40
+      },
+      {
+        "name": "list-themes",
+        "invocation": "+list-themes",
+        "impl_file": "cli/list_themes.zig",
+        "line": 43
+      },
+      {
+        "name": "list-colors",
+        "invocation": "+list-colors",
+        "impl_file": "cli/list_colors.zig",
+        "line": 46
+      },
+      {
+        "name": "list-actions",
+        "invocation": "+list-actions",
+        "impl_file": "cli/list_actions.zig",
+        "line": 49
+      },
+      {
+        "name": "ssh",
+        "invocation": "+ssh",
+        "impl_file": "cli/ssh.zig",
+        "line": 52
+      },
+      {
+        "name": "ssh-cache",
+        "invocation": "+ssh-cache",
+        "impl_file": "cli/ssh_cache.zig",
+        "line": 55
+      },
+      {
+        "name": "edit-config",
+        "invocation": "+edit-config",
+        "impl_file": "cli/edit_config.zig",
+        "line": 58
+      },
+      {
+        "name": "show-config",
+        "invocation": "+show-config",
+        "impl_file": "cli/show_config.zig",
+        "line": 61
+      },
+      {
+        "name": "explain-config",
+        "invocation": "+explain-config",
+        "impl_file": "cli/explain_config.zig",
+        "line": 64
+      },
+      {
+        "name": "validate-config",
+        "invocation": "+validate-config",
+        "impl_file": "cli/validate_config.zig",
+        "line": 67
+      },
+      {
+        "name": "show-face",
+        "invocation": "+show-face",
+        "impl_file": "cli/show_face.zig",
+        "line": 70
+      },
+      {
+        "name": "crash-report",
+        "invocation": "+crash-report",
+        "impl_file": "cli/crash_report.zig",
+        "line": 73
+      },
+      {
+        "name": "boo",
+        "invocation": "+boo",
+        "impl_file": "cli/boo.zig",
+        "line": 76
+      },
+      {
+        "name": "new-window",
+        "invocation": "+new-window",
+        "impl_file": "cli/new_window.zig",
+        "line": 79
+      },
+      {
+        "name": "toggle-quick-terminal",
+        "invocation": "+toggle-quick-terminal",
+        "impl_file": "cli/toggle_quick_terminal.zig",
+        "line": 82
+      }
+    ]
+  },
+  "terminfo": {
+    "source": "src/terminfo/ghostty.zig (+ Source.zig, main.zig)",
+    "entry_names": [
+      "xterm-ghostty",
+      "ghostty",
+      "Ghostty"
+    ],
+    "by_type": {
+      "boolean": 15,
+      "numeric": 5,
+      "string": 248
+    },
+    "capabilities": [
+      {
+        "name": "am",
+        "type": "boolean",
+        "value": "{",
+        "line": 37
+      },
+      {
+        "name": "bce",
+        "type": "boolean",
+        "value": "{",
+        "line": 40
+      },
+      {
+        "name": "ccc",
+        "type": "boolean",
+        "value": "{",
+        "line": 44
+      },
+      {
+        "name": "hs",
+        "type": "boolean",
+        "value": "{",
+        "line": 47
+      },
+      {
+        "name": "km",
+        "type": "boolean",
+        "value": "{",
+        "line": 50
+      },
+      {
+        "name": "mc5i",
+        "type": "boolean",
+        "value": "{",
+        "line": 53
+      },
+      {
+        "name": "mir",
+        "type": "boolean",
+        "value": "{",
+        "line": 56
+      },
+      {
+        "name": "msgr",
+        "type": "boolean",
+        "value": "{",
+        "line": 57
+      },
+      {
+        "name": "npc",
+        "type": "boolean",
+        "value": "{",
+        "line": 60
+      },
+      {
+        "name": "xenl",
+        "type": "boolean",
+        "value": "{",
+        "line": 63
+      },
+      {
+        "name": "AX",
+        "type": "boolean",
+        "value": "{",
+        "line": 66
+      },
+      {
+        "name": "Tc",
+        "type": "boolean",
+        "value": "{",
+        "line": 71
+      },
+      {
+        "name": "Su",
+        "type": "boolean",
+        "value": "{",
+        "line": 74
+      },
+      {
+        "name": "XT",
+        "type": "boolean",
+        "value": "{",
+        "line": 77
+      },
+      {
+        "name": "fullkbd",
+        "type": "boolean",
+        "value": "{",
+        "line": 81
+      },
+      {
+        "name": "colors",
+        "type": "numeric",
+        "value": "256",
+        "line": 84
+      },
+      {
+        "name": "cols",
+        "type": "numeric",
+        "value": "80",
+        "line": 89
+      },
+      {
+        "name": "it",
+        "type": "numeric",
+        "value": "8",
+        "line": 92
+      },
+      {
+        "name": "lines",
+        "type": "numeric",
+        "value": "24",
+        "line": 96
+      },
+      {
+        "name": "pairs",
+        "type": "numeric",
+        "value": "32767",
+        "line": 99
+      },
+      {
+        "name": "acsc",
+        "type": "string",
+        "value": "\"++\\\\,\\\\,--..00``aaffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz{{||}}~~\"",
+        "line": 104
+      },
+      {
+        "name": "Smulx",
+        "type": "string",
+        "value": "\"\\\\E[4:%p1%dm\"",
+        "line": 107
+      },
+      {
+        "name": "Setulc",
+        "type": "string",
+        "value": "\"\\\\E[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%d%;m\"",
+        "line": 110
+      },
+      {
+        "name": "Ss",
+        "type": "string",
+        "value": "\"\\\\E[%p1%d q\"",
+        "line": 113
+      },
+      {
+        "name": "Se",
+        "type": "string",
+        "value": "\"\\\\E[0 q\"",
+        "line": 116
+      },
+      {
+        "name": "Ms",
+        "type": "string",
+        "value": "\"\\\\E]52;%p1%s;%p2%s\\\\007\"",
+        "line": 119
+      },
+      {
+        "name": "Sync",
+        "type": "string",
+        "value": "\"\\\\E[?2026%?%p1%{1}%-%tl%eh%;\"",
+        "line": 122
+      },
+      {
+        "name": "BD",
+        "type": "string",
+        "value": "\"\\\\E[?2004l\"",
+        "line": 125
+      },
+      {
+        "name": "BE",
+        "type": "string",
+        "value": "\"\\\\E[?2004h\"",
+        "line": 126
+      },
+      {
+        "name": "PS",
+        "type": "string",
+        "value": "\"\\\\E[200~\"",
+        "line": 128
+      },
+      {
+        "name": "PE",
+        "type": "string",
+        "value": "\"\\\\E[201~\"",
+        "line": 129
+      },
+      {
+        "name": "XM",
+        "type": "string",
+        "value": "\"\\\\E[?1006;1000%?%p1%{1}%=%th%el%;\"",
+        "line": 132
+      },
+      {
+        "name": "xm",
+        "type": "string",
+        "value": "\"\\\\E[<%i%p3%d;%p1%d;%p2%d;%?%p4%tM%em%;\"",
+        "line": 133
+      },
+      {
+        "name": "RV",
+        "type": "string",
+        "value": "\"\\\\E[>c\"",
+        "line": 136
+      },
+      {
+        "name": "rv",
+        "type": "string",
+        "value": "\"\\\\E\\\\\\\\[[0-9]+;[0-9]+;[0-9]+c\"",
+        "line": 137
+      },
+      {
+        "name": "XR",
+        "type": "string",
+        "value": "\"\\\\E[>0q\"",
+        "line": 140
+      },
+      {
+        "name": "xr",
+        "type": "string",
+        "value": "\"\\\\EP>\\\\\\\\|[ -~]+a\\\\E\\\\\\\\\"",
+        "line": 141
+      },
+      {
+        "name": "Enmg",
+        "type": "string",
+        "value": "\"\\\\E[?69h\"",
+        "line": 144
+      },
+      {
+        "name": "Dsmg",
+        "type": "string",
+        "value": "\"\\\\E[?69l\"",
+        "line": 145
+      },
+      {
+        "name": "Clmg",
+        "type": "string",
+        "value": "\"\\\\E[s\"",
+        "line": 146
+      },
+      {
+        "name": "Cmg",
+        "type": "string",
+        "value": "\"\\\\E[%i%p1%d;%p2%ds\"",
+        "line": 147
+      },
+      {
+        "name": "clear",
+        "type": "string",
+        "value": "\"\\\\E[H\\\\E[2J\"",
+        "line": 150
+      },
+      {
+        "name": "E3",
+        "type": "string",
+        "value": "\"\\\\E[3J\"",
+        "line": 151
+      },
+      {
+        "name": "fe",
+        "type": "string",
+        "value": "\"\\\\E[?1004h\"",
+        "line": 154
+      },
+      {
+        "name": "fd",
+        "type": "string",
+        "value": "\"\\\\E[?1004l\"",
+        "line": 155
+      },
+      {
+        "name": "kxIN",
+        "type": "string",
+        "value": "\"\\\\E[I\"",
+        "line": 156
+      },
+      {
+        "name": "kxOUT",
+        "type": "string",
+        "value": "\"\\\\E[O\"",
+        "line": 157
+      },
+      {
+        "name": "bel",
+        "type": "string",
+        "value": "\"^G\"",
+        "line": 161
+      },
+      {
+        "name": "blink",
+        "type": "string",
+        "value": "\"\\\\E[5m\"",
+        "line": 162
+      },
+      {
+        "name": "bold",
+        "type": "string",
+        "value": "\"\\\\E[1m\"",
+        "line": 163
+      },
+      {
+        "name": "cbt",
+        "type": "string",
+        "value": "\"\\\\E[Z\"",
+        "line": 164
+      },
+      {
+        "name": "civis",
+        "type": "string",
+        "value": "\"\\\\E[?25l\"",
+        "line": 165
+      },
+      {
+        "name": "cnorm",
+        "type": "string",
+        "value": "\"\\\\E[?12l\\\\E[?25h\"",
+        "line": 166
+      },
+      {
+        "name": "cr",
+        "type": "string",
+        "value": "\"\\\\r\"",
+        "line": 167
+      },
+      {
+        "name": "csr",
+        "type": "string",
+        "value": "\"\\\\E[%i%p1%d;%p2%dr\"",
+        "line": 168
+      },
+      {
+        "name": "cub",
+        "type": "string",
+        "value": "\"\\\\E[%p1%dD\"",
+        "line": 169
+      },
+      {
+        "name": "cub1",
+        "type": "string",
+        "value": "\"^H\"",
+        "line": 170
+      },
+      {
+        "name": "cud",
+        "type": "string",
+        "value": "\"\\\\E[%p1%dB\"",
+        "line": 171
+      },
+      {
+        "name": "cud1",
+        "type": "string",
+        "value": "\"^J\"",
+        "line": 172
+      },
+      {
+        "name": "cuf",
+        "type": "string",
+        "value": "\"\\\\E[%p1%dC\"",
+        "line": 173
+      },
+      {
+        "name": "cuf1",
+        "type": "string",
+        "value": "\"\\\\E[C\"",
+        "line": 174
+      },
+      {
+        "name": "cup",
+        "type": "string",
+        "value": "\"\\\\E[%i%p1%d;%p2%dH\"",
+        "line": 175
+      },
+      {
+        "name": "cuu",
+        "type": "string",
+        "value": "\"\\\\E[%p1%dA\"",
+        "line": 176
+      },
+      {
+        "name": "cuu1",
+        "type": "string",
+        "value": "\"\\\\E[A\"",
+        "line": 177
+      },
+      {
+        "name": "cvvis",
+        "type": "string",
+        "value": "\"\\\\E[?12;25h\"",
+        "line": 178
+      },
+      {
+        "name": "dch",
+        "type": "string",
+        "value": "\"\\\\E[%p1%dP\"",
+        "line": 179
+      },
+      {
+        "name": "dch1",
+        "type": "string",
+        "value": "\"\\\\E[P\"",
+        "line": 180
+      },
+      {
+        "name": "dim",
+        "type": "string",
+        "value": "\"\\\\E[2m\"",
+        "line": 181
+      },
+      {
+        "name": "dl",
+        "type": "string",
+        "value": "\"\\\\E[%p1%dM\"",
+        "line": 182
+      },
+      {
+        "name": "dl1",
+        "type": "string",
+        "value": "\"\\\\E[M\"",
+        "line": 183
+      },
+      {
+        "name": "dsl",
+        "type": "string",
+        "value": "\"\\\\E]2;\\\\007\"",
+        "line": 184
+      },
+      {
+        "name": "ech",
+        "type": "string",
+        "value": "\"\\\\E[%p1%dX\"",
+        "line": 185
+      },
+      {
+        "name": "ed",
+        "type": "string",
+        "value": "\"\\\\E[J\"",
+        "line": 186
+      },
+      {
+        "name": "el",
+        "type": "string",
+        "value": "\"\\\\E[K\"",
+        "line": 187
+      },
+      {
+        "name": "el1",
+        "type": "string",
+        "value": "\"\\\\E[1K\"",
+        "line": 188
+      },
+      {
+        "name": "flash",
+        "type": "string",
+        "value": "\"\\\\E[?5h$<100/>\\\\E[?5l\"",
+        "line": 189
+      },
+      {
+        "name": "fsl",
+        "type": "string",
+        "value": "\"^G\"",
+        "line": 190
+      },
+      {
+        "name": "home",
+        "type": "string",
+        "value": "\"\\\\E[H\"",
+        "line": 191
+      },
+      {
+        "name": "hpa",
+        "type": "string",
+        "value": "\"\\\\E[%i%p1%dG\"",
+        "line": 192
+      },
+      {
+        "name": "ht",
+        "type": "string",
+        "value": "\"^I\"",
+        "line": 193
+      },
+      {
+        "name": "hts",
+        "type": "string",
+        "value": "\"\\\\EH\"",
+        "line": 194
+      },
+      {
+        "name": "ich",
+        "type": "string",
+        "value": "\"\\\\E[%p1%d@\"",
+        "line": 195
+      },
+      {
+        "name": "ich1",
+        "type": "string",
+        "value": "\"\\\\E[@\"",
+        "line": 196
+      },
+      {
+        "name": "il",
+        "type": "string",
+        "value": "\"\\\\E[%p1%dL\"",
+        "line": 197
+      },
+      {
+        "name": "il1",
+        "type": "string",
+        "value": "\"\\\\E[L\"",
+        "line": 198
+      },
+      {
+        "name": "ind",
+        "type": "string",
+        "value": "\"\\\\n\"",
+        "line": 199
+      },
+      {
+        "name": "indn",
+        "type": "string",
+        "value": "\"\\\\E[%p1%dS\"",
+        "line": 200
+      },
+      {
+        "name": "initc",
+        "type": "string",
+        "value": "\"\\\\E]4;%p1%d;rgb\\\\:%p2%{255}%*%{1000}%/%2.2X/%p3%{255}%*%{1000}%/%2.2X/%p4%{255}%*%{1000}%/%2.2X\\\\E\\\\\\\\\"",
+        "line": 201
+      },
+      {
+        "name": "invis",
+        "type": "string",
+        "value": "\"\\\\E[8m\"",
+        "line": 202
+      },
+      {
+        "name": "oc",
+        "type": "string",
+        "value": "\"\\\\E]104\\\\007\"",
+        "line": 203
+      },
+      {
+        "name": "op",
+        "type": "string",
+        "value": "\"\\\\E[39;49m\"",
+        "line": 204
+      },
+      {
+        "name": "rc",
+        "type": "string",
+        "value": "\"\\\\E8\"",
+        "line": 205
+      },
+      {
+        "name": "rep",
+        "type": "string",
+        "value": "\"%p1%c\\\\E[%p2%{1}%-%db\"",
+        "line": 206
+      },
+      {
+        "name": "rev",
+        "type": "string",
+        "value": "\"\\\\E[7m\"",
+        "line": 207
+      },
+      {
+        "name": "ri",
+        "type": "string",
+        "value": "\"\\\\EM\"",
+        "line": 208
+      },
+      {
+        "name": "rin",
+        "type": "string",
+        "value": "\"\\\\E[%p1%dT\"",
+        "line": 209
+      },
+      {
+        "name": "ritm",
+        "type": "string",
+        "value": "\"\\\\E[23m\"",
+        "line": 210
+      },
+      {
+        "name": "rmacs",
+        "type": "string",
+        "value": "\"\\\\E(B\"",
+        "line": 211
+      },
+      {
+        "name": "rmam",
+        "type": "string",
+        "value": "\"\\\\E[?7l\"",
+        "line": 212
+      },
+      {
+        "name": "rmcup",
+        "type": "string",
+        "value": "\"\\\\E[?1049l\"",
+        "line": 213
+      },
+      {
+        "name": "rmir",
+        "type": "string",
+        "value": "\"\\\\E[4l\"",
+        "line": 214
+      },
+      {
+        "name": "rmkx",
+        "type": "string",
+        "value": "\"\\\\E[?1l\\\\E>\"",
+        "line": 215
+      },
+      {
+        "name": "rmso",
+        "type": "string",
+        "value": "\"\\\\E[27m\"",
+        "line": 216
+      },
+      {
+        "name": "rmul",
+        "type": "string",
+        "value": "\"\\\\E[24m\"",
+        "line": 217
+      },
+      {
+        "name": "rmxx",
+        "type": "string",
+        "value": "\"\\\\E[29m\"",
+        "line": 218
+      },
+      {
+        "name": "setab",
+        "type": "string",
+        "value": "\"\\\\E[%?%p1%{8}%<%t4%p1%d%e%p1%{16}%<%t10%p1%{8}%-%d%e48;5;%p1%d%;m\"",
+        "line": 219
+      },
+      {
+        "name": "setaf",
+        "type": "string",
+        "value": "\"\\\\E[%?%p1%{8}%<%t3%p1%d%e%p1%{16}%<%t9%p1%{8}%-%d%e38;5;%p1%d%;m\"",
+        "line": 220
+      },
+      {
+        "name": "setrgbb",
+        "type": "string",
+        "value": "\"\\\\E[48:2:%p1%d:%p2%d:%p3%dm\"",
+        "line": 221
+      },
+      {
+        "name": "setrgbf",
+        "type": "string",
+        "value": "\"\\\\E[38:2:%p1%d:%p2%d:%p3%dm\"",
+        "line": 222
+      },
+      {
+        "name": "sgr",
+        "type": "string",
+        "value": "\"%?%p9%t\\\\E(0%e\\\\E(B%;\\\\E[0%?%p6%t;1%;%?%p5%t;2%;%?%p2%t;4%;%?%p1%p3%|%t;7%;%?%p4%t;5%;%?%p7%t;8%;m\"",
+        "line": 223
+      },
+      {
+        "name": "sgr0",
+        "type": "string",
+        "value": "\"\\\\E(B\\\\E[m\"",
+        "line": 224
+      },
+      {
+        "name": "sitm",
+        "type": "string",
+        "value": "\"\\\\E[3m\"",
+        "line": 225
+      },
+      {
+        "name": "smacs",
+        "type": "string",
+        "value": "\"\\\\E(0\"",
+        "line": 226
+      },
+      {
+        "name": "smam",
+        "type": "string",
+        "value": "\"\\\\E[?7h\"",
+        "line": 227
+      },
+      {
+        "name": "smcup",
+        "type": "string",
+        "value": "\"\\\\E[?1049h\"",
+        "line": 228
+      },
+      {
+        "name": "smir",
+        "type": "string",
+        "value": "\"\\\\E[4h\"",
+        "line": 229
+      },
+      {
+        "name": "smkx",
+        "type": "string",
+        "value": "\"\\\\E[?1h\\\\E=\"",
+        "line": 230
+      },
+      {
+        "name": "smso",
+        "type": "string",
+        "value": "\"\\\\E[7m\"",
+        "line": 231
+      },
+      {
+        "name": "smul",
+        "type": "string",
+        "value": "\"\\\\E[4m\"",
+        "line": 232
+      },
+      {
+        "name": "smxx",
+        "type": "string",
+        "value": "\"\\\\E[9m\"",
+        "line": 233
+      },
+      {
+        "name": "tbc",
+        "type": "string",
+        "value": "\"\\\\E[3g\"",
+        "line": 234
+      },
+      {
+        "name": "tsl",
+        "type": "string",
+        "value": "\"\\\\E]2;\"",
+        "line": 235
+      },
+      {
+        "name": "u6",
+        "type": "string",
+        "value": "\"\\\\E[%i%d;%dR\"",
+        "line": 236
+      },
+      {
+        "name": "u7",
+        "type": "string",
+        "value": "\"\\\\E[6n\"",
+        "line": 237
+      },
+      {
+        "name": "u8",
+        "type": "string",
+        "value": "\"\\\\E[?%[;0123456789]c\"",
+        "line": 238
+      },
+      {
+        "name": "u9",
+        "type": "string",
+        "value": "\"\\\\E[c\"",
+        "line": 239
+      },
+      {
+        "name": "vpa",
+        "type": "string",
+        "value": "\"\\\\E[%i%p1%dd\"",
+        "line": 240
+      },
+      {
+        "name": "kDC",
+        "type": "string",
+        "value": "\"\\\\E[3;2~\"",
+        "line": 247
+      },
+      {
+        "name": "kDC3",
+        "type": "string",
+        "value": "\"\\\\E[3;3~\"",
+        "line": 248
+      },
+      {
+        "name": "kDC4",
+        "type": "string",
+        "value": "\"\\\\E[3;4~\"",
+        "line": 249
+      },
+      {
+        "name": "kDC5",
+        "type": "string",
+        "value": "\"\\\\E[3;5~\"",
+        "line": 250
+      },
+      {
+        "name": "kDC6",
+        "type": "string",
+        "value": "\"\\\\E[3;6~\"",
+        "line": 251
+      },
+      {
+        "name": "kDC7",
+        "type": "string",
+        "value": "\"\\\\E[3;7~\"",
+        "line": 252
+      },
+      {
+        "name": "kDN",
+        "type": "string",
+        "value": "\"\\\\E[1;2B\"",
+        "line": 253
+      },
+      {
+        "name": "kDN3",
+        "type": "string",
+        "value": "\"\\\\E[1;3B\"",
+        "line": 254
+      },
+      {
+        "name": "kDN4",
+        "type": "string",
+        "value": "\"\\\\E[1;4B\"",
+        "line": 255
+      },
+      {
+        "name": "kDN5",
+        "type": "string",
+        "value": "\"\\\\E[1;5B\"",
+        "line": 256
+      },
+      {
+        "name": "kDN6",
+        "type": "string",
+        "value": "\"\\\\E[1;6B\"",
+        "line": 257
+      },
+      {
+        "name": "kDN7",
+        "type": "string",
+        "value": "\"\\\\E[1;7B\"",
+        "line": 258
+      },
+      {
+        "name": "kEND",
+        "type": "string",
+        "value": "\"\\\\E[1;2F\"",
+        "line": 259
+      },
+      {
+        "name": "kEND3",
+        "type": "string",
+        "value": "\"\\\\E[1;3F\"",
+        "line": 260
+      },
+      {
+        "name": "kEND4",
+        "type": "string",
+        "value": "\"\\\\E[1;4F\"",
+        "line": 261
+      },
+      {
+        "name": "kEND5",
+        "type": "string",
+        "value": "\"\\\\E[1;5F\"",
+        "line": 262
+      },
+      {
+        "name": "kEND6",
+        "type": "string",
+        "value": "\"\\\\E[1;6F\"",
+        "line": 263
+      },
+      {
+        "name": "kEND7",
+        "type": "string",
+        "value": "\"\\\\E[1;7F\"",
+        "line": 264
+      },
+      {
+        "name": "kHOM",
+        "type": "string",
+        "value": "\"\\\\E[1;2H\"",
+        "line": 265
+      },
+      {
+        "name": "kHOM3",
+        "type": "string",
+        "value": "\"\\\\E[1;3H\"",
+        "line": 266
+      },
+      {
+        "name": "kHOM4",
+        "type": "string",
+        "value": "\"\\\\E[1;4H\"",
+        "line": 267
+      },
+      {
+        "name": "kHOM5",
+        "type": "string",
+        "value": "\"\\\\E[1;5H\"",
+        "line": 268
+      },
+      {
+        "name": "kHOM6",
+        "type": "string",
+        "value": "\"\\\\E[1;6H\"",
+        "line": 269
+      },
+      {
+        "name": "kHOM7",
+        "type": "string",
+        "value": "\"\\\\E[1;7H\"",
+        "line": 270
+      },
+      {
+        "name": "kIC",
+        "type": "string",
+        "value": "\"\\\\E[2;2~\"",
+        "line": 271
+      },
+      {
+        "name": "kIC3",
+        "type": "string",
+        "value": "\"\\\\E[2;3~\"",
+        "line": 272
+      },
+      {
+        "name": "kIC4",
+        "type": "string",
+        "value": "\"\\\\E[2;4~\"",
+        "line": 273
+      },
+      {
+        "name": "kIC5",
+        "type": "string",
+        "value": "\"\\\\E[2;5~\"",
+        "line": 274
+      },
+      {
+        "name": "kIC6",
+        "type": "string",
+        "value": "\"\\\\E[2;6~\"",
+        "line": 275
+      },
+      {
+        "name": "kIC7",
+        "type": "string",
+        "value": "\"\\\\E[2;7~\"",
+        "line": 276
+      },
+      {
+        "name": "kLFT",
+        "type": "string",
+        "value": "\"\\\\E[1;2D\"",
+        "line": 277
+      },
+      {
+        "name": "kLFT3",
+        "type": "string",
+        "value": "\"\\\\E[1;3D\"",
+        "line": 278
+      },
+      {
+        "name": "kLFT4",
+        "type": "string",
+        "value": "\"\\\\E[1;4D\"",
+        "line": 279
+      },
+      {
+        "name": "kLFT5",
+        "type": "string",
+        "value": "\"\\\\E[1;5D\"",
+        "line": 280
+      },
+      {
+        "name": "kLFT6",
+        "type": "string",
+        "value": "\"\\\\E[1;6D\"",
+        "line": 281
+      },
+      {
+        "name": "kLFT7",
+        "type": "string",
+        "value": "\"\\\\E[1;7D\"",
+        "line": 282
+      },
+      {
+        "name": "kNXT",
+        "type": "string",
+        "value": "\"\\\\E[6;2~\"",
+        "line": 283
+      },
+      {
+        "name": "kNXT3",
+        "type": "string",
+        "value": "\"\\\\E[6;3~\"",
+        "line": 284
+      },
+      {
+        "name": "kNXT4",
+        "type": "string",
+        "value": "\"\\\\E[6;4~\"",
+        "line": 285
+      },
+      {
+        "name": "kNXT5",
+        "type": "string",
+        "value": "\"\\\\E[6;5~\"",
+        "line": 286
+      },
+      {
+        "name": "kNXT6",
+        "type": "string",
+        "value": "\"\\\\E[6;6~\"",
+        "line": 287
+      },
+      {
+        "name": "kNXT7",
+        "type": "string",
+        "value": "\"\\\\E[6;7~\"",
+        "line": 288
+      },
+      {
+        "name": "kPRV",
+        "type": "string",
+        "value": "\"\\\\E[5;2~\"",
+        "line": 289
+      },
+      {
+        "name": "kPRV3",
+        "type": "string",
+        "value": "\"\\\\E[5;3~\"",
+        "line": 290
+      },
+      {
+        "name": "kPRV4",
+        "type": "string",
+        "value": "\"\\\\E[5;4~\"",
+        "line": 291
+      },
+      {
+        "name": "kPRV5",
+        "type": "string",
+        "value": "\"\\\\E[5;5~\"",
+        "line": 292
+      },
+      {
+        "name": "kPRV6",
+        "type": "string",
+        "value": "\"\\\\E[5;6~\"",
+        "line": 293
+      },
+      {
+        "name": "kPRV7",
+        "type": "string",
+        "value": "\"\\\\E[5;7~\"",
+        "line": 294
+      },
+      {
+        "name": "kRIT",
+        "type": "string",
+        "value": "\"\\\\E[1;2C\"",
+        "line": 295
+      },
+      {
+        "name": "kRIT3",
+        "type": "string",
+        "value": "\"\\\\E[1;3C\"",
+        "line": 296
+      },
+      {
+        "name": "kRIT4",
+        "type": "string",
+        "value": "\"\\\\E[1;4C\"",
+        "line": 297
+      },
+      {
+        "name": "kRIT5",
+        "type": "string",
+        "value": "\"\\\\E[1;5C\"",
+        "line": 298
+      },
+      {
+        "name": "kRIT6",
+        "type": "string",
+        "value": "\"\\\\E[1;6C\"",
+        "line": 299
+      },
+      {
+        "name": "kRIT7",
+        "type": "string",
+        "value": "\"\\\\E[1;7C\"",
+        "line": 300
+      },
+      {
+        "name": "kUP",
+        "type": "string",
+        "value": "\"\\\\E[1;2A\"",
+        "line": 301
+      },
+      {
+        "name": "kUP3",
+        "type": "string",
+        "value": "\"\\\\E[1;3A\"",
+        "line": 302
+      },
+      {
+        "name": "kUP4",
+        "type": "string",
+        "value": "\"\\\\E[1;4A\"",
+        "line": 303
+      },
+      {
+        "name": "kUP5",
+        "type": "string",
+        "value": "\"\\\\E[1;5A\"",
+        "line": 304
+      },
+      {
+        "name": "kUP6",
+        "type": "string",
+        "value": "\"\\\\E[1;6A\"",
+        "line": 305
+      },
+      {
+        "name": "kUP7",
+        "type": "string",
+        "value": "\"\\\\E[1;7A\"",
+        "line": 306
+      },
+      {
+        "name": "kbs",
+        "type": "string",
+        "value": "\"^?\"",
+        "line": 307
+      },
+      {
+        "name": "kcbt",
+        "type": "string",
+        "value": "\"\\\\E[Z\"",
+        "line": 308
+      },
+      {
+        "name": "kcub1",
+        "type": "string",
+        "value": "\"\\\\EOD\"",
+        "line": 309
+      },
+      {
+        "name": "kcud1",
+        "type": "string",
+        "value": "\"\\\\EOB\"",
+        "line": 310
+      },
+      {
+        "name": "kcuf1",
+        "type": "string",
+        "value": "\"\\\\EOC\"",
+        "line": 311
+      },
+      {
+        "name": "kcuu1",
+        "type": "string",
+        "value": "\"\\\\EOA\"",
+        "line": 312
+      },
+      {
+        "name": "kdch1",
+        "type": "string",
+        "value": "\"\\\\E[3~\"",
+        "line": 313
+      },
+      {
+        "name": "kend",
+        "type": "string",
+        "value": "\"\\\\EOF\"",
+        "line": 314
+      },
+      {
+        "name": "kent",
+        "type": "string",
+        "value": "\"\\\\EOM\"",
+        "line": 315
+      },
+      {
+        "name": "kf1",
+        "type": "string",
+        "value": "\"\\\\EOP\"",
+        "line": 316
+      },
+      {
+        "name": "kf10",
+        "type": "string",
+        "value": "\"\\\\E[21~\"",
+        "line": 317
+      },
+      {
+        "name": "kf11",
+        "type": "string",
+        "value": "\"\\\\E[23~\"",
+        "line": 318
+      },
+      {
+        "name": "kf12",
+        "type": "string",
+        "value": "\"\\\\E[24~\"",
+        "line": 319
+      },
+      {
+        "name": "kf13",
+        "type": "string",
+        "value": "\"\\\\E[1;2P\"",
+        "line": 320
+      },
+      {
+        "name": "kf14",
+        "type": "string",
+        "value": "\"\\\\E[1;2Q\"",
+        "line": 321
+      },
+      {
+        "name": "kf15",
+        "type": "string",
+        "value": "\"\\\\E[1;2R\"",
+        "line": 322
+      },
+      {
+        "name": "kf16",
+        "type": "string",
+        "value": "\"\\\\E[1;2S\"",
+        "line": 323
+      },
+      {
+        "name": "kf17",
+        "type": "string",
+        "value": "\"\\\\E[15;2~\"",
+        "line": 324
+      },
+      {
+        "name": "kf18",
+        "type": "string",
+        "value": "\"\\\\E[17;2~\"",
+        "line": 325
+      },
+      {
+        "name": "kf19",
+        "type": "string",
+        "value": "\"\\\\E[18;2~\"",
+        "line": 326
+      },
+      {
+        "name": "kf2",
+        "type": "string",
+        "value": "\"\\\\EOQ\"",
+        "line": 327
+      },
+      {
+        "name": "kf20",
+        "type": "string",
+        "value": "\"\\\\E[19;2~\"",
+        "line": 328
+      },
+      {
+        "name": "kf21",
+        "type": "string",
+        "value": "\"\\\\E[20;2~\"",
+        "line": 329
+      },
+      {
+        "name": "kf22",
+        "type": "string",
+        "value": "\"\\\\E[21;2~\"",
+        "line": 330
+      },
+      {
+        "name": "kf23",
+        "type": "string",
+        "value": "\"\\\\E[23;2~\"",
+        "line": 331
+      },
+      {
+        "name": "kf24",
+        "type": "string",
+        "value": "\"\\\\E[24;2~\"",
+        "line": 332
+      },
+      {
+        "name": "kf25",
+        "type": "string",
+        "value": "\"\\\\E[1;5P\"",
+        "line": 333
+      },
+      {
+        "name": "kf26",
+        "type": "string",
+        "value": "\"\\\\E[1;5Q\"",
+        "line": 334
+      },
+      {
+        "name": "kf27",
+        "type": "string",
+        "value": "\"\\\\E[1;5R\"",
+        "line": 335
+      },
+      {
+        "name": "kf28",
+        "type": "string",
+        "value": "\"\\\\E[1;5S\"",
+        "line": 336
+      },
+      {
+        "name": "kf29",
+        "type": "string",
+        "value": "\"\\\\E[15;5~\"",
+        "line": 337
+      },
+      {
+        "name": "kf3",
+        "type": "string",
+        "value": "\"\\\\EOR\"",
+        "line": 338
+      },
+      {
+        "name": "kf30",
+        "type": "string",
+        "value": "\"\\\\E[17;5~\"",
+        "line": 339
+      },
+      {
+        "name": "kf31",
+        "type": "string",
+        "value": "\"\\\\E[18;5~\"",
+        "line": 340
+      },
+      {
+        "name": "kf32",
+        "type": "string",
+        "value": "\"\\\\E[19;5~\"",
+        "line": 341
+      },
+      {
+        "name": "kf33",
+        "type": "string",
+        "value": "\"\\\\E[20;5~\"",
+        "line": 342
+      },
+      {
+        "name": "kf34",
+        "type": "string",
+        "value": "\"\\\\E[21;5~\"",
+        "line": 343
+      },
+      {
+        "name": "kf35",
+        "type": "string",
+        "value": "\"\\\\E[23;5~\"",
+        "line": 344
+      },
+      {
+        "name": "kf36",
+        "type": "string",
+        "value": "\"\\\\E[24;5~\"",
+        "line": 345
+      },
+      {
+        "name": "kf37",
+        "type": "string",
+        "value": "\"\\\\E[1;6P\"",
+        "line": 346
+      },
+      {
+        "name": "kf38",
+        "type": "string",
+        "value": "\"\\\\E[1;6Q\"",
+        "line": 347
+      },
+      {
+        "name": "kf39",
+        "type": "string",
+        "value": "\"\\\\E[1;6R\"",
+        "line": 348
+      },
+      {
+        "name": "kf4",
+        "type": "string",
+        "value": "\"\\\\EOS\"",
+        "line": 349
+      },
+      {
+        "name": "kf40",
+        "type": "string",
+        "value": "\"\\\\E[1;6S\"",
+        "line": 350
+      },
+      {
+        "name": "kf41",
+        "type": "string",
+        "value": "\"\\\\E[15;6~\"",
+        "line": 351
+      },
+      {
+        "name": "kf42",
+        "type": "string",
+        "value": "\"\\\\E[17;6~\"",
+        "line": 352
+      },
+      {
+        "name": "kf43",
+        "type": "string",
+        "value": "\"\\\\E[18;6~\"",
+        "line": 353
+      },
+      {
+        "name": "kf44",
+        "type": "string",
+        "value": "\"\\\\E[19;6~\"",
+        "line": 354
+      },
+      {
+        "name": "kf45",
+        "type": "string",
+        "value": "\"\\\\E[20;6~\"",
+        "line": 355
+      },
+      {
+        "name": "kf46",
+        "type": "string",
+        "value": "\"\\\\E[21;6~\"",
+        "line": 356
+      },
+      {
+        "name": "kf47",
+        "type": "string",
+        "value": "\"\\\\E[23;6~\"",
+        "line": 357
+      },
+      {
+        "name": "kf48",
+        "type": "string",
+        "value": "\"\\\\E[24;6~\"",
+        "line": 358
+      },
+      {
+        "name": "kf49",
+        "type": "string",
+        "value": "\"\\\\E[1;3P\"",
+        "line": 359
+      },
+      {
+        "name": "kf5",
+        "type": "string",
+        "value": "\"\\\\E[15~\"",
+        "line": 360
+      },
+      {
+        "name": "kf50",
+        "type": "string",
+        "value": "\"\\\\E[1;3Q\"",
+        "line": 361
+      },
+      {
+        "name": "kf51",
+        "type": "string",
+        "value": "\"\\\\E[1;3R\"",
+        "line": 362
+      },
+      {
+        "name": "kf52",
+        "type": "string",
+        "value": "\"\\\\E[1;3S\"",
+        "line": 363
+      },
+      {
+        "name": "kf53",
+        "type": "string",
+        "value": "\"\\\\E[15;3~\"",
+        "line": 364
+      },
+      {
+        "name": "kf54",
+        "type": "string",
+        "value": "\"\\\\E[17;3~\"",
+        "line": 365
+      },
+      {
+        "name": "kf55",
+        "type": "string",
+        "value": "\"\\\\E[18;3~\"",
+        "line": 366
+      },
+      {
+        "name": "kf56",
+        "type": "string",
+        "value": "\"\\\\E[19;3~\"",
+        "line": 367
+      },
+      {
+        "name": "kf57",
+        "type": "string",
+        "value": "\"\\\\E[20;3~\"",
+        "line": 368
+      },
+      {
+        "name": "kf58",
+        "type": "string",
+        "value": "\"\\\\E[21;3~\"",
+        "line": 369
+      },
+      {
+        "name": "kf59",
+        "type": "string",
+        "value": "\"\\\\E[23;3~\"",
+        "line": 370
+      },
+      {
+        "name": "kf6",
+        "type": "string",
+        "value": "\"\\\\E[17~\"",
+        "line": 371
+      },
+      {
+        "name": "kf60",
+        "type": "string",
+        "value": "\"\\\\E[24;3~\"",
+        "line": 372
+      },
+      {
+        "name": "kf61",
+        "type": "string",
+        "value": "\"\\\\E[1;4P\"",
+        "line": 373
+      },
+      {
+        "name": "kf62",
+        "type": "string",
+        "value": "\"\\\\E[1;4Q\"",
+        "line": 374
+      },
+      {
+        "name": "kf63",
+        "type": "string",
+        "value": "\"\\\\E[1;4R\"",
+        "line": 375
+      },
+      {
+        "name": "kf7",
+        "type": "string",
+        "value": "\"\\\\E[18~\"",
+        "line": 376
+      },
+      {
+        "name": "kf8",
+        "type": "string",
+        "value": "\"\\\\E[19~\"",
+        "line": 377
+      },
+      {
+        "name": "kf9",
+        "type": "string",
+        "value": "\"\\\\E[20~\"",
+        "line": 378
+      },
+      {
+        "name": "khome",
+        "type": "string",
+        "value": "\"\\\\EOH\"",
+        "line": 379
+      },
+      {
+        "name": "kich1",
+        "type": "string",
+        "value": "\"\\\\E[2~\"",
+        "line": 380
+      },
+      {
+        "name": "kind",
+        "type": "string",
+        "value": "\"\\\\E[1;2B\"",
+        "line": 381
+      },
+      {
+        "name": "kmous",
+        "type": "string",
+        "value": "\"\\\\E[<\"",
+        "line": 382
+      },
+      {
+        "name": "knp",
+        "type": "string",
+        "value": "\"\\\\E[6~\"",
+        "line": 383
+      },
+      {
+        "name": "kpp",
+        "type": "string",
+        "value": "\"\\\\E[5~\"",
+        "line": 384
+      },
+      {
+        "name": "kri",
+        "type": "string",
+        "value": "\"\\\\E[1;2A\"",
+        "line": 385
+      },
+      {
+        "name": "rs1",
+        "type": "string",
+        "value": "\"\\\\E]\\\\E\\\\\\\\\\\\Ec\"",
+        "line": 386
+      },
+      {
+        "name": "sc",
+        "type": "string",
+        "value": "\"\\\\E7\"",
+        "line": 387
+      }
+    ]
+  },
+  "terminal_modes": {
+    "source": "src/terminal/modes.zig",
+    "modes": [
+      {
+        "name": "disable_keyboard",
+        "value": 2,
+        "kind": "ANSI",
+        "default": false,
+        "disabled": false,
+        "line": 253
+      },
+      {
+        "name": "insert",
+        "value": 4,
+        "kind": "ANSI",
+        "default": false,
+        "disabled": false,
+        "line": 254
+      },
+      {
+        "name": "send_receive_mode",
+        "value": 12,
+        "kind": "ANSI",
+        "default": true,
+        "disabled": false,
+        "line": 255
+      },
+      {
+        "name": "linefeed",
+        "value": 20,
+        "kind": "ANSI",
+        "default": false,
+        "disabled": false,
+        "line": 256
+      },
+      {
+        "name": "cursor_keys",
+        "value": 1,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 259
+      },
+      {
+        "name": "132_column",
+        "value": 3,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 260
+      },
+      {
+        "name": "slow_scroll",
+        "value": 4,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 261
+      },
+      {
+        "name": "reverse_colors",
+        "value": 5,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 262
+      },
+      {
+        "name": "origin",
+        "value": 6,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 263
+      },
+      {
+        "name": "wraparound",
+        "value": 7,
+        "kind": "DEC",
+        "default": true,
+        "disabled": false,
+        "line": 264
+      },
+      {
+        "name": "autorepeat",
+        "value": 8,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 265
+      },
+      {
+        "name": "mouse_event_x10",
+        "value": 9,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 266
+      },
+      {
+        "name": "cursor_blinking",
+        "value": 12,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 267
+      },
+      {
+        "name": "cursor_visible",
+        "value": 25,
+        "kind": "DEC",
+        "default": true,
+        "disabled": false,
+        "line": 268
+      },
+      {
+        "name": "enable_mode_3",
+        "value": 40,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 269
+      },
+      {
+        "name": "reverse_wrap",
+        "value": 45,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 270
+      },
+      {
+        "name": "alt_screen_legacy",
+        "value": 47,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 271
+      },
+      {
+        "name": "keypad_keys",
+        "value": 66,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 272
+      },
+      {
+        "name": "backarrow_key_mode",
+        "value": 67,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 277
+      },
+      {
+        "name": "enable_left_and_right_margin",
+        "value": 69,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 278
+      },
+      {
+        "name": "mouse_event_normal",
+        "value": 1000,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 279
+      },
+      {
+        "name": "mouse_event_button",
+        "value": 1002,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 280
+      },
+      {
+        "name": "mouse_event_any",
+        "value": 1003,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 281
+      },
+      {
+        "name": "focus_event",
+        "value": 1004,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 282
+      },
+      {
+        "name": "mouse_format_utf8",
+        "value": 1005,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 283
+      },
+      {
+        "name": "mouse_format_sgr",
+        "value": 1006,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 284
+      },
+      {
+        "name": "mouse_alternate_scroll",
+        "value": 1007,
+        "kind": "DEC",
+        "default": true,
+        "disabled": false,
+        "line": 285
+      },
+      {
+        "name": "mouse_format_urxvt",
+        "value": 1015,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 286
+      },
+      {
+        "name": "mouse_format_sgr_pixels",
+        "value": 1016,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 287
+      },
+      {
+        "name": "ignore_keypad_with_numlock",
+        "value": 1035,
+        "kind": "DEC",
+        "default": true,
+        "disabled": false,
+        "line": 288
+      },
+      {
+        "name": "alt_esc_prefix",
+        "value": 1036,
+        "kind": "DEC",
+        "default": true,
+        "disabled": false,
+        "line": 289
+      },
+      {
+        "name": "alt_sends_escape",
+        "value": 1039,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 290
+      },
+      {
+        "name": "reverse_wrap_extended",
+        "value": 1045,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 291
+      },
+      {
+        "name": "alt_screen",
+        "value": 1047,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 292
+      },
+      {
+        "name": "save_cursor",
+        "value": 1048,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 293
+      },
+      {
+        "name": "alt_screen_save_cursor_clear_enter",
+        "value": 1049,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 294
+      },
+      {
+        "name": "bracketed_paste",
+        "value": 2004,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 295
+      },
+      {
+        "name": "synchronized_output",
+        "value": 2026,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 296
+      },
+      {
+        "name": "grapheme_cluster",
+        "value": 2027,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 297
+      },
+      {
+        "name": "report_color_scheme",
+        "value": 2031,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 298
+      },
+      {
+        "name": "in_band_size_reports",
+        "value": 2048,
+        "kind": "DEC",
+        "default": false,
+        "disabled": false,
+        "line": 299
+      }
+    ]
+  },
+  "sgr_attributes": {
+    "source": "src/terminal/sgr.zig (Attribute union / Tag enum)",
+    "attributes": [
+      {
+        "name": "unset",
+        "line": 83
+      },
+      {
+        "name": "unknown",
+        "line": 84
+      },
+      {
+        "name": "bold",
+        "line": 85
+      },
+      {
+        "name": "reset_bold",
+        "line": 86
+      },
+      {
+        "name": "italic",
+        "line": 87
+      },
+      {
+        "name": "reset_italic",
+        "line": 88
+      },
+      {
+        "name": "faint",
+        "line": 89
+      },
+      {
+        "name": "underline",
+        "line": 90
+      },
+      {
+        "name": "underline_color",
+        "line": 91
+      },
+      {
+        "name": "256_underline_color",
+        "line": 92
+      },
+      {
+        "name": "reset_underline_color",
+        "line": 93
+      },
+      {
+        "name": "overline",
+        "line": 94
+      },
+      {
+        "name": "reset_overline",
+        "line": 95
+      },
+      {
+        "name": "blink",
+        "line": 96
+      },
+      {
+        "name": "reset_blink",
+        "line": 97
+      },
+      {
+        "name": "inverse",
+        "line": 98
+      },
+      {
+        "name": "reset_inverse",
+        "line": 99
+      },
+      {
+        "name": "invisible",
+        "line": 100
+      },
+      {
+        "name": "reset_invisible",
+        "line": 101
+      },
+      {
+        "name": "strikethrough",
+        "line": 102
+      },
+      {
+        "name": "reset_strikethrough",
+        "line": 103
+      },
+      {
+        "name": "direct_color_fg",
+        "line": 104
+      },
+      {
+        "name": "direct_color_bg",
+        "line": 105
+      },
+      {
+        "name": "8_bg",
+        "line": 106
+      },
+      {
+        "name": "8_fg",
+        "line": 107
+      },
+      {
+        "name": "reset_fg",
+        "line": 108
+      },
+      {
+        "name": "reset_bg",
+        "line": 109
+      },
+      {
+        "name": "8_bright_bg",
+        "line": 110
+      },
+      {
+        "name": "8_bright_fg",
+        "line": 111
+      },
+      {
+        "name": "256_bg",
+        "line": 112
+      },
+      {
+        "name": "256_fg",
+        "line": 113
+      }
+    ]
+  },
+  "osc_handlers": {
+    "source": "src/terminal/osc.zig (Command union / Key enum), src/terminal/osc/parsers/",
+    "command_kinds": [
+      "invalid",
+      "change_window_title",
+      "change_window_icon",
+      "semantic_prompt",
+      "clipboard_contents",
+      "report_pwd",
+      "mouse_shape",
+      "color_operation",
+      "kitty_color_protocol",
+      "show_desktop_notification",
+      "hyperlink_start",
+      "hyperlink_end",
+      "conemu_sleep",
+      "conemu_show_message_box",
+      "conemu_change_tab_title",
+      "conemu_progress_report",
+      "conemu_wait_input",
+      "conemu_guimacro",
+      "conemu_run_process",
+      "conemu_output_environment_variable",
+      "conemu_xterm_emulation",
+      "conemu_comment",
+      "kitty_text_sizing",
+      "kitty_clipboard_protocol",
+      "context_signal"
+    ],
+    "subparsers": [
+      "change_window_icon",
+      "change_window_title",
+      "clipboard_operation",
+      "color",
+      "context_signal",
+      "hyperlink",
+      "iterm2",
+      "kitty_clipboard_protocol",
+      "kitty_color",
+      "kitty_text_sizing",
+      "mouse_shape",
+      "osc9",
+      "report_pwd",
+      "rxvt_extension",
+      "semantic_prompt"
+    ],
+    "numeric_codes_referenced": [
+      7,
+      8,
+      9,
+      21,
+      22,
+      52,
+      66,
+      77,
+      777,
+      3008
+    ]
+  },
+  "csi_handlers": {
+    "source": "src/terminal/stream.zig csiDispatch (switch on input.final)",
+    "note": "Top-level final-byte arms; many further dispatch on intermediates (more distinct commands than arm count). Param enums in src/terminal/csi.zig.",
+    "has_else_unimplemented": true,
+    "arms": [
+      {
+        "finals": [
+          "A",
+          "k"
+        ],
+        "comment": "CUU - Cursor Up",
+        "line": 810
+      },
+      {
+        "finals": [
+          "B"
+        ],
+        "comment": "CUD - Cursor Down",
+        "line": 833
+      },
+      {
+        "finals": [
+          "C"
+        ],
+        "comment": "CUF - Cursor Right",
+        "line": 853
+      },
+      {
+        "finals": [
+          "D",
+          "j"
+        ],
+        "comment": "CUB - Cursor Left",
+        "line": 876
+      },
+      {
+        "finals": [
+          "E"
+        ],
+        "comment": "CNL - Cursor Next Line",
+        "line": 896
+      },
+      {
+        "finals": [
+          "F"
+        ],
+        "comment": "CPL - Cursor Previous Line",
+        "line": 919
+      },
+      {
+        "finals": [
+          "G",
+          "`"
+        ],
+        "comment": "HPA - Cursor Horizontal Position Absolute | TODO: test",
+        "line": 943
+      },
+      {
+        "finals": [
+          "H",
+          "f"
+        ],
+        "comment": "CUP - Set Cursor Position. | TODO: test",
+        "line": 964
+      },
+      {
+        "finals": [
+          "I"
+        ],
+        "comment": "CHT - Cursor Horizontal Tabulation",
+        "line": 989
+      },
+      {
+        "finals": [
+          "J"
+        ],
+        "comment": "Erase Display",
+        "line": 1006
+      },
+      {
+        "finals": [
+          "K"
+        ],
+        "comment": "Erase Line",
+        "line": 1039
+      },
+      {
+        "finals": [
+          "L"
+        ],
+        "comment": "IL - Insert Lines | TODO: test",
+        "line": 1079
+      },
+      {
+        "finals": [
+          "M"
+        ],
+        "comment": "DL - Delete Lines | TODO: test",
+        "line": 1097
+      },
+      {
+        "finals": [
+          "P"
+        ],
+        "comment": "Delete Character (DCH)",
+        "line": 1114
+      },
+      {
+        "finals": [
+          "S"
+        ],
+        "comment": null,
+        "line": 1132
+      },
+      {
+        "finals": [
+          "T"
+        ],
+        "comment": "Scroll Down (SD)",
+        "line": 1149
+      },
+      {
+        "finals": [
+          "W"
+        ],
+        "comment": "Cursor Tabulation Control",
+        "line": 1166
+      },
+      {
+        "finals": [
+          "X"
+        ],
+        "comment": "Erase Characters (ECH)",
+        "line": 1209
+      },
+      {
+        "finals": [
+          "Z"
+        ],
+        "comment": "CHT - Cursor Horizontal Tabulation Back",
+        "line": 1230
+      },
+      {
+        "finals": [
+          "a"
+        ],
+        "comment": "HPR - Cursor Horizontal Position Relative",
+        "line": 1247
+      },
+      {
+        "finals": [
+          "b"
+        ],
+        "comment": "Repeat Previous Char (REP)",
+        "line": 1266
+      },
+      {
+        "finals": [
+          "c"
+        ],
+        "comment": "c - Device Attributes (DA1)",
+        "line": 1283
+      },
+      {
+        "finals": [
+          "d"
+        ],
+        "comment": "VPA - Cursor Vertical Position Absolute",
+        "line": 1303
+      },
+      {
+        "finals": [
+          "e"
+        ],
+        "comment": "VPR - Cursor Vertical Position Relative",
+        "line": 1322
+      },
+      {
+        "finals": [
+          "g"
+        ],
+        "comment": "TBC - Tab Clear | TODO: test",
+        "line": 1342
+      },
+      {
+        "finals": [
+          "h"
+        ],
+        "comment": "SM - Set Mode",
+        "line": 1368
+      },
+      {
+        "finals": [
+          "l"
+        ],
+        "comment": "RM - Reset Mode",
+        "line": 1389
+      },
+      {
+        "finals": [
+          "m"
+        ],
+        "comment": "SGR - Select Graphic Rendition",
+        "line": 1410
+      },
+      {
+        "finals": [
+          "n"
+        ],
+        "comment": "TODO: test",
+        "line": 1493
+      },
+      {
+        "finals": [
+          "p"
+        ],
+        "comment": "DECRQM - Request Mode",
+        "line": 1548
+      },
+      {
+        "finals": [
+          "q"
+        ],
+        "comment": null,
+        "line": 1588
+      },
+      {
+        "finals": [
+          "r"
+        ],
+        "comment": null,
+        "line": 1656
+      },
+      {
+        "finals": [
+          "s"
+        ],
+        "comment": null,
+        "line": 1698
+      },
+      {
+        "finals": [
+          "t"
+        ],
+        "comment": "XTWINOPS",
+        "line": 1759
+      },
+      {
+        "finals": [
+          "u"
+        ],
+        "comment": null,
+        "line": 1827
+      },
+      {
+        "finals": [
+          "@"
+        ],
+        "comment": "ICH - Insert Blanks",
+        "line": 1901
+      },
+      {
+        "finals": [
+          "}"
+        ],
+        "comment": "DECSASD - Select Active Status Display",
+        "line": 1919
+      },
+      {
+        "finals": [
+          "else"
+        ],
+        "comment": null,
+        "line": 1942
+      }
+    ]
+  },
+  "esc_handlers": {
+    "source": "src/terminal/stream.zig escDispatch (switch on action.final)",
+    "has_else_unimplemented": true,
+    "arms": [
+      {
+        "finals": [
+          "B"
+        ],
+        "comment": "Charsets",
+        "line": 2134
+      },
+      {
+        "finals": [
+          "A"
+        ],
+        "comment": null,
+        "line": 2138
+      },
+      {
+        "finals": [
+          "0"
+        ],
+        "comment": null,
+        "line": 2139
+      },
+      {
+        "finals": [
+          "7"
+        ],
+        "comment": "DECSC - Save Cursor",
+        "line": 2145
+      },
+      {
+        "finals": [
+          "8"
+        ],
+        "comment": null,
+        "line": 2157
+      },
+      {
+        "finals": [
+          "D"
+        ],
+        "comment": "IND - Index",
+        "line": 2183
+      },
+      {
+        "finals": [
+          "E"
+        ],
+        "comment": "NEL - Next Line",
+        "line": 2193
+      },
+      {
+        "finals": [
+          "H"
+        ],
+        "comment": "HTS - Horizontal Tab Set",
+        "line": 2203
+      },
+      {
+        "finals": [
+          "M"
+        ],
+        "comment": "RI - Reverse Index",
+        "line": 2213
+      },
+      {
+        "finals": [
+          "N"
+        ],
+        "comment": "SS2 - Single Shift 2",
+        "line": 2226
+      },
+      {
+        "finals": [
+          "O"
+        ],
+        "comment": "SS3 - Single Shift 3",
+        "line": 2240
+      },
+      {
+        "finals": [
+          "V"
+        ],
+        "comment": "SPA - Start of Guarded Area",
+        "line": 2254
+      },
+      {
+        "finals": [
+          "W"
+        ],
+        "comment": "EPA - End of Guarded Area",
+        "line": 2260
+      },
+      {
+        "finals": [
+          "Z"
+        ],
+        "comment": "DECID",
+        "line": 2266
+      },
+      {
+        "finals": [
+          "c"
+        ],
+        "comment": "RIS - Full Reset",
+        "line": 2271
+      },
+      {
+        "finals": [
+          "n"
+        ],
+        "comment": "LS2 - Locking Shift 2",
+        "line": 2280
+      },
+      {
+        "finals": [
+          "o"
+        ],
+        "comment": "LS3 - Locking Shift 3",
+        "line": 2294
+      },
+      {
+        "finals": [
+          "~"
+        ],
+        "comment": "LS1R - Locking Shift 1 Right",
+        "line": 2308
+      },
+      {
+        "finals": [
+          "}"
+        ],
+        "comment": "LS2R - Locking Shift 2 Right",
+        "line": 2322
+      },
+      {
+        "finals": [
+          "|"
+        ],
+        "comment": "LS3R - Locking Shift 3 Right",
+        "line": 2336
+      },
+      {
+        "finals": [
+          "="
+        ],
+        "comment": "Set application keypad mode",
+        "line": 2350
+      },
+      {
+        "finals": [
+          ">"
+        ],
+        "comment": "Reset application keypad mode",
+        "line": 2359
+      },
+      {
+        "finals": [
+          "\\\\"
+        ],
+        "comment": "Sets ST (string terminator). We don't have to do anything | because our parser always accepts ST.",
+        "line": 2369
+      },
+      {
+        "finals": [
+          "else"
+        ],
+        "comment": null,
+        "line": 2373
+      }
+    ]
+  },
+  "dcs_handlers": {
+    "source": "src/terminal/dcs.zig (Handler, Command union, DECRQSS enum)",
+    "command_kinds": [
+      "xtgettcap",
+      "decrqss",
+      "tmux"
+    ],
+    "decrqss_subvalues": [
+      "none",
+      "sgr",
+      "decscusr",
+      "decstbm",
+      "decslrm"
+    ],
+    "recognized_hook_sequences": [
+      {
+        "sequence": "ESC P ... p",
+        "name": "tmux control mode",
+        "command": "tmux"
+      },
+      {
+        "sequence": "ESC P + q ... ST",
+        "name": "XTGETTCAP",
+        "command": "xtgettcap"
+      },
+      {
+        "sequence": "ESC P $ q ... ST",
+        "name": "DECRQSS",
+        "command": "decrqss"
+      }
+    ]
+  },
+  "c0_controls": {
+    "source": "src/terminal/ansi.zig (C0 enum), dispatched in stream.zig execute()",
+    "controls": [
+      {
+        "name": "NUL",
+        "value": "0x00"
+      },
+      {
+        "name": "SOH",
+        "value": "0x01"
+      },
+      {
+        "name": "STX",
+        "value": "0x02"
+      },
+      {
+        "name": "ENQ",
+        "value": "0x05"
+      },
+      {
+        "name": "BEL",
+        "value": "0x07"
+      },
+      {
+        "name": "BS",
+        "value": "0x08"
+      },
+      {
+        "name": "HT",
+        "value": "0x09"
+      },
+      {
+        "name": "LF",
+        "value": "0x0A"
+      },
+      {
+        "name": "VT",
+        "value": "0x0B"
+      },
+      {
+        "name": "FF",
+        "value": "0x0C"
+      },
+      {
+        "name": "CR",
+        "value": "0x0D"
+      },
+      {
+        "name": "SO",
+        "value": "0x0E"
+      },
+      {
+        "name": "SI",
+        "value": "0x0F"
+      }
+    ]
+  }
+}

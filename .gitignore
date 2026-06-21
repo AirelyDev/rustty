@@ -1,0 +1,36 @@
+# Rust / Cargo build outputs
+/target/
+**/target/
+**/*.rlib
+
+# OS / editor cruft
+.DS_Store
+*.swp
+
+# ---------------------------------------------------------------------------
+# Phase-0 parity artifacts: KEEP the docs, scripts, inventory, baseline,
+# corpora, goldens, and gate tools. Ignore only generated / compiled outputs.
+# ---------------------------------------------------------------------------
+
+# Differential example outputs (regenerated from corpora)
+/.port/phase-0/examples-out/
+
+# Compiled differential-harness binaries (the reference oracle driver etc.).
+# The harness SOURCE (vt_driver.c, *.sh, *.py, fixtures, DESIGN.md) is KEPT.
+/.port/phase-0/harness/**/bin/
+*.dSYM/
+.port/phase-0/harness/bin/
+
+# Common compiled-binary extensions anywhere under the harness
+/.port/phase-0/harness/**/*.o
+/.port/phase-0/harness/**/*.a
+/.port/phase-0/harness/**/*.so
+/.port/phase-0/harness/**/*.dylib
+
+# Reference-oracle BUILD outputs under baseline/ (regenerable; large).
+# KEEP: BASELINE.json, METHODOLOGY.md, run_benchmarks.py, raw/ results+logs,
+#       and corpora/ (the benchmark input goldens).
+# IGNORE: the Zig compilation cache and the compiled reference install tree
+#         (the ghostty-bench / ghostty-gen binaries + libs/headers).
+/.port/phase-0/baseline/bench-rf-cache/
+/.port/phase-0/baseline/bench-releasefast/
