@@ -336,11 +336,13 @@ impl Pin {
 
     /// Move the pin left n columns. n must fit within the size.
     //
-    // PORT NOTE: `left`/`right` are sibling navigation helpers used by
-    // `leftWrap`/`rightWrap` (below). They are ported here in the pin cluster
-    // alongside their only callers.
+    // PORT NOTE: the reference `left` is `pub inline fn left` — it is a public
+    // navigation helper used both by `leftWrap`/`rightWrap` (below, this cluster)
+    // and by the iter cluster's `PromptIterator` (`iter.rs`). We keep it `pub` to
+    // match the reference visibility and allow the iter cluster to call it.
+    // `right` (below) stays private; it has no cross-cluster caller.
     #[inline]
-    fn left(&self, n: usize) -> Pin {
+    pub fn left(&self, n: usize) -> Pin {
         assert!(n <= self.x as usize);
         let mut result = self.pin_copy();
         // result.x -= std.math.cast(size.CellCountInt, n) orelse result.x;
