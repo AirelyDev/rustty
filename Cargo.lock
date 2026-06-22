@@ -184,6 +184,9 @@ dependencies = [
 [[package]]
 name = "rustty-global"
 version = "0.1.0"
+dependencies = [
+ "rustty-build-config",
+]
 
 [[package]]
 name = "rustty-identity"
