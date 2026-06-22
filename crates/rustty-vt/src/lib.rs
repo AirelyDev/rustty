@@ -58,6 +58,13 @@ pub mod focus;
 pub mod formatter;
 // pub const highlight = @import("highlight.zig");
 pub mod highlight;
+// PORT NOTE: `terminal/hyperlink.zig` has no top-level re-export in `main.zig`
+// (it is an internal sibling of `page.zig`, with which it forms a mutually
+// recursive unit: each `@import`s the other). It is ported alongside `page.rs`
+// in this sub-batch because `Page` embeds `hyperlink.Map`/`hyperlink.Set` and
+// many `Page` methods operate on hyperlink entries. Declared here so `page`
+// can reference it.
+pub mod hyperlink;
 // pub const kitty = @import("kitty.zig");
 pub mod kitty;
 // pub const modes = @import("modes.zig");

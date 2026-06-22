@@ -2,8 +2,8 @@
 //!
 //! PORTS: ghostty src/terminal/style.zig
 //!
-//! PORT STATUS: partial (leaf primitives; page.Cell- and RefCountedSet-dependent
-//! parts deferred — see DEFERRED SEAM notes)
+//! PORT STATUS: done (vt-2b wired the previously-deferred page.Cell- and
+//! RefCountedSet-dependent seams: `bg`, `bgCell`, the `Set` alias + its 2 tests)
 //!
 //! PORT NOTE: the reference imports are
 //!   const std = @import("std");
@@ -193,21 +193,35 @@ impl Style {
             && self.underline_color.eql(other.underline_color)
     }
 
-    // /// Returns the bg color for a cell with this style given the cell
-    // /// that has this style and the palette to use.
-    // ///
-    // /// Note that generally if a cell is a color-only cell, it SHOULD
-    // /// only have the default style, but this is meant to work with the
-    // /// default style as well.
-    // pub fn bg(
-    //     self: Style,
-    //     cell: *const page.Cell,
-    //     palette: *const color.Palette,
-    // ) ?color.RGB { ... }
-    //
-    // DEFERRED SEAM: `bg` reads `cell.content_tag` / `cell.content` from
-    // `page.Cell`, which is not yet ported. The full body is reproduced as a
-    // comment above so the reference logic is preserved when page lands.
+    /// Returns the bg color for a cell with this style given the cell
+    /// that has this style and the palette to use.
+    ///
+    /// Note that generally if a cell is a color-only cell, it SHOULD
+    /// only have the default style, but this is meant to work with the
+    /// default style as well.
+    // PORT NOTE (vt-2b seam wired): `page.Cell` is now ported, so this is the
+    // verbatim translation of the reference `bg`.
+    pub fn bg(self, cell: &crate::page::Cell, palette: &color::Palette) -> Option<color::RGB> {
+        match cell.content_tag() {
+            crate::page::ContentTag::BgColorPalette => {
+                Some(palette[cell.content_color_palette() as usize])
+            }
+            crate::page::ContentTag::BgColorRgb => {
+                let rgb = cell.content_color_rgb();
+                Some(color::RGB {
+                    r: rgb.r,
+                    g: rgb.g,
+                    b: rgb.b,
+                })
+            }
+
+            _ => match self.bg_color {
+                Color::None => None,
+                Color::Palette(idx) => Some(palette[idx as usize]),
+                Color::Rgb(rgb) => Some(rgb),
+            },
+        }
+    }
 
     /// Returns the fg color for a cell with this style given the palette
     /// and various configuration options.
@@ -267,11 +281,30 @@ impl Style {
         }
     }
 
-    // /// Returns a bg-color only cell from this style, if it exists.
-    // pub fn bgCell(self: Style) ?page.Cell { ... }
-    //
-    // DEFERRED SEAM: `bgCell` constructs a `page.Cell`, which is not yet ported.
-    // Reproduced as a comment for fidelity when page lands.
+    /// Returns a bg-color only cell from this style, if it exists.
+    // PORT NOTE (vt-2b seam wired): `page.Cell` is now ported, so this is the
+    // verbatim translation of the reference `bgCell`.
+    pub fn bg_cell(self) -> Option<crate::page::Cell> {
+        match self.bg_color {
+            Color::None => None,
+            Color::Palette(idx) => {
+                let mut cell = crate::page::Cell::zeroed();
+                cell.set_content_tag(crate::page::ContentTag::BgColorPalette);
+                cell.set_content_color_palette(idx);
+                Some(cell)
+            }
+            Color::Rgb(rgb) => {
+                let mut cell = crate::page::Cell::zeroed();
+                cell.set_content_tag(crate::page::ContentTag::BgColorRgb);
+                cell.set_content_color_rgb(crate::page::CellRgb {
+                    r: rgb.r,
+                    g: rgb.g,
+                    b: rgb.b,
+                });
+                Some(cell)
+            }
+        }
+    }
 
     /// Formatting to make debug logs easier to read
     /// by only including non-default attributes.
@@ -685,28 +718,42 @@ impl PackedStyle {
     }
 }
 
-// pub const Set = RefCountedSet(Style, Id, size.CellCountInt, ...);
-//
-// DEFERRED SEAM: `Set` is `RefCountedSet(Style, ...)`, which lives in the
-// not-yet-ported `ref_counted_set.zig`. The alias and its hash/eql context
-// struct (which just forward to `Style.hash`/`Style.eql`) are deferred to the
-// sub-batch that ports RefCountedSet. The two `Set` reference tests are deferred
-// with it; their bodies (with comments preserved verbatim for R1) are:
-//
-//   test "Set basic usage" {
-//       ... const id = try set.add(buf, style);
-//       // Second add should return the same metadata.
-//       ... // Look it up
-//       ... // Add a second style
-//       ... // Ref count
-//       ... // Release
-//       // We added the first one twice, so
-//       ... }
-//
-//   test "Set capacities" {
-//       // We want to support at least this many styles without overflowing.
-//       _ = Set.Layout.init(16384);
-//   }
+// PORT NOTE (vt-2b seam wired): `ref_counted_set.zig` is now ported, so the
+// `Set` alias and its hash/eql context are live. The reference is:
+//   pub const Set = RefCountedSet(
+//       Style,
+//       Id,
+//       size.CellCountInt,
+//       struct {
+//           pub fn hash(self: *const @This(), style: Style) u64 {
+//               _ = self;
+//               return style.hash();
+//           }
+//           pub fn eql(self: *const @This(), a: Style, b: Style) bool {
+//               _ = self;
+//               return a.eql(b);
+//           }
+//       },
+//   );
+/// The context for the style `Set`. It is stateless (the reference's anonymous
+/// struct has no fields); `hash`/`eql` forward to `Style.hash`/`Style.eql`.
+#[derive(Default, Clone, Copy)]
+pub struct SetContext;
+
+impl crate::ref_counted_set::RefCountedSetContext<Style> for SetContext {
+    fn hash(&self, style: Style) -> u64 {
+        // _ = self; return style.hash();
+        style.hash()
+    }
+
+    fn eql(&self, a: Style, b: Style) -> bool {
+        // _ = self; return a.eql(b);
+        a.eql(&b)
+    }
+}
+
+/// The available set of styles in use on a page.
+pub type Set = crate::ref_counted_set::RefCountedSet<Style, Id, size::CellCountInt, SetContext>;
 
 // PORT NOTE: `std.hash.int` on a u64 dispatches to `uint64` (mx3). Ported
 // verbatim so the deferred `Set` hashing matches when RefCountedSet lands.
@@ -1221,5 +1268,120 @@ mod tests {
             "color: rgb(204, 102, 102);background-color: rgb(181, 189, 104);text-decoration-color: rgb(240, 198, 116);",
             html_with_palette(&style, &color::DEFAULT),
         );
+    }
+
+    // PORT NOTE: a test-only RAII helper for the reference's
+    // `alloc.alignedAlloc(u8, Set.base_align, layout.total_size)` /
+    // `defer alloc.free(buf)`. Owns a `total_size`-byte heap allocation aligned
+    // to `base_align` and frees it on drop.
+    struct AlignedBuf {
+        ptr: *mut u8,
+        layout: std::alloc::Layout,
+    }
+
+    impl AlignedBuf {
+        fn new(total_size: usize, base_align: usize) -> AlignedBuf {
+            let layout = std::alloc::Layout::from_size_align(total_size, base_align).unwrap();
+            let ptr = unsafe { std::alloc::alloc(layout) };
+            assert!(!ptr.is_null());
+            AlignedBuf { ptr, layout }
+        }
+
+        fn base(&self) -> *const u8 {
+            self.ptr
+        }
+
+        fn offset_buf(&self) -> size::OffsetBuf {
+            size::OffsetBuf::init(self.ptr as *const u8)
+        }
+    }
+
+    impl Drop for AlignedBuf {
+        fn drop(&mut self) {
+            unsafe { std::alloc::dealloc(self.ptr, self.layout) };
+        }
+    }
+
+    #[test]
+    fn set_basic_usage() {
+        // const layout: Set.Layout = .init(16);
+        let layout = crate::ref_counted_set::Layout::<Id>::init::<Style, size::CellCountInt>(16);
+        // const buf = try alloc.alignedAlloc(u8, Set.base_align, layout.total_size);
+        let buf = AlignedBuf::new(layout.total_size, Set::base_align());
+
+        let style = Style {
+            flags: Flags {
+                bold: true,
+                ..Flags::default()
+            },
+            ..Style::default()
+        };
+        let style2 = Style {
+            flags: Flags {
+                italic: true,
+                ..Flags::default()
+            },
+            ..Style::default()
+        };
+
+        // var set = Set.init(.init(buf), layout, .{});
+        let mut set = unsafe { Set::init(buf.offset_buf(), layout, SetContext) };
+        let base = buf.base();
+
+        // Add style
+        // const id = try set.add(buf, style);
+        let id = unsafe { set.add(base, style) }.unwrap();
+        // try testing.expect(id > 0);
+        assert!(id > 0);
+
+        // Second add should return the same metadata.
+        {
+            let id2 = unsafe { set.add(base, style) }.unwrap();
+            assert_eq!(id, id2);
+        }
+
+        // Look it up
+        {
+            // PORT NOTE: the reference holds `v`/`v2` as `*Style` (raw); we keep
+            // them raw too and read flags / compare pointers without forming a
+            // long-lived `&Style` (which would alias under Stacked Borrows when
+            // `get` is called again).
+            let v: *mut Style = unsafe { set.get(base, id) };
+            assert!(unsafe { (*v).flags.bold });
+
+            let v2: *mut Style = unsafe { set.get(base, id) };
+            // try testing.expectEqual(v, v2); — `v`/`v2` are the same slot pointer.
+            assert_eq!(v, v2);
+        }
+
+        // Add a second style
+        let id2 = unsafe { set.add(base, style2) }.unwrap();
+
+        // Look it up
+        {
+            let v: *mut Style = unsafe { set.get(base, id2) };
+            assert!(unsafe { (*v).flags.italic });
+        }
+
+        // Ref count
+        assert!(unsafe { set.ref_count(base, id) } == 2);
+        assert!(unsafe { set.ref_count(base, id2) } == 1);
+
+        // Release
+        unsafe { set.release(base, id) };
+        assert!(unsafe { set.ref_count(base, id) } == 1);
+        unsafe { set.release(base, id2) };
+        assert!(unsafe { set.ref_count(base, id2) } == 0);
+
+        // We added the first one twice, so
+        unsafe { set.release(base, id) };
+        assert!(unsafe { set.ref_count(base, id) } == 0);
+    }
+
+    #[test]
+    fn set_capacities() {
+        // We want to support at least this many styles without overflowing.
+        // _ = Set.Layout.init(16384);
+        let _ = crate::ref_counted_set::Layout::<Id>::init::<Style, size::CellCountInt>(16384);
     }
 }

@@ -3,3 +3,1142 @@
 //! PORTS: ghostty src/terminal/page.zig
 //!
 //! PORT STATUS: stub
+//!
+//! NOTE ON "stub": per the sub-batch contract the crate-level lib.rs PORT STATUS
+//! stays `stub` while leaves land; this module itself is fully ported.
+//!
+//! PORT NOTE: the reference imports are
+//!   const std = @import("std");
+//!   const builtin = @import("builtin");
+//!   const build_options = @import("terminal_options");
+//!   const Allocator = std.mem.Allocator;
+//!   const ArenaAllocator = std.heap.ArenaAllocator;
+//!   const assert = @import("../quirks.zig").inlineAssert;
+//!   const testing = std.testing;
+//!   const posix = std.posix;
+//!   const windows = std.os.windows;
+//!   const fastmem = @import("../fastmem.zig");
+//!   const color = @import("color.zig");
+//!   const hyperlink = @import("hyperlink.zig");
+//!   const kitty = @import("kitty.zig");
+//!   const stylepkg = @import("style.zig");
+//!   const Style = stylepkg.Style;
+//!   const StyleId = stylepkg.Id;
+//!   const StyleSet = stylepkg.Set;
+//!   const size = @import("size.zig");
+//!   const getOffset = size.getOffset;
+//!   const Offset = size.Offset;
+//!   const OffsetBuf = size.OffsetBuf;
+//!   const BitmapAllocator = @import("bitmap_allocator.zig").BitmapAllocator;
+//!   const hash_map = @import("hash_map.zig");
+//!   const AutoOffsetHashMap = hash_map.AutoOffsetHashMap;
+//!   const alignForward = std.mem.alignForward;
+//!   const alignBackward = std.mem.alignBackward;
+//!
+//! PORT NOTE: `Cell` and `Row` are reference `packed struct(u64)` types whose
+//! exact bit layout is load-bearing: `Page` `@bitCast`s them, `@memset`s cell
+//! arrays as `[]u64`, and stores them in mmap'd backing memory accessed through
+//! relative `Offset`s. To reproduce the byte-identical packed layout (and stay
+//! Miri-clean — no padding/uninit), both are modeled as `#[repr(transparent)]`
+//! wrappers over the backing `u64` with bit-field accessors that match the Zig
+//! least-significant-first packing exactly. `size_of`/`align_of`/bit-offset
+//! tests assert the layout.
+//!
+//! PORT NOTE: `build_options.slow_runtime_safety` is modeled as
+//! `cfg!(debug_assertions)` (the convention used by `ref_counted_set.rs`), and
+//! `build_options.kitty_graphics` as the `KITTY_GRAPHICS` const (the reference
+//! ghostty default is `true`; the page only uses it to mark the virtual
+//! placeholder for U+10EEEE).
+
+#![allow(clippy::missing_safety_doc)]
+#![allow(non_camel_case_types)]
+// PORT NOTE: the `Page` API mirrors the reference's `*Row`/`*Cell` raw-pointer
+// signatures (the page is an offset-addressed arena; rows/cells are raw
+// pointers into its mmap'd backing memory). Several methods therefore take raw
+// pointers and dereference them; the safety contract is the same as the
+// reference's (the pointers must come from this page). We allow the
+// corresponding clippy lints module-wide rather than marking every accessor
+// `unsafe` (which the reference does not, and which would not improve safety
+// given the arena design).
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
+use std::collections::HashMap;
+
+// PORT NOTE: Rust has no `u21`. Zig's `u21` (used for codepoints) occupies the
+// same 4-byte storage as `u32` (`@sizeOf(u21) == 4`), and codepoint values fit
+// in 21 bits. We alias `u21 = u32` so codepoint-typed signatures read like the
+// reference; the packed `Cell` storage masks to exactly 21/24 bits per the
+// bit-layout tests, so no out-of-range bits leak.
+#[allow(non_camel_case_types)]
+pub type u21 = u32;
+
+use rustty_render_types::term_size as size;
+use rustty_render_types::term_size::{get_offset, Offset, OffsetBuf, OffsetSlice};
+use rustty_util::fastmem;
+
+use crate::bitmap_allocator::BitmapAllocator;
+use crate::hash_map::{AutoContext, AutoOffsetHashMap};
+use crate::hyperlink;
+use crate::style as stylepkg;
+use crate::style::Id as StyleId;
+use crate::style::Set as StyleSet;
+use crate::style::Style;
+
+// PORT NOTE: `build_options.kitty_graphics`. The reference enables the Kitty
+// graphics protocol by default for the ghostty artifact; the page uses this only
+// to set `Row.kitty_virtual_placeholder`. We keep the slot true so the layout
+// and behavior match the reference's default build.
+const KITTY_GRAPHICS: bool = true;
+
+// PORT NOTE: `kitty.graphics.unicode.placeholder` is U+10EEEE. The kitty module
+// surface is ported by a different sub-batch; we inline the constant here (the
+// only use is the codepoint comparison below).
+const KITTY_PLACEHOLDER: u21 = 0x10EEEE;
+
+/// The allocator to use for multi-codepoint grapheme data. We use
+/// a chunk size of 4 codepoints. It'd be best to set this empirically
+/// but it is currently set based on vibes. My thinking around 4 codepoints
+/// is that most skin-tone emoji are <= 4 codepoints, letter combiners
+/// are usually <= 4 codepoints, and 4 codepoints is a nice power of two
+/// for alignment.
+const GRAPHEME_CHUNK_LEN: usize = 4;
+const GRAPHEME_CHUNK: usize = GRAPHEME_CHUNK_LEN * core::mem::size_of::<u32>();
+// PORT NOTE: the reference uses `u21` for codepoints; Rust has no `u21`, so we
+// use `u32` (which has the same 4-byte storage as Zig's `u21`, matching
+// `@sizeOf(u21) == 4` for the grapheme allocation chunk math).
+type GraphemeAlloc = BitmapAllocator<GRAPHEME_CHUNK>;
+const GRAPHEME_COUNT_DEFAULT: usize = GraphemeAlloc::BITMAP_BIT_SIZE;
+pub const GRAPHEME_BYTES_DEFAULT: usize = GRAPHEME_COUNT_DEFAULT * GRAPHEME_CHUNK;
+type GraphemeMap = AutoOffsetHashMap<Offset<Cell>, OffsetSlice<u32>>;
+
+/// The allocator used for shared utf8-encoded strings within a page.
+/// Note the chunk size below is the minimum size of a single allocation
+/// and requires a single bit of metadata in our bitmap allocator. Therefore
+/// it should be tuned carefully (too small and we waste metadata, too large
+/// and we have fragmentation). We can probably use a better allocation
+/// strategy in the future.
+///
+/// At the time of writing this, the strings table is only used for OSC8
+/// IDs and URIs. IDs are usually short and URIs are usually longer. I chose
+/// 32 bytes as a compromise between these two since it represents single
+/// domain links quite well and is not too wasteful for short IDs. We can
+/// continue to tune this as we see how it's used.
+const STRING_CHUNK_LEN: usize = 32;
+const STRING_CHUNK: usize = STRING_CHUNK_LEN * core::mem::size_of::<u8>();
+type StringAlloc = BitmapAllocator<STRING_CHUNK>;
+const STRING_COUNT_DEFAULT: usize = StringAlloc::BITMAP_BIT_SIZE;
+pub const STRING_BYTES_DEFAULT: usize = STRING_COUNT_DEFAULT * STRING_CHUNK;
+
+/// Default number of hyperlinks we support.
+///
+/// The cell multiplier is the number of cells per hyperlink entry that
+/// we support. A hyperlink can be longer than this multiplier; the multiplier
+/// just sets the total capacity to simplify adjustable size metrics.
+const HYPERLINK_COUNT_DEFAULT: usize = 4;
+fn hyperlink_set_item_size() -> usize {
+    core::mem::size_of::<
+        crate::ref_counted_set::Item<hyperlink::PageEntry, hyperlink::Id, size::CellCountInt>,
+    >()
+}
+fn hyperlink_bytes_default() -> usize {
+    HYPERLINK_COUNT_DEFAULT * hyperlink_set_item_size()
+}
+const HYPERLINK_CELL_MULTIPLIER: usize = 16;
+
+// PORT NOTE: `std.mem.alignForward(usize, v, a)` / `alignBackward`.
+#[inline]
+fn align_forward(v: usize, a: usize) -> usize {
+    (v + a - 1) & !(a - 1)
+}
+#[inline]
+fn align_backward(v: usize, a: usize) -> usize {
+    v & !(a - 1)
+}
+
+// PORT NOTE: `std.heap.page_size_min`. On all targets we care about this is the
+// OS page size minimum (4096 on aarch64-macos/x86_64-linux). We query it at
+// runtime for the actual mmap allocation but use a const for layout math; both
+// must agree. The reference is a comptime-known minimum; we use 4096 as the
+// minimum (smallest supported page size), matching `std.heap.page_size_min`.
+const PAGE_SIZE_MIN: usize = 4096;
+
+// PORT NOTE: the reference selects `AllocWindows` or `AllocPosix` at comptime.
+// We implement the POSIX mmap path (the platforms this crate targets) and keep
+// the reference comments for both. The allocation must be page-aligned and
+// zeroed; mmap(MAP_PRIVATE|MAP_ANONYMOUS) guarantees both.
+mod page_alloc {
+    //! Page-aligned allocator used for terminal page backing memory. Pages
+    //! require page-aligned, zeroed memory obtained directly from the OS
+    //! (not the Zig allocator) because the allocation fast-path is
+    //! performance-critical and the OS guarantees zeroed pages.
+    //!
+    //! Allocate page-aligned, zeroed backing memory using mmap with
+    //! MAP_PRIVATE | MAP_ANONYMOUS which guarantees zeroed pages.
+    //!
+    //! PORT NOTE: the reference also has `AllocWindows` using VirtualAlloc with
+    //! MEM_COMMIT | MEM_RESERVE which guarantees zeroed pages. We port the POSIX
+    //! variant; the Windows variant's comments are preserved here for fidelity.
+
+    /// A page-aligned, zeroed mmap allocation. The pointer/len pair mirrors the
+    /// reference's `[]align(page_size_min) u8`.
+    pub struct Backing {
+        pub ptr: *mut u8,
+        pub len: usize,
+    }
+
+    /// pub fn alloc(n: usize) ![]align(page_size_min) u8
+    pub fn alloc(n: usize) -> Option<Backing> {
+        // posix.mmap(null, n, PROT.READ|PROT.WRITE, .{ .TYPE=.PRIVATE, .ANONYMOUS=true }, -1, 0)
+        let ptr = unsafe {
+            libc_mmap(
+                core::ptr::null_mut(),
+                n,
+                PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        if ptr == MAP_FAILED {
+            return None;
+        }
+        Some(Backing {
+            ptr: ptr as *mut u8,
+            len: n,
+        })
+    }
+
+    /// pub fn free(mem: []align(page_size_min) u8) void
+    pub fn free(b: &Backing) {
+        unsafe {
+            libc_munmap(b.ptr as *mut core::ffi::c_void, b.len);
+        }
+    }
+
+    // Minimal libc bindings for mmap/munmap. We avoid pulling the `libc` crate
+    // as a new dependency; these signatures are stable across the platforms we
+    // target.
+    pub const PROT_READ: i32 = 0x1;
+    pub const PROT_WRITE: i32 = 0x2;
+
+    #[cfg(target_os = "macos")]
+    pub const MAP_PRIVATE: i32 = 0x0002;
+    #[cfg(target_os = "macos")]
+    pub const MAP_ANONYMOUS: i32 = 0x1000;
+    #[cfg(target_os = "linux")]
+    pub const MAP_PRIVATE: i32 = 0x0002;
+    #[cfg(target_os = "linux")]
+    pub const MAP_ANONYMOUS: i32 = 0x0020;
+
+    pub const MAP_FAILED: *mut core::ffi::c_void = (-1isize) as *mut core::ffi::c_void;
+
+    extern "C" {
+        #[link_name = "mmap"]
+        fn libc_mmap(
+            addr: *mut core::ffi::c_void,
+            len: usize,
+            prot: i32,
+            flags: i32,
+            fd: i32,
+            offset: i64,
+        ) -> *mut core::ffi::c_void;
+
+        #[link_name = "munmap"]
+        fn libc_munmap(addr: *mut core::ffi::c_void, len: usize) -> i32;
+    }
+}
+
+/// The standard capacity for a page that doesn't have special
+/// requirements. This is enough to support a very large number of cells.
+/// The standard capacity is chosen as the fast-path for allocation since
+/// pages of standard capacity use a pooled allocator instead of single-use
+/// mmaps.
+pub fn std_capacity() -> Capacity {
+    Capacity {
+        cols: 215,
+        rows: 215,
+        styles: 128,
+        // grapheme_bytes = if (builtin.is_test) 512 else 8192
+        grapheme_bytes: if cfg!(test) { 512 } else { 8192 },
+        hyperlink_bytes: hyperlink_bytes_default() as size::HyperlinkCountInt,
+        string_bytes: STRING_BYTES_DEFAULT as size::StringBytesInt,
+    }
+}
+
+// ===========================================================================
+// Cell / Row packed structs — byte-layout critical (see module PORT NOTE).
+// ===========================================================================
+
+/// `Cell.RGB = packed struct { r: u8, g: u8, b: u8 }`. Used in the cell content
+/// union. 24 data bits.
+// PORT NOTE: hoisted out of `Cell` (Rust nested type names). Matches the
+// reference `Cell.RGB` field order/widths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct CellRgb {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+/// `Cell.ContentTag = enum(u2)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentTag {
+    /// A single codepoint, could be zero to be empty cell.
+    Codepoint = 0,
+
+    /// A codepoint that is part of a multi-codepoint grapheme cluster.
+    /// The codepoint tag is active in content, but also expect more
+    /// codepoints in the grapheme data.
+    CodepointGrapheme = 1,
+
+    /// The cell has no text but only a background color. This is an
+    /// optimization so that cells with only backgrounds don't take up
+    /// style map space and also don't require a style map lookup.
+    BgColorPalette = 2,
+    BgColorRgb = 3,
+}
+
+impl ContentTag {
+    #[inline]
+    fn from_u2(v: u64) -> ContentTag {
+        match v & 0b11 {
+            0 => ContentTag::Codepoint,
+            1 => ContentTag::CodepointGrapheme,
+            2 => ContentTag::BgColorPalette,
+            3 => ContentTag::BgColorRgb,
+            _ => unreachable!(),
+        }
+    }
+}
+
+/// `Cell.Wide = enum(u2)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wide {
+    /// Not a wide character, cell width 1.
+    Narrow = 0,
+
+    /// Wide character, cell width 2.
+    Wide = 1,
+
+    /// Spacer after wide character. Do not render.
+    SpacerTail = 2,
+
+    /// Spacer at the end of a soft-wrapped line to indicate that a wide
+    /// character is continued on the next line.
+    SpacerHead = 3,
+}
+
+impl Wide {
+    #[inline]
+    fn from_u2(v: u64) -> Wide {
+        match v & 0b11 {
+            0 => Wide::Narrow,
+            1 => Wide::Wide,
+            2 => Wide::SpacerTail,
+            3 => Wide::SpacerHead,
+            _ => unreachable!(),
+        }
+    }
+}
+
+/// `Cell.SemanticContent = enum(u2)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticContent {
+    /// Regular output content, such as command output.
+    Output = 0,
+
+    /// Content that is part of user input, such as the command
+    /// to execute at a prompt.
+    Input = 1,
+
+    /// Content that is part of prompt emitted by the interactive
+    /// application, such as "user@host >"
+    Prompt = 2,
+}
+
+impl SemanticContent {
+    #[inline]
+    fn from_u2(v: u64) -> SemanticContent {
+        match v & 0b11 {
+            0 => SemanticContent::Output,
+            1 => SemanticContent::Input,
+            2 => SemanticContent::Prompt,
+            // The reference enum only declares 0..2; value 3 is unused. The
+            // zero-initialized backing memory never produces it, but we keep the
+            // match total to avoid UB.
+            _ => SemanticContent::Output,
+        }
+    }
+}
+
+/// A cell represents a single terminal grid cell.
+///
+/// The zero value of this struct must be a valid cell representing empty,
+/// since we zero initialize the backing memory for a page.
+///
+/// PORT NOTE: reference `pub const Cell = packed struct(u64)`. Bit layout
+/// (least-significant first, matching Zig packing):
+///   bits  0..1   content_tag : ContentTag (u2)
+///   bits  2..22  content     : union { codepoint:u21, color_palette:u8, color_rgb:RGB(u24) }  (21 bits wide)
+///   bits 23..38  style_id    : StyleId (u16)
+///   bits 39..40  wide        : Wide (u2)
+///   bit  41      protected   : bool (u1)
+///   bit  42      hyperlink   : bool (u1)
+///   bits 43..44  semantic_content : SemanticContent (u2)
+///   bits 45..60  _padding    : u16
+/// Note: the union field is 21 bits wide overall (the widest member, u21);
+/// `color_palette` occupies the low 8 bits and `color_rgb` the low 24... but the
+/// union width is `@bitSizeOf` of the widest member = u21 = 21 bits. The
+/// reference `Cell.RGB` is `packed struct { r,g,b: u8 }` = 24 bits, which is
+/// WIDER than u21; Zig sizes the union to the max member, so the content union is
+/// 24 bits. See the `comptime`/layout tests below which assert the total is u64.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct Cell(u64);
+
+// Bit offsets/masks for Cell fields (see struct doc).
+const CELL_CONTENT_TAG_SHIFT: u32 = 0;
+const CELL_CONTENT_TAG_BITS: u32 = 2;
+const CELL_CONTENT_SHIFT: u32 = 2;
+const CELL_CONTENT_BITS: u32 = 24; // union sized to widest member RGB (u24)
+const CELL_STYLE_ID_SHIFT: u32 = CELL_CONTENT_SHIFT + CELL_CONTENT_BITS; // 26
+const CELL_STYLE_ID_BITS: u32 = 16;
+const CELL_WIDE_SHIFT: u32 = CELL_STYLE_ID_SHIFT + CELL_STYLE_ID_BITS; // 42
+const CELL_WIDE_BITS: u32 = 2;
+const CELL_PROTECTED_SHIFT: u32 = CELL_WIDE_SHIFT + CELL_WIDE_BITS; // 44
+const CELL_HYPERLINK_SHIFT: u32 = CELL_PROTECTED_SHIFT + 1; // 45
+const CELL_SEMANTIC_CONTENT_SHIFT: u32 = CELL_HYPERLINK_SHIFT + 1; // 46
+const CELL_SEMANTIC_CONTENT_BITS: u32 = 2;
+// `_padding: u16` occupies bits 48..63. The accessors never touch it; these
+// document the reference field's bit position and are asserted by the
+// `cell_field_bit_offsets` layout test.
+#[allow(dead_code)]
+const CELL_PADDING_SHIFT: u32 = CELL_SEMANTIC_CONTENT_SHIFT + CELL_SEMANTIC_CONTENT_BITS; // 48
+#[allow(dead_code)]
+const CELL_PADDING_BITS: u32 = 16;
+
+#[inline]
+fn mask(bits: u32) -> u64 {
+    if bits >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << bits) - 1
+    }
+}
+
+#[inline]
+fn get_bits(backing: u64, shift: u32, bits: u32) -> u64 {
+    (backing >> shift) & mask(bits)
+}
+
+#[inline]
+fn set_bits(backing: &mut u64, shift: u32, bits: u32, value: u64) {
+    let m = mask(bits) << shift;
+    *backing = (*backing & !m) | ((value << shift) & m);
+}
+
+impl Cell {
+    /// A cell whose backing u64 is all zeros (the valid "empty" cell).
+    #[inline]
+    pub fn zeroed() -> Cell {
+        Cell(0)
+    }
+
+    /// `@bitCast(@as(u64, x))`
+    #[inline]
+    pub fn from_bits(v: u64) -> Cell {
+        Cell(v)
+    }
+
+    /// `@as(u64, @bitCast(self))`
+    #[inline]
+    pub fn to_bits(self) -> u64 {
+        self.0
+    }
+
+    /// The content tag dictates the active tag in content and possibly
+    /// some other behaviors.
+    #[inline]
+    pub fn content_tag(self) -> ContentTag {
+        ContentTag::from_u2(get_bits(
+            self.0,
+            CELL_CONTENT_TAG_SHIFT,
+            CELL_CONTENT_TAG_BITS,
+        ))
+    }
+    #[inline]
+    pub fn set_content_tag(&mut self, tag: ContentTag) {
+        set_bits(
+            &mut self.0,
+            CELL_CONTENT_TAG_SHIFT,
+            CELL_CONTENT_TAG_BITS,
+            tag as u64,
+        );
+    }
+
+    // The content of the cell. This is a union based on content_tag.
+    //   content: packed union {
+    //       /// The codepoint that this cell contains. If `grapheme` is false,
+    //       /// then this is the only codepoint in the cell. If `grapheme` is
+    //       /// true, then this is the first codepoint in the grapheme cluster.
+    //       codepoint: u21,
+    //
+    //       /// The content is an empty cell with a background color.
+    //       color_palette: u8,
+    //       color_rgb: RGB,
+    //   } = .{ .codepoint = 0 },
+
+    /// `content.codepoint: u21`
+    #[inline]
+    pub fn content_codepoint(self) -> u21 {
+        // Low 21 bits of the 24-bit content field.
+        (get_bits(self.0, CELL_CONTENT_SHIFT, 21)) as u21
+    }
+    #[inline]
+    pub fn set_content_codepoint(&mut self, cp: u21) {
+        // Writing the union overwrites the whole content field (24 bits): the
+        // high 3 bits of the union storage become 0, matching Zig's behavior of
+        // writing a u21 into the 24-bit union slot (upper bits zeroed by the
+        // `init`/`@bitCast(0)` idiom; explicit field writes set only the active
+        // member but the reference always zero-inits first).
+        set_bits(
+            &mut self.0,
+            CELL_CONTENT_SHIFT,
+            CELL_CONTENT_BITS,
+            cp as u64,
+        );
+    }
+
+    /// `content.color_palette: u8`
+    #[inline]
+    pub fn content_color_palette(self) -> u8 {
+        get_bits(self.0, CELL_CONTENT_SHIFT, 8) as u8
+    }
+    #[inline]
+    pub fn set_content_color_palette(&mut self, v: u8) {
+        set_bits(&mut self.0, CELL_CONTENT_SHIFT, CELL_CONTENT_BITS, v as u64);
+    }
+
+    /// `content.color_rgb: RGB`
+    #[inline]
+    pub fn content_color_rgb(self) -> CellRgb {
+        let raw = get_bits(self.0, CELL_CONTENT_SHIFT, 24);
+        CellRgb {
+            r: (raw & 0xFF) as u8,
+            g: ((raw >> 8) & 0xFF) as u8,
+            b: ((raw >> 16) & 0xFF) as u8,
+        }
+    }
+    #[inline]
+    pub fn set_content_color_rgb(&mut self, rgb: CellRgb) {
+        let raw = (rgb.r as u64) | ((rgb.g as u64) << 8) | ((rgb.b as u64) << 16);
+        set_bits(&mut self.0, CELL_CONTENT_SHIFT, CELL_CONTENT_BITS, raw);
+    }
+
+    /// The style ID to use for this cell within the style map. Zero
+    /// is always the default style so no lookup is required.
+    #[inline]
+    pub fn style_id(self) -> StyleId {
+        get_bits(self.0, CELL_STYLE_ID_SHIFT, CELL_STYLE_ID_BITS) as StyleId
+    }
+    #[inline]
+    pub fn set_style_id(&mut self, id: StyleId) {
+        set_bits(
+            &mut self.0,
+            CELL_STYLE_ID_SHIFT,
+            CELL_STYLE_ID_BITS,
+            id as u64,
+        );
+    }
+
+    /// The wide property of this cell, for wide characters. Characters in
+    /// a terminal grid can only be 1 or 2 cells wide. A wide character
+    /// is always next to a spacer. This is used to determine both the width
+    /// and spacer properties of a cell.
+    #[inline]
+    pub fn wide(self) -> Wide {
+        Wide::from_u2(get_bits(self.0, CELL_WIDE_SHIFT, CELL_WIDE_BITS))
+    }
+    #[inline]
+    pub fn set_wide(&mut self, w: Wide) {
+        set_bits(&mut self.0, CELL_WIDE_SHIFT, CELL_WIDE_BITS, w as u64);
+    }
+
+    /// Whether this was written with the protection flag set.
+    #[inline]
+    pub fn protected(self) -> bool {
+        get_bits(self.0, CELL_PROTECTED_SHIFT, 1) != 0
+    }
+    #[inline]
+    pub fn set_protected(&mut self, v: bool) {
+        set_bits(&mut self.0, CELL_PROTECTED_SHIFT, 1, v as u64);
+    }
+
+    /// Whether this cell is a hyperlink. If this is true then you must
+    /// look up the hyperlink ID in the page hyperlink_map and the ID in
+    /// the hyperlink_set to get the actual hyperlink data.
+    #[inline]
+    pub fn hyperlink(self) -> bool {
+        get_bits(self.0, CELL_HYPERLINK_SHIFT, 1) != 0
+    }
+    #[inline]
+    pub fn set_hyperlink(&mut self, v: bool) {
+        set_bits(&mut self.0, CELL_HYPERLINK_SHIFT, 1, v as u64);
+    }
+
+    /// The semantic type of the content of this cell. This is used
+    /// by the semantic prompt (OSC 133) set of sequences to understand
+    /// boundary points for content.
+    #[inline]
+    pub fn semantic_content(self) -> SemanticContent {
+        SemanticContent::from_u2(get_bits(
+            self.0,
+            CELL_SEMANTIC_CONTENT_SHIFT,
+            CELL_SEMANTIC_CONTENT_BITS,
+        ))
+    }
+    #[inline]
+    pub fn set_semantic_content(&mut self, v: SemanticContent) {
+        set_bits(
+            &mut self.0,
+            CELL_SEMANTIC_CONTENT_SHIFT,
+            CELL_SEMANTIC_CONTENT_BITS,
+            v as u64,
+        );
+    }
+
+    /// C ABI type.
+    // pub const C = u64;
+    /// Returns this cell as a C ABI value.
+    // PORT NOTE: `Cell.C = u64; pub fn cval(self) C`.
+    #[inline]
+    pub fn cval(self) -> u64 {
+        self.0
+    }
+
+    /// Helper to make a cell that just has a codepoint.
+    pub fn init(cp: u21) -> Cell {
+        // We have to use this bitCast here to ensure that our memory is
+        // zeroed. Otherwise, the content below will leave some uninitialized
+        // memory in the packed union. Valgrind verifies this.
+        let mut cell = Cell::from_bits(0);
+        cell.set_content_tag(ContentTag::Codepoint);
+        cell.set_content_codepoint(cp);
+        cell
+    }
+
+    #[inline]
+    pub fn is_zero(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Returns true if this cell represents a cell with text to render.
+    ///
+    /// Cases this returns false:
+    ///   - Cell text is blank
+    ///   - Cell is styled but only with a background color and no text
+    ///   - Cell has a unicode placeholder for Kitty graphics protocol
+    #[inline]
+    pub fn has_text(self) -> bool {
+        match self.content_tag() {
+            ContentTag::Codepoint | ContentTag::CodepointGrapheme => self.content_codepoint() != 0,
+            ContentTag::BgColorPalette | ContentTag::BgColorRgb => false,
+        }
+    }
+
+    #[inline]
+    pub fn codepoint(self) -> u21 {
+        match self.content_tag() {
+            ContentTag::Codepoint | ContentTag::CodepointGrapheme => self.content_codepoint(),
+            ContentTag::BgColorPalette | ContentTag::BgColorRgb => 0,
+        }
+    }
+
+    /// The width in grid cells that this cell takes up.
+    #[inline]
+    pub fn grid_width(self) -> u8 {
+        match self.wide() {
+            Wide::Narrow | Wide::SpacerHead | Wide::SpacerTail => 1,
+            Wide::Wide => 2,
+        }
+    }
+
+    #[inline]
+    pub fn has_styling(self) -> bool {
+        self.style_id() != stylepkg::DEFAULT_ID
+    }
+
+    /// Returns true if the cell has no text or styling.
+    pub fn is_empty(self) -> bool {
+        match self.content_tag() {
+            // Textual cells are empty if they have no text and are narrow.
+            // The "narrow" requirement is because wide spacers are meaningful.
+            ContentTag::Codepoint | ContentTag::CodepointGrapheme => {
+                !self.has_text() && self.wide() == Wide::Narrow
+            }
+            ContentTag::BgColorPalette | ContentTag::BgColorRgb => false,
+        }
+    }
+
+    #[inline]
+    pub fn has_grapheme(self) -> bool {
+        self.content_tag() == ContentTag::CodepointGrapheme
+    }
+
+    /// Returns true if the set of cells has text in it.
+    #[inline]
+    pub fn has_text_any(cells: &[Cell]) -> bool {
+        for cell in cells {
+            if cell.has_text() {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+impl Default for Cell {
+    fn default() -> Self {
+        Cell::zeroed()
+    }
+}
+
+/// The semantic prompt state of the row. See `semantic_prompt`.
+// PORT NOTE: `Row.SemanticPrompt = enum(u2)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticPrompt {
+    /// No prompt cells in this row.
+    None = 0,
+    /// Prompt cells exist in this row and this is a primary prompt
+    /// line. A primary prompt line is one that is not a continuation
+    /// and is the beginning of a prompt.
+    Prompt = 1,
+    /// Prompt cells exist in this row that had k=c set (continuation)
+    /// line. This is used as a way to detect when a line should
+    /// be considered part of some prior prompt. If no prior prompt
+    /// is found, the last (most historical) prompt continuation line is
+    /// considered the prompt.
+    PromptContinuation = 2,
+}
+
+impl SemanticPrompt {
+    #[inline]
+    fn from_u2(v: u64) -> SemanticPrompt {
+        match v & 0b11 {
+            0 => SemanticPrompt::None,
+            1 => SemanticPrompt::Prompt,
+            2 => SemanticPrompt::PromptContinuation,
+            _ => SemanticPrompt::None,
+        }
+    }
+}
+
+/// `pub const Row = packed struct(u64)`. Bit layout (least-significant first):
+///   bits  0..31  cells: Offset(Cell) (OffsetInt == u32)
+///   bit  32      wrap : bool
+///   bit  33      wrap_continuation : bool
+///   bit  34      grapheme : bool
+///   bit  35      styled : bool
+///   bit  36      hyperlink : bool
+///   bits 37..38  semantic_prompt : SemanticPrompt (u2)
+///   bit  39      kitty_virtual_placeholder : bool
+///   bit  40      dirty : bool
+///   bits 41..63  _padding : u23
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct Row(u64);
+
+const ROW_CELLS_SHIFT: u32 = 0;
+const ROW_CELLS_BITS: u32 = 32;
+const ROW_WRAP_SHIFT: u32 = 32;
+const ROW_WRAP_CONTINUATION_SHIFT: u32 = 33;
+const ROW_GRAPHEME_SHIFT: u32 = 34;
+const ROW_STYLED_SHIFT: u32 = 35;
+const ROW_HYPERLINK_SHIFT: u32 = 36;
+const ROW_SEMANTIC_PROMPT_SHIFT: u32 = 37;
+const ROW_SEMANTIC_PROMPT_BITS: u32 = 2;
+const ROW_KITTY_PLACEHOLDER_SHIFT: u32 = 39;
+const ROW_DIRTY_SHIFT: u32 = 40;
+// `_padding: u23` occupies bits 41..63. The accessors never touch it; these
+// document the reference field's bit position and are asserted by the
+// `row_field_bit_offsets` layout test.
+#[allow(dead_code)]
+const ROW_PADDING_SHIFT: u32 = 41;
+#[allow(dead_code)]
+const ROW_PADDING_BITS: u32 = 23;
+
+impl Row {
+    #[inline]
+    pub fn zeroed() -> Row {
+        Row(0)
+    }
+    #[inline]
+    pub fn from_bits(v: u64) -> Row {
+        Row(v)
+    }
+    #[inline]
+    pub fn to_bits(self) -> u64 {
+        self.0
+    }
+
+    /// The cells in the row offset from the page.
+    #[inline]
+    pub fn cells(self) -> Offset<Cell> {
+        Offset::new(get_bits(self.0, ROW_CELLS_SHIFT, ROW_CELLS_BITS) as size::OffsetInt)
+    }
+    #[inline]
+    pub fn set_cells(&mut self, off: Offset<Cell>) {
+        set_bits(
+            &mut self.0,
+            ROW_CELLS_SHIFT,
+            ROW_CELLS_BITS,
+            off.offset as u64,
+        );
+    }
+
+    /// True if this row is soft-wrapped. The first cell of the next
+    /// row is a continuation of this row.
+    #[inline]
+    pub fn wrap(self) -> bool {
+        get_bits(self.0, ROW_WRAP_SHIFT, 1) != 0
+    }
+    #[inline]
+    pub fn set_wrap(&mut self, v: bool) {
+        set_bits(&mut self.0, ROW_WRAP_SHIFT, 1, v as u64);
+    }
+
+    /// True if the previous row to this one is soft-wrapped and
+    /// this row is a continuation of that row.
+    #[inline]
+    pub fn wrap_continuation(self) -> bool {
+        get_bits(self.0, ROW_WRAP_CONTINUATION_SHIFT, 1) != 0
+    }
+    #[inline]
+    pub fn set_wrap_continuation(&mut self, v: bool) {
+        set_bits(&mut self.0, ROW_WRAP_CONTINUATION_SHIFT, 1, v as u64);
+    }
+
+    /// True if any of the cells in this row have multi-codepoint
+    /// grapheme clusters. If this is true, some fast paths are not
+    /// possible because erasing for example may need to clear existing
+    /// grapheme data.
+    #[inline]
+    pub fn grapheme(self) -> bool {
+        get_bits(self.0, ROW_GRAPHEME_SHIFT, 1) != 0
+    }
+    #[inline]
+    pub fn set_grapheme(&mut self, v: bool) {
+        set_bits(&mut self.0, ROW_GRAPHEME_SHIFT, 1, v as u64);
+    }
+
+    /// True if any of the cells in this row have a ref-counted style.
+    /// This can have false positives but never a false negative. Meaning:
+    /// this will be set to true the first time a style is used, but it
+    /// will not be set to false if the style is no longer used, because
+    /// checking for that condition is too expensive.
+    ///
+    /// Why have this weird false positive flag at all? This makes VT operations
+    /// that erase cells (such as insert lines, delete lines, erase chars,
+    /// etc.) MUCH MUCH faster in the case that the row was never styled.
+    /// At the time of writing this, the speed difference is around 4x.
+    #[inline]
+    pub fn styled(self) -> bool {
+        get_bits(self.0, ROW_STYLED_SHIFT, 1) != 0
+    }
+    #[inline]
+    pub fn set_styled(&mut self, v: bool) {
+        set_bits(&mut self.0, ROW_STYLED_SHIFT, 1, v as u64);
+    }
+
+    /// True if any of the cells in this row are part of a hyperlink.
+    /// This is similar to styled: it can have false positives but never
+    /// false negatives. This is used to optimize hyperlink operations.
+    #[inline]
+    pub fn hyperlink(self) -> bool {
+        get_bits(self.0, ROW_HYPERLINK_SHIFT, 1) != 0
+    }
+    #[inline]
+    pub fn set_hyperlink(&mut self, v: bool) {
+        set_bits(&mut self.0, ROW_HYPERLINK_SHIFT, 1, v as u64);
+    }
+
+    /// The semantic prompt state for this row.
+    ///
+    /// This is ONLY meant to note if there are ANY cells in this
+    /// row that are part of a prompt. This is an optimization for more
+    /// efficiently implementing jump-to-prompt operations.
+    ///
+    /// This may contain false positives but never false negatives. If
+    /// this is set, you should still check individual cells to see if they
+    /// have prompt semantics.
+    #[inline]
+    pub fn semantic_prompt(self) -> SemanticPrompt {
+        SemanticPrompt::from_u2(get_bits(
+            self.0,
+            ROW_SEMANTIC_PROMPT_SHIFT,
+            ROW_SEMANTIC_PROMPT_BITS,
+        ))
+    }
+    #[inline]
+    pub fn set_semantic_prompt(&mut self, v: SemanticPrompt) {
+        set_bits(
+            &mut self.0,
+            ROW_SEMANTIC_PROMPT_SHIFT,
+            ROW_SEMANTIC_PROMPT_BITS,
+            v as u64,
+        );
+    }
+
+    /// True if this row contains a virtual placeholder for the Kitty
+    /// graphics protocol. (U+10EEEE)
+    // Note: We keep this as memory-using even if the kitty graphics
+    // feature is disabled because we want to keep our padding and
+    // everything throughout the same.
+    #[inline]
+    pub fn kitty_virtual_placeholder(self) -> bool {
+        get_bits(self.0, ROW_KITTY_PLACEHOLDER_SHIFT, 1) != 0
+    }
+    #[inline]
+    pub fn set_kitty_virtual_placeholder(&mut self, v: bool) {
+        set_bits(&mut self.0, ROW_KITTY_PLACEHOLDER_SHIFT, 1, v as u64);
+    }
+
+    /// True if this row is dirty and requires a redraw. This is set to true
+    /// by any operation that modifies the row's contents or position, and
+    /// consumers of the page are expected to clear it when they redraw.
+    ///
+    /// Dirty status is only ever meant to convey that one or more cells in
+    /// the row have changed visually. A cell which changes in a way that
+    /// doesn't affect the visual representation may not be marked as dirty.
+    ///
+    /// Dirty tracking may have false positives but should never have false
+    /// negatives. A false negative would result in a visual artifact on the
+    /// screen.
+    #[inline]
+    pub fn dirty(self) -> bool {
+        get_bits(self.0, ROW_DIRTY_SHIFT, 1) != 0
+    }
+    #[inline]
+    pub fn set_dirty(&mut self, v: bool) {
+        set_bits(&mut self.0, ROW_DIRTY_SHIFT, 1, v as u64);
+    }
+
+    /// C ABI type.
+    // pub const C = u64;
+    /// Returns this row as a C ABI value.
+    // PORT NOTE: `Row.C = u64; pub fn cval(self) C`.
+    #[inline]
+    pub fn cval(self) -> u64 {
+        self.0
+    }
+
+    /// Returns true if this row has any managed memory outside of the
+    /// row structure (graphemes, styles, etc.)
+    #[inline]
+    pub fn managed_memory(self) -> bool {
+        // Ordered on purpose for likelihood.
+        self.styled() || self.hyperlink() || self.grapheme()
+    }
+}
+
+impl Default for Row {
+    fn default() -> Self {
+        Row::zeroed()
+    }
+}
+
+/// The size of this page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PageSize {
+    pub cols: size::CellCountInt,
+    pub rows: size::CellCountInt,
+}
+
+/// Capacity of this page.
+///
+/// This capacity can be maxed out (every field max) and still fit
+/// within a 64-bit memory space. If you need more than this, you will
+/// need to split data across separate pages.
+///
+/// For 32-bit systems, it is possible to overflow the addressable
+/// space and this is something we still need to address in the future
+/// likely by limiting the maximum capacity on 32-bit systems further.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Capacity {
+    /// Number of columns and rows we can know about.
+    pub cols: size::CellCountInt,
+    pub rows: size::CellCountInt,
+
+    /// Number of unique styles that can be used on this page.
+    pub styles: size::StyleCountInt,
+
+    /// Number of bytes to allocate for hyperlink data. Note that the
+    /// amount of data used for hyperlinks in total is more than this because
+    /// hyperlinks use string data as well as a small amount of lookup metadata.
+    /// This number is a rough approximation.
+    pub hyperlink_bytes: size::HyperlinkCountInt,
+
+    /// Number of bytes to allocate for grapheme data.
+    pub grapheme_bytes: size::GraphemeBytesInt,
+
+    /// Number of bytes to allocate for strings.
+    pub string_bytes: size::StringBytesInt,
+}
+
+/// `Capacity.Adjustment`
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Adjustment {
+    pub cols: Option<size::CellCountInt>,
+}
+
+/// The allocation-failure error mirroring Zig's `Allocator.Error` / OutOfMemory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OutOfMemory;
+
+impl Capacity {
+    // PORT NOTE: the reference field defaults are applied via a builder-style
+    // constructor since Rust structs can't have per-field defaults. `cap_new`
+    // mirrors `Capacity{ .cols = c, .rows = r }` with the reference defaults:
+    //   styles = 16, hyperlink_bytes = hyperlink_bytes_default,
+    //   grapheme_bytes = grapheme_bytes_default, string_bytes = string_bytes_default.
+    pub fn new(cols: size::CellCountInt, rows: size::CellCountInt) -> Capacity {
+        Capacity {
+            cols,
+            rows,
+            styles: 16,
+            hyperlink_bytes: hyperlink_bytes_default() as size::HyperlinkCountInt,
+            grapheme_bytes: GRAPHEME_BYTES_DEFAULT as size::GraphemeBytesInt,
+            string_bytes: STRING_BYTES_DEFAULT as size::StringBytesInt,
+        }
+    }
+
+    /// Returns the maximum number of columns that can be used with this
+    /// capacity while still fitting at least one row. Returns null if even
+    /// a single column cannot fit (which would indicate an unusable capacity).
+    ///
+    /// Note that this is the maximum number of columns that never increases
+    /// the amount of memory the original capacity will take. If you modify
+    /// the original capacity to add rows, then you can fit more columns.
+    pub fn max_cols(self) -> Option<size::CellCountInt> {
+        let available_bits = self.available_bits_for_grid();
+
+        // If we can't even fit the row metadata, return null
+        if available_bits <= bit_size_of_row() {
+            return None;
+        }
+
+        // We do the math of how many columns we can fit in the remaining
+        // bits ignoring the metadata of a row.
+        let remaining_bits = available_bits - bit_size_of_row();
+        let max_cols = remaining_bits / bit_size_of_cell();
+
+        // Clamp to CellCountInt max
+        Some(core::cmp::min(size::CellCountInt::MAX as usize, max_cols) as size::CellCountInt)
+    }
+
+    /// Adjust the capacity parameters while retaining the same total size.
+    ///
+    /// Adjustments always happen by limiting the rows in the page. Everything
+    /// else can grow. If it is impossible to achieve the desired adjustment,
+    /// OutOfMemory is returned.
+    pub fn adjust(self, req: Adjustment) -> Result<Capacity, OutOfMemory> {
+        let mut adjusted = self;
+        if let Some(cols) = req.cols {
+            let available_bits = self.available_bits_for_grid();
+
+            // The size per row is:
+            //   - The row metadata itself
+            //   - The cells per row (n=cols)
+            let bits_per_row: usize = bit_size_of_row() + bit_size_of_cell() * (cols as usize);
+            let new_rows: usize = available_bits / bits_per_row;
+
+            // If our rows go to zero then we can't fit any row metadata
+            // for the desired number of columns.
+            if new_rows == 0 {
+                return Err(OutOfMemory);
+            }
+
+            adjusted.cols = cols;
+            adjusted.rows = new_rows as size::CellCountInt;
+        }
+
+        Ok(adjusted)
+    }
+
+    /// Computes the number of bits available for rows and cells in the page.
+    ///
+    /// This is done by laying out the "meta" members (styles, graphemes,
+    /// hyperlinks, strings) from the end of the page and finding where they
+    /// start, which gives us the space available for rows and cells.
+    fn available_bits_for_grid(self) -> usize {
+        // The math below only works if there is no alignment gap between
+        // the end of the rows array and the start of the cells array.
+        //
+        // To guarantee this, we assert that Row's size is a multiple of
+        // Cell's alignment, so that any length array of Rows will end on
+        // a valid alignment for the start of the Cell array.
+        assert!(core::mem::size_of::<Row>().is_multiple_of(core::mem::align_of::<Cell>()));
+
+        let l = Page::layout(self);
+
+        // Layout meta members from the end to find styles_start
+        let hyperlink_map_start = align_backward(
+            l.total_size - l.hyperlink_map_layout.total_size,
+            hyperlink_map_base_align(),
+        );
+        let hyperlink_set_start = align_backward(
+            hyperlink_map_start - l.hyperlink_set_layout.total_size,
+            hyperlink_set_base_align(),
+        );
+        let string_alloc_start = align_backward(
+            hyperlink_set_start - l.string_alloc_layout.total_size,
+            StringAlloc::BASE_ALIGN,
+        );
+        let grapheme_map_start = align_backward(
+            string_alloc_start - l.grapheme_map_layout.total_size,
+            grapheme_map_base_align(),
+        );
+        let grapheme_alloc_start = align_backward(
+            grapheme_map_start - l.grapheme_alloc_layout.total_size,
+            GraphemeAlloc::BASE_ALIGN,
+        );
+        let styles_start = align_backward(
+            grapheme_alloc_start - l.styles_layout.total_size,
+            style_set_base_align(),
+        );
+
+        // Multiply by 8 to convert bytes to bits
+        styles_start * 8
+    }
+}
+
+// PORT NOTE: `@bitSizeOf(Row)` / `@bitSizeOf(Cell)`. Both are `packed
+// struct(u64)`, so their bit size is exactly 64.
+#[inline]
+fn bit_size_of_row() -> usize {
+    64
+}
+#[inline]
+fn bit_size_of_cell() -> usize {
+    64
+}
+
+// PORT NOTE: `StyleSet.base_align.toByteUnits()`, `GraphemeMap.base_align`,
+// `hyperlink.Map.base_align`, `hyperlink.Set.base_align`. These are the offset-
+// based structures' base alignments (max of header/key/value alignments).
+fn style_set_base_align() -> usize {
+    StyleSet::base_align()
+}
+fn grapheme_map_base_align() -> usize {
+    GraphemeMap::base_align()
+}
+fn hyperlink_map_base_align() -> usize {
+    hyperlink::Map::base_align()
+}
+fn hyperlink_set_base_align() -> usize {
+    hyperlink::Set::base_align()
+}
+
+include!("page_impl.rs");
+
+include!("page_tests.rs");

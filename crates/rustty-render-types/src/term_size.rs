@@ -98,6 +98,16 @@ impl<T> PartialEq for Offset<T> {
 
 impl<T> Eq for Offset<T> {}
 
+// PORT NOTE: `Offset` is used as a key in `AutoOffsetHashMap` (the page's
+// grapheme/hyperlink maps key on `Offset(Cell)`). The map's auto-context hashes
+// the key, so `Offset` must be `Hash`; it hashes by its single integer field,
+// matching the reference's `std.hash.autoHash` over the packed `OffsetInt`.
+impl<T> core::hash::Hash for Offset<T> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.offset.hash(state);
+    }
+}
+
 impl<T> core::fmt::Debug for Offset<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Offset")
@@ -152,6 +162,15 @@ pub struct OffsetSlice<T> {
     pub offset: Offset<T>,
     pub len: usize,
 }
+
+// PORT NOTE: the reference `Offset(T).Slice` is a plain value type copied freely
+// (`var x = self.uri`); both fields are `Copy`, so the wrapper is `Copy`/`Clone`.
+impl<T> Clone for OffsetSlice<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T> Copy for OffsetSlice<T> {}
 
 impl<T> Default for OffsetSlice<T> {
     fn default() -> Self {

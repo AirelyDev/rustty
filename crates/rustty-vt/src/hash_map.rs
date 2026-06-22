@@ -132,6 +132,17 @@ pub struct OffsetHashMap<K, V, Context: HashMapContext<K>> {
     _marker: PhantomData<(K, V, Context)>,
 }
 
+// PORT NOTE: the reference `OffsetHashMap` is a plain struct holding a single
+// `Offset` (a `u32`), so `var x = self.*` copies it trivially. We mirror that
+// with `Clone`/`Copy` (the only field is `Copy`); needed by `Page` clone, which
+// copies the whole struct (`var result = self.*`).
+impl<K, V, Context: HashMapContext<K>> Clone for OffsetHashMap<K, V, Context> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<K, V, Context: HashMapContext<K>> Copy for OffsetHashMap<K, V, Context> {}
+
 // PORT NOTE: the reference exposes two re-exports on `OffsetHashMap`:
 //   /// This is the pointer-based map that we're wrapping.
 //   pub const Unmanaged = HashMapUnmanaged(K, V, Context);

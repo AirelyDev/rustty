@@ -60,6 +60,11 @@ use rustty_util::quirks::inlineAssert as assert;
 // Notes for contributors: this is highly contributor friendly part of
 // the code. If you can improve this, add tests, show benchmarks, then
 // please do so!
+// PORT NOTE: the reference `BitmapAllocator` is a plain struct of two `Offset`s
+// plus a `usize`, so `var x = self.*` copies it trivially. We mirror that with
+// `Clone`/`Copy` (all fields are `Copy`); needed by `Page` clone, which copies
+// the whole struct (`var result = self.*`).
+#[derive(Clone, Copy)]
 pub struct BitmapAllocator<const CHUNK_SIZE: usize> {
     /// The bitmap of available chunks. Each bit represents a chunk. A
     /// 1 means the chunk is free and a 0 means it's used. We use 1

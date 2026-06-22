@@ -309,6 +309,34 @@ where
     _marker: PhantomData<RefCount>,
 }
 
+// PORT NOTE: the reference set is a plain struct of `Offset`s, ints, a fixed
+// array, a `Layout`, and the context, so `var result = self.*` copies it
+// shallowly. We mirror that with `Clone` (requiring `Context: Clone`); needed by
+// `Page` clone, which copies the whole struct (`var result = self.*`). Offsets
+// are relative to the (newly memcpy'd) backing memory, so a shallow copy is
+// exactly correct.
+impl<T, Id, RefCount, Context> Clone for RefCountedSet<T, Id, RefCount, Context>
+where
+    T: Copy + Default,
+    Id: IdInt,
+    RefCount: RefCountIntTrait,
+    Context: RefCountedSetContext<T> + Clone,
+{
+    fn clone(&self) -> Self {
+        RefCountedSet {
+            table: self.table,
+            max_psl: self.max_psl,
+            psl_stats: self.psl_stats,
+            items: self.items,
+            living: self.living,
+            next_id: self.next_id,
+            layout: self.layout,
+            context: self.context.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl<Id: IdInt> Layout<Id> {
     /// This is the max load until the set returns OutOfMemory and
     /// requires more capacity.
