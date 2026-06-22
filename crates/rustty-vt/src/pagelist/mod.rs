@@ -73,6 +73,12 @@ pub mod pin;
 pub mod resize;
 pub mod scroll;
 
+// PORT NOTE: the 205 PageList `test {}` blocks are integration tests that
+// exercise many methods, so per the port plan they are co-located in a dedicated
+// `tests.rs` (gated `#![cfg(test)]`) rather than split per-cluster.
+#[cfg(test)]
+mod tests;
+
 use rustty_datastruct::IntrusiveDoublyLinkedList as DoublyLinkedList;
 use rustty_render_types::term_size as size;
 use rustty_render_types::term_size::OffsetBuf;

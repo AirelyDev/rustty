@@ -505,6 +505,13 @@ impl PageList {
         unsafe { self.pages.remove(node) };
         self.destroy_node(node);
 
+        // PORT NOTE: the linked-list splice above takes `&mut Node` through
+        // `new_node`, which under Stacked Borrows invalidates the earlier
+        // `&mut (*new_node).data`-derived `new_page` tag. Re-derive the page
+        // pointer from the node via raw projection (no `&mut` retag) before the
+        // final integrity check, matching the raw-pointer discipline used by the
+        // `page_memory` helper in `mod.rs`.
+        let new_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*new_node).data) };
         unsafe { (*new_page).assert_integrity() };
         self.assert_integrity();
         Ok(new_node)
@@ -572,6 +579,11 @@ impl PageList {
         unsafe { self.pages.remove(node) };
         self.destroy_node(node);
 
+        // PORT NOTE: re-derive `new_page` via raw projection after the
+        // linked-list splice (see the matching note in `increase_capacity`):
+        // the splice retags `new_node`, invalidating the earlier
+        // `&mut (*new_node).data`-derived tag under Stacked Borrows.
+        let new_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*new_node).data) };
         unsafe { (*new_page).assert_integrity() };
         self.assert_integrity();
         Ok(Some(new_node))
@@ -581,7 +593,7 @@ impl PageList {
     /// helper from the reference. It lives in the resize cluster in the
     /// reference; included here as it is a thin wrapper over `grow`.
     #[allow(dead_code)]
-    fn grow_rows(&mut self, n: usize) -> Result<(), super::OutOfMemory> {
+    pub(crate) fn grow_rows(&mut self, n: usize) -> Result<(), super::OutOfMemory> {
         for _ in 0..n {
             let _ = self.grow()?;
         }
