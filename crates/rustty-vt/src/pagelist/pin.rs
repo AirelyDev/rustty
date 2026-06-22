@@ -13,11 +13,11 @@
 //! tracking methods.
 //!
 //! PORT STATUS: methods ported (vt-3c). `pinIsValid` lives in `mod.rs` (the CORE
-//! `verify_integrity` caller needs it) and `pinIsActive`/`pinIsTop` are owned by
-//! the scroll/grow clusters' deferred seams; this file ports `pin`, `trackPin`,
-//! `untrackPin`, `countTrackedPins`, `trackedPins`, `pointFromPin`, and the full
-//! `impl Pin` navigation set (`rowAndCell`, `cells`, `isBetween`, `before`,
-//! `leftWrap`, `rightWrap`, `down`, `up`, `eql`, plus the `downOverflow`/
+//! `verify_integrity` caller needs it); this file ports `pin`, `trackPin`,
+//! `untrackPin`, `countTrackedPins`, `trackedPins`, `pointFromPin`,
+//! `pinIsActive`, `pinIsTop`, and the full `impl Pin` navigation set
+//! (`rowAndCell`, `cells`, `isBetween`, `before`, `leftWrap`, `rightWrap`,
+//! `down`, `up`, `eql`, `isDirty`, `markDirty`, plus the `downOverflow`/
 //! `upOverflow` they delegate to). The 205-block test split lands in the
 //! dedicated test phase.
 
@@ -148,6 +148,51 @@ impl PageList {
         }
 
         Some(point::Point::from_c(tag, coord))
+    }
+
+    /// Returns the viewport for the given pin, preferring to pin to
+    /// "active" if the pin is within the active area.
+    //
+    // PORT NOTE: `#[allow(dead_code)]` — the reference `pinIsActive` is a private
+    // helper whose callers (`fixupViewport`, `scroll`, `resize`, `eraseRows`) live
+    // in the grow/scroll/resize/erase clusters whose bodies land later; until then
+    // the CORE skeleton has no callers for it.
+    #[allow(dead_code)]
+    fn pin_is_active(&self, p: Pin) -> bool {
+        // If the pin is in the active page, then we can quickly determine
+        // if we're beyond the end.
+        let active = self.get_top_left(point::Tag::Active);
+        if core::ptr::eq(p.node, active.node) {
+            return p.y >= active.y;
+        }
+
+        let mut node_ = unsafe { (*active.node).next };
+        while !node_.is_null() {
+            let node = node_;
+            // This loop is pretty fast because the active area is
+            // never that large so this is at most one, two nodes for
+            // reasonable terminals (including very large real world
+            // ones).
+
+            // A node forward in the active area is our node, so we're
+            // definitely in the active area.
+            if core::ptr::eq(node, p.node) {
+                return true;
+            }
+            node_ = unsafe { (*node).next };
+        }
+
+        false
+    }
+
+    /// Returns true if the pin is at the top of the scrollback area.
+    //
+    // PORT NOTE: `#[allow(dead_code)]` — the reference `pinIsTop` is a private
+    // helper whose callers (`scroll`) live in the scroll cluster whose body lands
+    // later; until then the CORE skeleton has no callers for it.
+    #[allow(dead_code)]
+    fn pin_is_top(&self, p: Pin) -> bool {
+        p.y == 0 && core::ptr::eq(p.node, self.pages.first)
     }
 }
 
@@ -332,6 +377,23 @@ impl Pin {
     #[inline]
     pub fn eql(&self, other: Pin) -> bool {
         core::ptr::eq(self.node, other.node) && self.y == other.y && self.x == other.x
+    }
+
+    /// Check if this pin is dirty.
+    //
+    // PORT NOTE: `#[allow(dead_code)]` — the reference `isDirty` is a `pub inline`
+    // helper whose callers land in later clusters/tests; until then the CORE
+    // skeleton has no callers for it.
+    #[allow(dead_code)]
+    #[inline]
+    pub fn is_dirty(&self) -> bool {
+        unsafe { (*self.node).data.dirty || (*self.row_and_cell().row).dirty() }
+    }
+
+    /// Mark this pin location as dirty.
+    #[inline]
+    pub fn mark_dirty(&self) {
+        unsafe { (*self.row_and_cell().row).set_dirty(true) };
     }
 
     /// Move the pin left n columns. n must fit within the size.

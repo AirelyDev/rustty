@@ -1385,6 +1385,16 @@ impl PageList {
         false
     }
 
+    /// Mark a point as dirty, used for testing.
+    //
+    // PORT NOTE: `#[allow(dead_code)]` — the reference `markDirty` is a private
+    // testing/debugging helper; its sole callers are test blocks that land in the
+    // dedicated test phase.
+    #[allow(dead_code)]
+    fn mark_dirty(&self, pt: point::Point) {
+        self.pin(pt).unwrap().mark_dirty();
+    }
+
     /// Get the top-left of the screen for the given tag.
     pub fn get_top_left(&self, tag: point::Tag) -> Pin {
         match tag {
