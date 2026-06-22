@@ -60,6 +60,7 @@ members = [
     "crates-sys/spirv-cross-sys",
     "crates-sys/wuffs-sys",
     "crates-sys/zlib-sys",
+    "crates-sys/gettext-sys",
     "crates-sys/libpng-sys",
     "crates-sys/sentry-sys",
     "crates-sys/dcimgui-sys",

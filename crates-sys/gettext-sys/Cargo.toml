@@ -1,0 +1,37 @@
+# gettext-sys — vendored C dependency (R3: self-contained, no ghostty dep)
+#
+# This crate vendors copied C sources from the SAME upstream library the
+# reference uses (GNU gettext's gnulib `localename` family) and builds them
+# standalone via `cc` + `bindgen`. `links` declares the native lib so Cargo
+# enforces one-version linking.
+#
+# Scope: the macOS `_libintl_locale_name_canonicalize`
+# (`gl_locale_name_canonicalize`) symbol consumed by `os/i18n.zig`
+# (`canonicalizeLocale`). The reference builds libintl from gettext for macOS
+# only (Linux gets libintl from libc); see ghostty/pkg/libintl/build.zig — this
+# crate mirrors that macOS C-source subset. The build template (config.h,
+# libgnuintl.h, libintl.h) is copied from ghostty/pkg/libintl; the gnulib-lib
+# `.c`/`.h` sources are copied from the gettext upstream (gettext-runtime/intl/
+# gnulib-lib). NO build- or run-time dependency on the ghostty tree (R3).
+[package]
+name = "gettext-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+links = "intl"
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[build-dependencies]
+# R3: compile the vendored C standalone (`cc`) and auto-generate the thin FFI
+# surface (`bindgen`) for the canonicalize symbol. `cc` invokes the host C
+# compiler with the reference's portable flags (-DHAVE_CONFIG_H -DLOCALEDIR="").
+cc = "1"
+bindgen = "0.72"

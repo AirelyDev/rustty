@@ -11,6 +11,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+# R3: pty.c is vendored in-tree and compiled standalone via `cc` (see build.rs),
+# matching the reference's `src/pty.c` (used by pty.zig).
+build = "build.rs"
 
 [lints]
 workspace = true
@@ -20,3 +23,23 @@ rustty-datastruct = { workspace = true }
 rustty-util = { workspace = true }
 rustty-global = { workspace = true }
 rustty-build-config = { workspace = true }
+
+# Raw FFI bindings to the platform libc (syscalls/constants used across os/*).
+# R3: `libc` binds the SAME system library the reference's Zig `std.c`/`std.posix`
+# layer targets — it is a binding, not a pure-Rust reimplementation.
+[target.'cfg(target_family = "unix")'.dependencies]
+libc = "0.2"
+
+# macOS: Objective-C runtime + Foundation/CoreFoundation bindings (the reference
+# uses these for the Darwin code paths, e.g. mach.zig/macos.zig/cf_release_thread.zig).
+# R3: bindings to the SAME system frameworks, not reimplementations. `gettext-sys`
+# provides the vendored libintl `locale_name_canonicalize` for os/i18n.zig.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-core-foundation = "0.3"
+gettext-sys = { path = "../../crates-sys/gettext-sys" }
+
+[build-dependencies]
+# R3: compile the vendored `pty.c` standalone with the host C compiler.
+cc = "1"
