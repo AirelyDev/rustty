@@ -166,6 +166,9 @@ dependencies = [
 [[package]]
 name = "rustty-datastruct"
 version = "0.1.0"
+dependencies = [
+ "rustty-util",
+]
 
 [[package]]
 name = "rustty-font"

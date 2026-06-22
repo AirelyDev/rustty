@@ -16,3 +16,4 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+rustty-util.workspace = true
