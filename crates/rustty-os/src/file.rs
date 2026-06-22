@@ -155,8 +155,7 @@ pub enum RandomBasenameError {
 // padding. `calcSize` for N input bytes (no padding) is
 // `N/3*4 + (N%3*8 + 5)/6`.
 mod b64_encoder {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
     // PARITY: this is the verbatim Zig `std.base64` no-pad `calcSize` formula.
     // clippy suggests `.div_ceil(6)` for the `(.. + 5) / 6` term, but rewriting
@@ -329,7 +328,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // real-OS CSPRNG syscall (getentropy/arc4random_buf)
     #[allow(non_snake_case)]
-    fn randomBasename_() {
+    fn random_basename() {
         let mut buf = [0u8; random_basename_len];
         let name = randomBasename(&mut buf).unwrap_or_else(|_| panic!());
         assert_eq!(random_basename_len, name.len());

@@ -189,6 +189,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // reads/mutates process env (real OS state)
     #[allow(non_snake_case)]
     fn desktop_environment() {
+        let _env = crate::env_test_lock();
         #[cfg(target_os = "macos")]
         {
             assert_eq!(DesktopEnvironment::Macos, desktopEnvironment());

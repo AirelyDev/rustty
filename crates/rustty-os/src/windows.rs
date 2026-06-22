@@ -199,9 +199,11 @@ pub mod exp {
     }
 
     pub mod kernel32 {
-        use super::super::{BOOL, COORD, DWORD, HANDLE, HRESULT, LPWSTR, PROCESS_INFORMATION, SECURITY_ATTRIBUTES};
-        use super::{HPCON, LPPROC_THREAD_ATTRIBUTE_LIST};
+        use super::super::{
+            BOOL, COORD, DWORD, HANDLE, HRESULT, LPWSTR, PROCESS_INFORMATION, SECURITY_ATTRIBUTES,
+        };
         use super::super::{DWORD_PTR, PVOID, SIZE_T};
+        use super::{HPCON, LPPROC_THREAD_ATTRIBUTE_LIST};
         extern "system" {
             pub fn CreatePipe(
                 hReadPipe: *mut HANDLE,
@@ -280,9 +282,21 @@ pub mod exp {
         additive: bool,
     ) -> DWORD {
         (attribute as DWORD & PROC_THREAD_ATTRIBUTE_NUMBER)
-            | (if thread { PROC_THREAD_ATTRIBUTE_THREAD } else { 0 })
-            | (if input { PROC_THREAD_ATTRIBUTE_INPUT } else { 0 })
-            | (if additive { PROC_THREAD_ATTRIBUTE_ADDITIVE } else { 0 })
+            | (if thread {
+                PROC_THREAD_ATTRIBUTE_THREAD
+            } else {
+                0
+            })
+            | (if input {
+                PROC_THREAD_ATTRIBUTE_INPUT
+            } else {
+                0
+            })
+            | (if additive {
+                PROC_THREAD_ATTRIBUTE_ADDITIVE
+            } else {
+                0
+            })
     }
 
     pub const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: DWORD = ProcThreadAttributeValue(

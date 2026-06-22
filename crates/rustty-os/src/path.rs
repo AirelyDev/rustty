@@ -202,7 +202,11 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // real-OS PATH lookup + openFile/stat syscalls
     fn expand_hostname() {
-        let executable = if cfg!(windows) { "hostname.exe" } else { "uname" };
+        let executable = if cfg!(windows) {
+            "hostname.exe"
+        } else {
+            "uname"
+        };
         let path = expand(executable).unwrap().unwrap();
         assert!(path.len() > executable.len());
     }

@@ -99,10 +99,7 @@ pub fn get() -> Result<Entry, Error> {
                         "/bin/sh".to_string(),
                         "-l".to_string(),
                         "-c".to_string(),
-                        format!(
-                            "getent passwd {}",
-                            slice_to_str(pw.pw_name),
-                        ),
+                        format!("getent passwd {}", slice_to_str(pw.pw_name),),
                     ],
                     stdin: pty.slave,
                     stdout: pty.slave,
@@ -121,12 +118,10 @@ pub fn get() -> Result<Entry, Error> {
                 let output = {
                     let mut output: Vec<u8> = Vec::new();
                     loop {
-                        let n = unsafe {
-                            libc::read(pty.master, buf.as_mut_ptr().cast(), buf.len())
-                        };
+                        let n =
+                            unsafe { libc::read(pty.master, buf.as_mut_ptr().cast(), buf.len()) };
                         if n < 0 {
-                            let errno =
-                                std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
                             match errno {
                                 // EIO is triggered at the end since we closed our
                                 // child side. This is just EOF for this. I'm not sure

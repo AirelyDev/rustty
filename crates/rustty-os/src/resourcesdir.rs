@@ -114,7 +114,9 @@ pub fn resourcesDir() -> Result<ResourcesDir, ResourcesDirError> {
         #[cfg(target_os = "macos")]
         {
             for sentinel in sentinels {
-                if let Some(v) = maybeDir(&mut dir_buf, dir_str(&dir), "Contents/Resources", sentinel)? {
+                if let Some(v) =
+                    maybeDir(&mut dir_buf, dir_str(&dir), "Contents/Resources", sentinel)?
+                {
                     return Ok(ResourcesDir {
                         app_path: Some(fs_path_join(&[v.as_str(), app_subdir()])),
                         ..Default::default()
@@ -211,10 +213,7 @@ pub fn maybeDir(
 /// PORT: the reference reads the `GHOSTTY_RESOURCES_DIR` env var. Retargeted to
 /// the published `rustty` identity (R2): `<APP_NAME upper>_RESOURCES_DIR`.
 fn resources_dir_env_var() -> String {
-    format!(
-        "{}_RESOURCES_DIR",
-        rustty_identity::APP_NAME.to_uppercase()
-    )
+    format!("{}_RESOURCES_DIR", rustty_identity::APP_NAME.to_uppercase())
 }
 
 /// PORT: the reference's terminfo sentinels. Retargeted to the `rustty`
@@ -229,7 +228,7 @@ fn sentinels() -> &'static [&'static str] {
         // Leak the small, process-lifetime sentinel strings so they are `'static`.
         let primary = rustty_identity::TERMINFO_PRIMARY_NAME; // xterm-rustty
         let preferred = rustty_identity::TERMINFO_PREFERRED_NAME; // rustty
-        // (macOS uses only `primary`; other targets use both.)
+                                                                  // (macOS uses only `primary`; other targets use both.)
         let _ = (primary, preferred);
         let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
         #[cfg(target_os = "windows")]

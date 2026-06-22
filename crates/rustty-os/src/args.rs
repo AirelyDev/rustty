@@ -186,7 +186,8 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg_attr(miri, ignore)] // ffi (macOS): NSProcessInfo crosses the ObjC boundary (ASan, not Miri)
+    #[cfg_attr(miri, ignore)]
+    // ffi (macOS): NSProcessInfo crosses the ObjC boundary (ASan, not Miri)
     // PARITY: the reference asserts `iter.next().?.len > 0`; the `> 0` form is
     // kept verbatim (assertion-for-assertion) rather than `!is_empty()`.
     #[allow(clippy::len_zero)]

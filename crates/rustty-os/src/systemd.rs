@@ -123,7 +123,9 @@ pub mod notify {
 
             // The socket address must be a path or an abstract socket.
             if socket_path[0] != b'/' && socket_path[0] != b'@' {
-                log_warn("only AF_UNIX sockets with path or abstract namespace addresses are supported!");
+                log_warn(
+                    "only AF_UNIX sockets with path or abstract namespace addresses are supported!",
+                );
                 return;
             }
 
@@ -147,11 +149,7 @@ pub mod notify {
 
             let socket: libc::c_int = {
                 let rc = unsafe {
-                    libc::socket(
-                        libc::AF_UNIX,
-                        libc::SOCK_DGRAM | libc::SOCK_CLOEXEC,
-                        0,
-                    )
+                    libc::socket(libc::AF_UNIX, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0)
                 };
                 if rc < 0 {
                     log_warn(&format!(
@@ -189,7 +187,11 @@ pub mod notify {
             // write
             {
                 let rc = unsafe {
-                    libc::write(socket, message.as_ptr() as *const libc::c_void, message.len())
+                    libc::write(
+                        socket,
+                        message.as_ptr() as *const libc::c_void,
+                        message.len(),
+                    )
                 };
                 if rc < 0 {
                     log_warn(&format!(

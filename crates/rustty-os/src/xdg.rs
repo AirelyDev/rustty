@@ -236,6 +236,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // exercises homedir lookup (env/syscalls)
     fn config_nonempty() {
+        let _env = crate::env_test_lock();
         let value = config(Options::default()).unwrap();
         assert!(!value.is_empty());
     }
@@ -289,6 +290,7 @@ mod tests {
             return; // error.SkipZigTest
         }
 
+        let _env = crate::env_test_lock();
         let saved_home: Option<CString> = std::env::var_os("HOME")
             .map(|v| CString::new(v.to_string_lossy().into_owned()).unwrap());
         // defer: restore HOME on scope exit
@@ -343,6 +345,7 @@ mod tests {
             return; // error.SkipZigTest
         }
 
+        let _env = crate::env_test_lock();
         let saved_home: Option<CString> = std::env::var_os("HOME")
             .map(|v| CString::new(v.to_string_lossy().into_owned()).unwrap());
         let _restore_home = RestoreEnv {
@@ -396,7 +399,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn parseTerminalExec_() {
+    fn parse_terminal_exec() {
         {
             let actual = parseTerminalExec(&["a", "b", "c"]);
             assert!(actual.is_none());

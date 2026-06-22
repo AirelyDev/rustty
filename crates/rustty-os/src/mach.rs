@@ -264,7 +264,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn vmtag_make() {
+    fn VMTag_make() {
         // PORT: the reference computes the expected value via
         // `@as(i32, @bitCast(@as(u32, 240) << 24))` — i.e. VM_MAKE_TAG(240).
         // To keep this an INDEPENDENT oracle (not re-deriving it from `make`),

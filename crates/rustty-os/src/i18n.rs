@@ -87,8 +87,8 @@ pub fn init(resources_dir: &str) -> Result<(), InitError> {
 
         // Bind our bundle ID to the given locale path
         log_debug_binding(build_config::BUNDLE_ID, &path);
-        let domain = std::ffi::CString::new(build_config::BUNDLE_ID)
-            .map_err(|_| InitError::OutOfMemory)?;
+        let domain =
+            std::ffi::CString::new(build_config::BUNDLE_ID).map_err(|_| InitError::OutOfMemory)?;
         let ret = unsafe { bindtextdomain(domain.as_ptr(), path.as_ptr()) };
         if ret.is_null() {
             return Err(InitError::OutOfMemory);
@@ -165,10 +165,7 @@ pub fn gettext_(msgid: &std::ffi::CStr) -> &'static std::ffi::CStr {
 /// their own canonicalization logic:
 ///
 /// https://github.com/coreutils/gnulib/blob/5b92dd0a45c8d27f13a21076b57095ea5e220870/lib/localename.c#L1171
-pub fn canonicalizeLocale<'a>(
-    buf: &'a mut [u8],
-    locale: &str,
-) -> Result<&'a [u8], NoSpaceLeft> {
+pub fn canonicalizeLocale<'a>(buf: &'a mut [u8], locale: &str) -> Result<&'a [u8], NoSpaceLeft> {
     let locale = locale.as_bytes();
 
     if !build_config::i18n() {

@@ -29,7 +29,13 @@ pub fn pipe() -> std::io::Result<[fd_t; 2]> {
         // as Zig's std does for `posix.pipe2` on such targets — we `pipe()` then
         // set `FD_CLOEXEC` on both descriptors with `fcntl`. CLOEXEC is set on the
         // file descriptors either way, preserving the documented behavior.
-        #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd", target_os = "dragonfly", target_os = "openbsd"))]
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "dragonfly",
+            target_os = "openbsd"
+        ))]
         {
             let mut fds: [libc::c_int; 2] = [0; 2];
             let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
@@ -38,7 +44,13 @@ pub fn pipe() -> std::io::Result<[fd_t; 2]> {
             }
             Ok([fds[0], fds[1]])
         }
-        #[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd", target_os = "dragonfly", target_os = "openbsd")))]
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "dragonfly",
+            target_os = "openbsd"
+        )))]
         {
             let mut fds: [libc::c_int; 2] = [0; 2];
             let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
@@ -61,7 +73,8 @@ pub fn pipe() -> std::io::Result<[fd_t; 2]> {
     {
         let mut read: crate::windows::HANDLE = std::ptr::null_mut();
         let mut write: crate::windows::HANDLE = std::ptr::null_mut();
-        if crate::windows::exp::kernel32::CreatePipe(&mut read, &mut write, std::ptr::null(), 0) == 0
+        if crate::windows::exp::kernel32::CreatePipe(&mut read, &mut write, std::ptr::null(), 0)
+            == 0
         {
             return crate::windows::unexpectedError(crate::windows::kernel32::GetLastError());
         }

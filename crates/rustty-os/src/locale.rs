@@ -262,11 +262,9 @@ fn preferredLanguageFromCocoa(buf: &mut [u8]) -> Result<Option<Vec<u8>>, NoSpace
         if pos > buf.len() {
             return Err(NoSpaceLeft);
         }
-        let canon = i18n::canonicalizeLocale(
-            &mut buf[pos..],
-            c_str.to_str().map_err(|_| NoSpaceLeft)?,
-        )
-        .map_err(|_| NoSpaceLeft)?;
+        let canon =
+            i18n::canonicalizeLocale(&mut buf[pos..], c_str.to_str().map_err(|_| NoSpaceLeft)?)
+                .map_err(|_| NoSpaceLeft)?;
         let canon = canon.to_vec();
         out.extend_from_slice(&canon);
 
@@ -304,7 +302,10 @@ const LC_ALL_MASK: std::ffi::c_int = libc::LC_ALL_MASK;
 type locale_t = libc::locale_t;
 
 /// `c.setlocale`: returns the active locale C-string or `None` on failure.
-fn setlocale(category: std::ffi::c_int, locale: &std::ffi::CStr) -> Option<&'static std::ffi::CStr> {
+fn setlocale(
+    category: std::ffi::c_int,
+    locale: &std::ffi::CStr,
+) -> Option<&'static std::ffi::CStr> {
     let p = unsafe { libc::setlocale(category, locale.as_ptr()) };
     if p.is_null() {
         None

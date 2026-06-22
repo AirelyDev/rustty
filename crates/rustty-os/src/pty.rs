@@ -58,12 +58,12 @@ impl Default for winsize {
 
 // PORT: `pub const Pty = switch (builtin.os.tag) { .windows => WindowsPty,
 // .ios => NullPty, else => PosixPty };`. Selected at compile time via `cfg`.
-#[cfg(windows)]
-pub use WindowsPty as Pty;
 #[cfg(target_os = "ios")]
 pub use NullPty as Pty;
 #[cfg(not(any(windows, target_os = "ios")))]
 pub use PosixPty as Pty;
+#[cfg(windows)]
+pub use WindowsPty as Pty;
 
 /// The modes of a pty. Not all of these modes are supported on
 /// all platforms but all platforms share the same mode struct.

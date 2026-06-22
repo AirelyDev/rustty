@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn isValid_() {
+    fn is_valid() {
         // Valid hostnames
         assert!(isValid(b"example"));
         assert!(isValid(b"example.com"));

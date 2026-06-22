@@ -162,10 +162,7 @@ pub enum StdParseError {
 /// some forms of URIs in the wild, such as HTTP Location headers.
 /// The return value will contain strings pointing into the original `text`.
 /// Each component that is provided, will be non-`null`.
-pub fn parseAfterScheme<'a>(
-    scheme: &'a [u8],
-    text: &'a [u8],
-) -> Result<Uri<'a>, StdParseError> {
+pub fn parseAfterScheme<'a>(scheme: &'a [u8], text: &'a [u8]) -> Result<Uri<'a>, StdParseError> {
     let mut uri = Uri {
         scheme,
         user: None,
@@ -249,7 +246,9 @@ pub fn parseAfterScheme<'a>(
             if start_of_host >= end_of_host {
                 return Err(StdParseError::InvalidFormat);
             }
-            uri.host = Some(Component::PercentEncoded(&authority[start_of_host..end_of_host]));
+            uri.host = Some(Component::PercentEncoded(
+                &authority[start_of_host..end_of_host],
+            ));
         }
     }
 
@@ -311,16 +310,12 @@ fn find_scalar_pos(haystack: &[u8], start: usize, needle: u8) -> Option<usize> {
 
 fn index_of(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     // std.mem.indexOf(u8, haystack, needle)
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 fn last_index_of(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     // std.mem.lastIndexOf(u8, haystack, needle)
-    haystack
-        .windows(needle.len())
-        .rposition(|w| w == needle)
+    haystack.windows(needle.len()).rposition(|w| w == needle)
 }
 
 fn parse_int_u16(s: &[u8]) -> Option<u16> {
@@ -710,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn isValidMacAddress_() {
+    fn is_valid_mac_address() {
         assert!(isValidMacAddress(b"01:23:45:67:89:Aa"));
         assert!(isValidMacAddress(b"Aa:Bb:Cc:Dd:Ee:Ff"));
 

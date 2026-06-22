@@ -268,11 +268,12 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // env/passwd/objc home lookup hits real OS state
     #[allow(non_snake_case)]
-    fn expandHomeUnix_() {
+    fn expand_home_unix() {
         if cfg!(windows) {
             return; // error.SkipZigTest
         }
 
+        let _env = crate::env_test_lock();
         let mut buf = [0u8; libc::PATH_MAX as usize];
         let home_dir = expandHomeUnix(b"~/", &mut buf).unwrap().to_vec();
         // Joining the home directory `~` with the path `/`
@@ -309,6 +310,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // env/passwd/objc home lookup hits real OS state
     fn home_returns_value() {
+        let _env = crate::env_test_lock();
         let mut buf = [0u8; 1024];
         let result = home(&mut buf).unwrap();
         assert!(result.is_some());

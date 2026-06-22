@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::octal_escapes)]
-    fn shellCommandBuilder() {
+    fn shell_command_builder() {
         // Empty command
         {
             let cmd = ShellCommandBuilder::init();

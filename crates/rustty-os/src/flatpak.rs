@@ -117,7 +117,8 @@ mod host_command {
             pub fn g_main_context_unref(context: *mut GMainContext);
             pub fn g_main_context_push_thread_default(context: *mut GMainContext);
             pub fn g_main_context_pop_thread_default(context: *mut GMainContext);
-            pub fn g_main_loop_new(context: *mut GMainContext, is_running: c_int) -> *mut GMainLoop;
+            pub fn g_main_loop_new(context: *mut GMainContext, is_running: c_int)
+                -> *mut GMainLoop;
             pub fn g_main_loop_unref(loop_: *mut GMainLoop);
             pub fn g_main_loop_run(loop_: *mut GMainLoop);
             pub fn g_main_loop_quit(loop_: *mut GMainLoop);
@@ -129,7 +130,11 @@ mod host_command {
             ) -> c_int;
             pub fn g_variant_builder_new(type_: *const GVariantType) -> *mut GVariantBuilder;
             pub fn g_variant_builder_unref(builder: *mut GVariantBuilder);
-            pub fn g_variant_builder_add(builder: *mut GVariantBuilder, format_string: *const c_char, ...);
+            pub fn g_variant_builder_add(
+                builder: *mut GVariantBuilder,
+                format_string: *const c_char,
+                ...
+            );
             pub fn g_variant_builder_end(builder: *mut GVariantBuilder) -> *mut GVariant;
             pub fn g_get_current_dir() -> *mut c_char;
             pub fn g_free(mem: *mut c_void);
@@ -261,7 +266,8 @@ mod host_command {
     }
 
     pub struct Completion {
-        pub callback: fn(ud: *mut c_void, l: *mut xev::Loop, c: *mut Completion, r: Result<u8, WaitError>),
+        pub callback:
+            fn(ud: *mut c_void, l: *mut xev::Loop, c: *mut Completion, r: Result<u8, WaitError>),
         c_xev: xev::Completion,
         userdata: *mut c_void,
         timer: Option<xev::Timer>,
@@ -344,7 +350,12 @@ mod host_command {
             loop_: *mut xev::Loop,
             completion: *mut Completion,
             userdata: *mut c_void,
-            cb: fn(ud: *mut c_void, l: *mut xev::Loop, c: *mut Completion, r: Result<u8, WaitError>),
+            cb: fn(
+                ud: *mut c_void,
+                l: *mut xev::Loop,
+                c: *mut Completion,
+                r: Result<u8, WaitError>,
+            ),
         ) {
             let _guard = self.state_mutex.lock().unwrap();
 
@@ -400,9 +411,13 @@ mod host_command {
             // Get our bus connection.
             let mut g_err: *mut c::GError = std::ptr::null_mut();
             unsafe {
-                let bus = c::g_bus_get_sync(c::G_BUS_TYPE_SESSION, std::ptr::null_mut(), &mut g_err);
+                let bus =
+                    c::g_bus_get_sync(c::G_BUS_TYPE_SESSION, std::ptr::null_mut(), &mut g_err);
                 if bus.is_null() {
-                    log_warn(&format!("signal error getting bus: {}", gerror_message(g_err)));
+                    log_warn(&format!(
+                        "signal error getting bus: {}",
+                        gerror_message(g_err)
+                    ));
                     if !g_err.is_null() {
                         c::g_error_free(g_err);
                     }
@@ -415,12 +430,7 @@ mod host_command {
                     cstr(b"/org/freedesktop/Flatpak/Development\0"),
                     cstr(b"org.freedesktop.Flatpak.Development\0"),
                     cstr(b"HostCommandSignal\0"),
-                    c::g_variant_new(
-                        cstr(b"(uub)\0"),
-                        pid,
-                        sig as c_uint,
-                        intcast_from_bool(pg),
-                    ),
+                    c::g_variant_new(cstr(b"(uub)\0"), pid, sig as c_uint, intcast_from_bool(pg)),
                     c::G_VARIANT_TYPE(cstr(b"()\0")),
                     c::G_DBUS_CALL_FLAGS_NONE,
                     c::G_MAXINT,
@@ -462,7 +472,10 @@ mod host_command {
             let mut g_err: *mut c::GError = std::ptr::null_mut();
             let bus = c::g_bus_get_sync(c::G_BUS_TYPE_SESSION, std::ptr::null_mut(), &mut g_err);
             if bus.is_null() {
-                log_warn(&format!("spawn error getting bus: {}", gerror_message(g_err)));
+                log_warn(&format!(
+                    "spawn error getting bus: {}",
+                    gerror_message(g_err)
+                ));
                 self_.updateState(State::Err);
                 if !g_err.is_null() {
                     c::g_error_free(g_err);
@@ -542,14 +555,20 @@ mod host_command {
                     for (k, v) in env.iter() {
                         let key = std::ffi::CString::new(k.as_str()).unwrap();
                         let value = std::ffi::CString::new(v.as_str()).unwrap();
-                        c::g_variant_builder_add(env_builder, cstr(b"{ss}\0"), key.as_ptr(), value.as_ptr());
+                        c::g_variant_builder_add(
+                            env_builder,
+                            cstr(b"{ss}\0"),
+                            key.as_ptr(),
+                            value.as_ptr(),
+                        );
                         keep_alive.push(key);
                         keep_alive.push(value);
                     }
                 }
 
                 // Build our args
-                let mut args: Vec<*mut std::os::raw::c_char> = Vec::with_capacity(self.argv.len() + 1);
+                let mut args: Vec<*mut std::os::raw::c_char> =
+                    Vec::with_capacity(self.argv.len() + 1);
                 for arg in &self.argv {
                     let arg_z = std::ffi::CString::new(arg.as_str()).unwrap();
                     args.push(arg_z.as_ptr() as *mut _);
@@ -615,7 +634,10 @@ mod host_command {
                     &mut err,
                 );
                 if reply.is_null() {
-                    log_warn(&format!("Flatpak.HostCommand failed: {}", gerror_message(err)));
+                    log_warn(&format!(
+                        "Flatpak.HostCommand failed: {}",
+                        gerror_message(err)
+                    ));
                     c::g_dbus_connection_signal_unsubscribe(bus, subscription_id);
                     c::g_variant_unref(params);
                     c::g_free(g_cwd as *mut c_void);
@@ -688,7 +710,9 @@ mod host_command {
                 pid,
                 status: exit_status,
             });
-            log_debug(&format!("HostCommand exited pid={pid} status={exit_status}"));
+            log_debug(&format!(
+                "HostCommand exited pid={pid} status={exit_status}"
+            ));
 
             // We're done now, so we can unsubscribe
             c::g_dbus_connection_signal_unsubscribe(bus, state_subscription);
@@ -698,7 +722,13 @@ mod host_command {
         }
     }
 
-    fn noopCallback(_: *mut c_void, _: *mut xev::Loop, _: *mut Completion, _: Result<u8, WaitError>) {}
+    fn noopCallback(
+        _: *mut c_void,
+        _: *mut xev::Loop,
+        _: *mut Completion,
+        _: Result<u8, WaitError>,
+    ) {
+    }
 
     // PORT: the inline timer-run callback closures in `waitXev`/`onExit`. They
     // recover the outer `Completion` via `@fieldParentPtr("c_xev", ...)`, deinit

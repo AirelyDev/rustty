@@ -86,7 +86,7 @@ pub fn setQosClass(class: QosClass) -> Result<(), SetQosClassError> {
     // PORT: `std.posix.errno(pthread_set_qos_class_self_np(class, 0))`. The C
     // function returns an errno-style `c_int`; we switch on it directly.
     match unsafe { pthread_set_qos_class_self_np(class, 0) } {
-        0 => Ok(()), // .SUCCESS
+        0 => Ok(()),                                              // .SUCCESS
         libc::EPERM => Err(SetQosClassError::ThreadIncompatible), // .PERM
 
         // EPERM is the only known error that can happen based on
@@ -111,8 +111,10 @@ pub enum QosClass {
 }
 
 extern "C" {
-    fn pthread_set_qos_class_self_np(qos_class: QosClass, relative_priority: std::ffi::c_int)
-        -> std::ffi::c_int;
+    fn pthread_set_qos_class_self_np(
+        qos_class: QosClass,
+        relative_priority: std::ffi::c_int,
+    ) -> std::ffi::c_int;
 }
 
 extern "C" {

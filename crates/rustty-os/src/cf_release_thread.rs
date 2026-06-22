@@ -47,9 +47,7 @@ use xev_seam as xev;
 pub enum Message {
     /// Release a slice of CFTypeRefs. Uses alloc to free the slice after
     /// releasing all the refs.
-    Release {
-        refs: Vec<*mut std::ffi::c_void>,
-    },
+    Release { refs: Vec<*mut std::ffi::c_void> },
 }
 
 /// The type used for sending messages to the thread. For now this is
