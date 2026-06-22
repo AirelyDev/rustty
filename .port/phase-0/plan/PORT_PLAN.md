@@ -563,3 +563,17 @@ fail on any unexpected cross-crate SCC.
   needs sign-off), A2 (vt 55-vs-95 count — reconciled), A3 (config/key.zig home),
   A4 (extra/ not in DAG), A5 (apprt-api file/symbol partition — least pinned),
   A6 (renderer+inspector+termio fallback group).
+
+---
+## Amendment (2026-06-22): Zig-stdlib dependency discovery
+
+The Phase-0 dependency graph scanned only `src/` `@import`s and therefore MISSED
+dependencies on the Zig STANDARD LIBRARY. `PageList` (and ~51 files via
+`ArenaAllocator`, 10 via `MultiArrayList`, 8 via `AutoArrayHashMap`, 1 via
+`std.heap.MemoryPool`) require faithful Rust equivalents of Zig stdlib types that
+have no Rust-std counterpart. Resolution: a new foundational leaf crate
+**`rustty-zigstd`** (additive infra; NOT in the 3234 test contract) provides them.
+Shipped: `ArenaAllocator` (free_all/retain_capacity/retain_with_limit),
+`MemoryPool`/`MemoryPoolAligned`, `AutoArrayHashMap`/Unmanaged. TODO as consumers
+land: `MultiArrayList` (used by Screen/Terminal et al.), `BoundedArray` (0 users).
+Crates needing the Zig memory model now depend on `rustty-zigstd`.
