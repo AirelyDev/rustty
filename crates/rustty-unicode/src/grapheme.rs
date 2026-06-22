@@ -101,6 +101,25 @@ impl Precompute {
     };
 }
 
+/// Harness accessor: re-encode rustty's RUNTIME grapheme precompute
+/// (`Precompute::DATA`, the table `grapheme_break` actually reads) back into the
+/// `result | state<<1` byte form, for the unicode differential gate (ORACLE #2,
+/// `.port/phase-0/harness/unicode/`). This is harness-only glue (R1: adds
+/// nothing-lost) — it lets the harness diff rustty's live table against an
+/// INDEPENDENT uucode regeneration, the full-range reproduction of the
+/// reference's `test "... tables match uucode"`. Not used by any in-crate test.
+#[doc(hidden)]
+pub fn harness_precompute_bytes() -> [u8; 8192] {
+    let mut out = [0u8; 8192];
+    let mut i = 0;
+    while i < 8192 {
+        let v = Precompute::DATA[i];
+        out[i] = u8::from(v.result) | ((v.state as u8) << 1);
+        i += 1;
+    }
+    out
+}
+
 /// If you build this file as a binary, we will verify the grapheme break
 /// implementation. This iterates over billions of codepoints so it is
 /// SLOW. It's not meant to be run in CI, but it's useful for debugging.

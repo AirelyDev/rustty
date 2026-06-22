@@ -1,0 +1,16 @@
+.{
+    .name = .rustty_unicode_oracle,
+    .version = "0.0.0",
+    .fingerprint = 0x72676de086409988,
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        // uucode 0.2.0 — the EXACT dependency ghostty pins (see ghostty
+        // build.zig.zon). This is harness-only tooling (R3): no rustty Cargo
+        // crate depends on uucode.
+        .uucode = .{
+            .url = "https://deps.files.ghostty.org/uucode-0.2.0-ZZjBPqZVVABQepOqZHR7vV_NcaN-wats0IB6o-Exj6m9.tar.gz",
+            .hash = "uucode-0.2.0-ZZjBPqZVVABQepOqZHR7vV_NcaN-wats0IB6o-Exj6m9",
+        },
+    },
+    .paths = .{""},
+}

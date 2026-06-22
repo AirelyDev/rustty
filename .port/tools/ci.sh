@@ -20,6 +20,14 @@
 # GATE SUITE (canonical scripts; ci.sh does NOT reimplement them — it runs them):
 #   G7  check_acyclic.sh             crate graph acyclic (R4)        -> HARD-FAIL
 #   G4  run_differential.sh          differential VT + harness ctrl  -> HARD-FAIL
+#   G4-uni run_unicode_diff.sh       unicode tables vs LIVE uucode    -> HARD-FAIL
+#                                    (ORACLE #2: rustty's embedded width/symbol/
+#                                    Properties/grapheme tables diffed full-range
+#                                    0..=0x10FFFF + 8192 grapheme entries against
+#                                    uucode 0.2.0 — the faithful reproduction of
+#                                    ghostty's props/symbols_uucode "tables match
+#                                    uucode" tests whose live oracle R3 forbids
+#                                    in-crate. 0 diffs required.)
 #   G1  check_tests_ported.py        100% test{} ported (==3234)     -> PROGRESS*
 #   G2  check_assertions.py          assertion-for-assertion         -> PROGRESS*
 #   G3  check_comments_fidelity.py   zero comment-inventory delta    -> PROGRESS*
@@ -71,6 +79,7 @@ PY="${PYTHON:-python3}"
 GATE_REGISTRY=(
   "G7|HARD|bash $GATES/check_acyclic.sh"
   "G4|HARD|bash $GATES/run_differential.sh"
+  "G4-uni|HARD|bash $ROOT/.port/phase-0/harness/unicode/run_unicode_diff.sh"
   "G1|PROGRESS|$PY $GATES/check_tests_ported.py"
   "G2|PROGRESS|$PY $GATES/check_assertions.py"
   "G3|PROGRESS|$PY $GATES/check_comments_fidelity.py"

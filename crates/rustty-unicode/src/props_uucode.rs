@@ -72,33 +72,241 @@ pub fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::props_table::table;
 
-    // PARITY: keeps the reference's `try testing.expect(false)` verbatim as
-    // `assert!(false)` inside the mismatch branch; clippy flags the constant
-    // assertion but changing it would weaken the test (R5).
-    #[allow(clippy::assertions_on_constants)]
+    // PARITY / METHODOLOGY: the reference `test "unicode props: tables match
+    // uucode"` compares the generated table against the LIVE `uucode` oracle —
+    // an INDEPENDENT source — over the full code-point range. R3 forbids a
+    // `uucode` Cargo dep in-crate, so that exhaustive full-range differential is
+    // reproduced as a permanent harness gate (ORACLE #2):
+    //   .port/phase-0/harness/unicode/  (run_unicode_diff.sh; G4-uni in ci.sh)
+    // which dumps rustty's embedded tables AND the live uucode oracle over every
+    // cp 0..=0x10FFFF and asserts 0 diffs (confirmed: 0 diffs).
+    //
+    // This in-crate test is the genuine, NON-tautological complement: a CURATED
+    // spot-check of `get` against hand-verified ground truth from the Unicode
+    // standard (NOT read from rustty's own table). Together the curated
+    // spot-check + the exhaustive harness differential give coverage >= the
+    // reference (DEFINITION_OF_PARITY §Methodology). See the harness README.
+    //
+    // Expected values are sourced independently:
+    //  - width: East Asian Width (UAX #11) + Ghostty's clamp to [0,2] and the
+    //    uucode_config.zig `computeWidth` rule (width 0 iff zero-in-grapheme AND
+    //    not an emoji modifier AND grapheme_break != prepend, else min(2, std)).
+    //  - width_zero_in_grapheme: uucode `wcwidth_zero_in_grapheme`.
+    //  - grapheme_break: Grapheme_Cluster_Break (UAX #29) folded to uucode's
+    //    GraphemeBreakNoControl, incl. Indic conjunct-break + emoji classes.
+    //  - emoji_vs_base: emoji-VS base set (digits/#/* take keycap VS16).
+    //  - out-of-range (cp > MAX_CODE_POINT): reference rule width=1, wzg=true,
+    //    grapheme_break=Other, emoji_vs_base=false.
     #[test]
     fn unicode_props_tables_match_uucode() {
-        // PARITY: the reference skips under valgrind; rustty has no valgrind
-        // guard since the equivalent memory gate is Miri (R6).
+        use GraphemeBreakNoControl as G;
 
-        let min: u32 = 0xFF + 1; // start outside ascii
-        let max: u32 = 0x1F_FFFF + 1; // std.math.maxInt(u21) + 1
-        for cp in min..max {
-            let t = table().get(cp);
-            // PARITY: the reference oracle is `uucode.get(.width, cp)` (or `1`
-            // for cp > max_code_point). rustty's table embeds those exact
-            // uucode-derived values, read back via `get` (R3).
-            let uu: u8 = if cp > MAX_CODE_POINT {
-                1
-            } else {
-                get(cp).width
-            };
-            if t.width != uu {
-                eprintln!("mismatch cp=U+{cp:x} t={} uu={uu}", t.width);
-                assert!(false);
-            }
+        // (cp, width, width_zero_in_grapheme, grapheme_break, emoji_vs_base, note)
+        let cases: &[(u32, u8, bool, GraphemeBreakNoControl, bool, &str)] = &[
+            // --- ASCII / Latin: width 1, no special break ---
+            (0x0041, 1, false, G::Other, false, "U+0041 'A' ASCII letter"),
+            (0x007A, 1, false, G::Other, false, "U+007A 'z' ASCII letter"),
+            (0x0020, 1, false, G::Other, false, "U+0020 SPACE"),
+            (0x007E, 1, false, G::Other, false, "U+007E '~' tilde"),
+            // ASCII digits are emoji-VS bases (keycap 0..9 via VS16).
+            (
+                0x0039,
+                1,
+                false,
+                G::Other,
+                true,
+                "U+0039 '9' digit (emoji_vs_base)",
+            ),
+            (0x0023, 1, false, G::Other, true, "U+0023 '#' (keycap base)"),
+            (0x002A, 1, false, G::Other, true, "U+002A '*' (keycap base)"),
+            // --- control / tab: width 0 (zero-in-grapheme, Other break) ---
+            (0x0000, 0, true, G::Other, false, "U+0000 NUL"),
+            (0x0009, 0, true, G::Other, false, "U+0009 TAB"),
+            // --- wide CJK / Hiragana: width 2 ---
+            (
+                0x4E00,
+                2,
+                false,
+                G::Other,
+                false,
+                "U+4E00 CJK ideograph one",
+            ),
+            (0x3042, 2, false, G::Other, false, "U+3042 Hiragana A"),
+            (
+                0x2329,
+                2,
+                false,
+                G::Other,
+                false,
+                "U+2329 LEFT-POINTING ANGLE BRACKET (wide)",
+            ),
+            // --- fullwidth forms: width 2 ---
+            (
+                0xFF01,
+                2,
+                false,
+                G::Other,
+                false,
+                "U+FF01 FULLWIDTH EXCLAMATION MARK",
+            ),
+            (
+                0xFF21,
+                2,
+                false,
+                G::Other,
+                false,
+                "U+FF21 FULLWIDTH LATIN A",
+            ),
+            // --- combining / zero-width: width 0, zero-in-grapheme ---
+            (
+                0x0301,
+                0,
+                true,
+                G::IndicConjunctBreakExtend,
+                false,
+                "U+0301 COMBINING ACUTE",
+            ),
+            (
+                0x0300,
+                0,
+                true,
+                G::IndicConjunctBreakExtend,
+                false,
+                "U+0300 COMBINING GRAVE",
+            ),
+            (0x200B, 0, true, G::Other, false, "U+200B ZERO WIDTH SPACE"),
+            (0x200D, 0, true, G::Zwj, false, "U+200D ZWJ"),
+            (
+                0xFE0F,
+                0,
+                true,
+                G::IndicConjunctBreakExtend,
+                false,
+                "U+FE0F VS16",
+            ),
+            // --- emoji & emoji modifier (modifier keeps width 2 despite wzg) ---
+            (
+                0x1F600,
+                2,
+                false,
+                G::ExtendedPictographic,
+                false,
+                "U+1F600 GRINNING FACE",
+            ),
+            (
+                0x1F3FF,
+                2,
+                true,
+                G::EmojiModifier,
+                false,
+                "U+1F3FF EMOJI MODIFIER FITZPATRICK-6",
+            ),
+            // --- regional indicator (flags) ---
+            (
+                0x1F1E6,
+                2,
+                false,
+                G::RegionalIndicator,
+                false,
+                "U+1F1E6 REGIONAL INDICATOR A",
+            ),
+            // --- prepend special case: wzg=true but width stays 1 ---
+            (
+                0x0600,
+                1,
+                true,
+                G::Prepend,
+                false,
+                "U+0600 ARABIC NUMBER SIGN (prepend)",
+            ),
+            // --- Hangul jamo / syllable break classes ---
+            (
+                0x1100,
+                2,
+                false,
+                G::L,
+                false,
+                "U+1100 HANGUL CHOSEONG KIYEOK (L)",
+            ),
+            (
+                0x1160,
+                0,
+                true,
+                G::V,
+                false,
+                "U+1160 HANGUL JUNGSEONG FILLER (V)",
+            ),
+            (
+                0x11A8,
+                0,
+                true,
+                G::T,
+                false,
+                "U+11A8 HANGUL JONGSEONG KIYEOK (T)",
+            ),
+            (
+                0xAC00,
+                2,
+                false,
+                G::Lv,
+                false,
+                "U+AC00 HANGUL SYLLABLE GA (LV)",
+            ),
+            (
+                0xAC01,
+                2,
+                false,
+                G::Lvt,
+                false,
+                "U+AC01 HANGUL SYLLABLE GAG (LVT)",
+            ),
+            // --- Indic conjunct break: consonant + linker (virama) ---
+            (
+                0x0915,
+                1,
+                false,
+                G::IndicConjunctBreakConsonant,
+                false,
+                "U+0915 DEVANAGARI KA",
+            ),
+            (
+                0x094D,
+                0,
+                true,
+                G::IndicConjunctBreakLinker,
+                false,
+                "U+094D DEVANAGARI VIRAMA",
+            ),
+        ];
+
+        for &(cp, w, wzg, gb, evb, note) in cases {
+            let p = get(cp);
+            assert_eq!(p.width, w, "{note}: width");
+            assert_eq!(
+                p.width_zero_in_grapheme, wzg,
+                "{note}: width_zero_in_grapheme"
+            );
+            assert_eq!(p.grapheme_break, gb, "{note}: grapheme_break");
+            assert_eq!(p.emoji_vs_base, evb, "{note}: emoji_vs_base");
+        }
+
+        // Out-of-range rule (cp > MAX_CODE_POINT == 0x10FFFF): the reference
+        // returns width=1, width_zero_in_grapheme=true, grapheme_break=Other,
+        // emoji_vs_base=false. Verify the boundary and beyond.
+        for cp in [MAX_CODE_POINT + 1, 0x11_0000, 0x20_0000, u32::MAX] {
+            let p = get(cp);
+            assert_eq!(p.width, 1, "cp U+{cp:X} > MAX: width");
+            assert!(
+                p.width_zero_in_grapheme,
+                "cp U+{cp:X} > MAX: width_zero_in_grapheme"
+            );
+            assert_eq!(
+                p.grapheme_break,
+                GraphemeBreakNoControl::Other,
+                "cp U+{cp:X} > MAX: grapheme_break"
+            );
+            assert!(!p.emoji_vs_base, "cp U+{cp:X} > MAX: emoji_vs_base");
         }
     }
 }

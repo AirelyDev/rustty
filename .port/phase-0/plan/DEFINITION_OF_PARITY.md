@@ -277,6 +277,61 @@ capability present in the reference is covered (ported + parity-tested) in rustt
 
 ---
 
+## 1b. METHODOLOGY — reference tests that compare against a LIVE external oracle (R3)
+
+Some reference `test{}` blocks compare a generated artifact against a **live
+external oracle** that R3 forbids as an in-crate Cargo dependency. The canonical
+example is `uucode`:
+
+```zig
+// src/unicode/props_uucode.zig
+test "unicode props: tables match uucode" { ... table.get(cp) vs uucode.get(.width, cp) ... }
+// src/unicode/symbols_uucode.zig
+test "unicode symbols: tables match uucode" { ... table.get(cp) vs uucode.get(.is_symbol, cp) ... }
+```
+
+The reference's *independence* is the whole point: the embedded table is proven
+equal to a **second, externally-sourced** computation over the full range. A
+naive in-crate port has no second source (R3: no `uucode` dep), so the only
+available "oracle" becomes the table itself — a **tautology** (`table == table`)
+that verifies nothing. That is a silent weakening (R5) even though the test still
+"passes".
+
+**Rule (binding).** When a reference test compares against a live external oracle
+unavailable in-crate under R3, it is reproduced as a **harness DIFFERENTIAL gate
+(oracle #2)**: the external oracle is built in a separate process (it MAY depend
+on the forbidden library, because the harness is tooling, not a rustty crate),
+dumps its values over the full reference range, and a diff asserts **0 diffs**
+against the rustty artifact dumped over the same range. This differential gate is
+the **faithful, full-coverage reproduction** of the reference test.
+
+A **genuine in-crate spot-check** is ALSO kept (it must assert the
+function-under-test against *independently-sourced* ground truth — the standard /
+known values — NEVER read from the rustty artifact itself), so the test-count
+contract (G1) is preserved and a fast `cargo test` still exercises the path.
+
+**This is NOT a weakening (R5):** total coverage = exhaustive harness differential
+(every point) **+** independent in-crate spot-check **≥** the reference's single
+full-range oracle test. A tautological in-crate "oracle" is *less* than the
+reference; this decomposition is *more*.
+
+**Implemented instance — rustty-unicode (`G4-uni`):**
+`.port/phase-0/harness/unicode/` builds `uucode-oracle` (uucode 0.2.0 +
+ghostty's `src/build/uucode_config.zig`, copied verbatim/pinned) and dumps
+`width`, `is_symbol`, all `Properties` fields, `grapheme_break_no_control`, and
+the 8192-entry grapheme precompute for every cp `0..=0x10FFFF`;
+`cargo run --example dump_tables -p rustty-unicode` dumps rustty's embedded
+tables over the same range; `diff_unicode.py` asserts 0 diffs (result: **0 diffs**
+across all fields). Wired into `.port/tools/ci.sh` as the HARD gate `G4-uni`. The
+in-crate `props_uucode.rs` / `symbols_uucode.rs` `*_tables_match_uucode` tests are
+the curated spot-checks (ASCII/CJK/combining/ZWJ/emoji/fullwidth/control, the
+prepend & emoji-modifier width special-cases, Hangul & Indic break classes, the
+symbol block set + non-symbols, and the `cp > MAX_CODE_POINT` out-of-range rule),
+each value hand-verified against the Unicode standard / `uucode_config.zig` rule.
+See `.port/phase-0/harness/unicode/README.md`.
+
+---
+
 ## 2. PER-CRATE gate template
 
 Applied to **every** `rustty-*` crate as it is carved (leaves first, per the

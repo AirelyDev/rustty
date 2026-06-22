@@ -38,3 +38,10 @@
 # Python bytecode cache
 __pycache__/
 *.pyc
+
+# Zig build cache / outputs for harness-only generators (e.g. the rustty-unicode
+# differential oracle). KEEP the .zig source + build.zig + build.zig.zon; IGNORE
+# the regenerable compilation cache and install tree.
+.zig-cache/
+**/.zig-cache/
+/.port/phase-0/harness/**/zig-out/
