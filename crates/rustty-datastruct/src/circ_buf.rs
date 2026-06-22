@@ -197,6 +197,14 @@ impl<T: Copy> CircBuf<T> {
         !self.full && self.head == self.tail
     }
 
+    // PARITY: the reference exposes `empty()` (mirrored above). This is an
+    // additive Rust convenience that satisfies clippy's `len_without_is_empty`
+    // for `len()` below by delegating to the reference `empty()`; it adds no
+    // new behavior and removes nothing.
+    pub fn is_empty(&self) -> bool {
+        self.empty()
+    }
+
     /// Returns the total capacity allocated for this buffer.
     pub fn capacity(&self) -> usize {
         self.storage.len()
@@ -348,6 +356,11 @@ pub struct Iterator<'a, T: Copy> {
 }
 
 impl<'a, T: Copy> Iterator<'a, T> {
+    // PARITY: the reference `circ_buf.zig:34` exposes an inherent,
+    // iterator-like `next()` on its `Iterator` type. We keep that public API
+    // shape rather than reshaping it into `std::iter::Iterator`, so we silence
+    // `should_implement_trait`.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<&'a T> {
         if self.idx >= self.buf.len() {
             return None;

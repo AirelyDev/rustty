@@ -211,6 +211,11 @@ pub struct DrainIterator<'a, T, const CAPACITY: usize> {
 }
 
 impl<'a, T, const CAPACITY: usize> DrainIterator<'a, T, CAPACITY> {
+    // PARITY: the reference `blocking_queue.zig:171` exposes an inherent,
+    // iterator-like `next()` on `DrainIterator`. We keep that public API shape
+    // rather than reshaping it into `std::iter::Iterator`, so we silence
+    // `should_implement_trait`.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<T> {
         let state = self.state.as_mut().unwrap();
         if state.len == 0 {

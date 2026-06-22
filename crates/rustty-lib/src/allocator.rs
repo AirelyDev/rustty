@@ -269,7 +269,7 @@ impl ZigAllocator for CAllocatorAsZig {
 /// `std.mem.Allocator.VTable`. In rustty the mapping is provided by the
 /// `impl ZigAllocator for CAllocatorAsZig` above (the moral equivalent of the
 /// four `zig_vtable` callbacks), so no separate static is required.
-
+///
 /// An allocator implementation that wraps a Zig allocator so that
 /// it can be exposed to C.
 ///
@@ -492,17 +492,17 @@ pub fn c_allocator() -> Allocator {
     Allocator::from_zig(&C_ALLOCATOR_REF.0)
 }
 
-/// Allocator that can be sent to the C API that does full
-/// leak checking within Zig tests. This should only be used from
-/// Zig tests.
-///
-/// PORT NOTE: The reference declares `pub const test_allocator: Allocator =
-/// .fromZig(&testing.allocator)` (with the doc-comment above, preserved
-/// verbatim). rustty has no `std.testing.allocator` tracking allocator; under
-/// R6 the memory gate is enforced by Miri (`cargo +nightly miri test`), which
-/// performs the leak/UB checking the reference delegated to `testing.allocator`.
-/// The `test_allocator` const is therefore omitted (no rustty equivalent is
-/// needed), but its doc-comment is preserved here for R1 fidelity.
+// Allocator that can be sent to the C API that does full
+// leak checking within Zig tests. This should only be used from
+// Zig tests.
+//
+// PORT NOTE: The reference declares `pub const test_allocator: Allocator =
+// .fromZig(&testing.allocator)` (with the doc-comment above, preserved
+// verbatim). rustty has no `std.testing.allocator` tracking allocator; under
+// R6 the memory gate is enforced by Miri (`cargo +nightly miri test`), which
+// performs the leak/UB checking the reference delegated to `testing.allocator`.
+// The `test_allocator` const is therefore omitted (no rustty equivalent is
+// needed), but its doc-comment is preserved here for R1 fidelity.
 
 #[cfg(test)]
 mod tests {

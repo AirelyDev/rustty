@@ -374,6 +374,11 @@ mod tests {
     }
 
     #[test]
+    // PARITY: the reference `comparison.zig:262-263` uses the literals 3.14159 /
+    // 3.14158 to exercise `deepEqual` on f64; substituting `std::f64::consts::PI`
+    // would change the values under test and destroy the assertion, so we keep
+    // the literals and silence `approx_constant`.
+    #[allow(clippy::approx_constant)]
     fn deepEqual_float() {
         assert!(deep_equal(&1.0f32, &1.0f32));
         assert!(!deep_equal(&1.0f32, &1.1f32));

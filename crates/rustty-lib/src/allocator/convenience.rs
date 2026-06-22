@@ -10,6 +10,14 @@
 //! If a caller is using a custom allocator, they have the expertise to
 //! allocate these types manually using their custom allocator.
 
+// PARITY: These `pub extern "C"` functions are the WASM/C allocator-export FFI
+// boundary. They null-check then forward a caller-provided raw pointer to the
+// global allocator (the moral equivalent of the reference's `alloc.free`). The
+// C/Wasm caller owns pointer validity; marking these `unsafe` would not help a
+// C caller (it cannot observe Rust's `unsafe` qualifier) and would only add
+// ABI-neutral noise, so we silence `not_unsafe_ptr_arg_deref` at module scope.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
 // Get our default allocator at comptime since it is known.
 //
 // PORT NOTE: The reference binds `alloc` at comptime via `default(null)`. In

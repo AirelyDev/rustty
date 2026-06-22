@@ -214,6 +214,10 @@ pub enum Side {
 }
 
 /// Backtracking result for the recursive search helpers.
+// PARITY: the reference `split_tree.zig:322` names this union `Backtrack` with a
+// `.backtrack` tag; we mirror the variant name exactly rather than renaming it,
+// so we silence `enum_variant_names`.
+#[allow(clippy::enum_variant_names)]
 enum Backtrack {
     Deadend,
     Backtrack,
@@ -289,7 +293,15 @@ impl<V: View> SplitTree<V> {
     }
 
     /// Initialize a new tree with a single view.
-    pub fn init(view: *mut V) -> Result<Self, Error> {
+    ///
+    /// # Safety
+    ///
+    /// PARITY: the reference `split_tree.zig:112` takes `view: *View`, a
+    /// non-null Zig pointer whose validity is the caller's responsibility. We
+    /// encode that contract by marking `init` `unsafe`: the caller must pass a
+    /// `view` pointer that is valid for the lifetime of the tree (it is
+    /// dereferenced via `view_ref`).
+    pub unsafe fn init(view: *mut V) -> Result<Self, Error> {
         let mut nodes: Vec<Node<V>> = Vec::with_capacity(1);
         // nodes[0] = .{ .leaf = try viewRef(view, gpa) };
         let reffed = unsafe { Self::view_ref(view)? };
@@ -801,6 +813,9 @@ impl<V: View> SplitTree<V> {
         let mut reffed: usize = 0;
         let mut err: Option<Error> = None;
         let len = nodes.len();
+        // PARITY: mirrors reference index loop; `i` is needed to write back
+        // `nodes[i]` and to track `reffed` for the errdefer unref accounting.
+        #[allow(clippy::needless_range_loop)]
         for i in 0..len {
             match &nodes[i] {
                 Node::Split(_) => {}
@@ -1306,6 +1321,8 @@ impl<V: View> SplitTree<V> {
             {
                 let top = &mut grid[y][x..x + width];
                 top[0] = b'+';
+                // PARITY: mirrors reference index loop (`for (1..width-1) |i| top[i] = '-'`).
+                #[allow(clippy::needless_range_loop)]
                 for i in 1..width - 1 {
                     top[i] = b'-';
                 }
@@ -1316,6 +1333,8 @@ impl<V: View> SplitTree<V> {
             {
                 let bottom = &mut grid[y + height - 1][x..x + width];
                 bottom[0] = b'+';
+                // PARITY: mirrors reference index loop (`for (1..width-1) |i| bottom[i] = '-'`).
+                #[allow(clippy::needless_range_loop)]
                 for i in 1..width - 1 {
                     bottom[i] = b'-';
                 }
@@ -1323,9 +1342,13 @@ impl<V: View> SplitTree<V> {
             }
 
             // Left border
+            // PARITY: mirrors reference index loops (`for (y+1..y+height-1) |y_cur| ...`);
+            // `y_cur` indexes distinct rows of the 2-D `grid`.
+            #[allow(clippy::needless_range_loop)]
             for y_cur in y + 1..y + height - 1 {
                 grid[y_cur][x] = b'|';
             }
+            #[allow(clippy::needless_range_loop)]
             for y_cur in y + 1..y + height - 1 {
                 grid[y_cur][x + width - 1] = b'|';
             }
@@ -1407,6 +1430,11 @@ pub struct Iterator<'a, V: View> {
 }
 
 impl<'a, V: View> Iterator<'a, V> {
+    // PARITY: the reference `split_tree.zig:202` exposes an inherent,
+    // iterator-like `next()` on its `Iterator` type. We keep that public API
+    // shape rather than reshaping it into `std::iter::Iterator`, so we silence
+    // `should_implement_trait`.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<ViewEntry<V>> {
         // If we have no nodes, return null.
         if self.i.0 as usize >= self.nodes.len() {
@@ -1515,12 +1543,12 @@ mod tests {
 
         // Single node tree should not be split
         let mut v1 = TestView { label: b"A" };
-        let single: TestTree = TestTree::init(&mut v1).unwrap();
+        let single: TestTree = unsafe { TestTree::init(&mut v1) }.unwrap();
         assert!(!single.is_split());
 
         // Split tree should be split
         let mut v2 = TestView { label: b"B" };
-        let tree2: TestTree = TestTree::init(&mut v2).unwrap();
+        let tree2: TestTree = unsafe { TestTree::init(&mut v2) }.unwrap();
         let split = single
             .split(Handle::ROOT, Direction::Right, F16::from_f32(0.5), &tree2)
             .unwrap();
@@ -1538,7 +1566,7 @@ mod tests {
     #[test]
     fn SplitTree_single_node() {
         let mut v = TestView { label: b"A" };
-        let t: TestTree = TestTree::init(&mut v).unwrap();
+        let t: TestTree = unsafe { TestTree::init(&mut v) }.unwrap();
 
         let str = t.format_diagram();
         assert_eq!(
@@ -1552,9 +1580,9 @@ mod tests {
     #[test]
     fn SplitTree_split_horizontal() {
         let mut v1 = TestView { label: b"A" };
-        let t1: TestTree = TestTree::init(&mut v1).unwrap();
+        let t1: TestTree = unsafe { TestTree::init(&mut v1) }.unwrap();
         let mut v2 = TestView { label: b"B" };
-        let t2: TestTree = TestTree::init(&mut v2).unwrap();
+        let t2: TestTree = unsafe { TestTree::init(&mut v2) }.unwrap();
         let t3 = t1
             .split(
                 Handle::ROOT,     // at root
@@ -1579,7 +1607,7 @@ mod tests {
 
         // Split right at B
         let mut v_c = TestView { label: b"C" };
-        let t_c: TestTree = TestTree::init(&mut v_c).unwrap();
+        let t_c: TestTree = unsafe { TestTree::init(&mut v_c) }.unwrap();
         let handle_b = find_handle(&t3, b"B").unwrap();
         let t4 = t3
             .split(handle_b, Direction::Right, F16::from_f32(0.5), &t_c)
@@ -1602,7 +1630,7 @@ mod tests {
 
         // Split right at C
         let mut v_d = TestView { label: b"D" };
-        let t_d: TestTree = TestTree::init(&mut v_d).unwrap();
+        let t_d: TestTree = unsafe { TestTree::init(&mut v_d) }.unwrap();
         let handle_c = find_handle(&t4, b"C").unwrap();
         let t5 = t4
             .split(handle_c, Direction::Right, F16::from_f32(0.5), &t_d)
@@ -1667,9 +1695,9 @@ mod tests {
     #[test]
     fn SplitTree_split_vertical() {
         let mut v1 = TestView { label: b"A" };
-        let t1: TestTree = TestTree::init(&mut v1).unwrap();
+        let t1: TestTree = unsafe { TestTree::init(&mut v1) }.unwrap();
         let mut v2 = TestView { label: b"B" };
-        let t2: TestTree = TestTree::init(&mut v2).unwrap();
+        let t2: TestTree = unsafe { TestTree::init(&mut v2) }.unwrap();
 
         let t3 = t1
             .split(
@@ -1695,9 +1723,9 @@ mod tests {
     #[test]
     fn SplitTree_split_horizontal_with_zero_ratio() {
         let mut v1 = TestView { label: b"A" };
-        let t1: TestTree = TestTree::init(&mut v1).unwrap();
+        let t1: TestTree = unsafe { TestTree::init(&mut v1) }.unwrap();
         let mut v2 = TestView { label: b"B" };
-        let t2: TestTree = TestTree::init(&mut v2).unwrap();
+        let t2: TestTree = unsafe { TestTree::init(&mut v2) }.unwrap();
 
         // A | B horizontal
         let split_ab = t1
@@ -1724,9 +1752,9 @@ mod tests {
     #[test]
     fn SplitTree_split_vertical_with_zero_ratio() {
         let mut v1 = TestView { label: b"A" };
-        let t1: TestTree = TestTree::init(&mut v1).unwrap();
+        let t1: TestTree = unsafe { TestTree::init(&mut v1) }.unwrap();
         let mut v2 = TestView { label: b"B" };
-        let t2: TestTree = TestTree::init(&mut v2).unwrap();
+        let t2: TestTree = unsafe { TestTree::init(&mut v2) }.unwrap();
 
         // A | B horizontal
         let split_ab = t1
@@ -1753,9 +1781,9 @@ mod tests {
     #[test]
     fn SplitTree_split_horizontal_with_full_width() {
         let mut v1 = TestView { label: b"A" };
-        let t1: TestTree = TestTree::init(&mut v1).unwrap();
+        let t1: TestTree = unsafe { TestTree::init(&mut v1) }.unwrap();
         let mut v2 = TestView { label: b"B" };
-        let t2: TestTree = TestTree::init(&mut v2).unwrap();
+        let t2: TestTree = unsafe { TestTree::init(&mut v2) }.unwrap();
 
         // A | B horizontal
         let split_ab = t1
@@ -1782,9 +1810,9 @@ mod tests {
     #[test]
     fn SplitTree_split_vertical_with_full_width() {
         let mut v1 = TestView { label: b"A" };
-        let t1: TestTree = TestTree::init(&mut v1).unwrap();
+        let t1: TestTree = unsafe { TestTree::init(&mut v1) }.unwrap();
         let mut v2 = TestView { label: b"B" };
-        let t2: TestTree = TestTree::init(&mut v2).unwrap();
+        let t2: TestTree = unsafe { TestTree::init(&mut v2) }.unwrap();
 
         // A | B horizontal
         let split_ab = t1
@@ -1811,9 +1839,9 @@ mod tests {
     #[test]
     fn SplitTree_remove_leaf() {
         let mut v1 = TestView { label: b"A" };
-        let t1: TestTree = TestTree::init(&mut v1).unwrap();
+        let t1: TestTree = unsafe { TestTree::init(&mut v1) }.unwrap();
         let mut v2 = TestView { label: b"B" };
-        let t2: TestTree = TestTree::init(&mut v2).unwrap();
+        let t2: TestTree = unsafe { TestTree::init(&mut v2) }.unwrap();
         let t3 = t1
             .split(
                 Handle::ROOT,     // at root
@@ -1839,11 +1867,11 @@ mod tests {
     #[test]
     fn SplitTree_split_twice_remove_intermediary() {
         let mut v1 = TestView { label: b"A" };
-        let t1: TestTree = TestTree::init(&mut v1).unwrap();
+        let t1: TestTree = unsafe { TestTree::init(&mut v1) }.unwrap();
         let mut v2 = TestView { label: b"B" };
-        let t2: TestTree = TestTree::init(&mut v2).unwrap();
+        let t2: TestTree = unsafe { TestTree::init(&mut v2) }.unwrap();
         let mut v3 = TestView { label: b"C" };
-        let t3: TestTree = TestTree::init(&mut v3).unwrap();
+        let t3: TestTree = unsafe { TestTree::init(&mut v3) }.unwrap();
 
         // A | B horizontal.
         let split1 = t1
@@ -1907,13 +1935,13 @@ mod tests {
     #[test]
     fn SplitTree_spatial_goto() {
         let mut v1 = TestView { label: b"A" };
-        let t1: TestTree = TestTree::init(&mut v1).unwrap();
+        let t1: TestTree = unsafe { TestTree::init(&mut v1) }.unwrap();
         let mut v2 = TestView { label: b"B" };
-        let t2: TestTree = TestTree::init(&mut v2).unwrap();
+        let t2: TestTree = unsafe { TestTree::init(&mut v2) }.unwrap();
         let mut v3 = TestView { label: b"C" };
-        let t3: TestTree = TestTree::init(&mut v3).unwrap();
+        let t3: TestTree = unsafe { TestTree::init(&mut v3) }.unwrap();
         let mut v4 = TestView { label: b"D" };
-        let t4: TestTree = TestTree::init(&mut v4).unwrap();
+        let t4: TestTree = unsafe { TestTree::init(&mut v4) }.unwrap();
 
         // A | B horizontal
         let split_ab = t1
@@ -1928,7 +1956,7 @@ mod tests {
         // A | C vertical
         let split_ac = split_ab
             .split(
-                { find_handle(&split_ab, b"A").unwrap() },
+                find_handle(&split_ab, b"A").unwrap(),
                 Direction::Down, // split down
                 F16::from_f32(0.8),
                 &t3, // insert t3
@@ -1938,7 +1966,7 @@ mod tests {
         // B | D vertical
         let split_bd = split_ac
             .split(
-                { find_handle(&split_ab, b"B").unwrap() },
+                find_handle(&split_ab, b"B").unwrap(),
                 Direction::Down, // split down
                 F16::from_f32(0.3),
                 &t4, // insert t4
@@ -2055,9 +2083,9 @@ mod tests {
     #[test]
     fn SplitTree_resize() {
         let mut v1 = TestView { label: b"A" };
-        let t1: TestTree = TestTree::init(&mut v1).unwrap();
+        let t1: TestTree = unsafe { TestTree::init(&mut v1) }.unwrap();
         let mut v2 = TestView { label: b"B" };
-        let t2: TestTree = TestTree::init(&mut v2).unwrap();
+        let t2: TestTree = unsafe { TestTree::init(&mut v2) }.unwrap();
 
         // A | B horizontal
         let split = t1
@@ -2113,11 +2141,11 @@ mod tests {
     #[test]
     fn SplitTree_resize_nested_split() {
         let mut v1 = TestView { label: b"A" };
-        let t1: TestTree = TestTree::init(&mut v1).unwrap();
+        let t1: TestTree = unsafe { TestTree::init(&mut v1) }.unwrap();
         let mut v2 = TestView { label: b"B" };
-        let t2: TestTree = TestTree::init(&mut v2).unwrap();
+        let t2: TestTree = unsafe { TestTree::init(&mut v2) }.unwrap();
         let mut v3 = TestView { label: b"C" };
-        let t3: TestTree = TestTree::init(&mut v3).unwrap();
+        let t3: TestTree = unsafe { TestTree::init(&mut v3) }.unwrap();
 
         // A | B vertical
         let split_ab = t1
@@ -2131,7 +2159,7 @@ mod tests {
 
         let split_bc = split_ab
             .split(
-                { find_handle(&split_ab, b"B").unwrap() },
+                find_handle(&split_ab, b"B").unwrap(),
                 Direction::Down, // split down
                 F16::from_f32(0.5),
                 &t3, // insert t3
@@ -2239,9 +2267,9 @@ mod tests {
     #[test]
     fn SplitTree_zoom() {
         let mut v1 = TestView { label: b"A" };
-        let t1: TestTree = TestTree::init(&mut v1).unwrap();
+        let t1: TestTree = unsafe { TestTree::init(&mut v1) }.unwrap();
         let mut v2 = TestView { label: b"B" };
-        let t2: TestTree = TestTree::init(&mut v2).unwrap();
+        let t2: TestTree = unsafe { TestTree::init(&mut v2) }.unwrap();
 
         // A | B horizontal
         let mut split = t1
@@ -2282,9 +2310,9 @@ mod tests {
     #[test]
     fn SplitTree_split_resets_zoom() {
         let mut v1 = TestView { label: b"A" };
-        let mut t1: TestTree = TestTree::init(&mut v1).unwrap();
+        let mut t1: TestTree = unsafe { TestTree::init(&mut v1) }.unwrap();
         let mut v2 = TestView { label: b"B" };
-        let t2: TestTree = TestTree::init(&mut v2).unwrap();
+        let t2: TestTree = unsafe { TestTree::init(&mut v2) }.unwrap();
 
         // Zoom A
         let handle_a = find_handle(&t1, b"A").unwrap();
@@ -2314,9 +2342,9 @@ mod tests {
     #[test]
     fn SplitTree_remove_and_zoom() {
         let mut v1 = TestView { label: b"A" };
-        let t1: TestTree = TestTree::init(&mut v1).unwrap();
+        let t1: TestTree = unsafe { TestTree::init(&mut v1) }.unwrap();
         let mut v2 = TestView { label: b"B" };
-        let t2: TestTree = TestTree::init(&mut v2).unwrap();
+        let t2: TestTree = unsafe { TestTree::init(&mut v2) }.unwrap();
 
         // A | B horizontal
         let mut split = t1
