@@ -23,6 +23,7 @@ TEST_OPEN = re.compile(r'^\s*test\b.*\{\s*$')
 # low crate, so any import OF them routes to that crate automatically.
 EXTRACT = {
     "renderer/size.zig": "render-types",
+    "terminal/size.zig": "render-types",  # A1-hoist: leaf size types (breaks vt<->render-types)
     "config/formatter.zig": "cfg-fmt",
     "cli/args.zig": "args",
     "cli/diagnostics.zig": "args",

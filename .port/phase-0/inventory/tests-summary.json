@@ -1,3363 +1,3366 @@
 {
-  "src_root": "/Users/gael/projects/ghostty/src",
-  "total_test_blocks": 3234,
-  "named": 3158,
-  "anonymous": 76,
-  "files_with_tests": 279,
-  "total_assertions": 11975,
-  "assertion_breakdown": {
-    "std.debug.assert": 3,
-    "testing.expect": 4014,
-    "testing.expectApproxEqAbs": 29,
-    "testing.expectEqual": 5971,
-    "testing.expectEqualDeep": 20,
-    "testing.expectEqualSlices": 105,
-    "testing.expectEqualStrings": 1558,
-    "testing.expectError": 274,
-    "testing.expectStringStartsWith": 1
+ "src_root": "/Users/gael/projects/ghostty/src",
+ "total_test_blocks": 3234,
+ "named": 3158,
+ "anonymous": 76,
+ "files_with_tests": 279,
+ "total_assertions": 11975,
+ "assertion_breakdown": {
+  "std.debug.assert": 3,
+  "testing.expect": 4014,
+  "testing.expectApproxEqAbs": 29,
+  "testing.expectEqual": 5971,
+  "testing.expectEqualDeep": 20,
+  "testing.expectEqualSlices": 105,
+  "testing.expectEqualStrings": 1558,
+  "testing.expectError": 274,
+  "testing.expectStringStartsWith": 1
+ },
+ "per_file": {
+  "Command.zig": {
+   "tests": 10,
+   "assertions": 33
   },
-  "per_file": {
-    "Command.zig": {
-      "tests": 10,
-      "assertions": 33
-    },
-    "apprt.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "apprt/action.zig": {
-      "tests": 17,
-      "assertions": 0
-    },
-    "apprt/gtk.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "apprt/gtk/adw_version.zig": {
-      "tests": 1,
-      "assertions": 8
-    },
-    "apprt/gtk/class.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "apprt/gtk/class/config.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "apprt/gtk/class/surface.zig": {
-      "tests": 1,
-      "assertions": 4
-    },
-    "apprt/gtk/ext.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "apprt/gtk/ext/actions.zig": {
-      "tests": 2,
-      "assertions": 5
-    },
-    "apprt/gtk/ext/slice.zig": {
-      "tests": 3,
-      "assertions": 9
-    },
-    "apprt/gtk/gsettings.zig": {
-      "tests": 4,
-      "assertions": 12
-    },
-    "apprt/gtk/gtk_version.zig": {
-      "tests": 2,
-      "assertions": 16
-    },
-    "apprt/gtk/key.zig": {
-      "tests": 3,
-      "assertions": 13
-    },
-    "apprt/gtk/media.zig": {
-      "tests": 1,
-      "assertions": 4
-    },
-    "apprt/gtk/portal.zig": {
-      "tests": 4,
-      "assertions": 7
-    },
-    "apprt/gtk/weak_ref.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "apprt/ipc.zig": {
-      "tests": 2,
-      "assertions": 0
-    },
-    "apprt/runtime.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "benchmark/Benchmark.zig": {
-      "tests": 1,
-      "assertions": 4
-    },
-    "benchmark/CodepointWidth.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "benchmark/GraphemeBreak.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "benchmark/IsSymbol.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "benchmark/OscParser.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "benchmark/TerminalParser.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "benchmark/TerminalStream.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "benchmark/main.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "build/wasm_patch_growable_table.zig": {
-      "tests": 7,
-      "assertions": 14
-    },
-    "cli.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "cli/CommaSplitter.zig": {
-      "tests": 28,
-      "assertions": 61
-    },
-    "cli/Pager.zig": {
-      "tests": 2,
-      "assertions": 2
-    },
-    "cli/action.zig": {
-      "tests": 7,
-      "assertions": 13
-    },
-    "cli/args.zig": {
-      "tests": 36,
-      "assertions": 113
-    },
-    "cli/explain_config.zig": {
-      "tests": 1,
-      "assertions": 6
-    },
-    "cli/ghostty.zig": {
-      "tests": 4,
-      "assertions": 9
-    },
-    "cli/ssh-cache/DiskCache.zig": {
-      "tests": 12,
-      "assertions": 63
-    },
-    "cli/ssh-cache/Entry.zig": {
-      "tests": 3,
-      "assertions": 15
-    },
-    "cli/ssh.zig": {
-      "tests": 10,
-      "assertions": 21
-    },
-    "cli/ssh_cache.zig": {
-      "tests": 5,
-      "assertions": 28
-    },
-    "config.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "config/CApi.zig": {
-      "tests": 8,
-      "assertions": 24
-    },
-    "config/Config.zig": {
-      "tests": 113,
-      "assertions": 385
-    },
-    "config/RepeatableStringMap.zig": {
-      "tests": 4,
-      "assertions": 9
-    },
-    "config/c_get.zig": {
-      "tests": 6,
-      "assertions": 27
-    },
-    "config/command.zig": {
-      "tests": 10,
-      "assertions": 26
-    },
-    "config/conditional.zig": {
-      "tests": 1,
-      "assertions": 3
-    },
-    "config/formatter.zig": {
-      "tests": 8,
-      "assertions": 10
-    },
-    "config/formatter_file.zig": {
-      "tests": 2,
-      "assertions": 0
-    },
-    "config/io.zig": {
-      "tests": 4,
-      "assertions": 9
-    },
-    "config/key.zig": {
-      "tests": 1,
-      "assertions": 2
-    },
-    "config/path.zig": {
-      "tests": 8,
-      "assertions": 40
-    },
-    "config/string.zig": {
-      "tests": 9,
-      "assertions": 24
-    },
-    "config/url.zig": {
-      "tests": 1,
-      "assertions": 2
-    },
-    "crash/main.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "crash/sentry_envelope.zig": {
-      "tests": 8,
-      "assertions": 17
-    },
-    "datastruct/blocking_queue.zig": {
-      "tests": 2,
-      "assertions": 16
-    },
-    "datastruct/cache_table.zig": {
-      "tests": 1,
-      "assertions": 6
-    },
-    "datastruct/circ_buf.zig": {
-      "tests": 21,
-      "assertions": 132
-    },
-    "datastruct/comparison.zig": {
-      "tests": 24,
-      "assertions": 71
-    },
-    "datastruct/intrusive_linked_list.zig": {
-      "tests": 1,
-      "assertions": 4
-    },
-    "datastruct/lru.zig": {
-      "tests": 4,
-      "assertions": 29
-    },
-    "datastruct/main.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "datastruct/message_data.zig": {
-      "tests": 3,
-      "assertions": 3
-    },
-    "datastruct/segmented_pool.zig": {
-      "tests": 1,
-      "assertions": 10
-    },
-    "datastruct/split_tree.zig": {
-      "tests": 18,
-      "assertions": 40
-    },
-    "extra/fish.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "extra/vim.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "font/Atlas.zig": {
-      "tests": 13,
-      "assertions": 87
-    },
-    "font/CodepointMap.zig": {
-      "tests": 1,
-      "assertions": 7
-    },
-    "font/CodepointResolver.zig": {
-      "tests": 3,
-      "assertions": 17
-    },
-    "font/Collection.zig": {
-      "tests": 13,
-      "assertions": 26
-    },
-    "font/DeferredFace.zig": {
-      "tests": 2,
-      "assertions": 5
-    },
-    "font/Glyph.zig": {
-      "tests": 1,
-      "assertions": 8
-    },
-    "font/Metrics.zig": {
-      "tests": 11,
-      "assertions": 35
-    },
-    "font/SharedGrid.zig": {
-      "tests": 3,
-      "assertions": 9
-    },
-    "font/SharedGridSet.zig": {
-      "tests": 4,
-      "assertions": 9
-    },
-    "font/discovery.zig": {
-      "tests": 8,
-      "assertions": 12
-    },
-    "font/face.zig": {
-      "tests": 3,
-      "assertions": 4
-    },
-    "font/face/coretext.zig": {
-      "tests": 8,
-      "assertions": 11
-    },
-    "font/face/freetype.zig": {
-      "tests": 9,
-      "assertions": 19
-    },
-    "font/glyf_rasterize.zig": {
-      "tests": 14,
-      "assertions": 32
-    },
-    "font/glyf_rasterize_png_test.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "font/main.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "font/opentype.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "font/opentype/glyf.zig": {
-      "tests": 14,
-      "assertions": 62
-    },
-    "font/opentype/head.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "font/opentype/hhea.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "font/opentype/os2.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "font/opentype/post.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "font/opentype/sfnt.zig": {
-      "tests": 3,
-      "assertions": 9
-    },
-    "font/opentype/svg.zig": {
-      "tests": 1,
-      "assertions": 3
-    },
-    "font/shape.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "font/shaper/Cache.zig": {
-      "tests": 1,
-      "assertions": 2
-    },
-    "font/shaper/coretext.zig": {
-      "tests": 27,
-      "assertions": 124
-    },
-    "font/shaper/feature.zig": {
-      "tests": 2,
-      "assertions": 26
-    },
-    "font/shaper/harfbuzz.zig": {
-      "tests": 24,
-      "assertions": 105
-    },
-    "font/shaper/noop.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "font/sprite.zig": {
-      "tests": 2,
-      "assertions": 1
-    },
-    "font/sprite/Face.zig": {
-      "tests": 2,
-      "assertions": 1
-    },
-    "input.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "input/Binding.zig": {
-      "tests": 85,
-      "assertions": 299
-    },
-    "input/KeymapDarwin.zig": {
-      "tests": 2,
-      "assertions": 5
-    },
-    "input/command.zig": {
-      "tests": 1,
-      "assertions": 2
-    },
-    "input/function_keys.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "input/key.zig": {
-      "tests": 4,
-      "assertions": 6
-    },
-    "input/key_encode.zig": {
-      "tests": 92,
-      "assertions": 129
-    },
-    "input/key_mods.zig": {
-      "tests": 24,
-      "assertions": 46
-    },
-    "input/keycodes.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "input/kitty.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "input/mouse.zig": {
-      "tests": 1,
-      "assertions": 2
-    },
-    "input/mouse_encode.zig": {
-      "tests": 23,
-      "assertions": 36
-    },
-    "input/paste.zig": {
-      "tests": 10,
-      "assertions": 25
-    },
-    "inspector/main.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "lib/allocator.zig": {
-      "tests": 2,
-      "assertions": 2
-    },
-    "lib/enum.zig": {
-      "tests": 3,
-      "assertions": 6
-    },
-    "lib/main.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "lib/string.zig": {
-      "tests": 1,
-      "assertions": 2
-    },
-    "lib/struct.zig": {
-      "tests": 3,
-      "assertions": 13
-    },
-    "lib/union.zig": {
-      "tests": 3,
-      "assertions": 4
-    },
-    "lib_vt.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "main.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "main_c.zig": {
-      "tests": 3,
-      "assertions": 11
-    },
-    "main_ghostty.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "os/TempDir.zig": {
-      "tests": 1,
-      "assertions": 2
-    },
-    "os/args.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "os/desktop.zig": {
-      "tests": 1,
-      "assertions": 10
-    },
-    "os/env.zig": {
-      "tests": 4,
-      "assertions": 6
-    },
-    "os/file.zig": {
-      "tests": 1,
-      "assertions": 3
-    },
-    "os/homedir.zig": {
-      "tests": 2,
-      "assertions": 9
-    },
-    "os/hostname.zig": {
-      "tests": 4,
-      "assertions": 28
-    },
-    "os/i18n.zig": {
-      "tests": 1,
-      "assertions": 9
-    },
-    "os/kernel_info.zig": {
-      "tests": 1,
-      "assertions": 2
-    },
-    "os/mach.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "os/macos.zig": {
-      "tests": 1,
-      "assertions": 5
-    },
-    "os/main.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "os/passwd.zig": {
-      "tests": 1,
-      "assertions": 2
-    },
-    "os/path.zig": {
-      "tests": 3,
-      "assertions": 3
-    },
-    "os/shell.zig": {
-      "tests": 8,
-      "assertions": 13
-    },
-    "os/string_encoding.zig": {
-      "tests": 18,
-      "assertions": 21
-    },
-    "os/uri.zig": {
-      "tests": 3,
-      "assertions": 46
-    },
-    "os/xdg.zig": {
-      "tests": 5,
-      "assertions": 10
-    },
-    "pty.zig": {
-      "tests": 1,
-      "assertions": 6
-    },
-    "renderer.zig": {
-      "tests": 2,
-      "assertions": 0
-    },
-    "renderer/State.zig": {
-      "tests": 2,
-      "assertions": 9
-    },
-    "renderer/cell.zig": {
-      "tests": 5,
-      "assertions": 33
-    },
-    "renderer/cursor.zig": {
-      "tests": 4,
-      "assertions": 20
-    },
-    "renderer/link.zig": {
-      "tests": 3,
-      "assertions": 24
-    },
-    "renderer/metal/shaders.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "renderer/shadertoy.zig": {
-      "tests": 4,
-      "assertions": 2
-    },
-    "renderer/size.zig": {
-      "tests": 6,
-      "assertions": 13
-    },
-    "simd/base64.zig": {
-      "tests": 2,
-      "assertions": 2
-    },
-    "simd/codepoint_width.zig": {
-      "tests": 1,
-      "assertions": 9
-    },
-    "simd/index_of.zig": {
-      "tests": 1,
-      "assertions": 4
-    },
-    "simd/main.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "simd/vt.zig": {
-      "tests": 18,
-      "assertions": 83
-    },
-    "surface_mouse.zig": {
-      "tests": 1,
-      "assertions": 13
-    },
-    "synthetic/Bytes.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "synthetic/Osc.zig": {
-      "tests": 3,
-      "assertions": 3
-    },
-    "synthetic/Utf8.zig": {
-      "tests": 3,
-      "assertions": 7
-    },
-    "synthetic/cli.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "synthetic/cli/Ascii.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "synthetic/cli/Osc.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "synthetic/cli/Utf8.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "synthetic/main.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "terminal/PageList.zig": {
-      "tests": 205,
-      "assertions": 1164
-    },
-    "terminal/Parser.zig": {
-      "tests": 25,
-      "assertions": 287
-    },
-    "terminal/Screen.zig": {
-      "tests": 188,
-      "assertions": 736
-    },
-    "terminal/ScreenSet.zig": {
-      "tests": 2,
-      "assertions": 12
-    },
-    "terminal/Selection.zig": {
-      "tests": 18,
-      "assertions": 121
-    },
-    "terminal/SelectionGesture.zig": {
-      "tests": 31,
-      "assertions": 81
-    },
-    "terminal/StringMap.zig": {
-      "tests": 3,
-      "assertions": 9
-    },
-    "terminal/Tabstops.zig": {
-      "tests": 5,
-      "assertions": 23
-    },
-    "terminal/Terminal.zig": {
-      "tests": 376,
-      "assertions": 1293
-    },
-    "terminal/UTF8Decoder.zig": {
-      "tests": 3,
-      "assertions": 5
-    },
-    "terminal/apc.zig": {
-      "tests": 14,
-      "assertions": 17
-    },
-    "terminal/apc/glyph.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "terminal/apc/glyph/Glossary.zig": {
-      "tests": 9,
-      "assertions": 38
-    },
-    "terminal/apc/glyph/execute.zig": {
-      "tests": 12,
-      "assertions": 23
-    },
-    "terminal/apc/glyph/request.zig": {
-      "tests": 19,
-      "assertions": 71
-    },
-    "terminal/apc/glyph/response.zig": {
-      "tests": 12,
-      "assertions": 23
-    },
-    "terminal/bitmap_allocator.zig": {
-      "tests": 21,
-      "assertions": 120
-    },
-    "terminal/c/allocator.zig": {
-      "tests": 6,
-      "assertions": 2
-    },
-    "terminal/c/build_info.zig": {
-      "tests": 11,
-      "assertions": 19
-    },
-    "terminal/c/cell.zig": {
-      "tests": 8,
-      "assertions": 17
-    },
-    "terminal/c/focus.zig": {
-      "tests": 4,
-      "assertions": 8
-    },
-    "terminal/c/formatter.zig": {
-      "tests": 11,
-      "assertions": 42
-    },
-    "terminal/c/grid_ref.zig": {
-      "tests": 11,
-      "assertions": 19
-    },
-    "terminal/c/grid_ref_tracked.zig": {
-      "tests": 4,
-      "assertions": 26
-    },
-    "terminal/c/key_encode.zig": {
-      "tests": 7,
-      "assertions": 26
-    },
-    "terminal/c/key_event.zig": {
-      "tests": 4,
-      "assertions": 34
-    },
-    "terminal/c/kitty_graphics.zig": {
-      "tests": 35,
-      "assertions": 253
-    },
-    "terminal/c/main.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "terminal/c/modes.zig": {
-      "tests": 7,
-      "assertions": 13
-    },
-    "terminal/c/mouse_encode.zig": {
-      "tests": 7,
-      "assertions": 35
-    },
-    "terminal/c/mouse_event.zig": {
-      "tests": 3,
-      "assertions": 12
-    },
-    "terminal/c/osc.zig": {
-      "tests": 3,
-      "assertions": 6
-    },
-    "terminal/c/paste.zig": {
-      "tests": 11,
-      "assertions": 17
-    },
-    "terminal/c/render.zig": {
-      "tests": 38,
-      "assertions": 279
-    },
-    "terminal/c/row.zig": {
-      "tests": 6,
-      "assertions": 14
-    },
-    "terminal/c/selection.zig": {
-      "tests": 3,
-      "assertions": 19
-    },
-    "terminal/c/selection_gesture.zig": {
-      "tests": 19,
-      "assertions": 161
-    },
-    "terminal/c/sgr.zig": {
-      "tests": 2,
-      "assertions": 7
-    },
-    "terminal/c/size_report.zig": {
-      "tests": 4,
-      "assertions": 8
-    },
-    "terminal/c/style.zig": {
-      "tests": 2,
-      "assertions": 17
-    },
-    "terminal/c/sys.zig": {
-      "tests": 9,
-      "assertions": 29
-    },
-    "terminal/c/terminal.zig": {
-      "tests": 89,
-      "assertions": 456
-    },
-    "terminal/c/types.zig": {
-      "tests": 2,
-      "assertions": 10
-    },
-    "terminal/charsets.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "terminal/color.zig": {
-      "tests": 24,
-      "assertions": 114
-    },
-    "terminal/dcs.zig": {
-      "tests": 8,
-      "assertions": 34
-    },
-    "terminal/device_attributes.zig": {
-      "tests": 7,
-      "assertions": 7
-    },
-    "terminal/device_status.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "terminal/focus.zig": {
-      "tests": 2,
-      "assertions": 2
-    },
-    "terminal/formatter.zig": {
-      "tests": 100,
-      "assertions": 503
-    },
-    "terminal/hash_map.zig": {
-      "tests": 22,
-      "assertions": 88
-    },
-    "terminal/kitty.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "terminal/kitty/color.zig": {
-      "tests": 1,
-      "assertions": 2
-    },
-    "terminal/kitty/graphics.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "terminal/kitty/graphics_command.zig": {
-      "tests": 22,
-      "assertions": 66
-    },
-    "terminal/kitty/graphics_exec.zig": {
-      "tests": 8,
-      "assertions": 14
-    },
-    "terminal/kitty/graphics_image.zig": {
-      "tests": 16,
-      "assertions": 14
-    },
-    "terminal/kitty/graphics_storage.zig": {
-      "tests": 19,
-      "assertions": 89
-    },
-    "terminal/kitty/graphics_unicode.zig": {
-      "tests": 16,
-      "assertions": 105
-    },
-    "terminal/kitty/key.zig": {
-      "tests": 5,
-      "assertions": 10
-    },
-    "terminal/main.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "terminal/modes.zig": {
-      "tests": 12,
-      "assertions": 22
-    },
-    "terminal/mouse.zig": {
-      "tests": 3,
-      "assertions": 1
-    },
-    "terminal/osc.zig": {
-      "tests": 2,
-      "assertions": 0
-    },
-    "terminal/osc/encoding.zig": {
-      "tests": 1,
-      "assertions": 6
-    },
-    "terminal/osc/parsers.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "terminal/osc/parsers/change_window_icon.zig": {
-      "tests": 1,
-      "assertions": 2
-    },
-    "terminal/osc/parsers/change_window_title.zig": {
-      "tests": 7,
-      "assertions": 12
-    },
-    "terminal/osc/parsers/clipboard_operation.zig": {
-      "tests": 4,
-      "assertions": 12
-    },
-    "terminal/osc/parsers/color.zig": {
-      "tests": 12,
-      "assertions": 42
-    },
-    "terminal/osc/parsers/context_signal.zig": {
-      "tests": 18,
-      "assertions": 72
-    },
-    "terminal/osc/parsers/hyperlink.zig": {
-      "tests": 8,
-      "assertions": 19
-    },
-    "terminal/osc/parsers/iterm2.zig": {
-      "tests": 19,
-      "assertions": 21
-    },
-    "terminal/osc/parsers/kitty_clipboard_protocol.zig": {
-      "tests": 27,
-      "assertions": 202
-    },
-    "terminal/osc/parsers/kitty_color.zig": {
-      "tests": 5,
-      "assertions": 39
-    },
-    "terminal/osc/parsers/kitty_text_sizing.zig": {
-      "tests": 8,
-      "assertions": 24
-    },
-    "terminal/osc/parsers/mouse_shape.zig": {
-      "tests": 1,
-      "assertions": 2
-    },
-    "terminal/osc/parsers/osc9.zig": {
-      "tests": 61,
-      "assertions": 144
-    },
-    "terminal/osc/parsers/report_pwd.zig": {
-      "tests": 2,
-      "assertions": 4
-    },
-    "terminal/osc/parsers/rxvt_extension.zig": {
-      "tests": 1,
-      "assertions": 3
-    },
-    "terminal/osc/parsers/semantic_prompt.zig": {
-      "tests": 64,
-      "assertions": 201
-    },
-    "terminal/page.zig": {
-      "tests": 46,
-      "assertions": 137
-    },
-    "terminal/parse_table.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "terminal/render.zig": {
-      "tests": 15,
-      "assertions": 82
-    },
-    "terminal/search.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "terminal/search/Thread.zig": {
-      "tests": 1,
-      "assertions": 4
-    },
-    "terminal/search/active.zig": {
-      "tests": 2,
-      "assertions": 8
-    },
-    "terminal/search/pagelist.zig": {
-      "tests": 7,
-      "assertions": 49
-    },
-    "terminal/search/screen.zig": {
-      "tests": 16,
-      "assertions": 71
-    },
-    "terminal/search/sliding_window.zig": {
-      "tests": 25,
-      "assertions": 157
-    },
-    "terminal/search/viewport.zig": {
-      "tests": 4,
-      "assertions": 27
-    },
-    "terminal/sgr.zig": {
-      "tests": 31,
-      "assertions": 162
-    },
-    "terminal/size.zig": {
-      "tests": 5,
-      "assertions": 5
-    },
-    "terminal/size_report.zig": {
-      "tests": 5,
-      "assertions": 5
-    },
-    "terminal/stream.zig": {
-      "tests": 38,
-      "assertions": 103
-    },
-    "terminal/stream_terminal.zig": {
-      "tests": 65,
-      "assertions": 154
-    },
-    "terminal/style.zig": {
-      "tests": 37,
-      "assertions": 50
-    },
-    "terminal/tmux.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "terminal/tmux/control.zig": {
-      "tests": 18,
-      "assertions": 80
-    },
-    "terminal/tmux/layout.zig": {
-      "tests": 40,
-      "assertions": 107
-    },
-    "terminal/tmux/output.zig": {
-      "tests": 47,
-      "assertions": 151
-    },
-    "terminal/tmux/viewer.zig": {
-      "tests": 9,
-      "assertions": 85
-    },
-    "terminal/x11_color.zig": {
-      "tests": 1,
-      "assertions": 13
-    },
-    "terminfo/Source.zig": {
-      "tests": 2,
-      "assertions": 6
-    },
-    "terminfo/ghostty.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "terminfo/main.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "termio.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "termio/Exec.zig": {
-      "tests": 10,
-      "assertions": 39
-    },
-    "termio/message.zig": {
-      "tests": 2,
-      "assertions": 1
-    },
-    "termio/shell_integration.zig": {
-      "tests": 21,
-      "assertions": 64
-    },
-    "tripwire.zig": {
-      "tests": 4,
-      "assertions": 5
-    },
-    "unicode/grapheme.zig": {
-      "tests": 2,
-      "assertions": 16
-    },
-    "unicode/main.zig": {
-      "tests": 1,
-      "assertions": 0
-    },
-    "unicode/props_uucode.zig": {
-      "tests": 1,
-      "assertions": 1
-    },
-    "unicode/symbols_uucode.zig": {
-      "tests": 1,
-      "assertions": 1
+  "apprt.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "apprt/action.zig": {
+   "tests": 17,
+   "assertions": 0
+  },
+  "apprt/gtk.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "apprt/gtk/adw_version.zig": {
+   "tests": 1,
+   "assertions": 8
+  },
+  "apprt/gtk/class.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "apprt/gtk/class/config.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "apprt/gtk/class/surface.zig": {
+   "tests": 1,
+   "assertions": 4
+  },
+  "apprt/gtk/ext.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "apprt/gtk/ext/actions.zig": {
+   "tests": 2,
+   "assertions": 5
+  },
+  "apprt/gtk/ext/slice.zig": {
+   "tests": 3,
+   "assertions": 9
+  },
+  "apprt/gtk/gsettings.zig": {
+   "tests": 4,
+   "assertions": 12
+  },
+  "apprt/gtk/gtk_version.zig": {
+   "tests": 2,
+   "assertions": 16
+  },
+  "apprt/gtk/key.zig": {
+   "tests": 3,
+   "assertions": 13
+  },
+  "apprt/gtk/media.zig": {
+   "tests": 1,
+   "assertions": 4
+  },
+  "apprt/gtk/portal.zig": {
+   "tests": 4,
+   "assertions": 7
+  },
+  "apprt/gtk/weak_ref.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "apprt/ipc.zig": {
+   "tests": 2,
+   "assertions": 0
+  },
+  "apprt/runtime.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "benchmark/Benchmark.zig": {
+   "tests": 1,
+   "assertions": 4
+  },
+  "benchmark/CodepointWidth.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "benchmark/GraphemeBreak.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "benchmark/IsSymbol.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "benchmark/OscParser.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "benchmark/TerminalParser.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "benchmark/TerminalStream.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "benchmark/main.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "build/wasm_patch_growable_table.zig": {
+   "tests": 7,
+   "assertions": 14
+  },
+  "cli.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "cli/CommaSplitter.zig": {
+   "tests": 28,
+   "assertions": 61
+  },
+  "cli/Pager.zig": {
+   "tests": 2,
+   "assertions": 2
+  },
+  "cli/action.zig": {
+   "tests": 7,
+   "assertions": 13
+  },
+  "cli/args.zig": {
+   "tests": 36,
+   "assertions": 113
+  },
+  "cli/explain_config.zig": {
+   "tests": 1,
+   "assertions": 6
+  },
+  "cli/ghostty.zig": {
+   "tests": 4,
+   "assertions": 9
+  },
+  "cli/ssh-cache/DiskCache.zig": {
+   "tests": 12,
+   "assertions": 63
+  },
+  "cli/ssh-cache/Entry.zig": {
+   "tests": 3,
+   "assertions": 15
+  },
+  "cli/ssh.zig": {
+   "tests": 10,
+   "assertions": 21
+  },
+  "cli/ssh_cache.zig": {
+   "tests": 5,
+   "assertions": 28
+  },
+  "config.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "config/CApi.zig": {
+   "tests": 8,
+   "assertions": 24
+  },
+  "config/Config.zig": {
+   "tests": 113,
+   "assertions": 385
+  },
+  "config/RepeatableStringMap.zig": {
+   "tests": 4,
+   "assertions": 9
+  },
+  "config/c_get.zig": {
+   "tests": 6,
+   "assertions": 27
+  },
+  "config/command.zig": {
+   "tests": 10,
+   "assertions": 26
+  },
+  "config/conditional.zig": {
+   "tests": 1,
+   "assertions": 3
+  },
+  "config/formatter.zig": {
+   "tests": 8,
+   "assertions": 10
+  },
+  "config/formatter_file.zig": {
+   "tests": 2,
+   "assertions": 0
+  },
+  "config/io.zig": {
+   "tests": 4,
+   "assertions": 9
+  },
+  "config/key.zig": {
+   "tests": 1,
+   "assertions": 2
+  },
+  "config/path.zig": {
+   "tests": 8,
+   "assertions": 40
+  },
+  "config/string.zig": {
+   "tests": 9,
+   "assertions": 24
+  },
+  "config/url.zig": {
+   "tests": 1,
+   "assertions": 2
+  },
+  "crash/main.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "crash/sentry_envelope.zig": {
+   "tests": 8,
+   "assertions": 17
+  },
+  "datastruct/blocking_queue.zig": {
+   "tests": 2,
+   "assertions": 16
+  },
+  "datastruct/cache_table.zig": {
+   "tests": 1,
+   "assertions": 6
+  },
+  "datastruct/circ_buf.zig": {
+   "tests": 21,
+   "assertions": 132
+  },
+  "datastruct/comparison.zig": {
+   "tests": 24,
+   "assertions": 71
+  },
+  "datastruct/intrusive_linked_list.zig": {
+   "tests": 1,
+   "assertions": 4
+  },
+  "datastruct/lru.zig": {
+   "tests": 4,
+   "assertions": 29
+  },
+  "datastruct/main.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "datastruct/message_data.zig": {
+   "tests": 3,
+   "assertions": 3
+  },
+  "datastruct/segmented_pool.zig": {
+   "tests": 1,
+   "assertions": 10
+  },
+  "datastruct/split_tree.zig": {
+   "tests": 18,
+   "assertions": 40
+  },
+  "extra/fish.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "extra/vim.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "font/Atlas.zig": {
+   "tests": 13,
+   "assertions": 87
+  },
+  "font/CodepointMap.zig": {
+   "tests": 1,
+   "assertions": 7
+  },
+  "font/CodepointResolver.zig": {
+   "tests": 3,
+   "assertions": 17
+  },
+  "font/Collection.zig": {
+   "tests": 13,
+   "assertions": 26
+  },
+  "font/DeferredFace.zig": {
+   "tests": 2,
+   "assertions": 5
+  },
+  "font/Glyph.zig": {
+   "tests": 1,
+   "assertions": 8
+  },
+  "font/Metrics.zig": {
+   "tests": 11,
+   "assertions": 35
+  },
+  "font/SharedGrid.zig": {
+   "tests": 3,
+   "assertions": 9
+  },
+  "font/SharedGridSet.zig": {
+   "tests": 4,
+   "assertions": 9
+  },
+  "font/discovery.zig": {
+   "tests": 8,
+   "assertions": 12
+  },
+  "font/face.zig": {
+   "tests": 3,
+   "assertions": 4
+  },
+  "font/face/coretext.zig": {
+   "tests": 8,
+   "assertions": 11
+  },
+  "font/face/freetype.zig": {
+   "tests": 9,
+   "assertions": 19
+  },
+  "font/glyf_rasterize.zig": {
+   "tests": 14,
+   "assertions": 32
+  },
+  "font/glyf_rasterize_png_test.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "font/main.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "font/opentype.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "font/opentype/glyf.zig": {
+   "tests": 14,
+   "assertions": 62
+  },
+  "font/opentype/head.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "font/opentype/hhea.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "font/opentype/os2.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "font/opentype/post.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "font/opentype/sfnt.zig": {
+   "tests": 3,
+   "assertions": 9
+  },
+  "font/opentype/svg.zig": {
+   "tests": 1,
+   "assertions": 3
+  },
+  "font/shape.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "font/shaper/Cache.zig": {
+   "tests": 1,
+   "assertions": 2
+  },
+  "font/shaper/coretext.zig": {
+   "tests": 27,
+   "assertions": 124
+  },
+  "font/shaper/feature.zig": {
+   "tests": 2,
+   "assertions": 26
+  },
+  "font/shaper/harfbuzz.zig": {
+   "tests": 24,
+   "assertions": 105
+  },
+  "font/shaper/noop.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "font/sprite.zig": {
+   "tests": 2,
+   "assertions": 1
+  },
+  "font/sprite/Face.zig": {
+   "tests": 2,
+   "assertions": 1
+  },
+  "input.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "input/Binding.zig": {
+   "tests": 85,
+   "assertions": 299
+  },
+  "input/KeymapDarwin.zig": {
+   "tests": 2,
+   "assertions": 5
+  },
+  "input/command.zig": {
+   "tests": 1,
+   "assertions": 2
+  },
+  "input/function_keys.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "input/key.zig": {
+   "tests": 4,
+   "assertions": 6
+  },
+  "input/key_encode.zig": {
+   "tests": 92,
+   "assertions": 129
+  },
+  "input/key_mods.zig": {
+   "tests": 24,
+   "assertions": 46
+  },
+  "input/keycodes.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "input/kitty.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "input/mouse.zig": {
+   "tests": 1,
+   "assertions": 2
+  },
+  "input/mouse_encode.zig": {
+   "tests": 23,
+   "assertions": 36
+  },
+  "input/paste.zig": {
+   "tests": 10,
+   "assertions": 25
+  },
+  "inspector/main.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "lib/allocator.zig": {
+   "tests": 2,
+   "assertions": 2
+  },
+  "lib/enum.zig": {
+   "tests": 3,
+   "assertions": 6
+  },
+  "lib/main.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "lib/string.zig": {
+   "tests": 1,
+   "assertions": 2
+  },
+  "lib/struct.zig": {
+   "tests": 3,
+   "assertions": 13
+  },
+  "lib/union.zig": {
+   "tests": 3,
+   "assertions": 4
+  },
+  "lib_vt.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "main.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "main_c.zig": {
+   "tests": 3,
+   "assertions": 11
+  },
+  "main_ghostty.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "os/TempDir.zig": {
+   "tests": 1,
+   "assertions": 2
+  },
+  "os/args.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "os/desktop.zig": {
+   "tests": 1,
+   "assertions": 10
+  },
+  "os/env.zig": {
+   "tests": 4,
+   "assertions": 6
+  },
+  "os/file.zig": {
+   "tests": 1,
+   "assertions": 3
+  },
+  "os/homedir.zig": {
+   "tests": 2,
+   "assertions": 9
+  },
+  "os/hostname.zig": {
+   "tests": 4,
+   "assertions": 28
+  },
+  "os/i18n.zig": {
+   "tests": 1,
+   "assertions": 9
+  },
+  "os/kernel_info.zig": {
+   "tests": 1,
+   "assertions": 2
+  },
+  "os/mach.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "os/macos.zig": {
+   "tests": 1,
+   "assertions": 5
+  },
+  "os/main.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "os/passwd.zig": {
+   "tests": 1,
+   "assertions": 2
+  },
+  "os/path.zig": {
+   "tests": 3,
+   "assertions": 3
+  },
+  "os/shell.zig": {
+   "tests": 8,
+   "assertions": 13
+  },
+  "os/string_encoding.zig": {
+   "tests": 18,
+   "assertions": 21
+  },
+  "os/uri.zig": {
+   "tests": 3,
+   "assertions": 46
+  },
+  "os/xdg.zig": {
+   "tests": 5,
+   "assertions": 10
+  },
+  "pty.zig": {
+   "tests": 1,
+   "assertions": 6
+  },
+  "renderer.zig": {
+   "tests": 2,
+   "assertions": 0
+  },
+  "renderer/State.zig": {
+   "tests": 2,
+   "assertions": 9
+  },
+  "renderer/cell.zig": {
+   "tests": 5,
+   "assertions": 33
+  },
+  "renderer/cursor.zig": {
+   "tests": 4,
+   "assertions": 20
+  },
+  "renderer/link.zig": {
+   "tests": 3,
+   "assertions": 24
+  },
+  "renderer/metal/shaders.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "renderer/shadertoy.zig": {
+   "tests": 4,
+   "assertions": 2
+  },
+  "renderer/size.zig": {
+   "tests": 6,
+   "assertions": 13
+  },
+  "simd/base64.zig": {
+   "tests": 2,
+   "assertions": 2
+  },
+  "simd/codepoint_width.zig": {
+   "tests": 1,
+   "assertions": 9
+  },
+  "simd/index_of.zig": {
+   "tests": 1,
+   "assertions": 4
+  },
+  "simd/main.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "simd/vt.zig": {
+   "tests": 18,
+   "assertions": 83
+  },
+  "surface_mouse.zig": {
+   "tests": 1,
+   "assertions": 13
+  },
+  "synthetic/Bytes.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "synthetic/Osc.zig": {
+   "tests": 3,
+   "assertions": 3
+  },
+  "synthetic/Utf8.zig": {
+   "tests": 3,
+   "assertions": 7
+  },
+  "synthetic/cli.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "synthetic/cli/Ascii.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "synthetic/cli/Osc.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "synthetic/cli/Utf8.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "synthetic/main.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "terminal/PageList.zig": {
+   "tests": 205,
+   "assertions": 1164
+  },
+  "terminal/Parser.zig": {
+   "tests": 25,
+   "assertions": 287
+  },
+  "terminal/Screen.zig": {
+   "tests": 188,
+   "assertions": 736
+  },
+  "terminal/ScreenSet.zig": {
+   "tests": 2,
+   "assertions": 12
+  },
+  "terminal/Selection.zig": {
+   "tests": 18,
+   "assertions": 121
+  },
+  "terminal/SelectionGesture.zig": {
+   "tests": 31,
+   "assertions": 81
+  },
+  "terminal/StringMap.zig": {
+   "tests": 3,
+   "assertions": 9
+  },
+  "terminal/Tabstops.zig": {
+   "tests": 5,
+   "assertions": 23
+  },
+  "terminal/Terminal.zig": {
+   "tests": 376,
+   "assertions": 1293
+  },
+  "terminal/UTF8Decoder.zig": {
+   "tests": 3,
+   "assertions": 5
+  },
+  "terminal/apc.zig": {
+   "tests": 14,
+   "assertions": 17
+  },
+  "terminal/apc/glyph.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "terminal/apc/glyph/Glossary.zig": {
+   "tests": 9,
+   "assertions": 38
+  },
+  "terminal/apc/glyph/execute.zig": {
+   "tests": 12,
+   "assertions": 23
+  },
+  "terminal/apc/glyph/request.zig": {
+   "tests": 19,
+   "assertions": 71
+  },
+  "terminal/apc/glyph/response.zig": {
+   "tests": 12,
+   "assertions": 23
+  },
+  "terminal/bitmap_allocator.zig": {
+   "tests": 21,
+   "assertions": 120
+  },
+  "terminal/c/allocator.zig": {
+   "tests": 6,
+   "assertions": 2
+  },
+  "terminal/c/build_info.zig": {
+   "tests": 11,
+   "assertions": 19
+  },
+  "terminal/c/cell.zig": {
+   "tests": 8,
+   "assertions": 17
+  },
+  "terminal/c/focus.zig": {
+   "tests": 4,
+   "assertions": 8
+  },
+  "terminal/c/formatter.zig": {
+   "tests": 11,
+   "assertions": 42
+  },
+  "terminal/c/grid_ref.zig": {
+   "tests": 11,
+   "assertions": 19
+  },
+  "terminal/c/grid_ref_tracked.zig": {
+   "tests": 4,
+   "assertions": 26
+  },
+  "terminal/c/key_encode.zig": {
+   "tests": 7,
+   "assertions": 26
+  },
+  "terminal/c/key_event.zig": {
+   "tests": 4,
+   "assertions": 34
+  },
+  "terminal/c/kitty_graphics.zig": {
+   "tests": 35,
+   "assertions": 253
+  },
+  "terminal/c/main.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "terminal/c/modes.zig": {
+   "tests": 7,
+   "assertions": 13
+  },
+  "terminal/c/mouse_encode.zig": {
+   "tests": 7,
+   "assertions": 35
+  },
+  "terminal/c/mouse_event.zig": {
+   "tests": 3,
+   "assertions": 12
+  },
+  "terminal/c/osc.zig": {
+   "tests": 3,
+   "assertions": 6
+  },
+  "terminal/c/paste.zig": {
+   "tests": 11,
+   "assertions": 17
+  },
+  "terminal/c/render.zig": {
+   "tests": 38,
+   "assertions": 279
+  },
+  "terminal/c/row.zig": {
+   "tests": 6,
+   "assertions": 14
+  },
+  "terminal/c/selection.zig": {
+   "tests": 3,
+   "assertions": 19
+  },
+  "terminal/c/selection_gesture.zig": {
+   "tests": 19,
+   "assertions": 161
+  },
+  "terminal/c/sgr.zig": {
+   "tests": 2,
+   "assertions": 7
+  },
+  "terminal/c/size_report.zig": {
+   "tests": 4,
+   "assertions": 8
+  },
+  "terminal/c/style.zig": {
+   "tests": 2,
+   "assertions": 17
+  },
+  "terminal/c/sys.zig": {
+   "tests": 9,
+   "assertions": 29
+  },
+  "terminal/c/terminal.zig": {
+   "tests": 89,
+   "assertions": 456
+  },
+  "terminal/c/types.zig": {
+   "tests": 2,
+   "assertions": 10
+  },
+  "terminal/charsets.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "terminal/color.zig": {
+   "tests": 24,
+   "assertions": 114
+  },
+  "terminal/dcs.zig": {
+   "tests": 8,
+   "assertions": 34
+  },
+  "terminal/device_attributes.zig": {
+   "tests": 7,
+   "assertions": 7
+  },
+  "terminal/device_status.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "terminal/focus.zig": {
+   "tests": 2,
+   "assertions": 2
+  },
+  "terminal/formatter.zig": {
+   "tests": 100,
+   "assertions": 503
+  },
+  "terminal/hash_map.zig": {
+   "tests": 22,
+   "assertions": 88
+  },
+  "terminal/kitty.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "terminal/kitty/color.zig": {
+   "tests": 1,
+   "assertions": 2
+  },
+  "terminal/kitty/graphics.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "terminal/kitty/graphics_command.zig": {
+   "tests": 22,
+   "assertions": 66
+  },
+  "terminal/kitty/graphics_exec.zig": {
+   "tests": 8,
+   "assertions": 14
+  },
+  "terminal/kitty/graphics_image.zig": {
+   "tests": 16,
+   "assertions": 14
+  },
+  "terminal/kitty/graphics_storage.zig": {
+   "tests": 19,
+   "assertions": 89
+  },
+  "terminal/kitty/graphics_unicode.zig": {
+   "tests": 16,
+   "assertions": 105
+  },
+  "terminal/kitty/key.zig": {
+   "tests": 5,
+   "assertions": 10
+  },
+  "terminal/main.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "terminal/modes.zig": {
+   "tests": 12,
+   "assertions": 22
+  },
+  "terminal/mouse.zig": {
+   "tests": 3,
+   "assertions": 1
+  },
+  "terminal/osc.zig": {
+   "tests": 2,
+   "assertions": 0
+  },
+  "terminal/osc/encoding.zig": {
+   "tests": 1,
+   "assertions": 6
+  },
+  "terminal/osc/parsers.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "terminal/osc/parsers/change_window_icon.zig": {
+   "tests": 1,
+   "assertions": 2
+  },
+  "terminal/osc/parsers/change_window_title.zig": {
+   "tests": 7,
+   "assertions": 12
+  },
+  "terminal/osc/parsers/clipboard_operation.zig": {
+   "tests": 4,
+   "assertions": 12
+  },
+  "terminal/osc/parsers/color.zig": {
+   "tests": 12,
+   "assertions": 42
+  },
+  "terminal/osc/parsers/context_signal.zig": {
+   "tests": 18,
+   "assertions": 72
+  },
+  "terminal/osc/parsers/hyperlink.zig": {
+   "tests": 8,
+   "assertions": 19
+  },
+  "terminal/osc/parsers/iterm2.zig": {
+   "tests": 19,
+   "assertions": 21
+  },
+  "terminal/osc/parsers/kitty_clipboard_protocol.zig": {
+   "tests": 27,
+   "assertions": 202
+  },
+  "terminal/osc/parsers/kitty_color.zig": {
+   "tests": 5,
+   "assertions": 39
+  },
+  "terminal/osc/parsers/kitty_text_sizing.zig": {
+   "tests": 8,
+   "assertions": 24
+  },
+  "terminal/osc/parsers/mouse_shape.zig": {
+   "tests": 1,
+   "assertions": 2
+  },
+  "terminal/osc/parsers/osc9.zig": {
+   "tests": 61,
+   "assertions": 144
+  },
+  "terminal/osc/parsers/report_pwd.zig": {
+   "tests": 2,
+   "assertions": 4
+  },
+  "terminal/osc/parsers/rxvt_extension.zig": {
+   "tests": 1,
+   "assertions": 3
+  },
+  "terminal/osc/parsers/semantic_prompt.zig": {
+   "tests": 64,
+   "assertions": 201
+  },
+  "terminal/page.zig": {
+   "tests": 46,
+   "assertions": 137
+  },
+  "terminal/parse_table.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "terminal/render.zig": {
+   "tests": 15,
+   "assertions": 82
+  },
+  "terminal/search.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "terminal/search/Thread.zig": {
+   "tests": 1,
+   "assertions": 4
+  },
+  "terminal/search/active.zig": {
+   "tests": 2,
+   "assertions": 8
+  },
+  "terminal/search/pagelist.zig": {
+   "tests": 7,
+   "assertions": 49
+  },
+  "terminal/search/screen.zig": {
+   "tests": 16,
+   "assertions": 71
+  },
+  "terminal/search/sliding_window.zig": {
+   "tests": 25,
+   "assertions": 157
+  },
+  "terminal/search/viewport.zig": {
+   "tests": 4,
+   "assertions": 27
+  },
+  "terminal/sgr.zig": {
+   "tests": 31,
+   "assertions": 162
+  },
+  "terminal/size.zig": {
+   "tests": 5,
+   "assertions": 5
+  },
+  "terminal/size_report.zig": {
+   "tests": 5,
+   "assertions": 5
+  },
+  "terminal/stream.zig": {
+   "tests": 38,
+   "assertions": 103
+  },
+  "terminal/stream_terminal.zig": {
+   "tests": 65,
+   "assertions": 154
+  },
+  "terminal/style.zig": {
+   "tests": 37,
+   "assertions": 50
+  },
+  "terminal/tmux.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "terminal/tmux/control.zig": {
+   "tests": 18,
+   "assertions": 80
+  },
+  "terminal/tmux/layout.zig": {
+   "tests": 40,
+   "assertions": 107
+  },
+  "terminal/tmux/output.zig": {
+   "tests": 47,
+   "assertions": 151
+  },
+  "terminal/tmux/viewer.zig": {
+   "tests": 9,
+   "assertions": 85
+  },
+  "terminal/x11_color.zig": {
+   "tests": 1,
+   "assertions": 13
+  },
+  "terminfo/Source.zig": {
+   "tests": 2,
+   "assertions": 6
+  },
+  "terminfo/ghostty.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "terminfo/main.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "termio.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "termio/Exec.zig": {
+   "tests": 10,
+   "assertions": 39
+  },
+  "termio/message.zig": {
+   "tests": 2,
+   "assertions": 1
+  },
+  "termio/shell_integration.zig": {
+   "tests": 21,
+   "assertions": 64
+  },
+  "tripwire.zig": {
+   "tests": 4,
+   "assertions": 5
+  },
+  "unicode/grapheme.zig": {
+   "tests": 2,
+   "assertions": 16
+  },
+  "unicode/main.zig": {
+   "tests": 1,
+   "assertions": 0
+  },
+  "unicode/props_uucode.zig": {
+   "tests": 1,
+   "assertions": 1
+  },
+  "unicode/symbols_uucode.zig": {
+   "tests": 1,
+   "assertions": 1
+  }
+ },
+ "crate_map": {
+  "apprt": {
+   "files": [
+    {
+     "file": "apprt.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "apprt/action.zig",
+     "test_blocks": 17
+    },
+    {
+     "file": "apprt/browser.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/embedded.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "apprt/gtk/App.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/Surface.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/adw_version.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "apprt/gtk/build/blueprint.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/build/gresource.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/build/info.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/cgroup.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "apprt/gtk/class/application.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/clipboard_confirmation_dialog.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/close_confirmation_dialog.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/command_palette.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/config.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "apprt/gtk/class/config_errors_dialog.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/debug_warning.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/dialog.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/global_shortcuts.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/imgui_widget.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/inspector_widget.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/inspector_window.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/key_state_overlay.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/resize_overlay.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/search_overlay.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/split_tree.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/surface.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "apprt/gtk/class/surface_child_exited.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/surface_scrolled_window.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/tab.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/title_dialog.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/class/window.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/ext.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "apprt/gtk/ext/actions.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "apprt/gtk/ext/slice.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "apprt/gtk/flatpak.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/gsettings.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "apprt/gtk/gtk_version.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "apprt/gtk/ipc/DBus.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/ipc/new_window.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/ipc/toggle_quick_terminal.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/key.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "apprt/gtk/media.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "apprt/gtk/portal.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "apprt/gtk/portal/OpenURI.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/post_fork.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/pre_exec.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/weak_ref.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "apprt/gtk/winproto.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/winproto/BlurRegion.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/winproto/noop.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/winproto/wayland.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/winproto/wayland/Globals.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/gtk/winproto/x11.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/ipc.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "apprt/none.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/runtime.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "apprt/structs.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "apprt/surface.zig",
+     "test_blocks": 0
     }
+   ],
+   "test_blocks": 47,
+   "file_count": 62
   },
-  "crate_map": {
-    "apprt": {
-      "files": [
-        {
-          "file": "apprt.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "apprt/action.zig",
-          "test_blocks": 17
-        },
-        {
-          "file": "apprt/browser.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/embedded.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "apprt/gtk/App.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/Surface.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/adw_version.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "apprt/gtk/build/blueprint.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/build/gresource.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/build/info.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/cgroup.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "apprt/gtk/class/application.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/clipboard_confirmation_dialog.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/close_confirmation_dialog.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/command_palette.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/config.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "apprt/gtk/class/config_errors_dialog.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/debug_warning.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/dialog.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/global_shortcuts.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/imgui_widget.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/inspector_widget.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/inspector_window.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/key_state_overlay.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/resize_overlay.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/search_overlay.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/split_tree.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/surface.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "apprt/gtk/class/surface_child_exited.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/surface_scrolled_window.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/tab.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/title_dialog.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/class/window.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/ext.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "apprt/gtk/ext/actions.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "apprt/gtk/ext/slice.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "apprt/gtk/flatpak.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/gsettings.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "apprt/gtk/gtk_version.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "apprt/gtk/ipc/DBus.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/ipc/new_window.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/ipc/toggle_quick_terminal.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/key.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "apprt/gtk/media.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "apprt/gtk/portal.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "apprt/gtk/portal/OpenURI.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/post_fork.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/pre_exec.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/weak_ref.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "apprt/gtk/winproto.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/winproto/BlurRegion.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/winproto/noop.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/winproto/wayland.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/winproto/wayland/Globals.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/gtk/winproto/x11.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/ipc.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "apprt/none.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/runtime.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "apprt/structs.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "apprt/surface.zig",
-          "test_blocks": 0
-        }
-      ],
-      "test_blocks": 47,
-      "file_count": 62
+  "args": {
+   "files": [
+    {
+     "file": "cli/CommaSplitter.zig",
+     "test_blocks": 28
     },
-    "args": {
-      "files": [
-        {
-          "file": "cli/CommaSplitter.zig",
-          "test_blocks": 28
-        },
-        {
-          "file": "cli/args.zig",
-          "test_blocks": 36
-        },
-        {
-          "file": "cli/diagnostics.zig",
-          "test_blocks": 0
-        }
-      ],
-      "test_blocks": 64,
-      "file_count": 3
+    {
+     "file": "cli/args.zig",
+     "test_blocks": 36
     },
-    "bench": {
-      "files": [
-        {
-          "file": "benchmark/Benchmark.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "benchmark/CApi.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "benchmark/CodepointWidth.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "benchmark/GraphemeBreak.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "benchmark/IsSymbol.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "benchmark/OscParser.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "benchmark/ScreenClone.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "benchmark/TerminalParser.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "benchmark/TerminalStream.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "benchmark/cli.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "benchmark/main.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "benchmark/options.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "main_bench.zig",
-          "test_blocks": 0
-        }
-      ],
-      "test_blocks": 8,
-      "file_count": 13
-    },
-    "bin": {
-      "files": [
-        {
-          "file": "lib_vt.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "main.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "main_build_data.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "main_c.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "main_gen.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "main_ghostty.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "main_wasm.zig",
-          "test_blocks": 0
-        }
-      ],
-      "test_blocks": 6,
-      "file_count": 7
-    },
-    "build-config": {
-      "files": [
-        {
-          "file": "build_config.zig",
-          "test_blocks": 0
-        }
-      ],
-      "test_blocks": 0,
-      "file_count": 1
-    },
-    "cfg-fmt": {
-      "files": [
-        {
-          "file": "config/formatter.zig",
-          "test_blocks": 8
-        },
-        {
-          "file": "config/key.zig",
-          "test_blocks": 1
-        }
-      ],
-      "test_blocks": 9,
-      "file_count": 2
-    },
-    "cli": {
-      "files": [
-        {
-          "file": "cli.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "cli/Pager.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "cli/action.zig",
-          "test_blocks": 7
-        },
-        {
-          "file": "cli/boo.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "cli/crash_report.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "cli/edit_config.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "cli/explain_config.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "cli/ghostty.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "cli/help.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "cli/list_actions.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "cli/list_colors.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "cli/list_fonts.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "cli/list_keybinds.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "cli/list_themes.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "cli/new_window.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "cli/show_config.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "cli/show_face.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "cli/ssh-cache/DiskCache.zig",
-          "test_blocks": 12
-        },
-        {
-          "file": "cli/ssh-cache/Entry.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "cli/ssh.zig",
-          "test_blocks": 10
-        },
-        {
-          "file": "cli/ssh_cache.zig",
-          "test_blocks": 5
-        },
-        {
-          "file": "cli/toggle_quick_terminal.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "cli/tui.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "cli/validate_config.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "cli/version.zig",
-          "test_blocks": 0
-        }
-      ],
-      "test_blocks": 45,
-      "file_count": 25
-    },
-    "config": {
-      "files": [
-        {
-          "file": "config.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "config/CApi.zig",
-          "test_blocks": 8
-        },
-        {
-          "file": "config/ClipboardCodepointMap.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "config/Config.zig",
-          "test_blocks": 113
-        },
-        {
-          "file": "config/ErrorList.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "config/RepeatableStringMap.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "config/Wasm.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "config/c_get.zig",
-          "test_blocks": 6
-        },
-        {
-          "file": "config/command.zig",
-          "test_blocks": 10
-        },
-        {
-          "file": "config/conditional.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "config/edit.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "config/file_load.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "config/formatter_file.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "config/io.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "config/path.zig",
-          "test_blocks": 8
-        },
-        {
-          "file": "config/string.zig",
-          "test_blocks": 9
-        },
-        {
-          "file": "config/theme.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "config/url.zig",
-          "test_blocks": 1
-        }
-      ],
-      "test_blocks": 167,
-      "file_count": 18
-    },
-    "core": {
-      "files": [
-        {
-          "file": "App.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "Command.zig",
-          "test_blocks": 10
-        },
-        {
-          "file": "Surface.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "surface_mouse.zig",
-          "test_blocks": 1
-        }
-      ],
-      "test_blocks": 11,
-      "file_count": 4
-    },
-    "crash": {
-      "files": [
-        {
-          "file": "crash/dir.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "crash/main.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "crash/sentry.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "crash/sentry_envelope.zig",
-          "test_blocks": 8
-        }
-      ],
-      "test_blocks": 9,
-      "file_count": 4
-    },
-    "datastruct": {
-      "files": [
-        {
-          "file": "datastruct/array_list_collection.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "datastruct/blocking_queue.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "datastruct/cache_table.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "datastruct/circ_buf.zig",
-          "test_blocks": 21
-        },
-        {
-          "file": "datastruct/comparison.zig",
-          "test_blocks": 24
-        },
-        {
-          "file": "datastruct/intrusive_linked_list.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "datastruct/lru.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "datastruct/main.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "datastruct/message_data.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "datastruct/segmented_pool.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "datastruct/split_tree.zig",
-          "test_blocks": 18
-        }
-      ],
-      "test_blocks": 76,
-      "file_count": 11
-    },
-    "extra": {
-      "files": [
-        {
-          "file": "extra/bash.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "extra/fish.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "extra/sublime.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "extra/vim.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "extra/zsh.zig",
-          "test_blocks": 0
-        }
-      ],
-      "test_blocks": 2,
-      "file_count": 5
-    },
-    "font": {
-      "files": [
-        {
-          "file": "font/Atlas.zig",
-          "test_blocks": 13
-        },
-        {
-          "file": "font/CodepointMap.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "font/CodepointResolver.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "font/Collection.zig",
-          "test_blocks": 13
-        },
-        {
-          "file": "font/DeferredFace.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "font/Glyph.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "font/Metrics.zig",
-          "test_blocks": 11
-        },
-        {
-          "file": "font/SharedGrid.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "font/SharedGridSet.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "font/backend.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/discovery.zig",
-          "test_blocks": 8
-        },
-        {
-          "file": "font/embedded.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/face.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "font/face/coretext.zig",
-          "test_blocks": 8
-        },
-        {
-          "file": "font/face/freetype.zig",
-          "test_blocks": 9
-        },
-        {
-          "file": "font/face/web_canvas.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/glyf_rasterize.zig",
-          "test_blocks": 14
-        },
-        {
-          "file": "font/glyf_rasterize_png_test.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "font/library.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/main.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "font/nerd_font_attributes.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/opentype.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "font/opentype/glyf.zig",
-          "test_blocks": 14
-        },
-        {
-          "file": "font/opentype/head.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "font/opentype/hhea.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "font/opentype/os2.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "font/opentype/post.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "font/opentype/sfnt.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "font/opentype/svg.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "font/shape.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "font/shaper/Cache.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "font/shaper/coretext.zig",
-          "test_blocks": 27
-        },
-        {
-          "file": "font/shaper/feature.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "font/shaper/harfbuzz.zig",
-          "test_blocks": 24
-        },
-        {
-          "file": "font/shaper/noop.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "font/shaper/run.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/shaper/web_canvas.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/sprite.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "font/sprite/Face.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "font/sprite/canvas.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/sprite/draw/block.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/sprite/draw/box.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/sprite/draw/braille.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/sprite/draw/branch.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/sprite/draw/common.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/sprite/draw/geometric_shapes.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/sprite/draw/powerline.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/sprite/draw/special.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/sprite/draw/symbols_for_legacy_computing.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "font/sprite/draw/symbols_for_legacy_computing_supplement.zig",
-          "test_blocks": 0
-        }
-      ],
-      "test_blocks": 178,
-      "file_count": 50
-    },
-    "global": {
-      "files": [
-        {
-          "file": "global.zig",
-          "test_blocks": 0
-        }
-      ],
-      "test_blocks": 0,
-      "file_count": 1
-    },
-    "input": {
-      "files": [
-        {
-          "file": "input.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "input/Binding.zig",
-          "test_blocks": 85
-        },
-        {
-          "file": "input/KeymapDarwin.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "input/KeymapNoop.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "input/Link.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "input/command.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "input/config.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "input/function_keys.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "input/helpgen_actions.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "input/key_mods.zig",
-          "test_blocks": 24
-        },
-        {
-          "file": "input/keyboard.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "input/keycodes.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "input/kitty.zig",
-          "test_blocks": 1
-        }
-      ],
-      "test_blocks": 116,
-      "file_count": 13
-    },
-    "inspector": {
-      "files": [
-        {
-          "file": "inspector/Inspector.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "inspector/main.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "inspector/units.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "inspector/widgets.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "inspector/widgets/key.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "inspector/widgets/page.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "inspector/widgets/pagelist.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "inspector/widgets/renderer.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "inspector/widgets/screen.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "inspector/widgets/style.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "inspector/widgets/surface.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "inspector/widgets/terminal.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "inspector/widgets/termio.zig",
-          "test_blocks": 0
-        }
-      ],
-      "test_blocks": 1,
-      "file_count": 13
-    },
-    "lib": {
-      "files": [
-        {
-          "file": "lib/allocator.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "lib/allocator/convenience.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "lib/enum.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "lib/main.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "lib/string.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "lib/struct.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "lib/target.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "lib/types.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "lib/union.zig",
-          "test_blocks": 3
-        }
-      ],
-      "test_blocks": 13,
-      "file_count": 9
-    },
-    "os": {
-      "files": [
-        {
-          "file": "os/TempDir.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "os/args.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "os/cf_release_thread.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "os/cgroup.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "os/dbus.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "os/desktop.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "os/env.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "os/file.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "os/flatpak.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "os/homedir.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "os/hostname.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "os/i18n.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "os/i18n_locales.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "os/kernel_info.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "os/locale.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "os/mach.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "os/macos.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "os/main.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "os/mouse.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "os/open.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "os/passwd.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "os/path.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "os/pipe.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "os/resourcesdir.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "os/shell.zig",
-          "test_blocks": 8
-        },
-        {
-          "file": "os/string_encoding.zig",
-          "test_blocks": 18
-        },
-        {
-          "file": "os/systemd.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "os/uri.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "os/wasm.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "os/wasm/log.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "os/wasm/target.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "os/windows.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "os/xdg.zig",
-          "test_blocks": 5
-        },
-        {
-          "file": "pty.zig",
-          "test_blocks": 1
-        }
-      ],
-      "test_blocks": 58,
-      "file_count": 34
-    },
-    "render-types": {
-      "files": [
-        {
-          "file": "renderer/size.zig",
-          "test_blocks": 6
-        }
-      ],
-      "test_blocks": 6,
-      "file_count": 1
-    },
-    "renderer": {
-      "files": [
-        {
-          "file": "renderer.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "renderer/Metal.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/OpenGL.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/Options.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/Overlay.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/State.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "renderer/Thread.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/WebGL.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/backend.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/cell.zig",
-          "test_blocks": 5
-        },
-        {
-          "file": "renderer/cursor.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "renderer/generic.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/image.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/link.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "renderer/message.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/metal/Frame.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/metal/IOSurfaceLayer.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/metal/Pipeline.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/metal/RenderPass.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/metal/Sampler.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/metal/Target.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/metal/Texture.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/metal/api.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/metal/buffer.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/metal/shaders.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "renderer/opengl/Frame.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/opengl/Pipeline.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/opengl/RenderPass.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/opengl/Sampler.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/opengl/Target.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/opengl/Texture.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/opengl/buffer.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/opengl/shaders.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/row.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "renderer/shadertoy.zig",
-          "test_blocks": 4
-        }
-      ],
-      "test_blocks": 21,
-      "file_count": 35
-    },
-    "simd": {
-      "files": [
-        {
-          "file": "simd/base64.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "simd/base64_scalar.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "simd/codepoint_width.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "simd/index_of.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "simd/main.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "simd/vt.zig",
-          "test_blocks": 18
-        }
-      ],
-      "test_blocks": 23,
-      "file_count": 6
-    },
-    "synthetic": {
-      "files": [
-        {
-          "file": "synthetic/Bytes.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "synthetic/Generator.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "synthetic/Osc.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "synthetic/Utf8.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "synthetic/cli.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "synthetic/cli/Ascii.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "synthetic/cli/Osc.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "synthetic/cli/Utf8.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "synthetic/main.zig",
-          "test_blocks": 1
-        }
-      ],
-      "test_blocks": 12,
-      "file_count": 9
-    },
-    "terminfo": {
-      "files": [
-        {
-          "file": "terminfo/Source.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "terminfo/ghostty.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminfo/main.zig",
-          "test_blocks": 1
-        }
-      ],
-      "test_blocks": 4,
-      "file_count": 3
-    },
-    "termio": {
-      "files": [
-        {
-          "file": "termio.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "termio/Exec.zig",
-          "test_blocks": 10
-        },
-        {
-          "file": "termio/Options.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "termio/Termio.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "termio/Thread.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "termio/backend.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "termio/mailbox.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "termio/message.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "termio/shell_integration.zig",
-          "test_blocks": 21
-        },
-        {
-          "file": "termio/stream_handler.zig",
-          "test_blocks": 0
-        }
-      ],
-      "test_blocks": 34,
-      "file_count": 10
-    },
-    "unicode": {
-      "files": [
-        {
-          "file": "unicode/grapheme.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "unicode/lut.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "unicode/main.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "unicode/props.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "unicode/props_table.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "unicode/props_uucode.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "unicode/symbols_table.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "unicode/symbols_uucode.zig",
-          "test_blocks": 1
-        }
-      ],
-      "test_blocks": 5,
-      "file_count": 8
-    },
-    "util": {
-      "files": [
-        {
-          "file": "fastmem.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "file_type.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "math.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "quirks.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "tripwire.zig",
-          "test_blocks": 4
-        }
-      ],
-      "test_blocks": 4,
-      "file_count": 5
-    },
-    "vt": {
-      "files": [
-        {
-          "file": "input/key.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "input/key_encode.zig",
-          "test_blocks": 92
-        },
-        {
-          "file": "input/mouse.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "input/mouse_encode.zig",
-          "test_blocks": 23
-        },
-        {
-          "file": "input/paste.zig",
-          "test_blocks": 10
-        },
-        {
-          "file": "stb/main.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "terminal/PageList.zig",
-          "test_blocks": 205
-        },
-        {
-          "file": "terminal/Parser.zig",
-          "test_blocks": 25
-        },
-        {
-          "file": "terminal/Screen.zig",
-          "test_blocks": 188
-        },
-        {
-          "file": "terminal/ScreenSet.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "terminal/Selection.zig",
-          "test_blocks": 18
-        },
-        {
-          "file": "terminal/SelectionGesture.zig",
-          "test_blocks": 31
-        },
-        {
-          "file": "terminal/StringMap.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "terminal/Tabstops.zig",
-          "test_blocks": 5
-        },
-        {
-          "file": "terminal/Terminal.zig",
-          "test_blocks": 376
-        },
-        {
-          "file": "terminal/UTF8Decoder.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "terminal/ansi.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "terminal/apc.zig",
-          "test_blocks": 14
-        },
-        {
-          "file": "terminal/apc/glyph.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/apc/glyph/Glossary.zig",
-          "test_blocks": 9
-        },
-        {
-          "file": "terminal/apc/glyph/execute.zig",
-          "test_blocks": 12
-        },
-        {
-          "file": "terminal/apc/glyph/request.zig",
-          "test_blocks": 19
-        },
-        {
-          "file": "terminal/apc/glyph/response.zig",
-          "test_blocks": 12
-        },
-        {
-          "file": "terminal/bitmap_allocator.zig",
-          "test_blocks": 21
-        },
-        {
-          "file": "terminal/build_options.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "terminal/charsets.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/color.zig",
-          "test_blocks": 24
-        },
-        {
-          "file": "terminal/csi.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "terminal/cursor.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "terminal/dcs.zig",
-          "test_blocks": 8
-        },
-        {
-          "file": "terminal/device_attributes.zig",
-          "test_blocks": 7
-        },
-        {
-          "file": "terminal/device_status.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/focus.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "terminal/formatter.zig",
-          "test_blocks": 100
-        },
-        {
-          "file": "terminal/hash_map.zig",
-          "test_blocks": 22
-        },
-        {
-          "file": "terminal/highlight.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "terminal/hyperlink.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "terminal/kitty.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/kitty/color.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/kitty/graphics.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/kitty/graphics_command.zig",
-          "test_blocks": 22
-        },
-        {
-          "file": "terminal/kitty/graphics_exec.zig",
-          "test_blocks": 8
-        },
-        {
-          "file": "terminal/kitty/graphics_image.zig",
-          "test_blocks": 16
-        },
-        {
-          "file": "terminal/kitty/graphics_render.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "terminal/kitty/graphics_storage.zig",
-          "test_blocks": 19
-        },
-        {
-          "file": "terminal/kitty/graphics_unicode.zig",
-          "test_blocks": 16
-        },
-        {
-          "file": "terminal/kitty/key.zig",
-          "test_blocks": 5
-        },
-        {
-          "file": "terminal/lib.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "terminal/main.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/modes.zig",
-          "test_blocks": 12
-        },
-        {
-          "file": "terminal/mouse.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "terminal/osc.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "terminal/osc/encoding.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/osc/parsers.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/osc/parsers/change_window_icon.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/osc/parsers/change_window_title.zig",
-          "test_blocks": 7
-        },
-        {
-          "file": "terminal/osc/parsers/clipboard_operation.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "terminal/osc/parsers/color.zig",
-          "test_blocks": 12
-        },
-        {
-          "file": "terminal/osc/parsers/context_signal.zig",
-          "test_blocks": 18
-        },
-        {
-          "file": "terminal/osc/parsers/hyperlink.zig",
-          "test_blocks": 8
-        },
-        {
-          "file": "terminal/osc/parsers/iterm2.zig",
-          "test_blocks": 19
-        },
-        {
-          "file": "terminal/osc/parsers/kitty_clipboard_protocol.zig",
-          "test_blocks": 27
-        },
-        {
-          "file": "terminal/osc/parsers/kitty_color.zig",
-          "test_blocks": 5
-        },
-        {
-          "file": "terminal/osc/parsers/kitty_text_sizing.zig",
-          "test_blocks": 8
-        },
-        {
-          "file": "terminal/osc/parsers/mouse_shape.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/osc/parsers/osc9.zig",
-          "test_blocks": 61
-        },
-        {
-          "file": "terminal/osc/parsers/report_pwd.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "terminal/osc/parsers/rxvt_extension.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/osc/parsers/semantic_prompt.zig",
-          "test_blocks": 64
-        },
-        {
-          "file": "terminal/page.zig",
-          "test_blocks": 46
-        },
-        {
-          "file": "terminal/parse_table.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/point.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "terminal/ref_counted_set.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "terminal/render.zig",
-          "test_blocks": 15
-        },
-        {
-          "file": "terminal/search.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/search/Thread.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/search/active.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "terminal/search/pagelist.zig",
-          "test_blocks": 7
-        },
-        {
-          "file": "terminal/search/screen.zig",
-          "test_blocks": 16
-        },
-        {
-          "file": "terminal/search/sliding_window.zig",
-          "test_blocks": 25
-        },
-        {
-          "file": "terminal/search/viewport.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "terminal/selection_codepoints.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "terminal/sgr.zig",
-          "test_blocks": 31
-        },
-        {
-          "file": "terminal/size.zig",
-          "test_blocks": 5
-        },
-        {
-          "file": "terminal/size_report.zig",
-          "test_blocks": 5
-        },
-        {
-          "file": "terminal/stream.zig",
-          "test_blocks": 38
-        },
-        {
-          "file": "terminal/stream_terminal.zig",
-          "test_blocks": 65
-        },
-        {
-          "file": "terminal/style.zig",
-          "test_blocks": 37
-        },
-        {
-          "file": "terminal/sys.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "terminal/tmux.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/tmux/control.zig",
-          "test_blocks": 18
-        },
-        {
-          "file": "terminal/tmux/layout.zig",
-          "test_blocks": 40
-        },
-        {
-          "file": "terminal/tmux/output.zig",
-          "test_blocks": 47
-        },
-        {
-          "file": "terminal/tmux/viewer.zig",
-          "test_blocks": 9
-        },
-        {
-          "file": "terminal/x11_color.zig",
-          "test_blocks": 1
-        }
-      ],
-      "test_blocks": 2001,
-      "file_count": 95
-    },
-    "vt-c": {
-      "files": [
-        {
-          "file": "terminal/c/allocator.zig",
-          "test_blocks": 6
-        },
-        {
-          "file": "terminal/c/build_info.zig",
-          "test_blocks": 11
-        },
-        {
-          "file": "terminal/c/cell.zig",
-          "test_blocks": 8
-        },
-        {
-          "file": "terminal/c/color.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "terminal/c/focus.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "terminal/c/formatter.zig",
-          "test_blocks": 11
-        },
-        {
-          "file": "terminal/c/grid_ref.zig",
-          "test_blocks": 11
-        },
-        {
-          "file": "terminal/c/grid_ref_tracked.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "terminal/c/key_encode.zig",
-          "test_blocks": 7
-        },
-        {
-          "file": "terminal/c/key_event.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "terminal/c/kitty_graphics.zig",
-          "test_blocks": 35
-        },
-        {
-          "file": "terminal/c/main.zig",
-          "test_blocks": 1
-        },
-        {
-          "file": "terminal/c/modes.zig",
-          "test_blocks": 7
-        },
-        {
-          "file": "terminal/c/mouse_encode.zig",
-          "test_blocks": 7
-        },
-        {
-          "file": "terminal/c/mouse_event.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "terminal/c/osc.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "terminal/c/paste.zig",
-          "test_blocks": 11
-        },
-        {
-          "file": "terminal/c/render.zig",
-          "test_blocks": 38
-        },
-        {
-          "file": "terminal/c/result.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "terminal/c/row.zig",
-          "test_blocks": 6
-        },
-        {
-          "file": "terminal/c/selection.zig",
-          "test_blocks": 3
-        },
-        {
-          "file": "terminal/c/selection_gesture.zig",
-          "test_blocks": 19
-        },
-        {
-          "file": "terminal/c/sgr.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "terminal/c/size_report.zig",
-          "test_blocks": 4
-        },
-        {
-          "file": "terminal/c/style.zig",
-          "test_blocks": 2
-        },
-        {
-          "file": "terminal/c/sys.zig",
-          "test_blocks": 9
-        },
-        {
-          "file": "terminal/c/terminal.zig",
-          "test_blocks": 89
-        },
-        {
-          "file": "terminal/c/types.zig",
-          "test_blocks": 2
-        }
-      ],
-      "test_blocks": 307,
-      "file_count": 28
-    },
-    "xtask": {
-      "files": [
-        {
-          "file": "build/CombineArchivesStep.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/Config.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/GhosttyBench.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/GhosttyDist.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/GhosttyDocs.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/GhosttyExe.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/GhosttyFrameData.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/GhosttyI18n.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/GhosttyLib.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/GhosttyLibVt.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/GhosttyResources.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/GhosttyWebdata.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/GhosttyXCFramework.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/GhosttyXcodebuild.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/GhosttyZig.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/GitVersion.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/HelpStrings.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/LibtoolStep.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/LipoStep.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/MetallibStep.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/SharedDeps.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/UnicodeTables.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/XCFrameworkStep.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/combine_archives.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/gtk.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/main.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/mdgen/main_ghostty_1.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/mdgen/main_ghostty_5.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/mdgen/mdgen.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/uucode_config.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/wasm_patch_growable_table.zig",
-          "test_blocks": 7
-        },
-        {
-          "file": "build/webgen/main_actions.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/webgen/main_commands.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/webgen/main_config.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/xcframework.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "build/zig.zig",
-          "test_blocks": 0
-        },
-        {
-          "file": "helpgen.zig",
-          "test_blocks": 0
-        }
-      ],
-      "test_blocks": 7,
-      "file_count": 37
+    {
+     "file": "cli/diagnostics.zig",
+     "test_blocks": 0
     }
+   ],
+   "test_blocks": 64,
+   "file_count": 3
   },
-  "unmapped": [],
-  "unmapped_count": 0
+  "bench": {
+   "files": [
+    {
+     "file": "benchmark/Benchmark.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "benchmark/CApi.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "benchmark/CodepointWidth.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "benchmark/GraphemeBreak.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "benchmark/IsSymbol.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "benchmark/OscParser.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "benchmark/ScreenClone.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "benchmark/TerminalParser.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "benchmark/TerminalStream.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "benchmark/cli.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "benchmark/main.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "benchmark/options.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "main_bench.zig",
+     "test_blocks": 0
+    }
+   ],
+   "test_blocks": 8,
+   "file_count": 13
+  },
+  "bin": {
+   "files": [
+    {
+     "file": "lib_vt.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "main.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "main_build_data.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "main_c.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "main_gen.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "main_ghostty.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "main_wasm.zig",
+     "test_blocks": 0
+    }
+   ],
+   "test_blocks": 6,
+   "file_count": 7
+  },
+  "build-config": {
+   "files": [
+    {
+     "file": "build_config.zig",
+     "test_blocks": 0
+    }
+   ],
+   "test_blocks": 0,
+   "file_count": 1
+  },
+  "cfg-fmt": {
+   "files": [
+    {
+     "file": "config/formatter.zig",
+     "test_blocks": 8
+    },
+    {
+     "file": "config/key.zig",
+     "test_blocks": 1
+    }
+   ],
+   "test_blocks": 9,
+   "file_count": 2
+  },
+  "cli": {
+   "files": [
+    {
+     "file": "cli.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "cli/Pager.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "cli/action.zig",
+     "test_blocks": 7
+    },
+    {
+     "file": "cli/boo.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "cli/crash_report.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "cli/edit_config.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "cli/explain_config.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "cli/ghostty.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "cli/help.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "cli/list_actions.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "cli/list_colors.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "cli/list_fonts.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "cli/list_keybinds.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "cli/list_themes.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "cli/new_window.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "cli/show_config.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "cli/show_face.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "cli/ssh-cache/DiskCache.zig",
+     "test_blocks": 12
+    },
+    {
+     "file": "cli/ssh-cache/Entry.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "cli/ssh.zig",
+     "test_blocks": 10
+    },
+    {
+     "file": "cli/ssh_cache.zig",
+     "test_blocks": 5
+    },
+    {
+     "file": "cli/toggle_quick_terminal.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "cli/tui.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "cli/validate_config.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "cli/version.zig",
+     "test_blocks": 0
+    }
+   ],
+   "test_blocks": 45,
+   "file_count": 25
+  },
+  "config": {
+   "files": [
+    {
+     "file": "config.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "config/CApi.zig",
+     "test_blocks": 8
+    },
+    {
+     "file": "config/ClipboardCodepointMap.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "config/Config.zig",
+     "test_blocks": 113
+    },
+    {
+     "file": "config/ErrorList.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "config/RepeatableStringMap.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "config/Wasm.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "config/c_get.zig",
+     "test_blocks": 6
+    },
+    {
+     "file": "config/command.zig",
+     "test_blocks": 10
+    },
+    {
+     "file": "config/conditional.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "config/edit.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "config/file_load.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "config/formatter_file.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "config/io.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "config/path.zig",
+     "test_blocks": 8
+    },
+    {
+     "file": "config/string.zig",
+     "test_blocks": 9
+    },
+    {
+     "file": "config/theme.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "config/url.zig",
+     "test_blocks": 1
+    }
+   ],
+   "test_blocks": 167,
+   "file_count": 18
+  },
+  "core": {
+   "files": [
+    {
+     "file": "App.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "Command.zig",
+     "test_blocks": 10
+    },
+    {
+     "file": "Surface.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "surface_mouse.zig",
+     "test_blocks": 1
+    }
+   ],
+   "test_blocks": 11,
+   "file_count": 4
+  },
+  "crash": {
+   "files": [
+    {
+     "file": "crash/dir.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "crash/main.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "crash/sentry.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "crash/sentry_envelope.zig",
+     "test_blocks": 8
+    }
+   ],
+   "test_blocks": 9,
+   "file_count": 4
+  },
+  "datastruct": {
+   "files": [
+    {
+     "file": "datastruct/array_list_collection.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "datastruct/blocking_queue.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "datastruct/cache_table.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "datastruct/circ_buf.zig",
+     "test_blocks": 21
+    },
+    {
+     "file": "datastruct/comparison.zig",
+     "test_blocks": 24
+    },
+    {
+     "file": "datastruct/intrusive_linked_list.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "datastruct/lru.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "datastruct/main.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "datastruct/message_data.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "datastruct/segmented_pool.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "datastruct/split_tree.zig",
+     "test_blocks": 18
+    }
+   ],
+   "test_blocks": 76,
+   "file_count": 11
+  },
+  "extra": {
+   "files": [
+    {
+     "file": "extra/bash.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "extra/fish.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "extra/sublime.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "extra/vim.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "extra/zsh.zig",
+     "test_blocks": 0
+    }
+   ],
+   "test_blocks": 2,
+   "file_count": 5
+  },
+  "font": {
+   "files": [
+    {
+     "file": "font/Atlas.zig",
+     "test_blocks": 13
+    },
+    {
+     "file": "font/CodepointMap.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "font/CodepointResolver.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "font/Collection.zig",
+     "test_blocks": 13
+    },
+    {
+     "file": "font/DeferredFace.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "font/Glyph.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "font/Metrics.zig",
+     "test_blocks": 11
+    },
+    {
+     "file": "font/SharedGrid.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "font/SharedGridSet.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "font/backend.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/discovery.zig",
+     "test_blocks": 8
+    },
+    {
+     "file": "font/embedded.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/face.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "font/face/coretext.zig",
+     "test_blocks": 8
+    },
+    {
+     "file": "font/face/freetype.zig",
+     "test_blocks": 9
+    },
+    {
+     "file": "font/face/web_canvas.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/glyf_rasterize.zig",
+     "test_blocks": 14
+    },
+    {
+     "file": "font/glyf_rasterize_png_test.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "font/library.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/main.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "font/nerd_font_attributes.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/opentype.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "font/opentype/glyf.zig",
+     "test_blocks": 14
+    },
+    {
+     "file": "font/opentype/head.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "font/opentype/hhea.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "font/opentype/os2.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "font/opentype/post.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "font/opentype/sfnt.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "font/opentype/svg.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "font/shape.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "font/shaper/Cache.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "font/shaper/coretext.zig",
+     "test_blocks": 27
+    },
+    {
+     "file": "font/shaper/feature.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "font/shaper/harfbuzz.zig",
+     "test_blocks": 24
+    },
+    {
+     "file": "font/shaper/noop.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "font/shaper/run.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/shaper/web_canvas.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/sprite.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "font/sprite/Face.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "font/sprite/canvas.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/sprite/draw/block.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/sprite/draw/box.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/sprite/draw/braille.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/sprite/draw/branch.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/sprite/draw/common.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/sprite/draw/geometric_shapes.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/sprite/draw/powerline.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/sprite/draw/special.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/sprite/draw/symbols_for_legacy_computing.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "font/sprite/draw/symbols_for_legacy_computing_supplement.zig",
+     "test_blocks": 0
+    }
+   ],
+   "test_blocks": 178,
+   "file_count": 50
+  },
+  "global": {
+   "files": [
+    {
+     "file": "global.zig",
+     "test_blocks": 0
+    }
+   ],
+   "test_blocks": 0,
+   "file_count": 1
+  },
+  "input": {
+   "files": [
+    {
+     "file": "input.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "input/Binding.zig",
+     "test_blocks": 85
+    },
+    {
+     "file": "input/KeymapDarwin.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "input/KeymapNoop.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "input/Link.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "input/command.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "input/config.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "input/function_keys.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "input/helpgen_actions.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "input/key_mods.zig",
+     "test_blocks": 24
+    },
+    {
+     "file": "input/keyboard.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "input/keycodes.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "input/kitty.zig",
+     "test_blocks": 1
+    }
+   ],
+   "test_blocks": 116,
+   "file_count": 13
+  },
+  "inspector": {
+   "files": [
+    {
+     "file": "inspector/Inspector.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "inspector/main.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "inspector/units.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "inspector/widgets.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "inspector/widgets/key.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "inspector/widgets/page.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "inspector/widgets/pagelist.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "inspector/widgets/renderer.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "inspector/widgets/screen.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "inspector/widgets/style.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "inspector/widgets/surface.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "inspector/widgets/terminal.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "inspector/widgets/termio.zig",
+     "test_blocks": 0
+    }
+   ],
+   "test_blocks": 1,
+   "file_count": 13
+  },
+  "lib": {
+   "files": [
+    {
+     "file": "lib/allocator.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "lib/allocator/convenience.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "lib/enum.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "lib/main.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "lib/string.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "lib/struct.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "lib/target.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "lib/types.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "lib/union.zig",
+     "test_blocks": 3
+    }
+   ],
+   "test_blocks": 13,
+   "file_count": 9
+  },
+  "os": {
+   "files": [
+    {
+     "file": "os/TempDir.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "os/args.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "os/cf_release_thread.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "os/cgroup.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "os/dbus.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "os/desktop.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "os/env.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "os/file.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "os/flatpak.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "os/homedir.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "os/hostname.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "os/i18n.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "os/i18n_locales.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "os/kernel_info.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "os/locale.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "os/mach.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "os/macos.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "os/main.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "os/mouse.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "os/open.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "os/passwd.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "os/path.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "os/pipe.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "os/resourcesdir.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "os/shell.zig",
+     "test_blocks": 8
+    },
+    {
+     "file": "os/string_encoding.zig",
+     "test_blocks": 18
+    },
+    {
+     "file": "os/systemd.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "os/uri.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "os/wasm.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "os/wasm/log.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "os/wasm/target.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "os/windows.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "os/xdg.zig",
+     "test_blocks": 5
+    },
+    {
+     "file": "pty.zig",
+     "test_blocks": 1
+    }
+   ],
+   "test_blocks": 58,
+   "file_count": 34
+  },
+  "render-types": {
+   "files": [
+    {
+     "file": "renderer/size.zig",
+     "test_blocks": 6
+    },
+    {
+     "file": "terminal/size.zig",
+     "test_blocks": 5
+    }
+   ],
+   "test_blocks": 11,
+   "file_count": 2
+  },
+  "renderer": {
+   "files": [
+    {
+     "file": "renderer.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "renderer/Metal.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/OpenGL.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/Options.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/Overlay.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/State.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "renderer/Thread.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/WebGL.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/backend.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/cell.zig",
+     "test_blocks": 5
+    },
+    {
+     "file": "renderer/cursor.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "renderer/generic.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/image.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/link.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "renderer/message.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/metal/Frame.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/metal/IOSurfaceLayer.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/metal/Pipeline.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/metal/RenderPass.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/metal/Sampler.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/metal/Target.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/metal/Texture.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/metal/api.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/metal/buffer.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/metal/shaders.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "renderer/opengl/Frame.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/opengl/Pipeline.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/opengl/RenderPass.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/opengl/Sampler.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/opengl/Target.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/opengl/Texture.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/opengl/buffer.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/opengl/shaders.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/row.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "renderer/shadertoy.zig",
+     "test_blocks": 4
+    }
+   ],
+   "test_blocks": 21,
+   "file_count": 35
+  },
+  "simd": {
+   "files": [
+    {
+     "file": "simd/base64.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "simd/base64_scalar.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "simd/codepoint_width.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "simd/index_of.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "simd/main.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "simd/vt.zig",
+     "test_blocks": 18
+    }
+   ],
+   "test_blocks": 23,
+   "file_count": 6
+  },
+  "synthetic": {
+   "files": [
+    {
+     "file": "synthetic/Bytes.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "synthetic/Generator.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "synthetic/Osc.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "synthetic/Utf8.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "synthetic/cli.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "synthetic/cli/Ascii.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "synthetic/cli/Osc.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "synthetic/cli/Utf8.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "synthetic/main.zig",
+     "test_blocks": 1
+    }
+   ],
+   "test_blocks": 12,
+   "file_count": 9
+  },
+  "terminfo": {
+   "files": [
+    {
+     "file": "terminfo/Source.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "terminfo/ghostty.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminfo/main.zig",
+     "test_blocks": 1
+    }
+   ],
+   "test_blocks": 4,
+   "file_count": 3
+  },
+  "termio": {
+   "files": [
+    {
+     "file": "termio.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "termio/Exec.zig",
+     "test_blocks": 10
+    },
+    {
+     "file": "termio/Options.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "termio/Termio.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "termio/Thread.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "termio/backend.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "termio/mailbox.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "termio/message.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "termio/shell_integration.zig",
+     "test_blocks": 21
+    },
+    {
+     "file": "termio/stream_handler.zig",
+     "test_blocks": 0
+    }
+   ],
+   "test_blocks": 34,
+   "file_count": 10
+  },
+  "unicode": {
+   "files": [
+    {
+     "file": "unicode/grapheme.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "unicode/lut.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "unicode/main.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "unicode/props.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "unicode/props_table.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "unicode/props_uucode.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "unicode/symbols_table.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "unicode/symbols_uucode.zig",
+     "test_blocks": 1
+    }
+   ],
+   "test_blocks": 5,
+   "file_count": 8
+  },
+  "util": {
+   "files": [
+    {
+     "file": "fastmem.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "file_type.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "math.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "quirks.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "tripwire.zig",
+     "test_blocks": 4
+    }
+   ],
+   "test_blocks": 4,
+   "file_count": 5
+  },
+  "vt": {
+   "files": [
+    {
+     "file": "input/key.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "input/key_encode.zig",
+     "test_blocks": 92
+    },
+    {
+     "file": "input/mouse.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "input/mouse_encode.zig",
+     "test_blocks": 23
+    },
+    {
+     "file": "input/paste.zig",
+     "test_blocks": 10
+    },
+    {
+     "file": "stb/main.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "terminal/PageList.zig",
+     "test_blocks": 205
+    },
+    {
+     "file": "terminal/Parser.zig",
+     "test_blocks": 25
+    },
+    {
+     "file": "terminal/Screen.zig",
+     "test_blocks": 188
+    },
+    {
+     "file": "terminal/ScreenSet.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "terminal/Selection.zig",
+     "test_blocks": 18
+    },
+    {
+     "file": "terminal/SelectionGesture.zig",
+     "test_blocks": 31
+    },
+    {
+     "file": "terminal/StringMap.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "terminal/Tabstops.zig",
+     "test_blocks": 5
+    },
+    {
+     "file": "terminal/Terminal.zig",
+     "test_blocks": 376
+    },
+    {
+     "file": "terminal/UTF8Decoder.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "terminal/ansi.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "terminal/apc.zig",
+     "test_blocks": 14
+    },
+    {
+     "file": "terminal/apc/glyph.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/apc/glyph/Glossary.zig",
+     "test_blocks": 9
+    },
+    {
+     "file": "terminal/apc/glyph/execute.zig",
+     "test_blocks": 12
+    },
+    {
+     "file": "terminal/apc/glyph/request.zig",
+     "test_blocks": 19
+    },
+    {
+     "file": "terminal/apc/glyph/response.zig",
+     "test_blocks": 12
+    },
+    {
+     "file": "terminal/bitmap_allocator.zig",
+     "test_blocks": 21
+    },
+    {
+     "file": "terminal/build_options.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "terminal/charsets.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/color.zig",
+     "test_blocks": 24
+    },
+    {
+     "file": "terminal/csi.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "terminal/cursor.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "terminal/dcs.zig",
+     "test_blocks": 8
+    },
+    {
+     "file": "terminal/device_attributes.zig",
+     "test_blocks": 7
+    },
+    {
+     "file": "terminal/device_status.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/focus.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "terminal/formatter.zig",
+     "test_blocks": 100
+    },
+    {
+     "file": "terminal/hash_map.zig",
+     "test_blocks": 22
+    },
+    {
+     "file": "terminal/highlight.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "terminal/hyperlink.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "terminal/kitty.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/kitty/color.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/kitty/graphics.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/kitty/graphics_command.zig",
+     "test_blocks": 22
+    },
+    {
+     "file": "terminal/kitty/graphics_exec.zig",
+     "test_blocks": 8
+    },
+    {
+     "file": "terminal/kitty/graphics_image.zig",
+     "test_blocks": 16
+    },
+    {
+     "file": "terminal/kitty/graphics_render.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "terminal/kitty/graphics_storage.zig",
+     "test_blocks": 19
+    },
+    {
+     "file": "terminal/kitty/graphics_unicode.zig",
+     "test_blocks": 16
+    },
+    {
+     "file": "terminal/kitty/key.zig",
+     "test_blocks": 5
+    },
+    {
+     "file": "terminal/lib.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "terminal/main.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/modes.zig",
+     "test_blocks": 12
+    },
+    {
+     "file": "terminal/mouse.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "terminal/osc.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "terminal/osc/encoding.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/osc/parsers.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/osc/parsers/change_window_icon.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/osc/parsers/change_window_title.zig",
+     "test_blocks": 7
+    },
+    {
+     "file": "terminal/osc/parsers/clipboard_operation.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "terminal/osc/parsers/color.zig",
+     "test_blocks": 12
+    },
+    {
+     "file": "terminal/osc/parsers/context_signal.zig",
+     "test_blocks": 18
+    },
+    {
+     "file": "terminal/osc/parsers/hyperlink.zig",
+     "test_blocks": 8
+    },
+    {
+     "file": "terminal/osc/parsers/iterm2.zig",
+     "test_blocks": 19
+    },
+    {
+     "file": "terminal/osc/parsers/kitty_clipboard_protocol.zig",
+     "test_blocks": 27
+    },
+    {
+     "file": "terminal/osc/parsers/kitty_color.zig",
+     "test_blocks": 5
+    },
+    {
+     "file": "terminal/osc/parsers/kitty_text_sizing.zig",
+     "test_blocks": 8
+    },
+    {
+     "file": "terminal/osc/parsers/mouse_shape.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/osc/parsers/osc9.zig",
+     "test_blocks": 61
+    },
+    {
+     "file": "terminal/osc/parsers/report_pwd.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "terminal/osc/parsers/rxvt_extension.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/osc/parsers/semantic_prompt.zig",
+     "test_blocks": 64
+    },
+    {
+     "file": "terminal/page.zig",
+     "test_blocks": 46
+    },
+    {
+     "file": "terminal/parse_table.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/point.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "terminal/ref_counted_set.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "terminal/render.zig",
+     "test_blocks": 15
+    },
+    {
+     "file": "terminal/search.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/search/Thread.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/search/active.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "terminal/search/pagelist.zig",
+     "test_blocks": 7
+    },
+    {
+     "file": "terminal/search/screen.zig",
+     "test_blocks": 16
+    },
+    {
+     "file": "terminal/search/sliding_window.zig",
+     "test_blocks": 25
+    },
+    {
+     "file": "terminal/search/viewport.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "terminal/selection_codepoints.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "terminal/sgr.zig",
+     "test_blocks": 31
+    },
+    {
+     "file": "terminal/size_report.zig",
+     "test_blocks": 5
+    },
+    {
+     "file": "terminal/stream.zig",
+     "test_blocks": 38
+    },
+    {
+     "file": "terminal/stream_terminal.zig",
+     "test_blocks": 65
+    },
+    {
+     "file": "terminal/style.zig",
+     "test_blocks": 37
+    },
+    {
+     "file": "terminal/sys.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "terminal/tmux.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/tmux/control.zig",
+     "test_blocks": 18
+    },
+    {
+     "file": "terminal/tmux/layout.zig",
+     "test_blocks": 40
+    },
+    {
+     "file": "terminal/tmux/output.zig",
+     "test_blocks": 47
+    },
+    {
+     "file": "terminal/tmux/viewer.zig",
+     "test_blocks": 9
+    },
+    {
+     "file": "terminal/x11_color.zig",
+     "test_blocks": 1
+    }
+   ],
+   "test_blocks": 1996,
+   "file_count": 94
+  },
+  "vt-c": {
+   "files": [
+    {
+     "file": "terminal/c/allocator.zig",
+     "test_blocks": 6
+    },
+    {
+     "file": "terminal/c/build_info.zig",
+     "test_blocks": 11
+    },
+    {
+     "file": "terminal/c/cell.zig",
+     "test_blocks": 8
+    },
+    {
+     "file": "terminal/c/color.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "terminal/c/focus.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "terminal/c/formatter.zig",
+     "test_blocks": 11
+    },
+    {
+     "file": "terminal/c/grid_ref.zig",
+     "test_blocks": 11
+    },
+    {
+     "file": "terminal/c/grid_ref_tracked.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "terminal/c/key_encode.zig",
+     "test_blocks": 7
+    },
+    {
+     "file": "terminal/c/key_event.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "terminal/c/kitty_graphics.zig",
+     "test_blocks": 35
+    },
+    {
+     "file": "terminal/c/main.zig",
+     "test_blocks": 1
+    },
+    {
+     "file": "terminal/c/modes.zig",
+     "test_blocks": 7
+    },
+    {
+     "file": "terminal/c/mouse_encode.zig",
+     "test_blocks": 7
+    },
+    {
+     "file": "terminal/c/mouse_event.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "terminal/c/osc.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "terminal/c/paste.zig",
+     "test_blocks": 11
+    },
+    {
+     "file": "terminal/c/render.zig",
+     "test_blocks": 38
+    },
+    {
+     "file": "terminal/c/result.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "terminal/c/row.zig",
+     "test_blocks": 6
+    },
+    {
+     "file": "terminal/c/selection.zig",
+     "test_blocks": 3
+    },
+    {
+     "file": "terminal/c/selection_gesture.zig",
+     "test_blocks": 19
+    },
+    {
+     "file": "terminal/c/sgr.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "terminal/c/size_report.zig",
+     "test_blocks": 4
+    },
+    {
+     "file": "terminal/c/style.zig",
+     "test_blocks": 2
+    },
+    {
+     "file": "terminal/c/sys.zig",
+     "test_blocks": 9
+    },
+    {
+     "file": "terminal/c/terminal.zig",
+     "test_blocks": 89
+    },
+    {
+     "file": "terminal/c/types.zig",
+     "test_blocks": 2
+    }
+   ],
+   "test_blocks": 307,
+   "file_count": 28
+  },
+  "xtask": {
+   "files": [
+    {
+     "file": "build/CombineArchivesStep.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/Config.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/GhosttyBench.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/GhosttyDist.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/GhosttyDocs.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/GhosttyExe.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/GhosttyFrameData.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/GhosttyI18n.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/GhosttyLib.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/GhosttyLibVt.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/GhosttyResources.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/GhosttyWebdata.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/GhosttyXCFramework.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/GhosttyXcodebuild.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/GhosttyZig.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/GitVersion.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/HelpStrings.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/LibtoolStep.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/LipoStep.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/MetallibStep.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/SharedDeps.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/UnicodeTables.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/XCFrameworkStep.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/combine_archives.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/gtk.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/main.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/mdgen/main_ghostty_1.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/mdgen/main_ghostty_5.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/mdgen/mdgen.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/uucode_config.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/wasm_patch_growable_table.zig",
+     "test_blocks": 7
+    },
+    {
+     "file": "build/webgen/main_actions.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/webgen/main_commands.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/webgen/main_config.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/xcframework.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "build/zig.zig",
+     "test_blocks": 0
+    },
+    {
+     "file": "helpgen.zig",
+     "test_blocks": 0
+    }
+   ],
+   "test_blocks": 7,
+   "file_count": 37
+  }
+ },
+ "unmapped": [],
+ "unmapped_count": 0,
+ "_amendments": [
+  "A1-hoist: moved terminal/size.zig (5 tests) from crate 'vt' to 'render-types' so render-types is a leaf (->util) and the vt<->render-types size cycle is broken. Total test_blocks unchanged (3234). Documented in PORT_PLAN A1."
+ ]
 }
