@@ -186,12 +186,7 @@ impl PageList {
     }
 
     /// Returns true if the pin is at the top of the scrollback area.
-    //
-    // PORT NOTE: `#[allow(dead_code)]` — the reference `pinIsTop` is a private
-    // helper whose callers (`scroll`) live in the scroll cluster whose body lands
-    // later; until then the CORE skeleton has no callers for it.
-    #[allow(dead_code)]
-    fn pin_is_top(&self, p: Pin) -> bool {
+    pub(crate) fn pin_is_top(&self, p: Pin) -> bool {
         p.y == 0 && core::ptr::eq(p.node, self.pages.first)
     }
 }
