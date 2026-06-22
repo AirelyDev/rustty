@@ -16,3 +16,9 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# BREAK #1 (R4): `rustty-global` is the LEAF state-holder. Its only dependency is
+# the leaf `rustty-build-config` (used by the `Logging`/log-line semantics). The
+# upward crates the reference `global.zig` imported (apprt/cli/renderer/crash/font
+# /os/xev) are DEFERRED SEAMS wired in `rustty-core` — pulling them in here would
+# re-introduce the import cycle this break exists to sever.
+rustty-build-config = { path = "../rustty-build-config" }
