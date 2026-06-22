@@ -19,6 +19,7 @@
 //!     bug workaround carried by the reference; the AVX2/AVX512 perf delta is
 //!     not significant and AVX512 is rare on consumer hardware).
 //!   - On Windows, disable ubsan for the C/C++ objects.
+//!
 //! The include path `cbits/` makes `<simd/index_of.h>` / `<simd/vt.h>` resolve
 //! and `HWY_TARGET_INCLUDE "simd/<file>.cpp"` resolve, exactly as the
 //! reference's `m.addIncludePath(b.path("src"))` does for src/simd.

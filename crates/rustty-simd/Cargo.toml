@@ -28,6 +28,13 @@ workspace = true
 # simdutf provides UTF/base64 transcoding used by base64.cpp / vt.cpp.
 highway-sys = { path = "../../crates-sys/highway-sys" }
 simdutf-sys = { path = "../../crates-sys/simdutf-sys" }
+# `quirks.inlineAssert` (the reference imports `../quirks.zig`) lives in
+# rustty-util (a leaf crate).
+rustty-util = { workspace = true }
+# codepoint_width.zig's scalar fallback imports `uucode`; rustty embeds the
+# uucode-derived data in rustty-unicode (R3: no uucode dep), so the scalar path
+# reads the identical values back out of rustty-unicode (a leaf crate).
+rustty-unicode = { workspace = true }
 
 [build-dependencies]
 # R3: compile the copied ghostty SIMD .cpp standalone via the host C++ compiler
