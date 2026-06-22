@@ -78,10 +78,13 @@ extern "C" {
 
 #[cfg(test)]
 mod tests {
+    // `base64_maxLen` carries the reference test name `"base64 maxLen"`
+    // (camelCase `maxLen` preserved); spaces are not valid in a Rust fn name.
+    #![allow(non_snake_case)]
     use super::*;
 
     #[test]
-    fn base64_max_len() {
+    fn base64_maxLen() {
         let len = max_len(b"aGVsbG8gd29ybGQ=");
         assert_eq!(11, len);
     }

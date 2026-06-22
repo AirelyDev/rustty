@@ -98,6 +98,23 @@ fn main() {
         build.flag_if_supported("-fno-sanitize-trap=undefined");
     }
 
+    // R6 — Rust↔C FFI memory-safety gate: AddressSanitizer.
+    //
+    // Miri cannot interpret the foreign C++ SIMD kernels, so ASan covers UB
+    // across the FFI boundary (R6). When the Rust side is built with
+    // `-Zsanitizer=address` (passed via RUSTFLAGS), the C++ objects MUST also be
+    // instrumented with `-fsanitize=address`, otherwise the shadow-memory model
+    // is inconsistent across the boundary (the kernels would be uninstrumented
+    // blind spots, and link-time/runtime ASan errors can result). `cc` does not
+    // auto-propagate this from RUSTFLAGS, so we detect the sanitizer cfg here and
+    // mirror the flag onto the C++ build.
+    if rustflags_request_address_sanitizer() {
+        build.flag("-fsanitize=address");
+        // Match the Rust side's frame-pointer/debug expectations for readable
+        // ASan backtraces through the C++ frames.
+        build.flag_if_supported("-fno-omit-frame-pointer");
+    }
+
     // The copied ghostty SIMD C++ kernels (verbatim from src/simd/).
     for src in [
         "simd/base64.cpp",
@@ -114,5 +131,62 @@ fn main() {
 
     build.compile("rustty_simd_kernels");
 
+    // Under the ASan build, compile the version-symbol bridge as a SEPARATE,
+    // UN-instrumented translation unit (it must not reference the version-check
+    // symbol it defines) and link it alongside the instrumented kernels. See
+    // cbits/asan_version_bridge.c for the full rationale.
+    if rustflags_request_address_sanitizer() {
+        let mut bridge = cc::Build::new();
+        bridge
+            .warnings(false)
+            .flag_if_supported("-w")
+            .file(cbits.join("asan_version_bridge.c"));
+        // Deliberately NOT instrumented: no `-fsanitize=address` here.
+        bridge.compile("rustty_simd_asan_bridge");
+        println!("cargo:rerun-if-changed=cbits/asan_version_bridge.c");
+    }
+
     println!("cargo:rerun-if-changed=build.rs");
+}
+
+/// Returns true when the Rust compilation requests AddressSanitizer via
+/// `-Zsanitizer=address` (e.g. `RUSTFLAGS="-Zsanitizer=address"`). Cargo encodes
+/// the active RUSTFLAGS into `CARGO_ENCODED_RUSTFLAGS` (0x1f-separated); we also
+/// check the legacy `RUSTFLAGS` as a fallback. We only react to the `address`
+/// sanitizer (the one that requires matching C++ instrumentation for the FFI
+/// boundary gate).
+fn rustflags_request_address_sanitizer() -> bool {
+    println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
+    println!("cargo:rerun-if-env-changed=RUSTFLAGS");
+
+    let mut flags: Vec<String> = Vec::new();
+    if let Ok(encoded) = std::env::var("CARGO_ENCODED_RUSTFLAGS") {
+        flags.extend(encoded.split('\u{1f}').map(|s| s.to_string()));
+    }
+    if let Ok(raw) = std::env::var("RUSTFLAGS") {
+        flags.extend(raw.split_whitespace().map(|s| s.to_string()));
+    }
+
+    let mut iter = flags.iter().peekable();
+    while let Some(flag) = iter.next() {
+        // `-Zsanitizer=address` (single token) or `-Z sanitizer=address`
+        // (split token) forms.
+        if flag == "-Zsanitizer=address" {
+            return true;
+        }
+        if flag == "-Z" {
+            if let Some(next) = iter.peek() {
+                if next.as_str() == "sanitizer=address" {
+                    return true;
+                }
+            }
+        }
+        // Defensive: handle a comma-list like `-Zsanitizer=address,leak`.
+        if let Some(rest) = flag.strip_prefix("-Zsanitizer=") {
+            if rest.split(',').any(|s| s == "address") {
+                return true;
+            }
+        }
+    }
+    false
 }

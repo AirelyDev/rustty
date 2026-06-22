@@ -5,6 +5,8 @@
 //! re-exports the SIMD submodules. The SIMD kernels are ghostty's OWN C++
 //! (src/simd/*.cpp,*.h), copied VERBATIM into `cbits/simd/` and cc-built against
 //! highway-sys + simdutf-sys (R3: same C libs, no pure-Rust substitution).
+//!
+//! PORT STATUS: done
 
 // Force the cc-built C++ kernel archive (and its highway/simdutf deps) to be
 // linked even before the Rust wrappers reference its symbols, so the copied

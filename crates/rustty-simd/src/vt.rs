@@ -194,6 +194,11 @@ fn utf8_decode(bytes: &[u8]) -> Result<u32, ()> {
 
 #[cfg(test)]
 mod tests {
+    // The "Table 3-N: ..." tests below mirror the reference test names
+    // verbatim (Unicode 15.0 §3.9 Tables 3-8..3-11); Rust identifiers cannot
+    // hold the spaces/colons, so the reference name is carried as the closest
+    // valid slug, which keeps the capital `Table` from the reference name.
+    #![allow(non_snake_case)]
     use super::*;
 
     #[test]
@@ -246,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn decode_incomplete_utf8() {
+    fn decode_incomplete_utf_8() {
         let mut output: [u32; 64] = [0; 64];
 
         // 2-byte truncated at end of buffer
@@ -286,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn decode_invalid_utf8() {
+    fn decode_invalid_utf_8() {
         let mut output: [u32; 64] = [0; 64];
 
         // Invalid leading 2-byte sequence
@@ -475,7 +480,7 @@ mod tests {
     #[test]
     // PARITY: indexed loop mirrors the reference's `for (0..8) |i|`.
     #[allow(clippy::needless_range_loop)]
-    fn table_3_8_non_shortest_form_sequences() {
+    fn Table_3_8_non_shortest_form_sequences() {
         let mut output: [u32; 64] = [0; 64];
 
         let str = b"\xC0\xAF\xE0\x80\xBF\xF0\x81\x82\x41";
@@ -494,7 +499,7 @@ mod tests {
     #[test]
     // PARITY: indexed loop mirrors the reference's `for (0..8) |i|`.
     #[allow(clippy::needless_range_loop)]
-    fn table_3_9_surrogate_sequences() {
+    fn Table_3_9_surrogate_sequences() {
         let mut output: [u32; 64] = [0; 64];
 
         let str = b"\xED\xA0\x80\xED\xBF\xBF\xED\xAF\x41";
@@ -511,7 +516,7 @@ mod tests {
     // Bytes:  F4  91  92  93  FF  41  80  BF  42
     // Output: FFFD FFFD FFFD FFFD FFFD 0041 FFFD FFFD 0042
     #[test]
-    fn table_3_10_other_ill_formed_sequences() {
+    fn Table_3_10_other_ill_formed_sequences() {
         let mut output: [u32; 64] = [0; 64];
 
         let str = b"\xF4\x91\x92\x93\xFF\x41\x80\xBF\x42";
@@ -533,7 +538,7 @@ mod tests {
     // Bytes:  E1  80  E2  F0  91  92  F1  BF  41
     // Output: FFFD     FFFD    FFFD         FFFD     0041
     #[test]
-    fn table_3_11_truncated_sequences() {
+    fn Table_3_11_truncated_sequences() {
         let mut output: [u32; 64] = [0; 64];
 
         let str = b"\xE1\x80\xE2\xF0\x91\x92\xF1\xBF\x41";

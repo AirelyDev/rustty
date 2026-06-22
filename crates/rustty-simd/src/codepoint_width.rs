@@ -26,10 +26,14 @@ pub fn codepointWidth(cp: u32) -> i8 {
 
 #[cfg(test)]
 mod tests {
+    // `codepointWidth_basic` carries the reference test name
+    // `"codepointWidth basic"` (camelCase `codepointWidth` preserved); spaces
+    // are not valid in a Rust fn name.
+    #![allow(non_snake_case)]
     use super::*;
 
     #[test]
-    fn codepoint_width_basic() {
+    fn codepointWidth_basic() {
         assert_eq!(1_i8, codepointWidth(b'a' as u32));
         assert_eq!(1_i8, codepointWidth(0x100)); // Ā
         assert_eq!(2_i8, codepointWidth(0x3400)); // 㐀
