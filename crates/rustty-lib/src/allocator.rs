@@ -49,10 +49,15 @@ impl ZigSlice {
     }
 }
 
-/// PORT NOTE: The Zig allocator interface (`std.mem.Allocator`) modeled as a
-/// Rust trait. `ptr` (the Zig allocator's context) is `self`; the four methods
-/// mirror `std.mem.Allocator.VTable`. `ret_addr`/`ra` is the return address
-/// hint (unused by most allocators), preserved for ABI fidelity.
+/// Useful alias since they're required to create Zig allocators
+///
+/// PORT NOTE: The reference declares `pub const ZigVTable =
+/// std.mem.Allocator.VTable;` (with the doc-comment above, preserved verbatim).
+/// rustty has no `std.mem.Allocator.VTable` type; the Zig allocator interface
+/// (`std.mem.Allocator`) is modeled by the `ZigAllocator` trait below. `ptr`
+/// (the Zig allocator's context) is `self`; the four methods mirror
+/// `std.mem.Allocator.VTable`. `ret_addr`/`ra` is the return address hint
+/// (unused by most allocators), preserved for ABI fidelity.
 pub trait ZigAllocator {
     /// `alloc(ctx, len, alignment, ret_addr) ?[*]u8`
     fn alloc(&self, len: usize, alignment: Alignment, ra: usize) -> *mut u8;
@@ -510,6 +515,18 @@ static C_ALLOCATOR_REF: SyncAllocatorRef = SyncAllocatorRef(ZigAllocatorRef {
 pub fn c_allocator() -> Allocator {
     Allocator::from_zig(&C_ALLOCATOR_REF.0)
 }
+
+/// Allocator that can be sent to the C API that does full
+/// leak checking within Zig tests. This should only be used from
+/// Zig tests.
+///
+/// PORT NOTE: The reference declares `pub const test_allocator: Allocator =
+/// .fromZig(&testing.allocator)` (with the doc-comment above, preserved
+/// verbatim). rustty has no `std.testing.allocator` tracking allocator; under
+/// R6 the memory gate is enforced by Miri (`cargo +nightly miri test`), which
+/// performs the leak/UB checking the reference delegated to `testing.allocator`.
+/// The `test_allocator` const is therefore omitted (no rustty equivalent is
+/// needed), but its doc-comment is preserved here for R1 fidelity.
 
 #[cfg(test)]
 mod tests {
