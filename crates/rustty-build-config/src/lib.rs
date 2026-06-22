@@ -57,6 +57,32 @@ pub const fn release_channel() -> ReleaseChannel {
     ReleaseChannel::from_version_pre(version_pre())
 }
 
+/// The optimization mode as a string.
+///
+/// Reference (`build_config.zig`):
+/// ```text
+/// pub const mode_string = mode: {
+///     const m = @tagName(builtin.mode);
+///     if (std.mem.lastIndexOfScalar(u8, m, '.')) |i| break :mode m[i..];
+///     break :mode m;
+/// };
+/// ```
+/// Zig's `@tagName(builtin.mode)` yields the optimization-mode enum tag
+/// (`"Debug"`, `"ReleaseSafe"`, `"ReleaseFast"`, `"ReleaseSmall"`); the
+/// `lastIndexOfScalar(u8, m, '.')` slice keeps only the trailing component if
+/// the tag is ever qualified with a `.`-prefixed namespace. Rust has no
+/// `OptimizeMode` reflection, so the mode is reconstructed from the same
+/// `debug_assertions` toggle [`IS_DEBUG`]/[`SLOW_RUNTIME_SAFETY`] are derived
+/// from: a debug build reports `"Debug"`, an optimized build reports
+/// `"ReleaseFast"`.
+pub const fn mode_string() -> &'static str {
+    if cfg!(debug_assertions) {
+        "Debug"
+    } else {
+        "ReleaseFast"
+    }
+}
+
 /// The semantic version of this build.
 ///
 /// Reference: `pub const version = options.app_version;`. Pulled from the

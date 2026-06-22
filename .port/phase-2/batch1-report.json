@@ -1,0 +1,98 @@
+{
+  "batch": 1,
+  "date": "2026-06-21",
+  "commit_before_fix": "730fb79",
+  "verdict": "GREEN",
+  "contract_total_test_blocks": 3234,
+  "batch1_tests_ported": 93,
+  "workspace": {
+    "cargo_fmt_check": "green",
+    "cargo_clippy_dwarnings": "green (zero warnings)",
+    "cargo_build_workspace": "green",
+    "cargo_test_workspace": "green",
+    "g7_acyclic": "green",
+    "g4_differential_control": "green",
+    "r3_no_ghostty_dep": "satisfied (only doc comments reference ghostty as external oracle)"
+  },
+  "miri_all_done": "green (util=4, build-config=0, lib=13, datastruct=76; no UB, no leaks)",
+  "crates": [
+    {
+      "crate": "rustty-util",
+      "tests_ported": 4,
+      "contract_tests": 4,
+      "tests_match": true,
+      "rust_assertions": 13,
+      "ref_assertions": 5,
+      "g1_tests_ported": "green",
+      "g2_assertions": "green",
+      "g3_comments_fidelity": "green (rust=317 >= ref=218)",
+      "miri": "green (4 passed)",
+      "clippy": "green",
+      "fmt": "green",
+      "review_verdict": "PARITY",
+      "review_notes": "All 4 tripwire.zig test blocks ported assertion-for-assertion. Comments preserved verbatim. Only unsafe is fastmem::move ptr::copy (memmove, sound). Minor non-parity divergences (tripwire cfg!(test) scope, HashMap ordering, inlineAssert release-arm-as-comment) observed by zero tests."
+    },
+    {
+      "crate": "rustty-build-config",
+      "tests_ported": 0,
+      "contract_tests": 0,
+      "tests_match": true,
+      "rust_assertions": 0,
+      "ref_assertions": 0,
+      "g1_tests_ported": "green",
+      "g2_assertions": "green",
+      "g3_comments_fidelity": "green (rust=288 >= ref=33)",
+      "miri": "green (0 tests, no UB)",
+      "clippy": "green",
+      "fmt": "green",
+      "review_verdict": "PARITY (was NOT_PARITY, blocker FIXED)",
+      "review_notes": "Reviewer found a real R1 fidelity loss: ghostty src/build_config.zig:23-28 `pub const mode_string` with doc comment `/// The optimization mode as a string.` was ENTIRELY ABSENT from the rustty tree (masked by aggregate comment gate). FIX: ported `pub const fn mode_string() -> &'static str` to lib.rs with the doc comment preserved verbatim plus the full reference body reproduced in a ```text block; mode reconstructed from cfg!(debug_assertions) consistent with IS_DEBUG/SLOW_RUNTIME_SAFETY (Rust has no OptimizeMode reflection). Re-verified: grep finds mode_string + the doc comment; fmt/clippy/build/test/G1/G2/G3/Miri all green; comment count rose 270->288."
+    },
+    {
+      "crate": "rustty-lib",
+      "tests_ported": 13,
+      "contract_tests": 13,
+      "tests_match": true,
+      "rust_assertions": 30,
+      "ref_assertions": 27,
+      "g1_tests_ported": "green",
+      "g2_assertions": "green",
+      "g3_comments_fidelity": "green (rust=395 >= ref=123)",
+      "miri": "green (13 passed)",
+      "clippy": "green",
+      "fmt": "green",
+      "review_verdict": "PARITY",
+      "review_notes": "All 13 reference test blocks ported assertion-for-assertion (allocator, enum, struct, union, main, string). repr(C) layout math reproduces Zig extern layout. Unsafe confined to C allocator vtable bridge + FBA + Wasm/C FFI; ZigSlice used to avoid Stacked-Borrows UB on realloc/free; Miri clean."
+    },
+    {
+      "crate": "rustty-datastruct",
+      "tests_ported": 76,
+      "contract_tests": 76,
+      "tests_match": true,
+      "rust_assertions": 530,
+      "ref_assertions": 311,
+      "g1_tests_ported": "green",
+      "g2_assertions": "green",
+      "g3_comments_fidelity": "green (rust=1418 >= ref=855)",
+      "miri": "green (76 passed, 12s)",
+      "clippy": "green",
+      "fmt": "green",
+      "review_verdict": "PARITY",
+      "review_notes": "All 11 files reviewed; 76/76 tests (1 EXTRA anonymous circ_buf test). circ_buf getPtrSlice via split_at_mut (SB-clean). split_tree/lru raw-pointer refcount model Miri-verified. Minor non-parity: Small.len stored as usize (no test inspects bytes), lru get_or_put evict computed pre-insert (algebraically equivalent). NON-BLOCKING latitude: lru placeholder_value uses mem::zeroed bounded V:Copy, sound for stored integer types, always overwritten before read."
+    }
+  ],
+  "soundness_decisions": [
+    "split_tree.rs init: marked `pub unsafe fn init` (NOT #[allow]) to encode caller-must-pass-valid-view contract, mirroring reference init(gpa, view: *View). All 37 test call sites wrapped in unsafe {}. No external callers.",
+    "convenience.rs: module-level #[allow(clippy::not_unsafe_ptr_arg_deref)] for pub extern \"C\" WASM/C allocator exports; these ARE the FFI boundary, ABI-neutral.",
+    "lib allocator: ZigSlice (ptr,len) used instead of &mut [u8] to avoid Stacked-Borrows UB on realloc/free.",
+    "datastruct lru placeholder_value mem::zeroed bounded V:Copy: sound for integer instantiations, always overwritten before read; Miri clean."
+  ],
+  "parity_allows": [
+    "comparison.rs: kept literals 3.14159f64/3.14158f64 (reference comparison.zig:262-263); did not substitute consts::PI.",
+    "blocking_queue/circ_buf/split_tree: kept inherent next() public API (reference exposes inherent next()); did not convert to std::iter::Iterator.",
+    "split_tree Backtrack: kept variant name (reference union Backtrack).",
+    "circ_buf CircBuf: ADDED is_empty() delegating to empty(); kept reference empty().",
+    "build-config mode_string: reconstructed from cfg!(debug_assertions) (no Rust OptimizeMode reflection); doc comment + reference body preserved verbatim."
+  ],
+  "blockers": []
+}
