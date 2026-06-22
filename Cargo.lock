@@ -581,6 +581,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustty-zigstd"
+version = "0.1.0"
+dependencies = [
+ "rustty-util",
+]
+
+[[package]]
 name = "sentry-sys"
 version = "0.1.0"
 

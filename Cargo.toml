@@ -49,6 +49,11 @@ members = [
     "crates/rustty-bench",         # 28
     "crates/rustty-synthetic",     # 29
 
+    # ----- additive infra glue (R1): Zig stdlib equivalents -----
+    # NOT in the 3234-test contract (no ghostty src/ file) and NOT in the
+    # test-contract crate_map. A leaf over rustty-util; backing = std::alloc.
+    "crates/rustty-zigstd",
+
     # ----- supporting -sys crates (R3: vendored C, cc + bindgen) -----
     "crates-sys/freetype-sys",
     "crates-sys/harfbuzz-sys",
@@ -107,6 +112,8 @@ rustty-termio = { path = "crates/rustty-termio" }
 rustty-core = { path = "crates/rustty-core" }
 rustty-apprt = { path = "crates/rustty-apprt" }
 rustty-cli = { path = "crates/rustty-cli" }
+# Additive infra glue (R1): Zig stdlib equivalents; not in the parity contract.
+rustty-zigstd = { path = "crates/rustty-zigstd" }
 
 # Workspace-wide lints. Kept conservative for the scaffold phase; tightened as
 # real ported code lands. R1/R5: never weaken to pass — lint exceptions must be
