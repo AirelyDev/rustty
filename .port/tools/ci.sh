@@ -78,7 +78,7 @@ GATE_REGISTRY=(
   "G9|PROGRESS|$PY $GATES/check_parity_surface.py"
   "G8|PROGRESS|$PY $GATES/check_baseline_regression.py"
   "G5|PROGRESS|bash $GATES/run_fuzz_smoke.sh"
-  "G6|PROGRESS|bash $GATES/check_leaks.sh"
+  "G6|PROGRESS|bash $GATES/check_leaks.sh --all-done"
 )
 
 HARD_FAILURES=()   # hard-fail checks that failed, or a claimed-done regression
