@@ -158,7 +158,7 @@ impl PageList {
     // in the grow/scroll/resize/erase clusters whose bodies land later; until then
     // the CORE skeleton has no callers for it.
     #[allow(dead_code)]
-    fn pin_is_active(&self, p: Pin) -> bool {
+    pub(crate) fn pin_is_active(&self, p: Pin) -> bool {
         // If the pin is in the active page, then we can quickly determine
         // if we're beyond the end.
         let active = self.get_top_left(point::Tag::Active);

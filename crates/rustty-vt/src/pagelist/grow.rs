@@ -6,9 +6,7 @@
 //! `growRows` cluster.
 //!
 //! PORT STATUS: methods ported (vt-3c). `maxSize` and `pinIsValid` live in
-//! `mod.rs` (CORE callers need them); `fixupViewport` calls the pin-cluster
-//! `pinIsActive` and is DEFERRED to that cluster (documented seam — see the
-//! PORT NOTE at the bottom of this file). The 205-block test split lands in the
+//! `mod.rs` (CORE callers need them). The 205-block test split lands in the
 //! dedicated test phase.
 
 use super::{Node, PageList, Viewport};
@@ -220,12 +218,48 @@ impl PageList {
         }
     }
 
-    // PORT NOTE (DEFERRED SEAM): `fixupViewport` belongs to this file's owner
-    // doc header but its body calls the pin-cluster `pinIsActive`, which is a
-    // genuinely-unported NON-PageList-grow sibling at this point in the port. It
-    // is therefore deferred to the pin cluster (which owns `pinIsActive`), where
-    // it lands fully ported. No `fixupViewport` caller exists in this grow
-    // cluster, so deferring it does not affect any method ported here.
+    /// This fixes up the viewport data when rows are removed from the
+    /// PageList. This will update a viewport to `active` if row removal
+    /// puts the viewport into the active area, to `top` if the viewport
+    /// is now at row 0, and updates any row offset caches as necessary.
+    ///
+    /// This is unit tested transitively through other tests such as
+    /// eraseRows.
+    #[allow(dead_code)]
+    pub(crate) fn fixup_viewport(&mut self, removed: usize) {
+        match self.viewport {
+            Viewport::Active => {}
+
+            // For pin, we check if our pin is now in the active area and if so
+            // we move our viewport back to the active area.
+            Viewport::Pin => {
+                if self.pin_is_active(unsafe { (*self.viewport_pin).pin_copy() }) {
+                    self.viewport = Viewport::Active;
+                } else if let Some(v) = self.viewport_pin_row_offset.as_mut() {
+                    // If we have a cached row offset, we need to update it
+                    // to account for the erased rows.
+                    if *v < removed {
+                        self.viewport = Viewport::Top;
+                    } else {
+                        *v -= removed;
+                    }
+                }
+            }
+
+            // For top, we move back to active if our erasing moved our
+            // top page into the active area.
+            Viewport::Top => {
+                if self.pin_is_active(super::Pin {
+                    node: self.pages.first,
+                    y: 0,
+                    x: 0,
+                    garbage: false,
+                }) {
+                    self.viewport = Viewport::Active;
+                }
+            }
+        }
+    }
 
     /// Grow the active area by exactly one row.
     ///
