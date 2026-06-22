@@ -15,10 +15,14 @@
 
 use core::ptr;
 
+/// The type of the node in the list. This makes it easy to get the
+/// node type from the list type.
+///
 /// Trait for an intrusive node. The implementing type must store a "next" and
 /// "prev" pointer to itself; these accessors expose them to the list. This is
 /// the Rust seam for the Zig requirement that `T` "must have a 'next' and
-/// 'prev' field pointing to itself".
+/// 'prev' field pointing to itself". (The reference `pub const Node = T;`
+/// node-type alias maps to the `T: Node` generic here.)
 pub trait Node {
     /// Get the `prev` pointer.
     fn prev(&self) -> *mut Self;

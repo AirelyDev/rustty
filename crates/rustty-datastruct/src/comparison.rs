@@ -36,6 +36,19 @@ pub trait DeepEqual {
     fn deep_equal(&self, other: &Self) -> bool;
 }
 
+// The reference `deepEqual` is two sequential switches: a first `switch (T)`
+// over a handful of named types, then a `switch (@typeInfo(T))` over kinds.
+// The trait-based port splits each arm into its own `DeepEqual` impl, so the
+// two reference switch headers below annotate the impls reproducing each: the
+// named-type impls (`[u8]`, `[&[u8]]`) and the kind impls (`()`, the
+// `deep_equal_eq!` scalars, `Option`, `[T; N]`).
+
+// Do known named types first
+//
+// (See the `[u8]` / `[&[u8]]` impls below: the reference's first
+// `switch (T)` arms — `[]const u8`, `[:0]const u8`, `[]const [:0]const u8`.)
+
+// Back into types of types
 // .void => return true,
 impl DeepEqual for () {
     fn deep_equal(&self, _other: &Self) -> bool {
@@ -205,6 +218,14 @@ impl ApproxEqual for i32 {
     }
 }
 
+// unwrap unions, optionals, and error unions
+//
+// (The reference groups the `.@"union"`, `.optional`, and `.error_union` arms
+// here. In the trait-based port the `.@"union"` arm is reproduced per-type —
+// see the `TUnion` impl in tests — the `.optional` arm is the `Option<T>` impl
+// below, and `.error_union` maps to `Result` with the same `expectEqual`
+// fallthrough.)
+
 // .optional => { if (expected) |e| if (actual) |a| return expectApproxEqual(e, a);
 //                testing.expectEqual(expected, actual) catch return error; }
 impl<T: ApproxEqual> ApproxEqual for Option<T> {
@@ -291,6 +312,11 @@ mod tests {
 
     impl ApproxEqual for TUnion {
         fn approx_equal(&self, actual: &Self) -> Result<(), Error> {
+            // The reference `.@"union"` arm first handles the untagged case:
+            //   untagged unions can only be compared bitwise,
+            //   so expectEqual is all we need
+            // Rust enums are always tagged, so only the tagged path applies
+            // here; we compare the active tag then recurse into the payload.
             // expectEqual(expectedTag, actualTag)
             match (self, actual) {
                 (TUnion::A(e), TUnion::A(a)) => expect_approx_equal(e, a),
@@ -453,7 +479,8 @@ mod tests {
     }
     impl DeepEqual for Nested {
         fn deep_equal(&self, other: &Self) -> bool {
-            // No `equal` decl: recursive field-by-field compare.
+            // If a struct doesn't declare an "equal" function, we fall back
+            // to a recursive field-by-field compare.
             deep_equal(&self.x, &other.x) && deep_equal(&self.y, &other.y)
         }
     }

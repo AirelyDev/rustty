@@ -23,6 +23,10 @@
 #   G1  check_tests_ported.py        100% test{} ported (==3234)     -> PROGRESS*
 #   G2  check_assertions.py          assertion-for-assertion         -> PROGRESS*
 #   G3  check_comments_fidelity.py   zero comment-inventory delta    -> PROGRESS*
+#   G3b check_comment_coverage.py    content-aware comment coverage  -> PROGRESS*
+#                                    (every distinctive reference comment has a
+#                                    match in the port; 0 MISSING — closes the
+#                                    aggregate-count hole G3 can mask)
 #   G9  check_parity_surface.py      config/keybind/action/terminfo  -> PROGRESS*
 #   G8  check_baseline_regression.py no perf/mem/size/startup regress-> PROGRESS*
 #   G5  run_fuzz_smoke.sh            differential fuzz clean         -> PROGRESS*
@@ -70,6 +74,7 @@ GATE_REGISTRY=(
   "G1|PROGRESS|$PY $GATES/check_tests_ported.py"
   "G2|PROGRESS|$PY $GATES/check_assertions.py"
   "G3|PROGRESS|$PY $GATES/check_comments_fidelity.py"
+  "G3b|PROGRESS|$PY $GATES/check_comment_coverage.py"
   "G9|PROGRESS|$PY $GATES/check_parity_surface.py"
   "G8|PROGRESS|$PY $GATES/check_baseline_regression.py"
   "G5|PROGRESS|bash $GATES/run_fuzz_smoke.sh"

@@ -16,8 +16,8 @@ pub enum Backend {
 }
 
 impl Backend {
-    pub fn default(target: Target, wasm_target: WasmTarget) -> Backend {
-        if target.arch == crate::os::Arch::Wasm32 {
+    pub const fn default(target: Target, wasm_target: WasmTarget) -> Backend {
+        if target.arch.is_wasm() {
             return match wasm_target {
                 WasmTarget::Browser => Backend::Webgl,
             };

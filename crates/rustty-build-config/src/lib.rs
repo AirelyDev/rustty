@@ -42,8 +42,53 @@ pub mod font;
 pub mod os;
 pub mod renderer;
 
+pub use apprt::Runtime;
 pub use build::{Config, ExeEntrypoint, ReleaseChannel};
 pub use os::wasm::Target as WasmTarget;
+pub use os::{Arch, Os, Target};
+
+// Re-export the backend enums (BREAK #3: defined here, imported by the
+// upper-tier apprt/font/renderer crates — not the reverse) under the same
+// `font::Backend` / `renderer::Backend` paths the reference re-export surface
+// uses, so callers can name `build_config::font_backend()` of type
+// `font::Backend` exactly as the reference names `font.Backend`.
+
+/// The host target the comptime build-config defaults are computed for.
+///
+/// In the reference, `build/Config.zig`'s `init()` reads the resolved Zig build
+/// target (`target.result`) and computes every per-target default from it. The
+/// Rust port has no separate build-options blob, so the "resolved target" is
+/// simply the crate's own compilation target, reconstructed here from the
+/// `cfg!(target_os = ...)` / `cfg!(target_arch = ...)` toggles. The cargo
+/// features (`app-runtime-*`, `renderer-*`, `font-*`, `i18n`, ...) override
+/// these per-target defaults exactly as the `-D` build options override the
+/// `default()` selectors in the reference; when no overriding feature is set
+/// the per-target default is used verbatim.
+const fn host_target() -> Target {
+    let arch = if cfg!(target_arch = "wasm32") {
+        Arch::Wasm32
+    } else {
+        Arch::Other
+    };
+    let os = if cfg!(target_os = "macos") {
+        Os::Macos
+    } else if cfg!(target_os = "ios") {
+        Os::Ios
+    } else if cfg!(target_os = "linux") {
+        Os::Linux
+    } else if cfg!(target_os = "freebsd") {
+        Os::Freebsd
+    } else if cfg!(target_os = "windows") {
+        Os::Windows
+    } else {
+        Os::Other
+    };
+    Target::new(os, arch)
+}
+
+/// The wasm target platform. In the reference `init()` this is hardcoded to
+/// `.browser` (the only semi-usable runtime); the port mirrors that.
+const HOST_WASM_TARGET: WasmTarget = WasmTarget::Browser;
 
 /// The release channel for this build.
 ///
@@ -135,6 +180,54 @@ const fn version_pre() -> Option<&'static str> {
 /// `librustty` library vs the wasm module) via [`Artifact`].
 pub const fn artifact() -> Artifact {
     Artifact::detect()
+}
+
+/// Our build configuration. We re-export a lot of these back at the
+/// top-level so its a bit cleaner to use throughout the code. See the doc
+/// comments in BuildConfig for details on each.
+///
+/// Reference: `const config = BuildConfig.fromOptions();` followed by the
+/// `pub const exe_entrypoint/flatpak/snap/app_runtime/font_backend/renderer/i18n`
+/// re-exports. In the reference these are read out of the `build_options` blob
+/// `zig build` generates from `Config.init()`'s per-target `default()` logic;
+/// the Rust port reproduces the same per-target selection from
+/// [`host_target()`] (with cargo features as the override seam), so the runtime
+/// values match the reference defaults for the same OS/target.
+const CONFIG: Config = Config::from_options(host_target(), HOST_WASM_TARGET);
+
+/// The exe entrypoint. Reference: `pub const exe_entrypoint = config.exe_entrypoint;`.
+pub const fn exe_entrypoint() -> ExeEntrypoint {
+    CONFIG.exe_entrypoint
+}
+
+/// Reference: `pub const flatpak = options.flatpak;`.
+pub const fn flatpak() -> bool {
+    CONFIG.flatpak
+}
+
+/// Reference: `pub const snap = options.snap;`.
+pub const fn snap() -> bool {
+    CONFIG.snap
+}
+
+/// Reference: `pub const app_runtime: apprt.Runtime = config.app_runtime;`.
+pub const fn app_runtime() -> Runtime {
+    CONFIG.app_runtime
+}
+
+/// Reference: `pub const font_backend: font.Backend = config.font_backend;`.
+pub const fn font_backend() -> font::Backend {
+    CONFIG.font_backend
+}
+
+/// Reference: `pub const renderer: rendererpkg.Backend = config.renderer;`.
+pub const fn renderer() -> renderer::Backend {
+    CONFIG.renderer
+}
+
+/// Reference: `pub const i18n: bool = config.i18n;`.
+pub const fn i18n() -> bool {
+    CONFIG.i18n
 }
 
 /// The bundle ID for the app. This is used in many places and is currently

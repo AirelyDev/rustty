@@ -13,7 +13,7 @@
 
 use crate::apprt::Runtime as ApprtRuntime;
 use crate::font::Backend as FontBackend;
-use crate::os::WasmTarget;
+use crate::os::{Target, WasmTarget};
 use crate::renderer::Backend as RendererBackend;
 
 /// Build configuration. This is the configuration that is populated
@@ -73,6 +73,69 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    /// Rehydrate our Config from the comptime options. Note that not all
+    /// options are available at comptime, so look closely at this implementation
+    /// to see what is and isn't available.
+    ///
+    /// Reference: `pub fn fromOptions() Config`. The reference reads the
+    /// `build_options` blob `zig build` generated from `Config.init()`'s
+    /// per-target `default()` selection logic. The Rust port has no separate
+    /// build-options blob, so it reproduces that exact per-target selection
+    /// directly from the resolved `target` / `wasm_target` (with cargo features
+    /// as the override seam — when no overriding feature is set the per-target
+    /// `default()` is used verbatim, matching the reference defaults for the
+    /// same OS/target). The fields the reference marks "Unused at runtime"
+    /// (`optimize`, `target`, `env`) are not part of this runtime view.
+    pub const fn from_options(target: Target, wasm_target: WasmTarget) -> Config {
+        Config {
+            // Reference `init()`: `config.app_runtime = ... orelse
+            // ApprtRuntime.default(target.result);`.
+            app_runtime: ApprtRuntime::default_for(target),
+            // Reference `init()`: `config.renderer = ... orelse
+            // RendererBackend.default(target.result, wasm_target);`.
+            renderer: RendererBackend::default(target, wasm_target),
+            // Reference `init()`: `config.font_backend = ... orelse
+            // FontBackend.default(target.result, wasm_target);`.
+            font_backend: FontBackend::default(target, wasm_target),
+            // Reference `init()`: `config.i18n = ... orelse switch
+            // (target.result.os.tag) { .macos, .ios => true, .linux, .freebsd =>
+            // target.result.isGnuLibC(), else => false };`. `isGnuLibC()` maps
+            // to `cfg!(target_env = "gnu")`.
+            i18n: i18n_default(target),
+            // Reference field default: `exe_entrypoint: ExeEntrypoint = .ghostty`
+            // (no `init()`/option override of the runtime view).
+            exe_entrypoint: ExeEntrypoint::Rustty,
+            // Reference `fromOptions`: `.version = options.app_version`.
+            version: APP_VERSION,
+            // Reference field default: `flatpak: bool = false` (the `init()`
+            // option defaults to false too).
+            flatpak: false,
+            // Reference field default: `snap: bool = false`.
+            snap: false,
+            // Reference `init()`: `const wasm_target: WasmTarget = .browser;`.
+            wasm_target,
+            // Reference field default: `wasm_shared: bool = true`.
+            wasm_shared: true,
+        }
+    }
+}
+
+/// `i18n` default selection, factored out so it stays `const`. Reference
+/// `init()`: `switch (target.result.os.tag) { .macos, .ios => true, .linux,
+/// .freebsd => target.result.isGnuLibC(), else => false }`.
+const fn i18n_default(target: Target) -> bool {
+    match target.os {
+        crate::os::Os::Macos | crate::os::Os::Ios => true,
+        crate::os::Os::Linux | crate::os::Os::Freebsd => cfg!(target_env = "gnu"),
+        _ => false,
+    }
+}
+
+/// The semantic version of this build, parsed from the `rustty-identity`
+/// source-of-truth string (R2). Reference: `options.app_version`.
+const APP_VERSION: SemanticVersion = SemanticVersion::parse(rustty_identity::VERSION);
+
 /// A semantic version `MAJOR.MINOR.PATCH`, mirroring the reference
 /// `std.SemanticVersion` fields read at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +143,48 @@ pub struct SemanticVersion {
     pub major: u64,
     pub minor: u64,
     pub patch: u64,
+}
+
+impl SemanticVersion {
+    /// Parse the `MAJOR.MINOR.PATCH` prefix of a semantic-version string,
+    /// ignoring any `-PRE`/`+BUILD` suffix. `const` so it can populate
+    /// [`APP_VERSION`] at compile time, mirroring the reference reading
+    /// `options.app_version` at comptime.
+    pub const fn parse(s: &str) -> SemanticVersion {
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        // Parse one dot-separated unsigned integer starting at `bytes[*idx]`,
+        // advancing `*idx` past it (and past a trailing `.` if present).
+        let major;
+        let minor;
+        let patch;
+        (major, i) = parse_u64(bytes, i);
+        if i < bytes.len() && bytes[i] == b'.' {
+            i += 1;
+        }
+        (minor, i) = parse_u64(bytes, i);
+        if i < bytes.len() && bytes[i] == b'.' {
+            i += 1;
+        }
+        (patch, _) = parse_u64(bytes, i);
+        SemanticVersion {
+            major,
+            minor,
+            patch,
+        }
+    }
+}
+
+/// Parse a leading run of ASCII digits as a `u64`, returning the value and the
+/// index just past the last digit consumed.
+const fn parse_u64(bytes: &[u8], start: usize) -> (u64, usize) {
+    let mut value: u64 = 0;
+    let mut i = start;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        value = value * 10 + (bytes[i] - b'0') as u64;
+        i += 1;
+    }
+    (value, i)
 }
 
 /// The possible entrypoints for the exe artifact. This has no effect on

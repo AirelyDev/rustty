@@ -269,8 +269,17 @@ impl Spatial {
 /// SplitTree represents a tree of view types that can be divided.
 ///
 /// (See the module-level doc comment for the full contract.)
+///
+/// The view that this tree contains.
+///
+/// PORT: the reference `pub const View = V;` decl (naming the contained view
+/// type) maps to the `V: View` generic parameter here.
 pub struct SplitTree<V: View> {
     /// All the nodes in the tree. Node at index 0 is always the root.
+    ///
+    /// The arena allocator used for all allocations in the tree.
+    /// Since the tree is an immutable structure, this lets us
+    /// cleanly free all memory when the tree is deinitialized.
     ///
     /// PORT: In Zig this is `[]const Node` backed by a per-tree
     /// `ArenaAllocator`. In Rust the owned `Vec<Node>` plays both roles (it
@@ -287,6 +296,11 @@ impl<V: View> SplitTree<V> {
     /// An empty tree.
     pub fn empty() -> Self {
         SplitTree {
+            // Arena can be undefined because we have zero allocated nodes.
+            // If our nodes are empty our deinit function doesn't touch the
+            // arena.
+            // (PORT: the Rust port has no separate arena field — an empty
+            // `Vec` allocates nothing and frees nothing on `Drop`.)
             nodes: Vec::new(),
             zoomed: None,
         }
@@ -619,6 +633,10 @@ impl<V: View> SplitTree<V> {
         ratio: F16,
         insert: &Self,
     ) -> Result<Self, Error> {
+        // The new arena for our new tree.
+        // (PORT: the owned `Vec` below is the per-tree allocation the reference
+        // backs with a fresh `ArenaAllocator`.)
+
         // We know we're going to need the sum total of the nodes
         // between the two trees plus one for the new split node.
         let total = self.nodes.len() + insert.nodes.len() + 1;
@@ -693,6 +711,10 @@ impl<V: View> SplitTree<V> {
         if at == Handle::ROOT {
             return Ok(Self::empty());
         }
+
+        // The new arena for our new tree.
+        // (PORT: the owned `Vec` below is the per-tree allocation the reference
+        // backs with a fresh `ArenaAllocator`.)
 
         // Allocate our new nodes list with the number of nodes we'll
         // need after the removal.
@@ -1478,6 +1500,12 @@ fn log10_usize(mut n: usize) -> usize {
 // GTK `copy`/`free` boxed funcs are just `clone`/`deinit` wrappers (already
 // ported as `clone_tree`/`Drop`) plus glib create/destroy plumbing, which the
 // GTK crate will wire when it lands. No reference logic is lost.
+//
+// The `.gtk` arm's boxed type `.name` is computed as follows (preserved here
+// for when the GTK crate wires it; retargeted GhosttySplitTree -> RusttySplitTree
+// per R2):
+//   To get the type name we get the non-qualified type name
+//   of the view and append that to `RusttySplitTree`.
 #[allow(dead_code)]
 const GET_GOBJECT_TYPE: () = ();
 

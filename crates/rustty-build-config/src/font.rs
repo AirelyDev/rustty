@@ -43,14 +43,14 @@ impl Backend {
     /// Returns the default backend for a build environment. This is
     /// meant to be called at comptime by the build.zig script. To get the
     /// backend look at build_options.
-    pub fn default(target: Target, wasm_target: WasmTarget) -> Backend {
-        if target.arch == crate::os::Arch::Wasm32 {
+    pub const fn default(target: Target, wasm_target: WasmTarget) -> Backend {
+        if target.arch.is_wasm() {
             return match wasm_target {
                 WasmTarget::Browser => Backend::WebCanvas,
             };
         }
 
-        if target.os == crate::os::Os::Windows {
+        if matches!(target.os, crate::os::Os::Windows) {
             // Avoid fontconfig on Windows because its libxml2 dependency
             // may not unpack due to symlinks. Use the FreeType-based
             // Windows font-directory scanner for discovery. A future

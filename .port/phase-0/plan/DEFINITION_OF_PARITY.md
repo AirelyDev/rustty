@@ -110,6 +110,31 @@ summarized.
   `DROPPED:`/`ALTERED:` comments with file:line on any non-zero delta. Any
   non-zero delta is a blocker (R1: "Any delta is a blocker").
 
+### G3b — Content-aware reference-comment coverage [R1]
+
+G3 compares **aggregate** per-crate comment-line *counts*, so a genuinely
+dropped reference comment can be masked by added PORT NOTEs (rust_total >=
+ref_total even though a specific reference comment vanished). G3b closes that
+hole **deterministically**: every *distinctive* reference comment (a
+phrase/sentence — not a separator or ASCII diagram) must have a fuzzy match
+somewhere in the ported crate's comments, after applying the ghostty→rustty
+identity rename (R2). This is what `build-config` needed to surface the dropped
+`config`/re-export block and `datastruct` to surface the dropped `deepEqual`
+`.@"struct"` field-by-field fallback comment.
+
+- **Check:**
+  `python3 .port/tools/gates/check_comment_coverage.py --crate <name>`
+  (bare, no `--crate`, runs per `PORT STATUS: done` crate). Distinctive =
+  >= 5 word-tokens after normalization. Covered = normalized ref comment is a
+  substring of the port comment blob, OR a port comment matches it with difflib
+  ratio >= 0.60. A ref comment below the MISS threshold (0.45) is a real drop
+  (RED); between MISS and 0.60 it is reported as REVIEW (soft, not RED).
+- **Pass condition:** **0 MISSING** for every done crate; exit 0. The script
+  lists `MISSING ref comment:` with the dropped text on any drop. Any MISSING is
+  a blocker (R1). Run per done-crate; wired into `.port/tools/ci.sh` as a
+  PROGRESS gate (a stub crate is green; a claimed-done crate that drops a comment
+  goes RED, exactly R5).
+
 ### G4 — Differential VT clean (primary behavioral gate)
 
 Identical input fed to the reference oracle (built with the `identity-ghostty`
@@ -338,6 +363,7 @@ the rename actually took effect), so R2 is itself gated.
 | G1 tests ported | inventory.json | `check_tests_ported.py` + `cargo test --workspace` | count==3234, per-file ==contract, names match, exit 0 |
 | G2 assertions | inventory.json | `check_assertions.py` | per-test rust>=ref, none weakened |
 | G3 comments | inventory.json + identity map | `fidelity_critic.py` | per-file delta==0 |
+| G3b comment coverage | ref `.zig` comments + identity map | `check_comment_coverage.py` | 0 MISSING (every distinctive ref comment matched) |
 | G4 differential VT | corpora/cvt + harness | `diff_vt.py` (rustty `--features identity-ghostty`) | zero diffs |
 | G5 differential fuzz | fuzz corpus | `cargo fuzz run vt_diff` | zero new artifacts |
 | G6 memory-safe | — | `check_leaks.sh --all-done` (Miri pure-Rust / ASan FFI) | zero leaks/UB |

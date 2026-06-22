@@ -23,7 +23,7 @@ pub enum Runtime {
 }
 
 impl Runtime {
-    pub fn default_for(target: Target) -> Runtime {
+    pub const fn default_for(target: Target) -> Runtime {
         match target.os {
             // The Linux and FreeBSD default is GTK because it is a full
             // featured application.
