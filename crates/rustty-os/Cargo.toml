@@ -32,6 +32,10 @@ rustty-datastruct = { workspace = true }
 rustty-util = { workspace = true }
 rustty-global = { workspace = true }
 rustty-build-config = { workspace = true }
+# R2: the published product-identity strings (`APP_NAME`, terminfo entry names,
+# the resources-dir env var prefix) used by `os/resourcesdir.zig` after
+# retargeting. Source-of-truth `rustty-identity` crate (single owner of identity).
+rustty-identity = { workspace = true }
 
 # Raw FFI bindings to the platform libc (syscalls/constants used across os/*).
 # R3: `libc` binds the SAME system library the reference's Zig `std.c`/`std.posix`

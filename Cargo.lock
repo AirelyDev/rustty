@@ -486,6 +486,7 @@ dependencies = [
  "rustty-build-config",
  "rustty-datastruct",
  "rustty-global",
+ "rustty-identity",
  "rustty-util",
 ]
 
