@@ -1,6 +1,347 @@
 //! rustty-os::file
 //!
-//! PORT STATUS: stub
+//! PORT STATUS: ported
 //!
-//! Minimal compiling stub. Ports the reference's `src/os/file.zig` — every line,
-//! comment, and `test {}` is ported here as the module is carved (R1).
+//! Ports the reference's `src/os/file.zig` — every line, comment, and `test {}`
+//! is ported here (R1). Retargeted only for product identity (R2).
+
+// PORT: the Zig reference imports `std`, `builtin`, `posix = std.posix`, and
+// `windows = @import("windows.zig")`. In Rust we use the standard library plus
+// `libc` (R3: a binding to the SAME system library) for the `rlimit`
+// get/setrlimit syscalls and the CSPRNG used by `randomBasename`.
+
+#[cfg(not(windows))]
+use std::ffi::c_int;
+
+const LOG_SCOPE: &str = "os";
+
+// PORT: `pub const rlimit = if (@hasDecl(posix.system, "rlimit")) posix.rlimit
+// else struct {};` — on platforms without `rlimit` this is an empty struct. We
+// reproduce that conditionally: on Unix it aliases `libc::rlimit`; elsewhere it
+// is a zero-sized stand-in.
+#[cfg(not(windows))]
+#[allow(non_camel_case_types)]
+pub type rlimit = libc::rlimit;
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+#[allow(non_camel_case_types)]
+pub struct rlimit;
+
+/// This maximizes the number of file descriptors we can have open. We
+/// need to do this because each window consumes at least a handful of fds.
+/// This is extracted from the Zig compiler source code.
+#[allow(non_snake_case)]
+pub fn fixMaxFiles() -> Option<rlimit> {
+    #[cfg(windows)]
+    {
+        // `!@hasDecl(posix.system, "rlimit")` is true on Windows.
+        None
+    }
+    #[cfg(not(windows))]
+    {
+        let old = match getrlimit_nofile() {
+            Ok(old) => old,
+            Err(_) => {
+                log_warn("failed to query file handle limit, may limit max windows");
+                return None; // Oh well; we tried.
+            }
+        };
+
+        // If we're already at the max, we're done.
+        if old.rlim_cur >= old.rlim_max {
+            log_debug(&format!(
+                "file handle limit already maximized value={}",
+                old.rlim_cur
+            ));
+            return Some(old);
+        }
+
+        // Do a binary search for the limit.
+        let mut lim = old;
+        let mut min: rlim_t = lim.rlim_cur;
+        let mut max: rlim_t = 1 << 20;
+        // But if there's a defined upper bound, don't search, just set it.
+        if lim.rlim_max != libc::RLIM_INFINITY {
+            min = lim.rlim_max;
+            max = lim.rlim_max;
+        }
+
+        loop {
+            lim.rlim_cur = min + (max - min) / 2; // on freebsd rlim_t is signed
+            if setrlimit_nofile(lim).is_ok() {
+                min = lim.rlim_cur;
+            } else {
+                max = lim.rlim_cur;
+            }
+            if min + 1 >= max {
+                break;
+            }
+        }
+
+        log_debug(&format!("file handle limit raised value={}", lim.rlim_cur));
+        Some(old)
+    }
+}
+
+#[allow(non_snake_case)]
+pub fn restoreMaxFiles(lim: rlimit) {
+    #[cfg(windows)]
+    {
+        let _ = lim;
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = setrlimit_nofile(lim);
+    }
+}
+
+/// Return the recommended path for temporary files. Any trailing
+/// path separator is stripped so callers can safely join with their
+/// own separator (e.g. `"{tmp}/{name}"`).
+///
+/// On Windows this calls `GetTempPathW` and allocates a UTF-8 copy
+/// (or duplicates a hard-fallback string if the syscall fails). On
+/// POSIX this returns `$TMPDIR`/`$TMP` (or `"/tmp"` as a fallback)
+/// without allocating. Always pair with `freeTmpDir` to release any
+/// allocation.
+#[allow(non_snake_case)]
+pub fn allocTmpDir() -> String {
+    #[cfg(windows)]
+    {
+        // GetTempPathW guarantees the result fits in MAX_PATH+1.
+        let mut buf = [0u16; crate::windows::MAX_PATH + 1];
+        let len = unsafe { windows_GetTempPathW(buf.len() as u32, buf.as_mut_ptr()) };
+        if len > 0 {
+            // Trim the UTF-16 string before encoding as UT8-8 so that the
+            // returned slice's length matches its underlying allocation.
+            let trimmed = trim_end_u16(&buf[0..len as usize], PATH_SEP_U16);
+            match String::from_utf16(trimmed) {
+                Ok(utf8) => return utf8,
+                Err(e) => log_warn(&format!(
+                    "failed to convert temp dir path from windows string: {e}"
+                )),
+            }
+        }
+        "C:\\Windows\\Temp".to_string()
+    }
+    #[cfg(not(windows))]
+    {
+        let tmpdir = match std::env::var_os("TMPDIR").or_else(|| std::env::var_os("TMP")) {
+            Some(v) => v,
+            None => return "/tmp".to_string(),
+        };
+        let tmpdir = tmpdir.to_string_lossy();
+        trim_end_str(&tmpdir, PATH_SEP).to_string()
+    }
+}
+
+/// Free a path returned by `allocTmpDir` if it allocated memory.
+/// This is a no-op on POSIX.
+#[allow(non_snake_case)]
+pub fn freeTmpDir(_dir: &str) {
+    // PORT: in Rust the returned `String` owns its allocation on all platforms
+    // and is freed by Drop; the reference frees only on Windows. The comment is
+    // preserved verbatim above.
+}
+
+#[allow(non_upper_case_globals)]
+const random_basename_bytes: usize = 16;
+
+pub enum RandomBasenameError {
+    BufferTooSmall,
+}
+
+// PORT: `std.base64.url_safe_no_pad.Encoder` — the URL-safe alphabet without
+// padding. `calcSize` for N input bytes (no padding) is
+// `N/3*4 + (N%3*8 + 5)/6`.
+mod b64_encoder {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+    // PARITY: this is the verbatim Zig `std.base64` no-pad `calcSize` formula.
+    // clippy suggests `.div_ceil(6)` for the `(.. + 5) / 6` term, but rewriting
+    // would diverge from the reference expression; kept as-is for fidelity.
+    #[allow(clippy::manual_div_ceil)]
+    pub const fn calc_size(source_len: usize) -> usize {
+        source_len / 3 * 4 + (source_len % 3 * 8 + 5) / 6
+    }
+
+    /// Encode `source` into `dest` (which must be exactly `calc_size(source.len())`
+    /// bytes) and return a slice over the written bytes.
+    pub fn encode<'a>(dest: &'a mut [u8], source: &[u8]) -> &'a [u8] {
+        let out_len = calc_size(source.len());
+        let mut acc: u32 = 0;
+        let mut acc_len: u32 = 0;
+        let mut out_idx = 0;
+        for &byte in source {
+            acc = (acc << 8) | byte as u32;
+            acc_len += 8;
+            while acc_len >= 6 {
+                acc_len -= 6;
+                dest[out_idx] = ALPHABET[((acc >> acc_len) & 0x3f) as usize];
+                out_idx += 1;
+            }
+        }
+        if acc_len > 0 {
+            dest[out_idx] = ALPHABET[((acc << (6 - acc_len)) & 0x3f) as usize];
+            out_idx += 1;
+        }
+        debug_assert_eq!(out_idx, out_len);
+        &dest[0..out_len]
+    }
+}
+
+/// Length of the basename produced by `randomBasename`.
+#[allow(non_upper_case_globals)]
+pub const random_basename_len: usize = b64_encoder::calc_size(random_basename_bytes);
+
+/// Write a random filesystem-safe base64 basename of length
+/// `random_basename_len` into `buf` and return a slice over the
+/// written bytes. Returns `error.BufferTooSmall` if `buf` is too
+/// short.
+#[allow(non_snake_case)]
+pub fn randomBasename(buf: &mut [u8]) -> Result<&[u8], RandomBasenameError> {
+    if buf.len() < random_basename_len {
+        return Err(RandomBasenameError::BufferTooSmall);
+    }
+    let mut rand_buf = [0u8; random_basename_bytes];
+    crypto_random_bytes(&mut rand_buf);
+    Ok(b64_encoder::encode(
+        &mut buf[0..random_basename_len],
+        &rand_buf,
+    ))
+}
+
+/// Return a freshly-allocated path of the form `{TMPDIR}/{prefix}{random}`.
+/// The caller owns the returned slice and must free it with `allocator`.
+///
+/// Nothing is created on disk; this only builds the path string. Useful
+/// for one-shot temporary file/socket paths where a full `TempDir` is
+/// overkill.
+#[allow(non_snake_case)]
+pub fn randomTmpPath(prefix: &str) -> String {
+    let tmp_dir = allocTmpDir();
+    let mut name_buf = [0u8; random_basename_len];
+    let basename = randomBasename(&mut name_buf).unwrap_or_else(|_| unreachable!());
+    // PORT: `std.fmt.allocPrint(.., "{s}{c}{s}{s}", .{ tmp_dir, sep, prefix, basename })`.
+    let basename = std::str::from_utf8(basename).expect("base64 output is ASCII");
+    let result = format!("{tmp_dir}{}{prefix}{basename}", PATH_SEP as char);
+    freeTmpDir(&tmp_dir);
+    result
+}
+
+// ---------------------------------------------------------------------------
+// PORT: support shims for the std/posix facilities used above.
+// ---------------------------------------------------------------------------
+
+// `std.fs.path.sep`.
+#[cfg(windows)]
+const PATH_SEP: u8 = b'\\';
+#[cfg(not(windows))]
+const PATH_SEP: u8 = b'/';
+
+#[cfg(not(windows))]
+#[allow(non_camel_case_types)]
+type rlim_t = libc::rlim_t;
+
+#[cfg(not(windows))]
+fn getrlimit_nofile() -> Result<rlimit, c_int> {
+    let mut lim: rlimit = unsafe { std::mem::zeroed() };
+    let rc = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(0));
+    }
+    Ok(lim)
+}
+
+#[cfg(not(windows))]
+fn setrlimit_nofile(lim: rlimit) -> Result<(), c_int> {
+    let rc = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(0));
+    }
+    Ok(())
+}
+
+// `std.crypto.random.bytes`: fill `buf` with cryptographically-secure random
+// bytes from the OS CSPRNG.
+fn crypto_random_bytes(buf: &mut [u8]) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        // The libc `arc4random_buf` is the canonical macOS/BSD CSPRNG and
+        // never fails.
+        unsafe { libc::arc4random_buf(buf.as_mut_ptr().cast(), buf.len()) };
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios", windows)))]
+    {
+        // POSIX `getentropy` (limited to 256 bytes per call; our buffers are
+        // 16 bytes so a single call suffices).
+        let rc = unsafe { libc::getentropy(buf.as_mut_ptr().cast(), buf.len()) };
+        assert_eq!(rc, 0, "getentropy failed");
+    }
+    #[cfg(windows)]
+    {
+        let rc = unsafe { windows_RtlGenRandom(buf.as_mut_ptr(), buf.len() as u32) };
+        assert_ne!(rc, 0, "RtlGenRandom failed");
+    }
+}
+
+#[cfg(not(windows))]
+fn trim_end_str(s: &str, byte: u8) -> &str {
+    s.trim_end_matches(byte as char)
+}
+
+#[cfg(windows)]
+const PATH_SEP_U16: u16 = PATH_SEP as u16;
+
+#[cfg(windows)]
+fn trim_end_u16(s: &[u16], byte: u16) -> &[u16] {
+    let mut end = s.len();
+    while end > 0 && s[end - 1] == byte {
+        end -= 1;
+    }
+    &s[0..end]
+}
+
+#[cfg(windows)]
+extern "system" {
+    #[link_name = "GetTempPathW"]
+    fn windows_GetTempPathW(buffer_length: u32, buffer: *mut u16) -> u32;
+    #[link_name = "SystemFunction036"]
+    fn windows_RtlGenRandom(buffer: *mut u8, length: u32) -> u8;
+}
+
+fn log_warn(msg: &str) {
+    eprintln!("[warn] [{LOG_SCOPE}] {msg}");
+}
+
+#[cfg(not(windows))]
+fn log_debug(msg: &str) {
+    let _ = msg;
+    #[cfg(debug_assertions)]
+    eprintln!("[debug] [{LOG_SCOPE}] {msg}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS CSPRNG syscall (getentropy/arc4random_buf)
+    #[allow(non_snake_case)]
+    fn randomBasename_() {
+        let mut buf = [0u8; random_basename_len];
+        let name = randomBasename(&mut buf).unwrap_or_else(|_| panic!());
+        assert_eq!(random_basename_len, name.len());
+        for &c in name {
+            let ok = c.is_ascii_alphanumeric() || c == b'-' || c == b'_';
+            assert!(ok);
+        }
+
+        let mut small = [0u8; random_basename_len - 1];
+        assert!(matches!(
+            randomBasename(&mut small),
+            Err(RandomBasenameError::BufferTooSmall)
+        ));
+    }
+}

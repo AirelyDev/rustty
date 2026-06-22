@@ -18,6 +18,15 @@ build = "build.rs"
 [lints]
 workspace = true
 
+[features]
+# R1/R4 parity seam: `passwd.zig`'s flatpak host-command path is `comptime`-gated
+# behind `build_config.flatpak` in the reference and depends on the (not-yet-ported)
+# `pty`/`flatpak` groups. This feature mirrors that gate: it is OFF by default so
+# the block is excluded exactly as the reference excludes it when flatpak support
+# is disabled. It will be wired to the real `pty`/`flatpak` modules when those
+# groups land. No behavior is added or lost.
+flatpak = []
+
 [dependencies]
 rustty-datastruct = { workspace = true }
 rustty-util = { workspace = true }
