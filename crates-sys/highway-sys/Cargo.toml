@@ -1,9 +1,16 @@
-# highway-sys — vendored C dependency (R3: self-contained, no ghostty dep)
+# highway-sys — vendored C++ dependency (R3: self-contained, no ghostty dep)
 #
-# This crate will vendor copied C sources from the SAME upstream library the
-# reference uses (Google Highway SIMD) and build them standalone via `cc` + `bindgen`.
+# This crate vendors the SAME upstream library the reference uses (Google
+# Highway SIMD, google/highway @ 66486a10623fa0d72fe91260f96c892e41aceb06,
+# matching pkg/highway/build.zig.zon) and builds it standalone via `cc`.
+# It mirrors the reference's `pkg/highway` build: the full upstream `hwy/`
+# header tree is vendored under `vendor/`, and the three Highway runtime
+# translation units the reference compiles (its locally-modified `abort.cc`,
+# `per_target.cc`, `targets.cpp`) are vendored under `cpp/` byte-identical and
+# compiled with the reference's flags (see build.rs). `cpp/detect.c` is the C
+# port of the reference's Zig-provided `ghostty_hwy_detect_targets` (R3: rustty
+# has no Zig, so the runtime's target-detection symbol is ported to C).
 # `links` declares the native lib so Cargo enforces one-version linking.
-# STUB: no C is compiled yet (see build.rs).
 [package]
 name = "highway-sys"
 version.workspace = true
@@ -21,4 +28,6 @@ workspace = true
 [dependencies]
 
 [build-dependencies]
-# TODO(R3): add `cc` and `bindgen` here when the vendored C source lands.
+# R3: compile the vendored Highway runtime standalone via the host C++ compiler
+# with the reference's portable flags (mirrors pkg/highway/build.zig).
+cc = "1"

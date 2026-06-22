@@ -1,9 +1,13 @@
-# simdutf-sys — vendored C dependency (R3: self-contained, no ghostty dep)
+# simdutf-sys — vendored C++ dependency (R3: self-contained, no ghostty dep)
 #
-# This crate will vendor copied C sources from the SAME upstream library the
-# reference uses (simdutf UTF validation/transcoding) and build them standalone via `cc` + `bindgen`.
-# `links` declares the native lib so Cargo enforces one-version linking.
-# STUB: no C is compiled yet (see build.rs).
+# This crate vendors the SAME upstream library the reference uses (simdutf UTF
+# validation/transcoding, the single-header amalgamation copied from
+# pkg/simdutf/vendor) and builds it standalone via `cc`. It mirrors the
+# reference's pkg/simdutf/build.zig: `vendor/simdutf.cpp` is the only TU,
+# compiled in no-libcxx mode (the reference passes `.no_libcxx = true` from
+# SharedDeps.zig) with `SIMDUTF_IMPLEMENTATION_ICELAKE=0` and ubsan disabled
+# (see build.rs). `links` declares the native lib so Cargo enforces one-version
+# linking.
 [package]
 name = "simdutf-sys"
 version.workspace = true
@@ -21,4 +25,6 @@ workspace = true
 [dependencies]
 
 [build-dependencies]
-# TODO(R3): add `cc` and `bindgen` here when the vendored C source lands.
+# R3: compile the vendored simdutf amalgamation standalone via the host C++
+# compiler with the reference's portable flags (mirrors pkg/simdutf/build.zig).
+cc = "1"

@@ -3,6 +3,12 @@
 # Crate IDENTITY is `rustty-simd` (R4). This is NOT the published artifact name; the
 # library/binary artifacts are renamed to the `rustty` product identity later (R2).
 # NO dependency on the ghostty tree (R3) — reference is an external oracle only.
+#
+# This crate ports ghostty src/simd/. The SIMD kernels are ghostty's OWN C++
+# (src/simd/*.cpp,*.h) and are copied VERBATIM into `cbits/simd/` and cc-built
+# against highway-sys + simdutf-sys (R3: same C libs, no pure-Rust substitution).
+# The Zig wrappers (base64.zig, codepoint_width.zig, index_of.zig, vt.zig,
+# base64_scalar.zig, main.zig) are ported to Rust modules as the crate is carved.
 [package]
 name = "rustty-simd"
 version.workspace = true
@@ -11,8 +17,19 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+build = "build.rs"
 
 [lints]
 workspace = true
 
 [dependencies]
+# R3: the SIMD kernels link against the SAME C libraries the reference uses,
+# vendored standalone (no ghostty dep). highway provides the runtime dispatch;
+# simdutf provides UTF/base64 transcoding used by base64.cpp / vt.cpp.
+highway-sys = { path = "../../crates-sys/highway-sys" }
+simdutf-sys = { path = "../../crates-sys/simdutf-sys" }
+
+[build-dependencies]
+# R3: compile the copied ghostty SIMD .cpp standalone via the host C++ compiler
+# with the reference's highway flags (mirrors SharedDeps.zig addSimd).
+cc = "1"
