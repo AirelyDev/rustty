@@ -334,6 +334,10 @@ impl<V: View> SplitTree<V> {
             return Ok(Self::empty());
         }
 
+        // Create a new arena allocator for the clone.
+        // (PORT: the Rust port has no separate arena field — the owned
+        // `Vec<Node>` below subsumes the reference's `ArenaAllocator`.)
+
         // Allocate a new nodes array and copy the existing nodes into it.
         let mut nodes: Vec<Node<V>> = self.nodes.clone();
 
@@ -877,6 +881,10 @@ impl<V: View> SplitTree<V> {
         if self.is_empty() {
             return Ok(Self::empty());
         }
+
+        // Create a new arena allocator for the clone.
+        // (PORT: the Rust port has no separate arena field — the owned
+        // `Vec<Node>` below subsumes the reference's `ArenaAllocator`.)
 
         // Allocate a new nodes array and copy the existing nodes into it.
         let mut nodes: Vec<Node<V>> = self.nodes.clone();

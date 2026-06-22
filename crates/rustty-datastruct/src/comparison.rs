@@ -318,6 +318,8 @@ mod tests {
             // Rust enums are always tagged, so only the tagged path applies
             // here; we compare the active tag then recurse into the payload.
             // expectEqual(expectedTag, actualTag)
+
+            // we only reach this switch if the tags are equal
             match (self, actual) {
                 (TUnion::A(e), TUnion::A(a)) => expect_approx_equal(e, a),
                 (TUnion::B(e), TUnion::B(a)) => expect_approx_equal(e, a),

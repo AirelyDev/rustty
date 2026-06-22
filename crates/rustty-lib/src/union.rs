@@ -20,6 +20,8 @@ pub struct UnionField {
     pub alignment: usize,
 }
 
+/// The C ABI compatible union value type.
+///
 /// PORT NOTE: A concrete payload value for `cval`. We only need the integer
 /// payloads the reference tests exercise (`u32`, `u64`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,7 +29,9 @@ pub struct CValue {
     pub raw: u64,
 }
 
-/// PORT NOTE: The C ABI tagged union result of `cval`: `tag` + `value`.
+/// The C ABI compatible tagged union type.
+///
+/// PORT NOTE: The result of `cval`: `tag` + `value`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct C {
     pub tag: i64,
@@ -105,6 +109,13 @@ impl TaggedUnion {
                 let mut max_size = 0usize;
                 let mut max_align = 1usize;
                 for f in &self.fields {
+                    // Types can provide custom types for their CValue.
+                    //
+                    // PORT NOTE: in the reference, for each tag field whose
+                    // payload type is an enum/struct/union that declares a `C`
+                    // decl, the `CValue` union member uses `Type.C` instead of
+                    // `Type`. Our descriptor stores each field's already-resolved
+                    // (`Type.C` when present) size/alignment in `UnionField`.
                     if f.size > max_size {
                         max_size = f.size;
                     }

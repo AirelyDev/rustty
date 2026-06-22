@@ -119,7 +119,14 @@ pub fn getenv(key: &str) -> Result<Option<GetEnvResult>, Error> {
     // the Windows allocation and the non-Windows lookup uniformly; a missing key
     // or an invalid-unicode value both map to `None` (matching the reference's
     // `EnvironmentVariableNotFound`/`InvalidWtf8` → null on Windows, and
-    // `posix.getenv` returning null otherwise).
+    // `posix.getenv` returning null otherwise). Both reference branches are
+    // reproduced as comments below at the line they cover.
+
+    // Non-Windows doesn't need to allocate
+    //   else => if (posix.getenv(key)) |v| .{ .value = v } else null,
+
+    // Windows needs to allocate
+    //   .windows => if (std.process.getEnvVarOwned(alloc, key)) |v| ... ,
     Ok(match std::env::var(key) {
         Ok(v) => Some(GetEnvResult { value: v }),
         Err(_) => None,

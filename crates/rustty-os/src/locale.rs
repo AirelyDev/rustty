@@ -278,9 +278,16 @@ fn preferredLanguageFromCocoa(buf: &mut [u8]) -> Result<Option<Vec<u8>>, NoSpace
         return Ok(None);
     }
 
-    // PORT: the reference null-terminates the buffer and reslices it back without
-    // the null terminator. We return the bytes (no trailing NUL); the caller
-    // converts to a `CString`.
+    // Null terminate it
+    // PORT: the reference writes a trailing NUL byte into the buffer
+    // (`writer.writeByte(0)`). In Rust the caller converts the returned bytes to
+    // a `CString`, which appends the NUL; we therefore do not push it here.
+
+    // Get our slice, this won't be null terminated so we have to
+    // reslice it with the null terminator.
+    // PORT: the reference does `slice[0 .. slice.len - 1 :0]` to return a
+    // sentinel-terminated `[:0]const u8`. We return the bytes (no trailing NUL);
+    // the caller converts to a `CString`.
     Ok(Some(out))
 }
 

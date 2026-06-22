@@ -56,8 +56,19 @@ pub enum Message {
 pub type Mailbox = BlockingQueue<Message, 64>;
 
 /// PARITY: the reference is a single struct (the file). Its fields are reproduced
-/// here verbatim.
+/// here, except the reference's first field (see the `alloc` PARITY note below)
+/// which Rust ownership subsumes; all remaining fields are verbatim.
 pub struct Thread {
+    /// Allocator used for some state
+    //
+    // PARITY: the reference's first field is `alloc: std.mem.Allocator`. In Rust
+    // the allocator is implicit (the global allocator), and the owned `Box<Mailbox>`
+    // (and the `xev` handles) carry their own RAII cleanup, so there is no literal
+    // `alloc` field to store; this field is subsumed by Rust ownership. The
+    // reference's `self.alloc` usages map to allocator-less Rust equivalents:
+    // `Mailbox.create(alloc)` -> `Mailbox::create()`, and
+    // `self.mailbox.destroy(self.alloc)` -> `self.mailbox.destroy()`.
+
     /// The main event loop for the thread. The user data of this loop
     /// is always the allocator used to create the loop. This is a convenience
     /// so that users of the loop always have an allocator.

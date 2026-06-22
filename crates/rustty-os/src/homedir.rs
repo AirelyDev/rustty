@@ -134,33 +134,68 @@ fn homeUnix(buf: &mut [u8]) -> Result<Option<&[u8]>, Error> {
 #[cfg(windows)]
 #[allow(non_snake_case)]
 fn homeWindows(buf: &mut [u8]) -> Result<Option<&[u8]>, Error> {
+    // PORT: the reference uses a `std.heap.FixedBufferAllocator.init(buf)` and
+    // allocates `HOMEDRIVE` (then `HOMEPATH`) into it via
+    // `std.process.getEnvVarOwned`, so the env var bytes are written *in place*
+    // starting at `buf.ptr`. `getEnvVarOwned` maps `error.OutOfMemory` (the FBA
+    // ran out of room) to `Error.BufferTooSmall`, and
+    // `error.InvalidWtf8`/`error.EnvironmentVariableNotFound` to `null`. We
+    // reproduce that in-place fill with `fixed_buffer_env` below, which writes the
+    // var into the head of the given buffer slice and returns the written
+    // sub-slice (whose `.as_ptr()` equals the slice's `.as_ptr()`), preserving the
+    // reference's pointer invariant for the `@panic("codebug")` guards.
+    let buf_ptr = buf.as_ptr();
+
     let drive_len = {
-        let drive = match std::env::var("HOMEDRIVE") {
-            Ok(v) => v,
-            Err(_) => return Ok(None),
+        let drive = match fixed_buffer_env(buf, "HOMEDRIVE") {
+            Ok(Some(v)) => v,
+            Ok(None) => return Ok(None),
+            Err(_) => return Err(Error::BufferTooSmall),
         };
-        let bytes = drive.as_bytes();
-        if buf.len() < bytes.len() {
-            return Err(Error::BufferTooSmall);
+        // could shift the contents if this ever happens
+        if drive.as_ptr() != buf_ptr {
+            panic!("codebug");
         }
-        buf[0..bytes.len()].copy_from_slice(bytes);
-        bytes.len()
+        drive.len()
     };
 
     let path_len = {
-        let homepath = match std::env::var("HOMEPATH") {
-            Ok(v) => v,
-            Err(_) => return Ok(None),
+        let path_buf_ptr = buf[drive_len..].as_ptr();
+        let homepath = match fixed_buffer_env(&mut buf[drive_len..], "HOMEPATH") {
+            Ok(Some(v)) => v,
+            Ok(None) => return Ok(None),
+            Err(_) => return Err(Error::BufferTooSmall),
         };
-        let bytes = homepath.as_bytes();
-        if buf[drive_len..].len() < bytes.len() {
-            return Err(Error::BufferTooSmall);
+        // could shift the contents if this ever happens
+        if homepath.as_ptr() != path_buf_ptr {
+            panic!("codebug");
         }
-        buf[drive_len..drive_len + bytes.len()].copy_from_slice(bytes);
-        bytes.len()
+        homepath.len()
     };
 
     Ok(Some(&buf[0..drive_len + path_len]))
+}
+
+// PORT: the equivalent of `std.process.getEnvVarOwned(fba, key)` where `fba` is a
+// `FixedBufferAllocator` over `dst`: writes the value of the environment variable
+// `key` into the head of `dst` in place, returning the written sub-slice. Returns
+// `Ok(None)` for a missing variable (`error.EnvironmentVariableNotFound`) and
+// `Err(())` when the value does not fit in `dst` (`error.OutOfMemory`). The
+// reference also folds `error.InvalidWtf8` into `null`; Windows env values are
+// WTF-16 and `var_os` always yields an `OsString`, so the invalid-WTF8 case maps
+// to a successful read here.
+#[cfg(windows)]
+fn fixed_buffer_env<'a>(dst: &'a mut [u8], key: &str) -> Result<Option<&'a [u8]>, ()> {
+    let value = match std::env::var(key) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let bytes = value.as_bytes();
+    if dst.len() < bytes.len() {
+        return Err(());
+    }
+    dst[0..bytes.len()].copy_from_slice(bytes);
+    Ok(Some(&dst[0..bytes.len()]))
 }
 
 #[cfg(not(target_os = "macos"))]

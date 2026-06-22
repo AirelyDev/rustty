@@ -286,6 +286,9 @@ impl<P: FailPointKey, E: Copy> Default for Module<P, E> {
 /// Construct a tripwire module for the given fail-point enum `P` and error
 /// type `E`. (Zig: `tripwire.module(P, E)`.)
 ///
+/// The error set used for failures at the failure points.
+/// (Zig: `pub const Error`.) In Rust the error type is the type parameter `E`.
+///
 /// In the Zig reference `E` may be an error set, an error-union type, or a
 /// function whose return-value error set is used. In Rust the error type is
 /// passed directly as the type parameter `E`; the caller selects it explicitly.
