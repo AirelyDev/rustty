@@ -23,3 +23,4 @@ rustty-os = { workspace = true }
 rustty-lib = { workspace = true }
 rustty-util = { workspace = true }
 rustty-render-types = { workspace = true }
+rustty-zigstd = { workspace = true }

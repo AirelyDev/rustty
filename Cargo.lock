@@ -571,6 +571,7 @@ dependencies = [
  "rustty-simd",
  "rustty-unicode",
  "rustty-util",
+ "rustty-zigstd",
 ]
 
 [[package]]
