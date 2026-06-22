@@ -64,13 +64,7 @@ pub trait ZigAllocator {
     /// `resize(ctx, memory, alignment, new_len, ret_addr) bool`
     fn resize(&self, memory: ZigSlice, alignment: Alignment, new_len: usize, ra: usize) -> bool;
     /// `remap(ctx, memory, alignment, new_len, ret_addr) ?[*]u8`
-    fn remap(
-        &self,
-        memory: ZigSlice,
-        alignment: Alignment,
-        new_len: usize,
-        ra: usize,
-    ) -> *mut u8;
+    fn remap(&self, memory: ZigSlice, alignment: Alignment, new_len: usize, ra: usize) -> *mut u8;
     /// `free(ctx, memory, alignment, ret_addr) void`
     fn free(&self, memory: ZigSlice, alignment: Alignment, ra: usize);
 }
@@ -240,13 +234,7 @@ impl ZigAllocator for CAllocatorAsZig {
         }
     }
 
-    fn remap(
-        &self,
-        old_mem: ZigSlice,
-        alignment: Alignment,
-        new_len: usize,
-        ra: usize,
-    ) -> *mut u8 {
+    fn remap(&self, old_mem: ZigSlice, alignment: Alignment, new_len: usize, ra: usize) -> *mut u8 {
         let s: &Allocator = unsafe { &*self.ctx };
         unsafe {
             ((*s.vtable).remap)(
@@ -320,7 +308,7 @@ extern "C" fn zig_allocator_resize(
     let zig_alloc: &dyn ZigAllocator = unsafe { (*(ctx as *const ZigAllocatorRef)).inner };
     let mem = ZigSlice::new(memory, memory_len);
     zig_alloc.resize(
-        mem, // memory[0..memory_len]
+        mem,                  // memory[0..memory_len]
         Alignment(alignment), // @enumFromInt(alignment)
         new_len,
         ra,
@@ -338,7 +326,7 @@ extern "C" fn zig_allocator_remap(
     let zig_alloc: &dyn ZigAllocator = unsafe { (*(ctx as *const ZigAllocatorRef)).inner };
     let mem = ZigSlice::new(memory, memory_len);
     zig_alloc.remap(
-        mem, // memory[0..memory_len]
+        mem,                  // memory[0..memory_len]
         Alignment(alignment), // @enumFromInt(alignment)
         new_len,
         ra,
@@ -355,7 +343,7 @@ extern "C" fn zig_allocator_free(
     let zig_alloc: &dyn ZigAllocator = unsafe { (*(ctx as *const ZigAllocatorRef)).inner };
     let mem = ZigSlice::new(memory, memory_len);
     zig_alloc.free(
-        mem, // memory[0..memory_len]
+        mem,                  // memory[0..memory_len]
         Alignment(alignment), // @enumFromInt(alignment)
         ra,
     )
@@ -391,13 +379,7 @@ impl ZigAllocator for GlobalZigAllocator {
         new_len <= memory.len
     }
 
-    fn remap(
-        &self,
-        memory: ZigSlice,
-        alignment: Alignment,
-        new_len: usize,
-        _ra: usize,
-    ) -> *mut u8 {
+    fn remap(&self, memory: ZigSlice, alignment: Alignment, new_len: usize, _ra: usize) -> *mut u8 {
         if memory.len == 0 {
             return self.alloc(new_len, alignment, _ra);
         }
@@ -453,8 +435,8 @@ impl ZigAllocator for FixedBufferAllocator {
     }
 
     fn resize(&self, memory: ZigSlice, _alignment: Alignment, new_len: usize, _ra: usize) -> bool {
-        let is_last = (memory.ptr as usize + memory.len)
-            == (self.buf as usize + self.end_index.get());
+        let is_last =
+            (memory.ptr as usize + memory.len) == (self.buf as usize + self.end_index.get());
         if !is_last {
             return new_len <= memory.len;
         }
@@ -466,13 +448,7 @@ impl ZigAllocator for FixedBufferAllocator {
         true
     }
 
-    fn remap(
-        &self,
-        memory: ZigSlice,
-        alignment: Alignment,
-        new_len: usize,
-        ra: usize,
-    ) -> *mut u8 {
+    fn remap(&self, memory: ZigSlice, alignment: Alignment, new_len: usize, ra: usize) -> *mut u8 {
         if self.resize(memory, alignment, new_len, ra) {
             memory.ptr
         } else {
@@ -481,8 +457,8 @@ impl ZigAllocator for FixedBufferAllocator {
     }
 
     fn free(&self, memory: ZigSlice, _alignment: Alignment, _ra: usize) {
-        let is_last = (memory.ptr as usize + memory.len)
-            == (self.buf as usize + self.end_index.get());
+        let is_last =
+            (memory.ptr as usize + memory.len) == (self.buf as usize + self.end_index.get());
         if is_last {
             self.end_index.set(self.end_index.get() - memory.len);
         }

@@ -24,9 +24,9 @@ pub type Opaque = *mut c_void;
 /// PORT NOTE: `alloc.create(*anyopaque)` allocates storage for one pointer.
 pub extern "C" fn alloc_opaque() -> *mut Opaque {
     let layout = Layout::new::<Opaque>();
-    let p = unsafe { raw_alloc(layout) } as *mut Opaque;
+
     // catch return null
-    p
+    (unsafe { raw_alloc(layout) } as *mut Opaque)
 }
 
 pub extern "C" fn free_opaque(ptr: *mut Opaque) {
@@ -37,11 +37,10 @@ pub extern "C" fn free_opaque(ptr: *mut Opaque) {
 }
 
 pub extern "C" fn alloc_u8_array(len: usize) -> *mut u8 {
-    let slice = match alloc_array::<u8>(len) {
+    match alloc_array::<u8>(len) {
         Some(p) => p,
-        None => return std::ptr::null_mut(),
-    };
-    slice
+        None => std::ptr::null_mut(),
+    }
 }
 
 pub extern "C" fn free_u8_array(ptr: *mut u8, len: usize) {
@@ -51,11 +50,10 @@ pub extern "C" fn free_u8_array(ptr: *mut u8, len: usize) {
 }
 
 pub extern "C" fn alloc_u16_array(len: usize) -> *mut u16 {
-    let slice = match alloc_array::<u16>(len) {
+    match alloc_array::<u16>(len) {
         Some(p) => p,
-        None => return std::ptr::null_mut(),
-    };
-    slice
+        None => std::ptr::null_mut(),
+    }
 }
 
 pub extern "C" fn free_u16_array(ptr: *mut u16, len: usize) {

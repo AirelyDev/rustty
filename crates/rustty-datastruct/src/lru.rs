@@ -231,11 +231,7 @@ impl<K: Eq + Hash + Copy, V: Copy> HashMap<K, V> {
             Ok(GetOrPutResult {
                 found_existing: false,
                 value_ptr: ptr::addr_of_mut!((*entry).data.value),
-                evicted: if !evict {
-                    None
-                } else {
-                    Some((*entry).data)
-                },
+                evicted: if !evict { None } else { Some((*entry).data) },
             })
         }
     }

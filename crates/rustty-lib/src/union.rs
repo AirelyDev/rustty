@@ -169,8 +169,18 @@ mod tests {
         let u = TaggedUnion::new(
             Target::C,
             vec![
-                UnionField { name: "a", tag_value: 0, size: 4, alignment: 4 },
-                UnionField { name: "b", tag_value: 1, size: 8, alignment: 8 },
+                UnionField {
+                    name: "a",
+                    tag_value: 0,
+                    size: 4,
+                    alignment: 4,
+                },
+                UnionField {
+                    name: "b",
+                    tag_value: 1,
+                    size: 8,
+                    alignment: 8,
+                },
             ],
             8,
             8,
@@ -185,7 +195,12 @@ mod tests {
         // union(Tag) { a: u32 }, Padding = u64
         let u = TaggedUnion::new(
             Target::C,
-            vec![UnionField { name: "a", tag_value: 0, size: 4, alignment: 4 }],
+            vec![UnionField {
+                name: "a",
+                tag_value: 0,
+                size: 4,
+                alignment: 4,
+            }],
             8,
             8,
         );
@@ -200,8 +215,18 @@ mod tests {
         let u = TaggedUnion::new(
             Target::C,
             vec![
-                UnionField { name: "a", tag_value: 0, size: 4, alignment: 4 },
-                UnionField { name: "b", tag_value: 1, size: 8, alignment: 8 },
+                UnionField {
+                    name: "a",
+                    tag_value: 0,
+                    size: 4,
+                    alignment: 4,
+                },
+                UnionField {
+                    name: "b",
+                    tag_value: 1,
+                    size: 8,
+                    alignment: 8,
+                },
             ],
             8,
             8,

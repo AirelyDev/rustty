@@ -500,10 +500,7 @@ mod tests {
 
     #[test]
     fn deepEqual_struct() {
-        assert!(deep_equal(
-            &Point { x: 10, y: 20 },
-            &Point { x: 10, y: 20 }
-        ));
+        assert!(deep_equal(&Point { x: 10, y: 20 }, &Point { x: 10, y: 20 }));
         assert!(!deep_equal(
             &Point { x: 10, y: 20 },
             &Point { x: 10, y: 21 }
@@ -640,8 +637,7 @@ mod tests {
     }
     impl DeepEqual for Item {
         fn deep_equal(&self, other: &Self) -> bool {
-            deep_equal(&self.id, &other.id)
-                && deep_equal::<[u8]>(&self.name, &other.name)
+            deep_equal(&self.id, &other.id) && deep_equal::<[u8]>(&self.name, &other.name)
         }
     }
 
@@ -689,8 +685,7 @@ mod tests {
     }
     impl DeepEqual for Config {
         fn deep_equal(&self, other: &Self) -> bool {
-            deep_equal::<[u8]>(&self.name, &other.name)
-                && deep_equal(&self.port, &other.port)
+            deep_equal::<[u8]>(&self.name, &other.name) && deep_equal(&self.port, &other.port)
         }
     }
 
@@ -751,21 +746,12 @@ mod tests {
     #[test]
     fn deepEqual_struct_with_array_field() {
         assert!(deep_equal(
-            &Data {
-                values: [1, 2, 3]
-            },
-            &Data {
-                values: [1, 2, 3]
-            }
+            &Data { values: [1, 2, 3] },
+            &Data { values: [1, 2, 3] }
         ));
         assert!(!deep_equal(
-            &Data {
-                values: [1, 2, 3]
-            },
-            &Data {
-                values: [1, 2, 4]
-            }
+            &Data { values: [1, 2, 3] },
+            &Data { values: [1, 2, 4] }
         ));
     }
-
 }

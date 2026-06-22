@@ -295,7 +295,10 @@ impl<V: View> SplitTree<V> {
         let reffed = unsafe { Self::view_ref(view)? };
         nodes.push(Node::Leaf(reffed));
 
-        Ok(SplitTree { nodes, zoomed: None })
+        Ok(SplitTree {
+            nodes,
+            zoomed: None,
+        })
     }
 
     /// Clone this tree, returning a new tree with the same nodes.
@@ -1040,7 +1043,9 @@ impl<V: View> SplitTree<V> {
 
     fn fill_spatial_slots(&self, slots: &mut [Slot], current_: Handle) {
         let current = current_.idx();
-        assert(slots[current].width >= F16::from_int(0) && slots[current].height >= F16::from_int(0));
+        assert(
+            slots[current].width >= F16::from_int(0) && slots[current].height >= F16::from_int(0),
+        );
         match &self.nodes[current] {
             // Leaf node, current slot is already filled by caller.
             Node::Leaf(_) => {}
@@ -1151,21 +1156,17 @@ impl<V: View> SplitTree<V> {
             Node::Leaf(v) => {
                 if V::HAS_SPLIT_TREE_LABEL {
                     let label = unsafe { V::split_tree_label(*v) }.unwrap_or_default();
-                    let _ = write!(
-                        writer,
-                        "leaf: {}\n",
-                        String::from_utf8_lossy(&label)
-                    );
+                    let _ = writeln!(writer, "leaf: {}", String::from_utf8_lossy(&label));
                 } else {
-                    let _ = write!(writer, "leaf: {}\n", current.idx());
+                    let _ = writeln!(writer, "leaf: {}", current.idx());
                 }
             }
 
             Node::Split(s) => {
                 let s = *s;
-                let _ = write!(
+                let _ = writeln!(
                     writer,
-                    "split (layout: {}, ratio: {:.2})\n",
+                    "split (layout: {}, ratio: {:.2})",
                     s.layout.tag_name(),
                     s.ratio.to_f32()
                 );
@@ -1418,10 +1419,7 @@ impl<'a, V: View> Iterator<'a, V> {
         let node = &self.nodes[handle.idx()];
 
         match node {
-            Node::Leaf(v) => Some(ViewEntry {
-                handle,
-                view: *v,
-            }),
+            Node::Leaf(v) => Some(ViewEntry { handle, view: *v }),
             Node::Split(_) => self.next(),
         }
     }
@@ -1559,7 +1557,7 @@ mod tests {
         let t2: TestTree = TestTree::init(&mut v2).unwrap();
         let t3 = t1
             .split(
-                Handle::ROOT, // at root
+                Handle::ROOT,     // at root
                 Direction::Right, // split right
                 F16::from_f32(0.5),
                 &t2, // insert t2
@@ -1675,7 +1673,7 @@ mod tests {
 
         let t3 = t1
             .split(
-                Handle::ROOT, // at root
+                Handle::ROOT,    // at root
                 Direction::Down, // split down
                 F16::from_f32(0.5),
                 &t2, // insert t2
@@ -1704,7 +1702,7 @@ mod tests {
         // A | B horizontal
         let split_ab = t1
             .split(
-                Handle::ROOT, // at root
+                Handle::ROOT,     // at root
                 Direction::Right, // split right
                 F16::from_f32(0.0),
                 &t2, // insert t2
@@ -1733,7 +1731,7 @@ mod tests {
         // A | B horizontal
         let split_ab = t1
             .split(
-                Handle::ROOT, // at root
+                Handle::ROOT,    // at root
                 Direction::Down, // split right
                 F16::from_f32(0.0),
                 &t2, // insert t2
@@ -1762,7 +1760,7 @@ mod tests {
         // A | B horizontal
         let split_ab = t1
             .split(
-                Handle::ROOT, // at root
+                Handle::ROOT,     // at root
                 Direction::Right, // split right
                 F16::from_f32(1.0),
                 &t2, // insert t2
@@ -1791,7 +1789,7 @@ mod tests {
         // A | B horizontal
         let split_ab = t1
             .split(
-                Handle::ROOT, // at root
+                Handle::ROOT,    // at root
                 Direction::Down, // split right
                 F16::from_f32(1.0),
                 &t2, // insert t2
@@ -1818,7 +1816,7 @@ mod tests {
         let t2: TestTree = TestTree::init(&mut v2).unwrap();
         let t3 = t1
             .split(
-                Handle::ROOT, // at root
+                Handle::ROOT,     // at root
                 Direction::Right, // split right
                 F16::from_f32(0.5),
                 &t2, // insert t2
@@ -1850,7 +1848,7 @@ mod tests {
         // A | B horizontal.
         let split1 = t1
             .split(
-                Handle::ROOT, // at root
+                Handle::ROOT,     // at root
                 Direction::Right, // split right
                 F16::from_f32(0.5),
                 &t2, // insert t2
@@ -1860,7 +1858,7 @@ mod tests {
         // Insert C below that.
         let split2 = split1
             .split(
-                Handle::ROOT, // at root
+                Handle::ROOT,    // at root
                 Direction::Down, // split down
                 F16::from_f32(0.5),
                 &t3, // insert t3
@@ -1920,7 +1918,7 @@ mod tests {
         // A | B horizontal
         let split_ab = t1
             .split(
-                Handle::ROOT, // at root
+                Handle::ROOT,     // at root
                 Direction::Right, // split right
                 F16::from_f32(0.5),
                 &t2, // insert t2
@@ -1930,9 +1928,7 @@ mod tests {
         // A | C vertical
         let split_ac = split_ab
             .split(
-                {
-                    find_handle(&split_ab, b"A").unwrap()
-                },
+                { find_handle(&split_ab, b"A").unwrap() },
                 Direction::Down, // split down
                 F16::from_f32(0.8),
                 &t3, // insert t3
@@ -1942,9 +1938,7 @@ mod tests {
         // B | D vertical
         let split_bd = split_ac
             .split(
-                {
-                    find_handle(&split_ab, b"B").unwrap()
-                },
+                { find_handle(&split_ab, b"B").unwrap() },
                 Direction::Down, // split down
                 F16::from_f32(0.3),
                 &t4, // insert t4
@@ -2068,7 +2062,7 @@ mod tests {
         // A | B horizontal
         let split = t1
             .split(
-                Handle::ROOT, // at root
+                Handle::ROOT,     // at root
                 Direction::Right, // split right
                 F16::from_f32(0.5),
                 &t2, // insert t2
@@ -2128,7 +2122,7 @@ mod tests {
         // A | B vertical
         let split_ab = t1
             .split(
-                Handle::ROOT, // at root
+                Handle::ROOT,    // at root
                 Direction::Down, // split down
                 F16::from_f32(0.5),
                 &t2, // insert t2
@@ -2137,9 +2131,7 @@ mod tests {
 
         let split_bc = split_ab
             .split(
-                {
-                    find_handle(&split_ab, b"B").unwrap()
-                },
+                { find_handle(&split_ab, b"B").unwrap() },
                 Direction::Down, // split down
                 F16::from_f32(0.5),
                 &t3, // insert t3
@@ -2254,7 +2246,7 @@ mod tests {
         // A | B horizontal
         let mut split = t1
             .split(
-                Handle::ROOT, // at root
+                Handle::ROOT,     // at root
                 Direction::Right, // split right
                 F16::from_f32(0.5),
                 &t2, // insert t2
@@ -2301,7 +2293,7 @@ mod tests {
         // A | B horizontal
         let split = t1
             .split(
-                Handle::ROOT, // at root
+                Handle::ROOT,     // at root
                 Direction::Right, // split right
                 F16::from_f32(0.5),
                 &t2, // insert t2
@@ -2329,7 +2321,7 @@ mod tests {
         // A | B horizontal
         let mut split = t1
             .split(
-                Handle::ROOT, // at root
+                Handle::ROOT,     // at root
                 Direction::Right, // split right
                 F16::from_f32(0.5),
                 &t2, // insert t2
@@ -2345,10 +2337,7 @@ mod tests {
             assert!(removed.zoomed.is_none());
 
             let str = removed.format_text();
-            assert_eq!(
-                str,
-                "leaf: B\n"
-            );
+            assert_eq!(str, "leaf: B\n");
         }
 
         // Remove B, should keep zoom
@@ -2357,10 +2346,7 @@ mod tests {
             let removed = split.remove(from).unwrap();
 
             let str = removed.format_text();
-            assert_eq!(
-                str,
-                "(zoomed) leaf: A\n"
-            );
+            assert_eq!(str, "(zoomed) leaf: A\n");
         }
     }
 }

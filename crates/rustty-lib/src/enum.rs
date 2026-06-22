@@ -100,14 +100,14 @@ pub fn enum_type(target: Target, keys: &[Option<&str>]) -> EnumType {
     }
 
     // Assigned to var so that the type name is nicer in stack traces.
-    let result = EnumType {
+
+    EnumType {
         tag_type: match target {
             Target::C => TagType::CInt,
             Target::Zig => int_fitting_range(fields_i - 1),
         },
         fields,
-    };
-    result
+    }
 }
 
 /// Verify that for every key in enum T, there is a matching declaration in
@@ -155,8 +155,8 @@ where
         if let Some(decl) = c(&expected_name) {
             if decl != *value as i64 {
                 eprintln!(
-                    "{} key {} does not have the same backing int as {}",
-                    "EnumType", name, expected_name
+                    "EnumType key {} does not have the same backing int as {}",
+                    name, expected_name
                 );
                 return Err(format!(
                     "{} key {} does not have the same backing int as {}",
@@ -170,7 +170,7 @@ where
         }
     }
 
-    if set.len() != 0 {
+    if !set.is_empty() {
         for v in &set {
             // Recover the key name for this leftover value.
             let upper_string: String = enum_fields

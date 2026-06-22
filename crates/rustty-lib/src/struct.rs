@@ -149,9 +149,24 @@ mod tests {
         StructType {
             layout: Layout::Extern,
             fields: vec![
-                FieldInfo { name: "size", size: 8, natural_align: 8, alignment: 8 },
-                FieldInfo { name: "a", size: 1, natural_align: 1, alignment: 1 },
-                FieldInfo { name: "b", size: 4, natural_align: 4, alignment: 4 },
+                FieldInfo {
+                    name: "size",
+                    size: 8,
+                    natural_align: 8,
+                    alignment: 8,
+                },
+                FieldInfo {
+                    name: "a",
+                    size: 1,
+                    natural_align: 1,
+                    alignment: 1,
+                },
+                FieldInfo {
+                    name: "b",
+                    size: 4,
+                    natural_align: 4,
+                    alignment: 4,
+                },
             ],
             is_tuple: false,
         }
@@ -194,9 +209,24 @@ mod tests {
         let packed = StructType {
             layout: Layout::Packed,
             fields: vec![
-                FieldInfo { name: "flag1", size: 1, natural_align: 1, alignment: 0 },
-                FieldInfo { name: "flag2", size: 1, natural_align: 1, alignment: 0 },
-                FieldInfo { name: "value", size: 1, natural_align: 1, alignment: 0 },
+                FieldInfo {
+                    name: "flag1",
+                    size: 1,
+                    natural_align: 1,
+                    alignment: 0,
+                },
+                FieldInfo {
+                    name: "flag2",
+                    size: 1,
+                    natural_align: 1,
+                    alignment: 0,
+                },
+                FieldInfo {
+                    name: "value",
+                    size: 1,
+                    natural_align: 1,
+                    alignment: 0,
+                },
             ],
             is_tuple: false,
         };

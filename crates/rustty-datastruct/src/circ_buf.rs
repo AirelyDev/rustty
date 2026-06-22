@@ -311,7 +311,7 @@ impl<T: Copy> CircBuf<T> {
 
         // If we exceeded the length of the buffer, wrap around.
         if self.head >= self.storage.len() {
-            self.head = self.head - self.storage.len();
+            self.head -= self.storage.len();
         }
 
         // If we're full, we have to keep tail lined up.
@@ -601,8 +601,12 @@ mod tests {
             assert_eq!(2usize, slices.0.len());
             assert_eq!(0usize, slices.1.len());
             assert_eq!(2usize, buf.len());
-            unsafe { (&mut *slices.0)[0] = 1; }
-            unsafe { (&mut *slices.0)[1] = 2; }
+            unsafe {
+                (&mut *slices.0)[0] = 1;
+            }
+            unsafe {
+                (&mut *slices.0)[1] = 2;
+            }
         }
 
         // Get a slice that does grow, and forces wrap
@@ -615,8 +619,12 @@ mod tests {
             // should be empty
             assert_eq!(0u8, unsafe { (&*slices.0)[0] });
             assert_eq!(0u8, unsafe { (&*slices.0)[1] });
-            unsafe { (&mut *slices.0)[0] = 3; }
-            unsafe { (&mut *slices.0)[1] = 4; }
+            unsafe {
+                (&mut *slices.0)[0] = 3;
+            }
+            unsafe {
+                (&mut *slices.0)[1] = 4;
+            }
         }
 
         // Get a slice across boundaries
@@ -681,9 +689,15 @@ mod tests {
         // Refill to force a wrap
         {
             let slices = buf.get_ptr_slice(0, 3);
-            unsafe { (&mut *slices.0)[0] = 1; }
-            unsafe { (&mut *slices.1)[0] = 2; }
-            unsafe { (&mut *slices.1)[1] = 3; }
+            unsafe {
+                (&mut *slices.0)[0] = 1;
+            }
+            unsafe {
+                (&mut *slices.1)[0] = 2;
+            }
+            unsafe {
+                (&mut *slices.1)[1] = 3;
+            }
             assert_eq!(3usize, buf.len());
             assert!(buf.tail == 3 && buf.head == 2);
         }
@@ -715,10 +729,18 @@ mod tests {
         {
             let slices = buf.get_ptr_slice(0, 4);
             assert!(buf.full);
-            unsafe { (&mut *slices.0)[0] = 1; }
-            unsafe { (&mut *slices.1)[0] = 2; }
-            unsafe { (&mut *slices.1)[1] = 3; }
-            unsafe { (&mut *slices.1)[2] = 4; }
+            unsafe {
+                (&mut *slices.0)[0] = 1;
+            }
+            unsafe {
+                (&mut *slices.1)[0] = 2;
+            }
+            unsafe {
+                (&mut *slices.1)[1] = 3;
+            }
+            unsafe {
+                (&mut *slices.1)[2] = 4;
+            }
         }
 
         // Rotate to zero
@@ -766,10 +788,18 @@ mod tests {
         {
             let slices = buf.get_ptr_slice(0, 4);
             assert!(buf.full);
-            unsafe { (&mut *slices.0)[0] = 1; }
-            unsafe { (&mut *slices.0)[1] = 2; }
-            unsafe { (&mut *slices.0)[2] = 3; }
-            unsafe { (&mut *slices.0)[3] = 4; }
+            unsafe {
+                (&mut *slices.0)[0] = 1;
+            }
+            unsafe {
+                (&mut *slices.0)[1] = 2;
+            }
+            unsafe {
+                (&mut *slices.0)[2] = 3;
+            }
+            unsafe {
+                (&mut *slices.0)[3] = 4;
+            }
         }
 
         // Resize
@@ -796,10 +826,18 @@ mod tests {
         {
             let slices = buf.get_ptr_slice(0, 4);
             assert!(buf.full);
-            unsafe { (&mut *slices.0)[0] = 1; }
-            unsafe { (&mut *slices.0)[1] = 2; }
-            unsafe { (&mut *slices.0)[2] = 3; }
-            unsafe { (&mut *slices.0)[3] = 4; }
+            unsafe {
+                (&mut *slices.0)[0] = 1;
+            }
+            unsafe {
+                (&mut *slices.0)[1] = 2;
+            }
+            unsafe {
+                (&mut *slices.0)[2] = 3;
+            }
+            unsafe {
+                (&mut *slices.0)[3] = 4;
+            }
         }
 
         // Resize
