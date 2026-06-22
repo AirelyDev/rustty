@@ -35,8 +35,15 @@ INV = os.path.join(G.RUSTTY_ROOT, ".port", "phase-0", "inventory")
 sys.path.insert(0, INV)
 import census_comments as CC  # noqa: E402  (reuse string-aware find_comment_start)
 
-THRESHOLD = 0.60
-MISS = 0.45
+# Coverage signal priority: EXACT substring match (verbatim preservation after
+# ghostty->rustty retarget) is the primary "covered" signal and is threshold-free.
+# Fuzzy similarity is only a fallback for lightly-adapted comments, and it is
+# deliberately STRICT: coincidental cross-file matches at ~0.5 must NOT count as
+# covered (that false-negative let real os drops through). A ref comment whose
+# best fuzzy match is in [MISS, THRESHOLD) is REVIEW (flagged, must be vetted —
+# not auto-covered); below MISS it is a hard MISSING (RED).
+THRESHOLD = 0.80
+MISS = 0.62
 WORD_RE = re.compile(r"[a-z0-9_]{2,}")
 
 
