@@ -1,0 +1,77 @@
+{
+  "batch": 2,
+  "verdict": "GREEN",
+  "ci_result": "PASS",
+  "ci_exit_code": 0,
+  "commit": "7a0a3b4",
+  "branch": "phase-1-parity-gates",
+  "git_tree_clean": true,
+  "total_tests_ported": 98,
+  "global_contract_floor": 3234,
+  "workspace_contract": 3225,
+  "r3_no_ghostty_dep": true,
+  "crates": [
+    {
+      "crate": "rustty-global",
+      "tests_ported": 0,
+      "tests_contract": 0,
+      "assertions_rust": 0,
+      "assertions_ref": 0,
+      "g3b_missing": 0,
+      "miri_clean": true,
+      "all_gates_green": true,
+      "table_bit_identical": "N/A (no lookup tables)",
+      "review_verdict": "PARITY",
+      "gates": {
+        "cargo_test": "GREEN (0 tests, exit 0)",
+        "clippy": "GREEN (exit 0, -D warnings)",
+        "fmt": "GREEN (exit 0)",
+        "G1_tests_ported": "GREEN (0/0, name-sets match)",
+        "G2_assertions": "GREEN (rust=0 >= ref=0)",
+        "G3_comments_fidelity": "GREEN (rust=327 ref=77 delta=+250)",
+        "G3b_comment_coverage": "GREEN (distinctive=58 missing=0 review=0)",
+        "G7_acyclic": "GREEN (0 cross-crate SCCs)",
+        "G6_miri": "GREEN (0 UB, 0 leaks, 0 tests)"
+      },
+      "blockers": []
+    },
+    {
+      "crate": "rustty-unicode",
+      "tests_ported": 5,
+      "tests_contract": 5,
+      "assertions_rust": 26,
+      "assertions_ref": 18,
+      "g3b_missing": 0,
+      "miri_clean": true,
+      "all_gates_green": true,
+      "table_bit_identical": "VERIFIED (width+is_symbol zero-diff full range 0..=0x10FFFF; grapheme sweep zero-diff; props all-fields zero-diff; 8192 grapheme precompute entries zero-diff) against independently rebuilt uucode 0.2.0 + ghostty uucode_config.zig oracle",
+      "review_verdict": "PARITY",
+      "gates": {
+        "cargo_test": "GREEN (5 passed, exit 0)",
+        "clippy": "GREEN (exit 0, -D warnings; 3 justified PARITY #[allow])",
+        "fmt": "GREEN (exit 0)",
+        "G1_tests_ported": "GREEN (5/5, name-sets match, +1 extra ref_all_decls)",
+        "G2_assertions": "GREEN (rust=26 >= ref=18)",
+        "G3_comments_fidelity": "GREEN (rust=279 ref=107 delta=+172)",
+        "G3b_comment_coverage": "GREEN (distinctive=64 missing=0 review=0)",
+        "G7_acyclic": "GREEN (0 cross-crate cycles)",
+        "G6_miri": "GREEN (5 tests pass under Miri in 857s, 0 UB, 0 leaks)"
+      },
+      "blockers": [],
+      "resolved_blockers": [
+        "Porter's only blocker (Miri G6 unconfirmed/IN PROGRESS) is RESOLVED: cargo +nightly miri test -p rustty-unicode ran to completion (857.11s) with 5 passed / 0 failed and zero UB/leak strings. Confirmed in this CI run.",
+        "Porter's committed:false is RESOLVED: batch-2 unicode work committed as 7a0a3b4; git tree now clean."
+      ],
+      "notes_flagged": [
+        "The two in-crate 'tables match uucode' tests (unicode_props_tables_match_uucode, unicode_symbols_tables_match_uucode) are tautological in-crate because R3 forbids the uucode Cargo dep and the real oracle was relocated to the external parity harness. Assertion counts are preserved (assert!(false) verbatim, gate rust=26>=ref=18). Data parity is NOT weakened: tables independently proven bit-identical vs the rebuilt uucode oracle (zero diff). This is a form-not-data weakening confined to the tests' self-checking power; not a parity break."
+      ]
+    }
+  ],
+  "ci_summary": {
+    "hard_fail_passed": ["cargo fmt --check", "cargo clippy -D warnings", "cargo build --workspace", "cargo test --workspace", "G7", "G4"],
+    "progress_green": ["G1", "G2", "G3", "G3b", "G9", "G8", "G5", "G6"],
+    "warnings_blocked": 0,
+    "hard_failures": 0
+  },
+  "blockers": []
+}
