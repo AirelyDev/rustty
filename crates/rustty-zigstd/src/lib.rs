@@ -3,7 +3,7 @@
 //! PORTS: Zig stdlib types AS THE PORT USES THEM — std.heap.ArenaAllocator,
 //! std.heap.MemoryPool / MemoryPoolAligned, std.array_hash_map.AutoArrayHashMap.
 //!
-//! PORT STATUS: infra (Zig stdlib equivalents; not in the 3234 contract)
+//! PORT STATUS: done (infra; Zig stdlib equivalents; not in the 3234 contract)
 //!
 //! These types are NOT in ghostty src/, so they are NOT part of the 3234-test
 //! parity contract; they are ADDITIVE INFRASTRUCTURE GLUE (R1 allows necessary
