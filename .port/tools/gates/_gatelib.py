@@ -146,6 +146,26 @@ def crate_dir_name(crate):
     return "rustty-" + crate
 
 
+def normalize_crate(arg, cm=None):
+    """Accept either the crate_map key ('datastruct') OR the real Cargo crate
+    name ('rustty-datastruct', and 'rustty' for the bin). Returns the canonical
+    crate_map key; returns the arg unchanged if no match so the caller still
+    reports an honest 'unknown crate' (never a silent pass)."""
+    if not arg:
+        return arg
+    if cm is None:
+        cm = crate_map()
+    if arg in cm:
+        return arg
+    if arg == "rustty" and "bin" in cm:
+        return "bin"
+    if arg.startswith("rustty-"):
+        stripped = arg[len("rustty-"):]
+        if stripped in cm:
+            return stripped
+    return arg
+
+
 def crate_src_dir(crate):
     """Absolute path to crates/<dir>/src, or None if the crate dir is absent."""
     d = os.path.join(CRATES_DIR, crate_dir_name(crate), "src")

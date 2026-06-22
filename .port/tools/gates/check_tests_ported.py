@@ -84,6 +84,8 @@ def run(args):
 
     ref_names = load_ref_names_per_crate(summary) if not args.no_names else {}
 
+    if args.crate:
+        args.crate = G.normalize_crate(args.crate, cm)
     crates = [args.crate] if args.crate else G.workspace_crates(cm)
     if args.crate and args.crate not in cm:
         G.emit(G.RED, f"unknown crate '{args.crate}' (not in crate_map)")
