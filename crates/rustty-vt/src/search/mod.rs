@@ -4,9 +4,9 @@
 //!
 //! PORT STATUS: stub
 
-pub mod thread;
 pub mod active;
 pub mod pagelist;
 pub mod screen;
 pub mod sliding_window;
+pub mod thread;
 pub mod viewport;

@@ -5,10 +5,10 @@
 //! PORT STATUS: stub
 
 pub mod change_window_icon;
-pub mod context_signal;
 pub mod change_window_title;
 pub mod clipboard_operation;
 pub mod color;
+pub mod context_signal;
 pub mod hyperlink;
 pub mod iterm2;
 pub mod kitty_clipboard_protocol;

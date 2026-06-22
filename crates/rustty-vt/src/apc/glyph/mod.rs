@@ -4,7 +4,7 @@
 //!
 //! PORT STATUS: stub
 
-pub mod glossary;
 pub mod execute;
+pub mod glossary;
 pub mod request;
 pub mod response;
