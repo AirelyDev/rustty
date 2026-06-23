@@ -9430,3 +9430,542 @@ fn pagelist_resize_reflow_less_cols_cursor_in_wrapped_row() {
     s.untrack_pin(p);
     s.deinit();
 }
+
+// ref: test "PageList resize reflow less cols wraps spacer head"
+#[test]
+fn pagelist_resize_reflow_less_cols_wraps_spacer_head() {
+    let mut s = PageList::init(4, 3, Some(0)).unwrap();
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+
+        {
+            let rac = page.get_row_and_cell(0, 0);
+            unsafe {
+                (*rac.row).set_wrap(true);
+                *rac.cell = cell_codepoint('x' as u32);
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(1, 0);
+            unsafe {
+                *rac.cell = cell_codepoint('x' as u32);
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(2, 0);
+            unsafe {
+                *rac.cell = cell_codepoint('x' as u32);
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(3, 0);
+            unsafe {
+                let mut c = cell_codepoint(0);
+                c.set_wide(crate::page::Wide::SpacerHead);
+                *rac.cell = c;
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(0, 1);
+            unsafe {
+                (*rac.row).set_wrap_continuation(true);
+                let mut c = cell_codepoint('😀' as u32);
+                c.set_wide(crate::page::Wide::Wide);
+                *rac.cell = c;
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(1, 1);
+            unsafe {
+                let mut c = cell_codepoint(0);
+                c.set_wide(crate::page::Wide::SpacerTail);
+                *rac.cell = c;
+            }
+        }
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(3),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(3usize, s.cols as usize);
+    assert_eq!(3usize, s.total_rows());
+
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+
+        {
+            let rac = page.get_row_and_cell(0, 0);
+            assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
+            assert!(unsafe { (*rac.row).wrap() });
+        }
+        {
+            let rac = page.get_row_and_cell(1, 0);
+            assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
+        }
+        {
+            let rac = page.get_row_and_cell(2, 0);
+            assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
+        }
+        {
+            let rac = page.get_row_and_cell(0, 1);
+            assert_eq!('😀' as u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Wide, unsafe { (*rac.cell).wide() });
+        }
+        {
+            let rac = page.get_row_and_cell(1, 1);
+            assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::SpacerTail, unsafe { (*rac.cell).wide() });
+        }
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols cursor goes to scrollback"
+#[test]
+fn pagelist_resize_reflow_less_cols_cursor_goes_to_scrollback() {
+    let mut s = PageList::init(4, 2, None).unwrap();
+    assert!(s.pages.first == s.pages.last);
+    let page = unsafe { &mut (*s.pages.first).data };
+    for y in 0..s.rows {
+        for x in 0..s.cols {
+            let rac = page.get_row_and_cell(x as usize, y as usize);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Put a tracked pin in the history
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 2, y: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(2),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(2usize, s.cols as usize);
+    assert_eq!(4usize, s.total_rows());
+
+    // Our cursor should move to the first row
+    assert!(s.point_from_pin(point::Tag::Active, pin_copy(p)).is_none());
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols cursor in unchanged row"
+#[test]
+fn pagelist_resize_reflow_less_cols_cursor_in_unchanged_row() {
+    let mut s = PageList::init(4, 2, None).unwrap();
+    assert!(s.pages.first == s.pages.last);
+    let page = unsafe { &mut (*s.pages.first).data };
+    for y in 0..s.rows {
+        for x in 0..2 {
+            let rac = page.get_row_and_cell(x as usize, y as usize);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Put a tracked pin in the history
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 1, y: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(2),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(2usize, s.cols as usize);
+    assert_eq!(2usize, s.total_rows());
+
+    // Our cursor should move to the first row
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 1, y: 0 }),
+        s.point_from_pin(point::Tag::Active, pin_copy(p)).unwrap()
+    );
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols cursor in blank cell"
+#[test]
+fn pagelist_resize_reflow_less_cols_cursor_in_blank_cell() {
+    let mut s = PageList::init(6, 2, None).unwrap();
+    assert!(s.pages.first == s.pages.last);
+    let page = unsafe { &mut (*s.pages.first).data };
+    for y in 0..s.rows {
+        for x in 0..2 {
+            let rac = page.get_row_and_cell(x as usize, y as usize);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Put a tracked pin in the history
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 2, y: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(4),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+    assert_eq!(2usize, s.total_rows());
+
+    // Our cursor should not move
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 2, y: 0 }),
+        s.point_from_pin(point::Tag::Active, pin_copy(p)).unwrap()
+    );
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols cursor in final blank cell"
+#[test]
+fn pagelist_resize_reflow_less_cols_cursor_in_final_blank_cell() {
+    let mut s = PageList::init(6, 2, None).unwrap();
+    assert!(s.pages.first == s.pages.last);
+    let page = unsafe { &mut (*s.pages.first).data };
+    for y in 0..s.rows {
+        for x in 0..2 {
+            let rac = page.get_row_and_cell(x as usize, y as usize);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Put a tracked pin in the history
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 3, y: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(4),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+    assert_eq!(2usize, s.total_rows());
+
+    // Our cursor should move to the first row
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 3, y: 0 }),
+        s.point_from_pin(point::Tag::Active, pin_copy(p)).unwrap()
+    );
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols cursor in wrapped blank cell"
+#[test]
+fn pagelist_resize_reflow_less_cols_cursor_in_wrapped_blank_cell() {
+    let mut s = PageList::init(6, 2, None).unwrap();
+    assert!(s.pages.first == s.pages.last);
+    let page = unsafe { &mut (*s.pages.first).data };
+    for y in 0..s.rows {
+        for x in 0..2 {
+            let rac = page.get_row_and_cell(x as usize, y as usize);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Put a tracked pin in the history
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 5, y: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(4),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+    assert_eq!(2usize, s.total_rows());
+
+    // Our cursor should move to the first row
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 3, y: 0 }),
+        s.point_from_pin(point::Tag::Active, pin_copy(p)).unwrap()
+    );
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols blank lines"
+#[test]
+fn pagelist_resize_reflow_less_cols_blank_lines() {
+    let mut s = PageList::init(4, 3, Some(0)).unwrap();
+    assert!(s.pages.first == s.pages.last);
+    let page = unsafe { &mut (*s.pages.first).data };
+    for y in 0..1 {
+        for x in 0..4 {
+            let rac = page.get_row_and_cell(x as usize, y as usize);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(2),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(2usize, s.cols as usize);
+    assert_eq!(3usize, s.total_rows());
+
+    let mut it = s.row_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Active(point::Coordinate::default()),
+        None,
+    );
+    {
+        // First row should be wrapped
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert!(unsafe { (*rac.row).wrap() });
+        assert_eq!(2usize, cells.len());
+        assert_eq!(0u32, unsafe { (*cells)[0].content_codepoint() });
+    }
+    {
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert!(!unsafe { (*rac.row).wrap() });
+        assert_eq!(2usize, cells.len());
+        assert_eq!(2u32, unsafe { (*cells)[0].content_codepoint() });
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols blank lines between"
+#[test]
+fn pagelist_resize_reflow_less_cols_blank_lines_between() {
+    let mut s = PageList::init(4, 3, Some(0)).unwrap();
+    assert!(s.pages.first == s.pages.last);
+    let page = unsafe { &mut (*s.pages.first).data };
+    {
+        for x in 0..4 {
+            let rac = page.get_row_and_cell(x as usize, 0);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+    {
+        for x in 0..4 {
+            let rac = page.get_row_and_cell(x as usize, 2);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(2),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(2usize, s.cols as usize);
+    assert_eq!(5usize, s.total_rows());
+
+    let mut it = s.row_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Active(point::Coordinate::default()),
+        None,
+    );
+    {
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        assert!(!unsafe { (*rac.row).wrap() });
+    }
+    {
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert!(unsafe { (*rac.row).wrap() });
+        assert_eq!(2usize, cells.len());
+        assert_eq!(0u32, unsafe { (*cells)[0].content_codepoint() });
+    }
+    {
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert!(!unsafe { (*rac.row).wrap() });
+        assert_eq!(2usize, cells.len());
+        assert_eq!(2u32, unsafe { (*cells)[0].content_codepoint() });
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols blank lines between no scrollback"
+#[test]
+fn pagelist_resize_reflow_less_cols_blank_lines_between_no_scrollback() {
+    let mut s = PageList::init(5, 3, Some(0)).unwrap();
+    assert!(s.pages.first == s.pages.last);
+    let page = unsafe { &mut (*s.pages.first).data };
+    {
+        let rac = page.get_row_and_cell(0, 0);
+        unsafe {
+            *rac.cell = cell_codepoint('A' as u32);
+        }
+    }
+    {
+        let rac = page.get_row_and_cell(0, 2);
+        unsafe {
+            *rac.cell = cell_codepoint('C' as u32);
+        }
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(2),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(2usize, s.cols as usize);
+    assert_eq!(3usize, s.total_rows());
+
+    let mut it = s.row_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Active(point::Coordinate::default()),
+        None,
+    );
+    {
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert!(!unsafe { (*rac.row).wrap() });
+        assert_eq!(2usize, cells.len());
+        assert_eq!('A' as u32, unsafe { (*cells)[0].content_codepoint() });
+    }
+    {
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert_eq!(0u32, unsafe { (*cells)[0].content_codepoint() });
+    }
+    {
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert!(!unsafe { (*rac.row).wrap() });
+        assert_eq!(2usize, cells.len());
+        assert_eq!('C' as u32, unsafe { (*cells)[0].content_codepoint() });
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols cursor not on last line preserves location"
+#[test]
+fn pagelist_resize_reflow_less_cols_cursor_not_on_last_line_preserves_location() {
+    let mut s = PageList::init(5, 5, Some(1)).unwrap();
+    assert!(s.pages.first == s.pages.last);
+    let page = unsafe { &mut (*s.pages.first).data };
+    for y in 0..s.rows {
+        for x in 0..2 {
+            let rac = page.get_row_and_cell(x as usize, y as usize);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Grow blank rows to push our rows back into scrollback
+    s.grow_rows(5).unwrap();
+    assert_eq!(10usize, s.total_rows());
+
+    // Put a tracked pin in the history
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(4),
+        reflow: true,
+
+        // Important: not on last row
+        cursor: Some(super::resize::Cursor {
+            x: 1,
+            y: 1,
+            pin: None,
+        }),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+    assert_eq!(10usize, s.total_rows());
+
+    // Our cursor should move to the first row
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+        s.point_from_pin(point::Tag::Active, pin_copy(p)).unwrap()
+    );
+
+    s.untrack_pin(p);
+    s.deinit();
+}
