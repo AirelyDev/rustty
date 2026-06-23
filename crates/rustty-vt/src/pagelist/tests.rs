@@ -7948,17 +7948,17 @@ fn pagelist_resize_reflow_more_cols_creates_multiple_pages() {
     // Wrap every other row so every line is wrapped for reflow
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
         for y in 0..s.rows as usize {
             if y % 2 == 0 {
-                let rac = page.get_row_and_cell(0, y);
+                let rac = unsafe { (*page).get_row_and_cell(0, y) };
                 unsafe { (*rac.row).set_wrap(true) };
             } else {
-                let rac = page.get_row_and_cell(0, y);
+                let rac = unsafe { (*page).get_row_and_cell(0, y) };
                 unsafe { (*rac.row).set_wrap_continuation(true) };
             }
 
-            let rac = page.get_row_and_cell(0, y);
+            let rac = unsafe { (*page).get_row_and_cell(0, y) };
             unsafe {
                 *rac.cell = cell_codepoint('A' as u32);
             }
@@ -8011,12 +8011,12 @@ fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary() {
 
     // Grow to the capacity of the first page.
     {
-        let page = unsafe { &mut (*s.pages.first).data };
-        page.pause_integrity_checks(true);
-        for _ in page.size.rows..page.capacity.rows {
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        unsafe { (*page).pause_integrity_checks(true) };
+        for _ in unsafe { (*page).size.rows..(*page).capacity.rows } {
             let _ = s.grow().unwrap();
         }
-        unsafe { &mut (*s.pages.first).data }.pause_integrity_checks(false);
+        unsafe { (*core::ptr::addr_of_mut!((*s.pages.first).data)).pause_integrity_checks(false) };
         assert_eq!(1usize, s.total_pages());
         s.grow_rows(1).unwrap();
         assert_eq!(2usize, s.total_pages());
@@ -8025,28 +8025,28 @@ fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary() {
     // At this point, we have some rows on the first page, and some on the second.
     // We can now wrap across the boundary condition.
     {
-        let page = unsafe { &mut (*s.pages.first).data };
-        let y = page.size.rows as usize - 1;
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let y = unsafe { (*page).size.rows as usize - 1 };
         {
-            let rac = page.get_row_and_cell(0, y);
+            let rac = unsafe { (*page).get_row_and_cell(0, y) };
             unsafe { (*rac.row).set_wrap(true) };
         }
         for x in 0..s.cols as usize {
-            let rac = page.get_row_and_cell(x, y);
+            let rac = unsafe { (*page).get_row_and_cell(x, y) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
         }
     }
     {
-        let page2 = unsafe { &mut (*s.pages.last).data };
+        let page2 = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
         let y = 0;
         {
-            let rac = page2.get_row_and_cell(0, y);
+            let rac = unsafe { (*page2).get_row_and_cell(0, y) };
             unsafe { (*rac.row).set_wrap_continuation(true) };
         }
         for x in 0..s.cols as usize {
-            let rac = page2.get_row_and_cell(x, y);
+            let rac = unsafe { (*page2).get_row_and_cell(x, y) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -8116,12 +8116,12 @@ fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary_cursor_in_second_p
 
     // Grow to the capacity of the first page.
     {
-        let page = unsafe { &mut (*s.pages.first).data };
-        page.pause_integrity_checks(true);
-        for _ in page.size.rows..page.capacity.rows {
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        unsafe { (*page).pause_integrity_checks(true) };
+        for _ in unsafe { (*page).size.rows..(*page).capacity.rows } {
             let _ = s.grow().unwrap();
         }
-        unsafe { &mut (*s.pages.first).data }.pause_integrity_checks(false);
+        unsafe { (*core::ptr::addr_of_mut!((*s.pages.first).data)).pause_integrity_checks(false) };
         assert_eq!(1usize, s.total_pages());
         s.grow_rows(1).unwrap();
         assert_eq!(2usize, s.total_pages());
@@ -8130,28 +8130,28 @@ fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary_cursor_in_second_p
     // At this point, we have some rows on the first page, and some on the second.
     // We can now wrap across the boundary condition.
     {
-        let page = unsafe { &mut (*s.pages.first).data };
-        let y = page.size.rows as usize - 1;
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let y = unsafe { (*page).size.rows as usize - 1 };
         {
-            let rac = page.get_row_and_cell(0, y);
+            let rac = unsafe { (*page).get_row_and_cell(0, y) };
             unsafe { (*rac.row).set_wrap(true) };
         }
         for x in 0..s.cols as usize {
-            let rac = page.get_row_and_cell(x, y);
+            let rac = unsafe { (*page).get_row_and_cell(x, y) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
         }
     }
     {
-        let page2 = unsafe { &mut (*s.pages.last).data };
+        let page2 = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
         let y = 0;
         {
-            let rac = page2.get_row_and_cell(0, y);
+            let rac = unsafe { (*page2).get_row_and_cell(0, y) };
             unsafe { (*rac.row).set_wrap_continuation(true) };
         }
         for x in 0..s.cols as usize {
-            let rac = page2.get_row_and_cell(x, y);
+            let rac = unsafe { (*page2).get_row_and_cell(x, y) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -8220,12 +8220,12 @@ fn pagelist_resize_reflow_less_cols_wrap_across_page_boundary_cursor_in_second_p
 
     // Grow to the capacity of the first page.
     {
-        let page = unsafe { &mut (*s.pages.first).data };
-        page.pause_integrity_checks(true);
-        for _ in page.size.rows..page.capacity.rows {
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        unsafe { (*page).pause_integrity_checks(true) };
+        for _ in unsafe { (*page).size.rows..(*page).capacity.rows } {
             let _ = s.grow().unwrap();
         }
-        unsafe { &mut (*s.pages.first).data }.pause_integrity_checks(false);
+        unsafe { (*core::ptr::addr_of_mut!((*s.pages.first).data)).pause_integrity_checks(false) };
         assert_eq!(1usize, s.total_pages());
         s.grow_rows(5).unwrap();
         assert_eq!(2usize, s.total_pages());
@@ -8234,28 +8234,28 @@ fn pagelist_resize_reflow_less_cols_wrap_across_page_boundary_cursor_in_second_p
     // At this point, we have some rows on the first page, and some on the second.
     // We can now wrap across the boundary condition.
     {
-        let page = unsafe { &mut (*s.pages.first).data };
-        let y = page.size.rows as usize - 1;
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let y = unsafe { (*page).size.rows as usize - 1 };
         {
-            let rac = page.get_row_and_cell(0, y);
+            let rac = unsafe { (*page).get_row_and_cell(0, y) };
             unsafe { (*rac.row).set_wrap(true) };
         }
         for x in 0..s.cols as usize {
-            let rac = page.get_row_and_cell(x, y);
+            let rac = unsafe { (*page).get_row_and_cell(x, y) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
         }
     }
     {
-        let page2 = unsafe { &mut (*s.pages.last).data };
+        let page2 = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
         let y = 0;
         {
-            let rac = page2.get_row_and_cell(0, y);
+            let rac = unsafe { (*page2).get_row_and_cell(0, y) };
             unsafe { (*rac.row).set_wrap_continuation(true) };
         }
         for x in 0..s.cols as usize {
-            let rac = page2.get_row_and_cell(x, y);
+            let rac = unsafe { (*page2).get_row_and_cell(x, y) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -8395,14 +8395,14 @@ fn pagelist_resize_reflow_less_cols_wrap_across_page_boundary_cursor_in_second_p
 fn pagelist_resize_reflow_more_cols_cursor_in_wrapped_row() {
     let mut s = PageList::init(2, 4, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
     {
         {
-            let rac = page.get_row_and_cell(0, 0);
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
             unsafe { (*rac.row).set_wrap(true) };
         }
         for x in 0..s.cols as usize {
-            let rac = page.get_row_and_cell(x, 0);
+            let rac = unsafe { (*page).get_row_and_cell(x, 0) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -8410,11 +8410,11 @@ fn pagelist_resize_reflow_more_cols_cursor_in_wrapped_row() {
     }
     {
         {
-            let rac = page.get_row_and_cell(0, 1);
+            let rac = unsafe { (*page).get_row_and_cell(0, 1) };
             unsafe { (*rac.row).set_wrap_continuation(true) };
         }
         for x in 0..s.cols as usize {
-            let rac = page.get_row_and_cell(x, 1);
+            let rac = unsafe { (*page).get_row_and_cell(x, 1) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -8454,14 +8454,14 @@ fn pagelist_resize_reflow_more_cols_cursor_in_wrapped_row() {
 fn pagelist_resize_reflow_more_cols_cursor_in_not_wrapped_row() {
     let mut s = PageList::init(2, 4, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
     {
         {
-            let rac = page.get_row_and_cell(0, 0);
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
             unsafe { (*rac.row).set_wrap(true) };
         }
         for x in 0..s.cols as usize {
-            let rac = page.get_row_and_cell(x, 0);
+            let rac = unsafe { (*page).get_row_and_cell(x, 0) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -8469,11 +8469,11 @@ fn pagelist_resize_reflow_more_cols_cursor_in_not_wrapped_row() {
     }
     {
         {
-            let rac = page.get_row_and_cell(0, 1);
+            let rac = unsafe { (*page).get_row_and_cell(0, 1) };
             unsafe { (*rac.row).set_wrap_continuation(true) };
         }
         for x in 0..s.cols as usize {
-            let rac = page.get_row_and_cell(x, 1);
+            let rac = unsafe { (*page).get_row_and_cell(x, 1) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -8513,14 +8513,14 @@ fn pagelist_resize_reflow_more_cols_cursor_in_not_wrapped_row() {
 fn pagelist_resize_reflow_more_cols_cursor_in_wrapped_row_that_isnt_unwrapped() {
     let mut s = PageList::init(2, 4, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
     {
         {
-            let rac = page.get_row_and_cell(0, 0);
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
             unsafe { (*rac.row).set_wrap(true) };
         }
         for x in 0..s.cols as usize {
-            let rac = page.get_row_and_cell(x, 0);
+            let rac = unsafe { (*page).get_row_and_cell(x, 0) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -8528,14 +8528,14 @@ fn pagelist_resize_reflow_more_cols_cursor_in_wrapped_row_that_isnt_unwrapped() 
     }
     {
         {
-            let rac = page.get_row_and_cell(0, 1);
+            let rac = unsafe { (*page).get_row_and_cell(0, 1) };
             unsafe {
                 (*rac.row).set_wrap(true);
                 (*rac.row).set_wrap_continuation(true);
             }
         }
         for x in 0..s.cols as usize {
-            let rac = page.get_row_and_cell(x, 1);
+            let rac = unsafe { (*page).get_row_and_cell(x, 1) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -8543,11 +8543,11 @@ fn pagelist_resize_reflow_more_cols_cursor_in_wrapped_row_that_isnt_unwrapped() 
     }
     {
         {
-            let rac = page.get_row_and_cell(0, 2);
+            let rac = unsafe { (*page).get_row_and_cell(0, 2) };
             unsafe { (*rac.row).set_wrap_continuation(true) };
         }
         for x in 0..s.cols as usize {
-            let rac = page.get_row_and_cell(x, 2);
+            let rac = unsafe { (*page).get_row_and_cell(x, 2) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
