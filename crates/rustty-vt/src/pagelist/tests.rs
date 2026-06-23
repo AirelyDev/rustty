@@ -15,11 +15,6 @@
 //!     failpoints. The tripwire failpoint infrastructure is not yet ported
 //!     (the `init`/`initPages` PORT NOTE in `mod.rs` defers it to the test
 //!     phase); this test lands once that infra exists.
-//!   - `PageList grow prune scrollback` and
-//!     `PageList grow prune scrollback with viewport pin not in pruned page` —
-//!     both call `PageList.scroll`, which is DEFERRED in `scroll.rs` (its body
-//!     depends on the not-yet-ported pin/iter navigation). They land with the
-//!     scroll cluster.
 //!   - `PageList increaseCapacity after col shrink` — calls `PageList.resize`,
 //!     which is DEFERRED in `resize.rs`. It lands with the resize cluster.
 
@@ -36,6 +31,7 @@
 #![allow(clippy::while_immutable_condition)]
 
 use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError};
+use super::scroll::Scroll;
 use super::{std_capacity, std_size, PageList, PagePool, Pin};
 use crate::page::{Cell, ContentTag, Page};
 use crate::style::{self as stylepkg, Style};
@@ -101,6 +97,496 @@ fn pagelist() {
             len: s.rows as usize,
         },
         s.scrollbar(),
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList pointFromPin active no history"
+#[test]
+fn pagelist_pointFromPin_active_no_history() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    {
+        assert_eq!(
+            point::Point::Active(point::Coordinate { y: 0, x: 0 }),
+            s.point_from_pin(
+                point::Tag::Active,
+                Pin {
+                    node: s.pages.first,
+                    y: 0,
+                    x: 0,
+                    garbage: false,
+                }
+            )
+            .unwrap()
+        );
+    }
+    {
+        assert_eq!(
+            point::Point::Active(point::Coordinate { y: 2, x: 4 }),
+            s.point_from_pin(
+                point::Tag::Active,
+                Pin {
+                    node: s.pages.first,
+                    y: 2,
+                    x: 4,
+                    garbage: false,
+                }
+            )
+            .unwrap()
+        );
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList pointFromPin active with history"
+#[test]
+fn pagelist_pointFromPin_active_with_history() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(30).unwrap();
+
+    {
+        assert_eq!(
+            point::Point::Active(point::Coordinate { y: 0, x: 2 }),
+            s.point_from_pin(
+                point::Tag::Active,
+                Pin {
+                    node: s.pages.first,
+                    y: 30,
+                    x: 2,
+                    garbage: false,
+                }
+            )
+            .unwrap()
+        );
+    }
+
+    // In history, invalid
+    {
+        assert!(s
+            .point_from_pin(
+                point::Tag::Active,
+                Pin {
+                    node: s.pages.first,
+                    y: 21,
+                    x: 2,
+                    garbage: false,
+                }
+            )
+            .is_none());
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList pointFromPin active from prior page"
+#[test]
+fn pagelist_pointFromPin_active_from_prior_page() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    // Grow so we take up at least 5 pages.
+    let page_cap = unsafe { (*s.pages.last).data.capacity.rows };
+    let mut cur_page = s.pages.last;
+    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    for _ in 0..(page_cap as usize * 5) {
+        if let Some(new_page) = s.grow().unwrap() {
+            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            cur_page = new_page;
+            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+        }
+    }
+    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+
+    {
+        assert_eq!(
+            point::Point::Active(point::Coordinate { y: 0, x: 2 }),
+            s.point_from_pin(
+                point::Tag::Active,
+                Pin {
+                    node: s.pages.last,
+                    y: 0,
+                    x: 2,
+                    garbage: false,
+                }
+            )
+            .unwrap()
+        );
+    }
+
+    // Prior page
+    {
+        assert!(s
+            .point_from_pin(
+                point::Tag::Active,
+                Pin {
+                    node: s.pages.first,
+                    y: 0,
+                    x: 0,
+                    garbage: false,
+                }
+            )
+            .is_none());
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList pointFromPin traverse pages"
+#[test]
+fn pagelist_pointFromPin_traverse_pages() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Grow so we take up at least 2 pages.
+    let page_cap = unsafe { (*s.pages.last).data.capacity.rows };
+    let mut cur_page = s.pages.last;
+    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    for _ in 0..(page_cap as usize * 2) {
+        if let Some(new_page) = s.grow().unwrap() {
+            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            cur_page = new_page;
+            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+        }
+    }
+    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+
+    {
+        let pages = s.total_pages();
+        let page_cap = page_cap as usize;
+        let expected_y = page_cap * (pages - 2) + 5;
+
+        assert_eq!(
+            point::Point::Screen(point::Coordinate {
+                y: expected_y as u32,
+                x: 2,
+            }),
+            s.point_from_pin(
+                point::Tag::Screen,
+                Pin {
+                    node: unsafe { (*s.pages.last).prev },
+                    y: 5,
+                    x: 2,
+                    garbage: false,
+                }
+            )
+            .unwrap()
+        );
+    }
+
+    // Prior page
+    {
+        assert!(s
+            .point_from_pin(
+                point::Tag::Active,
+                Pin {
+                    node: s.pages.first,
+                    y: 0,
+                    x: 0,
+                    garbage: false,
+                }
+            )
+            .is_none());
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll with max_size 0 no history"
+#[test]
+fn pagelist_scroll_with_max_size_0_no_history() {
+    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+
+    s.grow_rows(10).unwrap();
+
+    // Remember initial viewport position
+    let pt_before = s
+        .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+        .unwrap()
+        .screen_point();
+
+    // Try to scroll backwards into "history" - should be no-op
+    s.scroll(Scroll::DeltaRow(-5));
+    assert!(s.viewport == super::Viewport::Active);
+
+    // Scroll to top - should also be no-op with no scrollback
+    s.scroll(Scroll::Top);
+    let pt_after = s
+        .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+        .unwrap()
+        .screen_point();
+    assert_eq!(pt_before, pt_after);
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll top"
+#[test]
+fn pagelist_scroll_top() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(10).unwrap();
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 10 }), pt);
+    }
+
+    s.scroll(Scroll::Top);
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 0 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: 0,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.grow_rows(10).unwrap();
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 0 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: 0,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.scroll(Scroll::Active);
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 20 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: s.total_rows - s.rows as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll delta row back"
+#[test]
+fn pagelist_scroll_delta_row_back() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(10).unwrap();
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 10 }), pt);
+    }
+
+    s.scroll(Scroll::DeltaRow(-1));
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: s.total_rows - s.rows as usize - 1,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 9 }), pt);
+    }
+
+    s.grow_rows(10).unwrap();
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 9 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: s.total_rows - s.rows as usize - 11,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.scroll(Scroll::DeltaRow(-1));
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: s.total_rows - s.rows as usize - 12,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll delta row back overflow"
+#[test]
+fn pagelist_scroll_delta_row_back_overflow() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(10).unwrap();
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 10 }), pt);
+    }
+
+    s.scroll(Scroll::DeltaRow(-100));
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 0 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: 0,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.grow_rows(10).unwrap();
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 0 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: 0,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll delta row forward"
+#[test]
+fn pagelist_scroll_delta_row_forward() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(10).unwrap();
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 10 }), pt);
+    }
+
+    s.scroll(Scroll::Top);
+    s.scroll(Scroll::DeltaRow(2));
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: 2,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 2 }), pt);
+    }
+
+    s.grow_rows(10).unwrap();
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 2 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: 2,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll delta row forward into active"
+#[test]
+fn pagelist_scroll_delta_row_forward_into_active() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    s.scroll(Scroll::DeltaRow(2));
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 0 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: s.total_rows - s.rows as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
     );
 
     s.deinit();
