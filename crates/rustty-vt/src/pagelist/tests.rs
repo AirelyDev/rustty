@@ -5612,3 +5612,370 @@ fn pagelist_erase_row_with_tracked_pin_is_erased() {
     s.untrack_pin(p);
     s.deinit();
 }
+
+// ref: test "PageList erase resets viewport to active if moves within active"
+#[test]
+fn pagelist_erase_resets_viewport_to_active_if_moves_within_active() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Grow so we take up at least 5 pages.
+    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let mut cur_page = s.pages.last;
+    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    for _ in 0..(page_cap_rows as usize * 5) {
+        if let Some(new_page) = s.grow().unwrap() {
+            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            cur_page = new_page;
+            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+        }
+    }
+    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+
+    // Move our viewport to the top
+    s.scroll(Scroll::DeltaRow(-(s.total_rows as isize)));
+    assert!(s.viewport == super::Viewport::Top);
+
+    // Erase the entire history, we should be back to just our active set.
+    s.erase_history(None);
+    assert!(s.viewport == super::Viewport::Active);
+
+    s.deinit();
+}
+
+// ref: test "PageList erase resets viewport if inside erased page but not active"
+#[test]
+fn pagelist_erase_resets_viewport_if_inside_erased_page_but_not_active() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Grow so we take up at least 5 pages.
+    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let mut cur_page = s.pages.last;
+    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    for _ in 0..(page_cap_rows as usize * 5) {
+        if let Some(new_page) = s.grow().unwrap() {
+            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            cur_page = new_page;
+            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+        }
+    }
+    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+
+    // Move our viewport to the top
+    s.scroll(Scroll::DeltaRow(-(s.total_rows as isize)));
+    assert!(s.viewport == super::Viewport::Top);
+
+    // Erase the entire history, we should be back to just our active set.
+    s.erase_history(Some(point::Point::History(point::Coordinate {
+        x: 0,
+        y: 2,
+    })));
+    assert!(s.viewport == super::Viewport::Top);
+
+    s.deinit();
+}
+
+// ref: test "PageList erase resets viewport to active if top is inside active"
+#[test]
+fn pagelist_erase_resets_viewport_to_active_if_top_is_inside_active() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Grow so we take up at least 5 pages.
+    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let mut cur_page = s.pages.last;
+    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    for _ in 0..(page_cap_rows as usize * 5) {
+        if let Some(new_page) = s.grow().unwrap() {
+            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            cur_page = new_page;
+            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+        }
+    }
+    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+
+    // Move our viewport to the top
+    s.scroll(Scroll::Top);
+
+    // Erase the entire history, we should be back to just our active set.
+    s.erase_history(None);
+    assert!(s.viewport == super::Viewport::Active);
+
+    s.deinit();
+}
+
+// ref: test "PageList erase active regrows automatically"
+#[test]
+fn pagelist_erase_active_regrows_automatically() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    assert!(s.total_rows() == s.rows as usize);
+    s.erase_active(10);
+    assert!(s.total_rows() == s.rows as usize);
+
+    s.deinit();
+}
+
+// ref: test "PageList erase a one-row active"
+#[test]
+fn pagelist_erase_a_one_row_active() {
+    let mut s = PageList::init(10, 1, None).unwrap();
+    assert_eq!(1_usize, s.total_pages());
+
+    // Write our letter
+    {
+        let page = unsafe { &mut (*s.pages.first).data };
+        for y in 0..s.rows as usize {
+            let rac = page.get_row_and_cell(0, y);
+            unsafe {
+                *rac.cell = cell_codepoint('A' as u32);
+            }
+        }
+    }
+
+    s.erase_active(0);
+    assert_eq!(s.rows as usize, s.total_rows);
+
+    // The row should be empty
+    {
+        let get = s
+            .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+            .unwrap();
+        assert_eq!(0_u32, unsafe { (*get.cell).content_codepoint() });
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList eraseRowBounded less than full row"
+#[test]
+fn pagelist_eraseRowBounded_less_than_full_row() {
+    let mut s = PageList::init(80, 10, None).unwrap();
+
+    // Pins
+    let p_top = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { y: 5, x: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+    let p_bot = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { y: 8, x: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+    let p_out = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { y: 9, x: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Erase only a few rows in our active
+    s.erase_row_bounded(point::Point::Active(point::Coordinate { x: 0, y: 5 }), 3)
+        .unwrap();
+    assert_eq!(s.rows as usize, s.total_rows());
+
+    // The erased rows should be dirty
+    assert!(s.is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 5 })));
+    assert!(s.is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 6 })));
+    assert!(s.is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 7 })));
+
+    assert!(core::ptr::eq(s.pages.first, unsafe { (*p_top).node }));
+    assert_eq!(4 as size::CellCountInt, unsafe { (*p_top).y });
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p_top).x });
+
+    assert!(core::ptr::eq(s.pages.first, unsafe { (*p_bot).node }));
+    assert_eq!(7 as size::CellCountInt, unsafe { (*p_bot).y });
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p_bot).x });
+
+    assert!(core::ptr::eq(s.pages.first, unsafe { (*p_out).node }));
+    assert_eq!(9 as size::CellCountInt, unsafe { (*p_out).y });
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p_out).x });
+
+    s.untrack_pin(p_out);
+    s.untrack_pin(p_bot);
+    s.untrack_pin(p_top);
+    s.deinit();
+}
+
+// ref: test "PageList eraseRowBounded with pin at top"
+#[test]
+fn pagelist_eraseRowBounded_with_pin_at_top() {
+    let mut s = PageList::init(80, 10, None).unwrap();
+
+    // Pins
+    let p_top = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { y: 0, x: 5 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Erase only a few rows in our active
+    s.erase_row_bounded(point::Point::Active(point::Coordinate { x: 0, y: 0 }), 3)
+        .unwrap();
+    assert_eq!(s.rows as usize, s.total_rows());
+
+    // The erased rows should be dirty
+    assert!(s.is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 0 })));
+    assert!(s.is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 1 })));
+    assert!(s.is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 2 })));
+
+    assert!(core::ptr::eq(s.pages.first, unsafe { (*p_top).node }));
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p_top).y });
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p_top).x });
+
+    s.untrack_pin(p_top);
+    s.deinit();
+}
+
+// ref: test "PageList eraseRowBounded full rows single page"
+#[test]
+fn pagelist_eraseRowBounded_full_rows_single_page() {
+    let mut s = PageList::init(80, 10, None).unwrap();
+
+    // Pins
+    let p_in = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { y: 7, x: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+    let p_out = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { y: 9, x: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Erase only a few rows in our active
+    s.erase_row_bounded(point::Point::Active(point::Coordinate { x: 0, y: 5 }), 10)
+        .unwrap();
+    assert_eq!(s.rows as usize, s.total_rows());
+
+    // The erased rows should be dirty
+    for y in 5..10 {
+        assert!(s.is_dirty(point::Point::Active(point::Coordinate { x: 0, y })));
+    }
+
+    // Our pin should move to the first page
+    assert!(core::ptr::eq(s.pages.first, unsafe { (*p_in).node }));
+    assert_eq!(6 as size::CellCountInt, unsafe { (*p_in).y });
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p_in).x });
+
+    assert!(core::ptr::eq(s.pages.first, unsafe { (*p_out).node }));
+    assert_eq!(8 as size::CellCountInt, unsafe { (*p_out).y });
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p_out).x });
+
+    s.untrack_pin(p_out);
+    s.untrack_pin(p_in);
+    s.deinit();
+}
+
+// ref: test "PageList eraseRowBounded full rows two pages"
+#[test]
+fn pagelist_eraseRowBounded_full_rows_two_pages() {
+    let mut s = PageList::init(80, 10, None).unwrap();
+
+    // Grow to two pages so our active area straddles
+    {
+        let page = unsafe { &mut (*s.pages.last).data };
+        page.pause_integrity_checks(true);
+        let to_grow = page.capacity.rows as usize - page.size.rows as usize;
+        for _ in 0..to_grow {
+            let _ = s.grow().unwrap();
+        }
+        unsafe { (*s.pages.last).data.pause_integrity_checks(false) };
+        s.grow_rows(5).unwrap();
+        assert_eq!(2_usize, s.total_pages());
+        assert_eq!(5 as size::CellCountInt, unsafe {
+            (*s.pages.last).data.size.rows
+        });
+    }
+
+    // Pins
+    let p_first = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { y: 4, x: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+    let p_first_out = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { y: 3, x: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+    let p_in = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { y: 8, x: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+    let p_out = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { y: 9, x: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    {
+        let prev = unsafe { (*s.pages.last).prev };
+        assert!(core::ptr::eq(prev, unsafe { (*p_first).node }));
+        let first_rows = unsafe { (*(*p_first).node).data.size.rows };
+        assert_eq!((first_rows - 1) as usize, unsafe { (*p_first).y } as usize);
+        assert_eq!(0 as size::CellCountInt, unsafe { (*p_first).x });
+
+        assert!(core::ptr::eq(prev, unsafe { (*p_first_out).node }));
+        let first_out_rows = unsafe { (*(*p_first_out).node).data.size.rows };
+        assert_eq!((first_out_rows - 2) as usize, unsafe { (*p_first_out).y }
+            as usize);
+        assert_eq!(0 as size::CellCountInt, unsafe { (*p_first_out).x });
+
+        assert!(core::ptr::eq(s.pages.last, unsafe { (*p_in).node }));
+        assert_eq!(3 as size::CellCountInt, unsafe { (*p_in).y });
+        assert_eq!(0 as size::CellCountInt, unsafe { (*p_in).x });
+
+        assert!(core::ptr::eq(s.pages.last, unsafe { (*p_out).node }));
+        assert_eq!(4 as size::CellCountInt, unsafe { (*p_out).y });
+        assert_eq!(0 as size::CellCountInt, unsafe { (*p_out).x });
+    }
+
+    // Erase only a few rows in our active
+    s.erase_row_bounded(point::Point::Active(point::Coordinate { x: 0, y: 4 }), 4)
+        .unwrap();
+
+    // The erased rows should be dirty
+    for y in 4..8 {
+        assert!(s.is_dirty(point::Point::Active(point::Coordinate { x: 0, y })));
+    }
+
+    // In page in first page is shifted
+    let prev = unsafe { (*s.pages.last).prev };
+    assert!(core::ptr::eq(prev, unsafe { (*p_first).node }));
+    let first_rows = unsafe { (*(*p_first).node).data.size.rows };
+    assert_eq!((first_rows - 2) as usize, unsafe { (*p_first).y } as usize);
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p_first).x });
+
+    // Out page in first page should not be shifted
+    assert!(core::ptr::eq(prev, unsafe { (*p_first_out).node }));
+    let first_out_rows = unsafe { (*(*p_first_out).node).data.size.rows };
+    assert_eq!((first_out_rows - 2) as usize, unsafe { (*p_first_out).y }
+        as usize);
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p_first_out).x });
+
+    // In page is shifted
+    assert!(core::ptr::eq(s.pages.last, unsafe { (*p_in).node }));
+    assert_eq!(2 as size::CellCountInt, unsafe { (*p_in).y });
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p_in).x });
+
+    // Out page is not shifted
+    assert!(core::ptr::eq(s.pages.last, unsafe { (*p_out).node }));
+    assert_eq!(4 as size::CellCountInt, unsafe { (*p_out).y });
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p_out).x });
+
+    s.untrack_pin(p_out);
+    s.untrack_pin(p_in);
+    s.untrack_pin(p_first_out);
+    s.untrack_pin(p_first);
+    s.deinit();
+}
