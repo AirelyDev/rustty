@@ -6805,3 +6805,531 @@ fn pagelist_resize_no_reflow_more_rows_contains_viewport() {
 
     s.deinit();
 }
+
+// ref: test "PageList resize (no reflow) less cols"
+#[test]
+fn pagelist_resize_no_reflow_less_cols() {
+    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(5),
+        reflow: false,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(5usize, s.cols as usize);
+    assert_eq!(10usize, s.total_rows());
+
+    let mut it = s.row_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Screen(point::Coordinate::default()),
+        None,
+    );
+    while let Some(offset) = it.next() {
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert_eq!(5usize, cells.len());
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize (no reflow) less cols pin in trimmed cols"
+#[test]
+fn pagelist_resize_no_reflow_less_cols_pin_in_trimmed_cols() {
+    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+
+    // Put a tracked pin in the history
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 8, y: 2 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(5),
+        reflow: false,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(5usize, s.cols as usize);
+    assert_eq!(10usize, s.total_rows());
+
+    let mut it = s.row_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Screen(point::Coordinate::default()),
+        None,
+    );
+    while let Some(offset) = it.next() {
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert_eq!(5usize, cells.len());
+    }
+
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 4, y: 2 }),
+        s.point_from_pin(point::Tag::Active, pin_copy(p)).unwrap()
+    );
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList resize (no reflow) less cols clears graphemes"
+#[test]
+fn pagelist_resize_no_reflow_less_cols_clears_graphemes() {
+    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+
+    // Add a grapheme.
+    let page = unsafe { &mut (*s.pages.first).data };
+    {
+        let rac = page.get_row_and_cell(9, 0);
+        unsafe {
+            *rac.cell = cell_codepoint('A' as u32);
+            page.append_grapheme(rac.row, rac.cell, 'A' as u32).unwrap();
+        }
+    }
+    assert_eq!(1usize, page.grapheme_count());
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(5),
+        reflow: false,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(5usize, s.cols as usize);
+    assert_eq!(10usize, s.total_rows());
+
+    let mut it = s.page_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Screen(point::Coordinate::default()),
+        None,
+    );
+    while let Some(chunk) = it.next() {
+        assert_eq!(0usize, unsafe { (*chunk.node).data.grapheme_count() });
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize (no reflow) more cols"
+#[test]
+fn pagelist_resize_no_reflow_more_cols() {
+    let mut s = PageList::init(5, 3, Some(0)).unwrap();
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(10),
+        reflow: false,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(10usize, s.cols as usize);
+    assert_eq!(3usize, s.total_rows());
+
+    let mut it = s.row_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Screen(point::Coordinate::default()),
+        None,
+    );
+    while let Some(offset) = it.next() {
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert_eq!(10usize, cells.len());
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize (no reflow) more cols with spacer head"
+#[test]
+fn pagelist_resize_no_reflow_more_cols_with_spacer_head() {
+    let mut s = PageList::init(2, 3, Some(0)).unwrap();
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+
+        {
+            let rac = page.get_row_and_cell(0, 0);
+            unsafe {
+                (*rac.row).set_wrap(true);
+                *rac.cell = cell_codepoint('x' as u32);
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(1, 0);
+            unsafe {
+                let mut c = cell_codepoint(0);
+                c.set_wide(crate::page::Wide::SpacerHead);
+                *rac.cell = c;
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(0, 1);
+            unsafe {
+                let mut c = cell_codepoint('😀' as u32);
+                c.set_wide(crate::page::Wide::Wide);
+                *rac.cell = c;
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(1, 1);
+            unsafe {
+                let mut c = cell_codepoint(0);
+                c.set_wide(crate::page::Wide::SpacerTail);
+                *rac.cell = c;
+            }
+        }
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(3),
+        reflow: false,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(3usize, s.cols as usize);
+    assert_eq!(3usize, s.total_rows());
+
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+
+        {
+            let rac = page.get_row_and_cell(0, 0);
+            assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
+            // assert!(!unsafe { (*rac.row).wrap() });
+        }
+        {
+            let rac = page.get_row_and_cell(1, 0);
+            assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
+        }
+        {
+            let rac = page.get_row_and_cell(2, 0);
+            assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
+        }
+    }
+
+    s.deinit();
+}
+
+// Regression test for fuzz crash. When we shrink cols and then
+// grow back, the page retains capacity from the original size so the grow
+// takes the fast path (just bumps page.size.cols). If any row has a
+// spacer_head at the old last column, that cell is no longer at the end
+// of the wider row, violating page integrity.
+// ref: test "PageList resize (no reflow) grow cols fast path with spacer head"
+#[test]
+fn pagelist_resize_no_reflow_grow_cols_fast_path_with_spacer_head() {
+    let mut s = PageList::init(10, 3, Some(0)).unwrap();
+
+    // Shrink to 5 cols. The page keeps capacity for 10 cols.
+    s.resize(Resize {
+        cols: Some(5),
+        reflow: false,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(5usize, s.cols as usize);
+
+    // Place a spacer_head at the last column (col 4) on two rows
+    // to simulate a wide character that didn't fit at the right edge.
+    {
+        let page = unsafe { &mut (*s.pages.first).data };
+
+        // Row 0: 'x' at col 0..3, spacer_head at col 4, wrap = true
+        {
+            let rac = page.get_row_and_cell(0, 0);
+            unsafe {
+                *rac.cell = cell_codepoint('x' as u32);
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(4, 0);
+            unsafe {
+                let mut c = cell_codepoint(0);
+                c.set_wide(crate::page::Wide::SpacerHead);
+                *rac.cell = c;
+                (*rac.row).set_wrap(true);
+            }
+        }
+
+        // Row 1: spacer_head at col 4, wrap = true
+        {
+            let rac = page.get_row_and_cell(4, 1);
+            unsafe {
+                let mut c = cell_codepoint(0);
+                c.set_wide(crate::page::Wide::SpacerHead);
+                *rac.cell = c;
+                (*rac.row).set_wrap(true);
+            }
+        }
+    }
+
+    // Grow back to 10 cols. This must not leave stale spacer_head
+    // cells at col 4 (which is no longer the last column).
+    s.resize(Resize {
+        cols: Some(10),
+        reflow: false,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(10usize, s.cols as usize);
+
+    // Verify the old spacer_head positions are now narrow.
+    {
+        let page = unsafe { &mut (*s.pages.first).data };
+        {
+            let rac = page.get_row_and_cell(4, 0);
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
+            assert!(!unsafe { (*rac.row).wrap() });
+        }
+        {
+            let rac = page.get_row_and_cell(4, 1);
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
+            assert!(!unsafe { (*rac.row).wrap() });
+        }
+    }
+
+    s.deinit();
+}
+
+// This test is a bit convoluted so I want to explain: what we are trying
+// to verify here is that when we increase cols such that our rows per page
+// shrinks, we don't fragment our rows across many pages because this ends
+// up wasting a lot of memory.
+//
+// This is particularly important for alternate screen buffers where we
+// don't have scrollback so our max size is very small. If we don't do this,
+// we end up pruning our pages and that causes resizes to fail!
+// ref: test "PageList resize (no reflow) more cols forces less rows per page"
+#[test]
+fn pagelist_resize_no_reflow_more_cols_forces_less_rows_per_page() {
+    // This test requires initially that our rows fit into one page.
+    let cols: size::CellCountInt = 5;
+    let rows: size::CellCountInt = 150;
+    assert!(
+        std_capacity()
+            .adjust(crate::page::Adjustment { cols: Some(cols) })
+            .unwrap()
+            .rows
+            >= rows
+    );
+    let mut s = PageList::init(cols, rows, Some(0)).unwrap();
+
+    // Then we need to resize our cols so that our rows per page shrinks.
+    // This will force our resize to split our rows across two pages.
+    {
+        let new_cols = {
+            let mut new_cols: size::CellCountInt = 50;
+            let mut cap = std_capacity()
+                .adjust(crate::page::Adjustment {
+                    cols: Some(new_cols),
+                })
+                .unwrap();
+            while cap.rows >= rows {
+                new_cols += 50;
+                cap = std_capacity()
+                    .adjust(crate::page::Adjustment {
+                        cols: Some(new_cols),
+                    })
+                    .unwrap();
+            }
+            new_cols
+        };
+        s.resize(Resize {
+            cols: Some(new_cols),
+            reflow: false,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(new_cols as usize, s.cols as usize);
+        assert_eq!(rows as usize, s.total_rows());
+    }
+
+    // Every page except the last should be full
+    {
+        let mut it = s.pages.first;
+        while !it.is_null() {
+            let page = it;
+            if page == s.pages.last {
+                break;
+            }
+            assert_eq!(unsafe { (*page).data.capacity.rows }, unsafe {
+                (*page).data.size.rows
+            });
+            it = unsafe { (*page).next };
+        }
+    }
+
+    // Now we need to resize again to a col size that further shrinks
+    // our last capacity.
+    {
+        let page = unsafe { &(*s.pages.first).data };
+        assert!(page.size.rows == page.capacity.rows);
+        let new_cols = {
+            let mut new_cols = page.size.cols + 50;
+            let mut cap = std_capacity()
+                .adjust(crate::page::Adjustment {
+                    cols: Some(new_cols),
+                })
+                .unwrap();
+            while cap.rows >= page.size.rows {
+                new_cols += 50;
+                cap = std_capacity()
+                    .adjust(crate::page::Adjustment {
+                        cols: Some(new_cols),
+                    })
+                    .unwrap();
+            }
+            new_cols
+        };
+
+        s.resize(Resize {
+            cols: Some(new_cols),
+            reflow: false,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(new_cols as usize, s.cols as usize);
+        assert_eq!(rows as usize, s.total_rows());
+    }
+
+    // Every page except the last should be full
+    {
+        let mut it = s.pages.first;
+        while !it.is_null() {
+            let page = it;
+            if page == s.pages.last {
+                break;
+            }
+            assert_eq!(unsafe { (*page).data.capacity.rows }, unsafe {
+                (*page).data.size.rows
+            });
+            it = unsafe { (*page).next };
+        }
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize (no reflow) less cols then more cols"
+#[test]
+fn pagelist_resize_no_reflow_less_cols_then_more_cols() {
+    let mut s = PageList::init(5, 3, Some(0)).unwrap();
+
+    // Resize less
+    s.resize(Resize {
+        cols: Some(2),
+        reflow: false,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(2usize, s.cols as usize);
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(5),
+        reflow: false,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(5usize, s.cols as usize);
+    assert_eq!(3usize, s.total_rows());
+
+    let mut it = s.row_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Screen(point::Coordinate::default()),
+        None,
+    );
+    while let Some(offset) = it.next() {
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert_eq!(5usize, cells.len());
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize (no reflow) less rows and cols"
+#[test]
+fn pagelist_resize_no_reflow_less_rows_and_cols() {
+    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+
+    // Resize less
+    s.resize(Resize {
+        cols: Some(5),
+        rows: Some(7),
+        reflow: false,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(5usize, s.cols as usize);
+    assert_eq!(7usize, s.rows as usize);
+
+    let mut it = s.row_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Screen(point::Coordinate::default()),
+        None,
+    );
+    while let Some(offset) = it.next() {
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert_eq!(5usize, cells.len());
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize less rows and cols cursor at bottom"
+#[test]
+fn pagelist_resize_less_rows_and_cols_cursor_at_bottom() {
+    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+
+    let cursor_pin = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate {
+                x: 0,
+                y: (s.rows - 1) as u32,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+    // Shrink both axes such that the original cursor.y is strictly past the
+    // new row count, so resizeWithoutReflow leaves self.rows < c.y + 1.
+    s.resize(Resize {
+        cols: Some(79),
+        rows: Some(20),
+        reflow: true,
+        cursor: Some(super::resize::Cursor {
+            x: 0,
+            y: 23,
+            pin: Some(cursor_pin),
+        }),
+    })
+    .unwrap();
+    assert_eq!(79usize, s.cols as usize);
+    assert_eq!(20usize, s.rows as usize);
+
+    // remaining_rows saturates to 0, so the cursor lands on the new bottom row.
+    assert_eq!(
+        point::Point::Active(point::Coordinate {
+            x: 0,
+            y: (s.rows - 1) as u32,
+        }),
+        s.point_from_pin(point::Tag::Active, pin_copy(cursor_pin))
+            .unwrap()
+    );
+
+    s.untrack_pin(cursor_pin);
+    s.deinit();
+}
