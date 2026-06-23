@@ -544,7 +544,10 @@ impl PageList {
     /// IMPORTANT: This function does NOT update `total_rows`. The caller is
     /// responsible for accounting for the removed rows before or after calling
     /// this function.
-    fn erase_page(&mut self, node: *mut Node) {
+    // PORT NOTE: `pub(crate)` so sibling cluster files in the `pagelist` module
+    // (e.g. `resize.rs::trim_trailing_blank_rows`) can call this private-in-Zig
+    // helper across the file split. The reference `erasePage` is file-private.
+    pub(crate) fn erase_page(&mut self, node: *mut Node) {
         // Must not be the final page.
         assert!(!unsafe { (*node).next }.is_null() || !unsafe { (*node).prev }.is_null());
 
