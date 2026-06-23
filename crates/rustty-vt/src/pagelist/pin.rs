@@ -24,6 +24,7 @@
 use super::{Node, PageList, Pin};
 use crate::page as pagepkg;
 use crate::point;
+use crate::style as stylepkg;
 use rustty_render_types::term_size as size;
 
 impl PageList {
@@ -425,6 +426,25 @@ impl Pin {
         result
     }
 
+    /// Move the pin left n columns, stopping at the start of the row.
+    #[inline]
+    pub fn left_clamp(&self, n: size::CellCountInt) -> Pin {
+        let mut result = self.pin_copy();
+        result.x = result.x.saturating_sub(n); // result.x -|= n
+        result
+    }
+
+    /// Move the pin right n columns, stopping at the end of the row.
+    #[inline]
+    pub fn right_clamp(&self, n: size::CellCountInt) -> Pin {
+        let mut result = self.pin_copy();
+        result.x = self
+            .x
+            .saturating_add(n)
+            .min(unsafe { (*self.node).data.size.cols } - 1);
+        result
+    }
+
     /// Move the pin left n cells, wrapping to the previous row as needed.
     ///
     /// If the offset goes beyond the top of the screen, returns null.
@@ -602,13 +622,26 @@ impl Pin {
         }
     }
 
-    // PORT NOTE: the reference `Pin.grapheme` and `Pin.style` accessors are not
-    // yet ported (they are not in this sub-file's PORTS list above); their
-    // reference doc comments are preserved verbatim here so they are not dropped
-    // and land with the methods in a later batch:
-    //
-    // Returns the grapheme codepoints for the given cell. These are only
-    // the EXTRA codepoints and not the first codepoint.
-    //
-    // Returns the style for the given cell in this pin.
+    /// Returns the grapheme codepoints for the given cell. These are only
+    /// the EXTRA codepoints and not the first codepoint.
+    #[inline]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // reference takes `cell: *const Cell`
+    pub fn grapheme(&self, cell: *const pagepkg::Cell) -> Option<&[u32]> {
+        unsafe { (*self.node).data.lookup_grapheme(cell) }
+    }
+
+    /// Returns the style for the given cell in this pin.
+    #[inline]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // reference takes `cell: *const Cell`
+    pub fn style(&self, cell: *const pagepkg::Cell) -> stylepkg::Style {
+        if unsafe { (*cell).style_id() } == stylepkg::DEFAULT_ID {
+            return stylepkg::Style::default();
+        }
+        unsafe {
+            *(*self.node)
+                .data
+                .styles
+                .get((*self.node).data.memory_ptr(), (*cell).style_id())
+        }
+    }
 }
