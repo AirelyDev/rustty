@@ -5834,9 +5834,9 @@ fn pagelist_erase_a_one_row_active() {
 
     // Write our letter
     {
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
         for y in 0..s.rows as usize {
-            let rac = page.get_row_and_cell(0, y);
+            let rac = unsafe { (*page).get_row_and_cell(0, y) };
             unsafe {
                 *rac.cell = cell_codepoint('A' as u32);
             }
@@ -5991,9 +5991,10 @@ fn pagelist_eraseRowBounded_full_rows_two_pages() {
 
     // Grow to two pages so our active area straddles
     {
-        let page = unsafe { &mut (*s.pages.last).data };
-        page.pause_integrity_checks(true);
-        let to_grow = page.capacity.rows as usize - page.size.rows as usize;
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
+        unsafe { (*page).pause_integrity_checks(true) };
+        let to_grow =
+            unsafe { (*page).capacity.rows } as usize - unsafe { (*page).size.rows } as usize;
         for _ in 0..to_grow {
             let _ = s.grow().unwrap();
         }
@@ -6452,11 +6453,11 @@ fn pagelist_resize_no_reflow_less_rows() {
 
     // This is required for our writing below to work
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Write into all rows so we don't get trim behavior
     for y in 0..s.rows as usize {
-        let rac = page.get_row_and_cell(0, y);
+        let rac = unsafe { (*page).get_row_and_cell(0, y) };
         unsafe {
             *rac.cell = cell_codepoint('A' as u32);
         }
@@ -6490,11 +6491,11 @@ fn pagelist_resize_no_reflow_one_rows() {
 
     // This is required for our writing below to work
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Write into all rows so we don't get trim behavior
     for y in 0..s.rows as usize {
-        let rac = page.get_row_and_cell(0, y);
+        let rac = unsafe { (*page).get_row_and_cell(0, y) };
         unsafe {
             *rac.cell = cell_codepoint('A' as u32);
         }
@@ -6528,11 +6529,11 @@ fn pagelist_resize_no_reflow_less_rows_cursor_on_bottom() {
 
     // This is required for our writing below to work
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Write into all rows so we don't get trim behavior
     for y in 0..s.rows as usize {
-        let rac = page.get_row_and_cell(0, y);
+        let rac = unsafe { (*page).get_row_and_cell(0, y) };
         unsafe {
             *rac.cell = cell_codepoint(y as u32);
         }
@@ -6595,11 +6596,11 @@ fn pagelist_resize_no_reflow_less_rows_cursor_in_scrollback() {
 
     // This is required for our writing below to work
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Write into all rows so we don't get trim behavior
     for y in 0..s.rows as usize {
-        let rac = page.get_row_and_cell(0, y);
+        let rac = unsafe { (*page).get_row_and_cell(0, y) };
         unsafe {
             *rac.cell = cell_codepoint(y as u32);
         }
@@ -6660,11 +6661,11 @@ fn pagelist_resize_no_reflow_less_rows_cursor_in_scrollback() {
 fn pagelist_resize_no_reflow_less_rows_trims_blank_lines() {
     let mut s = PageList::init(10, 5, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Write codepoint into first line
     {
-        let rac = page.get_row_and_cell(0, 0);
+        let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         unsafe {
             *rac.cell = cell_codepoint('A' as u32);
         }
@@ -6672,7 +6673,7 @@ fn pagelist_resize_no_reflow_less_rows_trims_blank_lines() {
 
     // Fill remaining lines with a background color
     for y in 1..s.rows as usize {
-        let rac = page.get_row_and_cell(0, y);
+        let rac = unsafe { (*page).get_row_and_cell(0, y) };
         unsafe {
             *rac.cell = cell_bg_color_rgb(0xFF, 0, 0);
         }
@@ -6732,11 +6733,11 @@ fn pagelist_resize_no_reflow_less_rows_trims_blank_lines() {
 fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_cursor_in_blank_line() {
     let mut s = PageList::init(10, 5, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Write codepoint into first line
     {
-        let rac = page.get_row_and_cell(0, 0);
+        let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         unsafe {
             *rac.cell = cell_codepoint('A' as u32);
         }
@@ -6744,7 +6745,7 @@ fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_cursor_in_blank_line() 
 
     // Fill remaining lines with a background color
     for y in 1..s.rows as usize {
-        let rac = page.get_row_and_cell(0, y);
+        let rac = unsafe { (*page).get_row_and_cell(0, y) };
         unsafe {
             *rac.cell = cell_bg_color_rgb(0xFF, 0, 0);
         }
@@ -6783,11 +6784,11 @@ fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_cursor_in_blank_line() 
 fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_erases_pages() {
     let mut s = PageList::init(100, 5, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Resize to take up two pages
     {
-        let rows = page.capacity.rows + 10;
+        let rows = unsafe { (*page).capacity.rows } + 10;
         s.resize(Resize {
             rows: Some(rows),
             reflow: false,
@@ -6799,7 +6800,7 @@ fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_erases_pages() {
 
     // Write codepoint into first line
     {
-        let rac = page.get_row_and_cell(0, 0);
+        let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         unsafe {
             *rac.cell = cell_codepoint('A' as u32);
         }
@@ -6825,11 +6826,11 @@ fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_erases_pages() {
 fn pagelist_resize_no_reflow_more_rows_extends_blank_lines() {
     let mut s = PageList::init(10, 3, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Write codepoint into first line
     {
-        let rac = page.get_row_and_cell(0, 0);
+        let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         unsafe {
             *rac.cell = cell_codepoint('A' as u32);
         }
@@ -6837,7 +6838,7 @@ fn pagelist_resize_no_reflow_more_rows_extends_blank_lines() {
 
     // Fill remaining lines with a background color
     for y in 1..s.rows as usize {
-        let rac = page.get_row_and_cell(0, y);
+        let rac = unsafe { (*page).get_row_and_cell(0, y) };
         unsafe {
             *rac.cell = cell_bg_color_rgb(0xFF, 0, 0);
         }
@@ -6978,15 +6979,17 @@ fn pagelist_resize_no_reflow_less_cols_clears_graphemes() {
     let mut s = PageList::init(10, 10, Some(0)).unwrap();
 
     // Add a grapheme.
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
     {
-        let rac = page.get_row_and_cell(9, 0);
+        let rac = unsafe { (*page).get_row_and_cell(9, 0) };
         unsafe {
             *rac.cell = cell_codepoint('A' as u32);
-            page.append_grapheme(rac.row, rac.cell, 'A' as u32).unwrap();
+            (*page)
+                .append_grapheme(rac.row, rac.cell, 'A' as u32)
+                .unwrap();
         }
     }
-    assert_eq!(1usize, page.grapheme_count());
+    assert_eq!(1usize, unsafe { (*page).grapheme_count() });
 
     // Resize
     s.resize(Resize {
@@ -7045,17 +7048,17 @@ fn pagelist_resize_no_reflow_more_cols_with_spacer_head() {
     let mut s = PageList::init(2, 3, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
         {
-            let rac = page.get_row_and_cell(0, 0);
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
             unsafe {
                 (*rac.row).set_wrap(true);
                 *rac.cell = cell_codepoint('x' as u32);
             }
         }
         {
-            let rac = page.get_row_and_cell(1, 0);
+            let rac = unsafe { (*page).get_row_and_cell(1, 0) };
             unsafe {
                 let mut c = cell_codepoint(0);
                 c.set_wide(crate::page::Wide::SpacerHead);
@@ -7063,7 +7066,7 @@ fn pagelist_resize_no_reflow_more_cols_with_spacer_head() {
             }
         }
         {
-            let rac = page.get_row_and_cell(0, 1);
+            let rac = unsafe { (*page).get_row_and_cell(0, 1) };
             unsafe {
                 let mut c = cell_codepoint('😀' as u32);
                 c.set_wide(crate::page::Wide::Wide);
@@ -7071,7 +7074,7 @@ fn pagelist_resize_no_reflow_more_cols_with_spacer_head() {
             }
         }
         {
-            let rac = page.get_row_and_cell(1, 1);
+            let rac = unsafe { (*page).get_row_and_cell(1, 1) };
             unsafe {
                 let mut c = cell_codepoint(0);
                 c.set_wide(crate::page::Wide::SpacerTail);
@@ -7092,21 +7095,21 @@ fn pagelist_resize_no_reflow_more_cols_with_spacer_head() {
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
         {
-            let rac = page.get_row_and_cell(0, 0);
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
             assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
             // try testing.expect(!rac.row.wrap);
         }
         {
-            let rac = page.get_row_and_cell(1, 0);
+            let rac = unsafe { (*page).get_row_and_cell(1, 0) };
             assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
         }
         {
-            let rac = page.get_row_and_cell(2, 0);
+            let rac = unsafe { (*page).get_row_and_cell(2, 0) };
             assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
         }
@@ -7137,17 +7140,17 @@ fn pagelist_resize_no_reflow_grow_cols_fast_path_with_spacer_head() {
     // Place a spacer_head at the last column (col 4) on two rows
     // to simulate a wide character that didn't fit at the right edge.
     {
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
         // Row 0: 'x' at col 0..3, spacer_head at col 4, wrap = true
         {
-            let rac = page.get_row_and_cell(0, 0);
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
             unsafe {
                 *rac.cell = cell_codepoint('x' as u32);
             }
         }
         {
-            let rac = page.get_row_and_cell(4, 0);
+            let rac = unsafe { (*page).get_row_and_cell(4, 0) };
             unsafe {
                 let mut c = cell_codepoint(0);
                 c.set_wide(crate::page::Wide::SpacerHead);
@@ -7158,7 +7161,7 @@ fn pagelist_resize_no_reflow_grow_cols_fast_path_with_spacer_head() {
 
         // Row 1: spacer_head at col 4, wrap = true
         {
-            let rac = page.get_row_and_cell(4, 1);
+            let rac = unsafe { (*page).get_row_and_cell(4, 1) };
             unsafe {
                 let mut c = cell_codepoint(0);
                 c.set_wide(crate::page::Wide::SpacerHead);
@@ -7180,14 +7183,14 @@ fn pagelist_resize_no_reflow_grow_cols_fast_path_with_spacer_head() {
 
     // Verify the old spacer_head positions are now narrow.
     {
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
         {
-            let rac = page.get_row_and_cell(4, 0);
+            let rac = unsafe { (*page).get_row_and_cell(4, 0) };
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
             assert!(!unsafe { (*rac.row).wrap() });
         }
         {
-            let rac = page.get_row_and_cell(4, 1);
+            let rac = unsafe { (*page).get_row_and_cell(4, 1) };
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
             assert!(!unsafe { (*rac.row).wrap() });
         }
@@ -7605,10 +7608,10 @@ fn pagelist_resize_no_reflow_more_cols_forces_smaller_cap() {
     let mut s = PageList::init(cap.cols, cap.rows, None).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     {
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
         for y in 0..s.rows as usize {
             for x in 0..s.cols as usize {
-                let rac = page.get_row_and_cell(x, y);
+                let rac = unsafe { (*page).get_row_and_cell(x, y) };
                 unsafe {
                     *rac.cell = cell_codepoint('A' as u32);
                 }
@@ -7653,9 +7656,9 @@ fn pagelist_resize_no_reflow_more_rows_adds_blank_rows_if_cursor_at_bottom() {
     s.grow_rows(2).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     {
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
         for y in 0..s.total_rows() {
-            let rac = page.get_row_and_cell(0, y);
+            let rac = unsafe { (*page).get_row_and_cell(0, y) };
             unsafe {
                 *rac.cell = cell_codepoint(y as u32);
             }
@@ -7751,10 +7754,10 @@ fn pagelist_resize_reflow_more_cols_no_wrapped_rows() {
     let mut s = PageList::init(5, 3, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     {
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
         for y in 0..s.rows as usize {
             for x in 0..s.cols as usize {
-                let rac = page.get_row_and_cell(x, y);
+                let rac = unsafe { (*page).get_row_and_cell(x, y) };
                 unsafe {
                     *rac.cell = cell_codepoint('A' as u32);
                 }
@@ -7795,18 +7798,18 @@ fn pagelist_resize_reflow_more_cols_wrapped_rows() {
     let mut s = PageList::init(2, 4, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
     {
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
         for y in 0..s.rows as usize {
             if y % 2 == 0 {
-                let rac = page.get_row_and_cell(0, y);
+                let rac = unsafe { (*page).get_row_and_cell(0, y) };
                 unsafe { (*rac.row).set_wrap(true) };
             } else {
-                let rac = page.get_row_and_cell(0, y);
+                let rac = unsafe { (*page).get_row_and_cell(0, y) };
                 unsafe { (*rac.row).set_wrap_continuation(true) };
             }
 
             for x in 0..s.cols as usize {
-                let rac = page.get_row_and_cell(x, y);
+                let rac = unsafe { (*page).get_row_and_cell(x, y) };
                 unsafe {
                     *rac.cell = cell_codepoint('A' as u32);
                 }
@@ -7863,18 +7866,18 @@ fn pagelist_resize_reflow_invalidates_viewport_offset_cache() {
     s.grow_rows(20).unwrap();
 
     {
-        let page = unsafe { &mut (*s.pages.last).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
         for y in 0..s.rows as usize {
             if y % 2 == 0 {
-                let rac = page.get_row_and_cell(0, y);
+                let rac = unsafe { (*page).get_row_and_cell(0, y) };
                 unsafe { (*rac.row).set_wrap(true) };
             } else {
-                let rac = page.get_row_and_cell(0, y);
+                let rac = unsafe { (*page).get_row_and_cell(0, y) };
                 unsafe { (*rac.row).set_wrap_continuation(true) };
             }
 
             for x in 0..s.cols as usize {
-                let rac = page.get_row_and_cell(x, y);
+                let rac = unsafe { (*page).get_row_and_cell(x, y) };
                 unsafe {
                     *rac.cell = cell_codepoint('A' as u32);
                 }
