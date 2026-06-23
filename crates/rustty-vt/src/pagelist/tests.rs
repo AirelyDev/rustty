@@ -6156,7 +6156,11 @@ fn pagelist_clone_partial_trimmed_left_reclaims_styles() {
     // Style the rows we're trimming
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
-        let page = unsafe { &mut (*s.pages.first).data };
+        // PORT NOTE: `page` is a raw `*mut PageData` (the reference's
+        // `&...first.?.data` is a Zig pointer). A real `&mut` held across the
+        // loop below is invalidated under Stacked Borrows by the shared retag
+        // through `Pin::row_and_cell`, so we keep a raw pointer and deref per use.
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
         let style = Style {
             flags: stylepkg::Flags {
@@ -6165,16 +6169,16 @@ fn pagelist_clone_partial_trimmed_left_reclaims_styles() {
             },
             ..Style::default()
         };
-        let base = page.memory_ptr();
-        let style_id = unsafe { page.styles.add(base, style) }.unwrap();
+        let base = unsafe { (*page).memory_ptr() };
+        let style_id = unsafe { (*page).styles.add(base, style) }.unwrap();
 
         let mut it = s.row_iterator(
             super::iter::Direction::LeftUp,
             point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
             Some(point::Point::Screen(point::Coordinate { x: 0, y: 9 })),
         );
-        let page = unsafe { &mut (*s.pages.first).data };
-        let base = page.memory_ptr();
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let base = unsafe { (*page).memory_ptr() };
         while let Some(p) = it.next() {
             let rac = p.row_and_cell();
             unsafe {
@@ -6182,15 +6186,15 @@ fn pagelist_clone_partial_trimmed_left_reclaims_styles() {
                 let mut c = cell_codepoint(b'A' as u32);
                 c.set_style_id(style_id);
                 *rac.cell = c;
-                page.styles.use_id(base, style_id);
+                (*page).styles.use_id(base, style_id);
             }
         }
 
         // We're over-counted by 1 because `add` implies `use`.
-        unsafe { page.styles.release(base, style_id) };
+        unsafe { (*page).styles.release(base, style_id) };
 
         // Expect to have one style
-        assert_eq!(1, page.styles.count());
+        assert_eq!(1, unsafe { (*page).styles.count() });
     }
 
     let mut opts = super::access::Clone {
