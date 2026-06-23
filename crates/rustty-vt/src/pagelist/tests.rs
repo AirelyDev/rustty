@@ -31,7 +31,7 @@
 use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError};
 use super::scroll::Scroll;
 use super::{std_capacity, std_size, PageList, PagePool, Pin};
-use crate::page::{Cell, ContentTag, Page, SemanticPrompt};
+use crate::page::{Cell, ContentTag, Page, SemanticContent, SemanticPrompt};
 use crate::style::{self as stylepkg, Style};
 use crate::{hyperlink, point};
 use rustty_render_types::term_size as size;
@@ -42,6 +42,16 @@ fn cell_codepoint(cp: u32) -> Cell {
     let mut c = Cell::zeroed();
     c.set_content_tag(ContentTag::Codepoint);
     c.set_content_codepoint(cp);
+    c
+}
+
+// Helper mirroring the reference cell-literal `.{ .content_tag = .codepoint,
+// .content = .{ .codepoint = cp }, .semantic_content = sc }`.
+fn cell_codepoint_sc(cp: u32, sc: SemanticContent) -> Cell {
+    let mut c = Cell::zeroed();
+    c.set_content_tag(ContentTag::Codepoint);
+    c.set_content_codepoint(cp);
+    c.set_semantic_content(sc);
     c
 }
 
@@ -4428,6 +4438,594 @@ fn pagelist_promptIterator_left_up_limit_inclusive() {
         );
     }
     assert!(it.next().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent prompt"
+#[test]
+fn pagelist_highlightSemanticContent_prompt() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 5
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        // Start the prompt for the first 5 cols
+        for x in 0..5 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'A' as u32, SemanticContent::Prompt);
+            }
+        }
+
+        // Next 3 let's make input
+        for x in 5..8 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'B' as u32, SemanticContent::Input);
+            }
+        }
+    }
+    // Prompt on row 10
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    let hl = s
+        .highlight_semantic_content(
+            s.pin(point::Point::Screen(point::Coordinate { x: 2, y: 5 }))
+                .unwrap(),
+            SemanticContent::Prompt,
+        )
+        .unwrap();
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 0, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.start).unwrap()
+    );
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 7, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.end).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent prompt with output"
+#[test]
+fn pagelist_highlightSemanticContent_prompt_with_output() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 5
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        // First 3 cols are prompt
+        for x in 0..3 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+
+        // Next 4 are input
+        for x in 3..7 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'l' as u32, SemanticContent::Input);
+            }
+        }
+
+        // Rest is output (shouldn't be included in prompt highlight)
+        for x in 7..10 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
+            }
+        }
+    }
+    // Prompt on row 10
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Highlighting from prompt should include prompt and input, but stop at output
+    let hl = s
+        .highlight_semantic_content(
+            s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 5 }))
+                .unwrap(),
+            SemanticContent::Prompt,
+        )
+        .unwrap();
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 0, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.start).unwrap()
+    );
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 6, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.end).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent prompt multiline"
+#[test]
+fn pagelist_highlightSemanticContent_prompt_multiline() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt starts on row 5
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        // First row is all prompt
+        for x in 0..10 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+    }
+    // Row 6 continues with input
+    {
+        for x in 0..5 {
+            let cell = page.get_row_and_cell(x, 6).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'c' as u32, SemanticContent::Input);
+            }
+        }
+    }
+    // Prompt on row 10
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Highlighting should span both rows
+    let hl = s
+        .highlight_semantic_content(
+            s.pin(point::Point::Screen(point::Coordinate { x: 2, y: 5 }))
+                .unwrap(),
+            SemanticContent::Prompt,
+        )
+        .unwrap();
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 0, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.start).unwrap()
+    );
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 4, y: 6 }),
+        s.point_from_pin(point::Tag::Screen, hl.end).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent prompt only"
+#[test]
+fn pagelist_highlightSemanticContent_prompt_only() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 5 with only prompt content (no input)
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        for x in 0..5 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+    }
+    // Prompt on row 10
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Highlighting should only include the prompt cells
+    let hl = s
+        .highlight_semantic_content(
+            s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 5 }))
+                .unwrap(),
+            SemanticContent::Prompt,
+        )
+        .unwrap();
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 0, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.start).unwrap()
+    );
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 4, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.end).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent prompt to end of screen"
+#[test]
+fn pagelist_highlightSemanticContent_prompt_to_end_of_screen() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Single prompt on row 15, no following prompt
+    {
+        let rac = page.get_row_and_cell(0, 15);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        for x in 0..3 {
+            let cell = page.get_row_and_cell(x, 15).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+
+        for x in 3..8 {
+            let cell = page.get_row_and_cell(x, 15).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'c' as u32, SemanticContent::Input);
+            }
+        }
+    }
+
+    // Highlighting should include prompt and input up to column 7
+    let hl = s
+        .highlight_semantic_content(
+            s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 15 }))
+                .unwrap(),
+            SemanticContent::Prompt,
+        )
+        .unwrap();
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 0, y: 15 }),
+        s.point_from_pin(point::Tag::Screen, hl.start).unwrap()
+    );
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 7, y: 15 }),
+        s.point_from_pin(point::Tag::Screen, hl.end).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent input basic"
+#[test]
+fn pagelist_highlightSemanticContent_input_basic() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 5
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        // First 3 cols are prompt
+        for x in 0..3 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+
+        // Next 5 are input
+        for x in 3..8 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'l' as u32, SemanticContent::Input);
+            }
+        }
+    }
+    // Prompt on row 10
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Highlighting input should only include input cells
+    let hl = s
+        .highlight_semantic_content(
+            s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 5 }))
+                .unwrap(),
+            SemanticContent::Input,
+        )
+        .unwrap();
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 3, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.start).unwrap()
+    );
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 7, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.end).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent input with output"
+#[test]
+fn pagelist_highlightSemanticContent_input_with_output() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 5
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        // First 2 cols are prompt
+        for x in 0..2 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+
+        // Next 3 are input
+        for x in 2..5 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'c' as u32, SemanticContent::Input);
+            }
+        }
+
+        // Rest is output
+        for x in 5..10 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
+            }
+        }
+    }
+    // Prompt on row 10
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Highlighting input should stop at output
+    let hl = s
+        .highlight_semantic_content(
+            s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 5 }))
+                .unwrap(),
+            SemanticContent::Input,
+        )
+        .unwrap();
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 2, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.start).unwrap()
+    );
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 4, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.end).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent input multiline with continuation"
+#[test]
+fn pagelist_highlightSemanticContent_input_multiline_with_continuation() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 5
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        // First 2 cols are prompt
+        for x in 0..2 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+
+        // Rest is input
+        for x in 2..10 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'c' as u32, SemanticContent::Input);
+            }
+        }
+    }
+    // Row 6 has continuation prompt then more input
+    {
+        // Continuation prompt
+        for x in 0..2 {
+            let cell = page.get_row_and_cell(x, 6).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'>' as u32, SemanticContent::Prompt);
+            }
+        }
+
+        // More input
+        for x in 2..6 {
+            let cell = page.get_row_and_cell(x, 6).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'd' as u32, SemanticContent::Input);
+            }
+        }
+    }
+    // Prompt on row 10
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Highlighting input should span both rows, skipping continuation prompts
+    let hl = s
+        .highlight_semantic_content(
+            s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 5 }))
+                .unwrap(),
+            SemanticContent::Input,
+        )
+        .unwrap();
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 2, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.start).unwrap()
+    );
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 5, y: 6 }),
+        s.point_from_pin(point::Tag::Screen, hl.end).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent input no input returns null"
+#[test]
+fn pagelist_highlightSemanticContent_input_no_input_returns_null() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 5 with only prompt, then immediately output
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        // First 3 cols are prompt
+        for x in 0..3 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+
+        // Rest is output (no input!)
+        for x in 3..10 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
+            }
+        }
+    }
+    // Prompt on row 10
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Highlighting input should return null when there's no input
+    let hl = s.highlight_semantic_content(
+        s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 5 }))
+            .unwrap(),
+        SemanticContent::Input,
+    );
+    assert!(hl.is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent input to end of screen"
+#[test]
+fn pagelist_highlightSemanticContent_input_to_end_of_screen() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Single prompt on row 15, no following prompt
+    {
+        let rac = page.get_row_and_cell(0, 15);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        for x in 0..2 {
+            let cell = page.get_row_and_cell(x, 15).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+
+        for x in 2..7 {
+            let cell = page.get_row_and_cell(x, 15).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'c' as u32, SemanticContent::Input);
+            }
+        }
+    }
+
+    // Highlighting input with no following prompt
+    let hl = s
+        .highlight_semantic_content(
+            s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 15 }))
+                .unwrap(),
+            SemanticContent::Input,
+        )
+        .unwrap();
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 2, y: 15 }),
+        s.point_from_pin(point::Tag::Screen, hl.start).unwrap()
+    );
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 6, y: 15 }),
+        s.point_from_pin(point::Tag::Screen, hl.end).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent input prompt only returns null"
+#[test]
+fn pagelist_highlightSemanticContent_input_prompt_only_returns_null() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 5 with only prompt content, no input or output
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        // All cells are prompt
+        for x in 0..10 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+    }
+    // Mark rows 6-9 as prompt to ensure no input before next prompt
+    {
+        for y in 6..10 {
+            for x in 0..10 {
+                let cell = page.get_row_and_cell(x, y).cell;
+                unsafe { (*cell).set_semantic_content(SemanticContent::Prompt) };
+            }
+        }
+    }
+    // Prompt on row 10
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Highlighting input should return null when there's only prompts
+    let hl = s.highlight_semantic_content(
+        s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 5 }))
+            .unwrap(),
+        SemanticContent::Input,
+    );
+    assert!(hl.is_none());
 
     s.deinit();
 }
