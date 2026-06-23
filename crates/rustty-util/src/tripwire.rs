@@ -171,8 +171,19 @@ struct Tripwire<E: Copy> {
 impl<P: FailPointKey, E: Copy> Module<P, E> {
     /// Whether our module is enabled or not. In the future we may
     /// want to make this a comptime parameter to the module.
+    //
+    // PORT NOTE: the Zig reference gates on `builtin.is_test`, which is true for
+    // the WHOLE compilation unit when running tests (including dependency code).
+    // Rust's `cfg!(test)` is only true inside the crate currently compiled with
+    // `--test`, so a downstream crate's tripwire calls would see `enabled() ==
+    // false` and never trip (this module would be dead weight cross-crate). The
+    // faithful equivalent that propagates to dependency code is
+    // `cfg!(debug_assertions)`: it is on for the `test`/`dev` profiles (where
+    // unit tests run) and off for `release`, matching `builtin.is_test`'s effect
+    // in practice. Consumers additionally `#[cfg(test)]`-gate their `check` call
+    // sites, so production (non-test) builds never reach `check` regardless.
     pub const fn enabled() -> bool {
-        cfg!(test)
+        cfg!(debug_assertions)
     }
 
     /// Construct a new tripwire module instance. (Zig models this as a type;

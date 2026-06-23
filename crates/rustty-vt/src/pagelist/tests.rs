@@ -9,12 +9,6 @@
 //! than split per-cluster. Each `#[test]` is an assertion-for-assertion port of
 //! the reference `test {}` block of the same name, with expected values taken
 //! from an independent reading of the reference (no tautologies).
-//!
-//! DEFERRED (land with their dependency cluster, NOT dropped, NOT stubbed):
-//!   - `PageList init error` — exercises the `init_tw`/`initPages_tw` tripwire
-//!     failpoints. The tripwire failpoint infrastructure is not yet ported
-//!     (the `init`/`initPages` PORT NOTE in `mod.rs` defers it to the test
-//!     phase); this test lands once that infra exists.
 
 #![allow(non_snake_case)]
 // PORT NOTE: these ported tests reproduce the reference's exact loop and range
@@ -132,6 +126,73 @@ fn pagelist() {
     );
 
     s.deinit();
+}
+
+// ref: test "PageList init error"
+#[test]
+fn pagelist_init_error() {
+    use super::{InitFp, InitPagesFp, OutOfMemory, INIT_PAGES_TW, INIT_TW};
+    use rustty_util::tripwire::ResetMode;
+
+    // PORT NOTE: the reference iterates `std.meta.tags(init_tw.FailPoint)` /
+    // `std.meta.tags(initPages_tw.FailPoint)`. Rust has no reflection over enum
+    // variants, so we list the fieldless-enum tags explicitly. These must match
+    // the `InitFp`/`InitPagesFp` definitions in `mod.rs` exactly.
+
+    // Test every failure point in `init` and ensure that we don't
+    // leak memory (testing.allocator verifies) since we're exiting early.
+    for tag in [
+        InitFp::InitMemoryPool,
+        InitFp::InitPages,
+        InitFp::ViewportPin,
+        InitFp::ViewportPinTrack,
+    ] {
+        // defer tw.end(.reset) catch unreachable;
+        // PORT NOTE: Rust has no `defer`; we drain the tripwire after the
+        // assertion via `end(.reset)` and assert it reports no untripped point.
+        INIT_TW.with(|tw| tw.borrow_mut().errorAlways(tag, OutOfMemory));
+        // try std.testing.expectError(error.OutOfMemory, init(...));
+        // PORT NOTE: `PageList` has no `Debug`, so we use `matches!` rather than
+        // `assert_eq!` (which would require `Debug` on the `Ok` type).
+        assert!(matches!(PageList::init(80, 24, None), Err(OutOfMemory)));
+        INIT_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+    }
+
+    // init calls initPages transitively, so let's check that if
+    // any failures happen in initPages, we also don't leak memory.
+    for tag in [
+        InitPagesFp::PageNode,
+        InitPagesFp::PageBufStd,
+        InitPagesFp::PageBufNonStd,
+    ] {
+        INIT_PAGES_TW.with(|tw| tw.borrow_mut().errorAlways(tag, OutOfMemory));
+
+        let cols: size::CellCountInt = if tag == InitPagesFp::PageBufStd {
+            80
+        } else {
+            std_capacity().max_cols().unwrap() + 1
+        };
+        assert!(matches!(PageList::init(cols, 24, None), Err(OutOfMemory)));
+        INIT_PAGES_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+    }
+
+    // Try non-standard pages since they don't go in our pool.
+    // PORT NOTE: the reference loops over a single-element array
+    // `[_]initPages_tw.FailPoint{.page_buf_non_std}`; we reproduce that loop
+    // form verbatim, so the single-element-loop lint is suppressed.
+    #[allow(clippy::single_element_loop)]
+    for tag in [InitPagesFp::PageBufNonStd] {
+        INIT_PAGES_TW.with(|tw| tw.borrow_mut().errorAfter(tag, OutOfMemory, 1));
+        assert!(matches!(
+            PageList::init(
+                std_capacity().max_cols().unwrap() + 1,
+                std_capacity().rows + 1,
+                None,
+            ),
+            Err(OutOfMemory)
+        ));
+        INIT_PAGES_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+    }
 }
 
 // ref: test "PageList pointFromPin active no history"
@@ -7030,7 +7091,7 @@ fn pagelist_resize_no_reflow_more_cols_with_spacer_head() {
             let rac = page.get_row_and_cell(0, 0);
             assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
-            // assert!(!unsafe { (*rac.row).wrap() });
+            // try testing.expect(!rac.row.wrap);
         }
         {
             let rac = page.get_row_and_cell(1, 0);
@@ -8575,6 +8636,14 @@ fn pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase() {
     // times the base string alloc capacity.
     //
     // This forces the reflow to increase capacity.
+    //
+    //  +--+ = PAGE 0
+    //  :  :
+    //  | X… <- where X is hyperlinked with almost all string cap.
+    //  +--+
+    //  +--+ = PAGE 1
+    //  …X | <- X here also almost hits string cap with a hyperlink.
+    //  +--+
 
     // Almost hit string alloc cap in bottom right of first page.
     // Mark the final row as wrapped.
@@ -8670,6 +8739,14 @@ fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
     // times the base grapheme alloc capacity.
     //
     // This forces the reflow to increase capacity.
+    //
+    //  +--+ = PAGE 0
+    //  :  :
+    //  | X… <- where X is a grapheme which uses almost all the capacity.
+    //  +--+
+    //  +--+ = PAGE 1
+    //  …X | <- X here also almost hits grapheme cap.
+    //  +--+
 
     // grapheme count: @divFloor(grapheme_bytes_default - 1, @sizeOf(u21))
     // where u21 occupies 4 bytes; the Rust port stores graphemes as u32.

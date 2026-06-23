@@ -210,16 +210,19 @@ const PAGE_SIZE_MIN: usize = 4096;
 // All buffers are page-aligned, so handing them to `OffsetBuf::init` yields the
 // same `[]align(page_size_min) u8` the reference relies on.
 struct PagePool {
-    /// The LIFO free-list of standard-size, page-aligned buffers available for
-    /// reuse. Each pointer addresses a `std_size`-byte, `page_size_min`-aligned
-    /// allocation owned by this pool.
-    free_list: Vec<NonNull<u8>>,
+    /// Every standard-size, page-aligned buffer this pool has ever allocated
+    /// and still owns, whether free-listed or currently handed out. This is the
+    /// faithful equivalent of the reference `MemoryPoolAligned` ARENA: the
+    /// arena owns ALL buffers and frees every one on `deinit` (our `Drop`),
+    /// regardless of whether a buffer is currently handed out. (Without this,
+    /// std buffers handed to nodes would leak on an early-return `init` failure
+    /// — exactly what the reference arena prevents.)
+    arena: Vec<NonNull<u8>>,
 
-    /// The total number of standard buffers this pool has ever allocated and
-    /// still owns (free-listed + handed-out). Used to honor `retain_with_limit`
-    /// during `reset` so we free as much as possible while keeping the retained
-    /// capacity, mirroring the reference arena's `retain_with_limit`.
-    live: usize,
+    /// The LIFO free-list of standard-size, page-aligned buffers available for
+    /// reuse. Each pointer is also present in `arena` (the free-list is the
+    /// reusable subset; the reference free-list likewise overlays the arena).
+    free_list: Vec<NonNull<u8>>,
 }
 
 impl PagePool {
@@ -242,8 +245,8 @@ impl PagePool {
     /// we zero each preheated buffer to match.
     fn init_preheated(preheat: usize) -> PagePool {
         let mut pool = PagePool {
+            arena: Vec::new(),
             free_list: Vec::new(),
-            live: 0,
         };
         let mut i: usize = 0;
         while i < preheat {
@@ -254,14 +257,14 @@ impl PagePool {
         pool
     }
 
-    /// Allocate one fresh `std_size`, page-aligned, zeroed buffer and account
-    /// for it in `live`.
+    /// Allocate one fresh `std_size`, page-aligned, zeroed buffer and record it
+    /// in the arena (which owns it until `deinit`/`reset`).
     fn alloc_std(&mut self) -> NonNull<u8> {
         let layout = Self::std_layout();
         // `alloc_zeroed`: the reference's mmap'd page memory is always zeroed.
         let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
         let nn = NonNull::new(ptr).unwrap_or_else(|| std::alloc::handle_alloc_error(layout));
-        self.live += 1;
+        self.arena.push(nn);
         nn
     }
 
@@ -287,37 +290,46 @@ impl PagePool {
         self.free_list.push(ptr);
     }
 
-    /// `pages.reset(.retain_with_limit(limit_bytes))`: retain free-list buffers
-    /// totalling at most `limit_bytes`, freeing the rest, then zero every
-    /// retained buffer (the reference zeroes the retained arena memory because
-    /// it is not re-`mmap`ed). Handed-out buffers are NOT tracked here (the
-    /// caller frees non-standard pages and stops referencing standard pages
-    /// before reset, exactly as the reference does).
+    /// `pages.reset(.retain_with_limit(limit_bytes))`: retain arena buffers
+    /// totalling at most `limit_bytes`, freeing the rest, then make every
+    /// retained buffer available again and zero it (the reference zeroes the
+    /// retained arena memory because it is not re-`mmap`ed).
     //
-    // PORT NOTE: the reference arena `retain_with_limit` shrinks the arena to
-    // `limit_bytes` and zeroes the surviving buffer. We reproduce that on the
-    // free-list: keep `floor(limit_bytes / item_size)` buffers (capped at how
-    // many we hold), free the remainder, and `@memset(0)` the survivors.
+    // PORT NOTE: the reference `MemoryPool.reset` resets the underlying ARENA
+    // (`arena.reset(mode)` retains `limit_bytes` and frees the remainder) and
+    // then NULLS the free-list (`pool.free_list = null`), so after a reset ALL
+    // retained arena memory is available for future `create()` calls. We mirror
+    // this exactly: keep `floor(limit_bytes / item_size)` arena buffers (capped
+    // at how many we own), free the remainder from BOTH the arena and the
+    // free-list, then rebuild the free-list to cover EVERY retained arena buffer
+    // (handed-out buffers are reclaimed by the arena reset, matching the
+    // reference) and `@memset(0)` each survivor. This is why `reset` works even
+    // though the caller (`PageList::reset`) has NOT returned the old pages' std
+    // buffers to the free-list — the arena owns them and reclaims them here.
     fn reset_retain_with_limit(&mut self, limit_bytes: usize) {
         let item_size = Self::item_size();
         let keep = if item_size == 0 {
-            self.free_list.len()
+            self.arena.len()
         } else {
-            core::cmp::min(limit_bytes / item_size, self.free_list.len())
+            core::cmp::min(limit_bytes / item_size, self.arena.len())
         };
 
         let layout = Self::std_layout();
-        // Free the buffers beyond the retained limit.
-        while self.free_list.len() > keep {
-            let buf = self.free_list.pop().unwrap();
+        // Free the arena buffers beyond the retained limit.
+        while self.arena.len() > keep {
+            let buf = self.arena.pop().unwrap();
             unsafe { std::alloc::dealloc(buf.as_ptr(), layout) };
-            self.live -= 1;
         }
+
+        // The free-list is reset to cover EVERY retained arena buffer (the
+        // reference nulls the free-list and reuses the retained arena memory).
+        self.free_list.clear();
+        self.free_list.extend_from_slice(&self.arena);
 
         // Our page pool relies on mmap to zero our page memory. Since we're
         // retaining a certain amount of memory, it won't use mmap and won't
         // be zeroed. Zero out all the retained buffers.
-        for buf in &self.free_list {
+        for buf in &self.arena {
             unsafe {
                 core::ptr::write_bytes(buf.as_ptr(), 0, std_size());
             }
@@ -327,12 +339,14 @@ impl PagePool {
 
 impl Drop for PagePool {
     fn drop(&mut self) {
-        // `pages.deinit()`: free every standard buffer the pool still owns
-        // (only the free-listed ones remain owned by the pool at deinit; any
-        // handed-out standard buffers were returned via `destroy` during
-        // PageList teardown, and non-standard buffers are freed by the caller).
+        // `pages.deinit()`: free every standard buffer this pool owns. The arena
+        // owns ALL buffers it ever allocated (free-listed AND handed-out), so
+        // dropping it frees them all — exactly like the reference
+        // `MemoryPoolAligned.deinit` freeing the whole arena, including buffers
+        // still referenced by live nodes on an early-return `init` failure.
         let layout = Self::std_layout();
-        for buf in self.free_list.drain(..) {
+        self.free_list.clear();
+        for buf in self.arena.drain(..) {
             unsafe { std::alloc::dealloc(buf.as_ptr(), layout) };
         }
     }
@@ -600,6 +614,72 @@ pub struct Pin {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutOfMemory;
 
+// const init_tw = tripwire.module(enum {
+//     init_memory_pool,
+//     init_pages,
+//     viewport_pin,
+//     viewport_pin_track,
+// }, init);
+//
+// PORT NOTE: the Zig `tripwire.module(P, E)` is a comptime function returning a
+// type with type-static state. The Rust `rustty_util::tripwire::Module<P, E>` is
+// an INSTANCE holding the same state (see its PORT NOTE). To share that state
+// between `init` (which calls `check`) and the `PageList init error` test (which
+// calls `error_always`), we hold each module in a `#[cfg(test)] thread_local!`
+// and route all access through the small `cfg(test)` helper fns below. In
+// non-test builds the helpers are no-ops returning `Ok(())`, mirroring the Zig
+// `enabled = builtin.is_test` gate (the `Module::enabled()` short-circuit).
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum InitFp {
+    InitMemoryPool,
+    InitPages,
+    ViewportPin,
+    ViewportPinTrack,
+}
+
+// const initPages_tw = tripwire.module(enum {
+//     page_node,
+//     page_buf_std,
+//     page_buf_non_std,
+// }, initPages);
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+// PORT NOTE: variant names mirror the reference enum tags `page_node`,
+// `page_buf_std`, `page_buf_non_std` verbatim; the shared `Page` prefix is
+// intrinsic to those names, so the `enum_variant_names` lint is suppressed.
+#[allow(clippy::enum_variant_names)]
+enum InitPagesFp {
+    PageNode,
+    PageBufStd,
+    PageBufNonStd,
+}
+
+#[cfg(test)]
+thread_local! {
+    static INIT_TW: core::cell::RefCell<rustty_util::tripwire::Module<InitFp, OutOfMemory>> =
+        core::cell::RefCell::new(rustty_util::tripwire::module());
+    static INIT_PAGES_TW: core::cell::RefCell<rustty_util::tripwire::Module<InitPagesFp, OutOfMemory>> =
+        core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+// `try tw.check(point)` for the `init` tripwire module. Only compiled in test
+// builds; the call sites are `#[cfg(test)]`-gated so production `init` is
+// unchanged, mirroring the Zig `enabled = builtin.is_test` gate where the
+// non-test `check` is a no-op.
+#[cfg(test)]
+#[inline]
+fn init_tw_check(point: InitFp) -> Result<(), OutOfMemory> {
+    INIT_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
+// `try tw.check(point)` for the `initPages` tripwire module.
+#[cfg(test)]
+#[inline]
+fn init_pages_tw_check(point: InitPagesFp) -> Result<(), OutOfMemory> {
+    INIT_PAGES_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
 impl PageList {
     /// Returns the minimum valid "max size" for a given number of rows and cols
     /// such that we can fit the active area AND at least two pages. Note we
@@ -742,10 +822,14 @@ impl PageList {
         // and we'll split it thereafter if it gets too large and add more as
         // necessary.
         // try tw.check(.init_memory_pool);
+        #[cfg(test)]
+        init_tw_check(InitFp::InitMemoryPool)?;
         let mut pool = MemoryPool::init(PAGE_PREHEAT)?;
         // errdefer pool.deinit();
 
         // try tw.check(.init_pages);
+        #[cfg(test)]
+        init_tw_check(InitFp::InitPages)?;
         let mut page_serial: u64 = 0;
         let (page_list, page_size) = match Self::init_pages(&mut pool, &mut page_serial, cols, rows)
         {
@@ -761,6 +845,8 @@ impl PageList {
 
         // We always track our viewport pin to ensure this is never an allocation
         // try tw.check(.viewport_pin);
+        #[cfg(test)]
+        init_tw_check(InitFp::ViewportPin)?;
         let viewport_pin = pool.pins.create().map_err(|_| OutOfMemory)?;
         // viewport_pin.* = .{ .node = page_list.first.? };
         unsafe {
@@ -775,6 +861,8 @@ impl PageList {
         // errdefer tracked_pins.deinit(pool.alloc);
 
         // try tw.check(.viewport_pin_track);
+        #[cfg(test)]
+        init_tw_check(InitFp::ViewportPinTrack)?;
         tracked_pins.put_no_clobber(viewport_pin.as_ptr(), ());
 
         // errdefer comptime unreachable;
@@ -827,6 +915,12 @@ impl PageList {
         let mut rem = rows;
         while rem > 0 {
             // try tw.check(.page_node);
+            #[cfg(test)]
+            if let Err(e) = init_pages_tw_check(InitPagesFp::PageNode) {
+                // errdefer: free every non-standard page in the partial list.
+                Self::free_non_standard_pages(&mut page_list);
+                return Err(e);
+            }
             let node = match pool.nodes.create() {
                 Ok(n) => n,
                 Err(_) => {
@@ -838,9 +932,24 @@ impl PageList {
 
             let page_buf: NonNull<u8> = if pooled {
                 // try tw.check(.page_buf_std);
+                #[cfg(test)]
+                if let Err(e) = init_pages_tw_check(InitPagesFp::PageBufStd) {
+                    // errdefer: node is in the pool (freed on pool Drop); free
+                    // every non-standard page in the partial list.
+                    Self::free_non_standard_pages(&mut page_list);
+                    return Err(e);
+                }
                 pool.pages.create()
             } else {
                 // try tw.check(.page_buf_non_std);
+                #[cfg(test)]
+                if let Err(e) = init_pages_tw_check(InitPagesFp::PageBufNonStd) {
+                    // errdefer: node is in the pool (freed on pool Drop); free
+                    // every non-standard page already appended in the partial
+                    // list (this iteration's buffer was never allocated).
+                    Self::free_non_standard_pages(&mut page_list);
+                    return Err(e);
+                }
                 // break :buf try page_alloc.alignedAlloc(
                 //     u8,
                 //     .fromByteUnits(std.heap.page_size_min),
