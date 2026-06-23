@@ -4444,20 +4444,20 @@ fn pagelist_promptIterator_right_down_continuation_at_start() {
 fn pagelist_promptIterator_right_down_with_prompt_before_continuation() {
     let mut s = PageList::init(2, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 2, continuation on rows 3-4
     // Starting iteration from row 3 should still find the prompt at row 2
     {
-        let rac = page.get_row_and_cell(0, 2);
+        let rac = unsafe { (*page).get_row_and_cell(0, 2) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
     {
-        let rac = page.get_row_and_cell(0, 3);
+        let rac = unsafe { (*page).get_row_and_cell(0, 3) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::PromptContinuation) };
     }
     {
-        let rac = page.get_row_and_cell(0, 4);
+        let rac = unsafe { (*page).get_row_and_cell(0, 4) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::PromptContinuation) };
     }
 
@@ -4487,16 +4487,16 @@ fn pagelist_promptIterator_right_down_with_prompt_before_continuation() {
 fn pagelist_promptIterator_right_down_limit_inclusive() {
     let mut s = PageList::init(2, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 5
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
     // Prompt on row 10
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -4523,16 +4523,16 @@ fn pagelist_promptIterator_right_down_limit_inclusive() {
 fn pagelist_promptIterator_left_up_limit_inclusive() {
     let mut s = PageList::init(2, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 5
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
     // Prompt on row 10
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -4560,16 +4560,16 @@ fn pagelist_promptIterator_left_up_limit_inclusive() {
 fn pagelist_highlightSemanticContent_prompt() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 5
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         // Start the prompt for the first 5 cols
         for x in 0..5 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'A' as u32, SemanticContent::Prompt);
             }
@@ -4577,7 +4577,7 @@ fn pagelist_highlightSemanticContent_prompt() {
 
         // Next 3 let's make input
         for x in 5..8 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'B' as u32, SemanticContent::Input);
             }
@@ -4585,7 +4585,7 @@ fn pagelist_highlightSemanticContent_prompt() {
     }
     // Prompt on row 10
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -4613,16 +4613,16 @@ fn pagelist_highlightSemanticContent_prompt() {
 fn pagelist_highlightSemanticContent_prompt_with_output() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 5
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         // First 3 cols are prompt
         for x in 0..3 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
@@ -4630,7 +4630,7 @@ fn pagelist_highlightSemanticContent_prompt_with_output() {
 
         // Next 4 are input
         for x in 3..7 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'l' as u32, SemanticContent::Input);
             }
@@ -4638,7 +4638,7 @@ fn pagelist_highlightSemanticContent_prompt_with_output() {
 
         // Rest is output (shouldn't be included in prompt highlight)
         for x in 7..10 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
             }
@@ -4646,7 +4646,7 @@ fn pagelist_highlightSemanticContent_prompt_with_output() {
     }
     // Prompt on row 10
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -4675,16 +4675,16 @@ fn pagelist_highlightSemanticContent_prompt_with_output() {
 fn pagelist_highlightSemanticContent_prompt_multiline() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt starts on row 5
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         // First row is all prompt
         for x in 0..10 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
@@ -4693,7 +4693,7 @@ fn pagelist_highlightSemanticContent_prompt_multiline() {
     // Row 6 continues with input
     {
         for x in 0..5 {
-            let cell = page.get_row_and_cell(x, 6).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 6) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'c' as u32, SemanticContent::Input);
             }
@@ -4701,7 +4701,7 @@ fn pagelist_highlightSemanticContent_prompt_multiline() {
     }
     // Prompt on row 10
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -4730,15 +4730,15 @@ fn pagelist_highlightSemanticContent_prompt_multiline() {
 fn pagelist_highlightSemanticContent_prompt_only() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 5 with only prompt content (no input)
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         for x in 0..5 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
@@ -4746,7 +4746,7 @@ fn pagelist_highlightSemanticContent_prompt_only() {
     }
     // Prompt on row 10
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -4775,22 +4775,22 @@ fn pagelist_highlightSemanticContent_prompt_only() {
 fn pagelist_highlightSemanticContent_prompt_to_end_of_screen() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Single prompt on row 15, no following prompt
     {
-        let rac = page.get_row_and_cell(0, 15);
+        let rac = unsafe { (*page).get_row_and_cell(0, 15) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         for x in 0..3 {
-            let cell = page.get_row_and_cell(x, 15).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 15) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
         }
 
         for x in 3..8 {
-            let cell = page.get_row_and_cell(x, 15).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 15) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'c' as u32, SemanticContent::Input);
             }
@@ -4822,16 +4822,16 @@ fn pagelist_highlightSemanticContent_prompt_to_end_of_screen() {
 fn pagelist_highlightSemanticContent_input_basic() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 5
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         // First 3 cols are prompt
         for x in 0..3 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
@@ -4839,7 +4839,7 @@ fn pagelist_highlightSemanticContent_input_basic() {
 
         // Next 5 are input
         for x in 3..8 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'l' as u32, SemanticContent::Input);
             }
@@ -4847,7 +4847,7 @@ fn pagelist_highlightSemanticContent_input_basic() {
     }
     // Prompt on row 10
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -4876,16 +4876,16 @@ fn pagelist_highlightSemanticContent_input_basic() {
 fn pagelist_highlightSemanticContent_input_with_output() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 5
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         // First 2 cols are prompt
         for x in 0..2 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
@@ -4893,7 +4893,7 @@ fn pagelist_highlightSemanticContent_input_with_output() {
 
         // Next 3 are input
         for x in 2..5 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'c' as u32, SemanticContent::Input);
             }
@@ -4901,7 +4901,7 @@ fn pagelist_highlightSemanticContent_input_with_output() {
 
         // Rest is output
         for x in 5..10 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
             }
@@ -4909,7 +4909,7 @@ fn pagelist_highlightSemanticContent_input_with_output() {
     }
     // Prompt on row 10
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -4938,16 +4938,16 @@ fn pagelist_highlightSemanticContent_input_with_output() {
 fn pagelist_highlightSemanticContent_input_multiline_with_continuation() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 5
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         // First 2 cols are prompt
         for x in 0..2 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
@@ -4955,7 +4955,7 @@ fn pagelist_highlightSemanticContent_input_multiline_with_continuation() {
 
         // Rest is input
         for x in 2..10 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'c' as u32, SemanticContent::Input);
             }
@@ -4965,7 +4965,7 @@ fn pagelist_highlightSemanticContent_input_multiline_with_continuation() {
     {
         // Continuation prompt
         for x in 0..2 {
-            let cell = page.get_row_and_cell(x, 6).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 6) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'>' as u32, SemanticContent::Prompt);
             }
@@ -4973,7 +4973,7 @@ fn pagelist_highlightSemanticContent_input_multiline_with_continuation() {
 
         // More input
         for x in 2..6 {
-            let cell = page.get_row_and_cell(x, 6).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 6) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'd' as u32, SemanticContent::Input);
             }
@@ -4981,7 +4981,7 @@ fn pagelist_highlightSemanticContent_input_multiline_with_continuation() {
     }
     // Prompt on row 10
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -5010,16 +5010,16 @@ fn pagelist_highlightSemanticContent_input_multiline_with_continuation() {
 fn pagelist_highlightSemanticContent_input_no_input_returns_null() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 5 with only prompt, then immediately output
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         // First 3 cols are prompt
         for x in 0..3 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
@@ -5027,7 +5027,7 @@ fn pagelist_highlightSemanticContent_input_no_input_returns_null() {
 
         // Rest is output (no input!)
         for x in 3..10 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
             }
@@ -5035,7 +5035,7 @@ fn pagelist_highlightSemanticContent_input_no_input_returns_null() {
     }
     // Prompt on row 10
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -5055,22 +5055,22 @@ fn pagelist_highlightSemanticContent_input_no_input_returns_null() {
 fn pagelist_highlightSemanticContent_input_to_end_of_screen() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Single prompt on row 15, no following prompt
     {
-        let rac = page.get_row_and_cell(0, 15);
+        let rac = unsafe { (*page).get_row_and_cell(0, 15) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         for x in 0..2 {
-            let cell = page.get_row_and_cell(x, 15).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 15) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
         }
 
         for x in 2..7 {
-            let cell = page.get_row_and_cell(x, 15).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 15) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'c' as u32, SemanticContent::Input);
             }
@@ -5102,16 +5102,16 @@ fn pagelist_highlightSemanticContent_input_to_end_of_screen() {
 fn pagelist_highlightSemanticContent_input_prompt_only_returns_null() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 5 with only prompt content, no input or output
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         // All cells are prompt
         for x in 0..10 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
@@ -5121,14 +5121,14 @@ fn pagelist_highlightSemanticContent_input_prompt_only_returns_null() {
     {
         for y in 6..10 {
             for x in 0..10 {
-                let cell = page.get_row_and_cell(x, y).cell;
+                let cell = unsafe { (*page).get_row_and_cell(x, y) }.cell;
                 unsafe { (*cell).set_semantic_content(SemanticContent::Prompt) };
             }
         }
     }
     // Prompt on row 10
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -5148,16 +5148,16 @@ fn pagelist_highlightSemanticContent_input_prompt_only_returns_null() {
 fn pagelist_highlightSemanticContent_output_basic() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 5
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         // First 2 cols are prompt
         for x in 0..2 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
@@ -5165,7 +5165,7 @@ fn pagelist_highlightSemanticContent_output_basic() {
 
         // Next 3 are input
         for x in 2..5 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'l' as u32, SemanticContent::Input);
             }
@@ -5173,7 +5173,7 @@ fn pagelist_highlightSemanticContent_output_basic() {
 
         // Cols 5-7 are output
         for x in 5..8 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
             }
@@ -5181,13 +5181,13 @@ fn pagelist_highlightSemanticContent_output_basic() {
 
         // Mark remaining cells as prompt to bound the output
         for x in 8..10 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe { (*cell).set_semantic_content(SemanticContent::Prompt) };
         }
     }
     // Prompt on row 10
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -5216,16 +5216,16 @@ fn pagelist_highlightSemanticContent_output_basic() {
 fn pagelist_highlightSemanticContent_output_multiline() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 5
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         // First 2 cols are prompt
         for x in 0..2 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
@@ -5233,7 +5233,7 @@ fn pagelist_highlightSemanticContent_output_multiline() {
 
         // Next 2 are input
         for x in 2..4 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'l' as u32, SemanticContent::Input);
             }
@@ -5241,7 +5241,7 @@ fn pagelist_highlightSemanticContent_output_multiline() {
 
         // Rest of row 5 is output
         for x in 4..10 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
             }
@@ -5250,7 +5250,7 @@ fn pagelist_highlightSemanticContent_output_multiline() {
     // Row 6 is all output
     {
         for x in 0..10 {
-            let cell = page.get_row_and_cell(x, 6).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 6) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
             }
@@ -5259,19 +5259,19 @@ fn pagelist_highlightSemanticContent_output_multiline() {
     // Row 7 has partial output then input to bound it
     {
         for x in 0..5 {
-            let cell = page.get_row_and_cell(x, 7).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 7) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
             }
         }
         for x in 5..10 {
-            let cell = page.get_row_and_cell(x, 7).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 7) }.cell;
             unsafe { (*cell).set_semantic_content(SemanticContent::Input) };
         }
     }
     // Prompt on row 10
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -5300,16 +5300,16 @@ fn pagelist_highlightSemanticContent_output_multiline() {
 fn pagelist_highlightSemanticContent_output_stops_at_next_prompt() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 5
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         // First 2 cols are prompt
         for x in 0..2 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
@@ -5317,7 +5317,7 @@ fn pagelist_highlightSemanticContent_output_stops_at_next_prompt() {
 
         // Next 2 are input
         for x in 2..4 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'l' as u32, SemanticContent::Input);
             }
@@ -5325,7 +5325,7 @@ fn pagelist_highlightSemanticContent_output_stops_at_next_prompt() {
 
         // Rest is output
         for x in 4..10 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
             }
@@ -5334,14 +5334,14 @@ fn pagelist_highlightSemanticContent_output_stops_at_next_prompt() {
     // Row 6 has output then prompt starts
     {
         for x in 0..3 {
-            let cell = page.get_row_and_cell(x, 6).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 6) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
             }
         }
         // Next prompt marker on same row
         for x in 3..6 {
-            let cell = page.get_row_and_cell(x, 6).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 6) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
@@ -5349,7 +5349,7 @@ fn pagelist_highlightSemanticContent_output_stops_at_next_prompt() {
     }
     // Prompt on row 10
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -5378,29 +5378,29 @@ fn pagelist_highlightSemanticContent_output_stops_at_next_prompt() {
 fn pagelist_highlightSemanticContent_output_to_end_of_screen() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Single prompt on row 15, no following prompt
     {
-        let rac = page.get_row_and_cell(0, 15);
+        let rac = unsafe { (*page).get_row_and_cell(0, 15) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         for x in 0..2 {
-            let cell = page.get_row_and_cell(x, 15).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 15) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
         }
 
         for x in 2..4 {
-            let cell = page.get_row_and_cell(x, 15).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 15) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'c' as u32, SemanticContent::Input);
             }
         }
 
         for x in 4..10 {
-            let cell = page.get_row_and_cell(x, 15).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 15) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
             }
@@ -5409,13 +5409,13 @@ fn pagelist_highlightSemanticContent_output_to_end_of_screen() {
     // Row 16 has output then prompt to bound it
     {
         for x in 0..8 {
-            let cell = page.get_row_and_cell(x, 16).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 16) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
             }
         }
         for x in 8..10 {
-            let cell = page.get_row_and_cell(x, 16).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 16) }.cell;
             unsafe { (*cell).set_semantic_content(SemanticContent::Prompt) };
         }
     }
@@ -5445,16 +5445,16 @@ fn pagelist_highlightSemanticContent_output_to_end_of_screen() {
 fn pagelist_highlightSemanticContent_output_no_output_returns_null() {
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 5 with only prompt and input, no output
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         // First 3 cols are prompt
         for x in 0..3 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
@@ -5462,7 +5462,7 @@ fn pagelist_highlightSemanticContent_output_no_output_returns_null() {
 
         // Rest is input (must explicitly mark all cells to avoid default .output)
         for x in 3..10 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'c' as u32, SemanticContent::Input);
             }
@@ -5472,14 +5472,14 @@ fn pagelist_highlightSemanticContent_output_no_output_returns_null() {
     {
         for y in 6..10 {
             for x in 0..10 {
-                let cell = page.get_row_and_cell(x, y).cell;
+                let cell = unsafe { (*page).get_row_and_cell(x, y) }.cell;
                 unsafe { (*cell).set_semantic_content(SemanticContent::Input) };
             }
         }
     }
     // Prompt on row 10 (no output between prompts)
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -5502,16 +5502,16 @@ fn pagelist_highlightSemanticContent_output_skips_empty_cells() {
     // doesn't fill the entire row - trailing cells have default .output.
     let mut s = PageList::init(10, 20, Some(0)).unwrap();
     assert!(core::ptr::eq(s.pages.first, s.pages.last));
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
     // Prompt on row 5 - only fills first 3 cells, rest are empty with default .output
     {
-        let rac = page.get_row_and_cell(0, 5);
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
 
         // First 3 cols are prompt with text
         for x in 0..3 {
-            let cell = page.get_row_and_cell(x, 5).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 5) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
             }
@@ -5523,7 +5523,7 @@ fn pagelist_highlightSemanticContent_output_skips_empty_cells() {
     // Row 6 has input (short, doesn't fill line)
     {
         for x in 0..4 {
-            let cell = page.get_row_and_cell(x, 6).cell;
+            let cell = unsafe { (*page).get_row_and_cell(x, 6) }.cell;
             unsafe {
                 *cell = cell_codepoint_sc(b'l' as u32, SemanticContent::Input);
             }
@@ -5535,7 +5535,7 @@ fn pagelist_highlightSemanticContent_output_skips_empty_cells() {
     {
         for y in 7..9 {
             for x in 0..5 {
-                let cell = page.get_row_and_cell(x, y).cell;
+                let cell = unsafe { (*page).get_row_and_cell(x, y) }.cell;
                 unsafe {
                     *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
                 }
@@ -5545,7 +5545,7 @@ fn pagelist_highlightSemanticContent_output_skips_empty_cells() {
 
     // Prompt on row 10
     {
-        let rac = page.get_row_and_cell(0, 10);
+        let rac = unsafe { (*page).get_row_and_cell(0, 10) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
