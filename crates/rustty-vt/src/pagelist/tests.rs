@@ -9189,13 +9189,13 @@ fn pagelist_resize_reflow_less_cols_no_reflow_preserves_semantic_prompt() {
     let mut s = PageList::init(4, 4, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
         {
-            let rac = page.get_row_and_cell(0, 1);
+            let rac = unsafe { (*page).get_row_and_cell(0, 1) };
             unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
         }
         for x in 0..s.cols as usize {
-            let rac = page.get_row_and_cell(x, 1);
+            let rac = unsafe { (*page).get_row_and_cell(x, 1) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -9240,8 +9240,8 @@ fn pagelist_resize_reflow_less_cols_no_reflow_preserves_semantic_prompt_on_first
     let mut s = PageList::init(4, 4, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
-        let rac = page.get_row_and_cell(0, 0);
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -9257,8 +9257,8 @@ fn pagelist_resize_reflow_less_cols_no_reflow_preserves_semantic_prompt_on_first
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
-        let rac = page.get_row_and_cell(0, 0);
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         assert!(unsafe { (*rac.row).semantic_prompt() } == SemanticPrompt::Prompt);
     }
 
@@ -9271,8 +9271,8 @@ fn pagelist_resize_reflow_less_cols_wrap_preserves_semantic_prompt() {
     let mut s = PageList::init(4, 4, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
-        let rac = page.get_row_and_cell(0, 0);
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -9288,8 +9288,8 @@ fn pagelist_resize_reflow_less_cols_wrap_preserves_semantic_prompt() {
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
-        let rac = page.get_row_and_cell(0, 0);
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         assert!(unsafe { (*rac.row).semantic_prompt() } == SemanticPrompt::Prompt);
     }
 
@@ -9301,12 +9301,12 @@ fn pagelist_resize_reflow_less_cols_wrap_preserves_semantic_prompt() {
 fn pagelist_resize_reflow_less_cols_no_wrapped_rows() {
     let mut s = PageList::init(10, 3, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
     for y in 0..s.rows as usize {
         let end = 4;
         assert!(end < s.cols as usize);
         for x in 0..4usize {
-            let rac = page.get_row_and_cell(x, y);
+            let rac = unsafe { (*page).get_row_and_cell(x, y) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -9427,17 +9427,17 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows_with_graphemes() {
     let mut s = PageList::init(4, 2, None).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
         for y in 0..s.rows as usize {
             for x in 0..s.cols as usize {
-                let rac = page.get_row_and_cell(x, y);
+                let rac = unsafe { (*page).get_row_and_cell(x, y) };
                 unsafe {
                     *rac.cell = cell_codepoint(x as u32);
                 }
             }
 
-            let rac = page.get_row_and_cell(2, y);
-            page.append_grapheme(rac.row, rac.cell, 'A' as u32).unwrap();
+            let rac = unsafe { (*page).get_row_and_cell(2, y) };
+            unsafe { (*page).append_grapheme(rac.row, rac.cell, 'A' as u32) }.unwrap();
         }
     }
 
@@ -9461,7 +9461,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows_with_graphemes() {
     }
 
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
     let mut it = s.row_iterator(
         super::iter::Direction::RightDown,
         point::Point::Screen(point::Coordinate::default()),
@@ -9485,7 +9485,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows_with_graphemes() {
         assert_eq!(2usize, cells.len());
         assert_eq!(2u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
 
-        let cps = page.lookup_grapheme(rac.cell).unwrap();
+        let cps = unsafe { (*page).lookup_grapheme(rac.cell) }.unwrap();
         assert_eq!(1usize, cps.len());
         assert_eq!('A' as u32, cps[0]);
     }
@@ -9507,7 +9507,7 @@ fn pagelist_resize_reflow_less_cols_wrapped_rows_with_graphemes() {
         assert_eq!(2usize, cells.len());
         assert_eq!(2u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
 
-        let cps = page.lookup_grapheme(rac.cell).unwrap();
+        let cps = unsafe { (*page).lookup_grapheme(rac.cell) }.unwrap();
         assert_eq!(1usize, cps.len());
         assert_eq!('A' as u32, cps[0]);
     }
@@ -9564,29 +9564,29 @@ fn pagelist_resize_reflow_less_cols_wraps_spacer_head() {
     let mut s = PageList::init(4, 3, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
         {
-            let rac = page.get_row_and_cell(0, 0);
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
             unsafe {
                 (*rac.row).set_wrap(true);
                 *rac.cell = cell_codepoint('x' as u32);
             }
         }
         {
-            let rac = page.get_row_and_cell(1, 0);
+            let rac = unsafe { (*page).get_row_and_cell(1, 0) };
             unsafe {
                 *rac.cell = cell_codepoint('x' as u32);
             }
         }
         {
-            let rac = page.get_row_and_cell(2, 0);
+            let rac = unsafe { (*page).get_row_and_cell(2, 0) };
             unsafe {
                 *rac.cell = cell_codepoint('x' as u32);
             }
         }
         {
-            let rac = page.get_row_and_cell(3, 0);
+            let rac = unsafe { (*page).get_row_and_cell(3, 0) };
             unsafe {
                 let mut c = cell_codepoint(0);
                 c.set_wide(crate::page::Wide::SpacerHead);
@@ -9594,7 +9594,7 @@ fn pagelist_resize_reflow_less_cols_wraps_spacer_head() {
             }
         }
         {
-            let rac = page.get_row_and_cell(0, 1);
+            let rac = unsafe { (*page).get_row_and_cell(0, 1) };
             unsafe {
                 (*rac.row).set_wrap_continuation(true);
                 let mut c = cell_codepoint('😀' as u32);
@@ -9603,7 +9603,7 @@ fn pagelist_resize_reflow_less_cols_wraps_spacer_head() {
             }
         }
         {
-            let rac = page.get_row_and_cell(1, 1);
+            let rac = unsafe { (*page).get_row_and_cell(1, 1) };
             unsafe {
                 let mut c = cell_codepoint(0);
                 c.set_wide(crate::page::Wide::SpacerTail);
@@ -9624,31 +9624,31 @@ fn pagelist_resize_reflow_less_cols_wraps_spacer_head() {
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
         {
-            let rac = page.get_row_and_cell(0, 0);
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
             assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
             assert!(unsafe { (*rac.row).wrap() });
         }
         {
-            let rac = page.get_row_and_cell(1, 0);
+            let rac = unsafe { (*page).get_row_and_cell(1, 0) };
             assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
         }
         {
-            let rac = page.get_row_and_cell(2, 0);
+            let rac = unsafe { (*page).get_row_and_cell(2, 0) };
             assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
         }
         {
-            let rac = page.get_row_and_cell(0, 1);
+            let rac = unsafe { (*page).get_row_and_cell(0, 1) };
             assert_eq!('😀' as u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Wide, unsafe { (*rac.cell).wide() });
         }
         {
-            let rac = page.get_row_and_cell(1, 1);
+            let rac = unsafe { (*page).get_row_and_cell(1, 1) };
             assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::SpacerTail, unsafe { (*rac.cell).wide() });
         }
@@ -9662,10 +9662,10 @@ fn pagelist_resize_reflow_less_cols_wraps_spacer_head() {
 fn pagelist_resize_reflow_less_cols_cursor_goes_to_scrollback() {
     let mut s = PageList::init(4, 2, None).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
     for y in 0..s.rows {
         for x in 0..s.cols {
-            let rac = page.get_row_and_cell(x as usize, y as usize);
+            let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -9702,10 +9702,10 @@ fn pagelist_resize_reflow_less_cols_cursor_goes_to_scrollback() {
 fn pagelist_resize_reflow_less_cols_cursor_in_unchanged_row() {
     let mut s = PageList::init(4, 2, None).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
     for y in 0..s.rows {
         for x in 0..2 {
-            let rac = page.get_row_and_cell(x as usize, y as usize);
+            let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -9745,10 +9745,10 @@ fn pagelist_resize_reflow_less_cols_cursor_in_unchanged_row() {
 fn pagelist_resize_reflow_less_cols_cursor_in_blank_cell() {
     let mut s = PageList::init(6, 2, None).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
     for y in 0..s.rows {
         for x in 0..2 {
-            let rac = page.get_row_and_cell(x as usize, y as usize);
+            let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -9788,10 +9788,10 @@ fn pagelist_resize_reflow_less_cols_cursor_in_blank_cell() {
 fn pagelist_resize_reflow_less_cols_cursor_in_final_blank_cell() {
     let mut s = PageList::init(6, 2, None).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
     for y in 0..s.rows {
         for x in 0..2 {
-            let rac = page.get_row_and_cell(x as usize, y as usize);
+            let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -9831,10 +9831,10 @@ fn pagelist_resize_reflow_less_cols_cursor_in_final_blank_cell() {
 fn pagelist_resize_reflow_less_cols_cursor_in_wrapped_blank_cell() {
     let mut s = PageList::init(6, 2, None).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
     for y in 0..s.rows {
         for x in 0..2 {
-            let rac = page.get_row_and_cell(x as usize, y as usize);
+            let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -9874,10 +9874,10 @@ fn pagelist_resize_reflow_less_cols_cursor_in_wrapped_blank_cell() {
 fn pagelist_resize_reflow_less_cols_blank_lines() {
     let mut s = PageList::init(4, 3, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
     for y in 0..1 {
         for x in 0..4 {
-            let rac = page.get_row_and_cell(x as usize, y as usize);
+            let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -9925,10 +9925,10 @@ fn pagelist_resize_reflow_less_cols_blank_lines() {
 fn pagelist_resize_reflow_less_cols_blank_lines_between() {
     let mut s = PageList::init(4, 3, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
     {
         for x in 0..4 {
-            let rac = page.get_row_and_cell(x as usize, 0);
+            let rac = unsafe { (*page).get_row_and_cell(x as usize, 0) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -9936,7 +9936,7 @@ fn pagelist_resize_reflow_less_cols_blank_lines_between() {
     }
     {
         for x in 0..4 {
-            let rac = page.get_row_and_cell(x as usize, 2);
+            let rac = unsafe { (*page).get_row_and_cell(x as usize, 2) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -9988,15 +9988,15 @@ fn pagelist_resize_reflow_less_cols_blank_lines_between() {
 fn pagelist_resize_reflow_less_cols_blank_lines_between_no_scrollback() {
     let mut s = PageList::init(5, 3, Some(0)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
     {
-        let rac = page.get_row_and_cell(0, 0);
+        let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         unsafe {
             *rac.cell = cell_codepoint('A' as u32);
         }
     }
     {
-        let rac = page.get_row_and_cell(0, 2);
+        let rac = unsafe { (*page).get_row_and_cell(0, 2) };
         unsafe {
             *rac.cell = cell_codepoint('C' as u32);
         }
@@ -10048,10 +10048,10 @@ fn pagelist_resize_reflow_less_cols_blank_lines_between_no_scrollback() {
 fn pagelist_resize_reflow_less_cols_cursor_not_on_last_line_preserves_location() {
     let mut s = PageList::init(5, 5, Some(1)).unwrap();
     assert!(s.pages.first == s.pages.last);
-    let page = unsafe { &mut (*s.pages.first).data };
+    let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
     for y in 0..s.rows {
         for x in 0..2 {
-            let rac = page.get_row_and_cell(x as usize, y as usize);
+            let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
             unsafe {
                 *rac.cell = cell_codepoint(x as u32);
             }
@@ -10108,7 +10108,7 @@ fn pagelist_resize_reflow_less_cols_copy_style() {
     let mut s = PageList::init(4, 2, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
         // Create a style
         let style = Style {
@@ -10118,21 +10118,21 @@ fn pagelist_resize_reflow_less_cols_copy_style() {
             },
             ..Style::default()
         };
-        let base = page.memory_ptr();
-        let style_id = unsafe { page.styles.add(base, style) }.unwrap();
+        let base = unsafe { (*page).memory_ptr() };
+        let style_id = unsafe { (*page).styles.add(base, style) }.unwrap();
 
         for x in 0..s.cols as usize - 1 {
-            let rac = page.get_row_and_cell(x, 0);
+            let rac = unsafe { (*page).get_row_and_cell(x, 0) };
             unsafe {
                 let mut c = cell_codepoint(x as u32);
                 c.set_style_id(style_id);
                 *rac.cell = c;
-                page.styles.use_id(base, style_id);
+                (*page).styles.use_id(base, style_id);
             }
         }
 
         // We're over-counted by 1 because `add` implies `use`.
-        unsafe { page.styles.release(base, style_id) };
+        unsafe { (*page).styles.release(base, style_id) };
     }
 
     // Resize
