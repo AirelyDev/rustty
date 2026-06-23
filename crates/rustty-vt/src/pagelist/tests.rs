@@ -7825,3 +7825,965 @@ fn pagelist_resize_reflow_invalidates_viewport_offset_cache() {
 
     s.deinit();
 }
+
+// ref: test "PageList resize reflow more cols creates multiple pages"
+#[test]
+fn pagelist_resize_reflow_more_cols_creates_multiple_pages() {
+    // We want a wide viewport so our row limit is rather small. This will
+    // force the reflow below to create multiple pages, which we assert.
+    let cap = {
+        let mut current: size::CellCountInt = 100;
+        loop {
+            let cap = std_capacity()
+                .adjust(crate::page::Adjustment {
+                    cols: Some(current),
+                })
+                .unwrap();
+            if cap.rows < 100 {
+                break cap;
+            }
+            current += 100;
+        }
+    };
+
+    let mut s = PageList::init(cap.cols, cap.rows, None).unwrap();
+
+    // Wrap every other row so every line is wrapped for reflow
+    {
+        assert!(core::ptr::eq(s.pages.first, s.pages.last));
+        let page = unsafe { &mut (*s.pages.first).data };
+        for y in 0..s.rows as usize {
+            if y % 2 == 0 {
+                let rac = page.get_row_and_cell(0, y);
+                unsafe { (*rac.row).set_wrap(true) };
+            } else {
+                let rac = page.get_row_and_cell(0, y);
+                unsafe { (*rac.row).set_wrap_continuation(true) };
+            }
+
+            let rac = page.get_row_and_cell(0, y);
+            unsafe {
+                *rac.cell = cell_codepoint('A' as u32);
+            }
+        }
+    }
+
+    // Resize
+    let newcap = cap
+        .adjust(crate::page::Adjustment {
+            cols: Some(cap.cols + 100),
+        })
+        .unwrap();
+    assert!(newcap.rows < cap.rows);
+    s.resize(Resize {
+        cols: Some(newcap.cols),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(newcap.cols as usize, s.cols as usize);
+    assert_eq!(cap.rows as usize, s.total_rows());
+
+    {
+        let mut count: usize = 0;
+        let mut it = s.pages.first;
+        while !it.is_null() {
+            count += 1;
+
+            // All pages should have the new capacity
+            assert_eq!(newcap.cols, unsafe { (*it).data.capacity.cols });
+            assert_eq!(newcap.rows, unsafe { (*it).data.capacity.rows });
+
+            it = unsafe { (*it).next };
+        }
+
+        // We should have more than one page, meaning we created at least
+        // one page. This is the critical aspect of this test so if this
+        // ever goes false we need to adjust this test.
+        assert!(count > 1);
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow more cols wrap across page boundary"
+#[test]
+fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary() {
+    let mut s = PageList::init(2, 10, Some(0)).unwrap();
+    assert_eq!(1usize, s.total_pages());
+
+    // Grow to the capacity of the first page.
+    {
+        let page = unsafe { &mut (*s.pages.first).data };
+        page.pause_integrity_checks(true);
+        for _ in page.size.rows..page.capacity.rows {
+            let _ = s.grow().unwrap();
+        }
+        unsafe { &mut (*s.pages.first).data }.pause_integrity_checks(false);
+        assert_eq!(1usize, s.total_pages());
+        s.grow_rows(1).unwrap();
+        assert_eq!(2usize, s.total_pages());
+    }
+
+    // At this point, we have some rows on the first page, and some on the second.
+    // We can now wrap across the boundary condition.
+    {
+        let page = unsafe { &mut (*s.pages.first).data };
+        let y = page.size.rows as usize - 1;
+        {
+            let rac = page.get_row_and_cell(0, y);
+            unsafe { (*rac.row).set_wrap(true) };
+        }
+        for x in 0..s.cols as usize {
+            let rac = page.get_row_and_cell(x, y);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+    {
+        let page2 = unsafe { &mut (*s.pages.last).data };
+        let y = 0;
+        {
+            let rac = page2.get_row_and_cell(0, y);
+            unsafe { (*rac.row).set_wrap_continuation(true) };
+        }
+        for x in 0..s.cols as usize {
+            let rac = page2.get_row_and_cell(x, y);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // We expect one fewer rows since we unwrapped a row.
+    let end_rows = s.total_rows() - 1;
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(4),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+    assert_eq!(end_rows, s.total_rows());
+
+    {
+        // PAGE 1 ROW 6280, ACTIVE 8
+        let p = s
+            .pin(point::Point::Active(point::Coordinate { x: 0, y: 8 }))
+            .unwrap();
+        let row = p.row_and_cell().row;
+        assert!(!unsafe { (*row).wrap() });
+        assert!(!unsafe { (*row).wrap_continuation() });
+
+        let cells = p.cells(super::pin::CellSubset::All);
+        assert!(!unsafe { (*(cells as *const Cell)).has_text() });
+        assert!(!unsafe { (*(cells as *const Cell).add(1)).has_text() });
+        assert!(!unsafe { (*(cells as *const Cell).add(2)).has_text() });
+        assert!(!unsafe { (*(cells as *const Cell).add(3)).has_text() });
+    }
+    {
+        // PAGE 1 ROW 6281, ACTIVE 9
+        let p = s
+            .pin(point::Point::Active(point::Coordinate { x: 0, y: 9 }))
+            .unwrap();
+        let row = p.row_and_cell().row;
+        assert!(!unsafe { (*row).wrap() });
+        assert!(!unsafe { (*row).wrap_continuation() });
+
+        let cells = p.cells(super::pin::CellSubset::All);
+        assert_eq!(0u32, unsafe {
+            (*(cells as *const Cell)).content_codepoint()
+        });
+        assert_eq!(1u32, unsafe {
+            (*(cells as *const Cell).add(1)).content_codepoint()
+        });
+        assert_eq!(0u32, unsafe {
+            (*(cells as *const Cell).add(2)).content_codepoint()
+        });
+        assert_eq!(1u32, unsafe {
+            (*(cells as *const Cell).add(3)).content_codepoint()
+        });
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow more cols wrap across page boundary cursor in second page"
+#[test]
+fn pagelist_resize_reflow_more_cols_wrap_across_page_boundary_cursor_in_second_page() {
+    let mut s = PageList::init(2, 10, Some(0)).unwrap();
+    assert_eq!(1usize, s.total_pages());
+
+    // Grow to the capacity of the first page.
+    {
+        let page = unsafe { &mut (*s.pages.first).data };
+        page.pause_integrity_checks(true);
+        for _ in page.size.rows..page.capacity.rows {
+            let _ = s.grow().unwrap();
+        }
+        unsafe { &mut (*s.pages.first).data }.pause_integrity_checks(false);
+        assert_eq!(1usize, s.total_pages());
+        s.grow_rows(1).unwrap();
+        assert_eq!(2usize, s.total_pages());
+    }
+
+    // At this point, we have some rows on the first page, and some on the second.
+    // We can now wrap across the boundary condition.
+    {
+        let page = unsafe { &mut (*s.pages.first).data };
+        let y = page.size.rows as usize - 1;
+        {
+            let rac = page.get_row_and_cell(0, y);
+            unsafe { (*rac.row).set_wrap(true) };
+        }
+        for x in 0..s.cols as usize {
+            let rac = page.get_row_and_cell(x, y);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+    {
+        let page2 = unsafe { &mut (*s.pages.last).data };
+        let y = 0;
+        {
+            let rac = page2.get_row_and_cell(0, y);
+            unsafe { (*rac.row).set_wrap_continuation(true) };
+        }
+        for x in 0..s.cols as usize {
+            let rac = page2.get_row_and_cell(x, y);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Put a tracked pin in wrapped row on the last page
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 1, y: 9 }))
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(core::ptr::eq(unsafe { (*p).node }, s.pages.last));
+
+    // We expect one fewer rows since we unwrapped a row.
+    let end_rows = s.total_rows() - 1;
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(4),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+    assert_eq!(end_rows, s.total_rows());
+
+    // Our cursor should move to the first row
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 3, y: 9 }),
+        s.point_from_pin(point::Tag::Active, pin_copy(p)).unwrap()
+    );
+
+    {
+        let p2 = s
+            .pin(point::Point::Active(point::Coordinate { x: 0, y: 9 }))
+            .unwrap();
+        let row = p2.row_and_cell().row;
+        assert!(!unsafe { (*row).wrap() });
+
+        let cells = p2.cells(super::pin::CellSubset::All);
+        assert_eq!(0u32, unsafe {
+            (*(cells as *const Cell)).content_codepoint()
+        });
+        assert_eq!(1u32, unsafe {
+            (*(cells as *const Cell).add(1)).content_codepoint()
+        });
+        assert_eq!(0u32, unsafe {
+            (*(cells as *const Cell).add(2)).content_codepoint()
+        });
+        assert_eq!(1u32, unsafe {
+            (*(cells as *const Cell).add(3)).content_codepoint()
+        });
+    }
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols wrap across page boundary cursor in second page"
+#[test]
+fn pagelist_resize_reflow_less_cols_wrap_across_page_boundary_cursor_in_second_page() {
+    let mut s = PageList::init(5, 10, None).unwrap();
+    assert_eq!(1usize, s.total_pages());
+
+    // Grow to the capacity of the first page.
+    {
+        let page = unsafe { &mut (*s.pages.first).data };
+        page.pause_integrity_checks(true);
+        for _ in page.size.rows..page.capacity.rows {
+            let _ = s.grow().unwrap();
+        }
+        unsafe { &mut (*s.pages.first).data }.pause_integrity_checks(false);
+        assert_eq!(1usize, s.total_pages());
+        s.grow_rows(5).unwrap();
+        assert_eq!(2usize, s.total_pages());
+    }
+
+    // At this point, we have some rows on the first page, and some on the second.
+    // We can now wrap across the boundary condition.
+    {
+        let page = unsafe { &mut (*s.pages.first).data };
+        let y = page.size.rows as usize - 1;
+        {
+            let rac = page.get_row_and_cell(0, y);
+            unsafe { (*rac.row).set_wrap(true) };
+        }
+        for x in 0..s.cols as usize {
+            let rac = page.get_row_and_cell(x, y);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+    {
+        let page2 = unsafe { &mut (*s.pages.last).data };
+        let y = 0;
+        {
+            let rac = page2.get_row_and_cell(0, y);
+            unsafe { (*rac.row).set_wrap_continuation(true) };
+        }
+        for x in 0..s.cols as usize {
+            let rac = page2.get_row_and_cell(x, y);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Put a tracked pin in wrapped row on the last page
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 2, y: 5 }))
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(core::ptr::eq(unsafe { (*p).node }, s.pages.last));
+    assert_eq!(0, unsafe { (*p).y });
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(4),
+        rows: None,
+        reflow: true,
+        cursor: Some(super::resize::Cursor {
+            x: 2,
+            y: 5,
+            pin: None,
+        }),
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+
+    // Our cursor should remain on the same cell
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 3, y: 5 }),
+        s.point_from_pin(point::Tag::Active, pin_copy(p)).unwrap()
+    );
+
+    {
+        // PAGE 0 ROW 7895, ACTIVE 3
+        let p2 = s
+            .pin(point::Point::Active(point::Coordinate { x: 0, y: 3 }))
+            .unwrap();
+        let row = p2.row_and_cell().row;
+        assert!(!unsafe { (*row).wrap() });
+        assert!(!unsafe { (*row).wrap_continuation() });
+
+        let cells = p2.cells(super::pin::CellSubset::All);
+        assert!(!unsafe { (*(cells as *const Cell)).has_text() });
+        assert!(!unsafe { (*(cells as *const Cell).add(1)).has_text() });
+        assert!(!unsafe { (*(cells as *const Cell).add(2)).has_text() });
+        assert!(!unsafe { (*(cells as *const Cell).add(3)).has_text() });
+    }
+    {
+        // PAGE 0 ROW 7896, ACTIVE 4
+        let p2 = s
+            .pin(point::Point::Active(point::Coordinate { x: 0, y: 4 }))
+            .unwrap();
+        let row = p2.row_and_cell().row;
+        assert!(unsafe { (*row).wrap() });
+        assert!(!unsafe { (*row).wrap_continuation() });
+
+        let cells = p2.cells(super::pin::CellSubset::All);
+        assert_eq!(0u32, unsafe {
+            (*(cells as *const Cell)).content_codepoint()
+        });
+        assert_eq!(1u32, unsafe {
+            (*(cells as *const Cell).add(1)).content_codepoint()
+        });
+        assert_eq!(2u32, unsafe {
+            (*(cells as *const Cell).add(2)).content_codepoint()
+        });
+        assert_eq!(3u32, unsafe {
+            (*(cells as *const Cell).add(3)).content_codepoint()
+        });
+    }
+    {
+        // PAGE 0 ROW 7897, ACTIVE 5
+        let p2 = s
+            .pin(point::Point::Active(point::Coordinate { x: 0, y: 5 }))
+            .unwrap();
+        let row = p2.row_and_cell().row;
+        assert!(unsafe { (*row).wrap() });
+        assert!(unsafe { (*row).wrap_continuation() });
+
+        let cells = p2.cells(super::pin::CellSubset::All);
+        assert_eq!(4u32, unsafe {
+            (*(cells as *const Cell)).content_codepoint()
+        });
+        assert_eq!(0u32, unsafe {
+            (*(cells as *const Cell).add(1)).content_codepoint()
+        });
+        assert_eq!(1u32, unsafe {
+            (*(cells as *const Cell).add(2)).content_codepoint()
+        });
+        assert_eq!(2u32, unsafe {
+            (*(cells as *const Cell).add(3)).content_codepoint()
+        });
+    }
+    {
+        // PAGE 0 ROW 7898, ACTIVE 6
+        let p2 = s
+            .pin(point::Point::Active(point::Coordinate { x: 0, y: 6 }))
+            .unwrap();
+        let row = p2.row_and_cell().row;
+        assert!(!unsafe { (*row).wrap() });
+        assert!(unsafe { (*row).wrap_continuation() });
+
+        let cells = p2.cells(super::pin::CellSubset::All);
+        assert_eq!(3u32, unsafe {
+            (*(cells as *const Cell)).content_codepoint()
+        });
+        assert_eq!(4u32, unsafe {
+            (*(cells as *const Cell).add(1)).content_codepoint()
+        });
+    }
+    {
+        // PAGE 0 ROW 7899, ACTIVE 7
+        let p2 = s
+            .pin(point::Point::Active(point::Coordinate { x: 0, y: 7 }))
+            .unwrap();
+        let row = p2.row_and_cell().row;
+        assert!(!unsafe { (*row).wrap() });
+        assert!(!unsafe { (*row).wrap_continuation() });
+
+        let cells = p2.cells(super::pin::CellSubset::All);
+        assert!(!unsafe { (*(cells as *const Cell)).has_text() });
+        assert!(!unsafe { (*(cells as *const Cell).add(1)).has_text() });
+        assert!(!unsafe { (*(cells as *const Cell).add(2)).has_text() });
+        assert!(!unsafe { (*(cells as *const Cell).add(3)).has_text() });
+    }
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow more cols cursor in wrapped row"
+#[test]
+fn pagelist_resize_reflow_more_cols_cursor_in_wrapped_row() {
+    let mut s = PageList::init(2, 4, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+    {
+        {
+            let rac = page.get_row_and_cell(0, 0);
+            unsafe { (*rac.row).set_wrap(true) };
+        }
+        for x in 0..s.cols as usize {
+            let rac = page.get_row_and_cell(x, 0);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+    {
+        {
+            let rac = page.get_row_and_cell(0, 1);
+            unsafe { (*rac.row).set_wrap_continuation(true) };
+        }
+        for x in 0..s.cols as usize {
+            let rac = page.get_row_and_cell(x, 1);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Put a tracked pin in the history
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 1, y: 1 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(4),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+    assert_eq!(4usize, s.total_rows());
+
+    // Our cursor should move to the first row
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 3, y: 0 }),
+        s.point_from_pin(point::Tag::Active, pin_copy(p)).unwrap()
+    );
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow more cols cursor in not wrapped row"
+#[test]
+fn pagelist_resize_reflow_more_cols_cursor_in_not_wrapped_row() {
+    let mut s = PageList::init(2, 4, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+    {
+        {
+            let rac = page.get_row_and_cell(0, 0);
+            unsafe { (*rac.row).set_wrap(true) };
+        }
+        for x in 0..s.cols as usize {
+            let rac = page.get_row_and_cell(x, 0);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+    {
+        {
+            let rac = page.get_row_and_cell(0, 1);
+            unsafe { (*rac.row).set_wrap_continuation(true) };
+        }
+        for x in 0..s.cols as usize {
+            let rac = page.get_row_and_cell(x, 1);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Put a tracked pin in the history
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 1, y: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(4),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+    assert_eq!(4usize, s.total_rows());
+
+    // Our cursor should move to the first row
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 1, y: 0 }),
+        s.point_from_pin(point::Tag::Active, pin_copy(p)).unwrap()
+    );
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow more cols cursor in wrapped row that isn't unwrapped"
+#[test]
+fn pagelist_resize_reflow_more_cols_cursor_in_wrapped_row_that_isnt_unwrapped() {
+    let mut s = PageList::init(2, 4, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+    {
+        {
+            let rac = page.get_row_and_cell(0, 0);
+            unsafe { (*rac.row).set_wrap(true) };
+        }
+        for x in 0..s.cols as usize {
+            let rac = page.get_row_and_cell(x, 0);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+    {
+        {
+            let rac = page.get_row_and_cell(0, 1);
+            unsafe {
+                (*rac.row).set_wrap(true);
+                (*rac.row).set_wrap_continuation(true);
+            }
+        }
+        for x in 0..s.cols as usize {
+            let rac = page.get_row_and_cell(x, 1);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+    {
+        {
+            let rac = page.get_row_and_cell(0, 2);
+            unsafe { (*rac.row).set_wrap_continuation(true) };
+        }
+        for x in 0..s.cols as usize {
+            let rac = page.get_row_and_cell(x, 2);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Put a tracked pin in the history
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 1, y: 2 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(4),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+    assert_eq!(4usize, s.total_rows());
+
+    // Our cursor should move to the first row
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 1, y: 1 }),
+        s.point_from_pin(point::Tag::Active, pin_copy(p)).unwrap()
+    );
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow more cols no reflow preserves semantic prompt"
+#[test]
+fn pagelist_resize_reflow_more_cols_no_reflow_preserves_semantic_prompt() {
+    let mut s = PageList::init(2, 4, Some(0)).unwrap();
+    {
+        assert!(core::ptr::eq(s.pages.first, s.pages.last));
+        let page = unsafe { &mut (*s.pages.first).data };
+        let rac = page.get_row_and_cell(0, 1);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(4),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+    assert_eq!(4usize, s.total_rows());
+
+    {
+        assert!(core::ptr::eq(s.pages.first, s.pages.last));
+        let page = unsafe { &mut (*s.pages.first).data };
+        let rac = page.get_row_and_cell(0, 1);
+        assert!(unsafe { (*rac.row).semantic_prompt() } == SemanticPrompt::Prompt);
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow exceeds hyperlink memory forcing capacity increase"
+#[test]
+fn pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase() {
+    let mut s = PageList::init(2, 10, Some(0)).unwrap();
+    assert_eq!(1usize, s.total_pages());
+
+    // Grow to the capacity of the first page and add
+    // one more row so that we have two pages total.
+    {
+        let page = unsafe { &mut (*s.pages.first).data };
+        page.pause_integrity_checks(true);
+        for _ in page.size.rows..page.capacity.rows {
+            let _ = s.grow().unwrap();
+        }
+        unsafe { &mut (*s.pages.first).data }.pause_integrity_checks(false);
+        assert_eq!(1usize, s.total_pages());
+        s.grow_rows(1).unwrap();
+        assert_eq!(2usize, s.total_pages());
+
+        // We now have two pages.
+        assert!(!core::ptr::eq(s.pages.first, s.pages.last));
+        assert!(core::ptr::eq(s.pages.last, unsafe {
+            (*s.pages.first).next
+        }));
+    }
+
+    // We use almost all string alloc capacity with a hyperlink in the final
+    // row of the first page, and do the same on the first row of the second
+    // page. We also mark the row as wrapped so that when we resize with more
+    // cols the row unwraps and we have a single row that requires almost two
+    // times the base string alloc capacity.
+    //
+    // This forces the reflow to increase capacity.
+
+    // Almost hit string alloc cap in bottom right of first page.
+    // Mark the final row as wrapped.
+    {
+        let page = unsafe { &mut (*s.pages.first).data };
+        let id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(0),
+                uri: vec![b'a'; crate::page::STRING_BYTES_DEFAULT - 1],
+            })
+            .unwrap();
+        let rac = page.get_row_and_cell(page.size.cols as usize - 1, page.size.rows as usize - 1);
+        unsafe {
+            (*rac.row).set_wrap(true);
+            *rac.cell = cell_codepoint('X' as u32);
+        }
+        page.set_hyperlink(rac.row, rac.cell, id).unwrap();
+        assert!(matches!(
+            page.insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(1),
+                uri: b"AAAAAAAAAAAAAAAAAAAAAAAAAA".to_vec(),
+            }),
+            Err(crate::page::InsertHyperlinkError::StringsOutOfMemory)
+        ));
+    }
+
+    // Almost hit string alloc cap in top left of second page.
+    // Mark the first row as a wrap continuation.
+    {
+        let page = unsafe { &mut (*s.pages.last).data };
+        let id = page
+            .insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(1),
+                uri: vec![b'a'; crate::page::STRING_BYTES_DEFAULT - 1],
+            })
+            .unwrap();
+        let rac = page.get_row_and_cell(0, 0);
+        unsafe {
+            (*rac.row).set_wrap_continuation(true);
+            *rac.cell = cell_codepoint('X' as u32);
+        }
+        page.set_hyperlink(rac.row, rac.cell, id).unwrap();
+        assert!(matches!(
+            page.insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(2),
+                uri: b"AAAAAAAAAAAAAAAAAAAAAAAAAA".to_vec(),
+            }),
+            Err(crate::page::InsertHyperlinkError::StringsOutOfMemory)
+        ));
+    }
+
+    // Resize to 1 column wider, unwrapping the row.
+    s.resize(Resize {
+        cols: Some(s.cols + 1),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow exceeds grapheme memory forcing capacity increase"
+#[test]
+fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
+    let mut s = PageList::init(2, 10, Some(0)).unwrap();
+    assert_eq!(1usize, s.total_pages());
+
+    // Grow to the capacity of the first page and add
+    // one more row so that we have two pages total.
+    {
+        let page = unsafe { &mut (*s.pages.first).data };
+        page.pause_integrity_checks(true);
+        for _ in page.size.rows..page.capacity.rows {
+            let _ = s.grow().unwrap();
+        }
+        unsafe { &mut (*s.pages.first).data }.pause_integrity_checks(false);
+        assert_eq!(1usize, s.total_pages());
+        s.grow_rows(1).unwrap();
+        assert_eq!(2usize, s.total_pages());
+
+        // We now have two pages.
+        assert!(!core::ptr::eq(s.pages.first, s.pages.last));
+        assert!(core::ptr::eq(s.pages.last, unsafe {
+            (*s.pages.first).next
+        }));
+    }
+
+    // We use almost all grapheme alloc capacity with a grapheme in the final
+    // row of the first page, and do the same on the first row of the second
+    // page. We also mark the row as wrapped so that when we resize with more
+    // cols the row unwraps and we have a single row that requires almost two
+    // times the base grapheme alloc capacity.
+    //
+    // This forces the reflow to increase capacity.
+
+    // grapheme count: @divFloor(grapheme_bytes_default - 1, @sizeOf(u21))
+    // where u21 occupies 4 bytes; the Rust port stores graphemes as u32.
+    let grapheme_n = (crate::page::GRAPHEME_BYTES_DEFAULT - 1) / core::mem::size_of::<u32>();
+    let grapheme_cps: Vec<u32> = vec!['a' as u32; grapheme_n];
+
+    // Almost hit grapheme alloc cap in bottom right of first page.
+    // Mark the final row as wrapped.
+    {
+        let page = unsafe { &mut (*s.pages.first).data };
+        let rac = page.get_row_and_cell(page.size.cols as usize - 1, page.size.rows as usize - 1);
+        unsafe {
+            (*rac.row).set_wrap(true);
+            *rac.cell = cell_codepoint('X' as u32);
+        }
+        page.set_graphemes(rac.row, rac.cell, &grapheme_cps)
+            .unwrap();
+        let base = page.memory_ptr();
+        assert!(unsafe { page.grapheme_alloc.alloc::<u32, _>(base, 16) }.is_err());
+    }
+
+    // Almost hit grapheme alloc cap in top left of second page.
+    // Mark the first row as a wrap continuation.
+    {
+        let page = unsafe { &mut (*s.pages.last).data };
+        let rac = page.get_row_and_cell(0, 0);
+        unsafe {
+            (*rac.row).set_wrap(true);
+            *rac.cell = cell_codepoint('X' as u32);
+        }
+        page.set_graphemes(rac.row, rac.cell, &grapheme_cps)
+            .unwrap();
+        let base = page.memory_ptr();
+        assert!(unsafe { page.grapheme_alloc.alloc::<u32, _>(base, 16) }.is_err());
+    }
+
+    // Resize to 1 column wider, unwrapping the row.
+    s.resize(Resize {
+        cols: Some(s.cols + 1),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow exceeds style memory forcing capacity increase"
+#[test]
+fn pagelist_resize_reflow_exceeds_style_memory_forcing_capacity_increase() {
+    let mut s = PageList::init(std_capacity().styles - 1, 10, Some(0)).unwrap();
+    assert_eq!(1usize, s.total_pages());
+
+    // Grow to the capacity of the first page and add
+    // one more row so that we have two pages total.
+    {
+        let page = unsafe { &mut (*s.pages.first).data };
+        page.pause_integrity_checks(true);
+        for _ in page.size.rows..page.capacity.rows {
+            let _ = s.grow().unwrap();
+        }
+        unsafe { &mut (*s.pages.first).data }.pause_integrity_checks(false);
+        assert_eq!(1usize, s.total_pages());
+        s.grow_rows(1).unwrap();
+        assert_eq!(2usize, s.total_pages());
+
+        // We now have two pages.
+        assert!(!core::ptr::eq(s.pages.first, s.pages.last));
+        assert!(core::ptr::eq(s.pages.last, unsafe {
+            (*s.pages.first).next
+        }));
+    }
+
+    // Give each cell in the final row of the first page a unique style.
+    // Mark the final row as wrapped.
+    {
+        let page = unsafe { &mut (*s.pages.first).data };
+        let base = page.memory_ptr();
+        for x in 0..s.cols as usize {
+            let style = Style {
+                bg_color: stylepkg::Color::Rgb(crate::color::RGB {
+                    r: x as u8,
+                    g: (x >> 8) as u8,
+                    b: (x >> 16) as u8,
+                }),
+                ..Style::default()
+            };
+            let id = match unsafe { page.styles.add(base, style) } {
+                Ok(id) => id,
+                Err(_) => break,
+            };
+
+            let rac = page.get_row_and_cell(x, page.size.rows as usize - 1);
+            unsafe {
+                (*rac.row).set_wrap(true);
+                (*rac.row).set_styled(true);
+                let mut c = cell_codepoint('X' as u32);
+                c.set_style_id(id);
+                *rac.cell = c;
+            }
+        }
+    }
+
+    // Do the same for the first row of the second page.
+    // Mark the first row as a wrap continuation.
+    {
+        let page = unsafe { &mut (*s.pages.last).data };
+        let base = page.memory_ptr();
+        for x in 0..s.cols as usize {
+            let style = Style {
+                fg_color: stylepkg::Color::Rgb(crate::color::RGB {
+                    r: x as u8,
+                    g: (x >> 8) as u8,
+                    b: (x >> 16) as u8,
+                }),
+                ..Style::default()
+            };
+            let id = match unsafe { page.styles.add(base, style) } {
+                Ok(id) => id,
+                Err(_) => break,
+            };
+
+            let rac = page.get_row_and_cell(x, 0);
+            unsafe {
+                (*rac.row).set_wrap_continuation(true);
+                (*rac.row).set_styled(true);
+                let mut c = cell_codepoint('X' as u32);
+                c.set_style_id(id);
+                *rac.cell = c;
+            }
+        }
+    }
+
+    // Resize to twice as wide, fully unwrapping the row.
+    s.resize(Resize {
+        cols: Some(s.cols * 2),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+
+    s.deinit();
+}
