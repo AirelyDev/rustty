@@ -5029,3 +5029,586 @@ fn pagelist_highlightSemanticContent_input_prompt_only_returns_null() {
 
     s.deinit();
 }
+
+// ref: test "PageList highlightSemanticContent output basic"
+#[test]
+fn pagelist_highlightSemanticContent_output_basic() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 5
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        // First 2 cols are prompt
+        for x in 0..2 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+
+        // Next 3 are input
+        for x in 2..5 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'l' as u32, SemanticContent::Input);
+            }
+        }
+
+        // Cols 5-7 are output
+        for x in 5..8 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
+            }
+        }
+
+        // Mark remaining cells as prompt to bound the output
+        for x in 8..10 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe { (*cell).set_semantic_content(SemanticContent::Prompt) };
+        }
+    }
+    // Prompt on row 10
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Highlighting output should only include output cells
+    let hl = s
+        .highlight_semantic_content(
+            s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 5 }))
+                .unwrap(),
+            SemanticContent::Output,
+        )
+        .unwrap();
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 5, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.start).unwrap()
+    );
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 7, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.end).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent output multiline"
+#[test]
+fn pagelist_highlightSemanticContent_output_multiline() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 5
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        // First 2 cols are prompt
+        for x in 0..2 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+
+        // Next 2 are input
+        for x in 2..4 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'l' as u32, SemanticContent::Input);
+            }
+        }
+
+        // Rest of row 5 is output
+        for x in 4..10 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
+            }
+        }
+    }
+    // Row 6 is all output
+    {
+        for x in 0..10 {
+            let cell = page.get_row_and_cell(x, 6).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
+            }
+        }
+    }
+    // Row 7 has partial output then input to bound it
+    {
+        for x in 0..5 {
+            let cell = page.get_row_and_cell(x, 7).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
+            }
+        }
+        for x in 5..10 {
+            let cell = page.get_row_and_cell(x, 7).cell;
+            unsafe { (*cell).set_semantic_content(SemanticContent::Input) };
+        }
+    }
+    // Prompt on row 10
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Highlighting output should span multiple rows
+    let hl = s
+        .highlight_semantic_content(
+            s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 5 }))
+                .unwrap(),
+            SemanticContent::Output,
+        )
+        .unwrap();
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 4, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.start).unwrap()
+    );
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 4, y: 7 }),
+        s.point_from_pin(point::Tag::Screen, hl.end).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent output stops at next prompt"
+#[test]
+fn pagelist_highlightSemanticContent_output_stops_at_next_prompt() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 5
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        // First 2 cols are prompt
+        for x in 0..2 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+
+        // Next 2 are input
+        for x in 2..4 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'l' as u32, SemanticContent::Input);
+            }
+        }
+
+        // Rest is output
+        for x in 4..10 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
+            }
+        }
+    }
+    // Row 6 has output then prompt starts
+    {
+        for x in 0..3 {
+            let cell = page.get_row_and_cell(x, 6).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
+            }
+        }
+        // Next prompt marker on same row
+        for x in 3..6 {
+            let cell = page.get_row_and_cell(x, 6).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+    }
+    // Prompt on row 10
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Highlighting output should stop before prompt/input
+    let hl = s
+        .highlight_semantic_content(
+            s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 5 }))
+                .unwrap(),
+            SemanticContent::Output,
+        )
+        .unwrap();
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 4, y: 5 }),
+        s.point_from_pin(point::Tag::Screen, hl.start).unwrap()
+    );
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 2, y: 6 }),
+        s.point_from_pin(point::Tag::Screen, hl.end).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent output to end of screen"
+#[test]
+fn pagelist_highlightSemanticContent_output_to_end_of_screen() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Single prompt on row 15, no following prompt
+    {
+        let rac = page.get_row_and_cell(0, 15);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        for x in 0..2 {
+            let cell = page.get_row_and_cell(x, 15).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+
+        for x in 2..4 {
+            let cell = page.get_row_and_cell(x, 15).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'c' as u32, SemanticContent::Input);
+            }
+        }
+
+        for x in 4..10 {
+            let cell = page.get_row_and_cell(x, 15).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
+            }
+        }
+    }
+    // Row 16 has output then prompt to bound it
+    {
+        for x in 0..8 {
+            let cell = page.get_row_and_cell(x, 16).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
+            }
+        }
+        for x in 8..10 {
+            let cell = page.get_row_and_cell(x, 16).cell;
+            unsafe { (*cell).set_semantic_content(SemanticContent::Prompt) };
+        }
+    }
+
+    // Highlighting output with no following prompt
+    let hl = s
+        .highlight_semantic_content(
+            s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 15 }))
+                .unwrap(),
+            SemanticContent::Output,
+        )
+        .unwrap();
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 4, y: 15 }),
+        s.point_from_pin(point::Tag::Screen, hl.start).unwrap()
+    );
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 7, y: 16 }),
+        s.point_from_pin(point::Tag::Screen, hl.end).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent output no output returns null"
+#[test]
+fn pagelist_highlightSemanticContent_output_no_output_returns_null() {
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 5 with only prompt and input, no output
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        // First 3 cols are prompt
+        for x in 0..3 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+
+        // Rest is input (must explicitly mark all cells to avoid default .output)
+        for x in 3..10 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'c' as u32, SemanticContent::Input);
+            }
+        }
+    }
+    // Mark rows 6-9 as input to ensure no output between prompts
+    {
+        for y in 6..10 {
+            for x in 0..10 {
+                let cell = page.get_row_and_cell(x, y).cell;
+                unsafe { (*cell).set_semantic_content(SemanticContent::Input) };
+            }
+        }
+    }
+    // Prompt on row 10 (no output between prompts)
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Highlighting output should return null when there's no output
+    let hl = s.highlight_semantic_content(
+        s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 5 }))
+            .unwrap(),
+        SemanticContent::Output,
+    );
+    assert!(hl.is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList highlightSemanticContent output skips empty cells"
+#[test]
+fn pagelist_highlightSemanticContent_output_skips_empty_cells() {
+    // Tests that empty cells with default .output semantic content are
+    // not selected as output. This can happen when a prompt/input line
+    // doesn't fill the entire row - trailing cells have default .output.
+    let mut s = PageList::init(10, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 5 - only fills first 3 cells, rest are empty with default .output
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+
+        // First 3 cols are prompt with text
+        for x in 0..3 {
+            let cell = page.get_row_and_cell(x, 5).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'$' as u32, SemanticContent::Prompt);
+            }
+        }
+        // Cells 3-9 are empty (codepoint = 0) with default .output semantic content
+        // This simulates what happens when a short prompt is written
+    }
+
+    // Row 6 has input (short, doesn't fill line)
+    {
+        for x in 0..4 {
+            let cell = page.get_row_and_cell(x, 6).cell;
+            unsafe {
+                *cell = cell_codepoint_sc(b'l' as u32, SemanticContent::Input);
+            }
+        }
+        // Cells 4-9 are empty with default .output
+    }
+
+    // Row 7-8 have actual output with text
+    {
+        for y in 7..9 {
+            for x in 0..5 {
+                let cell = page.get_row_and_cell(x, y).cell;
+                unsafe {
+                    *cell = cell_codepoint_sc(b'o' as u32, SemanticContent::Output);
+                }
+            }
+        }
+    }
+
+    // Prompt on row 10
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Highlighting output should skip empty cells on rows 5-6 and find
+    // the actual output starting at row 7
+    let hl = s
+        .highlight_semantic_content(
+            s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 5 }))
+                .unwrap(),
+            SemanticContent::Output,
+        )
+        .unwrap();
+    // Output should start at row 7, not row 5 (where empty cells have default .output)
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 0, y: 7 }),
+        s.point_from_pin(point::Tag::Screen, hl.start).unwrap()
+    );
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 4, y: 8 }),
+        s.point_from_pin(point::Tag::Screen, hl.end).unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList erase"
+#[test]
+fn pagelist_erase() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    assert_eq!(1_usize, s.total_pages());
+
+    // Grow so we take up at least 5 pages.
+    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let mut cur_page = s.pages.last;
+    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    for _ in 0..(page_cap_rows as usize * 5) {
+        if let Some(new_page) = s.grow().unwrap() {
+            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            cur_page = new_page;
+            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+        }
+    }
+    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+    assert_eq!(6_usize, s.total_pages());
+
+    // Our total rows should be large
+    assert!(s.total_rows > s.rows as usize);
+
+    // Erase the entire history, we should be back to just our active set.
+    s.erase_history(None);
+    assert_eq!(s.rows as usize, s.total_rows);
+
+    // We should be back to just one page
+    assert_eq!(1_usize, s.total_pages());
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+
+    s.deinit();
+}
+
+// ref: test "PageList erase reaccounts page size"
+#[test]
+fn pagelist_erase_reaccounts_page_size() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    let start_size = s.page_size;
+
+    // Grow so we take up at least 5 pages.
+    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let mut cur_page = s.pages.last;
+    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    for _ in 0..(page_cap_rows as usize * 5) {
+        if let Some(new_page) = s.grow().unwrap() {
+            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            cur_page = new_page;
+            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+        }
+    }
+    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+    assert!(s.page_size > start_size);
+
+    // Erase the entire history, we should be back to just our active set.
+    s.erase_history(None);
+    assert_eq!(start_size, s.page_size);
+
+    s.deinit();
+}
+
+// ref: test "PageList erase row with tracked pin resets to top-left"
+#[test]
+fn pagelist_erase_row_with_tracked_pin_resets_to_top_left() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Grow so we take up at least 5 pages.
+    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    let mut cur_page = s.pages.last;
+    unsafe { (*cur_page).data.pause_integrity_checks(true) };
+    for _ in 0..(page_cap_rows as usize * 5) {
+        if let Some(new_page) = s.grow().unwrap() {
+            unsafe { (*cur_page).data.pause_integrity_checks(false) };
+            cur_page = new_page;
+            unsafe { (*cur_page).data.pause_integrity_checks(true) };
+        }
+    }
+    unsafe { (*cur_page).data.pause_integrity_checks(false) };
+
+    // Our total rows should be large
+    assert!(s.total_rows > s.rows as usize);
+
+    // Put a tracked pin in the history
+    let p = s
+        .track_pin(
+            s.pin(point::Point::History(point::Coordinate { x: 0, y: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Erase the entire history, we should be back to just our active set.
+    s.erase_history(None);
+    assert_eq!(s.rows as usize, s.total_rows);
+
+    // Our pin should move to the first page
+    assert!(core::ptr::eq(s.pages.first, unsafe { (*p).node }));
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p).y });
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p).x });
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList erase row with tracked pin shifts"
+#[test]
+fn pagelist_erase_row_with_tracked_pin_shifts() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Put a tracked pin in the history
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { y: 4, x: 2 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Erase only a few rows in our active
+    s.erase_active(3);
+    assert_eq!(s.rows as usize, s.total_rows);
+
+    // Our pin should move to the first page
+    assert!(core::ptr::eq(s.pages.first, unsafe { (*p).node }));
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p).y });
+    assert_eq!(2 as size::CellCountInt, unsafe { (*p).x });
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList erase row with tracked pin is erased"
+#[test]
+fn pagelist_erase_row_with_tracked_pin_is_erased() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Put a tracked pin in the history
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { y: 2, x: 2 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Erase the entire history, we should be back to just our active set.
+    s.erase_active(3);
+    assert_eq!(s.rows as usize, s.total_rows);
+
+    // Our pin should move to the first page
+    assert!(core::ptr::eq(s.pages.first, unsafe { (*p).node }));
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p).y });
+    assert_eq!(0 as size::CellCountInt, unsafe { (*p).x });
+
+    s.untrack_pin(p);
+    s.deinit();
+}
