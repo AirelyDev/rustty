@@ -8787,3 +8787,646 @@ fn pagelist_resize_reflow_exceeds_style_memory_forcing_capacity_increase() {
 
     s.deinit();
 }
+
+// ref: test "PageList resize reflow more cols unwrap wide spacer head"
+#[test]
+fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head() {
+    let mut s = PageList::init(2, 2, Some(0)).unwrap();
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+
+        {
+            let rac = page.get_row_and_cell(0, 0);
+            unsafe {
+                (*rac.row).set_wrap(true);
+                *rac.cell = cell_codepoint('x' as u32);
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(1, 0);
+            unsafe {
+                let mut c = cell_codepoint(0);
+                c.set_wide(crate::page::Wide::SpacerHead);
+                *rac.cell = c;
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(0, 1);
+            unsafe {
+                (*rac.row).set_wrap_continuation(true);
+                let mut c = cell_codepoint('😀' as u32);
+                c.set_wide(crate::page::Wide::Wide);
+                *rac.cell = c;
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(1, 1);
+            unsafe {
+                let mut c = cell_codepoint(0);
+                c.set_wide(crate::page::Wide::SpacerTail);
+                *rac.cell = c;
+            }
+        }
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(4),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+    assert_eq!(2usize, s.total_rows());
+
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+
+        {
+            let rac = page.get_row_and_cell(0, 0);
+            assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
+            assert!(!unsafe { (*rac.row).wrap() });
+        }
+        {
+            let rac = page.get_row_and_cell(1, 0);
+            assert_eq!('😀' as u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Wide, unsafe { (*rac.cell).wide() });
+        }
+        {
+            let rac = page.get_row_and_cell(2, 0);
+            assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::SpacerTail, unsafe { (*rac.cell).wide() });
+        }
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow more cols unwrap wide spacer head across two rows"
+#[test]
+fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head_across_two_rows() {
+    let mut s = PageList::init(2, 3, Some(0)).unwrap();
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+
+        {
+            let rac = page.get_row_and_cell(0, 0);
+            unsafe {
+                (*rac.row).set_wrap(true);
+                *rac.cell = cell_codepoint('x' as u32);
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(1, 0);
+            unsafe {
+                *rac.cell = cell_codepoint('x' as u32);
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(0, 1);
+            unsafe {
+                (*rac.row).set_wrap_continuation(true);
+                (*rac.row).set_wrap(true);
+                *rac.cell = cell_codepoint('x' as u32);
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(1, 1);
+            unsafe {
+                let mut c = cell_codepoint(0);
+                c.set_wide(crate::page::Wide::SpacerHead);
+                *rac.cell = c;
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(0, 2);
+            unsafe {
+                (*rac.row).set_wrap_continuation(true);
+                let mut c = cell_codepoint('😀' as u32);
+                c.set_wide(crate::page::Wide::Wide);
+                *rac.cell = c;
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(1, 2);
+            unsafe {
+                let mut c = cell_codepoint(0);
+                c.set_wide(crate::page::Wide::SpacerTail);
+                *rac.cell = c;
+            }
+        }
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(4),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+    assert_eq!(3usize, s.total_rows());
+
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+
+        {
+            let rac = page.get_row_and_cell(0, 0);
+            assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
+            assert!(unsafe { (*rac.row).wrap() });
+        }
+        {
+            let rac = page.get_row_and_cell(1, 0);
+            assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
+        }
+        {
+            let rac = page.get_row_and_cell(2, 0);
+            assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
+        }
+        {
+            let rac = page.get_row_and_cell(3, 0);
+            assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::SpacerHead, unsafe { (*rac.cell).wide() });
+        }
+        {
+            let rac = page.get_row_and_cell(0, 1);
+            assert_eq!('😀' as u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Wide, unsafe { (*rac.cell).wide() });
+        }
+        {
+            let rac = page.get_row_and_cell(1, 1);
+            assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::SpacerTail, unsafe { (*rac.cell).wide() });
+        }
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow more cols unwrap still requires wide spacer head"
+#[test]
+fn pagelist_resize_reflow_more_cols_unwrap_still_requires_wide_spacer_head() {
+    let mut s = PageList::init(2, 2, Some(0)).unwrap();
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+
+        {
+            let rac = page.get_row_and_cell(0, 0);
+            unsafe {
+                (*rac.row).set_wrap(true);
+                *rac.cell = cell_codepoint('x' as u32);
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(1, 0);
+            unsafe {
+                *rac.cell = cell_codepoint('x' as u32);
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(0, 1);
+            unsafe {
+                (*rac.row).set_wrap_continuation(true);
+                let mut c = cell_codepoint('😀' as u32);
+                c.set_wide(crate::page::Wide::Wide);
+                *rac.cell = c;
+            }
+        }
+        {
+            let rac = page.get_row_and_cell(1, 1);
+            unsafe {
+                let mut c = cell_codepoint(0);
+                c.set_wide(crate::page::Wide::SpacerTail);
+                *rac.cell = c;
+            }
+        }
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(3),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(3usize, s.cols as usize);
+    assert_eq!(2usize, s.total_rows());
+
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+
+        {
+            let rac = page.get_row_and_cell(0, 0);
+            assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
+            assert!(unsafe { (*rac.row).wrap() });
+        }
+        {
+            let rac = page.get_row_and_cell(1, 0);
+            assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
+        }
+        {
+            let rac = page.get_row_and_cell(2, 0);
+            assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::SpacerHead, unsafe { (*rac.cell).wide() });
+        }
+        {
+            let rac = page.get_row_and_cell(0, 1);
+            assert_eq!('😀' as u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Wide, unsafe { (*rac.cell).wide() });
+        }
+        {
+            let rac = page.get_row_and_cell(1, 1);
+            assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::SpacerTail, unsafe { (*rac.cell).wide() });
+        }
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols no reflow preserves semantic prompt"
+#[test]
+fn pagelist_resize_reflow_less_cols_no_reflow_preserves_semantic_prompt() {
+    let mut s = PageList::init(4, 4, Some(0)).unwrap();
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+        {
+            let rac = page.get_row_and_cell(0, 1);
+            unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+        }
+        for x in 0..s.cols as usize {
+            let rac = page.get_row_and_cell(x, 1);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(2),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(2usize, s.cols as usize);
+    assert_eq!(4usize, s.total_rows());
+
+    {
+        assert!(s.pages.first == s.pages.last);
+        {
+            let p = s
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+                .unwrap();
+            let rac = p.row_and_cell();
+            assert!(unsafe { (*rac.row).wrap() });
+            assert!(unsafe { (*rac.row).semantic_prompt() } == SemanticPrompt::Prompt);
+        }
+        {
+            let p = s
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 2 }))
+                .unwrap();
+            let rac = p.row_and_cell();
+            assert!(unsafe { (*rac.row).semantic_prompt() } == SemanticPrompt::Prompt);
+        }
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols no reflow preserves semantic prompt on first line"
+#[test]
+fn pagelist_resize_reflow_less_cols_no_reflow_preserves_semantic_prompt_on_first_line() {
+    let mut s = PageList::init(4, 4, Some(0)).unwrap();
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+        let rac = page.get_row_and_cell(0, 0);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(2),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(2usize, s.cols as usize);
+    assert_eq!(4usize, s.total_rows());
+
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+        let rac = page.get_row_and_cell(0, 0);
+        assert!(unsafe { (*rac.row).semantic_prompt() } == SemanticPrompt::Prompt);
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols wrap preserves semantic prompt"
+#[test]
+fn pagelist_resize_reflow_less_cols_wrap_preserves_semantic_prompt() {
+    let mut s = PageList::init(4, 4, Some(0)).unwrap();
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+        let rac = page.get_row_and_cell(0, 0);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(2),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(2usize, s.cols as usize);
+    assert_eq!(4usize, s.total_rows());
+
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+        let rac = page.get_row_and_cell(0, 0);
+        assert!(unsafe { (*rac.row).semantic_prompt() } == SemanticPrompt::Prompt);
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols no wrapped rows"
+#[test]
+fn pagelist_resize_reflow_less_cols_no_wrapped_rows() {
+    let mut s = PageList::init(10, 3, Some(0)).unwrap();
+    assert!(s.pages.first == s.pages.last);
+    let page = unsafe { &mut (*s.pages.first).data };
+    for y in 0..s.rows as usize {
+        let end = 4;
+        assert!(end < s.cols as usize);
+        for x in 0..4usize {
+            let rac = page.get_row_and_cell(x, y);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(5),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(5usize, s.cols as usize);
+    assert_eq!(3usize, s.total_rows());
+
+    let mut it = s.row_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Screen(point::Coordinate::default()),
+        None,
+    );
+    while let Some(offset) = it.next() {
+        for x in 0..4usize {
+            let mut offset_copy = pin_copy(&offset as *const Pin as *mut Pin);
+            offset_copy.x = x as size::CellCountInt;
+            let rac = offset_copy.row_and_cell();
+            let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+            assert_eq!(5usize, cells.len());
+            assert_eq!(x as u32, unsafe {
+                (*(*cells).as_ptr().add(x)).content_codepoint()
+            });
+        }
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols wrapped rows"
+#[test]
+fn pagelist_resize_reflow_less_cols_wrapped_rows() {
+    let mut s = PageList::init(4, 2, None).unwrap();
+    assert!(s.pages.first == s.pages.last);
+    let page = unsafe { &mut (*s.pages.first).data };
+    for y in 0..s.rows as usize {
+        for x in 0..s.cols as usize {
+            let rac = page.get_row_and_cell(x, y);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(2),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(2usize, s.cols as usize);
+    assert_eq!(4usize, s.total_rows());
+
+    // Active moves due to scrollback
+    {
+        let pt = s
+            .get_cell(point::Point::Active(point::Coordinate::default()))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 2 }), pt);
+    }
+
+    let mut it = s.row_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Screen(point::Coordinate::default()),
+        None,
+    );
+    {
+        // First row should be wrapped
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert!(unsafe { (*rac.row).wrap() });
+        assert_eq!(2usize, cells.len());
+        assert_eq!(0u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
+    }
+    {
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert!(!unsafe { (*rac.row).wrap() });
+        assert_eq!(2usize, cells.len());
+        assert_eq!(2u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
+    }
+    {
+        // First row should be wrapped
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert!(unsafe { (*rac.row).wrap() });
+        assert_eq!(2usize, cells.len());
+        assert_eq!(0u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
+    }
+    {
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert!(!unsafe { (*rac.row).wrap() });
+        assert_eq!(2usize, cells.len());
+        assert_eq!(2u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols wrapped rows with graphemes"
+#[test]
+fn pagelist_resize_reflow_less_cols_wrapped_rows_with_graphemes() {
+    let mut s = PageList::init(4, 2, None).unwrap();
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { &mut (*s.pages.first).data };
+        for y in 0..s.rows as usize {
+            for x in 0..s.cols as usize {
+                let rac = page.get_row_and_cell(x, y);
+                unsafe {
+                    *rac.cell = cell_codepoint(x as u32);
+                }
+            }
+
+            let rac = page.get_row_and_cell(2, y);
+            page.append_grapheme(rac.row, rac.cell, 'A' as u32).unwrap();
+        }
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(2),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(2usize, s.cols as usize);
+    assert_eq!(4usize, s.total_rows());
+
+    // Active moves due to scrollback
+    {
+        let pt = s
+            .get_cell(point::Point::Active(point::Coordinate::default()))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 2 }), pt);
+    }
+
+    assert!(s.pages.first == s.pages.last);
+    let page = unsafe { &mut (*s.pages.first).data };
+    let mut it = s.row_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Screen(point::Coordinate::default()),
+        None,
+    );
+    {
+        // First row should be wrapped
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert!(unsafe { (*rac.row).wrap() });
+        assert_eq!(2usize, cells.len());
+        assert_eq!(0u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
+    }
+    {
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert!(!unsafe { (*rac.row).wrap() });
+        assert!(unsafe { (*rac.row).grapheme() });
+        assert_eq!(2usize, cells.len());
+        assert_eq!(2u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
+
+        let cps = page.lookup_grapheme(rac.cell).unwrap();
+        assert_eq!(1usize, cps.len());
+        assert_eq!('A' as u32, cps[0]);
+    }
+    {
+        // First row should be wrapped
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert!(unsafe { (*rac.row).wrap() });
+        assert_eq!(2usize, cells.len());
+        assert_eq!(0u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
+    }
+    {
+        let offset = it.next().unwrap();
+        let rac = offset.row_and_cell();
+        let cells = unsafe { (*offset.node).data.get_cells(rac.row) };
+        assert!(!unsafe { (*rac.row).wrap() });
+        assert!(unsafe { (*rac.row).grapheme() });
+        assert_eq!(2usize, cells.len());
+        assert_eq!(2u32, unsafe { (*(*cells).as_ptr()).content_codepoint() });
+
+        let cps = page.lookup_grapheme(rac.cell).unwrap();
+        assert_eq!(1usize, cps.len());
+        assert_eq!('A' as u32, cps[0]);
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols cursor in wrapped row"
+#[test]
+fn pagelist_resize_reflow_less_cols_cursor_in_wrapped_row() {
+    let mut s = PageList::init(4, 2, None).unwrap();
+    assert!(s.pages.first == s.pages.last);
+    let page = unsafe { &mut (*s.pages.first).data };
+    for y in 0..s.rows as usize {
+        for x in 0..s.cols as usize {
+            let rac = page.get_row_and_cell(x, y);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    // Put a tracked pin in the history
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 2, y: 1 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(2),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(2usize, s.cols as usize);
+    assert_eq!(4usize, s.total_rows());
+
+    // Our cursor should move to the first row
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+        s.point_from_pin(point::Tag::Active, pin_copy(p)).unwrap()
+    );
+
+    s.untrack_pin(p);
+    s.deinit();
+}
