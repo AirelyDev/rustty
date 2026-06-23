@@ -58,6 +58,7 @@ fn expect_pin(expected: Pin, got: Pin) {
     assert_eq!(expected.garbage, got.garbage);
 }
 
+// ref: test "PageList"
 #[test]
 fn pagelist() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -590,6 +591,7 @@ fn pagelist_scroll_delta_row_forward_into_active() {
     s.deinit();
 }
 
+// ref: test "PageList init rows across two pages"
 #[test]
 fn pagelist_init_rows_across_two_pages() {
     // Find a cap that makes it so that rows don't fit on one page.
@@ -630,6 +632,7 @@ fn pagelist_init_rows_across_two_pages() {
     s.deinit();
 }
 
+// ref: test "PageList init more than max cols"
 #[test]
 fn pagelist_init_more_than_max_cols() {
     // Initialize with more columns than we can fit in our standard
@@ -660,6 +663,7 @@ fn pagelist_init_more_than_max_cols() {
     s.deinit();
 }
 
+// ref: test "PageList active after grow"
 #[test]
 fn pagelist_active_after_grow() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -704,6 +708,7 @@ fn pagelist_active_after_grow() {
     s.deinit();
 }
 
+// ref: test "PageList grow allows exceeding max size for active area"
 #[test]
 fn pagelist_grow_allows_exceeding_max_size_for_active_area() {
     // Setup our initial page so that we fully take up one page.
@@ -743,6 +748,7 @@ fn pagelist_grow_allows_exceeding_max_size_for_active_area() {
     s.deinit();
 }
 
+// ref: test "PageList grow prune required with a single page"
 #[test]
 fn pagelist_grow_prune_required_with_a_single_page() {
     // Need scrollback > 0 to have a scrollbar to test
@@ -797,6 +803,7 @@ fn pagelist_grow_prune_required_with_a_single_page() {
     s.deinit();
 }
 
+// ref: test "PageList scrollbar with max_size 0 after grow"
 #[test]
 fn pagelist_scrollbar_with_max_size_0_after_grow() {
     let mut s = PageList::init(80, 24, Some(0)).unwrap();
@@ -815,6 +822,7 @@ fn pagelist_scrollbar_with_max_size_0_after_grow() {
     s.deinit();
 }
 
+// ref: test "PageList grow fit in capacity"
 #[test]
 fn pagelist_grow_fit_in_capacity() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -838,6 +846,7 @@ fn pagelist_grow_fit_in_capacity() {
     s.deinit();
 }
 
+// ref: test "PageList grow allocate"
 #[test]
 fn pagelist_grow_allocate() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -880,6 +889,7 @@ fn pagelist_grow_allocate() {
 // increaseCapacity
 // =====================================================================
 
+// ref: test "PageList increaseCapacity to increase styles"
 #[test]
 fn pagelist_increaseCapacity_to_increase_styles() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
@@ -925,6 +935,7 @@ fn pagelist_increaseCapacity_to_increase_styles() {
     s.deinit();
 }
 
+// ref: test "PageList increaseCapacity to increase graphemes"
 #[test]
 fn pagelist_increaseCapacity_to_increase_graphemes() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
@@ -966,6 +977,7 @@ fn pagelist_increaseCapacity_to_increase_graphemes() {
     s.deinit();
 }
 
+// ref: test "PageList increaseCapacity to increase hyperlinks"
 #[test]
 fn pagelist_increaseCapacity_to_increase_hyperlinks() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
@@ -1007,6 +1019,7 @@ fn pagelist_increaseCapacity_to_increase_hyperlinks() {
     s.deinit();
 }
 
+// ref: test "PageList increaseCapacity to increase string_bytes"
 #[test]
 fn pagelist_increaseCapacity_to_increase_string_bytes() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
@@ -1048,6 +1061,7 @@ fn pagelist_increaseCapacity_to_increase_string_bytes() {
     s.deinit();
 }
 
+// ref: test "PageList increaseCapacity tracked pins"
 #[test]
 fn pagelist_increaseCapacity_tracked_pins() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
@@ -1077,6 +1091,7 @@ fn pagelist_increaseCapacity_tracked_pins() {
     s.deinit();
 }
 
+// ref: test "PageList increaseCapacity returns OutOfSpace at max capacity"
 #[test]
 fn pagelist_increaseCapacity_returns_OutOfSpace_at_max_capacity() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
@@ -1098,6 +1113,7 @@ fn pagelist_increaseCapacity_returns_OutOfSpace_at_max_capacity() {
     s.deinit();
 }
 
+// ref: test "PageList increaseCapacity multi-page"
 #[test]
 fn pagelist_increaseCapacity_multi_page() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -1136,6 +1152,7 @@ fn pagelist_increaseCapacity_multi_page() {
     s.deinit();
 }
 
+// ref: test "PageList increaseCapacity preserves dirty flag"
 #[test]
 fn pagelist_increaseCapacity_preserves_dirty_flag() {
     let mut s = PageList::init(2, 4, Some(0)).unwrap();
@@ -4370,6 +4387,43 @@ fn pagelist_promptIterator_right_down_limit_inclusive() {
         let p = it.next().unwrap();
         assert_eq!(
             point::Point::Screen(point::Coordinate { x: 0, y: 5 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    assert!(it.next().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList promptIterator left_up limit inclusive"
+#[test]
+fn pagelist_promptIterator_left_up_limit_inclusive() {
+    let mut s = PageList::init(2, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 5
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+    // Prompt on row 10
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Iterate with limit at row 10 (the prompt row) - should include it
+    // tl_pt is the limit (upper bound), bl_pt is the start point for left_up
+    let mut it = s.prompt_iterator(
+        super::iter::Direction::LeftUp,
+        point::Point::Screen(point::Coordinate { x: 0, y: 10 }),
+        Some(point::Point::Screen(point::Coordinate { x: 0, y: 15 })),
+    );
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 10 }),
             s.point_from_pin(point::Tag::Screen, p).unwrap()
         );
     }
