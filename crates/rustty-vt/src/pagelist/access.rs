@@ -10,8 +10,8 @@
 //! PORT STATUS: methods ported (vt-3c). This file owns `getCell`,
 //! `getBottomRight`, `clone` (+ the `Clone` options struct and its
 //! `TrackedPinsRemap`), `diagram`, `highlightSemanticContent`, `clearDirty`,
-//! `isDirty`, and the introspection `Cell` struct (`isDirty`/`screenPoint`;
-//! `style` is a documented deferred seam pending the style `Set` port). The
+//! `isDirty`, and the introspection `Cell` struct (`isDirty`/`screenPoint`/
+//! `style`). The
 //! four PageList-level iterator wrappers (`pageIterator`/`rowIterator`/
 //! `cellIterator`/`promptIterator`) land here too: they were deferred from the
 //! iter cluster because they depend on `getBottomRight` (see the DEFERRED SEAM
@@ -27,6 +27,7 @@ use crate::highlight;
 use crate::page as pagepkg;
 use crate::page::{CloneFromError, Page, Row};
 use crate::point;
+use crate::style as stylepkg;
 use rustty_render_types::term_size as size;
 
 impl PageList {
@@ -993,22 +994,20 @@ impl Cell {
         unsafe { (*self.node).data.dirty || (*self.row).dirty() }
     }
 
-    // PORT NOTE (DEFERRED SEAM): the reference `Cell.style` reads the cell's
-    // style from the page's style `Set`:
-    //
-    //     pub fn style(self: Cell) stylepkg.Style {
-    //         if (self.cell.style_id == stylepkg.default_id) return .{};
-    //         return self.node.data.styles.get(
-    //             self.node.data.memory,
-    //             self.cell.style_id,
-    //         ).*;
-    //     }
-    //
-    // The style `Set`/`RefCountedSet.get(memory, id)` API and `stylepkg.default_id`
-    // are NOT yet ported (only the `Style` struct exists in `style.rs`). No ported
-    // caller in any landed cluster invokes `Cell.style`; it is a test/debug helper
-    // (`Not meant for non-test usage`). It is deferred to the style `Set` port and
-    // lands there fully ported — NOT stubbed.
+    /// Get the cell style.
+    ///
+    /// Not meant for non-test usage since this is inefficient.
+    pub fn style(&self) -> stylepkg::Style {
+        if unsafe { (*self.cell).style_id() } == stylepkg::DEFAULT_ID {
+            return stylepkg::Style::default();
+        }
+        unsafe {
+            *(*self.node)
+                .data
+                .styles
+                .get((*self.node).data.memory_ptr(), (*self.cell).style_id())
+        }
+    }
 
     /// Gets the screen point for the given cell.
     ///

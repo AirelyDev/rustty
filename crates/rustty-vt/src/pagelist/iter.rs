@@ -652,19 +652,16 @@ impl Pin {
     }
 }
 
-// PORT NOTE (DEFERRED SEAM): the four PageList-level iterator wrapper functions
-// — `pageIterator`, `rowIterator`, `cellIterator`, `promptIterator` on
+// PORT NOTE (DEFERRED-SEAM RESOLUTION): the four PageList-level iterator wrapper
+// functions — `pageIterator`, `rowIterator`, `cellIterator`, `promptIterator` on
 // `*const PageList` — belong to this file's owner doc header. Their bodies are
-// driven by `getBottomRight`, which is owned by the access cluster (`access.rs`)
-// and is genuinely unported at this point in the port:
+// driven by `getBottomRight`, which is owned by the access cluster (`access.rs`):
 //
 //   const bl_pin = if (bl_pt) |pt| self.pin(pt).? else
 //       self.getBottomRight(tl_pt) orelse return .{...};
 //
-// `pin` (pin cluster) is ported, but `getBottomRight` is not, and no ported
-// caller in any landed cluster invokes these PageList-level wrappers yet. They
-// are deferred to the access cluster (which owns `getBottomRight`), where they
-// land fully ported — NOT stubbed. The per-`Pin` inline iterators above (which
-// the wrappers delegate to via `tl_pin.pageIterator(...)` etc.) ARE ported here,
-// since they only depend on already-ported pin-cluster siblings (`eql`,
-// `before`) plus the iterator structs in this file.
+// `getBottomRight` now exists in `access.rs`, so the wrappers land there fully
+// ported — NOT stubbed. The per-`Pin` inline iterators above (which the wrappers
+// delegate to via `tl_pin.pageIterator(...)` etc.) ARE ported here, since they
+// only depend on already-ported pin-cluster siblings (`eql`, `before`) plus the
+// iterator structs in this file.
