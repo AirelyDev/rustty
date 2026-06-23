@@ -33,7 +33,7 @@
 use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError};
 use super::scroll::Scroll;
 use super::{std_capacity, std_size, PageList, PagePool, Pin};
-use crate::page::{Cell, ContentTag, Page};
+use crate::page::{Cell, ContentTag, Page, SemanticPrompt};
 use crate::style::{self as stylepkg, Style};
 use crate::{hyperlink, point};
 use rustty_render_types::term_size as size;
@@ -2794,6 +2794,625 @@ fn pagelist_scroll_to_row_without_scrollback() {
         },
         s.scrollbar()
     );
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll to row then delta"
+#[test]
+fn pagelist_scroll_to_row_then_delta() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(30).unwrap();
+
+    s.scroll(Scroll::Row(10));
+
+    assert!(s.viewport == super::Viewport::Pin);
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 10 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: 10,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.scroll(Scroll::DeltaRow(5));
+
+    assert!(s.viewport == super::Viewport::Pin);
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 15 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: 15,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.scroll(Scroll::DeltaRow(-3));
+
+    assert!(s.viewport == super::Viewport::Pin);
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 12 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: 12,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll to row with cache fast path down"
+#[test]
+fn pagelist_scroll_to_row_with_cache_fast_path_down() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(50).unwrap();
+
+    s.scroll(Scroll::Row(10));
+
+    assert!(s.viewport == super::Viewport::Pin);
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: 10,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 10 }), pt);
+    }
+
+    // Verify cache is populated
+    assert!(s.viewport_pin_row_offset.is_some());
+    assert_eq!(10_usize, s.viewport_pin_row_offset.unwrap());
+
+    // Now scroll to a different row - this should use the fast path
+    s.scroll(Scroll::Row(20));
+
+    assert!(s.viewport == super::Viewport::Pin);
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: 20,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 20 }), pt);
+    }
+
+    s.grow_rows(10).unwrap();
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 20 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: 20,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll to row with cache fast path up"
+#[test]
+fn pagelist_scroll_to_row_with_cache_fast_path_up() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(50).unwrap();
+
+    s.scroll(Scroll::Row(30));
+
+    assert!(s.viewport == super::Viewport::Pin);
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: 30,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 30 }), pt);
+    }
+
+    // Verify cache is populated
+    assert!(s.viewport_pin_row_offset.is_some());
+    assert_eq!(30_usize, s.viewport_pin_row_offset.unwrap());
+
+    // Now scroll up to a different row - this should use the fast path
+    s.scroll(Scroll::Row(15));
+
+    assert!(s.viewport == super::Viewport::Pin);
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: 15,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 15 }), pt);
+    }
+
+    s.grow_rows(10).unwrap();
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 15 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: 15,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll clear"
+#[test]
+fn pagelist_scroll_clear() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    {
+        let cell = s
+            .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+            .unwrap();
+        unsafe {
+            *cell.cell = cell_codepoint('A' as u32);
+        }
+    }
+    {
+        let cell = s
+            .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+            .unwrap();
+        unsafe {
+            *cell.cell = cell_codepoint('A' as u32);
+        }
+    }
+
+    s.scroll_clear().unwrap();
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 2 }), pt);
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList: jump zero prompts"
+#[test]
+fn pagelist_jump_zero_prompts() {
+    let mut s = PageList::init(5, 3, None).unwrap();
+    s.grow_rows(3).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+    {
+        let rac = page.get_row_and_cell(0, 1);
+        unsafe {
+            (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt);
+        }
+    }
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe {
+            (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt);
+        }
+    }
+
+    s.scroll(Scroll::DeltaPrompt(0));
+    assert!(s.viewport == super::Viewport::Active);
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: s.total_rows - s.rows as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.deinit();
+}
+
+// ref: test "Screen: jump back one prompt"
+#[test]
+fn screen_jump_back_one_prompt() {
+    let mut s = PageList::init(5, 3, None).unwrap();
+    s.grow_rows(3).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+    {
+        let rac = page.get_row_and_cell(0, 1);
+        unsafe {
+            (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt);
+        }
+    }
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe {
+            (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt);
+        }
+    }
+
+    // Jump back
+    {
+        s.scroll(Scroll::DeltaPrompt(-1));
+        assert!(s.viewport == super::Viewport::Pin);
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 1 }),
+            s.point_from_pin(
+                point::Tag::Screen,
+                s.pin(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+                    .unwrap()
+            )
+            .unwrap()
+        );
+
+        assert_eq!(
+            Scrollbar {
+                total: s.total_rows,
+                offset: 1,
+                len: s.rows as usize,
+            },
+            s.scrollbar()
+        );
+    }
+    {
+        s.scroll(Scroll::DeltaPrompt(-1));
+        assert!(s.viewport == super::Viewport::Pin);
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 1 }),
+            s.point_from_pin(
+                point::Tag::Screen,
+                s.pin(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+                    .unwrap()
+            )
+            .unwrap()
+        );
+
+        assert_eq!(
+            Scrollbar {
+                total: s.total_rows,
+                offset: 1,
+                len: s.rows as usize,
+            },
+            s.scrollbar()
+        );
+    }
+
+    // Jump forward
+    {
+        s.scroll(Scroll::DeltaPrompt(1));
+        assert!(s.viewport == super::Viewport::Active);
+        assert_eq!(
+            Scrollbar {
+                total: s.total_rows,
+                offset: s.total_rows - s.rows as usize,
+                len: s.rows as usize,
+            },
+            s.scrollbar()
+        );
+    }
+    {
+        s.scroll(Scroll::DeltaPrompt(1));
+        assert!(s.viewport == super::Viewport::Active);
+        assert_eq!(
+            Scrollbar {
+                total: s.total_rows,
+                offset: s.total_rows - s.rows as usize,
+                len: s.rows as usize,
+            },
+            s.scrollbar()
+        );
+    }
+
+    s.deinit();
+}
+
+// ref: test "Screen: jump forward prompt skips multiline continuation"
+#[test]
+fn screen_jump_forward_prompt_skips_multiline_continuation() {
+    let mut s = PageList::init(5, 3, None).unwrap();
+    s.grow_rows(7).unwrap();
+
+    // Multiline prompt on rows 1-3.
+    {
+        let p = s
+            .pin(point::Point::Screen(point::Coordinate { x: 0, y: 1 }))
+            .unwrap();
+        unsafe {
+            (*p.row_and_cell().row).set_semantic_prompt(SemanticPrompt::Prompt);
+        }
+    }
+    {
+        let p = s
+            .pin(point::Point::Screen(point::Coordinate { x: 0, y: 2 }))
+            .unwrap();
+        unsafe {
+            (*p.row_and_cell().row).set_semantic_prompt(SemanticPrompt::PromptContinuation);
+        }
+    }
+    {
+        let p = s
+            .pin(point::Point::Screen(point::Coordinate { x: 0, y: 3 }))
+            .unwrap();
+        unsafe {
+            (*p.row_and_cell().row).set_semantic_prompt(SemanticPrompt::PromptContinuation);
+        }
+    }
+
+    // Next prompt after command output.
+    {
+        let p = s
+            .pin(point::Point::Screen(point::Coordinate { x: 0, y: 6 }))
+            .unwrap();
+        unsafe {
+            (*p.row_and_cell().row).set_semantic_prompt(SemanticPrompt::Prompt);
+        }
+    }
+
+    // Starting at the first prompt line should jump to the next prompt,
+    // not to continuation lines.
+    s.scroll(Scroll::Row(1));
+    s.scroll(Scroll::DeltaPrompt(1));
+    assert!(s.viewport == super::Viewport::Pin);
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 0, y: 6 }),
+        s.point_from_pin(
+            point::Tag::Screen,
+            s.pin(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+                .unwrap()
+        )
+        .unwrap()
+    );
+
+    // Starting in the middle of continuation lines should also jump to
+    // the next prompt.
+    s.scroll(Scroll::Row(2));
+    s.scroll(Scroll::DeltaPrompt(1));
+    assert!(s.viewport == super::Viewport::Pin);
+    assert_eq!(
+        point::Point::Screen(point::Coordinate { x: 0, y: 6 }),
+        s.point_from_pin(
+            point::Tag::Screen,
+            s.pin(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+                .unwrap()
+        )
+        .unwrap()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList grow prune scrollback"
+#[test]
+fn pagelist_grow_prune_scrollback() {
+    // Use std_size to limit scrollback so pruning is triggered.
+    let mut s = PageList::init(80, 24, Some(std_size())).unwrap();
+
+    // Grow to capacity
+    let page1_node = s.pages.last;
+    let (page1_cap_rows, page1_size_rows) = {
+        let page1 = unsafe { &(*page1_node).data };
+        (page1.capacity.rows, page1.size.rows)
+    };
+    for _ in 0..(page1_cap_rows - page1_size_rows) {
+        assert!(s.grow().unwrap().is_none());
+    }
+
+    // Grow and allocate one more page. Then fill that page up.
+    let page2_node = s.grow().unwrap().unwrap();
+    let (page2_cap_rows, page2_size_rows) = {
+        let page2 = unsafe { &(*page2_node).data };
+        (page2.capacity.rows, page2.size.rows)
+    };
+    for _ in 0..(page2_cap_rows - page2_size_rows) {
+        assert!(s.grow().unwrap().is_none());
+    }
+
+    // Get our page size
+    let old_page_size = s.page_size;
+
+    // Create a tracked pin in the first page
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Screen(point::Coordinate { x: 0, y: 0 }))
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(core::ptr::eq(unsafe { (*p).node }, s.pages.first));
+
+    // Scroll back to create a pinned viewport (not active)
+    let pin_y = page1_cap_rows as usize / 2;
+    s.scroll(Scroll::Pin(
+        s.pin(point::Point::Screen(point::Coordinate {
+            x: 0,
+            y: pin_y as u32,
+        }))
+        .unwrap(),
+    ));
+    assert!(s.viewport == super::Viewport::Pin);
+
+    // Get the scrollbar state to populate the cache
+    let scrollbar_before = s.scrollbar();
+    assert_eq!(pin_y, scrollbar_before.offset);
+
+    // Next should create a new page, but it should reuse our first
+    // page since we're at max size.
+    let new = s.grow().unwrap().unwrap();
+    assert!(core::ptr::eq(s.pages.last, new));
+    assert_eq!(s.page_size, old_page_size);
+
+    // Our first should now be page2 and our last should be page1
+    assert!(core::ptr::eq(page2_node, s.pages.first));
+    assert!(core::ptr::eq(page1_node, s.pages.last));
+
+    // Our tracked pin should point to the top-left of the first page
+    assert!(core::ptr::eq(unsafe { (*p).node }, s.pages.first));
+    assert!(unsafe { (*p).x } == 0);
+    assert!(unsafe { (*p).y } == 0);
+    assert!(unsafe { (*p).garbage });
+
+    // Verify the viewport offset cache was invalidated. After pruning,
+    // the offset should have changed because we removed rows from
+    // the beginning.
+    {
+        let scrollbar_after = s.scrollbar();
+        let rows_pruned = page1_cap_rows as usize;
+        // PORT NOTE: the reference computes this with an explicit
+        // `if pin_y >= rows_pruned ... else 0` branch; reproduced verbatim
+        // (clippy would prefer `saturating_sub`, allowed here for fidelity).
+        #[allow(clippy::implicit_saturating_sub)]
+        let expected_offset = if pin_y >= rows_pruned {
+            pin_y - rows_pruned
+        } else {
+            0
+        };
+        assert_eq!(expected_offset, scrollbar_after.offset);
+    }
+
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList grow prune scrollback with viewport pin not in pruned page"
+#[test]
+fn pagelist_grow_prune_scrollback_with_viewport_pin_not_in_pruned_page() {
+    // Use std_size to limit scrollback so pruning is triggered.
+    let mut s = PageList::init(80, 24, Some(std_size())).unwrap();
+
+    // Grow to capacity of first page
+    let page1_node = s.pages.last;
+    let (page1_cap_rows, page1_size_rows) = {
+        let page1 = unsafe { &(*page1_node).data };
+        (page1.capacity.rows, page1.size.rows)
+    };
+    for _ in 0..(page1_cap_rows - page1_size_rows) {
+        assert!(s.grow().unwrap().is_none());
+    }
+
+    // Grow and allocate second page, then fill it up
+    let page2_node = s.grow().unwrap().unwrap();
+    let (page2_cap_rows, page2_size_rows) = {
+        let page2 = unsafe { &(*page2_node).data };
+        (page2.capacity.rows, page2.size.rows)
+    };
+    for _ in 0..(page2_cap_rows - page2_size_rows) {
+        assert!(s.grow().unwrap().is_none());
+    }
+
+    // Get our page size
+    let old_page_size = s.page_size;
+
+    // Scroll back to create a pinned viewport in page2 (NOT page1)
+    // This is the key difference from the previous test - the viewport
+    // pin is NOT in the page that will be pruned.
+    let pin_y = page1_cap_rows as usize + 5;
+    s.scroll(Scroll::Pin(
+        s.pin(point::Point::Screen(point::Coordinate {
+            x: 0,
+            y: pin_y as u32,
+        }))
+        .unwrap(),
+    ));
+    assert!(s.viewport == super::Viewport::Pin);
+    assert!(core::ptr::eq(unsafe { (*s.viewport_pin).node }, page2_node));
+
+    // Get the scrollbar state to populate the cache
+    let scrollbar_before = s.scrollbar();
+    assert_eq!(pin_y, scrollbar_before.offset);
+
+    // Next grow will trigger pruning of the first page.
+    // The viewport_pin.node is page2, not page1, so it won't be moved
+    // by the pin update loop, but the cached offset still needs to be
+    // invalidated because rows were removed from the beginning.
+    let new = s.grow().unwrap().unwrap();
+    assert!(core::ptr::eq(s.pages.last, new));
+    assert_eq!(s.page_size, old_page_size);
+
+    // Our first should now be page2 (page1 was pruned)
+    assert!(core::ptr::eq(page2_node, s.pages.first));
+
+    // The viewport pin should still be on page2, unchanged
+    assert!(core::ptr::eq(unsafe { (*s.viewport_pin).node }, page2_node));
+
+    // Verify the viewport offset cache was invalidated/updated.
+    // After pruning, the offset should have decreased by the number
+    // of rows that were pruned.
+    let scrollbar_after = s.scrollbar();
+    let rows_pruned = page1_cap_rows as usize;
+    let expected_offset = pin_y - rows_pruned;
+    assert_eq!(expected_offset, scrollbar_after.offset);
 
     s.deinit();
 }
