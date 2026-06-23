@@ -15,8 +15,6 @@
 //!     failpoints. The tripwire failpoint infrastructure is not yet ported
 //!     (the `init`/`initPages` PORT NOTE in `mod.rs` defers it to the test
 //!     phase); this test lands once that infra exists.
-//!   - `PageList increaseCapacity after col shrink` — calls `PageList.resize`,
-//!     which is DEFERRED in `resize.rs`. It lands with the resize cluster.
 
 #![allow(non_snake_case)]
 // PORT NOTE: these ported tests reproduce the reference's exact loop and range
@@ -3413,6 +3411,504 @@ fn pagelist_grow_prune_scrollback_with_viewport_pin_not_in_pruned_page() {
     let rows_pruned = page1_cap_rows as usize;
     let expected_offset = pin_y - rows_pruned;
     assert_eq!(expected_offset, scrollbar_after.offset);
+
+    s.deinit();
+}
+
+// ref: test "PageList eraseRows invalidates viewport offset cache"
+#[test]
+fn pagelist_eraseRows_invalidates_viewport_offset_cache() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Grow so we take up several pages worth of history
+    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    {
+        let mut cur_page = s.pages.last;
+        for _ in 0..(page_cap_rows as usize * 3) {
+            if let Some(new_page) = s.grow().unwrap() {
+                cur_page = new_page;
+            }
+        }
+        let _ = cur_page;
+    }
+
+    // Scroll back to create a pinned viewport somewhere in the middle
+    // of the scrollback
+    let pin_y = page_cap_rows;
+    s.scroll(Scroll::Pin(
+        s.pin(point::Point::Screen(point::Coordinate {
+            x: 0,
+            y: pin_y as u32,
+        }))
+        .unwrap(),
+    ));
+    assert!(s.viewport == super::Viewport::Pin);
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: pin_y as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar(),
+    );
+
+    // Erase some history rows BEFORE the viewport pin.
+    // This removes rows from before our pin, which changes its absolute
+    // offset from the top, but the cache is not invalidated.
+    let rows_to_erase = page_cap_rows / 2;
+    s.erase_history(Some(point::Point::History(point::Coordinate {
+        x: 0,
+        y: (rows_to_erase - 1) as u32,
+    })));
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: (pin_y - rows_to_erase) as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar(),
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList eraseRow invalidates viewport offset cache"
+#[test]
+fn pagelist_eraseRow_invalidates_viewport_offset_cache() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Grow so we take up several pages worth of history
+    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    {
+        let mut cur_page = s.pages.last;
+        for _ in 0..(page_cap_rows as usize * 3) {
+            if let Some(new_page) = s.grow().unwrap() {
+                cur_page = new_page;
+            }
+        }
+        let _ = cur_page;
+    }
+
+    // Scroll back to create a pinned viewport somewhere in the middle
+    // of the scrollback
+    let pin_y = page_cap_rows;
+    s.scroll(Scroll::Pin(
+        s.pin(point::Point::Screen(point::Coordinate {
+            x: 0,
+            y: pin_y as u32,
+        }))
+        .unwrap(),
+    ));
+    assert!(s.viewport == super::Viewport::Pin);
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: pin_y as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar(),
+    );
+
+    // Erase a single row from the history BEFORE the viewport pin.
+    // This removes one row from before our pin, which changes its absolute
+    // offset from the top by 1, but the cache is not invalidated.
+    s.erase_row(point::Point::History(point::Coordinate { x: 0, y: 0 }))
+        .unwrap();
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: (pin_y - 1) as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar(),
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList eraseRowBounded invalidates viewport offset cache"
+#[test]
+fn pagelist_eraseRowBounded_invalidates_viewport_offset_cache() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Grow so we take up several pages worth of history
+    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    {
+        let mut cur_page = s.pages.last;
+        for _ in 0..(page_cap_rows as usize * 3) {
+            if let Some(new_page) = s.grow().unwrap() {
+                cur_page = new_page;
+            }
+        }
+        let _ = cur_page;
+    }
+
+    // Scroll back to create a pinned viewport somewhere in the middle
+    // of the scrollback
+    let pin_y: u16 = 4;
+    s.scroll(Scroll::Pin(
+        s.pin(point::Point::Screen(point::Coordinate {
+            x: 0,
+            y: pin_y as u32,
+        }))
+        .unwrap(),
+    ));
+    assert!(s.viewport == super::Viewport::Pin);
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: pin_y as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar(),
+    );
+
+    // Erase a row from the history BEFORE the viewport pin with a bounded
+    // shift. This removes one row from before our pin, which changes its
+    // absolute offset from the top by 1, but the cache is not invalidated.
+    s.erase_row_bounded(point::Point::History(point::Coordinate { x: 0, y: 0 }), 10)
+        .unwrap();
+
+    // Verify the scrollbar reflects the change (offset decreased by 1)
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: (pin_y - 1) as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar(),
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList eraseRowBounded multi-page invalidates viewport offset cache"
+#[test]
+fn pagelist_eraseRowBounded_multi_page_invalidates_viewport_offset_cache() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Grow so we take up several pages worth of history
+    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    {
+        let mut cur_page = s.pages.last;
+        for _ in 0..(page_cap_rows as usize * 3) {
+            if let Some(new_page) = s.grow().unwrap() {
+                cur_page = new_page;
+            }
+        }
+        let _ = cur_page;
+    }
+
+    // Scroll back to create a pinned viewport somewhere in the middle
+    // of the scrollback, after the first page
+    let pin_y = page_cap_rows + 1;
+    s.scroll(Scroll::Pin(
+        s.pin(point::Point::Screen(point::Coordinate {
+            x: 0,
+            y: pin_y as u32,
+        }))
+        .unwrap(),
+    ));
+    assert!(s.viewport == super::Viewport::Pin);
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: pin_y as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar(),
+    );
+
+    // Erase a row from the beginning of history with a limit that spans
+    // across multiple pages. This ensures we hit the code path where
+    // eraseRowBounded finds the limit boundary in a subsequent page.
+    let limit = page_cap_rows as usize + 10;
+    s.erase_row_bounded(
+        point::Point::History(point::Coordinate { x: 0, y: 0 }),
+        limit,
+    )
+    .unwrap();
+
+    // Verify the scrollbar reflects the change (offset decreased by 1)
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: (pin_y - 1) as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar(),
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList eraseRowBounded full page shift invalidates viewport offset cache"
+#[test]
+fn pagelist_eraseRowBounded_full_page_shift_invalidates_viewport_offset_cache() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Grow so we take up several pages worth of history
+    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    {
+        let mut cur_page = s.pages.last;
+        for _ in 0..(page_cap_rows as usize * 4) {
+            if let Some(new_page) = s.grow().unwrap() {
+                cur_page = new_page;
+            }
+        }
+        let _ = cur_page;
+    }
+
+    // Scroll back to create a pinned viewport somewhere well beyond
+    // the first two pages
+    let pin_y: u16 = 5;
+    s.scroll(Scroll::Pin(
+        s.pin(point::Point::Screen(point::Coordinate {
+            x: 0,
+            y: pin_y as u32,
+        }))
+        .unwrap(),
+    ));
+    assert!(s.viewport == super::Viewport::Pin);
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: pin_y as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar(),
+    );
+
+    // Erase a row from the beginning of history with a limit that is
+    // larger than multiple full pages. This ensures we hit the code path
+    // where eraseRowBounded continues looping through entire pages,
+    // rotating all rows in each page until it reaches the limit or
+    // runs out of pages.
+    let limit = page_cap_rows as usize * 2 + 10;
+    s.erase_row_bounded(
+        point::Point::History(point::Coordinate { x: 0, y: 0 }),
+        limit,
+    )
+    .unwrap();
+
+    // Verify the scrollbar reflects the change (offset decreased by 1)
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: (pin_y - 1) as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar(),
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList eraseRowBounded exhausts pages invalidates viewport offset cache"
+#[test]
+fn pagelist_eraseRowBounded_exhausts_pages_invalidates_viewport_offset_cache() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Grow so we take up several pages worth of history
+    let page_cap_rows = unsafe { (*s.pages.last).data.capacity.rows };
+    {
+        let mut cur_page = s.pages.last;
+        for _ in 0..(page_cap_rows as usize * 3) {
+            if let Some(new_page) = s.grow().unwrap() {
+                cur_page = new_page;
+            }
+        }
+        let _ = cur_page;
+    }
+
+    // Our total rows should include history
+    let total_rows_before = s.total_rows();
+    assert!(total_rows_before > s.rows as usize);
+
+    // Scroll back to create a pinned viewport somewhere in the history,
+    // well after the erase will complete
+    let pin_y = page_cap_rows as usize * 2 + 10;
+    s.scroll(Scroll::Pin(
+        s.pin(point::Point::Screen(point::Coordinate {
+            x: 0,
+            y: pin_y as u32,
+        }))
+        .unwrap(),
+    ));
+    assert!(s.viewport == super::Viewport::Pin);
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: pin_y,
+            len: s.rows as usize,
+        },
+        s.scrollbar(),
+    );
+
+    // Erase a row from the beginning of history with a limit that is
+    // LARGER than all remaining pages combined. This ensures we exhaust
+    // all pages in the while loop and reach the cleanup code after the loop.
+    let limit = total_rows_before * 2;
+    s.erase_row_bounded(
+        point::Point::History(point::Coordinate { x: 0, y: 0 }),
+        limit,
+    )
+    .unwrap();
+
+    // Verify the scrollbar reflects the change (offset decreased by 1)
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: pin_y - 1,
+            len: s.rows as usize,
+        },
+        s.scrollbar(),
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList increaseCapacity after col shrink"
+#[test]
+fn pagelist_increaseCapacity_after_col_shrink() {
+    let mut s = PageList::init(10, 2, Some(0)).unwrap();
+
+    // Shrink columns
+    s.resize(super::resize::Resize {
+        cols: Some(5),
+        rows: None,
+        reflow: false,
+        cursor: None,
+    })
+    .unwrap();
+    assert_eq!(5, s.cols);
+
+    {
+        let page = unsafe { &(*s.pages.first).data };
+        assert_eq!(5, page.size.cols);
+        assert!(page.capacity.cols >= 10);
+    }
+
+    // Increase capacity
+    let _ = s
+        .increase_capacity(s.pages.first, Some(IncreaseCapacity::Styles))
+        .unwrap();
+
+    {
+        let page = unsafe { &(*s.pages.first).data };
+        // size.cols should still be 5, not reverted to capacity.cols
+        assert_eq!(5, page.size.cols);
+        assert_eq!(5, s.cols);
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList pageIterator single page"
+#[test]
+fn pagelist_pageIterator_single_page() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // The viewport should be within a single page
+    assert!(unsafe { (*s.pages.first).next.is_null() });
+
+    // Iterate the active area
+    let mut it = s.page_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Active(point::Coordinate::default()),
+        None,
+    );
+    {
+        let chunk = it.next().unwrap();
+        assert!(core::ptr::eq(chunk.node, s.pages.first));
+        assert_eq!(0_usize, chunk.start as usize);
+        assert_eq!(s.rows as usize, chunk.end as usize);
+    }
+
+    // Should only have one chunk
+    assert!(it.next().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList pageIterator two pages"
+#[test]
+fn pagelist_pageIterator_two_pages() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Grow to capacity
+    let page1_node = s.pages.last;
+    let (page1_cap_rows, page1_size_rows) = {
+        let page1 = unsafe { &(*page1_node).data };
+        (page1.capacity.rows, page1.size.rows)
+    };
+    unsafe { (*page1_node).data.pause_integrity_checks(true) };
+    for _ in 0..(page1_cap_rows - page1_size_rows) {
+        assert!(s.grow().unwrap().is_none());
+    }
+    unsafe { (*page1_node).data.pause_integrity_checks(false) };
+    assert!(s.grow().unwrap().is_some());
+
+    // Iterate the active area
+    let mut it = s.page_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Active(point::Coordinate::default()),
+        None,
+    );
+    {
+        let chunk = it.next().unwrap();
+        assert!(core::ptr::eq(chunk.node, s.pages.first));
+        let start = unsafe { (*chunk.node).data.size.rows } - s.rows + 1;
+        assert_eq!(start, chunk.start);
+        assert_eq!(unsafe { (*chunk.node).data.size.rows }, chunk.end);
+    }
+    {
+        let chunk = it.next().unwrap();
+        assert!(core::ptr::eq(chunk.node, s.pages.last));
+        let start: size::CellCountInt = 0;
+        assert_eq!(start, chunk.start);
+        assert_eq!(start + 1, chunk.end);
+    }
+    assert!(it.next().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList pageIterator history two pages"
+#[test]
+fn pagelist_pageIterator_history_two_pages() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Grow to capacity
+    let page1_node = s.pages.last;
+    let (page1_cap_rows, page1_size_rows) = {
+        let page1 = unsafe { &(*page1_node).data };
+        (page1.capacity.rows, page1.size.rows)
+    };
+    unsafe { (*page1_node).data.pause_integrity_checks(true) };
+    for _ in 0..(page1_cap_rows - page1_size_rows) {
+        assert!(s.grow().unwrap().is_none());
+    }
+    unsafe { (*page1_node).data.pause_integrity_checks(false) };
+    assert!(s.grow().unwrap().is_some());
+
+    // Iterate the active area
+    let mut it = s.page_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::History(point::Coordinate::default()),
+        None,
+    );
+    {
+        let active_tl = s.get_top_left(point::Tag::Active);
+        let chunk = it.next().unwrap();
+        assert!(core::ptr::eq(chunk.node, s.pages.first));
+        let start: size::CellCountInt = 0;
+        assert_eq!(start, chunk.start);
+        assert_eq!(active_tl.y, chunk.end);
+    }
+    assert!(it.next().is_none());
 
     s.deinit();
 }
