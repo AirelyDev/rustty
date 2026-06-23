@@ -517,7 +517,7 @@ impl PageList {
         Ok(())
     }
 
-    fn resize_without_reflow(&mut self, opts: Resize) -> Result<(), super::OutOfMemory> {
+    pub(crate) fn resize_without_reflow(&mut self, opts: Resize) -> Result<(), super::OutOfMemory> {
         // We only set the new min_max_size if we're not reflowing. If we are
         // reflowing, then resize handles this for us.
         let old_min_max_size = self.min_max_size;
