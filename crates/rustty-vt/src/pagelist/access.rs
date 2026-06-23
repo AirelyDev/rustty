@@ -31,6 +31,10 @@ use crate::style as stylepkg;
 use rustty_render_types::term_size as size;
 
 impl PageList {
+    /// Get the cell at the given point, or null if the cell does not
+    /// exist or is out of bounds.
+    ///
+    /// Warning: this is slow and should not be used in performance critical paths
     pub fn get_cell(&self, pt: point::Point) -> Option<Cell> {
         let pt_pin = self.pin(pt)?;
         let rac = unsafe {
@@ -494,6 +498,9 @@ impl PageList {
         }
     }
 
+    /// Returns the bottom right of the screen for the given tag. This can
+    /// return null because it is possible that a tag is not in the screen
+    /// (e.g. history does not yet exist).
     pub fn get_bottom_right(&self, tag: point::Tag) -> Option<Pin> {
         match tag {
             point::Tag::Screen | point::Tag::Active => {
@@ -607,6 +614,11 @@ impl PageList {
         }
     }
 
+    /// Create an iterator that can be used to iterate all the rows in
+    /// a region of the screen from the given top-left. The tag of the
+    /// top-left point will also determine the end of the iteration,
+    /// so convert from one reference point to another to change the
+    /// iteration bounds.
     pub fn row_iterator(
         &self,
         direction: Direction,
@@ -634,6 +646,22 @@ impl PageList {
         }
     }
 
+    /// Return an iterator that iterates through the rows in the tagged area
+    /// of the point. The iterator returns row "chunks", which are the largest
+    /// contiguous set of rows in a single backing page for a given portion of
+    /// the point region.
+    ///
+    /// This is a more efficient way to iterate through the data in a region,
+    /// since you can do simple pointer math and so on.
+    ///
+    /// If bl_pt is non-null, iteration will stop at the bottom left point
+    /// (inclusive). If bl_pt is null, the entire region specified by the point
+    /// tag will be iterated over. tl_pt and bl_pt must be the same tag, and
+    /// bl_pt must be greater than or equal to tl_pt.
+    ///
+    /// If direction is left_up, iteration will go from bl_pt to tl_pt. If
+    /// direction is right_down, iteration will go from tl_pt to bl_pt.
+    /// Both inclusive.
     pub fn page_iterator(
         &self,
         direction: Direction,

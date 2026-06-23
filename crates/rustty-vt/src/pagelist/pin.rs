@@ -601,4 +601,14 @@ impl Pin {
             n_left -= node_rows;
         }
     }
+
+    // PORT NOTE: the reference `Pin.grapheme` and `Pin.style` accessors are not
+    // yet ported (they are not in this sub-file's PORTS list above); their
+    // reference doc comments are preserved verbatim here so they are not dropped
+    // and land with the methods in a later batch:
+    //
+    // Returns the grapheme codepoints for the given cell. These are only
+    // the EXTRA codepoints and not the first codepoint.
+    //
+    // Returns the style for the given cell in this pin.
 }

@@ -30,6 +30,8 @@ use super::{Node, Pin};
 use crate::page as pagepkg;
 use rustty_render_types::term_size as size;
 
+/// Direction that iterators can move.
+///
 /// PORTS: `pub const Direction = enum { left_up, right_down };`
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Direction {

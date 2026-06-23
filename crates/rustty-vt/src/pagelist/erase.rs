@@ -13,6 +13,13 @@ use rustty_render_types::term_size as size;
 use rustty_util::fastmem;
 
 impl PageList {
+    /// Fast-path function to erase exactly 1 row. Erasing means that the row
+    /// is completely REMOVED, not just cleared. All rows following the removed
+    /// row will be shifted up by 1 to fill the empty space.
+    ///
+    /// Unlike eraseRows, eraseRow does not change the size of any pages. The
+    /// caller is responsible for adjusting the row count of the final page if
+    /// that behavior is required.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn erase_row(&mut self, pt: point::Point) -> Result<(), super::OutOfMemory> {
         // PORT NOTE: `defer self.assertIntegrity()` — reproduced by calling

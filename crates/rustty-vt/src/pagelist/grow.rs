@@ -551,6 +551,20 @@ impl PageList {
         Ok(new_node)
     }
 
+    /// Compact a page to use the minimum required memory for the contents
+    /// it stores. Returns the new node pointer if compaction occurred, or null
+    /// if the page was already compact or compaction would not provide meaningful
+    /// savings.
+    ///
+    /// The current design of PageList at the time of writing this doesn't
+    /// allow for smaller than `std_size` nodes so if the current node's backing
+    /// page is standard size or smaller, no compaction will occur. In the
+    /// future we should fix this up.
+    ///
+    /// If this returns OOM, the PageList is left unchanged and no dangling
+    /// memory references exist. It is safe to ignore the error and continue using
+    /// the uncompacted page.
+    ///
     /// PORT NOTE: `compact` is part of the access/introspection refactor in the
     /// reference but is grouped into this growth/capacity cluster per this
     /// file's owner doc header.
@@ -623,6 +637,9 @@ impl PageList {
         Ok(Some(new_node))
     }
 
+    /// Grow the number of rows available in the page list by n.
+    /// This is only used for testing so it isn't optimized in any way.
+    ///
     /// PORT NOTE: `growRows` is the verbatim `for (0..n) |_| _ = try self.grow()`
     /// helper from the reference. It lives in the resize cluster in the
     /// reference; included here as it is a thin wrapper over `grow`.

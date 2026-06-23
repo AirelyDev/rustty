@@ -560,7 +560,21 @@ pub struct PageList {
     pub pause_integrity_checks: usize,
 }
 
-/// A pin into the PageList. See `pin.rs` for the full definition.
+/// Represents an exact x/y coordinate within the screen. This is called
+/// a "pin" because it is a fixed point within the pagelist direct to
+/// a specific page pointer and memory offset. The benefit is that this
+/// point remains valid even through scrolling without any additional work.
+///
+/// A downside is that  the pin is only valid until the pagelist is modified
+/// in a way that may invalidate page pointers or shuffle rows, such as resizing,
+/// erasing rows, etc.
+///
+/// A pin can also be "tracked" which means that it will be updated as the
+/// PageList is modified.
+///
+/// The PageList maintains a list of active pin references and keeps them
+/// all up to date as the pagelist is modified. This isn't cheap so callers
+/// should limit the number of active pins as much as possible.
 //
 // PORT NOTE: the full `Pin` body (with `rowAndCell`, `cells`, `isBetween`,
 // `before`, `leftWrap`, `rightWrap`, `downOverflow`, `upOverflow`, etc.) lands
@@ -1095,6 +1109,12 @@ impl PageList {
         // Note: we only have to do this for the page pool because the
         // nodes are always fully overwritten on each allocation.
         //
+        // WARN: Since HeapAllocator's BufNode is not public API,
+        // we have to hardcode its layout here. We do a comptime assert
+        // on Zig version to verify we check it on every bump.
+        //
+        // The buffer minus our header
+        //
         // PORT NOTE: the reference reads the private `ArenaAllocator.BufNode`
         // layout to zero the retained arena memory. Our hand-rolled `PagePool`
         // zeroes the retained free-list buffers directly inside
@@ -1349,7 +1369,9 @@ impl PageList {
         core::cmp::max(self.explicit_max_size, self.min_max_size)
     }
 
-    /// Returns true if the given pin is valid for the page list.
+    /// Checks if a pin is valid for this pagelist. This is a very slow and
+    /// expensive operation since we traverse the entire linked list in the
+    /// worst case. Only for runtime safety/debug.
     //
     // PORT NOTE: the canonical home for `pinIsValid` is the pin cluster
     // (`pin.rs`). It is defined here because the CORE `verify_integrity` calls
