@@ -5979,3 +5979,254 @@ fn pagelist_eraseRowBounded_full_rows_two_pages() {
     s.untrack_pin(p_first);
     s.deinit();
 }
+
+// ref: test "PageList clone"
+#[test]
+fn pagelist_clone() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    assert_eq!(s.rows as usize, s.total_rows());
+
+    let mut opts = super::access::Clone {
+        top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+        bot: None,
+        tracked_pins: None,
+    };
+    let mut s2 = s.clone(&mut opts).unwrap();
+    assert_eq!(s.rows as usize, s2.total_rows());
+
+    s2.deinit();
+    s.deinit();
+}
+
+// ref: test "PageList clone partial trimmed right"
+#[test]
+fn pagelist_clone_partial_trimmed_right() {
+    let mut s = PageList::init(80, 20, None).unwrap();
+    assert_eq!(s.rows as usize, s.total_rows());
+    s.grow_rows(30).unwrap();
+
+    let mut opts = super::access::Clone {
+        top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+        bot: Some(point::Point::Screen(point::Coordinate { x: 0, y: 39 })),
+        tracked_pins: None,
+    };
+    let mut s2 = s.clone(&mut opts).unwrap();
+    assert_eq!(40usize, s2.total_rows());
+
+    s2.deinit();
+    s.deinit();
+}
+
+// ref: test "PageList clone partial trimmed left"
+#[test]
+fn pagelist_clone_partial_trimmed_left() {
+    let mut s = PageList::init(80, 20, None).unwrap();
+    assert_eq!(s.rows as usize, s.total_rows());
+    s.grow_rows(30).unwrap();
+
+    let mut opts = super::access::Clone {
+        top: point::Point::Screen(point::Coordinate { x: 0, y: 10 }),
+        bot: None,
+        tracked_pins: None,
+    };
+    let mut s2 = s.clone(&mut opts).unwrap();
+    assert_eq!(40usize, s2.total_rows());
+
+    s2.deinit();
+    s.deinit();
+}
+
+// ref: test "PageList clone partial trimmed left reclaims styles"
+#[test]
+fn pagelist_clone_partial_trimmed_left_reclaims_styles() {
+    let mut s = PageList::init(80, 20, None).unwrap();
+    assert_eq!(s.rows as usize, s.total_rows());
+    s.grow_rows(30).unwrap();
+
+    // Style the rows we're trimming
+    {
+        assert!(core::ptr::eq(s.pages.first, s.pages.last));
+        let page = unsafe { &mut (*s.pages.first).data };
+
+        let style = Style {
+            flags: stylepkg::Flags {
+                bold: true,
+                ..stylepkg::Flags::default()
+            },
+            ..Style::default()
+        };
+        let base = page.memory_ptr();
+        let style_id = unsafe { page.styles.add(base, style) }.unwrap();
+
+        let mut it = s.row_iterator(
+            super::iter::Direction::LeftUp,
+            point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+            Some(point::Point::Screen(point::Coordinate { x: 0, y: 9 })),
+        );
+        let page = unsafe { &mut (*s.pages.first).data };
+        let base = page.memory_ptr();
+        while let Some(p) = it.next() {
+            let rac = p.row_and_cell();
+            unsafe {
+                (*rac.row).set_styled(true);
+                let mut c = cell_codepoint(b'A' as u32);
+                c.set_style_id(style_id);
+                *rac.cell = c;
+                page.styles.use_id(base, style_id);
+            }
+        }
+
+        // We're over-counted by 1 because `add` implies `use`.
+        unsafe { page.styles.release(base, style_id) };
+
+        // Expect to have one style
+        assert_eq!(1, page.styles.count());
+    }
+
+    let mut opts = super::access::Clone {
+        top: point::Point::Screen(point::Coordinate { x: 0, y: 10 }),
+        bot: None,
+        tracked_pins: None,
+    };
+    let mut s2 = s.clone(&mut opts).unwrap();
+    assert_eq!(40usize, s2.total_rows());
+
+    {
+        assert!(core::ptr::eq(s2.pages.first, s2.pages.last));
+        let page = unsafe { &(*s2.pages.first).data };
+        assert_eq!(0, page.styles.count());
+    }
+
+    s2.deinit();
+    s.deinit();
+}
+
+// ref: test "PageList clone partial trimmed both"
+#[test]
+fn pagelist_clone_partial_trimmed_both() {
+    let mut s = PageList::init(80, 20, None).unwrap();
+    assert_eq!(s.rows as usize, s.total_rows());
+    s.grow_rows(30).unwrap();
+
+    let mut opts = super::access::Clone {
+        top: point::Point::Screen(point::Coordinate { x: 0, y: 10 }),
+        bot: Some(point::Point::Screen(point::Coordinate { x: 0, y: 35 })),
+        tracked_pins: None,
+    };
+    let mut s2 = s.clone(&mut opts).unwrap();
+    assert_eq!(26usize, s2.total_rows());
+
+    s2.deinit();
+    s.deinit();
+}
+
+// ref: test "PageList clone less than active"
+#[test]
+fn pagelist_clone_less_than_active() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    assert_eq!(s.rows as usize, s.total_rows());
+
+    let mut opts = super::access::Clone {
+        top: point::Point::Active(point::Coordinate { x: 0, y: 5 }),
+        bot: None,
+        tracked_pins: None,
+    };
+    let mut s2 = s.clone(&mut opts).unwrap();
+    assert_eq!(s.rows as usize, s2.total_rows());
+
+    s2.deinit();
+    s.deinit();
+}
+
+// ref: test "PageList clone remap tracked pin"
+#[test]
+fn pagelist_clone_remap_tracked_pin() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    assert_eq!(s.rows as usize, s.total_rows());
+
+    // Put a tracked pin in the screen
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 0, y: 6 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    let mut opts = super::access::Clone {
+        top: point::Point::Active(point::Coordinate { x: 0, y: 5 }),
+        bot: None,
+        tracked_pins: Some(super::access::TrackedPinsRemap::new()),
+    };
+    let mut s2 = s.clone(&mut opts).unwrap();
+
+    // We should be able to find our tracked pin
+    let p2 = *opts.tracked_pins.as_ref().unwrap().get(&p).unwrap();
+    assert_eq!(
+        point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+        s2.point_from_pin(point::Tag::Active, unsafe { (*p2).pin_copy() })
+            .unwrap(),
+    );
+
+    s2.deinit();
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList clone remap tracked pin not in cloned area"
+#[test]
+fn pagelist_clone_remap_tracked_pin_not_in_cloned_area() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    assert_eq!(s.rows as usize, s.total_rows());
+
+    // Put a tracked pin in the screen
+    let p = s
+        .track_pin(
+            s.pin(point::Point::Active(point::Coordinate { x: 0, y: 3 }))
+                .unwrap(),
+        )
+        .unwrap();
+
+    let mut opts = super::access::Clone {
+        top: point::Point::Active(point::Coordinate { x: 0, y: 5 }),
+        bot: None,
+        tracked_pins: Some(super::access::TrackedPinsRemap::new()),
+    };
+    let mut s2 = s.clone(&mut opts).unwrap();
+
+    // We should be able to find our tracked pin
+    assert!(opts.tracked_pins.as_ref().unwrap().get(&p).is_none());
+
+    s2.deinit();
+    s.untrack_pin(p);
+    s.deinit();
+}
+
+// ref: test "PageList clone full dirty"
+#[test]
+fn pagelist_clone_full_dirty() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    assert_eq!(s.rows as usize, s.total_rows());
+
+    // Mark a row as dirty
+    s.mark_dirty(point::Point::Active(point::Coordinate { x: 0, y: 0 }));
+    s.mark_dirty(point::Point::Active(point::Coordinate { x: 0, y: 12 }));
+    s.mark_dirty(point::Point::Active(point::Coordinate { x: 0, y: 23 }));
+
+    let mut opts = super::access::Clone {
+        top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+        bot: None,
+        tracked_pins: None,
+    };
+    let mut s2 = s.clone(&mut opts).unwrap();
+    assert_eq!(s.rows as usize, s2.total_rows());
+
+    // Should still be dirty
+    assert!(s2.is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 0 })));
+    assert!(!s2.is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 1 })));
+    assert!(s2.is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 12 })));
+    assert!(!s2.is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 14 })));
+    assert!(s2.is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 23 })));
+
+    s2.deinit();
+    s.deinit();
+}
