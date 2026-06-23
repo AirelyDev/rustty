@@ -2372,3 +2372,428 @@ fn pagelist_split_preserves_hyperlinks() {
 
     s.deinit();
 }
+
+// ref: test "PageList scroll delta row back without space preserves active"
+#[test]
+fn pagelist_scroll_delta_row_back_without_space_preserves_active() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.scroll(Scroll::DeltaRow(-1));
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 0 }), pt);
+    }
+
+    assert!(s.viewport == super::Viewport::Active);
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: s.total_rows - s.rows as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll to pin"
+#[test]
+fn pagelist_scroll_to_pin() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(10).unwrap();
+
+    s.scroll(Scroll::Pin(
+        s.pin(point::Point::Screen(point::Coordinate { x: 2, y: 4 }))
+            .unwrap(),
+    ));
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: 4,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 4 }), pt);
+    }
+
+    s.scroll(Scroll::Pin(
+        s.pin(point::Point::Screen(point::Coordinate { x: 2, y: 5 }))
+            .unwrap(),
+    ));
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: 5,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 5 }), pt);
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll to pin in active"
+#[test]
+fn pagelist_scroll_to_pin_in_active() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(10).unwrap();
+
+    s.scroll(Scroll::Pin(
+        s.pin(point::Point::Screen(point::Coordinate { x: 2, y: 30 }))
+            .unwrap(),
+    ));
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: s.total_rows - s.rows as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 10 }), pt);
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll to pin at top"
+#[test]
+fn pagelist_scroll_to_pin_at_top() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(10).unwrap();
+
+    s.scroll(Scroll::Pin(
+        s.pin(point::Point::Screen(point::Coordinate { x: 2, y: 0 }))
+            .unwrap(),
+    ));
+
+    assert!(s.viewport == super::Viewport::Top);
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows(),
+            offset: 0,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 0 }), pt);
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll to row 0"
+#[test]
+fn pagelist_scroll_to_row_0() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(10).unwrap();
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 10 }), pt);
+    }
+
+    s.scroll(Scroll::Row(0));
+    assert!(s.viewport == super::Viewport::Top);
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 0 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: 0,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.grow_rows(10).unwrap();
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 0 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: 0,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll to row in scrollback"
+#[test]
+fn pagelist_scroll_to_row_in_scrollback() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(20).unwrap();
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 20 }), pt);
+    }
+
+    s.scroll(Scroll::Row(5));
+    assert!(s.viewport == super::Viewport::Pin);
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: 5,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 5 }), pt);
+    }
+
+    s.grow_rows(10).unwrap();
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 5 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: 5,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll to row in middle"
+#[test]
+fn pagelist_scroll_to_row_in_middle() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(50).unwrap();
+
+    let total = s.total_rows;
+    let midpoint = total / 2;
+    s.scroll(Scroll::Row(midpoint));
+
+    assert!(s.viewport == super::Viewport::Pin);
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: midpoint,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate {
+                x: 0,
+                y: midpoint as u32,
+            }),
+            pt
+        );
+    }
+
+    s.grow_rows(10).unwrap();
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate {
+                x: 0,
+                y: midpoint as u32,
+            }),
+            pt
+        );
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: midpoint,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll to row at active boundary"
+#[test]
+fn pagelist_scroll_to_row_at_active_boundary() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(20).unwrap();
+
+    let active_start = s.total_rows - s.rows as usize;
+
+    s.scroll(Scroll::Row(active_start));
+
+    assert!(s.viewport == super::Viewport::Active);
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate {
+                x: 0,
+                y: active_start as u32,
+            }),
+            pt
+        );
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: s.total_rows - s.rows as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.grow_rows(10).unwrap();
+
+    assert!(s.viewport == super::Viewport::Active);
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: s.total_rows - s.rows as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll to row beyond active"
+#[test]
+fn pagelist_scroll_to_row_beyond_active() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+    s.grow_rows(10).unwrap();
+
+    s.scroll(Scroll::Row(1000));
+
+    assert!(s.viewport == super::Viewport::Active);
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 10 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: s.total_rows - s.rows as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.deinit();
+}
+
+// ref: test "PageList scroll to row without scrollback"
+#[test]
+fn pagelist_scroll_to_row_without_scrollback() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    s.scroll(Scroll::Row(5));
+
+    assert!(s.viewport == super::Viewport::Active);
+
+    {
+        let pt = s
+            .get_cell(point::Point::Viewport(point::Coordinate { x: 0, y: 0 }))
+            .unwrap()
+            .screen_point();
+        assert_eq!(point::Point::Screen(point::Coordinate { x: 0, y: 0 }), pt);
+    }
+
+    assert_eq!(
+        Scrollbar {
+            total: s.total_rows,
+            offset: s.total_rows - s.rows as usize,
+            len: s.rows as usize,
+        },
+        s.scrollbar()
+    );
+
+    s.deinit();
+}
