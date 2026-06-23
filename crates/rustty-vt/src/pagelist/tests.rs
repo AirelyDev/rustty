@@ -8588,8 +8588,8 @@ fn pagelist_resize_reflow_more_cols_no_reflow_preserves_semantic_prompt() {
     let mut s = PageList::init(2, 4, Some(0)).unwrap();
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
-        let page = unsafe { &mut (*s.pages.first).data };
-        let rac = page.get_row_and_cell(0, 1);
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let rac = unsafe { (*page).get_row_and_cell(0, 1) };
         unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
     }
 
@@ -8605,8 +8605,8 @@ fn pagelist_resize_reflow_more_cols_no_reflow_preserves_semantic_prompt() {
 
     {
         assert!(core::ptr::eq(s.pages.first, s.pages.last));
-        let page = unsafe { &mut (*s.pages.first).data };
-        let rac = page.get_row_and_cell(0, 1);
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let rac = unsafe { (*page).get_row_and_cell(0, 1) };
         assert!(unsafe { (*rac.row).semantic_prompt() } == SemanticPrompt::Prompt);
     }
 
@@ -8622,12 +8622,12 @@ fn pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase() {
     // Grow to the capacity of the first page and add
     // one more row so that we have two pages total.
     {
-        let page = unsafe { &mut (*s.pages.first).data };
-        page.pause_integrity_checks(true);
-        for _ in page.size.rows..page.capacity.rows {
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        unsafe { (*page).pause_integrity_checks(true) };
+        for _ in unsafe { (*page).size.rows..(*page).capacity.rows } {
             let _ = s.grow().unwrap();
         }
-        unsafe { &mut (*s.pages.first).data }.pause_integrity_checks(false);
+        unsafe { (*core::ptr::addr_of_mut!((*s.pages.first).data)).pause_integrity_checks(false) };
         assert_eq!(1usize, s.total_pages());
         s.grow_rows(1).unwrap();
         assert_eq!(2usize, s.total_pages());
@@ -8658,24 +8658,32 @@ fn pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase() {
     // Almost hit string alloc cap in bottom right of first page.
     // Mark the final row as wrapped.
     {
-        let page = unsafe { &mut (*s.pages.first).data };
-        let id = page
-            .insert_hyperlink(hyperlink::Hyperlink {
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let id = unsafe {
+            (*page).insert_hyperlink(hyperlink::Hyperlink {
                 id: hyperlink::HyperlinkId::Implicit(0),
                 uri: vec![b'a'; crate::page::STRING_BYTES_DEFAULT - 1],
             })
-            .unwrap();
-        let rac = page.get_row_and_cell(page.size.cols as usize - 1, page.size.rows as usize - 1);
+        }
+        .unwrap();
+        let rac = unsafe {
+            (*page).get_row_and_cell(
+                (*page).size.cols as usize - 1,
+                (*page).size.rows as usize - 1,
+            )
+        };
         unsafe {
             (*rac.row).set_wrap(true);
             *rac.cell = cell_codepoint('X' as u32);
         }
-        page.set_hyperlink(rac.row, rac.cell, id).unwrap();
+        unsafe { (*page).set_hyperlink(rac.row, rac.cell, id) }.unwrap();
         assert!(matches!(
-            page.insert_hyperlink(hyperlink::Hyperlink {
-                id: hyperlink::HyperlinkId::Implicit(1),
-                uri: b"AAAAAAAAAAAAAAAAAAAAAAAAAA".to_vec(),
-            }),
+            unsafe {
+                (*page).insert_hyperlink(hyperlink::Hyperlink {
+                    id: hyperlink::HyperlinkId::Implicit(1),
+                    uri: b"AAAAAAAAAAAAAAAAAAAAAAAAAA".to_vec(),
+                })
+            },
             Err(crate::page::InsertHyperlinkError::StringsOutOfMemory)
         ));
     }
@@ -8683,24 +8691,27 @@ fn pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase() {
     // Almost hit string alloc cap in top left of second page.
     // Mark the first row as a wrap continuation.
     {
-        let page = unsafe { &mut (*s.pages.last).data };
-        let id = page
-            .insert_hyperlink(hyperlink::Hyperlink {
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
+        let id = unsafe {
+            (*page).insert_hyperlink(hyperlink::Hyperlink {
                 id: hyperlink::HyperlinkId::Implicit(1),
                 uri: vec![b'a'; crate::page::STRING_BYTES_DEFAULT - 1],
             })
-            .unwrap();
-        let rac = page.get_row_and_cell(0, 0);
+        }
+        .unwrap();
+        let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         unsafe {
             (*rac.row).set_wrap_continuation(true);
             *rac.cell = cell_codepoint('X' as u32);
         }
-        page.set_hyperlink(rac.row, rac.cell, id).unwrap();
+        unsafe { (*page).set_hyperlink(rac.row, rac.cell, id) }.unwrap();
         assert!(matches!(
-            page.insert_hyperlink(hyperlink::Hyperlink {
-                id: hyperlink::HyperlinkId::Implicit(2),
-                uri: b"AAAAAAAAAAAAAAAAAAAAAAAAAA".to_vec(),
-            }),
+            unsafe {
+                (*page).insert_hyperlink(hyperlink::Hyperlink {
+                    id: hyperlink::HyperlinkId::Implicit(2),
+                    uri: b"AAAAAAAAAAAAAAAAAAAAAAAAAA".to_vec(),
+                })
+            },
             Err(crate::page::InsertHyperlinkError::StringsOutOfMemory)
         ));
     }
@@ -8725,12 +8736,12 @@ fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
     // Grow to the capacity of the first page and add
     // one more row so that we have two pages total.
     {
-        let page = unsafe { &mut (*s.pages.first).data };
-        page.pause_integrity_checks(true);
-        for _ in page.size.rows..page.capacity.rows {
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        unsafe { (*page).pause_integrity_checks(true) };
+        for _ in unsafe { (*page).size.rows..(*page).capacity.rows } {
             let _ = s.grow().unwrap();
         }
-        unsafe { &mut (*s.pages.first).data }.pause_integrity_checks(false);
+        unsafe { (*core::ptr::addr_of_mut!((*s.pages.first).data)).pause_integrity_checks(false) };
         assert_eq!(1usize, s.total_pages());
         s.grow_rows(1).unwrap();
         assert_eq!(2usize, s.total_pages());
@@ -8766,31 +8777,34 @@ fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
     // Almost hit grapheme alloc cap in bottom right of first page.
     // Mark the final row as wrapped.
     {
-        let page = unsafe { &mut (*s.pages.first).data };
-        let rac = page.get_row_and_cell(page.size.cols as usize - 1, page.size.rows as usize - 1);
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let rac = unsafe {
+            (*page).get_row_and_cell(
+                (*page).size.cols as usize - 1,
+                (*page).size.rows as usize - 1,
+            )
+        };
         unsafe {
             (*rac.row).set_wrap(true);
             *rac.cell = cell_codepoint('X' as u32);
         }
-        page.set_graphemes(rac.row, rac.cell, &grapheme_cps)
-            .unwrap();
-        let base = page.memory_ptr();
-        assert!(unsafe { page.grapheme_alloc.alloc::<u32, _>(base, 16) }.is_err());
+        unsafe { (*page).set_graphemes(rac.row, rac.cell, &grapheme_cps) }.unwrap();
+        let base = unsafe { (*page).memory_ptr() };
+        assert!(unsafe { (*page).grapheme_alloc.alloc::<u32, _>(base, 16) }.is_err());
     }
 
     // Almost hit grapheme alloc cap in top left of second page.
     // Mark the first row as a wrap continuation.
     {
-        let page = unsafe { &mut (*s.pages.last).data };
-        let rac = page.get_row_and_cell(0, 0);
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
+        let rac = unsafe { (*page).get_row_and_cell(0, 0) };
         unsafe {
             (*rac.row).set_wrap(true);
             *rac.cell = cell_codepoint('X' as u32);
         }
-        page.set_graphemes(rac.row, rac.cell, &grapheme_cps)
-            .unwrap();
-        let base = page.memory_ptr();
-        assert!(unsafe { page.grapheme_alloc.alloc::<u32, _>(base, 16) }.is_err());
+        unsafe { (*page).set_graphemes(rac.row, rac.cell, &grapheme_cps) }.unwrap();
+        let base = unsafe { (*page).memory_ptr() };
+        assert!(unsafe { (*page).grapheme_alloc.alloc::<u32, _>(base, 16) }.is_err());
     }
 
     // Resize to 1 column wider, unwrapping the row.
@@ -8813,12 +8827,12 @@ fn pagelist_resize_reflow_exceeds_style_memory_forcing_capacity_increase() {
     // Grow to the capacity of the first page and add
     // one more row so that we have two pages total.
     {
-        let page = unsafe { &mut (*s.pages.first).data };
-        page.pause_integrity_checks(true);
-        for _ in page.size.rows..page.capacity.rows {
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        unsafe { (*page).pause_integrity_checks(true) };
+        for _ in unsafe { (*page).size.rows..(*page).capacity.rows } {
             let _ = s.grow().unwrap();
         }
-        unsafe { &mut (*s.pages.first).data }.pause_integrity_checks(false);
+        unsafe { (*core::ptr::addr_of_mut!((*s.pages.first).data)).pause_integrity_checks(false) };
         assert_eq!(1usize, s.total_pages());
         s.grow_rows(1).unwrap();
         assert_eq!(2usize, s.total_pages());
@@ -8833,8 +8847,8 @@ fn pagelist_resize_reflow_exceeds_style_memory_forcing_capacity_increase() {
     // Give each cell in the final row of the first page a unique style.
     // Mark the final row as wrapped.
     {
-        let page = unsafe { &mut (*s.pages.first).data };
-        let base = page.memory_ptr();
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let base = unsafe { (*page).memory_ptr() };
         for x in 0..s.cols as usize {
             let style = Style {
                 bg_color: stylepkg::Color::Rgb(crate::color::RGB {
@@ -8844,12 +8858,12 @@ fn pagelist_resize_reflow_exceeds_style_memory_forcing_capacity_increase() {
                 }),
                 ..Style::default()
             };
-            let id = match unsafe { page.styles.add(base, style) } {
+            let id = match unsafe { (*page).styles.add(base, style) } {
                 Ok(id) => id,
                 Err(_) => break,
             };
 
-            let rac = page.get_row_and_cell(x, page.size.rows as usize - 1);
+            let rac = unsafe { (*page).get_row_and_cell(x, (*page).size.rows as usize - 1) };
             unsafe {
                 (*rac.row).set_wrap(true);
                 (*rac.row).set_styled(true);
@@ -8863,8 +8877,8 @@ fn pagelist_resize_reflow_exceeds_style_memory_forcing_capacity_increase() {
     // Do the same for the first row of the second page.
     // Mark the first row as a wrap continuation.
     {
-        let page = unsafe { &mut (*s.pages.last).data };
-        let base = page.memory_ptr();
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.last).data) };
+        let base = unsafe { (*page).memory_ptr() };
         for x in 0..s.cols as usize {
             let style = Style {
                 fg_color: stylepkg::Color::Rgb(crate::color::RGB {
@@ -8874,12 +8888,12 @@ fn pagelist_resize_reflow_exceeds_style_memory_forcing_capacity_increase() {
                 }),
                 ..Style::default()
             };
-            let id = match unsafe { page.styles.add(base, style) } {
+            let id = match unsafe { (*page).styles.add(base, style) } {
                 Ok(id) => id,
                 Err(_) => break,
             };
 
-            let rac = page.get_row_and_cell(x, 0);
+            let rac = unsafe { (*page).get_row_and_cell(x, 0) };
             unsafe {
                 (*rac.row).set_wrap_continuation(true);
                 (*rac.row).set_styled(true);
@@ -8907,17 +8921,17 @@ fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
         {
-            let rac = page.get_row_and_cell(0, 0);
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
             unsafe {
                 (*rac.row).set_wrap(true);
                 *rac.cell = cell_codepoint('x' as u32);
             }
         }
         {
-            let rac = page.get_row_and_cell(1, 0);
+            let rac = unsafe { (*page).get_row_and_cell(1, 0) };
             unsafe {
                 let mut c = cell_codepoint(0);
                 c.set_wide(crate::page::Wide::SpacerHead);
@@ -8925,7 +8939,7 @@ fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head() {
             }
         }
         {
-            let rac = page.get_row_and_cell(0, 1);
+            let rac = unsafe { (*page).get_row_and_cell(0, 1) };
             unsafe {
                 (*rac.row).set_wrap_continuation(true);
                 let mut c = cell_codepoint('😀' as u32);
@@ -8934,7 +8948,7 @@ fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head() {
             }
         }
         {
-            let rac = page.get_row_and_cell(1, 1);
+            let rac = unsafe { (*page).get_row_and_cell(1, 1) };
             unsafe {
                 let mut c = cell_codepoint(0);
                 c.set_wide(crate::page::Wide::SpacerTail);
@@ -8955,21 +8969,21 @@ fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head() {
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
         {
-            let rac = page.get_row_and_cell(0, 0);
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
             assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
             assert!(!unsafe { (*rac.row).wrap() });
         }
         {
-            let rac = page.get_row_and_cell(1, 0);
+            let rac = unsafe { (*page).get_row_and_cell(1, 0) };
             assert_eq!('😀' as u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Wide, unsafe { (*rac.cell).wide() });
         }
         {
-            let rac = page.get_row_and_cell(2, 0);
+            let rac = unsafe { (*page).get_row_and_cell(2, 0) };
             assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::SpacerTail, unsafe { (*rac.cell).wide() });
         }
@@ -8984,23 +8998,23 @@ fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head_across_two_rows() {
     let mut s = PageList::init(2, 3, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
         {
-            let rac = page.get_row_and_cell(0, 0);
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
             unsafe {
                 (*rac.row).set_wrap(true);
                 *rac.cell = cell_codepoint('x' as u32);
             }
         }
         {
-            let rac = page.get_row_and_cell(1, 0);
+            let rac = unsafe { (*page).get_row_and_cell(1, 0) };
             unsafe {
                 *rac.cell = cell_codepoint('x' as u32);
             }
         }
         {
-            let rac = page.get_row_and_cell(0, 1);
+            let rac = unsafe { (*page).get_row_and_cell(0, 1) };
             unsafe {
                 (*rac.row).set_wrap_continuation(true);
                 (*rac.row).set_wrap(true);
@@ -9008,7 +9022,7 @@ fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head_across_two_rows() {
             }
         }
         {
-            let rac = page.get_row_and_cell(1, 1);
+            let rac = unsafe { (*page).get_row_and_cell(1, 1) };
             unsafe {
                 let mut c = cell_codepoint(0);
                 c.set_wide(crate::page::Wide::SpacerHead);
@@ -9016,7 +9030,7 @@ fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head_across_two_rows() {
             }
         }
         {
-            let rac = page.get_row_and_cell(0, 2);
+            let rac = unsafe { (*page).get_row_and_cell(0, 2) };
             unsafe {
                 (*rac.row).set_wrap_continuation(true);
                 let mut c = cell_codepoint('😀' as u32);
@@ -9025,7 +9039,7 @@ fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head_across_two_rows() {
             }
         }
         {
-            let rac = page.get_row_and_cell(1, 2);
+            let rac = unsafe { (*page).get_row_and_cell(1, 2) };
             unsafe {
                 let mut c = cell_codepoint(0);
                 c.set_wide(crate::page::Wide::SpacerTail);
@@ -9046,36 +9060,36 @@ fn pagelist_resize_reflow_more_cols_unwrap_wide_spacer_head_across_two_rows() {
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
         {
-            let rac = page.get_row_and_cell(0, 0);
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
             assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
             assert!(unsafe { (*rac.row).wrap() });
         }
         {
-            let rac = page.get_row_and_cell(1, 0);
+            let rac = unsafe { (*page).get_row_and_cell(1, 0) };
             assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
         }
         {
-            let rac = page.get_row_and_cell(2, 0);
+            let rac = unsafe { (*page).get_row_and_cell(2, 0) };
             assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
         }
         {
-            let rac = page.get_row_and_cell(3, 0);
+            let rac = unsafe { (*page).get_row_and_cell(3, 0) };
             assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::SpacerHead, unsafe { (*rac.cell).wide() });
         }
         {
-            let rac = page.get_row_and_cell(0, 1);
+            let rac = unsafe { (*page).get_row_and_cell(0, 1) };
             assert_eq!('😀' as u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Wide, unsafe { (*rac.cell).wide() });
         }
         {
-            let rac = page.get_row_and_cell(1, 1);
+            let rac = unsafe { (*page).get_row_and_cell(1, 1) };
             assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::SpacerTail, unsafe { (*rac.cell).wide() });
         }
@@ -9090,23 +9104,23 @@ fn pagelist_resize_reflow_more_cols_unwrap_still_requires_wide_spacer_head() {
     let mut s = PageList::init(2, 2, Some(0)).unwrap();
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
         {
-            let rac = page.get_row_and_cell(0, 0);
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
             unsafe {
                 (*rac.row).set_wrap(true);
                 *rac.cell = cell_codepoint('x' as u32);
             }
         }
         {
-            let rac = page.get_row_and_cell(1, 0);
+            let rac = unsafe { (*page).get_row_and_cell(1, 0) };
             unsafe {
                 *rac.cell = cell_codepoint('x' as u32);
             }
         }
         {
-            let rac = page.get_row_and_cell(0, 1);
+            let rac = unsafe { (*page).get_row_and_cell(0, 1) };
             unsafe {
                 (*rac.row).set_wrap_continuation(true);
                 let mut c = cell_codepoint('😀' as u32);
@@ -9115,7 +9129,7 @@ fn pagelist_resize_reflow_more_cols_unwrap_still_requires_wide_spacer_head() {
             }
         }
         {
-            let rac = page.get_row_and_cell(1, 1);
+            let rac = unsafe { (*page).get_row_and_cell(1, 1) };
             unsafe {
                 let mut c = cell_codepoint(0);
                 c.set_wide(crate::page::Wide::SpacerTail);
@@ -9136,31 +9150,31 @@ fn pagelist_resize_reflow_more_cols_unwrap_still_requires_wide_spacer_head() {
 
     {
         assert!(s.pages.first == s.pages.last);
-        let page = unsafe { &mut (*s.pages.first).data };
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
 
         {
-            let rac = page.get_row_and_cell(0, 0);
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
             assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
             assert!(unsafe { (*rac.row).wrap() });
         }
         {
-            let rac = page.get_row_and_cell(1, 0);
+            let rac = unsafe { (*page).get_row_and_cell(1, 0) };
             assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
         }
         {
-            let rac = page.get_row_and_cell(2, 0);
+            let rac = unsafe { (*page).get_row_and_cell(2, 0) };
             assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::SpacerHead, unsafe { (*rac.cell).wide() });
         }
         {
-            let rac = page.get_row_and_cell(0, 1);
+            let rac = unsafe { (*page).get_row_and_cell(0, 1) };
             assert_eq!('😀' as u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::Wide, unsafe { (*rac.cell).wide() });
         }
         {
-            let rac = page.get_row_and_cell(1, 1);
+            let rac = unsafe { (*page).get_row_and_cell(1, 1) };
             assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::SpacerTail, unsafe { (*rac.cell).wide() });
         }
