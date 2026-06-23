@@ -3912,3 +3912,468 @@ fn pagelist_pageIterator_history_two_pages() {
 
     s.deinit();
 }
+
+// ref: test "PageList pageIterator reverse single page"
+#[test]
+fn pagelist_pageIterator_reverse_single_page() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // The viewport should be within a single page
+    assert!(unsafe { (*s.pages.first).next.is_null() });
+
+    // Iterate the active area
+    let mut it = s.page_iterator(
+        super::iter::Direction::LeftUp,
+        point::Point::Active(point::Coordinate::default()),
+        None,
+    );
+    {
+        let chunk = it.next().unwrap();
+        assert!(core::ptr::eq(chunk.node, s.pages.first));
+        assert_eq!(0_usize, chunk.start as usize);
+        assert_eq!(s.rows as usize, chunk.end as usize);
+    }
+
+    // Should only have one chunk
+    assert!(it.next().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList pageIterator reverse two pages"
+#[test]
+fn pagelist_pageIterator_reverse_two_pages() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Grow to capacity
+    let page1_node = s.pages.last;
+    let (page1_cap_rows, page1_size_rows) = {
+        let page1 = unsafe { &(*page1_node).data };
+        (page1.capacity.rows, page1.size.rows)
+    };
+    unsafe { (*page1_node).data.pause_integrity_checks(true) };
+    for _ in 0..(page1_cap_rows - page1_size_rows) {
+        assert!(s.grow().unwrap().is_none());
+    }
+    unsafe { (*page1_node).data.pause_integrity_checks(false) };
+    assert!(s.grow().unwrap().is_some());
+
+    // Iterate the active area
+    let mut it = s.page_iterator(
+        super::iter::Direction::LeftUp,
+        point::Point::Active(point::Coordinate::default()),
+        None,
+    );
+    let mut count: usize = 0;
+    {
+        let chunk = it.next().unwrap();
+        assert!(core::ptr::eq(chunk.node, s.pages.last));
+        let start: size::CellCountInt = 0;
+        assert_eq!(start, chunk.start);
+        assert_eq!(start + 1, chunk.end);
+        count += (chunk.end - chunk.start) as usize;
+    }
+    {
+        let chunk = it.next().unwrap();
+        assert!(core::ptr::eq(chunk.node, s.pages.first));
+        let start = unsafe { (*chunk.node).data.size.rows } - s.rows + 1;
+        assert_eq!(start, chunk.start);
+        assert_eq!(unsafe { (*chunk.node).data.size.rows }, chunk.end);
+        count += (chunk.end - chunk.start) as usize;
+    }
+    assert!(it.next().is_none());
+    assert_eq!(s.rows as usize, count);
+
+    s.deinit();
+}
+
+// ref: test "PageList pageIterator reverse history two pages"
+#[test]
+fn pagelist_pageIterator_reverse_history_two_pages() {
+    let mut s = PageList::init(80, 24, None).unwrap();
+
+    // Grow to capacity
+    let page1_node = s.pages.last;
+    let (page1_cap_rows, page1_size_rows) = {
+        let page1 = unsafe { &(*page1_node).data };
+        (page1.capacity.rows, page1.size.rows)
+    };
+    unsafe { (*page1_node).data.pause_integrity_checks(true) };
+    for _ in 0..(page1_cap_rows - page1_size_rows) {
+        assert!(s.grow().unwrap().is_none());
+    }
+    unsafe { (*page1_node).data.pause_integrity_checks(false) };
+    assert!(s.grow().unwrap().is_some());
+
+    // Iterate the active area
+    let mut it = s.page_iterator(
+        super::iter::Direction::LeftUp,
+        point::Point::History(point::Coordinate::default()),
+        None,
+    );
+    {
+        let active_tl = s.get_top_left(point::Tag::Active);
+        let chunk = it.next().unwrap();
+        assert!(core::ptr::eq(chunk.node, s.pages.first));
+        let start: size::CellCountInt = 0;
+        assert_eq!(start, chunk.start);
+        assert_eq!(active_tl.y, chunk.end);
+    }
+    assert!(it.next().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList cellIterator"
+#[test]
+fn pagelist_cellIterator() {
+    let mut s = PageList::init(2, 2, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+    for y in 0..s.rows as usize {
+        for x in 0..s.cols as usize {
+            let rac = page.get_row_and_cell(x, y);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    let mut it = s.cell_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Screen(point::Coordinate::default()),
+        None,
+    );
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 1, y: 0 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 1 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 1, y: 1 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    assert!(it.next().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList cellIterator reverse"
+#[test]
+fn pagelist_cellIterator_reverse() {
+    let mut s = PageList::init(2, 2, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+    for y in 0..s.rows as usize {
+        for x in 0..s.cols as usize {
+            let rac = page.get_row_and_cell(x, y);
+            unsafe {
+                *rac.cell = cell_codepoint(x as u32);
+            }
+        }
+    }
+
+    let mut it = s.cell_iterator(
+        super::iter::Direction::LeftUp,
+        point::Point::Screen(point::Coordinate::default()),
+        None,
+    );
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 1, y: 1 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 1 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 1, y: 0 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    assert!(it.next().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList promptIterator left_up"
+#[test]
+fn pagelist_promptIterator_left_up() {
+    let mut s = PageList::init(2, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+    // Normal prompt
+    {
+        let rac = page.get_row_and_cell(0, 3);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+    // Continuation
+    {
+        let rac = page.get_row_and_cell(0, 6);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+    {
+        let rac = page.get_row_and_cell(0, 7);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::PromptContinuation) };
+    }
+    {
+        let rac = page.get_row_and_cell(0, 8);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::PromptContinuation) };
+    }
+    // Broken continuation that has non-prompts in between
+    {
+        let rac = page.get_row_and_cell(0, 12);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::PromptContinuation) };
+    }
+
+    let mut it = s.prompt_iterator(
+        super::iter::Direction::LeftUp,
+        point::Point::Screen(point::Coordinate::default()),
+        None,
+    );
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 12 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 6 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 3 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    assert!(it.next().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList promptIterator right_down"
+#[test]
+fn pagelist_promptIterator_right_down() {
+    let mut s = PageList::init(2, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+    // Normal prompt
+    {
+        let rac = page.get_row_and_cell(0, 3);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+    // Continuation (prompt on row 6, continuation on rows 7-8)
+    {
+        let rac = page.get_row_and_cell(0, 6);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+    {
+        let rac = page.get_row_and_cell(0, 7);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::PromptContinuation) };
+    }
+    {
+        let rac = page.get_row_and_cell(0, 8);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::PromptContinuation) };
+    }
+    // Broken continuation that has non-prompts in between (orphaned continuation at row 12)
+    {
+        let rac = page.get_row_and_cell(0, 12);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::PromptContinuation) };
+    }
+
+    let mut it = s.prompt_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Screen(point::Coordinate::default()),
+        None,
+    );
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 3 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 6 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 12 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    assert!(it.next().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList promptIterator right_down continuation at start"
+#[test]
+fn pagelist_promptIterator_right_down_continuation_at_start() {
+    let mut s = PageList::init(2, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt continuation at row 0 (no prior rows - simulates trimmed scrollback)
+    {
+        let rac = page.get_row_and_cell(0, 0);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::PromptContinuation) };
+    }
+    {
+        let rac = page.get_row_and_cell(0, 1);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::PromptContinuation) };
+    }
+    // Normal prompt later
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    let mut it = s.prompt_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Screen(point::Coordinate::default()),
+        None,
+    );
+    {
+        // Should return the first continuation line since there's no prior prompt
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 5 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    assert!(it.next().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList promptIterator right_down with prompt before continuation"
+#[test]
+fn pagelist_promptIterator_right_down_with_prompt_before_continuation() {
+    let mut s = PageList::init(2, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 2, continuation on rows 3-4
+    // Starting iteration from row 3 should still find the prompt at row 2
+    {
+        let rac = page.get_row_and_cell(0, 2);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+    {
+        let rac = page.get_row_and_cell(0, 3);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::PromptContinuation) };
+    }
+    {
+        let rac = page.get_row_and_cell(0, 4);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::PromptContinuation) };
+    }
+
+    // Start iteration from row 3 (middle of the continuation)
+    // Since we start on a continuation line, we treat it as the prompt start
+    // (handles case where scrollback pruned the actual prompt)
+    let mut it = s.prompt_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Screen(point::Coordinate { x: 0, y: 3 }),
+        None,
+    );
+    {
+        let p = it.next().unwrap();
+        // Returns row 3 since that's the first prompt-related line we encounter
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 3 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    assert!(it.next().is_none());
+
+    s.deinit();
+}
+
+// ref: test "PageList promptIterator right_down limit inclusive"
+#[test]
+fn pagelist_promptIterator_right_down_limit_inclusive() {
+    let mut s = PageList::init(2, 20, Some(0)).unwrap();
+    assert!(core::ptr::eq(s.pages.first, s.pages.last));
+    let page = unsafe { &mut (*s.pages.first).data };
+
+    // Prompt on row 5
+    {
+        let rac = page.get_row_and_cell(0, 5);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+    // Prompt on row 10
+    {
+        let rac = page.get_row_and_cell(0, 10);
+        unsafe { (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt) };
+    }
+
+    // Iterate with limit at row 5 (the prompt row) - should include it
+    let mut it = s.prompt_iterator(
+        super::iter::Direction::RightDown,
+        point::Point::Screen(point::Coordinate::default()),
+        Some(point::Point::Screen(point::Coordinate { x: 0, y: 5 })),
+    );
+    {
+        let p = it.next().unwrap();
+        assert_eq!(
+            point::Point::Screen(point::Coordinate { x: 0, y: 5 }),
+            s.point_from_pin(point::Tag::Screen, p).unwrap()
+        );
+    }
+    assert!(it.next().is_none());
+
+    s.deinit();
+}
