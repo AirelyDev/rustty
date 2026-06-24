@@ -75,3 +75,16 @@ pure-VT `rustty-vt` crate:
 ## Rule
 A sub-batch's verify MUST treat G3b "missing" that maps to an entry here as
 EXPECTED (not RED), and MUST NOT add new deferrals without recording them here.
+
+## Deferred: apc cluster (font-blocked) — revisit after rustty-font
+
+`apc.zig` + `apc/glyph/{request,Glossary,execute,glyph}` (67 tests) need
+`font/opentype/glyf` (`Glyf` parser, 44 refs in request.zig) + `font/Glyph` +
+`datastruct/circ_buf` (the last is ported: rustty-datastruct/circ_buf.rs). BLOCKER:
+**rustty-font is a stub AND already depends on rustty-vt**, so a direct `vt→font`
+dep would create a crate cycle, and the glyf-decode tests need a real decoder.
+RESOLUTION (deferred): port rustty-font's `glyf`/`Glyph` first, then port apc either
+(a) in a crate layered above both vt+font, or (b) via a `GlyfDecoder` trait seam in
+vt that font fills (the plan's "sys-style hook"). `apc/glyph/response` (12 tests,
+leaf, no font) could go early if needed. Terminal (vt-12) must stub its apc usage
+until this lands.

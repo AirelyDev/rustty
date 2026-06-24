@@ -13,9 +13,9 @@ units (structs→methods→tests, the PageList discipline), Screen/Terminal last
 | ~~vt-5~~ | parse_table + Parser | 26 | **REORDERED after vt-6**: Parser EMBEDS osc.Parser (field + dispatch + osc tests) → osc must land first. Mutual cycle parse_table↔Parser stays struct/table-first. |
 | **vt-6 (NEXT, before Parser)** | osc + encoding + **16** osc/parsers/* + kitty/color | ~243 | Parent↔child cycle, struct-first (osc.rs skeleton+stubs→fill). osc9(61)+semantic_prompt(64) dominate. (+hyperlink parser 8t, missed earlier.) |
 | ~~vt-7~~ ✅ | kitty key/command/unicode/render/image + aggregators | ~47 | DONE. graphics_storage/exec + graphics_unicode render_placement/grid (+14 tests, 58 comments) DEFERRED to vt-12 — see DEFERRALS.md. Extended zlib-sys (full inflate) for decompressZlib. |
-| vt-8 (after vt-9) | apc + apc/glyph/{response,request,Glossary,execute,glyph} | 67 | **External font/opentype dep** → sys-style hook seam. Only needed by vt-12, so AFTER stream. |
-| **vt-9 (NEXT)** | stream | 38 | All deps DONE (Parser/osc/kitty/mouse/UTF8Decoder). Generic Stream<Handler> + TestHandler. No font risk. |
-| **vt-10** | Screen+Selection+formatter+StringMap+ScreenSet — **STRUCTS only** (+ method sigs as todo!) | 0 | Breaks the 4-way cycle struct-first (PageList discipline). StringMap oniguruma → feature-gate. |
+| ~~vt-8~~ DEFERRED | apc + apc/glyph/* | 67 | **BLOCKED**: needs rustty-font `Glyf`/`Glyph` (stub) and `vt→font` would CYCLE (font→vt exists). Glyf-decode tests need a real decoder. Deferred until rustty-font glyf is ported + the vt↔font seam decided. See DEFERRALS.md. Only feeds vt-12 (Terminal stubs its apc usage meanwhile). |
+| ~~vt-9~~ ✅ | stream | 38 | DONE (+ osc raw-byte fidelity fix). VT input pipeline complete. |
+| **vt-10 (NEXT)** | Screen+Selection+formatter+StringMap+ScreenSet — **STRUCTS only** (+ method sigs as todo!) | 0 | Breaks the 4-way cycle struct-first (PageList discipline). StringMap oniguruma → feature-gate. Design scout first. |
 | **vt-11** | …same cluster — methods + tests | ~309 | Screen 188 + Selection 18 + formatter 100 + StringMap 3 + ScreenSet 2. XL. 2nd-biggest risk. |
 | **vt-12** | Terminal ↔ stream_terminal (struct→method→test split 12a/b/c) + deferred kitty graphics_storage/exec + graphics_unicode render_placement/grid (DEFERRALS.md) | ~509 | **Biggest single unit** (Terminal 376 + stream_terminal 65 + 27). Mutual cycle. |
 | vt-13 | render + SelectionGesture + highlight Tracked/track | 46 | Sits on full Screen/Terminal cluster. |
