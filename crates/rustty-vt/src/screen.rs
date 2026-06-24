@@ -10,6 +10,9 @@
 // drop out once the bodies land.
 #![allow(clippy::todo, dead_code, unused_variables, unused_imports)]
 #![allow(clippy::should_implement_trait)]
+// `splitCellBoundary`'s reference doc block uses `o`-prefixed sub-bullets indented
+// under `-` list items; preserved VERBATIM per R1, which trips this style lint.
+#![allow(clippy::doc_overindented_list_items)]
 
 // const std = @import("std");
 // const build_options = @import("terminal_options");
@@ -394,7 +397,9 @@ impl Options {
     }
 }
 
-/// See PageList.Scroll.
+/// Options for scrolling the viewport of the terminal grid. The reason
+/// we have this in addition to PageList.Scroll is because we have additional
+/// scroll behaviors that are not part of the PageList.Scroll enum.
 pub enum Scroll {
     /// For all of these, see PageList.Scroll.
     Active,
@@ -2060,6 +2065,38 @@ impl Screen {
         self.assert_integrity();
     }
 
+    /// Clean up boundary conditions where a cell will become discontiguous with
+    /// a neighboring cell because either one of them will be moved and/or cleared.
+    ///
+    /// For performance reasons this is specialized to operate on the cursor row.
+    ///
+    /// Handles the boundary between the cell at `x` and the cell at `x - 1`.
+    ///
+    /// So, for example, when moving a region of cells [a, b] (inclusive), call this
+    /// function with `x = a` and `x = b + 1`. It is okay if `x` is out of bounds by
+    /// 1, this will be interpreted correctly.
+    ///
+    /// DOES NOT MODIFY ROW WRAP STATE! See `cursor_reset_wrap` for that.
+    ///
+    /// The following boundary conditions are handled:
+    ///
+    /// - `x - 1` is a wide character and `x` is a spacer tail:
+    ///   o Both cells will be cleared.
+    ///   o If `x - 1` is the start of the row and was wrapped from a previous row
+    ///     then the previous row is checked for a spacer head, which is cleared if
+    ///     present.
+    ///
+    /// - `x == 0` and is a wide character:
+    ///   o If the row is a wrap continuation then the previous row will be checked
+    ///     for a spacer head, which is cleared if present.
+    ///
+    /// - `x == cols` and `x - 1` is a spacer head:
+    ///   o `x - 1` will be cleared.
+    ///
+    /// NOTE(qwerasd): This method is not scrolling region aware, and cannot be
+    /// since it's on Screen not Terminal. This needs to be addressed down the
+    /// line. Not an extremely urgent issue since it's an edge case of an edge
+    /// case, but not ideal.
     pub fn split_cell_boundary(&mut self, x: size::CellCountInt) {
         // const page = &self.cursor.page_pin.node.data;
         let page: *mut Page =
@@ -2195,6 +2232,8 @@ impl Screen {
         unsafe { (*page).pause_integrity_checks(false) };
     }
 
+    /// Returns the blank cell to use when doing terminal operations that
+    /// require preserving the bg color.
     #[inline]
     pub fn blank_cell(&self) -> Cell {
         if self.cursor.style_id == style::DEFAULT_ID {
@@ -2457,6 +2496,10 @@ impl Screen {
         Ok(())
     }
 
+    /// Set a style attribute for the current cursor.
+    ///
+    /// If the style can't be set due to any internal errors (memory-related),
+    /// then this will revert back to the existing style and return an error.
     pub fn set_attribute(
         &mut self,
         attr: crate::sgr::Attribute<'_>,
@@ -2644,6 +2687,8 @@ impl Screen {
         let mut page: *mut Page =
             unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
 
+        // std.log.warn("active styles={}", .{page.styles.count()});
+
         // Release our previous style if it was not default.
         if self.cursor.style_id != style::DEFAULT_ID {
             unsafe {
@@ -2661,13 +2706,17 @@ impl Screen {
 
         // Clear the cursor style ID to prevent weird things from happening
         // if the page capacity has to be adjusted which would end up calling
-        // manualStyleUpdate again.
+        // manual_style_update again.
         //
         // This also ensures that if anything fails below, we fall back to
         // clearing our style.
         self.cursor.style_id = style::DEFAULT_ID;
 
         // After setting the style, we need to update our style map.
+        // Note that we COULD lazily do this in print. We should look into
+        // if that makes a meaningful difference. Our priority is to keep print
+        // fast because setting a ton of styles that do nothing is uncommon
+        // and weird.
         let add_result = unsafe {
             let base = (*page).memory_ptr();
             (*page).styles.add(base, self.cursor.style)
@@ -3440,6 +3489,8 @@ impl Screen {
         Some(Selection::init(start, end, false))
     }
 
+    /// Return the selection for all contents on the screen. Surrounding
+    /// whitespace is omitted. If there is no selection, this returns null.
     pub fn select_all(&mut self) -> Option<Selection> {
         let whitespace: &[u32] = &[0, b' ' as u32, b'\t' as u32];
 
@@ -3635,6 +3686,13 @@ impl Screen {
         Some(Selection::init(start, end, false))
     }
 
+    /// Select the command output under the given point. The limits of the output
+    /// are determined by semantic prompt information provided by shell integration.
+    /// A selection can span multiple physical lines if they are soft-wrapped.
+    ///
+    /// This will return null if a selection is impossible:
+    ///  - the point pt is outside of the written screen space.
+    ///  - the point pt is on a prompt / input line.
     pub fn select_output(&mut self, pin: Pin) -> Option<Selection> {
         // If our pin right now is not on output, then we return nothing.
         if unsafe { (*pin.row_and_cell().cell).semantic_content() }
@@ -3903,6 +3961,9 @@ impl Screen {
         }
     }
 
+    /// Dump the screen to a string. The writer given should be buffered;
+    /// this function does not attempt to efficiently write and generally writes
+    /// one byte at a time.
     pub fn dump_string(
         &self,
         writer: &mut dyn io::Write,
@@ -4696,7 +4757,9 @@ mod tests {
         }
         unsafe { (*start_page).pause_integrity_checks(false) };
 
-        // We need our page to change for this test o make sense.
+        // We need our page to change for this test o make sense. If this
+        // assertion fails then the bug is in the test: we should be scrolling
+        // above enough for a new page to show up.
         {
             let page: *mut Page =
                 unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
@@ -4888,7 +4951,9 @@ mod tests {
         let new_page: *mut Page =
             unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
 
-        // We need our page to change for this test to make sense.
+        // We need our page to change for this test to make sense. If this
+        // assertion fails then the bug is in the test: we should be scrolling
+        // above enough for a new page to show up.
         assert!(!std::ptr::eq(start_page, new_page));
 
         // Add styles to the start page until it reaches capacity.
@@ -6108,6 +6173,20 @@ mod tests {
         }
 
         // Pin the viewport to a history row just above the active area.
+        //
+        // Before resize:
+        // - total rows = 40
+        // - active area starts at row 30
+        // - viewport is pinned at row 28
+        //
+        // After unwrap during resize:
+        // - total rows shrinks to 20
+        // - the old row 28 remaps into what is now the active area
+        //
+        // The bug was that resize/grow would temporarily keep the viewport as a
+        // history pin even after reflow had moved it into the active area, leaving
+        // fewer than `rows` visible rows beneath the pin and tripping integrity
+        // checks.
         s.pages.scroll(pagelist::scroll::Scroll::Pin(
             s.pages
                 .pin(point::Point::Screen(point::Coordinate { x: 0, y: 28 }))
@@ -6988,6 +7067,8 @@ mod tests {
 
         // So this is the key point: we end up with a wide spacer head at
         // the end of row 1, then the emoji, then a wide spacer tail on row 2.
+        // We should expect that if we resize to more cols, the wide spacer
+        // head is replaced with the emoji.
         {
             let list_cell = s
                 .pages
@@ -8062,6 +8143,7 @@ mod tests {
 
     // PORT NOTE: the selectWord tests use the default word boundary codepoints
     // inline; mirrored here as a local const matching the reference array.
+    // Default boundary codepoints for word selection
     const SELECT_WORD_BOUNDARY: [u32; 20] = [
         0,
         b' ' as u32,

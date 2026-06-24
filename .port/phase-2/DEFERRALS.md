@@ -54,6 +54,45 @@ From **vt-11b (formatter production + Screen dump)**:
 **vt-12 acceptance gain (formatter):** +~100 formatter tests + 5 TerminalFormatter
 tests, and `TerminalFormatter::{init,format}` → 0 `todo!()`.
 
+## Deferred Screen.zig tests (not-yet-ported test bodies) — vt-11/vt-12 cluster
+
+From **vt-11 (Screen)** — 152 of 187 `Screen.zig` `test{}` blocks are ported; the
+remaining ~35 are scheduled, not dropped (R1). 23 of these are flagged by G3b as
+test-region "missing" (their inner comments come WITH the deferred test body).
+These are NOT kitty/TerminalFormatter tests; they are the
+`increaseCapacity`/`scroll-above`/`scrollback`/`hyperlink`/`setAttribute`-OOM edge
+tests whose production methods ARE ported but whose test fixtures/assertions land
+in a later Screen sub-batch (vt-11h)/vt-12. Each carries its inner comments, so its
+G3b "missing" inner comments are EXPECTED until the test is ported:
+
+- `Screen: cursorDown to page with insufficient capacity` (15)
+- `Screen setAttribute increases capacity when style map is full` (13)
+- `Screen: increaseCapacity non-cursor page returns early` (11)
+- `Screen: increaseCapacity cursor style ref count preserved` (6)
+- `Screen: increaseCapacity cursor with both style and hyperlink preserved` (5)
+- `Screen: increaseCapacity cursor hyperlink ref count preserved` (3)
+- `Screen setAttribute splits page on OutOfSpace at max styles` (6)
+- `Screen: cursorSetHyperlink OOM + URI too large for string alloc` (6)
+- `Screen: hyperlink cursor state on resize` (3)
+- `Screen: hyperlink reuse` (2)
+- `Screen: scrollback various cases` (5)
+- `Screen: scrollback doesn't move viewport if not at bottom` (4)
+- `Screen: scroll above same page but cursor on previous page last row` (5)
+- `Screen: scroll above same page` (4)
+- `Screen: scroll above with cursor on non-final row` (4)
+- `Screen: scroll above same page but cursor on previous page` (3)
+- `Screen: scroll above creates new page` (2)
+- `Screen: scroll above no scrollback bottom of page` (1)
+- `Screen: scroll down from 0` (1)
+- `Screen: scrolling` (3)
+- `Screen: scrolling when viewport is pruned` (2)
+- `Screen: scrolling with a single-row screen with scrollback` (1)
+- `Screen: select replaces existing pins` (1)
+
+**Acceptance gain:** porting these test bodies drives the Screen.zig test-region
+G3b "missing" to 0 (only the kitty-ImageStorage/Valgrind production deferrals above
+remain, EXPECTED until vt-12).
+
 ## Deferred to Dispatch/SIMD phase
 
 From **vt-9 (stream)**:
