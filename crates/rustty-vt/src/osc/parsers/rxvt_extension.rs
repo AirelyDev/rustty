@@ -46,9 +46,11 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
     data[t] = 0;
     let data_len = data.len();
     // data[k + 1 .. t :0]
-    let title = String::from_utf8_lossy(&data[k + 1..t]).into_owned();
+    // PORT NOTE (fidelity): reference `title: [:0]const u8` RAW bytes.
+    let title = data[k + 1..t].to_vec();
     // data[t + 1 .. data.len - 1 :0]
-    let body = String::from_utf8_lossy(&data[t + 1..data_len - 1]).into_owned();
+    // PORT NOTE (fidelity): reference `body: [:0]const u8` RAW bytes.
+    let body = data[t + 1..data_len - 1].to_vec();
     parser.command = Command::ShowDesktopNotification { title, body };
     Some(&mut parser.command)
 }
@@ -73,8 +75,8 @@ mod tests {
         ));
         match cmd {
             crate::osc::Command::ShowDesktopNotification { title, body } => {
-                assert_eq!(title, "Title");
-                assert_eq!(body, "Body");
+                assert_eq!(title.as_slice(), b"Title");
+                assert_eq!(body.as_slice(), b"Body");
             }
             _ => unreachable!(),
         }

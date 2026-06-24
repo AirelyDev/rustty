@@ -27,11 +27,11 @@ use rustty_os::string_encoding;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
     pub action: Action,
-    // PORT NOTE: `options_unvalidated: []const u8` is a borrowed slice into the
-    // parser's capture buffer in Zig. The ported `Command` owns the bytes as a
-    // `String` (the parent skeleton's declared public type); option reading and
-    // command-line decoding operate over `options_unvalidated.as_bytes()`.
-    pub options_unvalidated: String,
+    // PORT NOTE (fidelity): `options_unvalidated: []const u8` is a borrowed slice
+    // into the parser's capture buffer in Zig. The ported `Command` owns the
+    // bytes as a `Vec<u8>` (RAW bytes, not a lossy `String`); option reading and
+    // command-line decoding operate over the byte slice directly.
+    pub options_unvalidated: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +50,7 @@ impl Command {
     pub fn init(action: Action) -> Command {
         Command {
             action,
-            options_unvalidated: String::new(),
+            options_unvalidated: Vec::new(),
         }
     }
 
@@ -61,7 +61,7 @@ impl Command {
     // `Copy`-valued options and the borrow-returning `[]const u8` options share
     // one `read_option` entry point.
     pub fn read_option<'a, O: ReadableOption<'a>>(&'a self, option: O) -> Option<O::Output> {
-        option.read(self.options_unvalidated.as_bytes())
+        option.read(&self.options_unvalidated)
     }
 
     /// Write the decoded command line (if any) to the writer. If an error
@@ -566,10 +566,11 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut OSCCom
 
 // PORT NOTE: `parser.command.semantic_prompt.options_unvalidated = data[2..];`
 // — in Zig this stores a borrowed slice into the capture buffer. The ported
-// `Command` owns its options as a `String`, so we copy the bytes in.
+// `Command` owns its options as a `Vec<u8>`, so we copy the RAW bytes in —
+// NEVER a lossy String decode.
 fn set_options(command: &mut OSCCommand, data: &[u8]) {
     if let OSCCommand::SemanticPrompt(sp) = command {
-        sp.options_unvalidated = String::from_utf8_lossy(data).into_owned();
+        sp.options_unvalidated = data.to_vec();
     }
 }
 

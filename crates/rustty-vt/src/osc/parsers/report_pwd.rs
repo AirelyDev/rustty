@@ -19,7 +19,9 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
     let data = cap.trailing();
     parser.command = Command::ReportPwd {
         // data[0 .. data.len() - 1 :0]
-        value: String::from_utf8_lossy(&data[0..data.len() - 1]).into_owned(),
+        // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes (trailing NUL
+        // excluded), NOT a lossy String decode.
+        value: data[0..data.len() - 1].to_vec(),
     };
     Some(&mut parser.command)
 }
@@ -40,7 +42,9 @@ mod tests {
         let cmd = p.end(None).unwrap().clone();
         assert!(matches!(cmd, crate::osc::Command::ReportPwd { .. }));
         match cmd {
-            crate::osc::Command::ReportPwd { value } => assert_eq!("file:///tmp/example", value),
+            crate::osc::Command::ReportPwd { value } => {
+                assert_eq!(b"file:///tmp/example", value.as_slice())
+            }
             _ => unreachable!(),
         }
     }
@@ -56,7 +60,7 @@ mod tests {
         let cmd = p.end(None).unwrap().clone();
         assert!(matches!(cmd, crate::osc::Command::ReportPwd { .. }));
         match cmd {
-            crate::osc::Command::ReportPwd { value } => assert_eq!("", value),
+            crate::osc::Command::ReportPwd { value } => assert_eq!(b"", value.as_slice()),
             _ => unreachable!(),
         }
     }

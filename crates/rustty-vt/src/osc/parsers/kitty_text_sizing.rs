@@ -72,7 +72,8 @@ pub struct OSC {
     pub denominator: u8, // u4
     pub valign: VAlign,
     pub halign: HAlign,
-    pub text: String,
+    /// PORT NOTE (fidelity): reference `text: [:0]const u8` — raw bytes, not lossy.
+    pub text: Vec<u8>,
 }
 
 // PORT NOTE: `error{ UnknownKey, InvalidValue }` — the error set returned by
@@ -191,10 +192,11 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         return None;
     }
 
-    // PORT NOTE: `payload` is escape-code-safe UTF-8 (validated above), so the
-    // decode here is infallible; copy it out so the mutable `parser.command`
-    // borrow below does not alias the capture buffer.
-    let text = String::from_utf8_lossy(payload).into_owned();
+    // PORT NOTE (fidelity): the reference assigns `payload` (a `[:0]const u8`
+    // slice) directly to `text`; copy the RAW bytes out (so the mutable
+    // `parser.command` borrow below does not alias the capture buffer), NOT a
+    // lossy String decode.
+    let text = payload.to_vec();
     // PORT NOTE: the args region precedes the payload; copy it out for the same
     // aliasing reason before reborrowing `parser.command`.
     let args: Vec<u8> = data[0..payload_start].to_vec();
@@ -281,7 +283,7 @@ mod tests {
         match cmd {
             Command::KittyTextSizing(osc) => {
                 assert_eq!(1u8, osc.scale);
-                assert_eq!("bobr", osc.text);
+                assert_eq!(b"bobr", osc.text.as_slice());
             }
             _ => unreachable!(),
         }
@@ -301,7 +303,7 @@ mod tests {
         match cmd {
             Command::KittyTextSizing(osc) => {
                 assert_eq!(2u8, osc.scale);
-                assert_eq!("kurwa", osc.text);
+                assert_eq!(b"kurwa", osc.text.as_slice());
             }
             _ => unreachable!(),
         }
@@ -326,7 +328,7 @@ mod tests {
                 assert_eq!(15u8, osc.denominator);
                 assert_eq!(VAlign::Bottom, osc.valign);
                 assert_eq!(HAlign::Center, osc.halign);
-                assert_eq!("long", osc.text);
+                assert_eq!(b"long", osc.text.as_slice());
             }
             _ => unreachable!(),
         }
@@ -381,7 +383,9 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::KittyTextSizing(_)));
         match cmd {
-            Command::KittyTextSizing(osc) => assert_eq!("👻魑魅魍魉ゴースッティ", osc.text),
+            Command::KittyTextSizing(osc) => {
+                assert_eq!("👻魑魅魍魉ゴースッティ".as_bytes(), osc.text.as_slice())
+            }
             _ => unreachable!(),
         }
     }

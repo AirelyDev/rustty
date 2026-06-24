@@ -31,11 +31,15 @@ pub struct Command {
     // crate, so it is ported as this note.
     pub action: Action,
     /// The context identifier. Must be 1-64 characters in the 32..126 byte range.
-    pub id: String,
+    ///
+    /// PORT NOTE (fidelity): reference `id: []const u8` — RAW bytes.
+    pub id: Vec<u8>,
     /// Raw unparsed metadata fields after the context ID.
     /// Fields are semicolon-separated key=value pairs.
     /// Parsed lazily via `readOption`.
-    pub metadata: String,
+    ///
+    /// PORT NOTE (fidelity): reference `metadata: []const u8` — RAW bytes.
+    pub metadata: Vec<u8>,
 }
 
 impl Command {
@@ -46,7 +50,7 @@ impl Command {
     // return types, so `read_option` takes a runtime `Field` and returns a
     // tagged `FieldValue` whose active variant matches `Field::value_type`.
     pub fn read_option(&self, option: Field) -> FieldValue {
-        option.read(self.metadata.as_bytes())
+        option.read(&self.metadata)
     }
 }
 
@@ -153,7 +157,8 @@ pub enum FieldValue {
     Type(Option<ContextType>),
     Exit(Option<ExitStatus>),
     Int(Option<u64>),
-    Str(Option<String>),
+    /// PORT NOTE (fidelity): string fields are `[]const u8` — RAW bytes.
+    Str(Option<Vec<u8>>),
 }
 
 impl FieldValue {
@@ -182,7 +187,9 @@ impl FieldValue {
     }
 
     /// Helper for `?[]const u8` fields.
-    pub fn as_str(&self) -> Option<&str> {
+    ///
+    /// PORT NOTE (fidelity): returns the RAW bytes, not a UTF-8 `str`.
+    pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
             FieldValue::Str(v) => v.as_deref(),
             _ => panic!("field value is not a string"),
@@ -293,7 +300,8 @@ impl Field {
                 | Field::Sessionid
                 | Field::Signal => {
                     if !value.is_empty() {
-                        FieldValue::Str(Some(String::from_utf8_lossy(value).into_owned()))
+                        // PORT NOTE (fidelity): `[]const u8` RAW bytes, not lossy.
+                        FieldValue::Str(Some(value.to_vec()))
                     } else {
                         FieldValue::Str(None)
                     }
@@ -401,8 +409,10 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut OSCCom
         b""
     };
 
-    let id = String::from_utf8_lossy(id).into_owned();
-    let metadata = String::from_utf8_lossy(metadata).into_owned();
+    // PORT NOTE (fidelity): `id`/`metadata` are `[]const u8` RAW bytes; copy the
+    // bytes out, NEVER a lossy String decode.
+    let id = id.to_vec();
+    let metadata = metadata.to_vec();
 
     parser.command = OSCCommand::ContextSignal(Command {
         action,
@@ -437,8 +447,8 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(cs.action, super::Action::Start);
-        assert_eq!(cs.id, "abc123");
-        assert_eq!(cs.metadata, "");
+        assert_eq!(cs.id.as_slice(), b"abc123".as_slice());
+        assert_eq!(cs.metadata.as_slice(), b"".as_slice());
     }
 
     #[test]
@@ -456,8 +466,8 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(cs.action, super::Action::End);
-        assert_eq!(cs.id, "abc123");
-        assert_eq!(cs.metadata, "");
+        assert_eq!(cs.id.as_slice(), b"abc123".as_slice());
+        assert_eq!(cs.metadata.as_slice(), b"".as_slice());
     }
 
     #[test]
@@ -476,15 +486,24 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(cs.action, super::Action::Start);
-        assert_eq!(cs.id, "bed86fab93af4328bbed0a1224af6d40");
+        assert_eq!(
+            cs.id.as_slice(),
+            b"bed86fab93af4328bbed0a1224af6d40".as_slice()
+        );
 
         // Read individual fields
         assert_eq!(
             cs.read_option(Field::Type).as_type().unwrap(),
             ContextType::Container
         );
-        assert_eq!(cs.read_option(Field::User).as_str().unwrap(), "lennart");
-        assert_eq!(cs.read_option(Field::Hostname).as_str().unwrap(), "zeta");
+        assert_eq!(
+            cs.read_option(Field::User).as_bytes().unwrap(),
+            b"lennart".as_slice()
+        );
+        assert_eq!(
+            cs.read_option(Field::Hostname).as_bytes().unwrap(),
+            b"zeta".as_slice()
+        );
     }
 
     #[test]
@@ -505,19 +524,28 @@ mod tests {
             cs.read_option(Field::Type).as_type().unwrap(),
             ContextType::Shell
         );
-        assert_eq!(cs.read_option(Field::User).as_str().unwrap(), "root");
-        assert_eq!(cs.read_option(Field::Hostname).as_str().unwrap(), "myhost");
         assert_eq!(
-            cs.read_option(Field::Machineid).as_str().unwrap(),
-            "3deb5353d3ba43d08201c136a47ead7b"
+            cs.read_option(Field::User).as_bytes().unwrap(),
+            b"root".as_slice()
         );
         assert_eq!(
-            cs.read_option(Field::Bootid).as_str().unwrap(),
-            "d4a3d0fdf2e24fdea6d971ce73f4fbf2"
+            cs.read_option(Field::Hostname).as_bytes().unwrap(),
+            b"myhost".as_slice()
+        );
+        assert_eq!(
+            cs.read_option(Field::Machineid).as_bytes().unwrap(),
+            b"3deb5353d3ba43d08201c136a47ead7b".as_slice()
+        );
+        assert_eq!(
+            cs.read_option(Field::Bootid).as_bytes().unwrap(),
+            b"d4a3d0fdf2e24fdea6d971ce73f4fbf2".as_slice()
         );
         assert_eq!(cs.read_option(Field::Pid).as_int().unwrap(), 1062862u64);
         assert_eq!(cs.read_option(Field::Pidfdid).as_int().unwrap(), 1063162u64);
-        assert_eq!(cs.read_option(Field::Comm).as_str().unwrap(), "bash");
+        assert_eq!(
+            cs.read_option(Field::Comm).as_bytes().unwrap(),
+            b"bash".as_slice()
+        );
     }
 
     #[test]
@@ -535,7 +563,7 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(cs.action, super::Action::End);
-        assert_eq!(cs.id, "myctx");
+        assert_eq!(cs.id.as_slice(), b"myctx".as_slice());
         assert_eq!(
             cs.read_option(Field::Exit).as_exit().unwrap(),
             ExitStatus::Success
@@ -562,7 +590,10 @@ mod tests {
             ExitStatus::Failure
         );
         assert_eq!(cs.read_option(Field::Status).as_int().unwrap(), 1u64);
-        assert_eq!(cs.read_option(Field::Signal).as_str().unwrap(), "SIGKILL");
+        assert_eq!(
+            cs.read_option(Field::Signal).as_bytes().unwrap(),
+            b"SIGKILL".as_slice()
+        );
     }
 
     #[test]
@@ -583,7 +614,10 @@ mod tests {
             cs.read_option(Field::Type).as_type().unwrap(),
             ContextType::Shell
         );
-        assert_eq!(cs.read_option(Field::User).as_str().unwrap(), "root");
+        assert_eq!(
+            cs.read_option(Field::User).as_bytes().unwrap(),
+            b"root".as_slice()
+        );
     }
 
     #[test]
@@ -643,7 +677,7 @@ mod tests {
             Command::ContextSignal(cs) => cs,
             _ => unreachable!(),
         };
-        assert_eq!(cs.id, id);
+        assert_eq!(cs.id.as_slice(), id.as_bytes());
     }
 
     #[test]
@@ -749,18 +783,30 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(cs.action, super::Action::Start);
-        assert_eq!(cs.id, "bed86fab93af4328bbed0a1224af6d40");
+        assert_eq!(
+            cs.id.as_slice(),
+            b"bed86fab93af4328bbed0a1224af6d40".as_slice()
+        );
         assert_eq!(
             cs.read_option(Field::Type).as_type().unwrap(),
             ContextType::Container
         );
-        assert_eq!(cs.read_option(Field::User).as_str().unwrap(), "lennart");
-        assert_eq!(cs.read_option(Field::Hostname).as_str().unwrap(), "zeta");
         assert_eq!(
-            cs.read_option(Field::Comm).as_str().unwrap(),
-            "systemd-nspawn"
+            cs.read_option(Field::User).as_bytes().unwrap(),
+            b"lennart".as_slice()
         );
-        assert_eq!(cs.read_option(Field::Container).as_str().unwrap(), "foobar");
+        assert_eq!(
+            cs.read_option(Field::Hostname).as_bytes().unwrap(),
+            b"zeta".as_slice()
+        );
+        assert_eq!(
+            cs.read_option(Field::Comm).as_bytes().unwrap(),
+            b"systemd-nspawn".as_slice()
+        );
+        assert_eq!(
+            cs.read_option(Field::Container).as_bytes().unwrap(),
+            b"foobar".as_slice()
+        );
         assert_eq!(cs.read_option(Field::Pid).as_int().unwrap(), 1062862u64);
     }
 
@@ -780,7 +826,10 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(cs.action, super::Action::End);
-        assert_eq!(cs.id, "bed86fab93af4328bbed0a1224af6d40");
+        assert_eq!(
+            cs.id.as_slice(),
+            b"bed86fab93af4328bbed0a1224af6d40".as_slice()
+        );
     }
 
     #[test]
@@ -797,8 +846,14 @@ mod tests {
             Command::ContextSignal(cs) => cs,
             _ => unreachable!(),
         };
-        assert_eq!(cs.read_option(Field::Cwd).as_str().unwrap(), "/home/user");
-        assert_eq!(cs.read_option(Field::Cmdline).as_str().unwrap(), "ls -la");
+        assert_eq!(
+            cs.read_option(Field::Cwd).as_bytes().unwrap(),
+            b"/home/user".as_slice()
+        );
+        assert_eq!(
+            cs.read_option(Field::Cmdline).as_bytes().unwrap(),
+            b"ls -la".as_slice()
+        );
     }
 
     #[test]
@@ -816,7 +871,7 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(cs.action, super::Action::Start);
-        assert_eq!(cs.id, "simpleid");
+        assert_eq!(cs.id.as_slice(), b"simpleid".as_slice());
         assert!(cs.read_option(Field::Type).is_null());
         assert!(cs.read_option(Field::User).is_null());
         assert!(cs.read_option(Field::Exit).is_null());

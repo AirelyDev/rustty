@@ -20,7 +20,10 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
     let data = cap.trailing();
     parser.command = Command::ChangeWindowTitle(
         // data[0 .. data.len() - 1 :0]
-        String::from_utf8_lossy(&data[0..data.len() - 1]).into_owned(),
+        // PORT NOTE (fidelity): reference keeps this as `[:0]const u8` RAW bytes
+        // (the trailing NUL we appended is excluded by the `data.len() - 1`
+        // slice); copy the bytes out, NEVER a lossy String decode.
+        data[0..data.len() - 1].to_vec(),
     );
     Some(&mut parser.command)
 }
@@ -39,7 +42,7 @@ mod tests {
         let cmd = p.end(None).unwrap().clone();
         assert!(matches!(cmd, crate::osc::Command::ChangeWindowTitle(_)));
         match cmd {
-            crate::osc::Command::ChangeWindowTitle(v) => assert_eq!("ab", v),
+            crate::osc::Command::ChangeWindowTitle(v) => assert_eq!(b"ab", v.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -71,7 +74,7 @@ mod tests {
         let cmd = p.end(None).unwrap().clone();
         assert!(matches!(cmd, crate::osc::Command::ChangeWindowTitle(_)));
         match cmd {
-            crate::osc::Command::ChangeWindowTitle(v) => assert_eq!(title, v),
+            crate::osc::Command::ChangeWindowTitle(v) => assert_eq!(title.as_bytes(), v.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -101,7 +104,7 @@ mod tests {
         let cmd = p.end(None).unwrap().clone();
         assert!(matches!(cmd, crate::osc::Command::ChangeWindowTitle(_)));
         match cmd {
-            crate::osc::Command::ChangeWindowTitle(v) => assert_eq!("ab", v),
+            crate::osc::Command::ChangeWindowTitle(v) => assert_eq!(b"ab", v.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -125,7 +128,7 @@ mod tests {
         let cmd = p.end(None).unwrap().clone();
         assert!(matches!(cmd, crate::osc::Command::ChangeWindowTitle(_)));
         match cmd {
-            crate::osc::Command::ChangeWindowTitle(v) => assert_eq!("— ‐", v),
+            crate::osc::Command::ChangeWindowTitle(v) => assert_eq!("— ‐".as_bytes(), v.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -138,7 +141,7 @@ mod tests {
         let cmd = p.end(None).unwrap().clone();
         assert!(matches!(cmd, crate::osc::Command::ChangeWindowTitle(_)));
         match cmd {
-            crate::osc::Command::ChangeWindowTitle(v) => assert_eq!("", v),
+            crate::osc::Command::ChangeWindowTitle(v) => assert_eq!(b"", v.as_slice()),
             _ => unreachable!(),
         }
     }

@@ -30,9 +30,13 @@ use crate::osc::{Command, Parser, State, Terminator};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OSC {
     /// The raw metadata that was received. It can be parsed by using the `readOption` method.
-    pub metadata: String,
+    ///
+    /// PORT NOTE (fidelity): reference `metadata: []const u8` — RAW bytes.
+    pub metadata: Vec<u8>,
     /// The raw payload. It may be Base64 encoded, check the `e` option.
-    pub payload: Option<String>,
+    ///
+    /// PORT NOTE (fidelity): reference `payload: ?[]const u8` — optional RAW bytes.
+    pub payload: Option<Vec<u8>>,
     /// The terminator that was used in case we need to send a response.
     pub terminator: Terminator,
 }
@@ -44,7 +48,7 @@ impl OSC {
     // types, so `read_option` takes a runtime `Option` and returns a tagged
     // `OptionValue` whose active variant matches `Option::value_type`.
     pub fn read_option(&self, key: Option_) -> OptionValue {
-        key.read(self.metadata.as_bytes())
+        key.read(&self.metadata)
     }
 }
 
@@ -145,7 +149,8 @@ pub enum Option_ {
 //   .type     => ?Operation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OptionValue {
-    Str(Option<String>),
+    /// PORT NOTE (fidelity): the `[]const u8` option types are RAW bytes.
+    Str(Option<Vec<u8>>),
     Loc(Option<Location>),
     Status(Option<Status>),
     Type(Option<Operation>),
@@ -153,7 +158,9 @@ pub enum OptionValue {
 
 impl OptionValue {
     /// Helper for `?[]const u8` options.
-    pub fn as_str(&self) -> Option<&str> {
+    ///
+    /// PORT NOTE (fidelity): returns the RAW bytes, not a UTF-8 `str`.
+    pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
             OptionValue::Str(v) => v.as_deref(),
             _ => panic!("option value is not a string"),
@@ -268,15 +275,13 @@ impl Option_ {
         match self {
             Option_::Id => OptionValue::Str(parse_identifier(value)),
             Option_::Loc => OptionValue::Loc(Location::init(value)),
-            // PORT NOTE: the byte-slice values (`mime`/`name`/`password`/`pw`)
-            // are lossily decoded to owned `String`s; the bytes originate from
-            // the captured metadata and are exposed verbatim by the reference.
-            Option_::Mime => OptionValue::Str(Some(String::from_utf8_lossy(value).into_owned())),
-            Option_::Name => OptionValue::Str(Some(String::from_utf8_lossy(value).into_owned())),
-            Option_::Password => {
-                OptionValue::Str(Some(String::from_utf8_lossy(value).into_owned()))
-            }
-            Option_::Pw => OptionValue::Str(Some(String::from_utf8_lossy(value).into_owned())),
+            // PORT NOTE (fidelity): the byte-slice values (`mime`/`name`/
+            // `password`/`pw`) are `[]const u8`; the reference exposes the bytes
+            // verbatim, so copy the RAW bytes out — NEVER a lossy String decode.
+            Option_::Mime => OptionValue::Str(Some(value.to_vec())),
+            Option_::Name => OptionValue::Str(Some(value.to_vec())),
+            Option_::Password => OptionValue::Str(Some(value.to_vec())),
+            Option_::Pw => OptionValue::Str(Some(value.to_vec())),
             Option_::Status => OptionValue::Status(Status::init(value)),
             Option_::Type => OptionValue::Type(Operation::init(value)),
         }
@@ -310,12 +315,11 @@ fn is_valid_identifier(str: &[u8]) -> bool {
     str.iter().all(|b| VALID_IDENTIFIER_CHARACTERS.contains(b))
 }
 
-fn parse_identifier(str: &[u8]) -> Option<String> {
+fn parse_identifier(str: &[u8]) -> Option<Vec<u8>> {
     if is_valid_identifier(str) {
-        // PORT NOTE: the reference returns the byte slice directly; here it is
-        // lossily decoded to an owned `String` (the bytes are valid-identifier
-        // ASCII, so the decode is exact).
-        return Some(String::from_utf8_lossy(str).into_owned());
+        // PORT NOTE (fidelity): the reference returns the byte slice directly;
+        // copy the RAW bytes out (`[]const u8`), NOT a lossy String decode.
+        return Some(str.to_vec());
     }
     None
 }
@@ -361,8 +365,10 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'
         (&data[0..start], Some(&data[start + 1..data.len()]))
     };
 
-    let metadata = String::from_utf8_lossy(metadata).into_owned();
-    let payload = payload.map(|p| String::from_utf8_lossy(p).into_owned());
+    // PORT NOTE (fidelity): `metadata`/`payload` are `[]const u8` / `?[]const u8`
+    // RAW bytes; copy the bytes out, NEVER a lossy String decode.
+    let metadata = metadata.to_vec();
+    let payload = payload.map(|p| p.to_vec());
 
     parser.command = Command::KittyClipboardProtocol(OSC {
         metadata,
@@ -397,7 +403,7 @@ mod tests {
             Command::KittyClipboardProtocol(kcp) => kcp,
             _ => unreachable!(),
         };
-        assert_eq!("", kcp.metadata);
+        assert_eq!(b"".as_slice(), kcp.metadata.as_slice());
         assert!(kcp.payload.is_none());
         assert!(kcp.read_option(Option_::Id).is_null());
         assert!(kcp.read_option(Option_::Loc).is_null());
@@ -424,8 +430,8 @@ mod tests {
             Command::KittyClipboardProtocol(kcp) => kcp,
             _ => unreachable!(),
         };
-        assert_eq!("", kcp.metadata);
-        assert_eq!("", kcp.payload.as_ref().unwrap());
+        assert_eq!(b"".as_slice(), kcp.metadata.as_slice());
+        assert_eq!(b"".as_slice(), kcp.payload.as_ref().unwrap().as_slice());
         assert!(kcp.read_option(Option_::Id).is_null());
         assert!(kcp.read_option(Option_::Loc).is_null());
         assert!(kcp.read_option(Option_::Mime).is_null());
@@ -451,8 +457,11 @@ mod tests {
             Command::KittyClipboardProtocol(kcp) => kcp,
             _ => unreachable!(),
         };
-        assert_eq!("type=read", kcp.metadata);
-        assert_eq!("dGV4dC9wbGFpbg==", kcp.payload.as_ref().unwrap());
+        assert_eq!(b"type=read".as_slice(), kcp.metadata.as_slice());
+        assert_eq!(
+            b"dGV4dC9wbGFpbg==".as_slice(),
+            kcp.payload.as_ref().unwrap().as_slice()
+        );
         assert!(kcp.read_option(Option_::Id).is_null());
         assert!(kcp.read_option(Option_::Loc).is_null());
         assert!(kcp.read_option(Option_::Mime).is_null());
@@ -500,8 +509,8 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(
-            "5c076ad9-d36f-4705-847b-d4dbf356cc0d",
-            kcp.read_option(Option_::Id).as_str().unwrap()
+            b"5c076ad9-d36f-4705-847b-d4dbf356cc0d".as_slice(),
+            kcp.read_option(Option_::Id).as_bytes().unwrap()
         );
     }
 
@@ -617,12 +626,12 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(
-            "R2hvc3R0eQ==",
-            kcp.read_option(Option_::Pw).as_str().unwrap()
+            b"R2hvc3R0eQ==".as_slice(),
+            kcp.read_option(Option_::Pw).as_bytes().unwrap()
         );
         assert_eq!(
-            "Qk9CUiBLVVJXQQ==",
-            kcp.read_option(Option_::Name).as_str().unwrap()
+            b"Qk9CUiBLVVJXQQ==".as_slice(),
+            kcp.read_option(Option_::Name).as_bytes().unwrap()
         );
     }
 
@@ -642,8 +651,8 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(
-            "R2hvc3R0eQ==",
-            kcp.read_option(Option_::Password).as_str().unwrap()
+            b"R2hvc3R0eQ==".as_slice(),
+            kcp.read_option(Option_::Password).as_bytes().unwrap()
         );
     }
 
@@ -694,12 +703,15 @@ mod tests {
             Command::KittyClipboardProtocol(kcp) => kcp,
             _ => unreachable!(),
         };
-        assert_eq!("R2hvc3R0eQ==", kcp.payload.as_ref().unwrap());
+        assert_eq!(
+            b"R2hvc3R0eQ==".as_slice(),
+            kcp.payload.as_ref().unwrap().as_slice()
+        );
         assert!(kcp.read_option(Option_::Id).is_null());
         assert!(kcp.read_option(Option_::Loc).is_null());
         assert_eq!(
-            "dGV4dC9wbGFpbg==",
-            kcp.read_option(Option_::Mime).as_str().unwrap()
+            b"dGV4dC9wbGFpbg==".as_slice(),
+            kcp.read_option(Option_::Mime).as_bytes().unwrap()
         );
         assert!(kcp.read_option(Option_::Name).is_null());
         assert!(kcp.read_option(Option_::Password).is_null());
@@ -787,12 +799,15 @@ mod tests {
             Command::KittyClipboardProtocol(kcp) => kcp,
             _ => unreachable!(),
         };
-        assert_eq!("R2hvc3R0eQ==", kcp.payload.as_ref().unwrap());
+        assert_eq!(
+            b"R2hvc3R0eQ==".as_slice(),
+            kcp.payload.as_ref().unwrap().as_slice()
+        );
         assert!(kcp.read_option(Option_::Id).is_null());
         assert!(kcp.read_option(Option_::Loc).is_null());
         assert_eq!(
-            "dGV4dC9wbGFpbg==",
-            kcp.read_option(Option_::Mime).as_str().unwrap()
+            b"dGV4dC9wbGFpbg==".as_slice(),
+            kcp.read_option(Option_::Mime).as_bytes().unwrap()
         );
         assert!(kcp.read_option(Option_::Name).is_null());
         assert!(kcp.read_option(Option_::Password).is_null());
@@ -913,14 +928,14 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(
-            "dGV4dC9odG1sIGFwcGxpY2F0aW9uL2pzb24=",
-            kcp.payload.as_ref().unwrap()
+            b"dGV4dC9odG1sIGFwcGxpY2F0aW9uL2pzb24=".as_slice(),
+            kcp.payload.as_ref().unwrap().as_slice()
         );
         assert!(kcp.read_option(Option_::Id).is_null());
         assert!(kcp.read_option(Option_::Loc).is_null());
         assert_eq!(
-            "dGV4dC9wbGFpbg==",
-            kcp.read_option(Option_::Mime).as_str().unwrap()
+            b"dGV4dC9wbGFpbg==".as_slice(),
+            kcp.read_option(Option_::Mime).as_bytes().unwrap()
         );
         assert!(kcp.read_option(Option_::Name).is_null());
         assert!(kcp.read_option(Option_::Password).is_null());
@@ -953,8 +968,8 @@ mod tests {
         assert!(kcp.read_option(Option_::Mime).is_null());
         assert!(kcp.read_option(Option_::Name).is_null());
         assert_eq!(
-            "Qk9CUiBLVVJXQQ==",
-            kcp.read_option(Option_::Password).as_str().unwrap()
+            b"Qk9CUiBLVVJXQQ==".as_slice(),
+            kcp.read_option(Option_::Password).as_bytes().unwrap()
         );
         assert!(kcp.read_option(Option_::Pw).is_null());
         assert_eq!(
@@ -986,8 +1001,8 @@ mod tests {
         assert!(kcp.read_option(Option_::Id).is_null());
         assert!(kcp.read_option(Option_::Loc).is_null());
         assert_eq!(
-            "dGV4dC9wbGFpbg==",
-            kcp.read_option(Option_::Mime).as_str().unwrap()
+            b"dGV4dC9wbGFpbg==".as_slice(),
+            kcp.read_option(Option_::Mime).as_bytes().unwrap()
         );
         assert!(kcp.read_option(Option_::Name).is_null());
         assert!(kcp.read_option(Option_::Password).is_null());
@@ -1021,13 +1036,13 @@ mod tests {
         assert!(kcp.read_option(Option_::Id).is_null());
         assert!(kcp.read_option(Option_::Loc).is_null());
         assert_eq!(
-            "dGV4dC9wbGFpbg==",
-            kcp.read_option(Option_::Mime).as_str().unwrap()
+            b"dGV4dC9wbGFpbg==".as_slice(),
+            kcp.read_option(Option_::Mime).as_bytes().unwrap()
         );
         assert!(kcp.read_option(Option_::Name).is_null());
         assert_eq!(
-            "Qk9CUiBLVVJXQQ==",
-            kcp.read_option(Option_::Password).as_str().unwrap()
+            b"Qk9CUiBLVVJXQQ==".as_slice(),
+            kcp.read_option(Option_::Password).as_bytes().unwrap()
         );
         assert!(kcp.read_option(Option_::Pw).is_null());
         assert!(kcp.read_option(Option_::Status).is_null());
@@ -1084,12 +1099,15 @@ mod tests {
             Command::KittyClipboardProtocol(kcp) => kcp,
             _ => unreachable!(),
         };
-        assert_eq!("Qk9CUiBLVVJXQQ==", kcp.payload.as_ref().unwrap());
+        assert_eq!(
+            b"Qk9CUiBLVVJXQQ==".as_slice(),
+            kcp.payload.as_ref().unwrap().as_slice()
+        );
         assert!(kcp.read_option(Option_::Id).is_null());
         assert!(kcp.read_option(Option_::Loc).is_null());
         assert_eq!(
-            "dGV4dC9wbGFpbg==",
-            kcp.read_option(Option_::Mime).as_str().unwrap()
+            b"dGV4dC9wbGFpbg==".as_slice(),
+            kcp.read_option(Option_::Mime).as_bytes().unwrap()
         );
         assert!(kcp.read_option(Option_::Name).is_null());
         assert!(kcp.read_option(Option_::Password).is_null());

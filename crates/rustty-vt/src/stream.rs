@@ -2245,15 +2245,13 @@ impl<'a, H: Handler> Stream<'a, H> {
             osc::Command::ChangeWindowTitle(title) => {
                 // @branchHint(.likely);
                 // if (!std.unicode.utf8ValidateSlice(title)) { ... }
-                if std::str::from_utf8(title.as_bytes()).is_err() {
+                if std::str::from_utf8(&title).is_err() {
                     // @branchHint(.unlikely);
                     // log.warn("change title request: invalid utf-8, ignoring request", .{});
                     return;
                 }
 
-                self.handler.window_title(WindowTitle {
-                    title: title.as_bytes(),
-                });
+                self.handler.window_title(WindowTitle { title: &title });
             }
 
             // .change_window_icon => |icon| { ... }
@@ -2264,24 +2262,20 @@ impl<'a, H: Handler> Stream<'a, H> {
 
             // .clipboard_contents => |clip| { ... }
             osc::Command::ClipboardContents { kind, data } => {
-                self.handler.clipboard_contents(ClipboardContents {
-                    kind,
-                    data: data.as_bytes(),
-                });
+                self.handler
+                    .clipboard_contents(ClipboardContents { kind, data: &data });
             }
 
             // .report_pwd => |v| { ... }
             osc::Command::ReportPwd { value } => {
                 // @branchHint(.likely);
-                self.handler.report_pwd(ReportPwd {
-                    url: value.as_bytes(),
-                });
+                self.handler.report_pwd(ReportPwd { url: &value });
             }
 
             // .mouse_shape => |v| { ... }
             osc::Command::MouseShape { value } => {
                 // const shape = MouseShape.fromString(v.value) orelse { ... };
-                let shape = match MouseShape::from_string(value.as_bytes()) {
+                let shape = match MouseShape::from_string(&value) {
                     Some(shape) => shape,
                     None => {
                         // @branchHint(.unlikely);
@@ -2316,8 +2310,8 @@ impl<'a, H: Handler> Stream<'a, H> {
             osc::Command::ShowDesktopNotification { title, body } => {
                 self.handler
                     .show_desktop_notification(ShowDesktopNotification {
-                        title: title.as_bytes(),
-                        body: body.as_bytes(),
+                        title: &title,
+                        body: &body,
                     });
             }
 
@@ -2325,8 +2319,8 @@ impl<'a, H: Handler> Stream<'a, H> {
             osc::Command::HyperlinkStart { id, uri } => {
                 // @branchHint(.likely);
                 self.handler.start_hyperlink(StartHyperlink {
-                    uri: uri.as_bytes(),
-                    id: id.as_deref().map(str::as_bytes),
+                    uri: &uri,
+                    id: id.as_deref(),
                 });
             }
 
@@ -2721,5 +2715,1076 @@ impl<'a, H: Handler> Stream<'a, H> {
             // else => log.warn("unimplemented ESC action: {f}", .{action}),
             _ => {}
         }
+    }
+}
+
+// PORT NOTE: the reference test handlers are defined inline within each `test`
+// block as a local struct `H` with a comptime `vt(comptime action, value)`
+// dispatch method (Zig's optional dispatch). The Rust port mirrors each one as
+// a test-local struct implementing the `Handler` trait, overriding exactly the
+// methods that test observes — faithfully reproducing the reference's per-test
+// handler. The reference's `Action.Key` tag enum (used by the CSI W tests to
+// record *which* action fired) has no Rust equivalent because `Action` is
+// modeled as the `Handler` trait; those tests record the observed action via a
+// test-local enum that mirrors the relevant `Action.Key` variants.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ansi, csi, modes};
+
+    // PORT NOTE: the reference passes string/byte literals to `next`/`nextSlice`.
+    // Rust string literals are `&str`; `next` takes a `u8` and `next_slice` a
+    // `&[u8]`. We iterate the bytes of the literal exactly as Zig iterates the
+    // bytes of its string literal.
+
+    // test Action {
+    //     // Forces the C type to be reified when the target is C, ensuring
+    //     // all our types are C ABI compatible.
+    //     _ = Action.C;
+    // }
+    // PORT NOTE: the reference `test Action` reifies the C-ABI union type so the
+    // compiler verifies C ABI compatibility. The Rust port models `Action` as
+    // the `Handler` trait; the C-ABI mirror lives in the `rustty-vt-c` crate, so
+    // there is no `Action.C` type to reify here. The test is intentionally
+    // retargeted to a no-op assertion that the dispatch surface compiles.
+    #[test]
+    fn action() {
+        // No C-ABI union in this crate; see PORT NOTE above.
+    }
+
+    // test "stream: print" { ... }
+    #[test]
+    fn stream_print() {
+        struct H {
+            c: Option<u32>,
+        }
+        impl Handler for H {
+            fn print(&mut self, cp: u32) {
+                self.c = Some(cp);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { c: Some(0) });
+        s.next(b'x');
+        assert_eq!(120u32, s.handler.c.unwrap());
+    }
+
+    // test "simd: print invalid utf-8" { ... }
+    #[test]
+    fn simd_print_invalid_utf8() {
+        struct H {
+            c: Option<u32>,
+        }
+        impl Handler for H {
+            fn print(&mut self, cp: u32) {
+                self.c = Some(cp);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { c: Some(0) });
+        s.next_slice(&[0xFF]);
+        assert_eq!(0xFFFDu32, s.handler.c.unwrap());
+    }
+
+    // test "simd: complete incomplete utf-8" { ... }
+    #[test]
+    fn simd_complete_incomplete_utf8() {
+        struct H {
+            c: Option<u32>,
+        }
+        impl Handler for H {
+            fn print(&mut self, cp: u32) {
+                self.c = Some(cp);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { c: None });
+        s.next_slice(&[0xE0]); // 3 byte
+        assert!(s.handler.c.is_none());
+        s.next_slice(&[0xA0]); // still incomplete
+        assert!(s.handler.c.is_none());
+        s.next_slice(&[0x80]);
+        assert_eq!(0x800u32, s.handler.c.unwrap());
+    }
+
+    // test "stream: cursor right (CUF)" { ... }
+    #[test]
+    fn stream_cursor_right_cuf() {
+        struct H {
+            amount: u16,
+        }
+        impl Handler for H {
+            fn cursor_right(&mut self, v: CursorMovement) {
+                self.amount = v.value;
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { amount: 0 });
+        s.next_slice(b"\x1B[C");
+        assert_eq!(1u16, s.handler.amount);
+
+        s.next_slice(b"\x1B[5C");
+        assert_eq!(5u16, s.handler.amount);
+
+        s.handler.amount = 0;
+        s.next_slice(b"\x1B[5;4C");
+        assert_eq!(0u16, s.handler.amount);
+
+        s.handler.amount = 0;
+        s.next_slice(b"\x1b[?3C");
+        assert_eq!(0u16, s.handler.amount);
+    }
+
+    // test "stream: dec set mode (SM) and reset mode (RM)" { ... }
+    #[test]
+    fn stream_dec_set_mode_sm_and_reset_mode_rm() {
+        // PORT NOTE: the reference sentinel `@as(modes.Mode, @enumFromInt(1))`
+        // is the mode whose tag is 1 (DECCKM / `cursor_keys`); used here as a
+        // "not origin" marker. We use `modes::Mode::CursorKeys` (= 1) directly.
+        struct H {
+            mode: modes::Mode,
+        }
+        impl Handler for H {
+            fn set_mode(&mut self, v: Mode) {
+                self.mode = v.mode;
+            }
+            fn reset_mode(&mut self, _v: Mode) {
+                self.mode = modes::Mode::CursorKeys;
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H {
+            mode: modes::Mode::CursorKeys,
+        });
+        s.next_slice(b"\x1B[?6h");
+        assert_eq!(modes::Mode::Origin, s.handler.mode);
+
+        s.next_slice(b"\x1B[?6l");
+        assert_eq!(modes::Mode::CursorKeys, s.handler.mode);
+
+        s.handler.mode = modes::Mode::CursorKeys;
+        s.next_slice(b"\x1B[6 h");
+        assert_eq!(modes::Mode::CursorKeys, s.handler.mode);
+    }
+
+    // test "stream: ansi set mode (SM) and reset mode (RM)" { ... }
+    #[test]
+    fn stream_ansi_set_mode_sm_and_reset_mode_rm() {
+        struct H {
+            mode: Option<modes::Mode>,
+        }
+        impl Handler for H {
+            fn set_mode(&mut self, v: Mode) {
+                self.mode = Some(v.mode);
+            }
+            fn reset_mode(&mut self, _v: Mode) {
+                self.mode = None;
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { mode: None });
+        s.next_slice(b"\x1B[4h");
+        assert_eq!(modes::Mode::Insert, s.handler.mode.unwrap());
+
+        s.next_slice(b"\x1B[4l");
+        assert!(s.handler.mode.is_none());
+
+        s.handler.mode = None;
+        s.next_slice(b"\x1B[>5h");
+        assert!(s.handler.mode.is_none());
+    }
+
+    // test "stream: ansi set mode (SM) and reset mode (RM) with unknown value" { ... }
+    #[test]
+    fn stream_ansi_set_mode_sm_and_reset_mode_rm_with_unknown_value() {
+        // PORT NOTE: the reference handler defines a `setMode` method that is
+        // never invoked (the modern dispatch uses `vt`), and a no-op `vt`. The
+        // mode `6` (DECCKM-adjacent value) used here is `origin`, which IS a
+        // known mode, but the no-op handler ignores it, so `mode` stays null.
+        struct H {
+            mode: Option<modes::Mode>,
+        }
+        impl Handler for H {}
+
+        let mut s: Stream<H> = Stream::init(H { mode: None });
+        s.next_slice(b"\x1B[6h");
+        assert!(s.handler.mode.is_none());
+
+        s.next_slice(b"\x1B[6l");
+        assert!(s.handler.mode.is_none());
+    }
+
+    // test "stream: restore mode" { ... }
+    #[test]
+    fn stream_restore_mode() {
+        struct H {
+            called: bool,
+        }
+        impl Handler for H {
+            fn top_and_bottom_margin(&mut self, _v: Margin) {
+                self.called = true;
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { called: false });
+        for c in b"\x1B[?42r" {
+            s.next(*c);
+        }
+        assert!(!s.handler.called);
+    }
+
+    // test "stream: pop kitty keyboard with no params defaults to 1" { ... }
+    #[test]
+    fn stream_pop_kitty_keyboard_with_no_params_defaults_to_1() {
+        struct H {
+            n: u16,
+        }
+        impl Handler for H {
+            fn kitty_keyboard_pop(&mut self, v: u16) {
+                self.n = v;
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { n: 0 });
+        for c in b"\x1B[<u" {
+            s.next(*c);
+        }
+        assert_eq!(1u16, s.handler.n);
+    }
+
+    // test "stream: DECSCA" { ... }
+    #[test]
+    fn stream_decsca() {
+        struct H {
+            v: Option<ansi::ProtectedMode>,
+        }
+        impl Handler for H {
+            fn protected_mode_off(&mut self) {
+                self.v = Some(ansi::ProtectedMode::Off);
+            }
+            fn protected_mode_iso(&mut self) {
+                self.v = Some(ansi::ProtectedMode::Iso);
+            }
+            fn protected_mode_dec(&mut self) {
+                self.v = Some(ansi::ProtectedMode::Dec);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { v: None });
+        {
+            for c in b"\x1B[\"q" {
+                s.next(*c);
+            }
+            assert_eq!(ansi::ProtectedMode::Off, s.handler.v.unwrap());
+        }
+        {
+            for c in b"\x1B[0\"q" {
+                s.next(*c);
+            }
+            assert_eq!(ansi::ProtectedMode::Off, s.handler.v.unwrap());
+        }
+        {
+            for c in b"\x1B[2\"q" {
+                s.next(*c);
+            }
+            assert_eq!(ansi::ProtectedMode::Off, s.handler.v.unwrap());
+        }
+        {
+            for c in b"\x1B[1\"q" {
+                s.next(*c);
+            }
+            assert_eq!(ansi::ProtectedMode::Dec, s.handler.v.unwrap());
+        }
+    }
+
+    // test "stream: DECED, DECSED" { ... }
+    #[test]
+    fn stream_deced_decsed() {
+        struct H {
+            mode: Option<csi::EraseDisplay>,
+            protected: Option<bool>,
+        }
+        impl Handler for H {
+            fn erase_display_below(&mut self, protected: bool) {
+                self.mode = Some(csi::EraseDisplay::Below);
+                self.protected = Some(protected);
+            }
+            fn erase_display_above(&mut self, protected: bool) {
+                self.mode = Some(csi::EraseDisplay::Above);
+                self.protected = Some(protected);
+            }
+            fn erase_display_complete(&mut self, protected: bool) {
+                self.mode = Some(csi::EraseDisplay::Complete);
+                self.protected = Some(protected);
+            }
+            fn erase_display_scrollback(&mut self, protected: bool) {
+                self.mode = Some(csi::EraseDisplay::Scrollback);
+                self.protected = Some(protected);
+            }
+            fn erase_display_scroll_complete(&mut self, protected: bool) {
+                self.mode = Some(csi::EraseDisplay::ScrollComplete);
+                self.protected = Some(protected);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H {
+            mode: None,
+            protected: None,
+        });
+        {
+            for c in b"\x1B[?J" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseDisplay::Below, s.handler.mode.unwrap());
+            assert!(s.handler.protected.unwrap());
+        }
+        {
+            for c in b"\x1B[?0J" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseDisplay::Below, s.handler.mode.unwrap());
+            assert!(s.handler.protected.unwrap());
+        }
+        {
+            for c in b"\x1B[?1J" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseDisplay::Above, s.handler.mode.unwrap());
+            assert!(s.handler.protected.unwrap());
+        }
+        {
+            for c in b"\x1B[?2J" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseDisplay::Complete, s.handler.mode.unwrap());
+            assert!(s.handler.protected.unwrap());
+        }
+        {
+            for c in b"\x1B[?3J" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseDisplay::Scrollback, s.handler.mode.unwrap());
+            assert!(s.handler.protected.unwrap());
+        }
+
+        {
+            for c in b"\x1B[J" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseDisplay::Below, s.handler.mode.unwrap());
+            assert!(!s.handler.protected.unwrap());
+        }
+        {
+            for c in b"\x1B[0J" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseDisplay::Below, s.handler.mode.unwrap());
+            assert!(!s.handler.protected.unwrap());
+        }
+        {
+            for c in b"\x1B[1J" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseDisplay::Above, s.handler.mode.unwrap());
+            assert!(!s.handler.protected.unwrap());
+        }
+        {
+            for c in b"\x1B[2J" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseDisplay::Complete, s.handler.mode.unwrap());
+            assert!(!s.handler.protected.unwrap());
+        }
+        {
+            for c in b"\x1B[3J" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseDisplay::Scrollback, s.handler.mode.unwrap());
+            assert!(!s.handler.protected.unwrap());
+        }
+        {
+            // Invalid and ignored by the handler
+            for c in b"\x1B[>0J" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseDisplay::Scrollback, s.handler.mode.unwrap());
+            assert!(!s.handler.protected.unwrap());
+        }
+    }
+
+    // test "stream: DECEL, DECSEL" { ... }
+    #[test]
+    fn stream_decel_decsel() {
+        struct H {
+            mode: Option<csi::EraseLine>,
+            protected: Option<bool>,
+        }
+        impl Handler for H {
+            fn erase_line_right(&mut self, protected: bool) {
+                self.mode = Some(csi::EraseLine::Right);
+                self.protected = Some(protected);
+            }
+            fn erase_line_left(&mut self, protected: bool) {
+                self.mode = Some(csi::EraseLine::Left);
+                self.protected = Some(protected);
+            }
+            fn erase_line_complete(&mut self, protected: bool) {
+                self.mode = Some(csi::EraseLine::Complete);
+                self.protected = Some(protected);
+            }
+            fn erase_line_right_unless_pending_wrap(&mut self, protected: bool) {
+                self.mode = Some(csi::EraseLine::RightUnlessPendingWrap);
+                self.protected = Some(protected);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H {
+            mode: None,
+            protected: None,
+        });
+        {
+            for c in b"\x1B[?K" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseLine::Right, s.handler.mode.unwrap());
+            assert!(s.handler.protected.unwrap());
+        }
+        {
+            for c in b"\x1B[?0K" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseLine::Right, s.handler.mode.unwrap());
+            assert!(s.handler.protected.unwrap());
+        }
+        {
+            for c in b"\x1B[?1K" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseLine::Left, s.handler.mode.unwrap());
+            assert!(s.handler.protected.unwrap());
+        }
+        {
+            for c in b"\x1B[?2K" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseLine::Complete, s.handler.mode.unwrap());
+            assert!(s.handler.protected.unwrap());
+        }
+
+        {
+            for c in b"\x1B[K" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseLine::Right, s.handler.mode.unwrap());
+            assert!(!s.handler.protected.unwrap());
+        }
+        {
+            for c in b"\x1B[0K" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseLine::Right, s.handler.mode.unwrap());
+            assert!(!s.handler.protected.unwrap());
+        }
+        {
+            for c in b"\x1B[1K" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseLine::Left, s.handler.mode.unwrap());
+            assert!(!s.handler.protected.unwrap());
+        }
+        {
+            for c in b"\x1B[2K" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseLine::Complete, s.handler.mode.unwrap());
+            assert!(!s.handler.protected.unwrap());
+        }
+        {
+            // Invalid and ignored by the handler
+            for c in b"\x1B[<1K" {
+                s.next(*c);
+            }
+            assert_eq!(csi::EraseLine::Complete, s.handler.mode.unwrap());
+            assert!(!s.handler.protected.unwrap());
+        }
+    }
+
+    // test "stream: DECSCUSR" { ... }
+    #[test]
+    fn stream_decscusr() {
+        struct H {
+            style: Option<ansi::CursorStyle>,
+        }
+        impl Handler for H {
+            fn cursor_style(&mut self, v: ansi::CursorStyle) {
+                self.style = Some(v);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { style: None });
+        s.next_slice(b"\x1B[ q");
+        assert!(s.handler.style.unwrap() == ansi::CursorStyle::Default);
+
+        s.next_slice(b"\x1B[1 q");
+        assert!(s.handler.style.unwrap() == ansi::CursorStyle::BlinkingBlock);
+
+        // Invalid and ignored by the handler
+        s.next_slice(b"\x1B[?0 q");
+        assert!(s.handler.style.unwrap() == ansi::CursorStyle::BlinkingBlock);
+    }
+
+    // test "stream: DECSCUSR without space" { ... }
+    #[test]
+    fn stream_decscusr_without_space() {
+        struct H {
+            style: Option<ansi::CursorStyle>,
+        }
+        impl Handler for H {
+            fn cursor_style(&mut self, v: ansi::CursorStyle) {
+                self.style = Some(v);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { style: None });
+        s.next_slice(b"\x1B[q");
+        assert!(s.handler.style.is_none());
+
+        s.next_slice(b"\x1B[1q");
+        assert!(s.handler.style.is_none());
+    }
+
+    // test "stream: XTSHIFTESCAPE" { ... }
+    #[test]
+    fn stream_xtshiftescape() {
+        struct H {
+            escape: Option<bool>,
+        }
+        impl Handler for H {
+            fn mouse_shift_capture(&mut self, capture: bool) {
+                self.escape = Some(capture);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { escape: None });
+        s.next_slice(b"\x1B[>2s");
+        assert!(s.handler.escape.is_none());
+
+        s.next_slice(b"\x1B[>s");
+        assert!(!s.handler.escape.unwrap());
+
+        s.next_slice(b"\x1B[>0s");
+        assert!(!s.handler.escape.unwrap());
+
+        s.next_slice(b"\x1B[>1s");
+        assert!(s.handler.escape.unwrap());
+
+        // Invalid and ignored by the handler
+        s.next_slice(b"\x1B[1 s");
+        assert!(s.handler.escape.unwrap());
+    }
+
+    // test "stream: change window title with invalid utf-8" { ... }
+    #[test]
+    fn stream_change_window_title_with_invalid_utf8() {
+        struct H {
+            seen: bool,
+        }
+        impl Handler for H {
+            fn window_title(&mut self, _v: WindowTitle) {
+                self.seen = true;
+            }
+        }
+
+        {
+            let mut s: Stream<H> = Stream::init(H { seen: false });
+            s.next_slice(b"\x1b]2;abc\x1b\\");
+            assert!(s.handler.seen);
+        }
+
+        {
+            let mut s: Stream<H> = Stream::init(H { seen: false });
+            s.next_slice(b"\x1b]2;abc\xc0\x1b\\");
+            assert!(!s.handler.seen);
+        }
+    }
+
+    // test "stream: insert characters" { ... }
+    #[test]
+    fn stream_insert_characters() {
+        struct H {
+            called: bool,
+        }
+        impl Handler for H {
+            fn insert_blanks(&mut self, _count: usize) {
+                self.called = true;
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { called: false });
+        for c in b"\x1B[42@" {
+            s.next(*c);
+        }
+        assert!(s.handler.called);
+
+        s.handler.called = false;
+        for c in b"\x1B[?42@" {
+            s.next(*c);
+        }
+        assert!(!s.handler.called);
+    }
+
+    // test "stream: insert characters explicit zero clamps to 1" { ... }
+    #[test]
+    fn stream_insert_characters_explicit_zero_clamps_to_1() {
+        struct H {
+            value: Option<usize>,
+        }
+        impl Handler for H {
+            fn insert_blanks(&mut self, count: usize) {
+                self.value = Some(count);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { value: None });
+        for c in b"\x1B[0@" {
+            s.next(*c);
+        }
+        assert_eq!(1usize, s.handler.value.unwrap());
+    }
+
+    // test "stream: SCOSC" { ... }
+    #[test]
+    fn stream_scosc() {
+        struct H {
+            called: bool,
+        }
+        impl Handler for H {
+            fn left_and_right_margin(&mut self, _v: Margin) {
+                panic!("bad");
+            }
+            fn left_and_right_margin_ambiguous(&mut self) {
+                self.called = true;
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { called: false });
+        for c in b"\x1B[s" {
+            s.next(*c);
+        }
+        assert!(s.handler.called);
+    }
+
+    // test "stream: SCORC" { ... }
+    #[test]
+    fn stream_scorc() {
+        struct H {
+            called: bool,
+        }
+        impl Handler for H {
+            fn restore_cursor(&mut self) {
+                self.called = true;
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { called: false });
+        for c in b"\x1B[u" {
+            s.next(*c);
+        }
+        assert!(s.handler.called);
+    }
+
+    // test "stream: too many csi params" { ... }
+    #[test]
+    fn stream_too_many_csi_params() {
+        struct H {}
+        impl Handler for H {
+            fn cursor_right(&mut self, _v: CursorMovement) {
+                unreachable!();
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H {});
+        s.next_slice(b"\x1B[1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1C");
+    }
+
+    // test "stream: csi param too long" { ... }
+    #[test]
+    fn stream_csi_param_too_long() {
+        struct H {}
+        impl Handler for H {}
+
+        let mut s: Stream<H> = Stream::init(H {});
+        s.next_slice(b"\x1B[1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111C");
+    }
+
+    // test "stream: send report with CSI t" { ... }
+    #[test]
+    fn stream_send_report_with_csi_t() {
+        struct H {
+            style: Option<csi::SizeReportStyle>,
+        }
+        impl Handler for H {
+            fn size_report(&mut self, v: csi::SizeReportStyle) {
+                self.style = Some(v);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { style: None });
+
+        s.next_slice(b"\x1b[14t");
+        assert_eq!(Some(csi::SizeReportStyle::Csi14T), s.handler.style);
+
+        s.next_slice(b"\x1b[16t");
+        assert_eq!(Some(csi::SizeReportStyle::Csi16T), s.handler.style);
+
+        s.next_slice(b"\x1b[18t");
+        assert_eq!(Some(csi::SizeReportStyle::Csi18T), s.handler.style);
+
+        s.next_slice(b"\x1b[21t");
+        assert_eq!(Some(csi::SizeReportStyle::Csi21T), s.handler.style);
+    }
+
+    // test "stream: invalid CSI t" { ... }
+    #[test]
+    fn stream_invalid_csi_t() {
+        // PORT NOTE: the reference handler defines an (unused) `sendSizeReport`
+        // method and a no-op `vt`; CSI 19 t is unimplemented so nothing fires.
+        struct H {
+            style: Option<csi::SizeReportStyle>,
+        }
+        impl Handler for H {}
+
+        let mut s: Stream<H> = Stream::init(H { style: None });
+
+        s.next_slice(b"\x1b[19t");
+        assert_eq!(None, s.handler.style);
+    }
+
+    // test "stream: CSI t push title" { ... }
+    #[test]
+    fn stream_csi_t_push_title() {
+        struct H {
+            index: Option<u16>,
+        }
+        impl Handler for H {
+            fn title_push(&mut self, v: u16) {
+                self.index = Some(v);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { index: None });
+
+        s.next_slice(b"\x1b[22;0t");
+        assert_eq!(0u16, s.handler.index.unwrap());
+    }
+
+    // test "stream: CSI t push title with explicit window" { ... }
+    #[test]
+    fn stream_csi_t_push_title_with_explicit_window() {
+        struct H {
+            index: Option<u16>,
+        }
+        impl Handler for H {
+            fn title_push(&mut self, v: u16) {
+                self.index = Some(v);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { index: None });
+
+        s.next_slice(b"\x1b[22;2t");
+        assert_eq!(0u16, s.handler.index.unwrap());
+    }
+
+    // test "stream: CSI t push title with explicit icon" { ... }
+    #[test]
+    fn stream_csi_t_push_title_with_explicit_icon() {
+        struct H {
+            index: Option<u16>,
+        }
+        impl Handler for H {
+            fn title_push(&mut self, v: u16) {
+                self.index = Some(v);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { index: None });
+
+        s.next_slice(b"\x1b[22;1t");
+        assert_eq!(None, s.handler.index);
+    }
+
+    // test "stream: CSI t push title with index" { ... }
+    #[test]
+    fn stream_csi_t_push_title_with_index() {
+        struct H {
+            index: Option<u16>,
+        }
+        impl Handler for H {
+            fn title_push(&mut self, v: u16) {
+                self.index = Some(v);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { index: None });
+
+        s.next_slice(b"\x1b[22;0;5t");
+        assert_eq!(5u16, s.handler.index.unwrap());
+    }
+
+    // test "stream: CSI t pop title" { ... }
+    #[test]
+    fn stream_csi_t_pop_title() {
+        struct H {
+            index: Option<u16>,
+        }
+        impl Handler for H {
+            fn title_pop(&mut self, v: u16) {
+                self.index = Some(v);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { index: None });
+
+        s.next_slice(b"\x1b[23;0t");
+        assert_eq!(0u16, s.handler.index.unwrap());
+    }
+
+    // test "stream: CSI t pop title with explicit window" { ... }
+    #[test]
+    fn stream_csi_t_pop_title_with_explicit_window() {
+        struct H {
+            index: Option<u16>,
+        }
+        impl Handler for H {
+            fn title_pop(&mut self, v: u16) {
+                self.index = Some(v);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { index: None });
+
+        s.next_slice(b"\x1b[23;2t");
+        assert_eq!(0u16, s.handler.index.unwrap());
+    }
+
+    // test "stream: CSI t pop title with explicit icon" { ... }
+    #[test]
+    fn stream_csi_t_pop_title_with_explicit_icon() {
+        struct H {
+            index: Option<u16>,
+        }
+        impl Handler for H {
+            fn title_pop(&mut self, v: u16) {
+                self.index = Some(v);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { index: None });
+
+        s.next_slice(b"\x1b[23;1t");
+        assert_eq!(None, s.handler.index);
+    }
+
+    // test "stream: CSI t pop title with index" { ... }
+    #[test]
+    fn stream_csi_t_pop_title_with_index() {
+        struct H {
+            index: Option<u16>,
+        }
+        impl Handler for H {
+            fn title_pop(&mut self, v: u16) {
+                self.index = Some(v);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { index: None });
+
+        s.next_slice(b"\x1b[23;0;5t");
+        assert_eq!(5u16, s.handler.index.unwrap());
+    }
+
+    // PORT NOTE: the next three tests record `?Action.Key` — *which* action
+    // fired. The Rust port has no `Action.Key` tag enum (Action == Handler
+    // trait), so each test declares a local `Observed` enum mirroring exactly
+    // the `Action.Key` variants those tests can witness, and the handler sets
+    // the field from whichever overridden method runs.
+
+    // test "stream CSI W clear tab stops" { ... }
+    #[test]
+    fn stream_csi_w_clear_tab_stops() {
+        #[derive(PartialEq, Eq, Debug)]
+        #[allow(clippy::enum_variant_names)]
+        enum Observed {
+            TabClearCurrent,
+            TabClearAll,
+            TabSet,
+            TabReset,
+        }
+        struct H {
+            action: Option<Observed>,
+        }
+        impl Handler for H {
+            fn tab_clear_current(&mut self) {
+                self.action = Some(Observed::TabClearCurrent);
+            }
+            fn tab_clear_all(&mut self) {
+                self.action = Some(Observed::TabClearAll);
+            }
+            fn tab_set(&mut self) {
+                self.action = Some(Observed::TabSet);
+            }
+            fn tab_reset(&mut self) {
+                self.action = Some(Observed::TabReset);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { action: None });
+
+        s.next_slice(b"\x1b[2W");
+        assert_eq!(
+            Observed::TabClearCurrent,
+            *s.handler.action.as_ref().unwrap()
+        );
+
+        s.next_slice(b"\x1b[5W");
+        assert_eq!(Observed::TabClearAll, *s.handler.action.as_ref().unwrap());
+    }
+
+    // test "stream CSI W tab set" { ... }
+    #[test]
+    fn stream_csi_w_tab_set() {
+        #[derive(PartialEq, Eq, Debug)]
+        #[allow(clippy::enum_variant_names)]
+        enum Observed {
+            TabClearCurrent,
+            TabClearAll,
+            TabSet,
+            TabReset,
+        }
+        struct H {
+            action: Option<Observed>,
+        }
+        impl Handler for H {
+            fn tab_clear_current(&mut self) {
+                self.action = Some(Observed::TabClearCurrent);
+            }
+            fn tab_clear_all(&mut self) {
+                self.action = Some(Observed::TabClearAll);
+            }
+            fn tab_set(&mut self) {
+                self.action = Some(Observed::TabSet);
+            }
+            fn tab_reset(&mut self) {
+                self.action = Some(Observed::TabReset);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { action: None });
+
+        s.next_slice(b"\x1b[W");
+        assert_eq!(Observed::TabSet, *s.handler.action.as_ref().unwrap());
+
+        s.handler.action = None;
+        s.next_slice(b"\x1b[0W");
+        assert_eq!(Observed::TabSet, *s.handler.action.as_ref().unwrap());
+
+        s.handler.action = None;
+        s.next_slice(b"\x1b[>W");
+        assert!(s.handler.action.is_none());
+
+        s.handler.action = None;
+        s.next_slice(b"\x1b[99W");
+        assert!(s.handler.action.is_none());
+    }
+
+    // test "stream CSI ? W reset tab stops" { ... }
+    #[test]
+    fn stream_csi_question_w_reset_tab_stops() {
+        #[derive(PartialEq, Eq, Debug)]
+        #[allow(clippy::enum_variant_names)]
+        enum Observed {
+            TabClearCurrent,
+            TabClearAll,
+            TabSet,
+            TabReset,
+        }
+        struct H {
+            action: Option<Observed>,
+        }
+        impl Handler for H {
+            fn tab_clear_current(&mut self) {
+                self.action = Some(Observed::TabClearCurrent);
+            }
+            fn tab_clear_all(&mut self) {
+                self.action = Some(Observed::TabClearAll);
+            }
+            fn tab_set(&mut self) {
+                self.action = Some(Observed::TabSet);
+            }
+            fn tab_reset(&mut self) {
+                self.action = Some(Observed::TabReset);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { action: None });
+
+        s.next_slice(b"\x1b[?2W");
+        assert!(s.handler.action.is_none());
+
+        s.next_slice(b"\x1b[?5W");
+        assert_eq!(Observed::TabReset, *s.handler.action.as_ref().unwrap());
+
+        // Invalid and ignored by the handler
+        s.handler.action = None;
+        s.next_slice(b"\x1b[?1;2;3W");
+        assert!(s.handler.action.is_none());
+    }
+
+    // test "stream: SGR with 17+ parameters for underline color" { ... }
+    #[test]
+    fn stream_sgr_with_17_plus_parameters_for_underline_color() {
+        // PORT NOTE: `sgr::Attribute<'a>` borrows; the reference stores `attrs`
+        // but only asserts `called`. We record `called` only (the stored attr
+        // is observationally unused in the assertion).
+        struct H {
+            called: bool,
+        }
+        impl Handler for H {
+            fn set_attribute(&mut self, _attr: sgr::Attribute) {
+                self.called = true;
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { called: false });
+
+        // Kakoune-style SGR with underline color as 17th parameter
+        // This tests the fix where param 17 was being dropped
+        s.next_slice(b"\x1b[4:3;38;2;51;51;51;48;2;170;170;170;58;2;255;97;136;0m");
+        assert!(s.handler.called);
+    }
+
+    // test "stream: tab clear with overflowing param" { ... }
+    #[test]
+    fn stream_tab_clear_with_overflowing_param() {
+        // Regression test for a fuzz crash: CSI with a parameter value that
+        // saturates to 65535 (u16 max) causes @enumFromInt to panic when
+        // converting to TabClear (enum(u8)).
+        struct H {
+            called: bool,
+        }
+        impl Handler for H {
+            fn tab_clear_current(&mut self) {
+                self.called = true;
+            }
+            fn tab_clear_all(&mut self) {
+                self.called = true;
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { called: false });
+        // This is the exact input from the fuzz crash (minus the mode byte):
+        // CSI with a huge numeric param that saturates to 65535, followed by 'g'.
+        s.next_slice(b"\x1b[388888888888888888888888888888888888g\x1b[0m");
     }
 }

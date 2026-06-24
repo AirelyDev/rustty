@@ -32,8 +32,10 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
 
     let data_len = data.len();
     // data[s + 1 .. data.len - 1 :0]
-    let uri = String::from_utf8_lossy(&data[s + 1..data_len - 1]).into_owned();
-    let mut id: Option<String> = None;
+    // PORT NOTE (fidelity): reference `uri: [:0]const u8` RAW bytes.
+    let uri = data[s + 1..data_len - 1].to_vec();
+    // PORT NOTE (fidelity): reference `id: ?[:0]const u8` — optional RAW bytes.
+    let mut id: Option<Vec<u8>> = None;
 
     data[s] = 0;
     let kvs_len = s + 1;
@@ -63,7 +65,7 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         let value = &kv[v + 1..kv_len - 1];
         if key == b"id" {
             if !value.is_empty() {
-                id = Some(String::from_utf8_lossy(value).into_owned());
+                id = Some(value.to_vec());
             }
         } else {
             // log.warn("unknown hyperlink option: '{s}'", .{key});
@@ -101,7 +103,9 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::HyperlinkStart { .. }));
         match cmd {
-            Command::HyperlinkStart { uri, .. } => assert_eq!(uri, "http://example.com"),
+            Command::HyperlinkStart { uri, .. } => {
+                assert_eq!(uri.as_slice(), b"http://example.com")
+            }
             _ => unreachable!(),
         }
     }
@@ -119,8 +123,8 @@ mod tests {
         assert!(matches!(cmd, Command::HyperlinkStart { .. }));
         match cmd {
             Command::HyperlinkStart { id, uri } => {
-                assert_eq!(id.unwrap(), "foo");
-                assert_eq!(uri, "http://example.com");
+                assert_eq!(id.unwrap().as_slice(), b"foo");
+                assert_eq!(uri.as_slice(), b"http://example.com");
             }
             _ => unreachable!(),
         }
@@ -140,7 +144,7 @@ mod tests {
         match cmd {
             Command::HyperlinkStart { id, uri } => {
                 assert_eq!(id, None);
-                assert_eq!(uri, "http://example.com");
+                assert_eq!(uri.as_slice(), b"http://example.com");
             }
             _ => unreachable!(),
         }
@@ -160,7 +164,7 @@ mod tests {
         match cmd {
             Command::HyperlinkStart { id, uri } => {
                 assert_eq!(id, None);
-                assert_eq!(uri, "http://example.com");
+                assert_eq!(uri.as_slice(), b"http://example.com");
             }
             _ => unreachable!(),
         }
@@ -180,7 +184,7 @@ mod tests {
         match cmd {
             Command::HyperlinkStart { id, uri } => {
                 assert_eq!(id, None);
-                assert_eq!(uri, "http://example.com");
+                assert_eq!(uri.as_slice(), b"http://example.com");
             }
             _ => unreachable!(),
         }
@@ -199,8 +203,8 @@ mod tests {
         assert!(matches!(cmd, Command::HyperlinkStart { .. }));
         match cmd {
             Command::HyperlinkStart { id, uri } => {
-                assert_eq!(id.unwrap(), "foo");
-                assert_eq!(uri, "http://example.com");
+                assert_eq!(id.unwrap().as_slice(), b"foo");
+                assert_eq!(uri.as_slice(), b"http://example.com");
             }
             _ => unreachable!(),
         }

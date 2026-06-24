@@ -42,13 +42,18 @@ pub enum Command {
     /// If title mode 2 is set or the terminal is setup for unconditional
     /// utf-8 titles text is interpreted as utf-8. Else text is interpreted
     /// as latin1.
-    ChangeWindowTitle(String),
+    ///
+    /// PORT NOTE (fidelity): the reference declares this `[:0]const u8` (raw,
+    /// NUL-terminated bytes). Modeled as owned `Vec<u8>` — NOT a lossy `String`.
+    ChangeWindowTitle(Vec<u8>),
 
     /// Set the icon of the terminal window. The name of the icon is not
     /// well defined, so this is currently ignored by Ghostty at the time
     /// of writing this. We just parse it so that we don't get parse errors
     /// in the log.
-    ChangeWindowIcon(String),
+    ///
+    /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes, not lossy.
+    ChangeWindowIcon(Vec<u8>),
 
     /// Semantic prompt command: https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/semantic-prompts.md
     SemanticPrompt(SemanticPrompt),
@@ -58,7 +63,8 @@ pub enum Command {
     /// contents is set on the clipboard.
     ClipboardContents {
         kind: u8,
-        data: String,
+        /// PORT NOTE (fidelity): reference `data: [:0]const u8` — raw bytes.
+        data: Vec<u8>,
     },
 
     /// OSC 7. Reports the current working directory of the shell. This is
@@ -68,7 +74,9 @@ pub enum Command {
     ReportPwd {
         /// The reported pwd value. This is not checked for validity. It should
         /// be a file URL but it is up to the caller to utilize this value.
-        value: String,
+        ///
+        /// PORT NOTE (fidelity): reference `value: [:0]const u8` — raw bytes.
+        value: Vec<u8>,
     },
 
     /// OSC 22. Set the mouse shape. There doesn't seem to be a standard
@@ -76,7 +84,8 @@ pub enum Command {
     /// are moving towards using the W3C CSS cursor names. For OSC parsing,
     /// we just parse whatever string is given.
     MouseShape {
-        value: String,
+        /// PORT NOTE (fidelity): reference `value: [:0]const u8` — raw bytes.
+        value: Vec<u8>,
     },
 
     /// OSC color operations to set, reset, or report color settings. Some OSCs
@@ -100,14 +109,18 @@ pub enum Command {
 
     /// Show a desktop notification (OSC 9 or OSC 777)
     ShowDesktopNotification {
-        title: String,
-        body: String,
+        /// PORT NOTE (fidelity): reference `title: [:0]const u8` — raw bytes.
+        title: Vec<u8>,
+        /// PORT NOTE (fidelity): reference `body: [:0]const u8` — raw bytes.
+        body: Vec<u8>,
     },
 
     /// Start a hyperlink (OSC 8)
     HyperlinkStart {
-        id: Option<String>,
-        uri: String,
+        /// PORT NOTE (fidelity): reference `id: ?[:0]const u8` — optional raw bytes.
+        id: Option<Vec<u8>>,
+        /// PORT NOTE (fidelity): reference `uri: [:0]const u8` — raw bytes.
+        uri: Vec<u8>,
     },
 
     /// End a hyperlink (OSC 8)
@@ -119,7 +132,9 @@ pub enum Command {
     },
 
     /// ConEmu show GUI message box (OSC 9;2)
-    ConemuShowMessageBox(String),
+    ///
+    /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes.
+    ConemuShowMessageBox(Vec<u8>),
 
     /// ConEmu change tab title (OSC 9;3)
     ConemuChangeTabTitle(ConemuChangeTabTitle),
@@ -131,13 +146,19 @@ pub enum Command {
     ConemuWaitInput,
 
     /// ConEmu GUI macro (OSC 9;6)
-    ConemuGuimacro(String),
+    ///
+    /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes.
+    ConemuGuimacro(Vec<u8>),
 
     /// ConEmu run process (OSC 9;7)
-    ConemuRunProcess(String),
+    ///
+    /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes.
+    ConemuRunProcess(Vec<u8>),
 
     /// ConEmu output environment variable (OSC 9;8)
-    ConemuOutputEnvironmentVariable(String),
+    ///
+    /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes.
+    ConemuOutputEnvironmentVariable(Vec<u8>),
 
     /// ConEmu XTerm keyboard and output emulation (OSC 9;10)
     /// https://conemu.github.io/en/TerminalModes.html
@@ -153,7 +174,9 @@ pub enum Command {
     },
 
     /// ConEmu comment (OSC 9;11)
-    ConemuComment(String),
+    ///
+    /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes.
+    ConemuComment(Vec<u8>),
 
     /// Kitty text sizing protocol (OSC 66)
     KittyTextSizing(parsers::kitty_text_sizing::OSC),
@@ -170,7 +193,8 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConemuChangeTabTitle {
     Reset,
-    Value(String),
+    /// PORT NOTE (fidelity): reference `value: [:0]const u8` — raw bytes.
+    Value(Vec<u8>),
 }
 
 impl Command {

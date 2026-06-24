@@ -105,7 +105,8 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                         let data = parser.capture.as_ref().unwrap().trailing();
                         parser.command = Command::ConemuComment(
                             // data[3 .. data.len - 1 :0]
-                            String::from_utf8_lossy(&data[3..data.len() - 1]).into_owned(),
+                            // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
+                            data[3..data.len() - 1].to_vec(),
                         );
                         return Some(&mut parser.command);
                     }
@@ -134,7 +135,8 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 let data = parser.capture.as_ref().unwrap().trailing();
                 parser.command = Command::ConemuShowMessageBox(
                     // data[2 .. data.len - 1 :0]
-                    String::from_utf8_lossy(&data[2..data.len() - 1]).into_owned(),
+                    // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
+                    data[2..data.len() - 1].to_vec(),
                 );
                 return Some(&mut parser.command);
             }
@@ -157,7 +159,8 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 let data = parser.capture.as_ref().unwrap().trailing();
                 parser.command = Command::ConemuChangeTabTitle(ConemuChangeTabTitle::Value(
                     // data[2 .. data.len - 1 :0]
-                    String::from_utf8_lossy(&data[2..data.len() - 1]).into_owned(),
+                    // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
+                    data[2..data.len() - 1].to_vec(),
                 ));
                 return Some(&mut parser.command);
             }
@@ -257,7 +260,8 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 let data = parser.capture.as_ref().unwrap().trailing();
                 parser.command = Command::ConemuGuimacro(
                     // data[2 .. data.len - 1 :0]
-                    String::from_utf8_lossy(&data[2..data.len() - 1]).into_owned(),
+                    // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
+                    data[2..data.len() - 1].to_vec(),
                 );
                 return Some(&mut parser.command);
             }
@@ -276,7 +280,8 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 let data = parser.capture.as_ref().unwrap().trailing();
                 parser.command = Command::ConemuRunProcess(
                     // data[2 .. data.len - 1 :0]
-                    String::from_utf8_lossy(&data[2..data.len() - 1]).into_owned(),
+                    // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
+                    data[2..data.len() - 1].to_vec(),
                 );
                 return Some(&mut parser.command);
             }
@@ -295,7 +300,8 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 let data = parser.capture.as_ref().unwrap().trailing();
                 parser.command = Command::ConemuOutputEnvironmentVariable(
                     // data[2 .. data.len - 1 :0]
-                    String::from_utf8_lossy(&data[2..data.len() - 1]).into_owned(),
+                    // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
+                    data[2..data.len() - 1].to_vec(),
                 );
                 return Some(&mut parser.command);
             }
@@ -314,7 +320,8 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 let data = parser.capture.as_ref().unwrap().trailing();
                 parser.command = Command::ReportPwd {
                     // data[2 .. data.len - 1 :0]
-                    value: String::from_utf8_lossy(&data[2..data.len() - 1]).into_owned(),
+                    // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
+                    value: data[2..data.len() - 1].to_vec(),
                 };
                 return Some(&mut parser.command);
             }
@@ -330,9 +337,10 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
     }
     let data = parser.capture.as_ref().unwrap().trailing();
     parser.command = Command::ShowDesktopNotification {
-        title: String::new(),
+        title: Vec::new(),
         // data[0 .. data.len - 1 :0]
-        body: String::from_utf8_lossy(&data[0..data.len() - 1]).into_owned(),
+        // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
+        body: data[0..data.len() - 1].to_vec(),
     };
     Some(&mut parser.command)
 }
@@ -354,8 +362,8 @@ mod tests {
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
             Command::ShowDesktopNotification { title, body } => {
-                assert_eq!("", title);
-                assert_eq!("Hello world", body);
+                assert_eq!(b"", title.as_slice());
+                assert_eq!(b"Hello world", body.as_slice());
             }
             _ => unreachable!(),
         }
@@ -374,8 +382,8 @@ mod tests {
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
             Command::ShowDesktopNotification { title, body } => {
-                assert_eq!("", title);
-                assert_eq!("H", body);
+                assert_eq!(b"", title.as_slice());
+                assert_eq!(b"H", body.as_slice());
             }
             _ => unreachable!(),
         }
@@ -466,7 +474,7 @@ mod tests {
 
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("1", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"1", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -484,7 +492,7 @@ mod tests {
 
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("1a", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"1a", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -501,7 +509,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ConemuShowMessageBox(_)));
         match cmd {
-            Command::ConemuShowMessageBox(s) => assert_eq!("hello world", s),
+            Command::ConemuShowMessageBox(s) => assert_eq!(b"hello world", s.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -518,7 +526,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("2", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"2", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -535,7 +543,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ConemuShowMessageBox(_)));
         match cmd {
-            Command::ConemuShowMessageBox(s) => assert_eq!("", s),
+            Command::ConemuShowMessageBox(s) => assert_eq!(b"", s.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -552,7 +560,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ConemuShowMessageBox(_)));
         match cmd {
-            Command::ConemuShowMessageBox(s) => assert_eq!("   ", s),
+            Command::ConemuShowMessageBox(s) => assert_eq!(b"   ", s.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -570,7 +578,7 @@ mod tests {
 
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("2", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"2", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -588,7 +596,7 @@ mod tests {
 
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("2a", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"2a", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -606,7 +614,7 @@ mod tests {
         assert!(matches!(cmd, Command::ConemuChangeTabTitle(_)));
         match cmd {
             Command::ConemuChangeTabTitle(ConemuChangeTabTitle::Value(v)) => {
-                assert_eq!("foo bar", v)
+                assert_eq!(b"foo bar", v.as_slice())
             }
             _ => unreachable!(),
         }
@@ -640,7 +648,9 @@ mod tests {
 
         assert!(matches!(cmd, Command::ConemuChangeTabTitle(_)));
         match cmd {
-            Command::ConemuChangeTabTitle(ConemuChangeTabTitle::Value(v)) => assert_eq!("   ", v),
+            Command::ConemuChangeTabTitle(ConemuChangeTabTitle::Value(v)) => {
+                assert_eq!(b"   ", v.as_slice())
+            }
             _ => unreachable!(),
         }
     }
@@ -658,7 +668,7 @@ mod tests {
 
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("3", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"3", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -676,7 +686,7 @@ mod tests {
 
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("3a", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"3a", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -953,7 +963,7 @@ mod tests {
 
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("4", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"4", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -971,7 +981,7 @@ mod tests {
 
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("4;", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"4;", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -989,7 +999,7 @@ mod tests {
 
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("4;5", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"4;5", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1007,7 +1017,7 @@ mod tests {
 
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("4;5a", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"4;5a", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1055,7 +1065,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ConemuGuimacro(_)));
         match cmd {
-            Command::ConemuGuimacro(s) => assert_eq!("a", s),
+            Command::ConemuGuimacro(s) => assert_eq!(b"a", s.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1072,7 +1082,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ConemuGuimacro(_)));
         match cmd {
-            Command::ConemuGuimacro(s) => assert_eq!("ab", s),
+            Command::ConemuGuimacro(s) => assert_eq!(b"ab", s.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1089,7 +1099,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("6", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"6", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1106,7 +1116,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ConemuRunProcess(_)));
         match cmd {
-            Command::ConemuRunProcess(s) => assert_eq!("ab", s),
+            Command::ConemuRunProcess(s) => assert_eq!(b"ab", s.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1123,7 +1133,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ConemuRunProcess(_)));
         match cmd {
-            Command::ConemuRunProcess(s) => assert_eq!("", s),
+            Command::ConemuRunProcess(s) => assert_eq!(b"", s.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1140,7 +1150,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("7", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"7", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1157,7 +1167,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ConemuOutputEnvironmentVariable(_)));
         match cmd {
-            Command::ConemuOutputEnvironmentVariable(s) => assert_eq!("ab", s),
+            Command::ConemuOutputEnvironmentVariable(s) => assert_eq!(b"ab", s.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1174,7 +1184,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ConemuOutputEnvironmentVariable(_)));
         match cmd {
-            Command::ConemuOutputEnvironmentVariable(s) => assert_eq!("", s),
+            Command::ConemuOutputEnvironmentVariable(s) => assert_eq!(b"", s.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1191,7 +1201,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("8", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"8", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1208,7 +1218,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ReportPwd { .. }));
         match cmd {
-            Command::ReportPwd { value } => assert_eq!("ab", value),
+            Command::ReportPwd { value } => assert_eq!(b"ab", value.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1225,7 +1235,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("9", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"9", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1350,7 +1360,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("10;4", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"10;4", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1367,7 +1377,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("10;", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"10;", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1384,7 +1394,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("10;abc", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"10;abc", body.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1401,7 +1411,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ConemuComment(_)));
         match cmd {
-            Command::ConemuComment(s) => assert_eq!("ab", s),
+            Command::ConemuComment(s) => assert_eq!(b"ab", s.as_slice()),
             _ => unreachable!(),
         }
     }
@@ -1418,7 +1428,7 @@ mod tests {
         let cmd = p.end(Some(0x1b)).unwrap().clone();
         assert!(matches!(cmd, Command::ShowDesktopNotification { .. }));
         match cmd {
-            Command::ShowDesktopNotification { body, .. } => assert_eq!("11", body),
+            Command::ShowDesktopNotification { body, .. } => assert_eq!(b"11", body.as_slice()),
             _ => unreachable!(),
         }
     }

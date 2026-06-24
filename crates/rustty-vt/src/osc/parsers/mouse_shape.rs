@@ -21,7 +21,9 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
     let data = cap.trailing();
     parser.command = Command::MouseShape {
         // data[0 .. data.len() - 1 :0]
-        value: String::from_utf8_lossy(&data[0..data.len() - 1]).into_owned(),
+        // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes (trailing NUL
+        // excluded), NOT a lossy String decode.
+        value: data[0..data.len() - 1].to_vec(),
     };
     Some(&mut parser.command)
 }
@@ -42,7 +44,7 @@ mod tests {
         let cmd = p.end(None).unwrap().clone();
         assert!(matches!(cmd, crate::osc::Command::MouseShape { .. }));
         match cmd {
-            crate::osc::Command::MouseShape { value } => assert_eq!("pointer", value),
+            crate::osc::Command::MouseShape { value } => assert_eq!(b"pointer", value.as_slice()),
             _ => unreachable!(),
         }
     }

@@ -27,7 +27,8 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         parser.command = Command::ClipboardContents {
             kind: b'c',
             // data[1 .. data.len() - 1 :0]
-            data: String::from_utf8_lossy(&data[1..data.len() - 1]).into_owned(),
+            // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
+            data: data[1..data.len() - 1].to_vec(),
         };
     } else {
         if data.len() < 2 {
@@ -41,7 +42,8 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         parser.command = Command::ClipboardContents {
             kind: data[0],
             // data[2 .. data.len() - 1 :0]
-            data: String::from_utf8_lossy(&data[2..data.len() - 1]).into_owned(),
+            // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
+            data: data[2..data.len() - 1].to_vec(),
         };
     }
     Some(&mut parser.command)
@@ -65,7 +67,7 @@ mod tests {
         match cmd {
             crate::osc::Command::ClipboardContents { kind, data } => {
                 assert!(kind == b's');
-                assert_eq!("?", data);
+                assert_eq!(b"?", data.as_slice());
             }
             _ => unreachable!(),
         }
@@ -85,7 +87,7 @@ mod tests {
         match cmd {
             crate::osc::Command::ClipboardContents { kind, data } => {
                 assert!(kind == b'c');
-                assert_eq!("?", data);
+                assert_eq!(b"?", data.as_slice());
             }
             _ => unreachable!(),
         }
@@ -109,7 +111,7 @@ mod tests {
         match cmd {
             crate::osc::Command::ClipboardContents { kind, data } => {
                 assert!(kind == b's');
-                assert_eq!("?", data);
+                assert_eq!(b"?", data.as_slice());
             }
             _ => unreachable!(),
         }
@@ -129,7 +131,7 @@ mod tests {
         match cmd {
             crate::osc::Command::ClipboardContents { kind, data } => {
                 assert!(kind == b'c');
-                assert_eq!("", data);
+                assert_eq!(b"", data.as_slice());
             }
             _ => unreachable!(),
         }

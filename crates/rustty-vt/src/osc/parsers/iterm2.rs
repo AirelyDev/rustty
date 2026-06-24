@@ -198,7 +198,9 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
 
             parser.command = Command::ClipboardContents {
                 kind: b'c',
-                data: String::from_utf8_lossy(&value).into_owned(),
+                // PORT NOTE (fidelity): reference assigns `value` ([:0]u8) to
+                // `data` ([:0]const u8) directly — RAW bytes, not lossy.
+                data: value,
             };
             Some(&mut parser.command)
         }
@@ -216,7 +218,9 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 return None;
             }
             parser.command = Command::ReportPwd {
-                value: String::from_utf8_lossy(&value).into_owned(),
+                // PORT NOTE (fidelity): reference assigns `value` ([:0]u8) to
+                // `value` ([:0]const u8) directly — RAW bytes, not lossy.
+                value,
             };
             Some(&mut parser.command)
         }
@@ -466,7 +470,7 @@ mod tests {
         match cmd {
             Command::ClipboardContents { kind, data } => {
                 assert_eq!(b'c', kind);
-                assert_eq!("YWJjMTIz", data);
+                assert_eq!(b"YWJjMTIz", data.as_slice());
             }
             _ => unreachable!(),
         }
@@ -508,7 +512,7 @@ mod tests {
         let cmd = p.end(Some(b'\x1b')).unwrap().clone();
         assert!(matches!(cmd, Command::ReportPwd { .. }));
         match cmd {
-            Command::ReportPwd { value } => assert_eq!("abc123", value),
+            Command::ReportPwd { value } => assert_eq!(b"abc123", value.as_slice()),
             _ => unreachable!(),
         }
     }

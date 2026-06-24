@@ -1168,7 +1168,7 @@ mod tests {
                 osc::Command::ChangeWindowTitle(t) => t,
                 _ => unreachable!(),
             };
-            assert_eq!("abc", title);
+            assert_eq!(b"abc", title.as_slice());
         }
     }
 
@@ -1203,7 +1203,7 @@ mod tests {
                 osc::Command::ChangeWindowTitle(t) => t,
                 _ => unreachable!(),
             };
-            assert_eq!("abc", title);
+            assert_eq!(b"abc", title.as_slice());
         }
     }
 
