@@ -230,6 +230,74 @@ mod tests {
     }
 
     #[test]
+    fn page_size_min_matches_reference_for_target() {
+        // PARITY (audit #4): `PAGE_SIZE_MIN` must equal the reference's comptime
+        // `std.heap.page_size_min` for THIS build target, not a hardcoded 4096.
+        // The reference selects it from `std.heap.page_size_min_default`
+        // (lib/std/heap.zig): aarch64 Apple => 16 KiB, x86_64 Apple => 4 KiB,
+        // Linux (x86_64/aarch64) => 4 KiB.
+        let expected: usize = if cfg!(all(target_os = "macos", target_arch = "aarch64"))
+            || cfg!(all(target_os = "ios", target_arch = "aarch64"))
+        {
+            16 << 10
+        } else {
+            // macOS x86_64 and Linux x86_64/aarch64 (the other targets we build).
+            4 << 10
+        };
+        assert_eq!(expected, PAGE_SIZE_MIN);
+    }
+
+    #[test]
+    fn page_layout_total_size_aligned_to_target_page_size_min() {
+        // PARITY (audit #4): `Page.layout` aligns `total_size` up to
+        // `page_size_min` via `alignForward(usize, hyperlink_map_end,
+        // page_size_min)`. So `total_size` must be an exact multiple of the
+        // per-target `PAGE_SIZE_MIN`. On aarch64-macos this is 16384, which a
+        // hardcoded-4096 port would get wrong for non-standard page sizes.
+        let std_cap = std_capacity();
+        let std_size = Page::layout(std_cap).total_size;
+        assert_eq!(
+            0,
+            std_size % PAGE_SIZE_MIN,
+            "std page total_size {std_size} not a multiple of PAGE_SIZE_MIN {PAGE_SIZE_MIN}",
+        );
+
+        // A reduced (non-standard) capacity: shrink cols hard so the layout is
+        // small enough that the page_size_min rounding is observable. Its
+        // total_size must also be aligned to PAGE_SIZE_MIN, and must be the
+        // SMALLEST such multiple that still contains the unaligned end (i.e.
+        // subtracting one PAGE_SIZE_MIN would not fit it).
+        let reduced = std_cap.adjust(Adjustment { cols: Some(1) }).unwrap();
+        let reduced_size = Page::layout(reduced).total_size;
+        assert_eq!(
+            0,
+            reduced_size % PAGE_SIZE_MIN,
+            "reduced page total_size {reduced_size} not a multiple of PAGE_SIZE_MIN {PAGE_SIZE_MIN}",
+        );
+        assert!(reduced_size >= PAGE_SIZE_MIN);
+
+        // On aarch64 Apple the alignment granularity is genuinely 16 KiB: the
+        // total_size must be a multiple of 16384. A hardcoded-4096 port would
+        // align the same content end to the nearest 4 KiB instead, generally
+        // producing a value that is NOT a multiple of 16384. Assert the stronger
+        // 16 KiB alignment directly so this target's parity is pinned.
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            assert_eq!(16 << 10, PAGE_SIZE_MIN);
+            assert_eq!(
+                0,
+                reduced_size % (16 << 10),
+                "aarch64-macos reduced page total_size {reduced_size} must be 16 KiB-aligned",
+            );
+            assert_eq!(
+                0,
+                std_size % (16 << 10),
+                "aarch64-macos std page total_size {std_size} must be 16 KiB-aligned",
+            );
+        }
+    }
+
+    #[test]
     fn available_bits_for_grid_invariant() {
         // The reference `availableBitsForGrid` asserts
         //   assert(@sizeOf(Row) % @alignOf(Cell) == 0);

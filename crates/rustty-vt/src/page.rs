@@ -155,12 +155,68 @@ fn align_backward(v: usize, a: usize) -> usize {
     v & !(a - 1)
 }
 
-// PORT NOTE: `std.heap.page_size_min`. On all targets we care about this is the
-// OS page size minimum (4096 on aarch64-macos/x86_64-linux). We query it at
-// runtime for the actual mmap allocation but use a const for layout math; both
-// must agree. The reference is a comptime-known minimum; we use 4096 as the
-// minimum (smallest supported page size), matching `std.heap.page_size_min`.
-const PAGE_SIZE_MIN: usize = 4096;
+// PORT NOTE: `std.heap.page_size_min`. In the reference this is a comptime
+// constant selected per `(builtin.os.tag, builtin.cpu.arch)` from
+// `std.heap.page_size_min_default` (lib/std/heap.zig). It is NOT always 4096:
+// aarch64 Apple targets (macOS/iOS/...) use 16 KiB, WASI/emscripten use 64 KiB,
+// some sparc64/m68k targets differ, etc. `Page.layout` aligns `total_size` up
+// to this value (`alignForward(usize, hyperlink_map_end, page_size_min)`), so on
+// Apple Silicon a non-standard (reduced-capacity) page rounds to a 16 KiB
+// multiple, not a 4 KiB one. We therefore derive it from the build target to
+// match the reference's comptime value rather than hardcoding 4096.
+//
+// The mmap fast-path allocates exactly `total_size` bytes and the OS-page
+// alignment of an mmap result is always >= the kernel page size (16 KiB on
+// aarch64-macos), so this layout value and the runtime allocation alignment
+// agree on every target we build.
+pub(crate) const PAGE_SIZE_MIN: usize = page_size_min_default();
+
+/// Comptime `std.heap.page_size_min` for the build target, mirroring
+/// `std.heap.page_size_min_default` in `lib/std/heap.zig`. We resolve it from
+/// `cfg!(target_os/target_arch)` so it is a faithful per-target constant.
+const fn page_size_min_default() -> usize {
+    // macOS / iOS / tvOS / watchOS / visionOS / driverkit (Apple/Darwin):
+    //   x86_64 => 4 KiB, aarch64 => 16 KiB.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        16 << 10
+    }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        4 << 10
+    }
+    #[cfg(all(target_os = "ios", target_arch = "aarch64"))]
+    {
+        16 << 10
+    }
+    // Linux: every arch we support uses 4 KiB (aarch64/x86_64/etc.). sparc64 is
+    // 8 KiB in the reference but we do not target it.
+    #[cfg(all(
+        target_os = "linux",
+        not(target_arch = "sparc64"),
+        not(target_arch = "m68k")
+    ))]
+    {
+        4 << 10
+    }
+    // Fallback for any other (os, arch) we have not enumerated: 4 KiB matches
+    // the reference for all currently-supported x86_64/aarch64 Unix targets
+    // (FreeBSD/NetBSD/OpenBSD/etc.). This keeps the const total even though we
+    // only build/test on macOS and Linux.
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "ios", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            not(target_arch = "sparc64"),
+            not(target_arch = "m68k")
+        )
+    )))]
+    {
+        4 << 10
+    }
+}
 
 // PORT NOTE: the reference selects `AllocWindows` or `AllocPosix` at comptime.
 // We implement the POSIX mmap path (the platforms this crate targets) and keep

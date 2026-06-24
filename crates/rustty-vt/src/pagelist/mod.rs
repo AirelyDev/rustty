@@ -177,12 +177,14 @@ fn std_size() -> usize {
     Page::layout(std_capacity()).total_size
 }
 
-/// `std.heap.page_size_min`. On all targets we care about this is 4096; the
-/// page buffer pool aligns standard and non-standard page buffers to this.
+/// `std.heap.page_size_min` for the build target (4 KiB on most targets, 16 KiB
+/// on aarch64 Apple). The page buffer pool aligns standard and non-standard page
+/// buffers to this.
 //
-// PORT NOTE: matches the `page.rs` `PAGE_SIZE_MIN` (private to that module);
-// duplicated here so the page-buffer pool can align allocations.
-const PAGE_SIZE_MIN: usize = 4096;
+// PORT NOTE: re-uses the canonical `page::PAGE_SIZE_MIN` (derived per target
+// from `std.heap.page_size_min_default`) so the page-buffer pool alignment and
+// `Page.layout` agree by construction instead of being a duplicated literal.
+use crate::page::PAGE_SIZE_MIN;
 
 /// The memory pool we use for page memory buffers. We use a separate pool
 /// so we can allocate these with a page allocator. We have to use a page
