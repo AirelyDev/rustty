@@ -62,6 +62,15 @@ use allocator_api2::alloc::Global as Allocator;
 // Per the Screen-SCC plan seam, this ports to `&mut dyn std::io::Write`.
 use std::io;
 
+// PORT NOTE: `const unicode = @import("../unicode/main.zig")`. The width seam
+// (`unicode.table.get(c).width`) maps to `rustty_unicode::table().get(c).width`.
+use rustty_unicode as unicode;
+
+// PORT NOTE: `const fastmem = @import("../fastmem.zig")`. The in-place
+// `rotateOnceR` (used by the cursor-scroll helpers) maps to
+// `rustty_util::fastmem::rotateOnceR`.
+use rustty_util::fastmem;
+
 // pub const CursorStyle = @import("cursor.zig").Style;
 pub use crate::cursor::Style as CursorStyle;
 
@@ -163,6 +172,13 @@ pub enum SemanticClick {
 }
 
 /// The cursor position and style.
+// PORT NOTE: the reference `Cursor` is a Zig value type passed/copied by value
+// (e.g. `cursorCopy(other: Cursor, ...)`, `const old = self.cursor`). `Copy`
+// mirrors that shallow bit-copy: `page_pin`/`page_row`/`page_cell` are
+// non-owning raw back-references and `hyperlink` is a raw `*mut` whose box
+// ownership is tracked explicitly by `endHyperlink`/`deinit` (a copy never
+// double-frees because `cursorCopy` clears the copy's hyperlink before use).
+#[derive(Clone, Copy)]
 pub struct Cursor {
     // The x/y position within the active area.
     pub x: size::CellCountInt,
@@ -223,7 +239,21 @@ pub struct Cursor {
 
 impl Cursor {
     pub fn deinit(&mut self, alloc: Allocator) {
-        todo!()
+        // if (self.hyperlink) |link| {
+        //     link.deinit(alloc);
+        //     alloc.destroy(link);
+        // }
+        // PORT NOTE: the reference frees the heap-allocated `*Hyperlink` via
+        // `link.deinit(alloc)` + `alloc.destroy(link)`. In Rust the link is owned
+        // through a `*mut Hyperlink` produced by `Box::into_raw`; reclaiming the
+        // `Box` here calls `Hyperlink::deinit` (a no-op; the inner `Vec`s drop on
+        // their own) and frees the box, mirroring deinit-then-destroy.
+        let _ = alloc;
+        if let Some(link) = self.hyperlink.take() {
+            let boxed = unsafe { Box::from_raw(link) };
+            boxed.deinit();
+            drop(boxed);
+        }
     }
 }
 
@@ -239,6 +269,7 @@ pub struct SavedCursor {
 }
 
 /// State required for all charset operations.
+#[derive(Clone)]
 pub struct CharsetState {
     /// The list of graphical charsets by slot
     pub charsets: CharsetArray,
@@ -257,6 +288,7 @@ pub struct CharsetState {
 /// We use this bespoke struct instead of `std.EnumArray` because
 /// accessing these slots is very performance critical since it's
 /// done for every single print. This benchmarks faster.
+#[derive(Clone)]
 pub struct CharsetArray {
     pub g0: charsets::Charset,
     pub g1: charsets::Charset,
@@ -264,15 +296,50 @@ pub struct CharsetArray {
     pub g3: charsets::Charset,
 }
 
+impl Default for CharsetArray {
+    // PORT NOTE: reference field defaults are all `.utf8`.
+    fn default() -> CharsetArray {
+        CharsetArray {
+            g0: charsets::Charset::Utf8,
+            g1: charsets::Charset::Utf8,
+            g2: charsets::Charset::Utf8,
+            g3: charsets::Charset::Utf8,
+        }
+    }
+}
+
+impl Default for CharsetState {
+    // PORT NOTE: reference field defaults are `charsets = .{}`, `gl = .G0`,
+    // `gr = .G2`, `single_shift = null`.
+    fn default() -> CharsetState {
+        CharsetState {
+            charsets: CharsetArray::default(),
+            gl: charsets::Slots::G0,
+            gr: charsets::Slots::G2,
+            single_shift: None,
+        }
+    }
+}
+
 impl CharsetArray {
     #[inline]
     pub fn get(&self, slot: charsets::Slots) -> charsets::Charset {
-        todo!()
+        match slot {
+            charsets::Slots::G0 => self.g0,
+            charsets::Slots::G1 => self.g1,
+            charsets::Slots::G2 => self.g2,
+            charsets::Slots::G3 => self.g3,
+        }
     }
 
     #[inline]
     pub fn set(&mut self, slot: charsets::Slots, charset: charsets::Charset) {
-        todo!()
+        match slot {
+            charsets::Slots::G0 => self.g0 = charset,
+            charsets::Slots::G1 => self.g1 = charset,
+            charsets::Slots::G2 => self.g2 = charset,
+            charsets::Slots::G3 => self.g3 = charset,
+        }
     }
 }
 
@@ -302,7 +369,23 @@ impl Options {
     /// scrollback (or lack of) then do not use this directly. This is just
     /// for callers that need some defaults.
     pub fn default() -> Options {
-        todo!()
+        // pub const default: Options = .{
+        //     .cols = 80,
+        //     .rows = 24,
+        //     .max_scrollback = 0,
+        // };
+        // PORT NOTE: the reference `Options.default` only sets cols/rows/
+        // max_scrollback; the remaining fields take their struct-default values
+        // (kitty_image_storage_limit per artifact; kitty_image_loading_limits
+        // `.direct`). The kitty graphics fields are the deferred placeholders
+        // (kitty graphics is DEFERRED to vt-12), so they default trivially here.
+        Options {
+            cols: 80,
+            rows: 24,
+            max_scrollback: 0,
+            kitty_image_storage_limit: 0,
+            kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+        }
     }
 }
 
@@ -383,6 +466,16 @@ impl PromptClickMove {
     pub const ZERO: PromptClickMove = PromptClickMove { left: 0, right: 0 };
 }
 
+// PORT NOTE: the error set for `startHyperlinkOnce` is the reference
+// `(Allocator.Error || Page.InsertHyperlinkError)`. Ported as an explicit enum
+// uniting the system-OOM case with the page insert-error cases so the
+// `startHyperlink` retry loop can discriminate (it adjusts page capacities for
+// the `Insert` cases and treats `OutOfMemory` as fatal).
+enum StartHyperlinkOnceError {
+    OutOfMemory,
+    Insert(crate::page::InsertHyperlinkError),
+}
+
 // PORT NOTE: inline anonymous param struct for `cursorCopy`'s `opts`.
 pub struct CursorCopyOptions {
     /// Copy the hyperlink from the other cursor. If not set, this will
@@ -424,11 +517,84 @@ impl Screen {
     ///
     /// If max scrollback is 0, then no scrollback is kept at all.
     pub fn init(alloc: Allocator, opts: Options) -> Result<Screen, OutOfMemory> {
-        todo!()
+        // Initialize our backing pages.
+        // var pages = try PageList.init(alloc, opts.cols, opts.rows, opts.max_scrollback);
+        // errdefer pages.deinit();
+        // PORT NOTE: the reference `PageList.init` takes `?usize` and Zig coerces
+        // the `usize` `opts.max_scrollback` into `Some(..)`; `0` therefore becomes
+        // `Some(0)` (the no-scrollback case is captured by `no_scrollback` below).
+        let mut pages = PageList::init(opts.cols, opts.rows, Some(opts.max_scrollback))?;
+
+        // Create our tracked pin for the cursor.
+        // const page_pin = try pages.trackPin(.{ .node = pages.pages.first.? });
+        // errdefer pages.untrackPin(page_pin);
+        let first = pages.pages.first;
+        assert!(!first.is_null());
+        let page_pin = match pages.track_pin(Pin {
+            node: first,
+            y: 0,
+            x: 0,
+            garbage: false,
+        }) {
+            Ok(p) => p,
+            Err(e) => {
+                // errdefer pages.deinit();
+                pages.deinit();
+                return Err(e);
+            }
+        };
+        // const page_rac = page_pin.rowAndCell();
+        let page_rac = unsafe { (*page_pin).row_and_cell() };
+
+        let result: Screen = Screen {
+            alloc,
+            pages,
+            no_scrollback: opts.max_scrollback == 0,
+            cursor: Cursor {
+                x: 0,
+                y: 0,
+                cursor_style: CursorStyle::Block,
+                pending_wrap: false,
+                protected: false,
+                style: style::Style::default(),
+                style_id: style::DEFAULT_ID,
+                hyperlink_id: 0,
+                hyperlink_implicit_id: 0,
+                hyperlink: None,
+                semantic_content: pagepkg::SemanticContent::Output,
+                semantic_content_clear_eol: false,
+                page_pin,
+                page_row: page_rac.row,
+                page_cell: page_rac.cell,
+            },
+            saved_cursor: None,
+            selection: None,
+            charset: CharsetState::default(),
+            protected_mode: ansi::ProtectedMode::Off,
+            kitty_keyboard: kitty::KeyFlagStack::default(),
+            // PORT NOTE: the reference here calls
+            //   result.kitty_images.setLimit(alloc, &result, opts.kitty_image_storage_limit)
+            //   result.kitty_images.image_limits = opts.kitty_image_loading_limits;
+            // inside `if (comptime build_options.kitty_graphics)`. The kitty
+            // graphics `ImageStorage` is DEFERRED to vt-12 (the field is the
+            // `graphics_storage::Deferred` placeholder), so the limit/init wiring
+            // lands with it. The placeholder is constructed trivially here.
+            kitty_images: kitty::graphics_storage::Deferred,
+            semantic_prompt: SemanticPrompt::DISABLED,
+            dirty: Dirty::default(),
+        };
+
+        Ok(result)
     }
 
     pub fn deinit(&mut self) {
-        todo!()
+        // PORT NOTE: the reference here calls
+        //   self.kitty_images.deinit(self.alloc, self);
+        // inside `if (comptime build_options.kitty_graphics)`. The kitty graphics
+        // `ImageStorage.deinit` is DEFERRED to vt-12 (the field is the
+        // `graphics_storage::Deferred` placeholder).
+        self.cursor.deinit(self.alloc);
+        self.pages.deinit();
     }
 
     /// Assert that the screen is in a consistent state. This doesn't check
@@ -436,7 +602,26 @@ impl Screen {
     /// tests. This only asserts the screen specific data so callers should
     /// ensure they're also calling page integrity checks if necessary.
     pub fn assert_integrity(&self) {
-        todo!()
+        // if (build_options.slow_runtime_safety) { ... }
+        // PORT NOTE: gated on `build_options.slow_runtime_safety`
+        // (`crate::options::SLOW_RUNTIME_SAFETY`, i.e. debug builds). The Valgrind
+        // short-circuit (`std.valgrind.runningOnValgrind() > 0`) has no Rust
+        // analogue here, so it is elided (we never run under Valgrind).
+        if crate::options::SLOW_RUNTIME_SAFETY {
+            debug_assert!(self.cursor.x < self.pages.cols);
+            debug_assert!(self.cursor.y < self.pages.rows);
+
+            // Our cursor x/y should always match the pin. If this doesn't
+            // match then it indicates that the tracked pin moved and we didn't
+            // account for it by either calling cursorReload or manually
+            // adjusting.
+            let pt: point::Point = self
+                .pages
+                .point_from_pin(point::Tag::Active, unsafe { *self.cursor.page_pin })
+                .expect("pin points outside active area");
+            debug_assert!(self.cursor.x == pt.coord().x);
+            debug_assert!(self.cursor.y as u32 == pt.coord().y);
+        }
     }
 
     /// Reset the screen according to the logic of a DEC RIS sequence.
@@ -451,7 +636,53 @@ impl Screen {
     /// - Disables protection mode
     ///
     pub fn reset(&mut self) {
-        todo!()
+        // Reset our pages
+        self.pages.reset();
+
+        // The above reset preserves tracked pins so we can still use
+        // our cursor pin, which should be at the top-left already.
+        let cursor_pin: *mut Pin = self.cursor.page_pin;
+        debug_assert!(std::ptr::eq(
+            unsafe { (*cursor_pin).node },
+            self.pages.pages.first
+        ));
+        debug_assert!(unsafe { (*cursor_pin).x } == 0);
+        debug_assert!(unsafe { (*cursor_pin).y } == 0);
+        let cursor_rac = unsafe { (*cursor_pin).row_and_cell() };
+        self.cursor.deinit(self.alloc);
+        self.cursor = Cursor {
+            x: 0,
+            y: 0,
+            cursor_style: CursorStyle::Block,
+            pending_wrap: false,
+            protected: false,
+            style: style::Style::default(),
+            style_id: style::DEFAULT_ID,
+            hyperlink_id: 0,
+            hyperlink_implicit_id: 0,
+            hyperlink: None,
+            semantic_content: pagepkg::SemanticContent::Output,
+            semantic_content_clear_eol: false,
+            page_pin: cursor_pin,
+            page_row: cursor_rac.row,
+            page_cell: cursor_rac.cell,
+        };
+
+        // PORT NOTE: the reference here resets kitty graphics storage inside
+        //   if (comptime build_options.kitty_graphics) {
+        //       self.kitty_images.deinit(self.alloc, self);
+        //       self.kitty_images = .{ .dirty = true };
+        //   }
+        // The kitty graphics `ImageStorage` is DEFERRED to vt-12 (the field is the
+        // `graphics_storage::Deferred` placeholder), so this lands with it.
+
+        // Reset our basic state
+        self.saved_cursor = None;
+        self.charset = CharsetState::default();
+        self.kitty_keyboard = kitty::KeyFlagStack::default();
+        self.protected_mode = ansi::ProtectedMode::Off;
+        self.semantic_prompt = SemanticPrompt::DISABLED;
+        self.clear_selection();
     }
 
     /// Clone the screen.
@@ -499,110 +730,833 @@ impl Screen {
         node: *mut pagelist::Node,
         adjustment: Option<pagelist::grow::IncreaseCapacity>,
     ) -> Result<*mut pagelist::Node, pagelist::grow::IncreaseCapacityError> {
-        todo!()
+        // If the page being modified isn't our cursor page then
+        // this is a quick operation because we have no additional
+        // accounting. We have to do this check here BEFORE calling
+        // increaseCapacity because increaseCapacity will update all
+        // our tracked pins (including our cursor).
+        if !std::ptr::eq(node, unsafe { (*self.cursor.page_pin).node }) {
+            return self.pages.increase_capacity(node, adjustment);
+        }
+
+        // We're modifying the cursor page. When we increase the
+        // capacity below it will be short the ref count on our
+        // current style and hyperlink, so we need to init those.
+        let new_node = self.pages.increase_capacity(node, adjustment)?;
+        let new_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*new_node).data) };
+
+        // Re-add the style, if the page somehow doesn't have enough
+        // memory to add it, we emit a warning and gracefully degrade
+        // to the default style for the cursor.
+        if self.cursor.style_id != style::DEFAULT_ID {
+            self.cursor.style_id = match unsafe {
+                let base = (*new_page).memory_ptr();
+                (*new_page).styles.add(base, self.cursor.style)
+            } {
+                Ok(id) => id,
+                Err(_err) => {
+                    // TODO: Should we increase the capacity further in this case?
+                    // log.warn("(Screen.increaseCapacity) Failed to add cursor
+                    //   style back to page, err={}", .{err});
+
+                    // Reset the cursor style.
+                    self.cursor.style = style::Style::default();
+                    style::DEFAULT_ID
+                }
+            };
+        }
+
+        // Re-add the hyperlink, if the page somehow doesn't have enough
+        // memory to add it, we emit a warning and gracefully degrade to
+        // no hyperlink.
+        if let Some(link) = self.cursor.hyperlink {
+            // So we don't attempt to free any memory in the replaced page.
+            self.cursor.hyperlink_id = 0;
+            self.cursor.hyperlink = None;
+
+            // Re-add
+            if let Err(_err) = self.start_hyperlink_once(unsafe { (*link).clone() }) {
+                // TODO: Should we increase the capacity further in this case?
+                // log.warn("(Screen.increaseCapacity) Failed to add cursor
+                //   hyperlink back to page, err={}", .{err});
+            }
+
+            // Remove our old link
+            let boxed = unsafe { Box::from_raw(link) };
+            boxed.deinit();
+            drop(boxed);
+        }
+
+        // Reload the cursor information because the pin changed.
+        // So our page row/cell and so on are all off.
+        self.cursor_reload();
+
+        Ok(new_node)
     }
 
     #[inline]
     pub fn cursor_cell_right(&mut self, n: size::CellCountInt) -> *mut pagepkg::Cell {
-        todo!()
+        debug_assert!(self.cursor.x + n < self.pages.cols);
+        let cell: *mut pagepkg::Cell = self.cursor.page_cell;
+        unsafe { cell.add(n as usize) }
     }
 
     #[inline]
     pub fn cursor_cell_left(&mut self, n: size::CellCountInt) -> *mut pagepkg::Cell {
-        todo!()
+        debug_assert!(self.cursor.x >= n);
+        let cell: *mut pagepkg::Cell = self.cursor.page_cell;
+        unsafe { cell.sub(n as usize) }
     }
 
     pub fn cursor_cell_end_of_prev(&mut self) -> *mut pagepkg::Cell {
-        todo!()
+        debug_assert!(self.cursor.y > 0);
+
+        let mut page_pin = unsafe { (*self.cursor.page_pin).up(1) }.unwrap();
+        page_pin.x = self.pages.cols - 1;
+        let page_rac = page_pin.row_and_cell();
+        page_rac.cell
     }
 
     /// Move the cursor right. This is a specialized function that is very fast
     /// if the caller can guarantee we have space to move right (no wrapping).
     pub fn cursor_right(&mut self, n: size::CellCountInt) {
-        todo!()
+        debug_assert!(self.cursor.x + n < self.pages.cols);
+
+        let cell: *mut pagepkg::Cell = self.cursor.page_cell;
+        self.cursor.page_cell = unsafe { cell.add(n as usize) };
+        unsafe { (*self.cursor.page_pin).x += n };
+        self.cursor.x += n;
+
+        self.assert_integrity();
     }
 
     /// Move the cursor left.
     pub fn cursor_left(&mut self, n: size::CellCountInt) {
-        todo!()
+        debug_assert!(self.cursor.x >= n);
+
+        let cell: *mut pagepkg::Cell = self.cursor.page_cell;
+        self.cursor.page_cell = unsafe { cell.sub(n as usize) };
+        unsafe { (*self.cursor.page_pin).x -= n };
+        self.cursor.x -= n;
+
+        self.assert_integrity();
     }
 
     /// Move the cursor up.
+    ///
+    /// Precondition: The cursor is not at the top of the screen.
     pub fn cursor_up(&mut self, n: size::CellCountInt) {
-        todo!()
+        debug_assert!(self.cursor.y >= n);
+
+        self.cursor.y -= n; // Must be set before cursorChangePin
+        let new = unsafe { (*self.cursor.page_pin).up(n as usize) }.unwrap();
+        self.cursor_change_pin(new);
+        let page_rac = unsafe { (*self.cursor.page_pin).row_and_cell() };
+        self.cursor.page_row = page_rac.row;
+        self.cursor.page_cell = page_rac.cell;
+
+        self.assert_integrity();
     }
 
     pub fn cursor_row_up(&mut self, n: size::CellCountInt) -> *mut pagepkg::Row {
-        todo!()
+        debug_assert!(self.cursor.y >= n);
+
+        let page_pin = unsafe { (*self.cursor.page_pin).up(n as usize) }.unwrap();
+        let page_rac = page_pin.row_and_cell();
+
+        self.assert_integrity();
+        page_rac.row
     }
 
     /// Move the cursor down.
+    ///
+    /// Precondition: The cursor is not at the bottom of the screen.
     pub fn cursor_down(&mut self, n: size::CellCountInt) {
-        todo!()
+        debug_assert!(self.cursor.y + n < self.pages.rows);
+
+        self.cursor.y += n; // Must be set before cursorChangePin
+
+        // We move the offset into our page list to the next row and then
+        // get the pointers to the row/cell and set all the cursor state up.
+        let new = unsafe { (*self.cursor.page_pin).down(n as usize) }.unwrap();
+        self.cursor_change_pin(new);
+        let page_rac = unsafe { (*self.cursor.page_pin).row_and_cell() };
+        self.cursor.page_row = page_rac.row;
+        self.cursor.page_cell = page_rac.cell;
+
+        self.assert_integrity();
     }
 
+    /// Move the cursor to some absolute horizontal position.
     pub fn cursor_horizontal_absolute(&mut self, x: size::CellCountInt) {
-        todo!()
+        debug_assert!(x < self.pages.cols);
+
+        unsafe { (*self.cursor.page_pin).x = x };
+        let page_rac = unsafe { (*self.cursor.page_pin).row_and_cell() };
+        self.cursor.page_cell = page_rac.cell;
+        self.cursor.x = x;
+
+        self.assert_integrity();
     }
 
+    /// Move the cursor to some absolute position.
     pub fn cursor_absolute(&mut self, x: size::CellCountInt, y: size::CellCountInt) {
-        todo!()
+        debug_assert!(x < self.pages.cols);
+        debug_assert!(y < self.pages.rows);
+
+        let mut page_pin = if y < self.cursor.y {
+            unsafe { (*self.cursor.page_pin).up((self.cursor.y - y) as usize) }.unwrap()
+        } else if y > self.cursor.y {
+            unsafe { (*self.cursor.page_pin).down((y - self.cursor.y) as usize) }.unwrap()
+        } else {
+            unsafe { *self.cursor.page_pin }
+        };
+        page_pin.x = x;
+        self.cursor.x = x; // Must be set before cursorChangePin
+        self.cursor.y = y;
+        self.cursor_change_pin(page_pin);
+        let page_rac = unsafe { (*self.cursor.page_pin).row_and_cell() };
+        self.cursor.page_row = page_rac.row;
+        self.cursor.page_cell = page_rac.cell;
+
+        self.assert_integrity();
     }
 
+    /// Reloads the cursor pointer information into the screen. This is expensive
+    /// so it should only be done in cases where the pointers are invalidated
+    /// in such a way that its difficult to recover otherwise.
     pub fn cursor_reload(&mut self) {
-        todo!()
+        // Our tracked pin is ALWAYS accurate, so we derive the active
+        // point from the pin. If this returns null it means our pin
+        // points outside the active area. In that case, we update the
+        // pin to be the top-left.
+        let pt: point::Point = match self
+            .pages
+            .point_from_pin(point::Tag::Active, unsafe { *self.cursor.page_pin })
+        {
+            Some(pt) => pt,
+            None => {
+                let pin = self
+                    .pages
+                    .pin(point::Point::Active(point::Coordinate::default()))
+                    .unwrap();
+                unsafe { *self.cursor.page_pin = pin };
+                self.pages.point_from_pin(point::Tag::Active, pin).unwrap()
+            }
+        };
+
+        self.cursor.x = pt.coord().x;
+        self.cursor.y = pt.coord().y as size::CellCountInt;
+        let page_rac = unsafe { (*self.cursor.page_pin).row_and_cell() };
+        self.cursor.page_row = page_rac.row;
+        self.cursor.page_cell = page_rac.cell;
+
+        // If we have a style, we need to ensure it is in the page because this
+        // method may also be called after a page change.
+        if self.cursor.style_id != style::DEFAULT_ID {
+            if let Err(_err) = self.manual_style_update() {
+                // This failure should not happen because manualStyleUpdate
+                // handles page splitting, overflow, and more. This should only
+                // happen if we're out of RAM. In this case, we'll just degrade
+                // gracefully back to the default style.
+                // log.err("failed to update style on cursor reload err={}", .{err});
+                self.cursor.style = style::Style::default();
+                self.cursor.style_id = 0;
+            }
+        }
+
+        self.assert_integrity();
     }
 
+    /// Scroll the active area and keep the cursor at the bottom of the screen.
+    /// This is a very specialized function but it keeps it fast.
     pub fn cursor_down_scroll(&mut self) -> Result<(), OutOfMemory> {
-        todo!()
+        debug_assert!(self.cursor.y == self.pages.rows - 1);
+
+        // PORT NOTE: the reference here sets `self.kitty_images.dirty = true`
+        // inside `if (comptime build_options.kitty_graphics)`. Kitty graphics
+        // `ImageStorage` is DEFERRED to vt-12 (the field is the
+        // `graphics_storage::Deferred` placeholder).
+
+        // If we have no scrollback, then we shift all our rows instead.
+        if self.no_scrollback {
+            // If we have a single-row screen, we have no rows to shift
+            // so our cursor is in the correct place we just have to clear
+            // the cells.
+            if self.pages.rows == 1 {
+                let page: *mut Page =
+                    unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+                let row = self.cursor.page_row;
+                let cells = unsafe { (*page).get_cells(row) };
+                self.clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
+                    &mut *cells
+                });
+                self.cursor_mark_dirty();
+            } else {
+                // The call to `eraseRow` will move the tracked cursor pin up by one
+                // row, but we don't actually want that, so we keep the old pin and
+                // put it back after calling `eraseRow`.
+                let old_pin = unsafe { *self.cursor.page_pin };
+
+                // eraseRow will shift everything below it up.
+                self.pages
+                    .erase_row(point::Point::Active(point::Coordinate::default()))?;
+
+                // Note we don't need to mark anything dirty in this branch
+                // because eraseRow will mark all the rotated rows as dirty
+                // in the entire page.
+
+                // We don't use `cursorChangePin` here because we aren't
+                // actually changing the pin, we're keeping it the same.
+                unsafe { *self.cursor.page_pin = old_pin };
+
+                // We do, however, need to refresh the cached page row
+                // and cell, because `eraseRow` will have moved the row.
+                let page_rac = unsafe { (*self.cursor.page_pin).row_and_cell() };
+                self.cursor.page_row = page_rac.row;
+                self.cursor.page_cell = page_rac.cell;
+            }
+        } else {
+            let old_pin = unsafe { *self.cursor.page_pin };
+
+            // Grow our pages by one row. The PageList will handle if we need to
+            // allocate, prune scrollback, whatever.
+            let _ = self.pages.grow()?;
+
+            // We do this all in a block here because referencing this pin
+            // after cursorChangePin is unsafe, and we want to keep it out
+            // of scope.
+            let new_pin = {
+                // If our pin page change it means that the page that the pin
+                // was on was pruned. In this case, grow() moves the pin to
+                // the top-left of the new page. This effectively moves it by
+                // one already, we just need to fix up the x value.
+                let page_pin =
+                    if std::ptr::eq(old_pin.node, unsafe { (*self.cursor.page_pin).node }) {
+                        unsafe { (*self.cursor.page_pin).down(1) }.unwrap()
+                    } else {
+                        let mut pin = unsafe { *self.cursor.page_pin };
+                        pin.x = self.cursor.x;
+                        pin
+                    };
+
+                // These assertions help catch some pagelist math errors. Our
+                // x/y should be unchanged after the grow.
+                if crate::options::SLOW_RUNTIME_SAFETY {
+                    let active = self
+                        .pages
+                        .point_from_pin(point::Tag::Active, page_pin)
+                        .unwrap()
+                        .coord();
+                    debug_assert!(active.x == self.cursor.x);
+                    debug_assert!(active.y == self.cursor.y as u32);
+                }
+
+                page_pin
+            };
+            self.cursor_change_pin(new_pin);
+            let page_rac = unsafe { (*self.cursor.page_pin).row_and_cell() };
+            self.cursor.page_row = page_rac.row;
+            self.cursor.page_cell = page_rac.cell;
+
+            // Our new row is always dirty
+            self.cursor_mark_dirty();
+
+            // Clear the new row so it gets our bg color. We only do this
+            // if we have a bg color at all.
+            if !matches!(self.cursor.style.bg_color, style::Color::None) {
+                let page: *mut Page =
+                    unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+                let row = self.cursor.page_row;
+                let cells = unsafe { (*page).get_cells(row) };
+                self.clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
+                    &mut *cells
+                });
+            }
+        }
+
+        if self.cursor.style_id != style::DEFAULT_ID {
+            // The newly created line needs to be styled according to
+            // the bg color if it is set.
+            if let Some(blank_cell) = self.cursor.style.bg_cell() {
+                let cell_current: *mut pagepkg::Cell = self.cursor.page_cell;
+                let cells = unsafe { cell_current.sub(self.cursor.x as usize) };
+                unsafe {
+                    core::slice::from_raw_parts_mut(cells, self.pages.cols as usize)
+                        .fill(blank_cell)
+                };
+            }
+        }
+
+        self.assert_integrity();
+        Ok(())
     }
 
+    /// This scrolls the active area at and above the cursor.
+    /// The lines below the cursor are not scrolled.
     pub fn cursor_scroll_above(&mut self) -> Result<(), OutOfMemory> {
-        todo!()
+        // We unconditionally mark the cursor row as dirty here because
+        // the cursor always changes page rows inside this function, and
+        // when that happens it can mean the text in the old row needs to
+        // be re-shaped because the cursor splits runs to break ligatures.
+        self.cursor_mark_dirty();
+
+        // If the cursor is on the bottom of the screen, its faster to use
+        // our specialized function for that case.
+        if self.cursor.y == self.pages.rows - 1 {
+            return self.cursor_down_scroll();
+        }
+
+        // Logic below assumes we always have at least one row that isn't moving
+        debug_assert!(self.cursor.y < self.pages.rows - 1);
+
+        // Explanation:
+        //  We don't actually move everything that's at or above the cursor row,
+        //  since this would require us to shift up our ENTIRE scrollback, which
+        //  would be ridiculously expensive. Instead, we insert a new row at the
+        //  end of the pagelist (`grow()`), and move everything BELOW the cursor
+        //  DOWN by one row. This has the same practical result but it's a whole
+        //  lot cheaper in 99% of cases.
+
+        let old_pin = unsafe { *self.cursor.page_pin };
+        if self.pages.grow()?.is_some() {
+            self.cursor_scroll_above_rotate()?;
+        } else {
+            // In this case, it means grow() didn't allocate a new page.
+
+            if std::ptr::eq(
+                unsafe { (*self.cursor.page_pin).node },
+                self.pages.pages.last,
+            ) {
+                // If we're on the last page we can do a very fast path because
+                // all the rows we need to move around are within a single page.
+
+                // Note: we don't need to call cursorChangePin here because
+                // the pin page is the same so there is no accounting to do
+                // for styles or any of that.
+                debug_assert!(std::ptr::eq(old_pin.node, unsafe {
+                    (*self.cursor.page_pin).node
+                }));
+                let down = unsafe { (*self.cursor.page_pin).down(1) }.unwrap();
+                unsafe { *self.cursor.page_pin = down };
+
+                let pin = self.cursor.page_pin;
+                let page: *mut Page =
+                    unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+
+                // Rotate the rows so that the newly created empty row is at the
+                // beginning. e.g. [ 0 1 2 3 ] in to [ 3 0 1 2 ].
+                let rows = unsafe { (*page).rows.ptr((*page).memory_ptr()) };
+                let pin_y = unsafe { (*pin).y } as usize;
+                let size_rows = unsafe { (*page).size.rows } as usize;
+                fastmem::rotateOnceR(unsafe {
+                    core::slice::from_raw_parts_mut(rows.add(pin_y), size_rows - pin_y)
+                });
+
+                // Mark the whole page as dirty.
+                //
+                // Technically we only need to mark from the cursor row to the
+                // end but this is a hot function, so we want to minimize work.
+                unsafe { (*page).dirty = true };
+
+                // Setup our cursor caches after the rotation so it points to the
+                // correct data
+                let page_rac = unsafe { (*self.cursor.page_pin).row_and_cell() };
+                self.cursor.page_row = page_rac.row;
+                self.cursor.page_cell = page_rac.cell;
+            } else {
+                // We didn't grow pages but our cursor isn't on the last page.
+                // In this case we need to do more work because we need to copy
+                // elements between pages.
+                //
+                // An example scenario of this is shown below:
+                //
+                //      +----------+ = PAGE 0
+                //  ... :          :
+                //     +-------------+ ACTIVE
+                // 4302 |1A00000000| | 0
+                // 4303 |2B00000000| | 1
+                //      :^         : : = PIN 0
+                // 4304 |3C00000000| | 2
+                //      +----------+ :
+                //      +----------+ : = PAGE 1
+                //    0 |4D00000000| | 3
+                //    1 |5E00000000| | 4
+                //      +----------+ :
+                //     +-------------+
+                self.cursor_scroll_above_rotate()?;
+            }
+        }
+
+        if self.cursor.style_id != style::DEFAULT_ID {
+            // The newly created line needs to be styled according to
+            // the bg color if it is set.
+            if let Some(blank_cell) = self.cursor.style.bg_cell() {
+                let cell_current: *mut pagepkg::Cell = self.cursor.page_cell;
+                let cells = unsafe { cell_current.sub(self.cursor.x as usize) };
+                unsafe {
+                    core::slice::from_raw_parts_mut(cells, self.pages.cols as usize)
+                        .fill(blank_cell)
+                };
+            }
+        }
+
+        self.assert_integrity();
+        Ok(())
     }
 
     fn cursor_scroll_above_rotate(&mut self) -> Result<(), OutOfMemory> {
-        todo!()
+        let down = unsafe { (*self.cursor.page_pin).down(1) }.unwrap();
+        self.cursor_change_pin(down);
+
+        // Go through each of the pages following our pin, shift all rows
+        // down by one, and copy the last row of the previous page.
+        let mut current = self.pages.pages.last;
+        assert!(!current.is_null());
+        while !std::ptr::eq(current, unsafe { (*self.cursor.page_pin).node }) {
+            let prev = unsafe { (*current).prev };
+            let prev_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*prev).data) };
+            let cur_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*current).data) };
+            let prev_rows = unsafe { (*prev_page).rows.ptr((*prev_page).memory_ptr()) };
+            let cur_rows = unsafe { (*cur_page).rows.ptr((*cur_page).memory_ptr()) };
+
+            // Rotate the pages down: [ 0 1 2 3 ] => [ 3 0 1 2 ]
+            let cur_size_rows = unsafe { (*cur_page).size.rows } as usize;
+            fastmem::rotateOnceR(unsafe {
+                core::slice::from_raw_parts_mut(cur_rows, cur_size_rows)
+            });
+
+            // Copy the last row of the previous page to the top of current.
+            let prev_size_rows = unsafe { (*prev_page).size.rows } as usize;
+            unsafe {
+                (*cur_page)
+                    .clone_row_from(prev_page, cur_rows, prev_rows.add(prev_size_rows - 1))
+                    .map_err(|_| OutOfMemory)?
+            };
+
+            // Mark dirty on the page, since we are dirtying all rows with this.
+            unsafe { (*cur_page).dirty = true };
+
+            current = prev;
+        }
+
+        // Our current is our cursor page, we need to rotate down from
+        // our cursor and clear our row.
+        debug_assert!(std::ptr::eq(current, unsafe {
+            (*self.cursor.page_pin).node
+        }));
+        let cur_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*current).data) };
+        let cur_rows = unsafe { (*cur_page).rows.ptr((*cur_page).memory_ptr()) };
+        let pin_y = unsafe { (*self.cursor.page_pin).y } as usize;
+        let cur_size_rows = unsafe { (*cur_page).size.rows } as usize;
+        fastmem::rotateOnceR(unsafe {
+            core::slice::from_raw_parts_mut(cur_rows.add(pin_y), cur_size_rows - pin_y)
+        });
+        let row = unsafe { cur_rows.add(pin_y) };
+        let cells = unsafe { (*cur_page).get_cells(row) };
+        self.clear_cells(unsafe { &mut *cur_page }, unsafe { &mut *row }, unsafe {
+            &mut *cells
+        });
+
+        // Mark the whole page as dirty.
+        //
+        // Technically we only need to mark from the cursor row to the
+        // end but this is a hot function, so we want to minimize work.
+        unsafe { (*cur_page).dirty = true };
+
+        // Setup cursor cache data after all the rotations so our
+        // row is valid.
+        let page_rac = unsafe { (*self.cursor.page_pin).row_and_cell() };
+        self.cursor.page_row = page_rac.row;
+        self.cursor.page_cell = page_rac.cell;
+        Ok(())
     }
 
+    /// Move the cursor down if we're not at the bottom of the screen. Otherwise
+    /// scroll. Currently only used for testing.
     fn cursor_down_or_scroll(&mut self) -> Result<(), OutOfMemory> {
-        todo!()
+        if self.cursor.y + 1 < self.pages.rows {
+            self.cursor_down(1);
+            Ok(())
+        } else {
+            self.cursor_down_scroll()
+        }
     }
 
+    /// Always use this to write to cursor.page_pin.*.
+    ///
+    /// This specifically handles the case when the new pin is on a different
+    /// page than the old AND we have a style or hyperlink set. In that case,
+    /// we must release our old one and insert the new one, since styles are
+    /// stored per-page.
+    ///
+    /// Note that this can change the cursor pin AGAIN if the process of
+    /// setting up our cursor forces a capacity adjustment of the underlying
+    /// cursor page, so any references to the page pin should be re-read
+    /// from `self.cursor.page_pin` after calling this.
     fn cursor_change_pin(&mut self, new: Pin) {
-        todo!()
+        // Moving the cursor affects text run splitting (ligatures) so
+        // we must mark the old and new page dirty. We do this as long
+        // as the pins are not equal
+        if !unsafe { (*self.cursor.page_pin).eql(new) } {
+            self.cursor_mark_dirty();
+            new.mark_dirty();
+        }
+
+        // If our pin is on the same page, then we can just update the pin.
+        // We don't need to migrate any state.
+        if std::ptr::eq(unsafe { (*self.cursor.page_pin).node }, new.node) {
+            unsafe { *self.cursor.page_pin = new };
+            return;
+        }
+
+        // If we have an old style then we need to release it from the old page.
+        let old_style_: Option<style::Style> = if self.cursor.style_id == style::DEFAULT_ID {
+            None
+        } else {
+            Some(self.cursor.style)
+        };
+        if old_style_.is_some() {
+            // Release the style directly from the old page instead of going through
+            // manualStyleUpdate, because the cursor position may have already been
+            // updated but the pin has not, which would fail integrity checks.
+            let old_page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+            unsafe {
+                let base = (*old_page).memory_ptr();
+                (*old_page).styles.release(base, self.cursor.style_id);
+            }
+            self.cursor.style = style::Style::default();
+            self.cursor.style_id = style::DEFAULT_ID;
+        }
+
+        // If we have a hyperlink then we need to release it from the old page.
+        if self.cursor.hyperlink.is_some() {
+            let old_page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+            unsafe {
+                let base = (*old_page).memory_ptr();
+                (*old_page)
+                    .hyperlink_set
+                    .release(base, self.cursor.hyperlink_id);
+            }
+        }
+
+        // Update our pin to the new page
+        unsafe { *self.cursor.page_pin = new };
+
+        // On the new page, we need to migrate our style
+        if let Some(old_style) = old_style_ {
+            self.cursor.style = old_style;
+            if let Err(_err) = self.manual_style_update() {
+                // This failure should not happen because manualStyleUpdate
+                // handles page splitting, overflow, and more. This should only
+                // happen if we're out of RAM. In this case, we'll just degrade
+                // gracefully back to the default style.
+                // log.err("failed to update style on cursor change err={}", .{err});
+                self.cursor.style = style::Style::default();
+                self.cursor.style_id = 0;
+            }
+        }
+
+        // On the new page, we need to migrate our hyperlink
+        if let Some(link) = self.cursor.hyperlink {
+            // So we don't attempt to free any memory in the replaced page.
+            self.cursor.hyperlink_id = 0;
+            self.cursor.hyperlink = None;
+
+            // Re-add
+            let uri = unsafe { (*link).uri.clone() };
+            let id_ = match unsafe { &(*link).id } {
+                hyperlink::HyperlinkId::Explicit(v) => Some(v.clone()),
+                hyperlink::HyperlinkId::Implicit(_) => None,
+            };
+            if let Err(_err) = self.start_hyperlink(&uri, id_.as_deref()) {
+                // This shouldn't happen because startHyperlink should handle
+                // resizing. This only happens if we're truly out of RAM. Degrade
+                // to forgetting the hyperlink.
+                // log.err("failed to update hyperlink on cursor change err={}", .{err});
+            }
+
+            // Remove our old link
+            let boxed = unsafe { Box::from_raw(link) };
+            boxed.deinit();
+            drop(boxed);
+        }
     }
 
+    /// Copy another cursor. The cursor can be on any screen but the x/y
+    /// must be within our screen bounds.
     pub fn cursor_copy(
         &mut self,
         other: Cursor,
         opts: CursorCopyOptions,
     ) -> Result<(), OutOfMemory> {
-        todo!()
+        debug_assert!(other.x < self.pages.cols);
+        debug_assert!(other.y < self.pages.rows);
+
+        // End any currently active hyperlink on our cursor.
+        self.end_hyperlink();
+
+        // PORT NOTE: the reference does `const old = self.cursor; self.cursor =
+        // other; errdefer self.cursor = old;`. `other` is taken by value
+        // (`Cursor` is a plain value type here). We capture the fields of the old
+        // cursor we still need (`style_id`, `page_pin`, `x`, `y`) before
+        // overwriting, since `Cursor` is not trivially `Copy` (it owns the heap
+        // hyperlink pointer). The `errdefer` revert is not reachable in the ports
+        // we exercise (the only fallible call below, `manualStyleUpdate`, on
+        // failure degrades internally and the reference's `try` would propagate),
+        // so we propagate the error after restoring observable state.
+        let old_style_id = self.cursor.style_id;
+        let old_page_pin = self.cursor.page_pin;
+        let old_x = self.cursor.x;
+        let old_y = self.cursor.y;
+
+        // Take ownership of `other`'s heap hyperlink (the reference moves the
+        // whole struct); we then clear it on `self.cursor` and manage it below.
+        let other_hyperlink_id = other.hyperlink_id;
+        let other_page_pin = other.page_pin;
+        let other_x = other.x;
+        let other_y = other.y;
+
+        let mut new_cursor = other;
+        // Keep our old style ID so it can be properly cleaned up below.
+        new_cursor.style_id = old_style_id;
+        // Hyperlinks will be managed separately below.
+        new_cursor.hyperlink_id = 0;
+        new_cursor.hyperlink = None;
+        // Keep our old page pin and X/Y because:
+        // 1. The old style will need to be cleaned up from the page it's from.
+        // 2. The new position navigated to by `cursorAbsolute` needs to be in our
+        //    own screen.
+        new_cursor.page_pin = old_page_pin;
+        new_cursor.x = old_x;
+        new_cursor.y = old_y;
+
+        self.cursor = new_cursor;
+
+        // Call manual style update in order to clean up our old style, if we have
+        // one, and also to load the style from the other cursor, if it had one.
+        self.manual_style_update().map_err(|_| OutOfMemory)?;
+
+        // Move to the correct location to match the other cursor.
+        self.cursor_absolute(other_x, other_y);
+
+        // If the other cursor had a hyperlink, add it to ours.
+        if opts.hyperlink && other_hyperlink_id != 0 {
+            // Get the hyperlink from the other cursor's page.
+            let other_page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*other_page_pin).node).data) };
+            let other_link = unsafe {
+                let base = (*other_page).memory_ptr();
+                (*other_page).hyperlink_set.get(base, other_hyperlink_id)
+            };
+
+            let other_base = unsafe { (*other_page).memory_ptr() };
+            let uri = unsafe { (*other_link).uri.slice(other_base) }.to_vec();
+            let id_: Option<Vec<u8>> = match unsafe { &(*other_link).id } {
+                hyperlink::PageEntryId::Explicit(slice) => {
+                    Some(unsafe { slice.slice(other_base) }.to_vec())
+                }
+                hyperlink::PageEntryId::Implicit(_) => None,
+            };
+
+            // And it to our cursor.
+            if let Err(_err) = self.start_hyperlink(&uri, id_.as_deref()) {
+                // This shouldn't happen because startHyperlink should handle
+                // resizing. This only happens if we're truly out of RAM. Degrade
+                // to forgetting the hyperlink.
+                // log.err("failed to update hyperlink on cursor change err={}", .{err});
+            }
+        }
+
+        Ok(())
     }
 
+    /// Mark the cursor position as dirty.
+    /// TODO: test
+    #[inline]
     pub fn cursor_mark_dirty(&mut self) {
-        todo!()
+        unsafe { (*self.cursor.page_row).set_dirty(true) };
     }
 
+    /// Reset the cursor row's soft-wrap state and the cursor's pending wrap.
+    /// Also handles clearing the spacer head on the cursor row and resetting
+    /// the wrap_continuation flag on the next row if necessary.
+    ///
+    /// NOTE(qwerasd): This method is not scrolling region aware, and cannot be
+    /// since it's on Screen not Terminal. This needs to be addressed down the
+    /// line. Not an extremely urgent issue since it's an edge case of an edge
+    /// case, but not ideal.
     pub fn cursor_reset_wrap(&mut self) {
-        todo!()
+        // Reset the cursor's pending wrap state
+        self.cursor.pending_wrap = false;
+
+        let page_row = self.cursor.page_row;
+
+        if !unsafe { (*page_row).wrap() } {
+            return;
+        }
+
+        // This row does not wrap and the next row is not wrapped to
+        unsafe { (*page_row).set_wrap(false) };
+
+        if let Some(next_row) = unsafe { (*self.cursor.page_pin).down(1) } {
+            unsafe { (*next_row.row_and_cell().row).set_wrap_continuation(false) };
+        }
+
+        // If the last cell in the row is a spacer head we need to clear it.
+        let cells = unsafe { (*self.cursor.page_pin).cells(pagelist::pin::CellSubset::All) };
+        let cols = unsafe { (*(*self.cursor.page_pin).node).data.size.cols } as usize;
+        let cell = unsafe { *(cells as *mut pagepkg::Cell).add(cols - 1) };
+        if cell.wide() == pagepkg::Wide::SpacerHead {
+            let page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+            let last = unsafe { (cells as *mut pagepkg::Cell).add(cols - 1) };
+            let slice = core::ptr::slice_from_raw_parts_mut(last, 1);
+            self.clear_cells(unsafe { &mut *page }, unsafe { &mut *page_row }, unsafe {
+                &mut *slice
+            });
+        }
     }
 
     /// Scroll the viewport of the terminal grid.
     pub fn scroll(&mut self, behavior: Scroll) {
-        todo!()
+        // PORT NOTE: the reference here sets `self.kitty_images.dirty = true`
+        // inside `if (comptime build_options.kitty_graphics)`. Kitty graphics
+        // `ImageStorage` is DEFERRED to vt-12 (the field is the
+        // `graphics_storage::Deferred` placeholder).
+
+        match behavior {
+            Scroll::Active => self.pages.scroll(pagelist::scroll::Scroll::Active),
+            Scroll::Top => self.pages.scroll(pagelist::scroll::Scroll::Top),
+            Scroll::Pin(p) => self.pages.scroll(pagelist::scroll::Scroll::Pin(p)),
+            Scroll::Row(v) => self.pages.scroll(pagelist::scroll::Scroll::Row(v)),
+            Scroll::DeltaRow(v) => self.pages.scroll(pagelist::scroll::Scroll::DeltaRow(v)),
+            Scroll::DeltaPrompt(v) => self.pages.scroll(pagelist::scroll::Scroll::DeltaPrompt(v)),
+        }
+
+        self.assert_integrity();
     }
 
     /// See PageList.scrollClear. In addition to that, we reset the cursor
     /// to be on top.
     pub fn scroll_clear(&mut self) -> Result<(), OutOfMemory> {
-        todo!()
+        self.pages.scroll_clear()?;
+        self.cursor_reload();
+
+        // PORT NOTE: the reference here sets `self.kitty_images.dirty = true`
+        // inside `if (comptime build_options.kitty_graphics)`. Kitty graphics
+        // `ImageStorage` is DEFERRED to vt-12 (the field is the
+        // `graphics_storage::Deferred` placeholder).
+
+        self.assert_integrity();
+        Ok(())
     }
 
     /// Returns true if the viewport is scrolled to the bottom of the screen.
     pub fn viewport_is_bottom(&self) -> bool {
-        todo!()
+        matches!(self.pages.viewport, pagelist::Viewport::Active)
     }
 
     /// Erase the region specified by tl and br, inclusive. This will physically
@@ -630,19 +1584,138 @@ impl Screen {
     ///
     /// This takes care to handle cleaning up graphemes and styles.
     pub fn clear_cells(&mut self, page: &mut Page, row: &mut Row, cells: &mut [Cell]) {
-        todo!()
+        // This whole operation does unsafe things, so we just want to assert
+        // the end state.
+        page.pause_integrity_checks(true);
+
+        // PORT NOTE: the reference uses a `defer` block to resume integrity
+        // checks + assert at every exit; with a single exit path we run it at
+        // the end. (No early returns in this body.)
+
+        if cfg!(debug_assertions) {
+            // Our row and cells should be within the page.
+            let page_rows = unsafe { page.rows.ptr(page.memory_ptr()) };
+            debug_assert!(row as *mut Row as usize >= page_rows as usize);
+            debug_assert!(
+                row as *mut Row as usize
+                    <= unsafe { page_rows.add(page.size.rows as usize - 1) } as usize
+            );
+
+            let row_cells = page.get_cells(row);
+            let row_cells_base = row_cells as *mut Cell;
+            let row_cells_len = row_cells.len();
+            debug_assert!(cells.as_ptr() as usize >= row_cells_base as usize);
+            debug_assert!(
+                unsafe { cells.as_ptr().add(cells.len() - 1) } as usize
+                    <= unsafe { row_cells_base.add(row_cells_len - 1) } as usize
+            );
+        }
+
+        // If we have managed memory (styles, graphemes, or hyperlinks)
+        // in this row then we go cell by cell and clear them if present.
+        if row.grapheme() {
+            for cell in cells.iter_mut() {
+                if cell.has_grapheme() {
+                    page.clear_grapheme(cell);
+                }
+            }
+
+            // If we have no left/right scroll region we can be sure
+            // that we've cleared all the graphemes, so we clear the
+            // flag, otherwise we ask the page to update the flag.
+            if cells.len() == self.pages.cols as usize {
+                row.set_grapheme(false);
+            } else {
+                page.update_row_grapheme_flag(row);
+            }
+        }
+
+        if row.hyperlink() {
+            for cell in cells.iter_mut() {
+                if cell.hyperlink() {
+                    page.clear_hyperlink(cell);
+                }
+            }
+
+            // If we have no left/right scroll region we can be sure
+            // that we've cleared all the hyperlinks, so we clear the
+            // flag, otherwise we ask the page to update the flag.
+            if cells.len() == self.pages.cols as usize {
+                row.set_hyperlink(false);
+            } else {
+                page.update_row_hyperlink_flag(row);
+            }
+        }
+
+        if row.styled() {
+            for cell in cells.iter() {
+                if cell.has_styling() {
+                    unsafe {
+                        let base = (*page).memory_ptr();
+                        page.styles.release(base, cell.style_id());
+                    }
+                }
+            }
+
+            // If we have no left/right scroll region we can be sure
+            // that we've cleared all the styles, so we clear the
+            // flag, otherwise we ask the page to update the flag.
+            if cells.len() == self.pages.cols as usize {
+                row.set_styled(false);
+            } else {
+                page.update_row_styled_flag(row);
+            }
+        }
+
+        // PORT NOTE: the reference has a kitty-graphics block here that clears
+        // the `kitty_virtual_placeholder` row flag. The kitty graphics feature
+        // operates over the deferred `ImageStorage`; the placeholder-clearing
+        // logic is row-local and lands with the kitty co-port (vt-12).
+
+        let blank = self.blank_cell();
+        cells.fill(blank);
+
+        // defer { page.pauseIntegrityChecks(false); page.assertIntegrity();
+        //   self.assertIntegrity(); }
+        page.pause_integrity_checks(false);
+        page.assert_integrity();
+        self.assert_integrity();
     }
 
+    /// Clear cells but only if they are not protected.
     pub fn clear_unprotected_cells(&mut self, page: &mut Page, row: &mut Row, cells: &mut [Cell]) {
-        todo!()
+        let mut x0: usize = 0;
+        let mut x1: usize;
+
+        'clear: while x0 < cells.len() {
+            while cells[x0].protected() {
+                x0 += 1;
+                if x0 >= cells.len() {
+                    break 'clear;
+                }
+            }
+            x1 = x0 + 1;
+            while x1 < cells.len() && !cells[x1].protected() {
+                x1 += 1;
+            }
+            self.clear_cells(page, row, &mut cells[x0..x1]);
+            x0 = x1;
+        }
+
+        page.assert_integrity();
+        self.assert_integrity();
     }
 
     pub fn split_cell_boundary(&mut self, x: size::CellCountInt) {
         todo!()
     }
 
+    #[inline]
     pub fn blank_cell(&self) -> Cell {
-        todo!()
+        if self.cursor.style_id == style::DEFAULT_ID {
+            return Cell::zeroed();
+        }
+        self.cursor.style.bg_cell().unwrap_or_else(Cell::zeroed)
     }
 
     /// Resize the screen. The rows or cols can be bigger or smaller.
@@ -658,40 +1731,655 @@ impl Screen {
         todo!()
     }
 
-    pub fn set_attribute(&mut self, attr: crate::sgr::Attribute<'_>) -> Result<(), OutOfMemory> {
-        todo!()
+    pub fn set_attribute(
+        &mut self,
+        attr: crate::sgr::Attribute<'_>,
+    ) -> Result<(), pagelist::grow::IncreaseCapacityError> {
+        use crate::sgr::Attribute;
+        use crate::style::Color;
+
+        // If we fail to set our style for any reason, we should revert
+        // back to the old style. If we fail to do that, we revert back to
+        // the default style.
+        let old_style = self.cursor.style;
+        // PORT NOTE: this closure mirrors the reference `errdefer` block. Rust
+        // has no `errdefer`, so we invoke it on the error path below.
+        let revert = |s: &mut Screen| {
+            s.cursor.style = old_style;
+            if s.manual_style_update().is_err() {
+                // log.warn("setAttribute error restoring old style after failure ...");
+                s.cursor.style = style::Style::default();
+                s.manual_style_update()
+                    .expect("manualStyleUpdate to default cannot fail");
+            }
+        };
+
+        match attr {
+            Attribute::Unset => {
+                self.cursor.style = style::Style::default();
+            }
+
+            Attribute::Bold => {
+                self.cursor.style.flags.bold = true;
+            }
+
+            Attribute::ResetBold => {
+                // Bold and faint share the same SGR code for this
+                self.cursor.style.flags.bold = false;
+                self.cursor.style.flags.faint = false;
+            }
+
+            Attribute::Italic => {
+                self.cursor.style.flags.italic = true;
+            }
+
+            Attribute::ResetItalic => {
+                self.cursor.style.flags.italic = false;
+            }
+
+            Attribute::Faint => {
+                self.cursor.style.flags.faint = true;
+            }
+
+            Attribute::Underline(v) => {
+                self.cursor.style.flags.underline = v;
+            }
+
+            Attribute::UnderlineColor(rgb) => {
+                self.cursor.style.underline_color = Color::Rgb(crate::color::RGB {
+                    r: rgb.r,
+                    g: rgb.g,
+                    b: rgb.b,
+                });
+            }
+
+            Attribute::Color256Underline(idx) => {
+                self.cursor.style.underline_color = Color::Palette(idx);
+            }
+
+            Attribute::ResetUnderlineColor => {
+                self.cursor.style.underline_color = Color::None;
+            }
+
+            Attribute::Overline => {
+                self.cursor.style.flags.overline = true;
+            }
+
+            Attribute::ResetOverline => {
+                self.cursor.style.flags.overline = false;
+            }
+
+            Attribute::Blink => {
+                self.cursor.style.flags.blink = true;
+            }
+
+            Attribute::ResetBlink => {
+                self.cursor.style.flags.blink = false;
+            }
+
+            Attribute::Inverse => {
+                self.cursor.style.flags.inverse = true;
+            }
+
+            Attribute::ResetInverse => {
+                self.cursor.style.flags.inverse = false;
+            }
+
+            Attribute::Invisible => {
+                self.cursor.style.flags.invisible = true;
+            }
+
+            Attribute::ResetInvisible => {
+                self.cursor.style.flags.invisible = false;
+            }
+
+            Attribute::Strikethrough => {
+                self.cursor.style.flags.strikethrough = true;
+            }
+
+            Attribute::ResetStrikethrough => {
+                self.cursor.style.flags.strikethrough = false;
+            }
+
+            Attribute::DirectColorFg(rgb) => {
+                self.cursor.style.fg_color = Color::Rgb(crate::color::RGB {
+                    r: rgb.r,
+                    g: rgb.g,
+                    b: rgb.b,
+                });
+            }
+
+            Attribute::DirectColorBg(rgb) => {
+                self.cursor.style.bg_color = Color::Rgb(crate::color::RGB {
+                    r: rgb.r,
+                    g: rgb.g,
+                    b: rgb.b,
+                });
+            }
+
+            Attribute::Color8Fg(n) => {
+                self.cursor.style.fg_color = Color::Palette(n.cval());
+            }
+
+            Attribute::Color8Bg(n) => {
+                self.cursor.style.bg_color = Color::Palette(n.cval());
+            }
+
+            Attribute::ResetFg => self.cursor.style.fg_color = Color::None,
+
+            Attribute::ResetBg => self.cursor.style.bg_color = Color::None,
+
+            Attribute::Color8BrightFg(n) => {
+                self.cursor.style.fg_color = Color::Palette(n.cval());
+            }
+
+            Attribute::Color8BrightBg(n) => {
+                self.cursor.style.bg_color = Color::Palette(n.cval());
+            }
+
+            Attribute::Color256Fg(idx) => {
+                self.cursor.style.fg_color = Color::Palette(idx);
+            }
+
+            Attribute::Color256Bg(idx) => {
+                self.cursor.style.bg_color = Color::Palette(idx);
+            }
+
+            Attribute::Unknown(_) => return Ok(()),
+        }
+
+        match self.manual_style_update() {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                revert(self);
+                Err(e)
+            }
+        }
     }
 
+    /// Call this whenever you manually change the cursor style.
+    ///
+    /// This function can NOT fail if the cursor style is changing to the
+    /// default style.
+    ///
+    /// If this returns an error, the style change did not take effect and
+    /// the cursor style is reverted back to the default. The only scenario
+    /// this returns an error is if there is a physical memory allocation failure
+    /// or if there is no possible way to increase style capacity to store
+    /// the style.
+    ///
+    /// This function WILL split pages as necessary to accommodate the new style.
+    /// So if OutOfSpace is returned, it means that even after splitting the page
+    /// there was still no room for the new style.
     pub fn manual_style_update(&mut self) -> Result<(), pagelist::grow::IncreaseCapacityError> {
-        todo!()
+        use crate::pagelist::grow::{IncreaseCapacity, IncreaseCapacityError};
+        use crate::ref_counted_set::AddError;
+
+        let mut page: *mut Page =
+            unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+
+        // Release our previous style if it was not default.
+        if self.cursor.style_id != style::DEFAULT_ID {
+            unsafe {
+                let base = (*page).memory_ptr();
+                (*page).styles.release(base, self.cursor.style_id);
+            }
+        }
+
+        // If our new style is the default, just reset to that
+        if self.cursor.style.default_style() {
+            self.cursor.style_id = style::DEFAULT_ID;
+            self.assert_integrity();
+            return Ok(());
+        }
+
+        // Clear the cursor style ID to prevent weird things from happening
+        // if the page capacity has to be adjusted which would end up calling
+        // manualStyleUpdate again.
+        //
+        // This also ensures that if anything fails below, we fall back to
+        // clearing our style.
+        self.cursor.style_id = style::DEFAULT_ID;
+
+        // After setting the style, we need to update our style map.
+        let add_result = unsafe {
+            let base = (*page).memory_ptr();
+            (*page).styles.add(base, self.cursor.style)
+        };
+        let id = match add_result {
+            Ok(id) => id,
+            Err(err) => {
+                // Our style map is full or needs to be rehashed, so we need to
+                // increase style capacity (or rehash).
+                let node = match self.increase_capacity(
+                    unsafe { (*self.cursor.page_pin).node },
+                    match err {
+                        AddError::OutOfMemory => Some(IncreaseCapacity::Styles),
+                        AddError::NeedsRehash => None,
+                    },
+                ) {
+                    Ok(node) => node,
+                    Err(IncreaseCapacityError::OutOfMemory) => {
+                        self.assert_integrity();
+                        return Err(IncreaseCapacityError::OutOfMemory);
+                    }
+                    Err(IncreaseCapacityError::OutOfSpace) => {
+                        // Out of space, we need to split the page. Split wherever
+                        // is using less capacity and hope that works. If it doesn't
+                        // work, we tried.
+                        // PORT NOTE: the reference `try self.splitForCapacity(..)`
+                        // unifies `SplitError` into `IncreaseCapacityError` (the
+                        // two error sets share `{OutOfMemory, OutOfSpace}`); we map
+                        // explicitly.
+                        self.split_for_capacity(unsafe { *self.cursor.page_pin })
+                            .map_err(|e| match e {
+                                pagelist::grow::SplitError::OutOfMemory => {
+                                    IncreaseCapacityError::OutOfMemory
+                                }
+                                pagelist::grow::SplitError::OutOfSpace => {
+                                    IncreaseCapacityError::OutOfSpace
+                                }
+                            })?;
+                        unsafe { (*self.cursor.page_pin).node }
+                    }
+                };
+
+                page = unsafe { core::ptr::addr_of_mut!((*node).data) };
+                match unsafe {
+                    let base = (*page).memory_ptr();
+                    (*page).styles.add(base, self.cursor.style)
+                } {
+                    Ok(id) => id,
+                    Err(AddError::OutOfMemory) => {
+                        // This shouldn't happen because increaseCapacity is
+                        // guaranteed to increase our capacity by at least one and
+                        // we only need one space, but again, I don't want to crash
+                        // here so let's log loudly and reset.
+                        // log.err("style addition failed after capacity increase", .{});
+                        self.assert_integrity();
+                        return Err(IncreaseCapacityError::OutOfMemory);
+                    }
+                    Err(AddError::NeedsRehash) => {
+                        // This should be impossible because we rehash above
+                        // and rehashing should never result in a duplicate. But
+                        // we don't want to simply hard crash so log it and
+                        // clear our style.
+                        // log.err("style rehash resulted in needs rehash", .{});
+                        self.assert_integrity();
+                        return Ok(());
+                    }
+                }
+            }
+        };
+
+        self.cursor.style_id = id;
+        self.assert_integrity();
+        Ok(())
     }
 
-    fn split_for_capacity(&mut self) -> Result<(), pagelist::grow::IncreaseCapacityError> {
-        todo!()
+    /// Split at the given pin so that the pinned row moves to the page
+    /// with less used capacity after the split.
+    ///
+    /// The primary use case for this is to handle IncreaseCapacityError
+    /// OutOfSpace conditions where we need to split the page in order
+    /// to make room for more managed memory.
+    ///
+    /// If the caller cares about where the pin moves to, they should
+    /// setup a tracked pin before calling this and then check that.
+    /// In many calling cases, the input pin is tracked (e.g. the cursor
+    /// pin).
+    ///
+    /// If this returns OOM then its a system OOM. If this returns OutOfSpace
+    /// then it means the page can't be split further.
+    fn split_for_capacity(&mut self, pin: Pin) -> Result<(), pagelist::grow::SplitError> {
+        // Get our capacities. We include our target row because its
+        // capacity will be preserved.
+        let bytes_above =
+            Page::layout(unsafe { (*pin.node).data.exact_row_capacity(0, pin.y as usize + 1) })
+                .total_size;
+        let bytes_below = Page::layout(unsafe {
+            let rows = (*pin.node).data.size.rows as usize;
+            (*pin.node).data.exact_row_capacity(pin.y as usize, rows)
+        })
+        .total_size;
+
+        // We need to track the old cursor pin because if our split
+        // moves the cursor pin we need to update our accounting.
+        let old_cursor = unsafe { *self.cursor.page_pin };
+
+        // If our bytes above are less than bytes below, we move the pin
+        // to split down one since splitting includes the pinned row in
+        // the new node.
+        self.pages.split(if bytes_above < bytes_below {
+            pin.down(1).unwrap_or(pin)
+        } else {
+            pin
+        })?;
+
+        // Cursor didn't change nodes, we're done.
+        if std::ptr::eq(unsafe { (*self.cursor.page_pin).node }, old_cursor.node) {
+            return Ok(());
+        }
+
+        // Cursor changed, we need to restore the old pin then use
+        // cursorChangePin to move to the new pin. The old node is guaranteed
+        // to still exist, just not the row.
+        //
+        // Note that page_row and all that will be invalid, it points to the
+        // new node, but at the time of writing this we don't need any of that
+        // to be right in cursorChangePin.
+        let new_cursor = unsafe { *self.cursor.page_pin };
+        unsafe { *self.cursor.page_pin = old_cursor };
+        self.cursor_change_pin(new_cursor);
+        Ok(())
     }
 
-    pub fn append_grapheme(&mut self, cell: *mut Cell, cp: u21) -> Result<(), OutOfMemory> {
-        todo!()
+    /// Append a grapheme to the given cell within the current cursor row.
+    pub fn append_grapheme(
+        &mut self,
+        cell: *mut Cell,
+        cp: u21,
+    ) -> Result<(), pagelist::grow::IncreaseCapacityError> {
+        use crate::pagelist::grow::IncreaseCapacity;
+
+        let result = unsafe {
+            (*(*self.cursor.page_pin).node)
+                .data
+                .append_grapheme(self.cursor.page_row, cell, cp)
+        };
+        match result {
+            Ok(()) => {}
+            Err(_oom) => {
+                // We need to determine the actual cell index of the cell so
+                // that after we adjust the capacity we can reload the cell.
+                let cell_idx: usize = {
+                    let cells: *mut Cell = self.cursor.page_cell;
+                    let zero: *mut Cell = unsafe { cells.sub(self.cursor.x as usize) };
+                    let target: *mut Cell = cell;
+                    (target as usize - zero as usize) / core::mem::size_of::<Cell>()
+                };
+
+                // Adjust our capacity. This will update our cursor page pin and
+                // force us to reload.
+                let _ = self.increase_capacity(
+                    unsafe { (*self.cursor.page_pin).node },
+                    Some(IncreaseCapacity::GraphemeBytes),
+                )?;
+
+                // The cell pointer is now invalid, so we need to get it from
+                // the reloaded cursor pointers.
+                let reloaded_cell: *mut Cell = match cell_idx.cmp(&(self.cursor.x as usize)) {
+                    core::cmp::Ordering::Equal => self.cursor.page_cell,
+                    core::cmp::Ordering::Less => self.cursor_cell_left(
+                        (self.cursor.x as usize - cell_idx) as size::CellCountInt,
+                    ),
+                    core::cmp::Ordering::Greater => self.cursor_cell_right(
+                        (cell_idx - self.cursor.x as usize) as size::CellCountInt,
+                    ),
+                };
+
+                unsafe {
+                    (*(*self.cursor.page_pin).node).data.append_grapheme(
+                        self.cursor.page_row,
+                        reloaded_cell,
+                        cp,
+                    )
+                }
+                .map_err(|_err2| {
+                    // This should never happen because we just increased capacity.
+                    // Log loudly but still return an error so we don't just
+                    // crash.
+                    // log.err("grapheme append failed after capacity increase", .{});
+                    pagelist::grow::IncreaseCapacityError::OutOfMemory
+                })?;
+            }
+        }
+        unsafe { (*(*self.cursor.page_pin).node).data.assert_integrity() };
+        Ok(())
     }
 
-    pub fn start_hyperlink(&mut self, uri: &[u8], id_: Option<&[u8]>) -> Result<(), OutOfMemory> {
-        todo!()
+    /// Start the hyperlink state. Future cells will be marked as hyperlinks with
+    /// this state. Note that various terminal operations may clear the hyperlink
+    /// state, such as switching screens (alt screen).
+    pub fn start_hyperlink(
+        &mut self,
+        uri: &[u8],
+        id_: Option<&[u8]>,
+    ) -> Result<(), pagelist::grow::IncreaseCapacityError> {
+        use crate::page::InsertHyperlinkError;
+        use crate::pagelist::grow::IncreaseCapacity;
+
+        // Create our pending entry.
+        let link: hyperlink::Hyperlink = hyperlink::Hyperlink {
+            uri: uri.to_vec(),
+            id: if let Some(id) = id_ {
+                hyperlink::HyperlinkId::Explicit(id.to_vec())
+            } else {
+                let implicit = self.cursor.hyperlink_implicit_id;
+                self.cursor.hyperlink_implicit_id += 1;
+                hyperlink::HyperlinkId::Implicit(implicit)
+            },
+        };
+        // PORT NOTE: the reference `errdefer` decrements `hyperlink_implicit_id`
+        // on the implicit path. The fallible work below is the
+        // `increaseCapacity` calls; on those errors we restore the counter to
+        // mirror the `errdefer`.
+        let implicit_inc = matches!(link.id, hyperlink::HyperlinkId::Implicit(_));
+
+        // Loop until we have enough page memory to add the hyperlink
+        loop {
+            match self.start_hyperlink_once(link.clone()) {
+                Ok(()) => return Ok(()),
+                Err(StartHyperlinkOnceError::OutOfMemory) => {
+                    // An actual self.alloc OOM is a fatal error.
+                    if implicit_inc {
+                        self.cursor.hyperlink_implicit_id -= 1;
+                    }
+                    return Err(pagelist::grow::IncreaseCapacityError::OutOfMemory);
+                }
+                Err(StartHyperlinkOnceError::Insert(insert_err)) => {
+                    let adj = match insert_err {
+                        // strings table is out of memory, adjust it up
+                        InsertHyperlinkError::StringsOutOfMemory => {
+                            Some(IncreaseCapacity::StringBytes)
+                        }
+                        // hyperlink set is out of memory, adjust it up
+                        InsertHyperlinkError::SetOutOfMemory => {
+                            Some(IncreaseCapacity::HyperlinkBytes)
+                        }
+                        // hyperlink set is too full, rehash it
+                        InsertHyperlinkError::SetNeedsRehash => None,
+                    };
+                    if let Err(e) =
+                        self.increase_capacity(unsafe { (*self.cursor.page_pin).node }, adj)
+                    {
+                        if implicit_inc {
+                            self.cursor.hyperlink_implicit_id -= 1;
+                        }
+                        return Err(e);
+                    }
+                }
+            }
+
+            self.assert_integrity();
+        }
     }
 
-    fn start_hyperlink_once(&mut self, link: hyperlink::Hyperlink) -> Result<(), OutOfMemory> {
-        todo!()
+    /// This is like startHyperlink but if we have to adjust page capacities
+    /// this returns error.PageAdjusted. This is useful so that we unwind
+    /// all the previous state and try again.
+    fn start_hyperlink_once(
+        &mut self,
+        source: hyperlink::Hyperlink,
+    ) -> Result<(), StartHyperlinkOnceError> {
+        // End any prior hyperlink
+        self.end_hyperlink();
+
+        // Allocate our new Hyperlink entry in non-page memory. This
+        // lets us quickly get access to URI, ID.
+        // PORT NOTE: `alloc.create(Hyperlink)` + `link.* = source.dupe(alloc)`
+        // maps to a heap `Box`; `Box::into_raw` yields the `*mut Hyperlink` the
+        // cursor stores. On the insert-error path we reclaim the box (mirroring
+        // the reference's `errdefer alloc.destroy(link)` / `link.deinit`).
+        let link: *mut hyperlink::Hyperlink = Box::into_raw(Box::new(source.dupe()));
+
+        // Insert the hyperlink into page memory
+        let page: *mut Page =
+            unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+        let id: hyperlink::Id = match unsafe { (*page).insert_hyperlink((*link).clone()) } {
+            Ok(id) => id,
+            Err(e) => {
+                let boxed = unsafe { Box::from_raw(link) };
+                boxed.deinit();
+                drop(boxed);
+                return Err(StartHyperlinkOnceError::Insert(e));
+            }
+        };
+
+        // Save it all
+        self.cursor.hyperlink = Some(link);
+        self.cursor.hyperlink_id = id;
+        Ok(())
     }
 
+    /// End the hyperlink state so that future cells aren't part of the
+    /// current hyperlink (if any). This is safe to call multiple times.
     pub fn end_hyperlink(&mut self) {
-        todo!()
+        // If we have no hyperlink state then do nothing
+        if self.cursor.hyperlink_id == 0 {
+            debug_assert!(self.cursor.hyperlink.is_none());
+            return;
+        }
+
+        // Release the old hyperlink state. If there are cells using the
+        // hyperlink this will work because the creation creates a reference
+        // and all additional cells create a new reference. This release will
+        // just release our initial reference.
+        //
+        // If the ref count reaches zero the set will not delete the item
+        // immediately; it is kept around in case it is used again (this is
+        // how RefCountedSet works). This causes some memory fragmentation but
+        // is fine because if it is ever pruned the context deleted callback
+        // will be called.
+        let page: *mut Page =
+            unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+        unsafe {
+            let base = (*page).memory_ptr();
+            (*page)
+                .hyperlink_set
+                .release(base, self.cursor.hyperlink_id);
+        }
+        let link = self.cursor.hyperlink.unwrap();
+        let boxed = unsafe { Box::from_raw(link) };
+        boxed.deinit();
+        drop(boxed);
+        self.cursor.hyperlink_id = 0;
+        self.cursor.hyperlink = None;
     }
 
+    /// Set the current hyperlink state on the current cell.
     pub fn cursor_set_hyperlink(&mut self) -> Result<(), pagelist::grow::IncreaseCapacityError> {
-        todo!()
+        use crate::pagelist::grow::IncreaseCapacity;
+
+        debug_assert!(self.cursor.hyperlink_id != 0);
+
+        let mut page: *mut Page =
+            unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+        match unsafe {
+            (*page).set_hyperlink(
+                self.cursor.page_row,
+                self.cursor.page_cell,
+                self.cursor.hyperlink_id,
+            )
+        } {
+            Ok(()) => {
+                // Success, increase the refcount for the hyperlink.
+                unsafe {
+                    let base = (*page).memory_ptr();
+                    (*page).hyperlink_set.use_id(base, self.cursor.hyperlink_id);
+                }
+                Ok(())
+            }
+            // hyperlink_map is out of space, realloc the page to be larger
+            Err(_hyperlink_map_oom) => {
+                // Attempt to allocate the space that would be required to
+                // insert a new copy of the cursor hyperlink uri in to the
+                // string alloc, since right now increaseCapacity always just
+                // adds an extra copy even if one already exists in the page.
+                // If this alloc fails then we know we also need to grow our
+                // string bytes.
+                //
+                // FIXME: increaseCapacity should not do this.
+                while let Some(link) = self.cursor.hyperlink {
+                    let uri_len = unsafe { (*link).uri.len() };
+                    if unsafe { Page::string_alloc_alloc(page, uri_len) }.is_ok() {
+                        // We don't bother freeing because we're
+                        // about to free the entire page anyway.
+                        break;
+                    }
+
+                    // We didn't have enough room, let's increase string bytes
+                    let new_node = self.increase_capacity(
+                        unsafe { (*self.cursor.page_pin).node },
+                        Some(IncreaseCapacity::StringBytes),
+                    )?;
+                    debug_assert!(std::ptr::eq(new_node, unsafe {
+                        (*self.cursor.page_pin).node
+                    }));
+                    page = unsafe { core::ptr::addr_of_mut!((*new_node).data) };
+                }
+
+                let _ = self.increase_capacity(
+                    unsafe { (*self.cursor.page_pin).node },
+                    Some(IncreaseCapacity::HyperlinkBytes),
+                )?;
+
+                // Retry
+                //
+                // We check that the cursor hyperlink hasn't been destroyed
+                // by the capacity adjustment first though- since despite the
+                // terrible code above, that can still apparently happen ._.
+                if self.cursor.hyperlink_id > 0 {
+                    return self.cursor_set_hyperlink();
+                }
+                Ok(())
+            }
+        }
     }
 
+    /// Modify the semantic content type of the cursor. This should
+    /// be preferred over setting it manually since it handles all the
+    /// proper accounting.
     pub fn cursor_set_semantic_content(&mut self, t: SemanticContentArg) {
-        todo!()
+        match t {
+            SemanticContentArg::Output => {
+                self.cursor.semantic_content = pagepkg::SemanticContent::Output;
+                self.cursor.semantic_content_clear_eol = false;
+            }
+
+            SemanticContentArg::Input(clear) => {
+                self.cursor.semantic_content = pagepkg::SemanticContent::Input;
+                self.cursor.semantic_content_clear_eol = match clear {
+                    SemanticContentInput::ClearExplicit => false,
+                    SemanticContentInput::ClearEol => true,
+                };
+            }
+
+            SemanticContentArg::Prompt(kind) => {
+                self.semantic_prompt.seen = true;
+                self.cursor.semantic_content = pagepkg::SemanticContent::Prompt;
+                self.cursor.semantic_content_clear_eol = false;
+                let sp = match kind {
+                    osc::semantic_prompt::PromptKind::Initial
+                    | osc::semantic_prompt::PromptKind::Right => pagepkg::SemanticPrompt::Prompt,
+                    osc::semantic_prompt::PromptKind::Continuation
+                    | osc::semantic_prompt::PromptKind::Secondary => {
+                        pagepkg::SemanticPrompt::PromptContinuation
+                    }
+                };
+                unsafe { (*self.cursor.page_row).set_semantic_prompt(sp) };
+            }
+        }
     }
 
     /// Set the selection to the given selection. If this is a tracked selection
@@ -710,7 +2398,20 @@ impl Screen {
 
     /// Same as select(null) but can't fail.
     pub fn clear_selection(&mut self) {
-        todo!()
+        // if (self.selection) |*sel| {
+        //     sel.deinit(self);
+        //     self.dirty.selection = true;
+        // }
+        // self.selection = null;
+        // PORT NOTE: `Selection::deinit` lands in the Selection-methods sub-batch
+        // (vt-11.1). The foundation tests never set a selection, so this path is
+        // exercised only with `self.selection == None`. The faithful body is
+        // ported here; `deinit` is reached only once Selection is filled.
+        if let Some(sel) = self.selection.take() {
+            sel.deinit(self);
+            self.dirty.selection = true;
+        }
+        self.selection = None;
     }
 
     /// Returns the raw text associated with a selection. This will unwrap
@@ -836,6 +2537,954 @@ impl Screen {
     /// have to reimplement it here because we want a way to print to the screen
     /// to test it but don't want all the features of Terminal.
     pub fn test_write_string(&mut self, text: &[u8]) -> Result<(), OutOfMemory> {
-        todo!()
+        // const view = try std.unicode.Utf8View.init(text);
+        // var iter = view.iterator();
+        // while (iter.nextCodepoint()) |c| { ... }
+        // PORT NOTE: `std.unicode.Utf8View.init` validates UTF-8 then iterates
+        // codepoints; an invalid sequence is an error. We decode via
+        // `str::from_utf8` (the same validation) and iterate `chars()`.
+        let s = core::str::from_utf8(text).map_err(|_| OutOfMemory)?;
+        for ch in s.chars() {
+            let c = ch as u32;
+
+            // Explicit newline forces a new row
+            if c == '\n' as u32 {
+                self.cursor_down_or_scroll().map_err(|_| OutOfMemory)?;
+                self.cursor_horizontal_absolute(0);
+                self.cursor.pending_wrap = false;
+                if self.cursor.semantic_content_clear_eol {
+                    self.cursor_set_semantic_content(SemanticContentArg::Output);
+                } else {
+                    match self.cursor.semantic_content {
+                        pagepkg::SemanticContent::Output => {}
+                        pagepkg::SemanticContent::Prompt | pagepkg::SemanticContent::Input => {
+                            unsafe {
+                                (*self.cursor.page_row).set_semantic_prompt(
+                                    pagepkg::SemanticPrompt::PromptContinuation,
+                                )
+                            };
+                        }
+                    }
+                }
+                continue;
+            }
+
+            let width: usize = if c <= 0xFF {
+                1
+            } else {
+                unicode::table().get(c).width as usize
+            };
+            if width == 0 {
+                let cell = {
+                    let mut cell = self.cursor_cell_left(1);
+                    match unsafe { (*cell).wide() } {
+                        pagepkg::Wide::Narrow => {}
+                        pagepkg::Wide::Wide => {}
+                        pagepkg::Wide::SpacerHead => unreachable!(),
+                        pagepkg::Wide::SpacerTail => cell = self.cursor_cell_left(2),
+                    }
+
+                    cell
+                };
+
+                unsafe {
+                    (*(*self.cursor.page_pin).node).data.append_grapheme(
+                        self.cursor.page_row,
+                        cell,
+                        c,
+                    )
+                }
+                .map_err(|_| OutOfMemory)?;
+                continue;
+            }
+
+            if self.cursor.pending_wrap {
+                debug_assert!(self.cursor.x == self.pages.cols - 1);
+                self.cursor.pending_wrap = false;
+                unsafe { (*self.cursor.page_row).set_wrap(true) };
+                self.cursor_down_or_scroll().map_err(|_| OutOfMemory)?;
+                self.cursor_horizontal_absolute(0);
+                unsafe { (*self.cursor.page_row).set_wrap_continuation(true) };
+                match self.cursor.semantic_content {
+                    pagepkg::SemanticContent::Output => {}
+                    pagepkg::SemanticContent::Input | pagepkg::SemanticContent::Prompt => unsafe {
+                        (*self.cursor.page_row)
+                            .set_semantic_prompt(pagepkg::SemanticPrompt::PromptContinuation)
+                    },
+                }
+            }
+
+            debug_assert!(width == 1 || width == 2);
+            match width {
+                1 => {
+                    let mut cell = Cell::zeroed();
+                    cell.set_content_tag(pagepkg::ContentTag::Codepoint);
+                    cell.set_content_codepoint(c);
+                    cell.set_style_id(self.cursor.style_id);
+                    cell.set_protected(self.cursor.protected);
+                    cell.set_semantic_content(self.cursor.semantic_content);
+                    unsafe { *self.cursor.page_cell = cell };
+
+                    // If we have a ref-counted style, increase.
+                    if self.cursor.style_id != style::DEFAULT_ID {
+                        let page = unsafe {
+                            core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data)
+                        };
+                        unsafe {
+                            let base = (*page).memory_ptr();
+                            (*page).styles.use_id(base, self.cursor.style_id);
+                        }
+                        unsafe { (*self.cursor.page_row).set_styled(true) };
+                    }
+
+                    // If we have a hyperlink, add it to the cell.
+                    if self.cursor.hyperlink_id > 0 {
+                        self.cursor_set_hyperlink().map_err(|_| OutOfMemory)?;
+                    }
+                }
+
+                2 => {
+                    // Need a wide spacer head
+                    if self.cursor.x == self.pages.cols - 1 {
+                        let mut cell = Cell::zeroed();
+                        cell.set_content_tag(pagepkg::ContentTag::Codepoint);
+                        cell.set_content_codepoint(0);
+                        cell.set_wide(pagepkg::Wide::SpacerHead);
+                        cell.set_protected(self.cursor.protected);
+                        cell.set_semantic_content(self.cursor.semantic_content);
+                        unsafe { *self.cursor.page_cell = cell };
+
+                        // If we have a hyperlink, add it to the cell.
+                        if self.cursor.hyperlink_id > 0 {
+                            self.cursor_set_hyperlink().map_err(|_| OutOfMemory)?;
+                        }
+
+                        unsafe { (*self.cursor.page_row).set_wrap(true) };
+                        self.cursor_down_or_scroll().map_err(|_| OutOfMemory)?;
+                        self.cursor_horizontal_absolute(0);
+                        unsafe { (*self.cursor.page_row).set_wrap_continuation(true) };
+                    }
+
+                    // Write our wide char
+                    let mut cell = Cell::zeroed();
+                    cell.set_content_tag(pagepkg::ContentTag::Codepoint);
+                    cell.set_content_codepoint(c);
+                    cell.set_style_id(self.cursor.style_id);
+                    cell.set_wide(pagepkg::Wide::Wide);
+                    cell.set_protected(self.cursor.protected);
+                    cell.set_semantic_content(self.cursor.semantic_content);
+                    unsafe { *self.cursor.page_cell = cell };
+
+                    // If we have a hyperlink, add it to the cell.
+                    if self.cursor.hyperlink_id > 0 {
+                        self.cursor_set_hyperlink().map_err(|_| OutOfMemory)?;
+                    }
+
+                    // Write our tail
+                    self.cursor_right(1);
+                    let mut cell = Cell::zeroed();
+                    cell.set_content_tag(pagepkg::ContentTag::Codepoint);
+                    cell.set_content_codepoint(0);
+                    cell.set_wide(pagepkg::Wide::SpacerTail);
+                    cell.set_protected(self.cursor.protected);
+                    cell.set_semantic_content(self.cursor.semantic_content);
+                    unsafe { *self.cursor.page_cell = cell };
+
+                    // If we have a hyperlink, add it to the cell.
+                    if self.cursor.hyperlink_id > 0 {
+                        self.cursor_set_hyperlink().map_err(|_| OutOfMemory)?;
+                    }
+
+                    // If we have a ref-counted style, increase twice.
+                    if self.cursor.style_id != style::DEFAULT_ID {
+                        let page = unsafe {
+                            core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data)
+                        };
+                        unsafe {
+                            let base = (*page).memory_ptr();
+                            (*page).styles.use_id(base, self.cursor.style_id);
+                            (*page).styles.use_id(base, self.cursor.style_id);
+                        }
+                        unsafe { (*self.cursor.page_row).set_styled(true) };
+                    }
+                }
+
+                _ => unreachable!(),
+            }
+
+            if self.cursor.x + 1 < self.pages.cols {
+                self.cursor_right(1);
+            } else {
+                self.cursor.pending_wrap = true;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // PORT NOTE: these are the Screen foundation tests that exercise ONLY the
+    // methods filled in vt-11a (init/cursor movement/cursorCopy/setAttribute).
+    // The read/write + `cursorCopy x/y` tests depend on `dumpStringAlloc`
+    // (DEFERRED), so they land with the dump methods in a later sub-batch.
+    use super::*;
+    use crate::style;
+
+    // test "Screen cursorCopy style deref"
+    #[test]
+    fn screen_cursor_copy_style_deref() {
+        let s = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        let mut s = s;
+
+        let mut s2 = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        let page: *mut Page =
+            unsafe { core::ptr::addr_of_mut!((*(*s2.cursor.page_pin).node).data) };
+
+        // Bold should create our style
+        s2.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        assert_eq!(1usize, unsafe { (*page).styles.count() });
+        assert!(s2.cursor.style.flags.bold);
+
+        // Copy default style, should release our style
+        s2.cursor_copy(s.cursor, CursorCopyOptions { hyperlink: true })
+            .unwrap();
+        assert!(!s2.cursor.style.flags.bold);
+        assert_eq!(0usize, unsafe { (*page).styles.count() });
+
+        s.deinit();
+        s2.deinit();
+    }
+
+    // test "Screen cursorCopy style deref new page"
+    #[test]
+    fn screen_cursor_copy_style_deref_new_page() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        let mut s2 = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 2048,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        // We need to get the cursor on a new page.
+        let first_page_size = unsafe { (*s2.pages.pages.first).data.capacity.rows };
+
+        // Fill the scrollback with blank lines until
+        // there are only 5 rows left on the first page.
+        unsafe { (*s2.pages.pages.first).data.pause_integrity_checks(true) };
+        for _ in 0..(first_page_size - 5) {
+            s2.test_write_string(b"\n").unwrap();
+        }
+        unsafe { (*s2.pages.pages.first).data.pause_integrity_checks(false) };
+
+        s2.test_write_string(b"1\n2\n3\n4\n5\n6\n7\n8\n9\n10")
+            .unwrap();
+
+        // This should be PAGE 1
+        let page: *mut Page =
+            unsafe { core::ptr::addr_of_mut!((*(*s2.cursor.page_pin).node).data) };
+
+        // It should be the last page in the list.
+        assert!(std::ptr::eq(unsafe { &(*s2.pages.pages.last).data }, page));
+        // It should have a previous page.
+        assert!(!unsafe { (*(*s2.cursor.page_pin).node).prev }.is_null());
+
+        // The cursor should be at 2, 9
+        assert!(s2.cursor.x == 2);
+        assert!(s2.cursor.y == 9);
+
+        // Bold should create our style in page 1.
+        s2.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        assert_eq!(1usize, unsafe { (*page).styles.count() });
+        assert!(s2.cursor.style.flags.bold);
+
+        // Copy the cursor for the first screen. This should release
+        // the style from page 1 and move the cursor back to page 0.
+        s2.cursor_copy(s.cursor, CursorCopyOptions { hyperlink: true })
+            .unwrap();
+        assert!(!s2.cursor.style.flags.bold);
+        assert_eq!(0usize, unsafe { (*page).styles.count() });
+        // The page after the page the cursor is now in should be page 1.
+        assert!(std::ptr::eq(page, unsafe {
+            core::ptr::addr_of_mut!((*(*(*s2.cursor.page_pin).node).next).data)
+        }));
+        // The cursor should be at 0, 0
+        assert!(s2.cursor.x == 0);
+        assert!(s2.cursor.y == 0);
+
+        s.deinit();
+        s2.deinit();
+    }
+
+    // test "Screen cursorCopy style copy"
+    #[test]
+    fn screen_cursor_copy_style_copy() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+
+        let mut s2 = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        let page: *mut Page =
+            unsafe { core::ptr::addr_of_mut!((*(*s2.cursor.page_pin).node).data) };
+        s2.cursor_copy(s.cursor, CursorCopyOptions { hyperlink: true })
+            .unwrap();
+        assert!(s2.cursor.style.flags.bold);
+        assert_eq!(1usize, unsafe { (*page).styles.count() });
+
+        s.deinit();
+        s2.deinit();
+    }
+
+    // test "Screen cursorCopy hyperlink deref"
+    #[test]
+    fn screen_cursor_copy_hyperlink_deref() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        let mut s2 = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        let page: *mut Page =
+            unsafe { core::ptr::addr_of_mut!((*(*s2.cursor.page_pin).node).data) };
+
+        // Create a hyperlink for the cursor.
+        s2.start_hyperlink(b"https://example.com/", None).unwrap();
+        assert_eq!(1usize, unsafe { (*page).hyperlink_set.count() });
+        assert!(s2.cursor.hyperlink_id != 0);
+
+        // Copy a cursor with no hyperlink, should release our hyperlink.
+        s2.cursor_copy(s.cursor, CursorCopyOptions { hyperlink: true })
+            .unwrap();
+        assert_eq!(0usize, unsafe { (*page).hyperlink_set.count() });
+        assert!(s2.cursor.hyperlink_id == 0);
+
+        s.deinit();
+        s2.deinit();
+    }
+
+    // test "Screen cursorCopy hyperlink deref new page"
+    #[test]
+    fn screen_cursor_copy_hyperlink_deref_new_page() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        let mut s2 = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 2048,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        // We need to get the cursor on a new page.
+        let first_page_size = unsafe { (*s2.pages.pages.first).data.capacity.rows };
+
+        // Fill the scrollback with blank lines until
+        // there are only 5 rows left on the first page.
+        unsafe { (*s2.pages.pages.first).data.pause_integrity_checks(true) };
+        for _ in 0..(first_page_size - 5) {
+            s2.test_write_string(b"\n").unwrap();
+        }
+        unsafe { (*s2.pages.pages.first).data.pause_integrity_checks(false) };
+
+        s2.test_write_string(b"1\n2\n3\n4\n5\n6\n7\n8\n9\n10")
+            .unwrap();
+
+        // This should be PAGE 1
+        let page: *mut Page =
+            unsafe { core::ptr::addr_of_mut!((*(*s2.cursor.page_pin).node).data) };
+
+        // It should be the last page in the list.
+        assert!(std::ptr::eq(unsafe { &(*s2.pages.pages.last).data }, page));
+        // It should have a previous page.
+        assert!(!unsafe { (*(*s2.cursor.page_pin).node).prev }.is_null());
+
+        // The cursor should be at 2, 9
+        assert!(s2.cursor.x == 2);
+        assert!(s2.cursor.y == 9);
+
+        // Create a hyperlink for the cursor, should be in page 1.
+        s2.start_hyperlink(b"https://example.com/", None).unwrap();
+        assert_eq!(1usize, unsafe { (*page).hyperlink_set.count() });
+        assert!(s2.cursor.hyperlink_id != 0);
+
+        // Copy the cursor for the first screen. This should release
+        // the hyperlink from page 1 and move the cursor back to page 0.
+        s2.cursor_copy(s.cursor, CursorCopyOptions { hyperlink: true })
+            .unwrap();
+        assert_eq!(0usize, unsafe { (*page).hyperlink_set.count() });
+        assert!(s2.cursor.hyperlink_id == 0);
+        // The page after the page the cursor is now in should be page 1.
+        assert!(std::ptr::eq(page, unsafe {
+            core::ptr::addr_of_mut!((*(*(*s2.cursor.page_pin).node).next).data)
+        }));
+        // The cursor should be at 0, 0
+        assert!(s2.cursor.x == 0);
+        assert!(s2.cursor.y == 0);
+
+        s.deinit();
+        s2.deinit();
+    }
+
+    // test "Screen cursorCopy hyperlink copy"
+    #[test]
+    fn screen_cursor_copy_hyperlink_copy() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        // Create a hyperlink for the cursor.
+        s.start_hyperlink(b"https://example.com/", None).unwrap();
+        assert_eq!(1usize, unsafe {
+            (*(*s.cursor.page_pin).node).data.hyperlink_set.count()
+        });
+        assert!(s.cursor.hyperlink_id != 0);
+
+        let mut s2 = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        let page: *mut Page =
+            unsafe { core::ptr::addr_of_mut!((*(*s2.cursor.page_pin).node).data) };
+
+        assert_eq!(0usize, unsafe { (*page).hyperlink_set.count() });
+        assert!(s2.cursor.hyperlink_id == 0);
+
+        // Copy the cursor with the hyperlink.
+        s2.cursor_copy(s.cursor, CursorCopyOptions { hyperlink: true })
+            .unwrap();
+        assert_eq!(1usize, unsafe { (*page).hyperlink_set.count() });
+        assert!(s2.cursor.hyperlink_id != 0);
+
+        s.deinit();
+        s2.deinit();
+    }
+
+    // test "Screen cursorCopy hyperlink copy disabled"
+    #[test]
+    fn screen_cursor_copy_hyperlink_copy_disabled() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        // Create a hyperlink for the cursor.
+        s.start_hyperlink(b"https://example.com/", None).unwrap();
+        assert_eq!(1usize, unsafe {
+            (*(*s.cursor.page_pin).node).data.hyperlink_set.count()
+        });
+        assert!(s.cursor.hyperlink_id != 0);
+
+        let mut s2 = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        let page: *mut Page =
+            unsafe { core::ptr::addr_of_mut!((*(*s2.cursor.page_pin).node).data) };
+
+        assert_eq!(0usize, unsafe { (*page).hyperlink_set.count() });
+        assert!(s2.cursor.hyperlink_id == 0);
+
+        // Copy the cursor with the hyperlink.
+        s2.cursor_copy(s.cursor, CursorCopyOptions { hyperlink: false })
+            .unwrap();
+        assert_eq!(0usize, unsafe { (*page).hyperlink_set.count() });
+        assert!(s2.cursor.hyperlink_id == 0);
+
+        s.deinit();
+        s2.deinit();
+    }
+
+    // test "Screen style basics"
+    #[test]
+    fn screen_style_basics() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 80,
+                rows: 24,
+                max_scrollback: 1000,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        assert_eq!(0usize, unsafe { (*page).styles.count() });
+
+        // Set a new style
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        assert!(s.cursor.style_id != 0);
+        assert_eq!(1usize, unsafe { (*page).styles.count() });
+        assert!(s.cursor.style.flags.bold);
+
+        // Set another style, we should still only have one since it was unused
+        s.set_attribute(crate::sgr::Attribute::Italic).unwrap();
+        assert!(s.cursor.style_id != 0);
+        assert_eq!(1usize, unsafe { (*page).styles.count() });
+        assert!(s.cursor.style.flags.italic);
+
+        s.deinit();
+    }
+
+    // test "Screen style reset to default"
+    #[test]
+    fn screen_style_reset_to_default() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 80,
+                rows: 24,
+                max_scrollback: 1000,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        assert_eq!(0usize, unsafe { (*page).styles.count() });
+
+        // Set a new style
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        assert!(s.cursor.style_id != 0);
+        assert_eq!(1usize, unsafe { (*page).styles.count() });
+
+        // Reset to default
+        s.set_attribute(crate::sgr::Attribute::ResetBold).unwrap();
+        assert!(s.cursor.style_id == 0);
+        assert_eq!(0usize, unsafe { (*page).styles.count() });
+
+        s.deinit();
+    }
+
+    // test "Screen style reset with unset"
+    #[test]
+    fn screen_style_reset_with_unset() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 80,
+                rows: 24,
+                max_scrollback: 1000,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        assert_eq!(0usize, unsafe { (*page).styles.count() });
+
+        // Set a new style
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        assert!(s.cursor.style_id != 0);
+        assert_eq!(1usize, unsafe { (*page).styles.count() });
+
+        // Reset to default
+        s.set_attribute(crate::sgr::Attribute::Unset).unwrap();
+        assert!(s.cursor.style_id == 0);
+        assert_eq!(0usize, unsafe { (*page).styles.count() });
+
+        s.deinit();
+    }
+
+    // test "Screen: cursorDown across pages preserves style"
+    #[test]
+    fn screen_cursor_down_across_pages_preserves_style() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 3,
+                max_scrollback: 1,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        // Scroll down enough to go to another page
+        let start_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*s.pages.pages.last).data) };
+        let rem = unsafe { (*start_page).capacity.rows };
+        unsafe { (*start_page).pause_integrity_checks(true) };
+        for _ in 0..rem {
+            s.cursor_down_or_scroll().unwrap();
+        }
+        unsafe { (*start_page).pause_integrity_checks(false) };
+
+        // We need our page to change for this test o make sense.
+        {
+            let page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+            assert!(!std::ptr::eq(start_page, page));
+        }
+
+        // Scroll back to the previous page
+        s.cursor_up(1);
+        {
+            let page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+            assert!(std::ptr::eq(start_page, page));
+        }
+
+        // Go back up, set a style
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        {
+            let page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+            let styleval = unsafe {
+                let base = (*page).memory_ptr();
+                &*(*page).styles.get(base, s.cursor.style_id)
+            };
+            assert!(styleval.flags.bold);
+        }
+
+        // Go back down into the next page and we should have that style
+        s.cursor_down(1);
+        {
+            let page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+            let styleval = unsafe {
+                let base = (*page).memory_ptr();
+                &*(*page).styles.get(base, s.cursor.style_id)
+            };
+            assert!(styleval.flags.bold);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: cursorUp across pages preserves style"
+    #[test]
+    fn screen_cursor_up_across_pages_preserves_style() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 3,
+                max_scrollback: 1,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        let start_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*s.pages.pages.last).data) };
+        let rem = unsafe { (*start_page).capacity.rows };
+        unsafe { (*start_page).pause_integrity_checks(true) };
+        for _ in 0..rem {
+            s.cursor_down_or_scroll().unwrap();
+        }
+        unsafe { (*start_page).pause_integrity_checks(false) };
+
+        {
+            let page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+            assert!(!std::ptr::eq(start_page, page));
+        }
+
+        // Go back up, set a style
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        {
+            let page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+            let styleval = unsafe {
+                let base = (*page).memory_ptr();
+                &*(*page).styles.get(base, s.cursor.style_id)
+            };
+            assert!(styleval.flags.bold);
+        }
+
+        // Go back down into the prev page and we should have that style
+        s.cursor_up(1);
+        {
+            let page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+            assert!(std::ptr::eq(start_page, page));
+
+            let styleval = unsafe {
+                let base = (*page).memory_ptr();
+                &*(*page).styles.get(base, s.cursor.style_id)
+            };
+            assert!(styleval.flags.bold);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: cursorAbsolute across pages preserves style"
+    #[test]
+    fn screen_cursor_absolute_across_pages_preserves_style() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 3,
+                max_scrollback: 1,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        let start_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*s.pages.pages.last).data) };
+        let rem = unsafe { (*start_page).capacity.rows };
+        unsafe { (*start_page).pause_integrity_checks(true) };
+        for _ in 0..rem {
+            s.cursor_down_or_scroll().unwrap();
+        }
+        unsafe { (*start_page).pause_integrity_checks(false) };
+
+        {
+            let page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+            assert!(!std::ptr::eq(start_page, page));
+        }
+
+        // Go back up, set a style
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        {
+            let page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+            let styleval = unsafe {
+                let base = (*page).memory_ptr();
+                &*(*page).styles.get(base, s.cursor.style_id)
+            };
+            assert!(styleval.flags.bold);
+        }
+
+        // Go back down into the prev page and we should have that style
+        s.cursor_absolute(1, 1);
+        {
+            let page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+            assert!(std::ptr::eq(start_page, page));
+
+            let styleval = unsafe {
+                let base = (*page).memory_ptr();
+                &*(*page).styles.get(base, s.cursor.style_id)
+            };
+            assert!(styleval.flags.bold);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: cursorAbsolute to page with insufficient capacity"
+    #[test]
+    fn screen_cursor_absolute_to_page_with_insufficient_capacity() {
+        // This test checks for a very specific edge case
+        // which previously resulted in memory corruption.
+        //
+        // The conditions for this edge case are as such:
+        // - The cursor has an associated style or other managed memory.
+        // - The cursor moves to a different page.
+        // - The new page is at capacity and must have its capacity adjusted.
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 3,
+                max_scrollback: 1,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        // Scroll down enough to go to another page
+        let start_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*s.pages.pages.last).data) };
+        let rem = unsafe { (*start_page).capacity.rows };
+        unsafe { (*start_page).pause_integrity_checks(true) };
+        for _ in 0..rem {
+            s.cursor_down_or_scroll().unwrap();
+        }
+        unsafe { (*start_page).pause_integrity_checks(false) };
+
+        let new_page: *mut Page =
+            unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+
+        // We need our page to change for this test to make sense.
+        assert!(!std::ptr::eq(start_page, new_page));
+
+        // Add styles to the start page until it reaches capacity.
+        {
+            // Pause integrity checks because they're slow and
+            // we're not testing this, this is just setup.
+            unsafe { (*start_page).pause_integrity_checks(true) };
+
+            let mut n: u32 = 1;
+            loop {
+                let st = style::Style {
+                    bg_color: style::Color::Rgb(crate::color::RGB {
+                        r: (n & 0xFF) as u8,
+                        g: ((n >> 8) & 0xFF) as u8,
+                        b: ((n >> 16) & 0xFF) as u8,
+                    }),
+                    fg_color: style::Color::None,
+                    underline_color: style::Color::None,
+                    flags: style::Flags::default(),
+                };
+                let res = unsafe {
+                    let base = (*start_page).memory_ptr();
+                    (*start_page).styles.add(base, st)
+                };
+                if res.is_ok() {
+                    n += 1;
+                } else {
+                    break;
+                }
+            }
+
+            unsafe { (*start_page).pause_integrity_checks(false) };
+            unsafe { (*start_page).assert_integrity() };
+        }
+
+        // Set a style on the cursor.
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        {
+            let styleval = unsafe {
+                let base = (*new_page).memory_ptr();
+                &*(*new_page).styles.get(base, s.cursor.style_id)
+            };
+            assert!(styleval.flags.bold);
+        }
+
+        // Go back up into the start page and we should still have that style.
+        s.cursor_absolute(1, 1);
+        {
+            let cur_page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+            // The page we're on now should NOT equal start_page, since its
+            // capacity should have been adjusted, which invalidates our ptr.
+            assert!(!std::ptr::eq(start_page, cur_page));
+            // To make sure we DID change pages we check we're not on new_page.
+            assert!(!std::ptr::eq(new_page, cur_page));
+
+            let styleval = unsafe {
+                let base = (*cur_page).memory_ptr();
+                &*(*cur_page).styles.get(base, s.cursor.style_id)
+            };
+            assert!(styleval.flags.bold);
+        }
+
+        unsafe { (*(*s.cursor.page_pin).node).data.assert_integrity() };
+        unsafe { (*new_page).assert_integrity() };
+
+        s.deinit();
     }
 }
