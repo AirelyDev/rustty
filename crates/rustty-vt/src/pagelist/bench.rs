@@ -12,11 +12,11 @@
 //!   * latency_ms       — median wall time of >=5 full-workload runs.
 //!   * peak_rss_bytes   — getrusage(RUSAGE_SELF).ru_maxrss (macOS reports BYTES).
 //!   * page_allocs      — `TrackerState::total_allocs()` delta over ONE workload
-//!                        run (cumulative page-pool allocations served through the
-//!                        `TrackingAllocator` child of the PagePool — arena
-//!                        backing blocks + non-standard pages).
+//!     run (cumulative page-pool allocations served through the
+//!     `TrackingAllocator` child of the PagePool — arena
+//!     backing blocks + non-standard pages).
 //!   * page_alloc_bytes — peak `outstanding_bytes()` (high-water mark of live
-//!                        page-pool bytes) sampled across ONE workload run.
+//!     page-pool bytes) sampled across ONE workload run.
 //!   * binary_size      — measured separately by the runner (rlib size).
 
 use std::time::Instant;
@@ -127,8 +127,7 @@ fn pagelist_alloc_bench() {
     // bytes by checking after each heavy phase via a wrapper.
     let peak_bytes = run_workload_sampling_peak();
 
-    let total_allocs_after =
-        page_tracking::with_tracker(|t| t.total_allocs());
+    let total_allocs_after = page_tracking::with_tracker(|t| t.total_allocs());
     let page_allocs = total_allocs_after - base_total_allocs;
     let page_alloc_bytes = peak_bytes;
 
