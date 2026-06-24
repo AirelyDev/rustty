@@ -39,3 +39,7 @@ allocator-api2 = { workspace = true }
 # tracking wrapper is compiled into the `cfg(test)` PageList page pool and is
 # absent from the production library.
 rustty-zigstd = { workspace = true, features = ["tracking"] }
+# TEST-ONLY: the §4 alloc/latency/RSS bench harness (pagelist::bench) calls
+# getrusage(RUSAGE_SELF) for peak RSS. Same libc the reference's std.posix binds
+# (R3); dev-only so it never enters the production library.
+libc = "0.2"

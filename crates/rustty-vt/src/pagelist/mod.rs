@@ -79,6 +79,13 @@ pub mod scroll;
 #[cfg(test)]
 mod tests;
 
+// TEST-ONLY allocation/latency/RSS bench harness (§4): runs the identical
+// scrollback workload under `cargo test --release` and reports MEASURED numbers
+// (latency median, peak RSS via getrusage, page allocs+bytes via the
+// `page_tracking` TrackingAllocator seam). Not part of the parity contract.
+#[cfg(test)]
+mod bench;
+
 use rustty_datastruct::IntrusiveDoublyLinkedList as DoublyLinkedList;
 use rustty_os::page_allocator::{page_allocator, PageAllocator};
 use rustty_render_types::term_size as size;
