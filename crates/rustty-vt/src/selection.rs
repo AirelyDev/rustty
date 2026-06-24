@@ -75,7 +75,13 @@ impl Selection {
     /// Initialize a new selection with the given start and end pins on
     /// the screen. The screen will be used for pin tracking.
     pub fn init(start_pin: Pin, end_pin: Pin, rect: bool) -> Selection {
-        todo!()
+        Selection {
+            bounds: Bounds::Untracked {
+                start: start_pin,
+                end: end_pin,
+            },
+            rectangle: rect,
+        }
     }
 
     pub fn deinit(self, s: &mut Screen) {
@@ -98,11 +104,17 @@ impl Selection {
     }
 
     pub fn start(self) -> Pin {
-        todo!()
+        match self.bounds {
+            Bounds::Untracked { start, .. } => start,
+            Bounds::Tracked { start, .. } => unsafe { *start },
+        }
     }
 
     pub fn end(self) -> Pin {
-        todo!()
+        match self.bounds {
+            Bounds::Untracked { end, .. } => end,
+            Bounds::Tracked { end, .. } => unsafe { *end },
+        }
     }
 
     /// Returns true if this is a tracked selection.
@@ -118,16 +130,85 @@ impl Selection {
 
     /// Returns the top left point of the selection.
     pub fn top_left(self, s: &Screen) -> Pin {
-        todo!()
+        match self.order(s) {
+            Order::Forward => self.start(),
+            Order::Reverse => self.end(),
+            Order::MirroredForward => {
+                let mut p = self.start();
+                p.x = self.end().x;
+                p
+            }
+            Order::MirroredReverse => {
+                let mut p = self.end();
+                p.x = self.start().x;
+                p
+            }
+        }
     }
 
     /// Returns the bottom right point of the selection.
     pub fn bottom_right(self, s: &Screen) -> Pin {
-        todo!()
+        match self.order(s) {
+            Order::Forward => self.end(),
+            Order::Reverse => self.start(),
+            Order::MirroredForward => {
+                let mut p = self.end();
+                p.x = self.start().x;
+                p
+            }
+            Order::MirroredReverse => {
+                let mut p = self.start();
+                p.x = self.end().x;
+                p
+            }
+        }
     }
 
     pub fn order(self, s: &Screen) -> Order {
-        todo!()
+        let start_pt = s
+            .pages
+            .point_from_pin(point::Tag::Screen, self.start())
+            .unwrap()
+            .coord();
+        let end_pt = s
+            .pages
+            .point_from_pin(point::Tag::Screen, self.end())
+            .unwrap()
+            .coord();
+
+        if self.rectangle {
+            // Reverse (also handles single-column)
+            if start_pt.y > end_pt.y && start_pt.x >= end_pt.x {
+                return Order::Reverse;
+            }
+            if start_pt.y >= end_pt.y && start_pt.x > end_pt.x {
+                return Order::Reverse;
+            }
+
+            // Mirror, bottom-left to top-right
+            if start_pt.y > end_pt.y && start_pt.x < end_pt.x {
+                return Order::MirroredReverse;
+            }
+
+            // Mirror, top-right to bottom-left
+            if start_pt.y < end_pt.y && start_pt.x > end_pt.x {
+                return Order::MirroredForward;
+            }
+
+            // Forward
+            return Order::Forward;
+        }
+
+        if start_pt.y < end_pt.y {
+            return Order::Forward;
+        }
+        if start_pt.y > end_pt.y {
+            return Order::Reverse;
+        }
+        if start_pt.x <= end_pt.x {
+            return Order::Forward;
+        }
+        Order::Reverse
     }
 
     /// Returns the selection in the given order.

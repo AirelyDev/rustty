@@ -29,6 +29,31 @@ From **vt-7 (kitty)** — these need `Screen`/`Terminal`/`ImageStorage`:
 
 **vt-12 acceptance gain:** +~41 tests (19+8+14) and graphics_unicode G3b → 0 missing.
 
+From **vt-11b (formatter production + Screen dump)**:
+
+5. **ALL ~100 `formatter.zig` `test{}` blocks.** Every formatter test constructs
+   its fixture via `Terminal.init(...)` + `t.vtStream()` (the parser entry point),
+   which is Terminal-gated → vt-12. The reference test names span
+   `"Page …"`, `"PageList …"`, `"Screen …"` (formatter-level, distinct from the
+   `Screen.zig` screen tests), `"TerminalFormatter …"`, plus HTML/VT/style/
+   hyperlink/charset/codepoint-map variants. Reference: `formatter.zig:1591`
+   onward. The **production formatters are fully ported and live now**
+   (`PageFormatter` incl. the `formatWithState` core loop + `TrailingState`,
+   `PageListFormatter`, `ScreenFormatter` + all cell/writer/style helpers); they
+   are exercised in vt-11b via the `Screen` read/write + `cursorCopy x/y` dump
+   tests (`screen::tests::screen_read_and_write*`, `screen_cursor_copy_x_y`).
+   The dedicated formatter tests are scheduled for vt-12 when `Terminal::vtStream`
+   exists to build their fixtures.
+
+6. **`TerminalFormatter` (formatter.zig:141).** Stays a compiling stub
+   (`init`/`format` are `todo!()`); needs the ported `Terminal` type (the
+   `terminal: *const Terminal` field is held back). Its `Extra` packed-struct and
+   the `palette`/`modes`/`scrolling_region`/`tabstops`/`pwd`/`keyboard` emission
+   paths land in vt-12. The 5 `TerminalFormatter`-driven Screen tests defer with it.
+
+**vt-12 acceptance gain (formatter):** +~100 formatter tests + 5 TerminalFormatter
+tests, and `TerminalFormatter::{init,format}` → 0 `todo!()`.
+
 ## Deferred to Dispatch/SIMD phase
 
 From **vt-9 (stream)**:

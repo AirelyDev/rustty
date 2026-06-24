@@ -40,6 +40,9 @@
 // const Pin = PageList.Pin;
 use crate::ansi;
 use crate::charsets;
+// const ScreenFormatter = @import("formatter.zig").ScreenFormatter;
+use crate::formatter;
+use crate::formatter::{Content, ScreenFormatter};
 use crate::hyperlink;
 use crate::kitty;
 use crate::osc;
@@ -2510,7 +2513,32 @@ impl Screen {
         writer: &mut dyn io::Write,
         opts: DumpStringOptions,
     ) -> io::Result<()> {
-        todo!()
+        // Create a formatter and use that to emit our text.
+        let mut formatter: ScreenFormatter = ScreenFormatter::init(
+            self as *const Screen,
+            formatter::Options {
+                emit: formatter::Format::Plain,
+                unwrap: opts.unwrap,
+                trim: false,
+                codepoint_map: Some(Vec::new()),
+                background: None,
+                foreground: None,
+                palette: None,
+            },
+        );
+
+        // Set up the selection based on the pins
+        let tl = opts.tl;
+        let br = opts
+            .br
+            .unwrap_or_else(|| self.pages.get_bottom_right(point::Tag::Screen).unwrap());
+
+        formatter.content = Content::Selection(Some(Selection::init(
+            tl, br, false, // not rectangle
+        )));
+
+        // Emit
+        formatter.format(writer)
     }
 
     /// You should use dumpString, this is a restricted version mostly for
@@ -2520,7 +2548,35 @@ impl Screen {
         alloc: Allocator,
         tl: point::Point,
     ) -> Result<Vec<u8>, OutOfMemory> {
-        todo!()
+        // PORT NOTE: the reference builds an `Allocating` writer over `alloc`
+        // and returns `toOwnedSlice()`. A `Vec<u8>` is the faithful sink; the
+        // allocator is the crate's `Global` seam (matching the rest of Screen).
+        let _ = alloc;
+        let mut builder: Vec<u8> = Vec::new();
+
+        // PORT NOTE: `getBottomRight(tl) orelse return error.UnknownPoint`. The
+        // skeleton signature for this convenience helper returns
+        // `Result<_, OutOfMemory>`; the reference's `error.UnknownPoint` cannot
+        // occur for the valid screen/active/viewport points the unit tests pass
+        // (those tags always resolve), so we surface it as `OutOfMemory` (the
+        // only error variant in this seam) rather than introducing a new error
+        // type that would ripple through every caller.
+        let br = match self.pages.get_bottom_right(tl.tag()) {
+            Some(p) => p,
+            None => return Err(OutOfMemory),
+        };
+
+        self.dump_string(
+            &mut builder,
+            DumpStringOptions {
+                tl: self.pages.get_top_left(tl.tag()),
+                br: Some(br),
+                unwrap: false,
+            },
+        )
+        .map_err(|_| OutOfMemory)?;
+
+        Ok(builder)
     }
 
     /// You should use dumpString, this is a restricted version mostly for
@@ -2530,7 +2586,25 @@ impl Screen {
         alloc: Allocator,
         tl: point::Point,
     ) -> Result<Vec<u8>, OutOfMemory> {
-        todo!()
+        let _ = alloc;
+        let mut builder: Vec<u8> = Vec::new();
+
+        let br = match self.pages.get_bottom_right(tl.tag()) {
+            Some(p) => p,
+            None => return Err(OutOfMemory),
+        };
+
+        self.dump_string(
+            &mut builder,
+            DumpStringOptions {
+                tl: self.pages.get_top_left(tl.tag()),
+                br: Some(br),
+                unwrap: true,
+            },
+        )
+        .map_err(|_| OutOfMemory)?;
+
+        Ok(builder)
     }
 
     /// This is basically a really jank version of Terminal.printString. We
@@ -3486,5 +3560,225 @@ mod tests {
         unsafe { (*new_page).assert_integrity() };
 
         s.deinit();
+    }
+
+    // PORT NOTE: these tests were DEFERRED from vt-11a because they require
+    // `dumpStringAlloc`, which lands here in vt-11b alongside the formatter
+    // production code.
+
+    // test "Screen read and write"
+    #[test]
+    fn screen_read_and_write() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 80,
+                rows: 24,
+                max_scrollback: 1000,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        assert_eq!(s.cursor.style_id, 0 as style::Id);
+
+        s.test_write_string(b"hello, world").unwrap();
+        let str = s
+            .dump_string_alloc(
+                Allocator,
+                point::Point::Screen(point::Coordinate::default()),
+            )
+            .unwrap();
+        assert_eq!(str, b"hello, world");
+
+        s.deinit();
+    }
+
+    // test "Screen read and write newline"
+    #[test]
+    fn screen_read_and_write_newline() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 80,
+                rows: 24,
+                max_scrollback: 1000,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        assert_eq!(s.cursor.style_id, 0 as style::Id);
+
+        s.test_write_string(b"hello\nworld").unwrap();
+        let str = s
+            .dump_string_alloc(
+                Allocator,
+                point::Point::Screen(point::Coordinate::default()),
+            )
+            .unwrap();
+        assert_eq!(str, b"hello\nworld");
+
+        s.deinit();
+    }
+
+    // test "Screen read and write scrollback"
+    #[test]
+    fn screen_read_and_write_scrollback() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 80,
+                rows: 2,
+                max_scrollback: 1000,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        s.test_write_string(b"hello\nworld\ntest").unwrap();
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Screen(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"hello\nworld\ntest");
+        }
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"world\ntest");
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen read and write no scrollback small"
+    #[test]
+    fn screen_read_and_write_no_scrollback_small() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 80,
+                rows: 2,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        s.test_write_string(b"hello\nworld\ntest").unwrap();
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Screen(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"world\ntest");
+        }
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"world\ntest");
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen read and write no scrollback large"
+    #[test]
+    fn screen_read_and_write_no_scrollback_large() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 80,
+                rows: 2,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        for i in 0..1_000u32 {
+            // PORT NOTE: `std.fmt.bufPrint(&buf, "{}\n", .{i})`.
+            let str = format!("{}\n", i);
+            s.test_write_string(str.as_bytes()).unwrap();
+        }
+        s.test_write_string(b"1000").unwrap();
+
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Screen(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"999\n1000");
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen cursorCopy x/y"
+    #[test]
+    fn screen_cursor_copy_x_y() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        s.cursor_absolute(2, 3);
+        assert!(s.cursor.x == 2);
+        assert!(s.cursor.y == 3);
+
+        let mut s2 = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 10,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        s2.cursor_copy(s.cursor, CursorCopyOptions { hyperlink: false })
+            .unwrap();
+        assert!(s2.cursor.x == 2);
+        assert!(s2.cursor.y == 3);
+        s2.test_write_string(b"Hello").unwrap();
+
+        {
+            let str = s2
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Screen(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"\n\n\n  Hello");
+        }
+
+        s.deinit();
+        s2.deinit();
     }
 }
