@@ -406,6 +406,37 @@ impl<A: Allocator> ArenaAllocator<A> {
         }
     }
 
+    /// Borrow of the child ("backing") allocator. Faithful map of Zig's
+    /// `arena.child_allocator` field access (`pool.pages.arena.child_allocator`
+    /// in `PageList`). The child is `Copy`-cheap for the page allocator, but we
+    /// hand out a reference so any `A` works.
+    #[inline]
+    pub fn child_allocator(&self) -> &A {
+        &self.child
+    }
+
+    /// Zero the usable data region of every backing node in the buffer list.
+    ///
+    /// Faithful port of `PageList.reset`'s arena-zeroing block: after a
+    /// `reset(.retain_with_limit)` the retained backing memory is NOT re-`mmap`ed
+    /// and so is not implicitly OS-zeroed, so the reference walks
+    /// `arena.state.buffer_list` and `@memset`s each node's `data_buf` (the
+    /// allocation minus its `BufNode` header). We reproduce that exactly here,
+    /// using our own `BufNode` header instead of hardcoding the std layout.
+    pub fn zero_retained(&mut self) {
+        let mut it = self.first;
+        while let Some(node) = it {
+            // SAFETY: `node` is a live backing node we own; `usable` returns its
+            // data region (allocation minus the BufNode header) which is exactly
+            // the reference's `data_buf`.
+            let (ptr, len) = unsafe { Self::usable(node) };
+            unsafe {
+                core::ptr::write_bytes(ptr, 0, len);
+            }
+            it = unsafe { node.as_ref().next };
+        }
+    }
+
     /// Number of backing nodes currently in the buffer list. Test/inspection
     /// helper (mirrors walking `state.buffer_list`).
     pub fn node_count(&self) -> usize {

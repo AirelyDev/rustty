@@ -47,7 +47,10 @@ use core::ptr::NonNull;
 use allocator_api2::alloc::{AllocError, Allocator};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use crate::mach::{TaggedPageAllocator, VMTag};
+use crate::mach::VMTag;
+// `TaggedPageAllocator` drives the mmap path, which is excluded under Miri.
+#[cfg(all(not(miri), any(target_os = "macos", target_os = "ios")))]
+use crate::mach::TaggedPageAllocator;
 
 /// The page allocator PageList uses for all underlying VM page allocations.
 ///
@@ -62,7 +65,9 @@ use crate::mach::{TaggedPageAllocator, VMTag};
 pub struct PageAllocator {
     // The Darwin VM tag this allocator stamps onto every mapping (smuggled into
     // the reference's allocator context pointer via `taggedPageAllocator`).
+    // Unused under Miri, which serves allocations from the std heap (no mmap).
     #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg_attr(miri, allow(dead_code))]
     tag: VMTag,
 }
 
@@ -95,6 +100,13 @@ pub fn page_allocator() -> PageAllocator {
 // is NOT enforced by the contract, so we treat a zero-size request the same way
 // the reference's `map` does for a page-rounded zero (it returns a valid page).
 unsafe impl Allocator for PageAllocator {
+    // Under Miri there is no `mmap` (Miri cannot execute the syscall / map
+    // file-backed memory). The `cfg(miri)` impl below mirrors the reference's
+    // `if (builtin.is_test) return std.testing.allocator;` branch: under the test
+    // interpreter we serve page-aligned, zeroed allocations from the std heap.
+    // The observable contract callers rely on (page-aligned, zeroed-on-handout
+    // memory) is identical to the mmap path; only the backing differs.
+    #[cfg(not(miri))]
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         // PORT: `map(n, alignment)` — `n` is the byte count, `alignment` the
         // requested byte alignment. The mmap'd region is lazily OS-zeroed.
@@ -117,6 +129,12 @@ unsafe impl Allocator for PageAllocator {
         Ok(NonNull::from(slice))
     }
 
+    #[cfg(miri)]
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        miri_alloc::allocate(layout)
+    }
+
+    #[cfg(not(miri))]
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         // PORT: `free(memory, ...)` -> `unmap(memory)`. `unmap` page-rounds the
         // length and `munmap`s it. A zero-size allocation mapped one page (see
@@ -124,6 +142,58 @@ unsafe impl Allocator for PageAllocator {
         let len = if layout.size() == 0 { 1 } else { layout.size() };
         let slice = unsafe { core::slice::from_raw_parts_mut(ptr.as_ptr(), len) };
         self.unmap_pages(slice);
+    }
+
+    #[cfg(miri)]
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        unsafe { miri_alloc::deallocate(ptr, layout) };
+    }
+}
+
+// Miri-only std-heap backing for `PageAllocator`, faithful to the reference's
+// `if (builtin.is_test) return std.testing.allocator;` branch. Page-aligned and
+// zeroed on handout (matching the mmap path's observable zero contract). We
+// record the exact `Layout` we allocated with by over-allocating a header so the
+// matching `dealloc` uses the same size/align Miri requires.
+#[cfg(miri)]
+mod miri_alloc {
+    use core::alloc::Layout;
+    use core::ptr::NonNull;
+
+    use allocator_api2::alloc::{AllocError, Allocator, Global};
+
+    /// Page-align every allocation (matches the mmap path). 4096 on all targets
+    /// we care about; the requested alignment is folded in via `layout.align()`.
+    /// The size is rounded up to the alignment so `dealloc` reconstructs the same
+    /// `Layout` deterministically from `(ptr, requested_layout)`.
+    fn aligned_layout(layout: Layout) -> Layout {
+        let align = layout.align().max(4096);
+        let size = layout.size().max(1);
+        let rounded = (size + align - 1) & !(align - 1);
+        Layout::from_size_align(rounded, align).expect("valid page-aligned layout")
+    }
+
+    pub fn allocate(layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        let n = layout.size();
+        let al = aligned_layout(layout);
+        // Delegate to `Global` so the returned pointer carries whole-allocation
+        // provenance (Stacked Borrows clean under Miri, unlike a manually
+        // narrowed `from_raw_parts_mut`). `allocate_zeroed` matches the mmap
+        // path's zeroed-on-handout contract.
+        let slice = Global.allocate_zeroed(al)?;
+        // Report exactly the requested size while preserving the full-allocation
+        // provenance from `Global`. Use `NonNull::slice_from_raw_parts` (raw slice
+        // metadata, NO intermediate `&mut [u8]` retag) so Stacked Borrows stays
+        // clean under Miri — a `from_raw_parts_mut` would narrow the borrow stack.
+        let base = slice.cast::<u8>();
+        Ok(NonNull::slice_from_raw_parts(base, n))
+    }
+
+    /// # Safety
+    /// `ptr` must have been returned by [`allocate`] with `layout`.
+    pub unsafe fn deallocate(ptr: NonNull<u8>, layout: Layout) {
+        let al = aligned_layout(layout);
+        unsafe { Global.deallocate(ptr, al) };
     }
 }
 
@@ -134,7 +204,10 @@ unsafe impl Allocator for PageAllocator {
 // These methods exist so the trait impl above is OS-agnostic and the
 // darwin/non-darwin split lives in exactly one place.
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+// `cfg(not(miri))`: under Miri these mmap-backed helpers are unused (the
+// `cfg(miri)` trait impl serves from the std heap), so we exclude them entirely
+// to avoid dead-code warnings while keeping the real OS path intact.
+#[cfg(all(not(miri), any(target_os = "macos", target_os = "ios")))]
 impl PageAllocator {
     fn map_pages(&self, n: usize, align: usize) -> Option<NonNull<u8>> {
         // The Darwin path tags the mapping with this allocator's VM tag.
@@ -151,7 +224,7 @@ impl PageAllocator {
 // `std.heap.PageAllocator.map`/`unmap` — `mmap(MAP_ANON | MAP_PRIVATE)` /
 // `munmap`, lazily OS-zeroed. This is the untagged equivalent of the Darwin path
 // in `mach.rs` (fd `-1`, no VM tag).
-#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+#[cfg(all(not(miri), unix, not(any(target_os = "macos", target_os = "ios"))))]
 impl PageAllocator {
     fn map_pages(&self, n: usize, align: usize) -> Option<NonNull<u8>> {
         let page_size = page_size();

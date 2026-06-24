@@ -238,6 +238,159 @@ const fn max_usize(a: usize, b: usize) -> usize {
     }
 }
 
+/// A faithful port of `std.heap.MemoryPoolAligned` whose item SIZE is supplied
+/// at construction instead of via a `[N]u8` type parameter.
+///
+/// PORT NOTE: in `PageList.zig` the page pool is
+/// `MemoryPoolAligned([std_size]u8, .fromByteUnits(page_size_min))`. In the Rust
+/// port `std_size` is a RUNTIME value (`Page.layout(std_capacity).total_size`,
+/// which depends on `cfg!(test)` for grapheme bytes), so it cannot be a
+/// const-generic array length. This type is the closest faithful mapping: it has
+/// the SAME implementation as [`MemoryPoolExtra`] (an owned [`ArenaAllocator`]
+/// over the child allocator plus a LIFO free-list), but `item_size` /
+/// `item_alignment` are dynamic. The pool dispenses raw, page-aligned,
+/// `item_size`-byte slots whose contents are whatever the backing allocator
+/// hands back (for the page allocator: lazily OS-zeroed mmap memory on fresh
+/// slots; reused free-list slots keep their previous contents until the caller
+/// zeroes them — exactly the reference semantics).
+///
+/// It additionally exposes [`child_allocator`](Self::child_allocator) and
+/// [`zero_retained_arena`](Self::zero_retained_arena) so `PageList` can reproduce
+/// the reference's `pool.pages.arena.child_allocator` (non-standard pages) and
+/// the post-reset arena-zeroing block.
+pub struct DynamicMemoryPoolAligned<A: Allocator = Global> {
+    arena: ArenaAllocator<A>,
+    free_list: Option<NonNull<Node>>,
+    /// `item_size = max(size_of(Node), requested_item_size)`.
+    item_size: usize,
+    /// `item_alignment = max(align_of(*Node), requested_alignment)`.
+    item_alignment: usize,
+}
+
+impl<A: Allocator> DynamicMemoryPoolAligned<A> {
+    /// Faithful port of `MemoryPoolAligned(.., alignment).init(child)` with a
+    /// runtime item size. `requested_item_size` is the byte size of one item
+    /// (`@sizeOf([std_size]u8) == std_size`); `requested_alignment` is the
+    /// requested item alignment (`page_size_min`).
+    pub fn init(child: A, requested_item_size: usize, requested_alignment: usize) -> Self {
+        DynamicMemoryPoolAligned {
+            arena: ArenaAllocator::with_child(child),
+            free_list: None,
+            item_size: max_usize(size_of::<Node>(), requested_item_size),
+            item_alignment: max_usize(align_of::<Option<NonNull<Node>>>(), requested_alignment),
+        }
+    }
+
+    /// Faithful port of `initPreheated(child, n)`: preheat `initial_size` items
+    /// onto the LIFO free-list.
+    pub fn init_preheated(
+        child: A,
+        requested_item_size: usize,
+        requested_alignment: usize,
+        initial_size: usize,
+    ) -> Result<Self, OutOfMemory> {
+        let mut pool = Self::init(child, requested_item_size, requested_alignment);
+        // errdefer pool.deinit(): on failure, dropping `pool` frees the arena.
+        pool.preheat(initial_size)?;
+        Ok(pool)
+    }
+
+    /// `PagePool.item_size`: the byte size of one item slot.
+    #[inline]
+    pub fn item_size(&self) -> usize {
+        self.item_size
+    }
+
+    /// Preheat the pool by pre-allocating `size` items onto the LIFO free-list.
+    pub fn preheat(&mut self, size: usize) -> Result<(), OutOfMemory> {
+        let mut i: usize = 0;
+        while i < size {
+            let raw_mem = self.alloc_new()?;
+            let free_node = raw_mem.cast::<Node>();
+            // SAFETY: `free_node` points to a fresh, suitably-aligned slot of at
+            // least item_size >= size_of::<Node>() bytes.
+            unsafe {
+                free_node.as_ptr().write(Node {
+                    next: self.free_list,
+                });
+            }
+            self.free_list = Some(free_node);
+            i += 1;
+        }
+        Ok(())
+    }
+
+    /// Faithful port of `reset(mode)`: reset the arena and clear the free-list.
+    pub fn reset(&mut self, mode: ResetMode) -> bool {
+        let reset_successful = self.arena.reset(mode);
+        self.free_list = None;
+        reset_successful
+    }
+
+    /// Faithful port of `create()`: hand back an `item_size`-byte, page-aligned
+    /// slot, reusing the most-recently-`destroy`ed one (LIFO) if available,
+    /// otherwise bumping a fresh slot from the arena. The returned slot's
+    /// contents are NOT zeroed by the pool: a fresh slot is whatever the backing
+    /// allocator returned (lazily OS-zeroed mmap for the page allocator), and a
+    /// reused slot retains its previous contents.
+    pub fn create(&mut self) -> Result<NonNull<u8>, OutOfMemory> {
+        if let Some(item) = self.free_list {
+            // SAFETY: `item` is a live free-list node we own.
+            self.free_list = unsafe { item.as_ref().next };
+            return Ok(item.cast::<u8>());
+        }
+        self.alloc_new()
+    }
+
+    /// Faithful port of `destroy(ptr)`: push the slot onto the LIFO free-list so
+    /// the next `create()` reuses it.
+    ///
+    /// # Safety
+    /// `ptr` must have been returned by `create()`/`preheat` on this pool and not
+    /// already destroyed.
+    pub unsafe fn destroy(&mut self, ptr: NonNull<u8>) {
+        let node = ptr.cast::<Node>();
+        // SAFETY: the slot is at least item_size >= size_of::<Node>() bytes and
+        // suitably aligned for Node (item_alignment >= align_of::<*Node>()).
+        unsafe {
+            node.as_ptr().write(Node {
+                next: self.free_list,
+            });
+        }
+        self.free_list = Some(node);
+    }
+
+    /// Borrow of the child ("backing") allocator — the reference's
+    /// `pool.pages.arena.child_allocator`, used for NON-STANDARD page buffers
+    /// that bypass the pool.
+    #[inline]
+    pub fn child_allocator(&self) -> &A {
+        self.arena.child_allocator()
+    }
+
+    /// Zero the usable region of every retained arena backing node. Faithful map
+    /// of `PageList.reset`'s post-reset arena-zeroing block (retained arena
+    /// memory is not re-`mmap`ed so it is not implicitly OS-zeroed).
+    pub fn zero_retained_arena(&mut self) {
+        self.arena.zero_retained();
+    }
+
+    /// Allocate one `item_size`-byte, `item_alignment`-aligned slot from the
+    /// backing arena.
+    fn alloc_new(&mut self) -> Result<NonNull<u8>, OutOfMemory> {
+        self.arena
+            .alloc_bytes(self.item_size, self.item_alignment)
+            .ok_or(OutOfMemory)
+    }
+}
+
+impl<A: Allocator> Drop for DynamicMemoryPoolAligned<A> {
+    fn drop(&mut self) {
+        // Faithful port of `deinit`: the owned ArenaAllocator's Drop frees every
+        // backing node (all slots at once).
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,6 +593,81 @@ mod tests {
         let c = pool.create().unwrap();
         unsafe { c.as_ptr().write(3) };
         unsafe { pool.destroy(c) };
+    }
+
+    /// `DynamicMemoryPoolAligned`: runtime item size + page alignment, LIFO
+    /// reuse, and that fresh arena slots come back zeroed (Global zeroes on
+    /// first-touch via its backing; we only assert reuse-after-zero semantics).
+    #[test]
+    fn dynamic_aligned_runtime_size_align_and_reuse() {
+        const PAGE: usize = 4096;
+        let item_size = 1024usize; // stand-in for a runtime `std_size`.
+        let mut pool: DynamicMemoryPoolAligned<Global> =
+            DynamicMemoryPoolAligned::init_preheated(Global, item_size, PAGE, 2).unwrap();
+        assert_eq!(pool.item_size(), max_usize(size_of::<Node>(), item_size));
+
+        let a = pool.create().unwrap();
+        let b = pool.create().unwrap();
+        assert_eq!(a.as_ptr() as usize % PAGE, 0);
+        assert_eq!(b.as_ptr() as usize % PAGE, 0);
+        assert_ne!(a.as_ptr(), b.as_ptr());
+
+        // Scribble, destroy, and assert LIFO reuse hands the exact slot back.
+        unsafe {
+            core::ptr::write_bytes(a.as_ptr(), 0xAB, item_size);
+            core::ptr::write_bytes(b.as_ptr(), 0xCD, item_size);
+            pool.destroy(b);
+        }
+        let c = pool.create().unwrap();
+        assert_eq!(c.as_ptr(), b.as_ptr());
+        unsafe {
+            pool.destroy(a);
+            pool.destroy(c);
+        }
+    }
+
+    /// `zero_retained_arena` zeroes the retained arena memory after a reset, so a
+    /// slot reused from the retained free list reads zero even though it was not
+    /// freshly allocated (the `PageList.reset` contract). Mirrors the realistic
+    /// PageList geometry: item_size is a multiple of the alignment and the retain
+    /// limit covers several items (so the page-aligned bump never spills to a
+    /// fresh, un-zeroed node).
+    #[test]
+    fn dynamic_aligned_zero_retained_arena() {
+        const ALIGN: usize = 64;
+        let item_size = 256usize; // multiple of ALIGN, like std_size vs page_size_min.
+        let mut pool: DynamicMemoryPoolAligned<Global> =
+            DynamicMemoryPoolAligned::init_preheated(Global, item_size, ALIGN, 4).unwrap();
+        // Hand out and scribble several slots.
+        let mut handed = Vec::new();
+        for _ in 0..4 {
+            let p = pool.create().unwrap();
+            unsafe { core::ptr::write_bytes(p.as_ptr(), 0xFF, item_size) };
+            handed.push(p);
+        }
+        // Retain plenty of capacity, then zero the retained arena.
+        pool.reset(ResetMode::RetainWithLimit(item_size * 8));
+        pool.zero_retained_arena();
+        // Every slot drawn from the retained (now-zeroed) arena reads zero.
+        for _ in 0..4 {
+            let q = pool.create().unwrap();
+            let bytes = unsafe { core::slice::from_raw_parts(q.as_ptr(), item_size) };
+            assert!(
+                bytes.iter().all(|&b| b == 0),
+                "retained slot must be zeroed"
+            );
+            unsafe { pool.destroy(q) };
+        }
+    }
+
+    /// `child_allocator` borrows the backing allocator (faithful map of
+    /// `pool.pages.arena.child_allocator`).
+    #[test]
+    fn dynamic_aligned_child_allocator_accessible() {
+        let pool: DynamicMemoryPoolAligned<Global> =
+            DynamicMemoryPoolAligned::init(Global, 256, 64);
+        // Just ensure the accessor is callable and yields the child type.
+        let _child: &Global = pool.child_allocator();
     }
 
     /// ITEM_SIZE/ITEM_ALIGNMENT match the Zig formulas for a small type.

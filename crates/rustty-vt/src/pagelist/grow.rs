@@ -301,7 +301,7 @@ impl PageList {
         // initial allocation.
         if !self.pages.first.is_null()
             && !core::ptr::eq(self.pages.first, self.pages.last)
-            && self.page_size + super::PagePool::item_size() > self.max_size()
+            && self.page_size + super::std_size() > self.max_size()
         {
             // prune:
             let first = unsafe { self.pages.pop_first() };

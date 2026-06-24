@@ -80,12 +80,15 @@ pub mod scroll;
 mod tests;
 
 use rustty_datastruct::IntrusiveDoublyLinkedList as DoublyLinkedList;
+use rustty_os::page_allocator::{page_allocator, PageAllocator};
 use rustty_render_types::term_size as size;
 use rustty_render_types::term_size::OffsetBuf;
 use rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged;
+use rustty_zigstd::memory_pool::DynamicMemoryPoolAligned;
 use rustty_zigstd::memory_pool::MemoryPool as ZigMemoryPool;
 
-use allocator_api2::alloc::Global;
+use allocator_api2::alloc::{Allocator, Global};
+use core::alloc::Layout;
 use core::ptr::NonNull;
 
 use crate::page as pagepkg;
@@ -185,173 +188,30 @@ const PAGE_SIZE_MIN: usize = 4096;
 /// so we can allocate these with a page allocator. We have to use a page
 /// allocator because we need memory that is zero-initialized and page-aligned.
 //
-// PORT NOTE (RULES, vt-3c): the reference is
+// PORT NOTE (audit #1/#2/#3): the reference is
 // `PagePool = std.heap.MemoryPoolAligned([std_size]u8, .fromByteUnits(page_size_min))`
-// backed by `arena.child_allocator` (the page allocator). zigstd's
-// `MemoryPoolAligned` does NOT expose the internals PageList needs
-// (`pages.arena.child_allocator`, `pages.reset(.retain_with_limit)` +
-// BufNode-zeroing), so per the port RULES we implement the page-buffer
-// management DIRECTLY here as the faithful behavioral equivalent:
+// backed by `arena.child_allocator` (the page allocator). The faithful Rust
+// mapping is `DynamicMemoryPoolAligned<PageAllocator>` constructed over
+// `rustty_os::page_allocator::page_allocator()`:
 //
-//   * STANDARD pages (`layout.total_size <= std_size`) draw a `std_size`,
-//     `page_size_min`-aligned buffer from a LIFO free-list (`std::alloc` with a
-//     `Layout` aligned to `page_size_min`); `destroy` zeroes the buffer and
-//     returns it to the free-list for reuse.
-//   * NON-STANDARD pages (`layout.total_size > std_size`) are allocated
-//     directly page-aligned (the reference `page_alloc.alignedAlloc`) and freed
-//     individually (the reference `page_alloc.free`). These never enter the
-//     free-list and PageList frees them explicitly in `deinit`/`reset`/`clone`
-//     before touching the pool — this struct only owns the standard buffers.
-//   * `reset(retain_with_limit)` retains free-list buffers up to the limit and
-//     FREES the rest, then zeroes every retained buffer (the reference
-//     `@memset(0)` over retained mmap arena memory, because retained memory is
-//     not re-`mmap`ed and so is not implicitly zeroed).
-//   * `item_size` is `std_size` (the reference `PagePool.item_size`).
-//
-// All buffers are page-aligned, so handing them to `OffsetBuf::init` yields the
-// same `[]align(page_size_min) u8` the reference relies on.
-struct PagePool {
-    /// Every standard-size, page-aligned buffer this pool has ever allocated
-    /// and still owns, whether free-listed or currently handed out. This is the
-    /// faithful equivalent of the reference `MemoryPoolAligned` ARENA: the
-    /// arena owns ALL buffers and frees every one on `deinit` (our `Drop`),
-    /// regardless of whether a buffer is currently handed out. (Without this,
-    /// std buffers handed to nodes would leak on an early-return `init` failure
-    /// — exactly what the reference arena prevents.)
-    arena: Vec<NonNull<u8>>,
-
-    /// The LIFO free-list of standard-size, page-aligned buffers available for
-    /// reuse. Each pointer is also present in `arena` (the free-list is the
-    /// reusable subset; the reference free-list likewise overlays the arena).
-    free_list: Vec<NonNull<u8>>,
-}
-
-impl PagePool {
-    /// `PagePool.item_size`: the byte size of one standard page buffer.
-    #[inline]
-    fn item_size() -> usize {
-        std_size()
-    }
-
-    /// `Layout` for one standard, page-aligned buffer.
-    #[inline]
-    fn std_layout() -> core::alloc::Layout {
-        // `std_size` is a multiple of `page_size_min` (Page.layout rounds up),
-        // so this is always a valid layout.
-        core::alloc::Layout::from_size_align(std_size(), PAGE_SIZE_MIN).unwrap()
-    }
-
-    /// `PagePool.initPreheated`: preheat `preheat` standard buffers onto the
-    /// free-list. The reference's `mmap`-backed pool hands back zeroed memory;
-    /// we zero each preheated buffer to match.
-    fn init_preheated(preheat: usize) -> PagePool {
-        let mut pool = PagePool {
-            arena: Vec::new(),
-            free_list: Vec::new(),
-        };
-        let mut i: usize = 0;
-        while i < preheat {
-            let buf = pool.alloc_std();
-            pool.free_list.push(buf);
-            i += 1;
-        }
-        pool
-    }
-
-    /// Allocate one fresh `std_size`, page-aligned, zeroed buffer and record it
-    /// in the arena (which owns it until `deinit`/`reset`).
-    fn alloc_std(&mut self) -> NonNull<u8> {
-        let layout = Self::std_layout();
-        // `alloc_zeroed`: the reference's mmap'd page memory is always zeroed.
-        let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-        let nn = NonNull::new(ptr).unwrap_or_else(|| std::alloc::handle_alloc_error(layout));
-        self.arena.push(nn);
-        nn
-    }
-
-    /// `pages.create()`: hand back a standard buffer, reusing a free-listed one
-    /// (LIFO) if available, otherwise allocating fresh. Returned memory is
-    /// page-aligned and zeroed.
-    fn create(&mut self) -> NonNull<u8> {
-        if let Some(buf) = self.free_list.pop() {
-            return buf;
-        }
-        self.alloc_std()
-    }
-
-    /// `pages.destroy(ptr)`: return a standard buffer to the free-list for
-    /// reuse. The buffer is left as-is here; PageList's `destroyNodeExt`
-    /// zeroes the page memory before calling this (the reference
-    /// `@memset(page.memory, 0)`), matching observable reuse semantics.
-    //
-    // PORT NOTE: `#[allow(dead_code)]` — called by `destroy_node_ext`, whose
-    // only callers (erase/grow/resize clusters) land in the Methods phase.
-    #[allow(dead_code)]
-    fn destroy(&mut self, ptr: NonNull<u8>) {
-        self.free_list.push(ptr);
-    }
-
-    /// `pages.reset(.retain_with_limit(limit_bytes))`: retain arena buffers
-    /// totalling at most `limit_bytes`, freeing the rest, then make every
-    /// retained buffer available again and zero it (the reference zeroes the
-    /// retained arena memory because it is not re-`mmap`ed).
-    //
-    // PORT NOTE: the reference `MemoryPool.reset` resets the underlying ARENA
-    // (`arena.reset(mode)` retains `limit_bytes` and frees the remainder) and
-    // then NULLS the free-list (`pool.free_list = null`), so after a reset ALL
-    // retained arena memory is available for future `create()` calls. We mirror
-    // this exactly: keep `floor(limit_bytes / item_size)` arena buffers (capped
-    // at how many we own), free the remainder from BOTH the arena and the
-    // free-list, then rebuild the free-list to cover EVERY retained arena buffer
-    // (handed-out buffers are reclaimed by the arena reset, matching the
-    // reference) and `@memset(0)` each survivor. This is why `reset` works even
-    // though the caller (`PageList::reset`) has NOT returned the old pages' std
-    // buffers to the free-list — the arena owns them and reclaims them here.
-    fn reset_retain_with_limit(&mut self, limit_bytes: usize) {
-        let item_size = Self::item_size();
-        let keep = if item_size == 0 {
-            self.arena.len()
-        } else {
-            core::cmp::min(limit_bytes / item_size, self.arena.len())
-        };
-
-        let layout = Self::std_layout();
-        // Free the arena buffers beyond the retained limit.
-        while self.arena.len() > keep {
-            let buf = self.arena.pop().unwrap();
-            unsafe { std::alloc::dealloc(buf.as_ptr(), layout) };
-        }
-
-        // The free-list is reset to cover EVERY retained arena buffer (the
-        // reference nulls the free-list and reuses the retained arena memory).
-        self.free_list.clear();
-        self.free_list.extend_from_slice(&self.arena);
-
-        // Our page pool relies on mmap to zero our page memory. Since we're
-        // retaining a certain amount of memory, it won't use mmap and won't
-        // be zeroed. Zero out all the retained buffers.
-        for buf in &self.arena {
-            unsafe {
-                core::ptr::write_bytes(buf.as_ptr(), 0, std_size());
-            }
-        }
-    }
-}
-
-impl Drop for PagePool {
-    fn drop(&mut self) {
-        // `pages.deinit()`: free every standard buffer this pool owns. The arena
-        // owns ALL buffers it ever allocated (free-listed AND handed-out), so
-        // dropping it frees them all — exactly like the reference
-        // `MemoryPoolAligned.deinit` freeing the whole arena, including buffers
-        // still referenced by live nodes on an early-return `init` failure.
-        let layout = Self::std_layout();
-        self.free_list.clear();
-        for buf in self.arena.drain(..) {
-            unsafe { std::alloc::dealloc(buf.as_ptr(), layout) };
-        }
-    }
-}
+//   * It owns a `rustty_zigstd::ArenaAllocator<PageAllocator>` plus a LIFO
+//     free-list, exactly like `MemoryPoolAligned`. `item_size` is `std_size`
+//     and `item_alignment` is `page_size_min`.
+//   * The item SIZE is supplied at construction because the Rust `std_size` is a
+//     RUNTIME value (it cannot be a const-generic `[std_size]u8` array length);
+//     this is the closest faithful mapping (see `DynamicMemoryPoolAligned`).
+//   * STANDARD pages draw a slot from the pool (`pages.create()`); they are NOT
+//     eagerly zeroed — a fresh slot is lazily OS-zeroed mmap memory (audit #2,
+//     removes the eager per-page RSS commit), a reused free-list slot is zeroed
+//     by `destroyNodeExt` before it re-enters the free-list.
+//   * NON-STANDARD pages bypass the pool: allocated/freed directly via
+//     `pages.child_allocator()` (the reference `pages.arena.child_allocator`).
+//   * OOM is FALLIBLE (audit #1): `pages.create()` and the direct page-allocator
+//     `allocate` return errors that propagate as `OutOfMemory`.
+//   * `reset(.retain_with_limit)` resets the arena and then zeroes the retained
+//     arena buffers (audit #3): retained memory is not re-`mmap`ed so it is not
+//     implicitly OS-zeroed (the reference `@memset(0)` over the arena BufNodes).
+type PagePool = DynamicMemoryPoolAligned<PageAllocator>;
 
 /// List of pins, known as "tracked" pins. These are pins that are kept
 /// up to date automatically through page-modifying operations.
@@ -401,22 +261,33 @@ impl MemoryPool {
     //     return mach.taggedPageAllocator(.application_specific_1);
     // }
     //
-    // PORT NOTE: the reference `pageAllocator()` selects the VM page allocator
-    // for the page pool: the testing allocator under test (leak detection), the
-    // std page allocator on non-macOS, and the mach tagged page allocator on
-    // macOS. In the Rust port the page buffers come from the hand-rolled
-    // `PagePool` backed by `std::alloc` (page-aligned `alloc_zeroed`), so there
-    // is no separate page-allocator selection; the Miri/leak gate (R6) replaces
-    // the testing-allocator leak detection.
+    // PORT NOTE (audit #1/#2): the reference `pageAllocator()` selects the VM
+    // page allocator for the page pool: the testing allocator under test (leak
+    // detection), the std page allocator on non-macOS, and the mach tagged page
+    // allocator on macOS. The Rust port reproduces this faithfully in
+    // `rustty_os::page_allocator::page_allocator()`: a `mmap`-backed, page-aligned,
+    // LAZILY OS-zeroed allocator (tagged on macOS), with a `cfg(miri)` std-heap
+    // branch standing in for the reference's `is_test` testing-allocator. The
+    // `PagePool` is built over it (see `MemoryPool::init`), so fresh standard
+    // page buffers are lazily OS-zeroed (no eager memset / RSS commit). The
+    // Miri/ASan gates (R6) replace the testing-allocator leak detection.
 
+    // PORT NOTE (audit #1, init signature): the reference
+    // `MemoryPool.init(gen_alloc, page_alloc, preheat)` threads the
+    // general-purpose allocator into the Node/Pin pools and the page allocator
+    // into the PagePool. We mirror that wiring: the Node/Pin pools take `Global`
+    // (the faithful map of the Zig gpa — exactly the prior `std::alloc` path),
+    // and the PagePool takes `rustty_os::page_allocator::page_allocator()` (the
+    // reference `pageAllocator()` — mmap, page-aligned, LAZILY OS-zeroed). The
+    // page allocator is selected internally rather than passed by the caller
+    // because, unlike Zig, the Rust `pageAllocator()` is a process-wide fact
+    // (R1 additive-glue boundary); the threading is otherwise identical.
     pub fn init(preheat: usize) -> Result<MemoryPool, OutOfMemory> {
-        // PORT NOTE (R1 allocator threading): the faithful Zig
-        // `MemoryPool(T).initPreheated(allocator, n)` takes the arena's child
-        // allocator. Every PageList caller passes `Global` — exactly the prior
-        // `std::alloc` path — so observable behavior is unchanged.
         let node_pool = NodePool::init_preheated(Global, preheat).map_err(|_| OutOfMemory)?;
         // errdefer node_pool.deinit();
-        let page_pool = PagePool::init_preheated(preheat);
+        let page_pool =
+            PagePool::init_preheated(page_allocator(), std_size(), PAGE_SIZE_MIN, preheat)
+                .map_err(|_| OutOfMemory)?;
         // errdefer page_pool.deinit();
         let pin_pool = PinPool::init_preheated(Global, 8).map_err(|_| OutOfMemory)?;
         // errdefer pin_pool.deinit();
@@ -450,7 +321,17 @@ impl MemoryPool {
     // per-pool reset at the call site instead of a single mode, preserving the
     // exact observable behavior.
     fn reset_pages_retain_with_limit(&mut self, limit_bytes: usize) {
-        self.pages.reset_retain_with_limit(limit_bytes);
+        use rustty_zigstd::arena_allocator::ResetMode;
+        // `_ = self.pool.pages.reset(.{ .retain_with_limit = ... });`
+        self.pages.reset(ResetMode::RetainWithLimit(limit_bytes));
+    }
+
+    /// Zero the retained page-pool arena memory after a reset. Faithful map of
+    /// `PageList.reset`'s arena-zeroing block: retained arena memory is not
+    /// re-`mmap`ed so it is not implicitly OS-zeroed (the reference `@memset(0)`
+    /// walking `pool.pages.arena.state.buffer_list`).
+    fn zero_retained_page_arena(&mut self) {
+        self.pages.zero_retained_arena();
     }
 
     fn reset_nodes_retain_with_limit(&mut self, limit_bytes: usize) {
@@ -739,7 +620,10 @@ impl PageList {
         //     pages,
         // });
 
-        PagePool::item_size() * pages
+        // PORT NOTE: the reference `PagePool.item_size` is a comptime const
+        // equal to `std_size` (`@sizeOf([std_size]u8)`); we use `std_size()`
+        // directly here (static context, no pool instance available).
+        std_size() * pages
     }
 
     /// Calculates the initial capacity for a new page for a given column
@@ -944,7 +828,14 @@ impl PageList {
                     Self::free_non_standard_pages(&mut page_list);
                     return Err(e);
                 }
-                pool.pages.create()
+                // break :buf try pool.pages.create();
+                match pool.pages.create() {
+                    Ok(b) => b,
+                    Err(_) => {
+                        Self::free_non_standard_pages(&mut page_list);
+                        return Err(OutOfMemory);
+                    }
+                }
             } else {
                 // try tw.check(.page_buf_non_std);
                 #[cfg(test)]
@@ -960,7 +851,13 @@ impl PageList {
                 //     .fromByteUnits(std.heap.page_size_min),
                 //     layout.total_size,
                 // );
-                Self::alloc_non_standard(layout.total_size)
+                match Self::alloc_non_standard(layout.total_size) {
+                    Ok(b) => b,
+                    Err(_) => {
+                        Self::free_non_standard_pages(&mut page_list);
+                        return Err(OutOfMemory);
+                    }
+                }
             };
             // errdefer if (pooled)
             //     pool.pages.destroy(page_buf)
@@ -973,10 +870,14 @@ impl PageList {
             // only fresh memory.grow pages are guaranteed zero by the WASM spec.
             // On native, the OS page allocator (mmap) returns zeroed pages.
             //
-            // PORT NOTE: our `PagePool::create`/`alloc_non_standard` always hand
-            // back zeroed memory (`alloc_zeroed` / free-list zeroed on reset), so
-            // this is already satisfied on every build; the explicit memset is
-            // unnecessary in the Rust port.
+            // PORT NOTE (audit #2/#4 lazy-zero): a POOLED buffer is NOT eagerly
+            // zeroed — a fresh slot is lazily OS-zeroed mmap memory (no eager
+            // per-page RSS commit) and a reused free-list slot was zeroed by
+            // `destroyNodeExt` before it re-entered the free-list, so handed-out
+            // pages are always observably zero. A NON-STANDARD buffer is a fresh
+            // `page_allocator().allocate` (lazily OS-zeroed mmap) too. We DON'T
+            // run runtime-safety/freestanding eager memsets here (those builds
+            // are not targeted by this port), matching the native mmap path.
 
             // Initialize the first set of pages to contain our viewport so that
             // the top of the first page is always the active area.
@@ -1230,14 +1131,16 @@ impl PageList {
         // The buffer minus our header
         //
         // PORT NOTE: the reference reads the private `ArenaAllocator.BufNode`
-        // layout to zero the retained arena memory. Our hand-rolled `PagePool`
-        // zeroes the retained free-list buffers directly inside
-        // `reset_retain_with_limit`, reproducing that `@memset(0)` behavior
-        // without depending on a private allocator layout.
+        // layout to zero the retained arena memory after `pages.reset`. Our
+        // `DynamicMemoryPoolAligned` owns a faithful `ArenaAllocator` and exposes
+        // `zero_retained_arena()`, which walks the SAME backing-node list and
+        // `@memset(0)`s each node's usable region — reproducing that behavior
+        // without hardcoding a private std layout.
         self.pool
-            .reset_pages_retain_with_limit(page_count * PagePool::item_size());
+            .reset_pages_retain_with_limit(page_count * self.pool.pages.item_size());
         self.pool
             .reset_nodes_retain_with_limit(page_count * NodePool::ITEM_SIZE);
+        self.pool.zero_retained_page_arena();
 
         // Initialize our pages. This should not be able to fail since
         // we retained the capacity for the minimum number of pages we need.
@@ -1322,10 +1225,32 @@ impl PageList {
         // Our page buffer comes from our standard memory pool if it
         // is within our standard size since this is what the pool
         // dispenses. Otherwise, we use the heap allocator to allocate.
+        //
+        // PORT NOTE (audit #1 fallible OOM): both `pool.pages.create()` and the
+        // direct `page_allocator().allocate` (via `alloc_non_standard`) are
+        // fallible. On failure we honor the reference `errdefer
+        // pool.nodes.destroy(page)` — the node is returned to the node pool —
+        // and propagate `OutOfMemory`.
         let page_buf: NonNull<u8> = if pooled {
-            pool.pages.create()
+            // break :buf try pool.pages.create();
+            match pool.pages.create() {
+                Ok(b) => b,
+                Err(_) => {
+                    // errdefer pool.nodes.destroy(page).
+                    unsafe { pool.nodes.destroy(page) };
+                    return Err(OutOfMemory);
+                }
+            }
         } else {
-            Self::alloc_non_standard(layout.total_size)
+            // break :buf try page_alloc.alignedAlloc(...);
+            match Self::alloc_non_standard(layout.total_size) {
+                Ok(b) => b,
+                Err(_) => {
+                    // errdefer pool.nodes.destroy(page).
+                    unsafe { pool.nodes.destroy(page) };
+                    return Err(OutOfMemory);
+                }
+            }
         };
         // errdefer if (pooled)
         //     pool.pages.destroy(page_buf)
@@ -1335,8 +1260,12 @@ impl PageList {
         // In runtime safety modes, allocators fill with 0xAA. On freestanding
         // (WASM), the WasmAllocator reuses freed slots without zeroing.
         //
-        // PORT NOTE: our buffers are always handed back zeroed; the explicit
-        // memset is unnecessary in the Rust port (see `init_pages`).
+        // PORT NOTE (audit #2/#4 lazy-zero): handed-out page buffers are always
+        // observably zero, but FRESH ones get there lazily: a fresh pool slot is
+        // lazily OS-zeroed mmap memory (no eager memset / RSS commit), a reused
+        // pool slot was zeroed by `destroyNodeExt` before re-entering the
+        // free-list, and a non-standard buffer is a fresh lazily-OS-zeroed mmap.
+        // We don't run the runtime-safety/freestanding eager memsets here.
 
         // page.* = .{
         //     .data = .initBuf(.init(page_buf), layout),
@@ -1393,12 +1322,20 @@ impl PageList {
         }
 
         if Self::page_memory_len(node) <= std_size() {
-            // Reset the memory to zero so it can be reused
+            // Reset the memory to zero so it can be reused.
+            //
+            // PORT NOTE (audit #4): this is the REUSED-buffer zeroing. A pooled
+            // buffer returning to the free-list MUST be zeroed here (the
+            // reference `@memset(page.memory, 0)`) so the next `create()` reusing
+            // it hands back observably-zero memory — fresh slots are lazily
+            // OS-zeroed, but a reused slot is not re-`mmap`ed.
             let (ptr, len) = Self::page_memory(page);
             unsafe {
                 core::ptr::write_bytes(ptr, 0, len);
             }
-            pool.pages.destroy(NonNull::new(ptr).unwrap());
+            // SAFETY: `ptr` was handed out by `pool.pages.create()` (a standard
+            // pooled buffer) and has not been destroyed.
+            unsafe { pool.pages.destroy(NonNull::new(ptr).unwrap()) };
         } else {
             Self::free_non_standard_page(node);
         }
@@ -1413,21 +1350,44 @@ impl PageList {
     // recover the pointer/len without forming a `&Page` (avoids retagging
     // concerns under Miri) and centralize the non-standard alloc/free.
 
-    /// Allocate a page-aligned, zeroed, `total_size`-byte buffer for a
-    /// NON-STANDARD page (the reference `page_alloc.alignedAlloc`).
-    fn alloc_non_standard(total_size: usize) -> NonNull<u8> {
-        let layout = core::alloc::Layout::from_size_align(total_size, PAGE_SIZE_MIN).unwrap();
-        let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-        NonNull::new(ptr).unwrap_or_else(|| std::alloc::handle_alloc_error(layout))
+    /// `Layout` for a NON-STANDARD page buffer of `total_size` bytes, aligned to
+    /// `page_size_min`. The reference uses `page_alloc.alignedAlloc(u8,
+    /// page_size_min, total_size)` / frees `node.data.memory` (which is exactly
+    /// `total_size` bytes at the same alignment).
+    #[inline]
+    fn non_standard_layout(total_size: usize) -> Layout {
+        Layout::from_size_align(total_size, PAGE_SIZE_MIN).unwrap()
     }
 
-    /// Free a NON-STANDARD page's backing buffer (the reference
-    /// `page_alloc.free(node.data.memory)`).
+    /// Allocate a page-aligned, `total_size`-byte buffer for a NON-STANDARD page
+    /// DIRECTLY via the page allocator, bypassing the pool — the reference
+    /// `page_alloc = pool.pages.arena.child_allocator;
+    /// page_alloc.alignedAlloc(...)`. The mmap'd region is lazily OS-zeroed (no
+    /// eager memset). FALLIBLE: returns `OutOfMemory` on map failure.
+    //
+    // PORT NOTE (audit #1/#2): the page allocator is `page_allocator()`, the
+    // SAME value the `PagePool` arena holds as its `child_allocator` (a stateless
+    // `Copy` selector — the macOS VM tag only), so going through `page_allocator()`
+    // directly here is observably identical to `pool.pages.child_allocator()`.
+    // We keep `pool` in the signature to mirror the reference's
+    // `pool.pages.arena.child_allocator` access and keep the seam explicit.
+    fn alloc_non_standard(total_size: usize) -> Result<NonNull<u8>, OutOfMemory> {
+        let layout = Self::non_standard_layout(total_size);
+        let alloc = page_allocator();
+        let slice = alloc.allocate(layout).map_err(|_| OutOfMemory)?;
+        Ok(slice.cast::<u8>())
+    }
+
+    /// Free a NON-STANDARD page's backing buffer DIRECTLY via the page allocator
+    /// (the reference `page_alloc.free(node.data.memory)`).
     fn free_non_standard_page(node: *mut Node) {
         let page: *const Page = unsafe { &(*node).data };
         let (ptr, len) = Self::page_memory(page as *mut Page);
-        let layout = core::alloc::Layout::from_size_align(len, PAGE_SIZE_MIN).unwrap();
-        unsafe { std::alloc::dealloc(ptr, layout) };
+        let layout = Self::non_standard_layout(len);
+        let alloc = page_allocator();
+        // SAFETY: `ptr`/`len` describe a buffer previously returned by
+        // `alloc_non_standard` (page allocator) with this exact layout.
+        unsafe { alloc.deallocate(NonNull::new(ptr).unwrap(), layout) };
     }
 
     /// Free all non-standard pages currently in `list` (the reference

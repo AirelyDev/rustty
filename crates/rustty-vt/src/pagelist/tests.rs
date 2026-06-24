@@ -25,7 +25,7 @@
 use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError};
 use super::resize::Resize;
 use super::scroll::Scroll;
-use super::{std_capacity, std_size, PageList, PagePool, Pin, Viewport};
+use super::{std_capacity, std_size, PageList, Pin, Viewport};
 use crate::page::{Cell, CellRgb, ContentTag, Page, SemanticContent, SemanticPrompt};
 use crate::style::{self as stylepkg, Style};
 use crate::{hyperlink, point};
@@ -1310,6 +1310,64 @@ fn pagelist_reset() {
     s.deinit();
 }
 
+// PORT AUDIT (#2/#4 lazy-zero): not a reference `test {}` block. Asserts the
+// faithful zero CONTRACT after the PagePool -> MemoryPoolAligned/arena rework.
+//
+// `Page::init_buf` initializes the page structures (rows/styles/etc.) but does
+// NOT write the CELL region — it relies on the handed-out page buffer being
+// zero so cells read as empty. This test exercises that contract on both the
+// fresh-pool-slot path (init) AND the reused-free-list-slot-after-reset path
+// (the reset-time arena `@memset(0)` + the `destroyNodeExt` reuse `@memset(0)`):
+// every active cell must read as empty/zeroed in both cases.
+#[test]
+fn pagelist_fresh_page_buffer_is_observably_zero() {
+    fn assert_all_cells_zero(s: &PageList, label: &str) {
+        // Walk every page's every cell directly (the active area of a fresh /
+        // just-reset PageList is the whole page). A non-zero cells region would
+        // surface here as a non-empty / non-zeroed cell.
+        let mut it = s.pages.first;
+        while !it.is_null() {
+            let node = it;
+            let rows = unsafe { (*node).data.size.rows };
+            let cols = unsafe { (*node).data.size.cols };
+            for y in 0..rows {
+                for x in 0..cols {
+                    let rac = unsafe { (*node).data.get_row_and_cell(x as usize, y as usize) };
+                    let cell = unsafe { *rac.cell };
+                    assert!(
+                        cell.is_empty() && cell.to_bits() == Cell::zeroed().to_bits(),
+                        "{label}: cell ({x},{y}) must read as zeroed/empty",
+                    );
+                }
+            }
+            it = unsafe { (*node).next };
+        }
+    }
+
+    // Fresh pool slot: the very first page handed out at init is lazily
+    // OS-zeroed mmap memory (no eager memset); every active cell reads empty.
+    let mut s = PageList::init(80, 24, None).unwrap();
+    assert_eq!(unsafe { (*s.pages.first).data.memory_len }, std_size());
+    assert_all_cells_zero(&s, "fresh");
+
+    // Reused slot after reset: scribble non-zero bytes across the ENTIRE page
+    // buffer, then reset. Reset retains + zeroes the arena and rebuilds the
+    // pages from the retained free-list, so the cell region must read zero again
+    // even though the slot was not freshly mmap'd.
+    {
+        let first = s.pages.first;
+        let ptr = unsafe { (*first).data.memory_ptr() } as *mut u8;
+        let len = unsafe { (*first).data.memory_len };
+        unsafe {
+            core::ptr::write_bytes(ptr, 0xAB, len);
+        }
+    }
+    s.reset();
+    assert_all_cells_zero(&s, "reused-after-reset");
+
+    s.deinit();
+}
+
 // ref: test "PageList reset invalidates stale untracked refs even if node memory is reused"
 #[test]
 fn pagelist_reset_invalidates_stale_untracked_refs_even_if_node_memory_is_reused() {
@@ -1444,7 +1502,7 @@ fn pagelist_grow_reuses_non_standard_page_without_leak() {
     assert!(!core::ptr::eq(s.pages.first, s.pages.last));
 
     // Continue growing until we exceed max_size AND the last page is full
-    while s.page_size + PagePool::item_size() <= s.max_size()
+    while s.page_size + std_size() <= s.max_size()
         || unsafe { (*s.pages.last).data.size.rows < (*s.pages.last).data.capacity.rows }
     {
         let _ = s.grow().unwrap();
@@ -1558,7 +1616,7 @@ fn pagelist_grow_non_standard_page_prune_protection() {
 
     // Verify prune path conditions are met
     assert!(!core::ptr::eq(s.pages.first, s.pages.last));
-    assert!(s.page_size + PagePool::item_size() > s.max_size());
+    assert!(s.page_size + std_size() > s.max_size());
     assert!(s.total_rows() >= s.rows as usize);
 
     // Verify last page is at capacity (so grow must prune or allocate new)
