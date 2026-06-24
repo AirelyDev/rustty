@@ -29,6 +29,23 @@ From **vt-7 (kitty)** — these need `Screen`/`Terminal`/`ImageStorage`:
 
 **vt-12 acceptance gain:** +~41 tests (19+8+14) and graphics_unicode G3b → 0 missing.
 
+## Deferred to Dispatch/SIMD phase
+
+From **vt-9 (stream)**:
+
+1. **`stream.rs` — `Stream::next_slice` SIMD fast path (`nextSliceCapped` + the
+   `simd.vt.utf8DecodeUntilControlSeq` loop).** Reference:
+   `ghostty/src/terminal/stream.zig:471-577` (`nextSlice` SIMD arm +
+   `nextSliceCapped`). This is a documented deferred seam gated on
+   `options::SIMD` (the reference's `comptime debug or !build_options.simd`):
+   `SIMD` defaults to `false` (`cfg!(feature = "simd")`), so the scalar fallback
+   — the reference's own non-SIMD arm — runs unconditionally and is fully ported
+   and exercised by all 38 stream tests. The SIMD arm is a `todo!()` documented
+   in-source at stream.rs:617-618 with a PORT NOTE at stream.rs:599-602. This is
+   NOT a comment/logic drop (R1): it lands with the `simd.vt` primitives in the
+   Dispatch/SIMD phase, at which point the `nextSliceCapped` body's inner
+   comments come with it.
+
 ## Pre-existing deferred seams (lower priority, noted)
 - `sgr.rs` local `SepList` — can be retargeted to re-export `parser::SepList` (vt-5
   defined the canonical one). Cosmetic; tracked PORT NOTE in sgr.rs.
