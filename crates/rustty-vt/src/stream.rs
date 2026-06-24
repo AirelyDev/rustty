@@ -10,6 +10,16 @@
 //! stubbed `todo!()` so the crate builds; the Dispatch phase fills them in
 //! against this exact `Handler` surface.
 
+// PORT NOTE: the dispatch routines are a verbatim retargeting of the reference's
+// `switch` statements (notably `switch (input.intermediates.len)` /
+// `switch (input.params.len)` with `0 => ... else => ...`). Faithfully mirroring
+// each Zig `switch` as a Rust `match` triggers `clippy::single_match` and
+// `clippy::len_zero`; rewriting them as `if`/`else if` would distort the 1:1
+// structural mapping with the reference. The lints are allowed crate-locally for
+// this module to keep the dispatch shape identical to `stream.zig`.
+#![allow(clippy::single_match)]
+#![allow(clippy::len_zero)]
+
 // const streampkg = @This();
 // const std = @import("std");
 // const build_options = @import("terminal_options");
@@ -847,29 +857,1869 @@ impl<'a, H: Handler> Stream<'a, H> {
     }
 
     // inline fn csiDispatch(self: *Self, input: Parser.Action.CSI) void { ... }
-    // PORT NOTE (vt-9 SKELETON): the per-final CSI dispatch is filled by the
-    // Dispatch phase against the `Handler` surface above. Stubbed so the crate
-    // builds.
-    fn csi_dispatch(&mut self, _input: parser::CSI) {
-        todo!("vt csiDispatch (Dispatch phase)")
+    fn csi_dispatch(&mut self, input: parser::CSI) {
+        // The branch hints here are based on real world data
+        // which indicates that the most common CSI finals are:
+        //
+        // 1. m
+        // 2. H
+        // 3. K
+        // 4. A
+        // 5. C
+        // 6. X
+        // 7. l
+        // 8. h
+        // 9. r
+        //
+        // Together, these 9 finals make up about 96% of all
+        // CSI sequences encountered in real world scenarios.
+        //
+        // Additionally, within the prongs, unlikely branch
+        // hints have been added to branches that deal with
+        // invalid sequences/commands, this is in order to
+        // optimize for the happy path where we're getting
+        // valid data from the program we're running.
+        //
+        // ref: https://github.com/qwerasd205/asciinema-stats
+
+        // switch (input.final) {
+        match input.final_ {
+            // CUU - Cursor Up
+            // 'A', 'k' => { ... }
+            b'A' | b'k' => {
+                // @branchHint(.likely);
+                // switch (input.intermediates.len) {
+                match input.intermediates.len() {
+                    // 0 => self.handler.vt(.cursor_up, .{ .value = ... }),
+                    0 => self.handler.cursor_up(CursorMovement {
+                        value: match input.params.len() {
+                            0 => 1,
+                            1 => input.params[0],
+                            _ => {
+                                // @branchHint(.unlikely);
+                                // log.warn("invalid cursor up command: {f}", .{input});
+                                return;
+                            }
+                        },
+                    }),
+
+                    // else => log.warn("ignoring unimplemented CSI A with intermediates: {s}", ...),
+                    _ => {}
+                }
+            }
+
+            // CUD - Cursor Down
+            // 'B' => switch (input.intermediates.len) { ... }
+            b'B' => match input.intermediates.len() {
+                0 => self.handler.cursor_down(CursorMovement {
+                    value: match input.params.len() {
+                        0 => 1,
+                        1 => input.params[0],
+                        _ => {
+                            // @branchHint(.unlikely);
+                            // log.warn("invalid cursor down command: {f}", .{input});
+                            return;
+                        }
+                    },
+                }),
+
+                // else => log.warn("ignoring unimplemented CSI B with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // CUF - Cursor Right
+            // 'C' => { ... }
+            b'C' => {
+                // @branchHint(.likely);
+                // switch (input.intermediates.len) {
+                match input.intermediates.len() {
+                    0 => self.handler.cursor_right(CursorMovement {
+                        value: match input.params.len() {
+                            0 => 1,
+                            1 => input.params[0],
+                            _ => {
+                                // @branchHint(.unlikely);
+                                // log.warn("invalid cursor right command: {f}", .{input});
+                                return;
+                            }
+                        },
+                    }),
+
+                    // else => log.warn("ignoring unimplemented CSI C with intermediates: {s}", ...),
+                    _ => {}
+                }
+            }
+
+            // CUB - Cursor Left
+            // 'D', 'j' => switch (input.intermediates.len) { ... }
+            b'D' | b'j' => match input.intermediates.len() {
+                0 => self.handler.cursor_left(CursorMovement {
+                    value: match input.params.len() {
+                        0 => 1,
+                        1 => input.params[0],
+                        _ => {
+                            // @branchHint(.unlikely);
+                            // log.warn("invalid cursor left command: {f}", .{input});
+                            return;
+                        }
+                    },
+                }),
+
+                // else => log.warn("ignoring unimplemented CSI D with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // CNL - Cursor Next Line
+            // 'E' => switch (input.intermediates.len) { ... }
+            b'E' => match input.intermediates.len() {
+                0 => {
+                    self.handler.cursor_down(CursorMovement {
+                        value: match input.params.len() {
+                            0 => 1,
+                            1 => input.params[0],
+                            _ => {
+                                // @branchHint(.unlikely);
+                                // log.warn("invalid cursor up command: {f}", .{input});
+                                return;
+                            }
+                        },
+                    });
+                    self.handler.carriage_return();
+                }
+
+                // else => log.warn("ignoring unimplemented CSI E with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // CPL - Cursor Previous Line
+            // 'F' => switch (input.intermediates.len) { ... }
+            b'F' => match input.intermediates.len() {
+                0 => {
+                    self.handler.cursor_up(CursorMovement {
+                        value: match input.params.len() {
+                            0 => 1,
+                            1 => input.params[0],
+                            _ => {
+                                // @branchHint(.unlikely);
+                                // log.warn("invalid cursor down command: {f}", .{input});
+                                return;
+                            }
+                        },
+                    });
+                    self.handler.carriage_return();
+                }
+
+                // else => log.warn("ignoring unimplemented CSI F with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // HPA - Cursor Horizontal Position Absolute
+            // TODO: test
+            // 'G', '`' => switch (input.intermediates.len) { ... }
+            b'G' | b'`' => match input.intermediates.len() {
+                0 => self.handler.cursor_col(CursorMovement {
+                    value: match input.params.len() {
+                        0 => 1,
+                        1 => input.params[0],
+                        _ => {
+                            // @branchHint(.unlikely);
+                            // log.warn("invalid HPA command: {f}", .{input});
+                            return;
+                        }
+                    },
+                }),
+
+                // else => log.warn("ignoring unimplemented CSI G with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // CUP - Set Cursor Position.
+            // TODO: test
+            // 'H', 'f' => { ... }
+            b'H' | b'f' => {
+                // @branchHint(.likely);
+                // switch (input.intermediates.len) {
+                match input.intermediates.len() {
+                    0 => {
+                        // const pos: streampkg.Action.CursorPos = switch (input.params.len) {
+                        let pos: CursorPos = match input.params.len() {
+                            0 => CursorPos { row: 1, col: 1 },
+                            1 => CursorPos {
+                                row: input.params[0],
+                                col: 1,
+                            },
+                            2 => CursorPos {
+                                row: input.params[0],
+                                col: input.params[1],
+                            },
+                            _ => {
+                                // @branchHint(.unlikely);
+                                // log.warn("invalid CUP command: {f}", .{input});
+                                return;
+                            }
+                        };
+                        self.handler.cursor_pos(pos);
+                    }
+
+                    // else => log.warn("ignoring unimplemented CSI H with intermediates: {s}", ...),
+                    _ => {}
+                }
+            }
+
+            // CHT - Cursor Horizontal Tabulation
+            // 'I' => switch (input.intermediates.len) { ... }
+            b'I' => match input.intermediates.len() {
+                0 => self.handler.horizontal_tab(match input.params.len() {
+                    0 => 1,
+                    1 => input.params[0],
+                    _ => {
+                        // log.warn("invalid horizontal tab command: {f}", .{input});
+                        return;
+                    }
+                }),
+
+                // else => log.warn("ignoring unimplemented CSI I with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // Erase Display
+            // 'J' => { ... }
+            b'J' => {
+                // const protected_: ?bool = switch (input.intermediates.len) {
+                let protected_: Option<bool> = match input.intermediates.len() {
+                    0 => Some(false),
+                    1 => {
+                        if input.intermediates[0] == b'?' {
+                            Some(true)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                // const protected = protected_ orelse { ... };
+                let protected = match protected_ {
+                    Some(p) => p,
+                    None => {
+                        // log.warn("invalid erase display command: {f}", .{input});
+                        return;
+                    }
+                };
+
+                // const mode_: ?csi.EraseDisplay = switch (input.params.len) {
+                let mode_: Option<csi::EraseDisplay> = match input.params.len() {
+                    0 => Some(csi::EraseDisplay::Below),
+                    // 1 => std.meta.intToEnum(csi.EraseDisplay, input.params[0]) catch null,
+                    1 => match input.params[0] {
+                        0 => Some(csi::EraseDisplay::Below),
+                        1 => Some(csi::EraseDisplay::Above),
+                        2 => Some(csi::EraseDisplay::Complete),
+                        3 => Some(csi::EraseDisplay::Scrollback),
+                        22 => Some(csi::EraseDisplay::ScrollComplete),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+
+                // const mode = mode_ orelse { ... };
+                let mode = match mode_ {
+                    Some(m) => m,
+                    None => {
+                        // log.warn("invalid erase display command: {f}", .{input});
+                        return;
+                    }
+                };
+
+                // switch (mode) {
+                match mode {
+                    csi::EraseDisplay::Below => self.handler.erase_display_below(protected),
+                    csi::EraseDisplay::Above => self.handler.erase_display_above(protected),
+                    csi::EraseDisplay::Complete => self.handler.erase_display_complete(protected),
+                    csi::EraseDisplay::Scrollback => {
+                        self.handler.erase_display_scrollback(protected)
+                    }
+                    csi::EraseDisplay::ScrollComplete => {
+                        self.handler.erase_display_scroll_complete(protected)
+                    }
+                }
+            }
+
+            // Erase Line
+            // 'K' => { ... }
+            b'K' => {
+                // @branchHint(.likely);
+                // const protected_: ?bool = switch (input.intermediates.len) {
+                let protected_: Option<bool> = match input.intermediates.len() {
+                    0 => Some(false),
+                    1 => {
+                        if input.intermediates[0] == b'?' {
+                            Some(true)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                // const protected = protected_ orelse { ... };
+                let protected = match protected_ {
+                    Some(p) => p,
+                    None => {
+                        // @branchHint(.unlikely);
+                        // log.warn("invalid erase line command: {f}", .{input});
+                        return;
+                    }
+                };
+
+                // const mode_: ?csi.EraseLine = switch (input.params.len) {
+                let mode_: Option<csi::EraseLine> = match input.params.len() {
+                    0 => Some(csi::EraseLine::Right),
+                    // 1 => if (input.params[0] < 3) @enumFromInt(input.params[0]) else null,
+                    1 => {
+                        if input.params[0] < 3 {
+                            Some(match input.params[0] {
+                                0 => csi::EraseLine::Right,
+                                1 => csi::EraseLine::Left,
+                                2 => csi::EraseLine::Complete,
+                                _ => csi::EraseLine::Other(input.params[0] as u8),
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                // const mode = mode_ orelse { ... };
+                let mode = match mode_ {
+                    Some(m) => m,
+                    None => {
+                        // @branchHint(.unlikely);
+                        // log.warn("invalid erase line command: {f}", .{input});
+                        return;
+                    }
+                };
+
+                // switch (mode) {
+                match mode {
+                    csi::EraseLine::Right => self.handler.erase_line_right(protected),
+                    csi::EraseLine::Left => self.handler.erase_line_left(protected),
+                    csi::EraseLine::Complete => self.handler.erase_line_complete(protected),
+                    csi::EraseLine::RightUnlessPendingWrap => {
+                        self.handler.erase_line_right_unless_pending_wrap(protected)
+                    }
+                    // _ => { ... }
+                    csi::EraseLine::Other(_) => {
+                        // @branchHint(.unlikely);
+                        // log.warn("invalid erase line mode: {}", .{mode});
+                    }
+                }
+            }
+
+            // IL - Insert Lines
+            // TODO: test
+            // 'L' => switch (input.intermediates.len) { ... }
+            b'L' => match input.intermediates.len() {
+                0 => self.handler.insert_lines(match input.params.len() {
+                    0 => 1,
+                    1 => input.params[0] as usize,
+                    _ => {
+                        // log.warn("invalid IL command: {f}", .{input});
+                        return;
+                    }
+                }),
+
+                // else => log.warn("ignoring unimplemented CSI L with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // DL - Delete Lines
+            // TODO: test
+            // 'M' => switch (input.intermediates.len) { ... }
+            b'M' => match input.intermediates.len() {
+                0 => self.handler.delete_lines(match input.params.len() {
+                    0 => 1,
+                    1 => input.params[0] as usize,
+                    _ => {
+                        // log.warn("invalid DL command: {f}", .{input});
+                        return;
+                    }
+                }),
+
+                // else => log.warn("ignoring unimplemented CSI M with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // Delete Character (DCH)
+            // 'P' => switch (input.intermediates.len) { ... }
+            b'P' => match input.intermediates.len() {
+                0 => self.handler.delete_chars(match input.params.len() {
+                    0 => 1,
+                    1 => input.params[0] as usize,
+                    _ => {
+                        // log.warn("invalid delete characters command: {f}", .{input});
+                        return;
+                    }
+                }),
+
+                // else => log.warn("ignoring unimplemented CSI P with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // Scroll Up (SD)
+            // 'S' => switch (input.intermediates.len) { ... }
+            b'S' => match input.intermediates.len() {
+                0 => self.handler.scroll_up(match input.params.len() {
+                    0 => 1,
+                    1 => input.params[0] as usize,
+                    _ => {
+                        // log.warn("invalid scroll up command: {f}", .{input});
+                        return;
+                    }
+                }),
+
+                // else => log.warn("ignoring unimplemented CSI S with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // Scroll Down (SD)
+            // 'T' => switch (input.intermediates.len) { ... }
+            b'T' => match input.intermediates.len() {
+                0 => self.handler.scroll_down(match input.params.len() {
+                    0 => 1,
+                    1 => input.params[0] as usize,
+                    _ => {
+                        // log.warn("invalid scroll down command: {f}", .{input});
+                        return;
+                    }
+                }),
+
+                // else => log.warn("ignoring unimplemented CSI T with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // Cursor Tabulation Control
+            // 'W' => switch (input.intermediates.len) { ... }
+            b'W' => match input.intermediates.len() {
+                0 => {
+                    // if (input.params.len == 0 or
+                    //     (input.params.len == 1 and input.params[0] == 0))
+                    if input.params.len() == 0 || (input.params.len() == 1 && input.params[0] == 0)
+                    {
+                        self.handler.tab_set();
+                        return;
+                    }
+
+                    // switch (input.params.len) {
+                    match input.params.len() {
+                        // 0 => unreachable,
+                        0 => unreachable!(),
+
+                        // 1 => switch (input.params[0]) {
+                        1 => match input.params[0] {
+                            // 0 => unreachable,
+                            0 => unreachable!(),
+
+                            2 => self.handler.tab_clear_current(),
+
+                            5 => self.handler.tab_clear_all(),
+
+                            _ => {}
+                        },
+
+                        _ => {}
+                    }
+
+                    // log.warn("invalid cursor tabulation control: {f}", .{input});
+                    #[allow(clippy::needless_return)]
+                    return;
+                }
+
+                // 1 => if (...) { self.handler.vt(.tab_reset, {}); } else log.warn(...),
+                1 => {
+                    if input.intermediates[0] == b'?'
+                        && input.params.len() == 1
+                        && input.params[0] == 5
+                    {
+                        self.handler.tab_reset();
+                    }
+                    // else log.warn("invalid cursor tabulation control: {f}", .{input});
+                }
+
+                // else => log.warn("ignoring unimplemented CSI W with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // Erase Characters (ECH)
+            // 'X' => { ... }
+            b'X' => {
+                // @branchHint(.likely);
+                // switch (input.intermediates.len) {
+                match input.intermediates.len() {
+                    0 => self.handler.erase_chars(match input.params.len() {
+                        0 => 1,
+                        1 => input.params[0] as usize,
+                        _ => {
+                            // @branchHint(.unlikely);
+                            // log.warn("invalid erase characters command: {f}", .{input});
+                            return;
+                        }
+                    }),
+
+                    // else => log.warn("ignoring unimplemented CSI X with intermediates: {s}", ...),
+                    _ => {}
+                }
+            }
+
+            // CHT - Cursor Horizontal Tabulation Back
+            // 'Z' => switch (input.intermediates.len) { ... }
+            b'Z' => match input.intermediates.len() {
+                0 => self.handler.horizontal_tab_back(match input.params.len() {
+                    0 => 1,
+                    1 => input.params[0],
+                    _ => {
+                        // log.warn("invalid horizontal tab back command: {f}", .{input});
+                        return;
+                    }
+                }),
+
+                // else => log.warn("ignoring unimplemented CSI Z with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // HPR - Cursor Horizontal Position Relative
+            // 'a' => switch (input.intermediates.len) { ... }
+            b'a' => match input.intermediates.len() {
+                0 => self.handler.cursor_col_relative(CursorMovement {
+                    value: match input.params.len() {
+                        0 => 1,
+                        1 => input.params[0],
+                        _ => {
+                            // log.warn("invalid HPR command: {f}", .{input});
+                            return;
+                        }
+                    },
+                }),
+
+                // else => log.warn("ignoring unimplemented CSI a with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // Repeat Previous Char (REP)
+            // 'b' => switch (input.intermediates.len) { ... }
+            b'b' => match input.intermediates.len() {
+                0 => self.handler.print_repeat(match input.params.len() {
+                    0 => 1,
+                    1 => input.params[0],
+                    _ => {
+                        // log.warn("invalid print repeat command: {f}", .{input});
+                        return;
+                    }
+                }),
+
+                // else => log.warn("ignoring unimplemented CSI b with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // c - Device Attributes (DA1)
+            // 'c' => { ... }
+            b'c' => {
+                // const req: ?device_attributes.Req = switch (input.intermediates.len) {
+                let req: Option<device_attributes::Req> = match input.intermediates.len() {
+                    0 => Some(device_attributes::Req::Primary),
+                    1 => match input.intermediates[0] {
+                        b'>' => Some(device_attributes::Req::Secondary),
+                        b'=' => Some(device_attributes::Req::Tertiary),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+
+                // if (req) |r| { ... } else { ... }
+                if let Some(r) = req {
+                    self.handler.device_attributes(r);
+                } else {
+                    // log.warn("invalid device attributes command: {f}", .{input});
+                    #[allow(clippy::needless_return)]
+                    return;
+                }
+            }
+
+            // VPA - Cursor Vertical Position Absolute
+            // 'd' => switch (input.intermediates.len) { ... }
+            b'd' => match input.intermediates.len() {
+                0 => self.handler.cursor_row(CursorMovement {
+                    value: match input.params.len() {
+                        0 => 1,
+                        1 => input.params[0],
+                        _ => {
+                            // log.warn("invalid VPA command: {f}", .{input});
+                            return;
+                        }
+                    },
+                }),
+
+                // else => log.warn("ignoring unimplemented CSI d with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // VPR - Cursor Vertical Position Relative
+            // 'e' => switch (input.intermediates.len) { ... }
+            b'e' => match input.intermediates.len() {
+                0 => self.handler.cursor_row_relative(CursorMovement {
+                    value: match input.params.len() {
+                        0 => 1,
+                        1 => input.params[0],
+                        _ => {
+                            // log.warn("invalid VPR command: {f}", .{input});
+                            return;
+                        }
+                    },
+                }),
+
+                // else => log.warn("ignoring unimplemented CSI e with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // TBC - Tab Clear
+            // TODO: test
+            // 'g' => switch (input.intermediates.len) { ... }
+            b'g' => match input.intermediates.len() {
+                0 => {
+                    // const mode: csi.TabClear = switch (input.params.len) {
+                    let mode: csi::TabClear = match input.params.len() {
+                        // 1 => std.meta.intToEnum(csi.TabClear, input.params[0]) catch { ... },
+                        1 => match u8::try_from(input.params[0]) {
+                            Ok(v) => match v {
+                                0 => csi::TabClear::Current,
+                                3 => csi::TabClear::All,
+                                _ => csi::TabClear::Other(v),
+                            },
+                            Err(_) => {
+                                // log.warn("invalid tab clear mode: {}", .{input.params[0]});
+                                return;
+                            }
+                        },
+                        _ => {
+                            // log.warn("invalid tab clear command: {f}", .{input});
+                            return;
+                        }
+                    };
+                    // switch (mode) {
+                    match mode {
+                        csi::TabClear::Current => self.handler.tab_clear_current(),
+                        csi::TabClear::All => self.handler.tab_clear_all(),
+                        // _ => log.warn("unknown tab clear mode: {}", .{mode}),
+                        csi::TabClear::Other(_) => {}
+                    }
+                }
+
+                // else => log.warn("ignoring unimplemented CSI g with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // SM - Set Mode
+            // 'h' => mode: { ... }
+            b'h' => 'mode: {
+                // @branchHint(.likely);
+                // const ansi_mode = ansi: { ... };
+                let ansi_mode = 'ansi: {
+                    if input.intermediates.len() == 0 {
+                        break 'ansi true;
+                    }
+                    if input.intermediates.len() == 1 && input.intermediates[0] == b'?' {
+                        break 'ansi false;
+                    }
+
+                    // log.warn("invalid set mode command: {f}", .{input});
+                    break 'mode;
+                };
+
+                // for (input.params) |mode_int| {
+                for &mode_int in input.params.iter() {
+                    // if (modes.modeFromInt(mode_int, ansi_mode)) |mode| {
+                    if let Some(mode) = modes::mode_from_int(mode_int, ansi_mode) {
+                        self.handler.set_mode(Mode { mode });
+                    } else {
+                        // log.warn("unimplemented mode: {}", .{mode_int});
+                    }
+                }
+            }
+
+            // RM - Reset Mode
+            // 'l' => mode: { ... }
+            b'l' => 'mode: {
+                // @branchHint(.likely);
+                // const ansi_mode = ansi: { ... };
+                let ansi_mode = 'ansi: {
+                    if input.intermediates.len() == 0 {
+                        break 'ansi true;
+                    }
+                    if input.intermediates.len() == 1 && input.intermediates[0] == b'?' {
+                        break 'ansi false;
+                    }
+
+                    // log.warn("invalid set mode command: {f}", .{input});
+                    break 'mode;
+                };
+
+                // for (input.params) |mode_int| {
+                for &mode_int in input.params.iter() {
+                    // if (modes.modeFromInt(mode_int, ansi_mode)) |mode| {
+                    if let Some(mode) = modes::mode_from_int(mode_int, ansi_mode) {
+                        self.handler.reset_mode(Mode { mode });
+                    } else {
+                        // log.warn("unimplemented mode: {}", .{mode_int});
+                    }
+                }
+            }
+
+            // SGR - Select Graphic Rendition
+            // 'm' => { ... }
+            b'm' => {
+                // @branchHint(.likely);
+                // switch (input.intermediates.len) {
+                match input.intermediates.len() {
+                    0 => {
+                        // This is the most common case.
+                        // @branchHint(.likely);
+                        // log.info("parse SGR params={any}", .{input.params});
+                        // var p: sgr.Parser = .{ .params = ..., .params_sep = ... };
+                        // PORT NOTE: the reference passes the single `SepList` type
+                        // straight through. In the port, `Parser.Action.CSI.SepList`
+                        // (`parser::SepList`) and the `sgr` module's structurally
+                        // identical local seam (`sgr::SepList`) are still distinct
+                        // Rust types (see the PORT NOTE on `parser::SepList`); bridge
+                        // them by copying the set separator bits through the public
+                        // `is_set`/`set` API so the SGR parser observes the identical
+                        // separator set.
+                        let mut params_sep = sgr::SepList::init_empty();
+                        for i in 0..parser::MAX_PARAMS {
+                            if input.params_sep.is_set(i) {
+                                params_sep.set(i);
+                            }
+                        }
+                        let mut p: sgr::Parser = sgr::Parser {
+                            params: &input.params,
+                            params_sep,
+                            idx: 0,
+                        };
+                        // while (p.next()) |attr| {
+                        while let Some(attr) = p.next() {
+                            // log.info("SGR attribute: {}", .{attr});
+                            self.handler.set_attribute(attr);
+                        }
+                    }
+
+                    // 1 => switch (input.intermediates[0]) {
+                    1 => match input.intermediates[0] {
+                        // '>' => blk: { ... }
+                        b'>' => 'blk: {
+                            // if (input.params.len == 0) { ... }
+                            if input.params.len() == 0 {
+                                // Reset
+                                self.handler
+                                    .modify_key_format(ansi::ModifyKeyFormat::Legacy);
+                                break 'blk;
+                            }
+
+                            // var format: ansi.ModifyKeyFormat = switch (input.params[0]) {
+                            let mut format: ansi::ModifyKeyFormat = match input.params[0] {
+                                0 => ansi::ModifyKeyFormat::Legacy,
+                                1 => ansi::ModifyKeyFormat::CursorKeys,
+                                2 => ansi::ModifyKeyFormat::FunctionKeys,
+                                4 => ansi::ModifyKeyFormat::OtherKeysNone,
+                                _ => {
+                                    // @branchHint(.unlikely);
+                                    // log.warn("invalid setModifyKeyFormat: {f}", .{input});
+                                    break 'blk;
+                                }
+                            };
+
+                            // if (input.params.len > 2) { ... }
+                            if input.params.len() > 2 {
+                                // @branchHint(.unlikely);
+                                // log.warn("invalid setModifyKeyFormat: {f}", .{input});
+                                break 'blk;
+                            }
+
+                            // if (input.params.len == 2) {
+                            if input.params.len() == 2 {
+                                // switch (format) {
+                                match format {
+                                    // We don't support any of the subparams yet for these.
+                                    ansi::ModifyKeyFormat::Legacy => {}
+                                    ansi::ModifyKeyFormat::CursorKeys => {}
+                                    ansi::ModifyKeyFormat::FunctionKeys => {}
+
+                                    // We only support the numeric form.
+                                    // .other_keys_none => switch (input.params[1]) {
+                                    ansi::ModifyKeyFormat::OtherKeysNone => match input.params[1] {
+                                        2 => format = ansi::ModifyKeyFormat::OtherKeysNumeric,
+                                        _ => {}
+                                    },
+                                    ansi::ModifyKeyFormat::OtherKeysNumericExcept => {}
+                                    ansi::ModifyKeyFormat::OtherKeysNumeric => {}
+                                }
+                            }
+
+                            self.handler.modify_key_format(format);
+                        }
+
+                        // else => log.warn("unknown CSI m with intermediate: {}", ...),
+                        _ => {}
+                    },
+
+                    _ => {
+                        // Nothing, but I wanted a place to put this comment:
+                        // there are others forms of CSI m that have intermediates.
+                        // `vim --clean` uses `CSI ? 4 m` and I don't know what
+                        // that means.
+                        // log.warn("ignoring unimplemented CSI m with intermediates: {s}", ...);
+                    }
+                }
+            }
+
+            // TODO: test
+            // 'n' => { ... }
+            b'n' => {
+                // Handle deviceStatusReport first
+                // if (input.intermediates.len == 0 or input.intermediates[0] == '?')
+                if input.intermediates.len() == 0 || input.intermediates[0] == b'?' {
+                    // if (input.params.len != 1) { ... }
+                    if input.params.len() != 1 {
+                        // log.warn("invalid device status report command: {f}", .{input});
+                        return;
+                    }
+
+                    // const question = question: { ... };
+                    let question = 'question: {
+                        if input.intermediates.len() == 0 {
+                            break 'question false;
+                        }
+                        if input.intermediates.len() == 1 && input.intermediates[0] == b'?' {
+                            break 'question true;
+                        }
+
+                        // log.warn("invalid set mode command: {f}", .{input});
+                        return;
+                    };
+
+                    // const req = device_status.reqFromInt(input.params[0], question) orelse { ... };
+                    let req = match device_status::req_from_int(input.params[0], question) {
+                        Some(req) => req,
+                        None => {
+                            // log.warn("invalid device status report command: {f}", .{input});
+                            return;
+                        }
+                    };
+
+                    self.handler.device_status(DeviceStatus { request: req });
+                    return;
+                }
+
+                // Handle other forms of CSI n
+                // switch (input.intermediates.len) {
+                match input.intermediates.len() {
+                    // 0 => unreachable, // handled above
+                    0 => unreachable!(), // handled above
+
+                    // 1 => switch (input.intermediates[0]) {
+                    1 => match input.intermediates[0] {
+                        b'>' => {
+                            // This isn't strictly correct. CSI > n has parameters that
+                            // control what exactly is being disabled. However, we
+                            // only support reverting back to modify other keys in
+                            // numeric except format.
+                            self.handler
+                                .modify_key_format(ansi::ModifyKeyFormat::OtherKeysNumericExcept);
+                        }
+
+                        // else => log.warn("unknown CSI n with intermediate: {}", ...),
+                        _ => {}
+                    },
+
+                    // else => log.warn("ignoring unimplemented CSI n with intermediates: {s}", ...),
+                    _ => {}
+                }
+            }
+
+            // DECRQM - Request Mode
+            // 'p' => switch (input.intermediates.len) { ... }
+            b'p' => match input.intermediates.len() {
+                // 2 => decrqm: { ... }
+                2 => 'decrqm: {
+                    // const ansi_mode = ansi: { ... };
+                    let ansi_mode = 'ansi: {
+                        // switch (input.intermediates.len) {
+                        match input.intermediates.len() {
+                            1 => {
+                                if input.intermediates[0] == b'$' {
+                                    break 'ansi true;
+                                }
+                            }
+                            2 => {
+                                if input.intermediates[0] == b'?' && input.intermediates[1] == b'$'
+                                {
+                                    break 'ansi false;
+                                }
+                            }
+                            _ => {}
+                        }
+
+                        // log.warn("ignoring unimplemented CSI p with intermediates: {s}", ...);
+                        break 'decrqm;
+                    };
+
+                    // if (input.params.len != 1) { ... }
+                    if input.params.len() != 1 {
+                        // log.warn("invalid DECRQM command: {f}", .{input});
+                        break 'decrqm;
+                    }
+
+                    // const mode_raw = input.params[0];
+                    let mode_raw = input.params[0];
+                    // const mode = modes.modeFromInt(mode_raw, ansi_mode);
+                    let mode = modes::mode_from_int(mode_raw, ansi_mode);
+                    // if (mode) |m| { ... } else { ... }
+                    if let Some(m) = mode {
+                        self.handler.request_mode(Mode { mode: m });
+                    } else {
+                        self.handler.request_mode_unknown(RawMode {
+                            mode: mode_raw,
+                            ansi: ansi_mode,
+                        });
+                    }
+                }
+
+                // else => log.warn("ignoring unimplemented CSI p with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // 'q' => switch (input.intermediates.len) { ... }
+            b'q' => match input.intermediates.len() {
+                // 1 => switch (input.intermediates[0]) {
+                1 => match input.intermediates[0] {
+                    // DECSCUSR - Select Cursor Style
+                    // TODO: test
+                    // ' ' => { ... }
+                    b' ' => {
+                        // const style: ansi.CursorStyle = switch (input.params.len) {
+                        let style: ansi::CursorStyle = match input.params.len() {
+                            0 => ansi::CursorStyle::Default,
+                            // 1 => switch (input.params[0]) {
+                            1 => match input.params[0] {
+                                0 => ansi::CursorStyle::Default,
+                                1 => ansi::CursorStyle::BlinkingBlock,
+                                2 => ansi::CursorStyle::SteadyBlock,
+                                3 => ansi::CursorStyle::BlinkingUnderline,
+                                4 => ansi::CursorStyle::SteadyUnderline,
+                                5 => ansi::CursorStyle::BlinkingBar,
+                                6 => ansi::CursorStyle::SteadyBar,
+                                _ => {
+                                    // log.warn("invalid cursor style value: {}", .{input.params[0]});
+                                    return;
+                                }
+                            },
+                            _ => {
+                                // log.warn("invalid set cursor style command: {f}", .{input});
+                                return;
+                            }
+                        };
+                        self.handler.cursor_style(style);
+                    }
+
+                    // DECSCA
+                    // '"' => { ... }
+                    b'"' => {
+                        // const mode_: ?ansi.ProtectedMode = switch (input.params.len) {
+                        let mode_: Option<ansi::ProtectedMode> = match input.params.len() {
+                            0 => Some(ansi::ProtectedMode::Off),
+                            // 1 => switch (input.params[0]) {
+                            1 => match input.params[0] {
+                                0 | 2 => Some(ansi::ProtectedMode::Off),
+                                1 => Some(ansi::ProtectedMode::Dec),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+
+                        // const mode = mode_ orelse { ... };
+                        let mode = match mode_ {
+                            Some(m) => m,
+                            None => {
+                                // log.warn("invalid set protected mode command: {f}", .{input});
+                                return;
+                            }
+                        };
+
+                        // switch (mode) {
+                        match mode {
+                            ansi::ProtectedMode::Off => self.handler.protected_mode_off(),
+                            ansi::ProtectedMode::Iso => self.handler.protected_mode_iso(),
+                            ansi::ProtectedMode::Dec => self.handler.protected_mode_dec(),
+                        }
+                    }
+
+                    // XTVERSION
+                    b'>' => self.handler.xtversion(),
+                    _ => {
+                        // log.warn("ignoring unimplemented CSI q with intermediates: {s}", ...);
+                    }
+                },
+
+                // else => log.warn("ignoring unimplemented CSI p with intermediates: {s}", ...),
+                _ => {}
+            },
+
+            // 'r' => { ... }
+            b'r' => {
+                // @branchHint(.likely);
+                // switch (input.intermediates.len) {
+                match input.intermediates.len() {
+                    // DECSTBM - Set Top and Bottom Margins
+                    // 0 => switch (input.params.len) {
+                    0 => match input.params.len() {
+                        0 => self.handler.top_and_bottom_margin(Margin {
+                            top_left: 0,
+                            bottom_right: 0,
+                        }),
+                        1 => self.handler.top_and_bottom_margin(Margin {
+                            top_left: input.params[0],
+                            bottom_right: 0,
+                        }),
+                        2 => self.handler.top_and_bottom_margin(Margin {
+                            top_left: input.params[0],
+                            bottom_right: input.params[1],
+                        }),
+                        _ => {
+                            // @branchHint(.unlikely);
+                            // log.warn("invalid DECSTBM command: {f}", .{input});
+                        }
+                    },
+
+                    // 1 => switch (input.intermediates[0]) {
+                    1 => match input.intermediates[0] {
+                        // Restore Mode
+                        b'?' => {
+                            // for (input.params) |mode_int| {
+                            for &mode_int in input.params.iter() {
+                                // if (modes.modeFromInt(mode_int, false)) |mode| {
+                                if let Some(mode) = modes::mode_from_int(mode_int, false) {
+                                    self.handler.restore_mode(Mode { mode });
+                                } else {
+                                    // log.warn("unimplemented restore mode: {}", .{mode_int});
+                                }
+                            }
+                        }
+
+                        // else => log.warn("unknown CSI s with intermediate: {f}", .{input}),
+                        _ => {}
+                    },
+
+                    // else => log.warn("ignoring unimplemented CSI s with intermediates: {f}", ...),
+                    _ => {}
+                }
+            }
+
+            // 's' => switch (input.intermediates.len) { ... }
+            b's' => match input.intermediates.len() {
+                // DECSLRM
+                // 0 => switch (input.params.len) {
+                0 => match input.params.len() {
+                    // CSI S is ambiguous with zero params so we defer
+                    // to our handler to do the proper logic. If mode 69
+                    // is set, then we should invoke DECSLRM, otherwise
+                    // we should invoke SC.
+                    0 => self.handler.left_and_right_margin_ambiguous(),
+                    1 => self.handler.left_and_right_margin(Margin {
+                        top_left: input.params[0],
+                        bottom_right: 0,
+                    }),
+                    2 => self.handler.left_and_right_margin(Margin {
+                        top_left: input.params[0],
+                        bottom_right: input.params[1],
+                    }),
+                    // else => log.warn("invalid DECSLRM command: {f}", .{input}),
+                    _ => {}
+                },
+
+                // 1 => switch (input.intermediates[0]) {
+                1 => match input.intermediates[0] {
+                    b'?' => {
+                        // for (input.params) |mode_int| {
+                        for &mode_int in input.params.iter() {
+                            // if (modes.modeFromInt(mode_int, false)) |mode| {
+                            if let Some(mode) = modes::mode_from_int(mode_int, false) {
+                                self.handler.save_mode(Mode { mode });
+                            } else {
+                                // log.warn("unimplemented save mode: {}", .{mode_int});
+                            }
+                        }
+                    }
+
+                    // XTSHIFTESCAPE
+                    // '>' => capture: { ... }
+                    b'>' => 'capture: {
+                        // const capture = switch (input.params.len) {
+                        let capture = match input.params.len() {
+                            0 => false,
+                            // 1 => switch (input.params[0]) {
+                            1 => match input.params[0] {
+                                0 => false,
+                                1 => true,
+                                _ => {
+                                    // log.warn("invalid XTSHIFTESCAPE command: {f}", .{input});
+                                    break 'capture;
+                                }
+                            },
+                            _ => {
+                                // log.warn("invalid XTSHIFTESCAPE command: {f}", .{input});
+                                break 'capture;
+                            }
+                        };
+
+                        self.handler.mouse_shift_capture(capture);
+                    }
+
+                    // else => log.warn("unknown CSI s with intermediate: {f}", .{input}),
+                    _ => {}
+                },
+
+                // else => log.warn("ignoring unimplemented CSI s with intermediates: {f}", ...),
+                _ => {}
+            },
+
+            // XTWINOPS
+            // 't' => switch (input.intermediates.len) { ... }
+            b't' => match input.intermediates.len() {
+                0 => {
+                    // if (input.params.len > 0) {
+                    if input.params.len() > 0 {
+                        // switch (input.params[0]) {
+                        match input.params[0] {
+                            // 14 => if (input.params.len == 1) { ... } else log.warn(...),
+                            14 => {
+                                if input.params.len() == 1 {
+                                    // report the text area size in pixels
+                                    self.handler.size_report(csi::SizeReportStyle::Csi14T);
+                                }
+                                // else log.warn("ignoring CSI 14 t with extra parameters: {f}", ...),
+                            }
+                            // 16 => if (input.params.len == 1) { ... } else log.warn(...),
+                            16 => {
+                                if input.params.len() == 1 {
+                                    // report cell size in pixels
+                                    self.handler.size_report(csi::SizeReportStyle::Csi16T);
+                                }
+                                // else log.warn("ignoring CSI 16 t with extra parameters: {f}", ...),
+                            }
+                            // 18 => if (input.params.len == 1) { ... } else log.warn(...),
+                            18 => {
+                                if input.params.len() == 1 {
+                                    // report screen size in characters
+                                    self.handler.size_report(csi::SizeReportStyle::Csi18T);
+                                }
+                                // else log.warn("ignoring CSI 18 t with extra parameters: {f}", ...),
+                            }
+                            // 21 => if (input.params.len == 1) { ... } else log.warn(...),
+                            21 => {
+                                if input.params.len() == 1 {
+                                    // report window title
+                                    self.handler.size_report(csi::SizeReportStyle::Csi21T);
+                                }
+                                // else log.warn("ignoring CSI 21 t with extra parameters: {f}", ...),
+                            }
+                            // inline 22, 23 => |number| if (...) { ... } else log.warn(...),
+                            number @ (22 | 23) => {
+                                if (input.params.len() == 2 || input.params.len() == 3) &&
+                                    // we only support window title
+                                    (input.params[1] == 0 || input.params[1] == 2)
+                                {
+                                    // push/pop title
+                                    // const index: u16 = if (input.params.len == 3) ... else 0;
+                                    let index: u16 = if input.params.len() == 3 {
+                                        input.params[2]
+                                    } else {
+                                        0
+                                    };
+                                    // switch (number) {
+                                    match number {
+                                        22 => self.handler.title_push(index),
+                                        23 => self.handler.title_pop(index),
+                                        // else => @compileError("unreachable"),
+                                        _ => unreachable!(),
+                                    }
+                                }
+                                // else log.warn("ignoring CSI 22/23 t with extra parameters: {f}", ...),
+                            }
+                            // else => log.warn("ignoring CSI t with unimplemented parameter: {f}", ...),
+                            _ => {}
+                        }
+                    }
+                    // else log.err("ignoring CSI t with no parameters: {f}", .{input});
+                }
+                // else => log.warn("ignoring unimplemented CSI t with intermediates: {f}", ...),
+                _ => {}
+            },
+
+            // 'u' => switch (input.intermediates.len) { ... }
+            b'u' => match input.intermediates.len() {
+                0 => self.handler.restore_cursor(),
+
+                // Kitty keyboard protocol
+                // 1 => switch (input.intermediates[0]) {
+                1 => match input.intermediates[0] {
+                    b'?' => self.handler.kitty_keyboard_query(),
+
+                    // '>' => push: { ... }
+                    b'>' => 'push: {
+                        // const flags: u5 = if (input.params.len == 1) std.math.cast(u5, ...) else 0;
+                        let flags: u8 = if input.params.len() == 1 {
+                            match u8::try_from(input.params[0]).ok().filter(|v| *v < 32) {
+                                Some(v) => v,
+                                None => {
+                                    // log.warn("invalid pushKittyKeyboard command: {f}", .{input});
+                                    break 'push;
+                                }
+                            }
+                        } else {
+                            0
+                        };
+
+                        self.handler.kitty_keyboard_push(KittyKeyboardFlags {
+                            flags: kitty::KeyFlags::from_int(flags),
+                        });
+                    }
+
+                    // '<' => { ... }
+                    b'<' => {
+                        // const number: u16 = if (input.params.len == 1) input.params[0] else 1;
+                        let number: u16 = if input.params.len() == 1 {
+                            input.params[0]
+                        } else {
+                            1
+                        };
+
+                        self.handler.kitty_keyboard_pop(number);
+                    }
+
+                    // '=' => set: { ... }
+                    b'=' => 'set: {
+                        // const flags: u5 = if (input.params.len >= 1) std.math.cast(u5, ...) else 0;
+                        let flags: u8 = if input.params.len() >= 1 {
+                            match u8::try_from(input.params[0]).ok().filter(|v| *v < 32) {
+                                Some(v) => v,
+                                None => {
+                                    // log.warn("invalid setKittyKeyboard command: {f}", .{input});
+                                    break 'set;
+                                }
+                            }
+                        } else {
+                            0
+                        };
+
+                        // const number: u16 = if (input.params.len >= 2) input.params[1] else 1;
+                        let number: u16 = if input.params.len() >= 2 {
+                            input.params[1]
+                        } else {
+                            1
+                        };
+
+                        // const action_tag: streampkg.Action.Tag = switch (number) {
+                        // PORT NOTE: the reference selects an `Action.Tag` then re-switches
+                        // on it to dispatch; the Rust port folds the two switches into one
+                        // since there is no separate tag value to carry. The `kitty_flags`
+                        // payload and the per-`number` dispatch are preserved verbatim.
+                        // const kitty_flags: streampkg.Action.KittyKeyboardFlags =
+                        //     .{ .flags = @as(kitty.KeyFlags, @bitCast(flags)) };
+                        let kitty_flags: KittyKeyboardFlags = KittyKeyboardFlags {
+                            flags: kitty::KeyFlags::from_int(flags),
+                        };
+                        match number {
+                            // 1 => .kitty_keyboard_set,
+                            1 => self.handler.kitty_keyboard_set(kitty_flags),
+                            // 2 => .kitty_keyboard_set_or,
+                            2 => self.handler.kitty_keyboard_set_or(kitty_flags),
+                            // 3 => .kitty_keyboard_set_not,
+                            3 => self.handler.kitty_keyboard_set_not(kitty_flags),
+                            _ => {
+                                // log.warn("invalid setKittyKeyboard command: {f}", .{input});
+                                break 'set;
+                            }
+                        }
+                    }
+
+                    // else => log.warn("unknown CSI s with intermediate: {f}", .{input}),
+                    _ => {}
+                },
+
+                // else => log.warn("ignoring unimplemented CSI u: {f}", .{input}),
+                _ => {}
+            },
+
+            // ICH - Insert Blanks
+            // '@' => switch (input.intermediates.len) { ... }
+            b'@' => match input.intermediates.len() {
+                0 => self.handler.insert_blanks(match input.params.len() {
+                    0 => 1,
+                    1 => std::cmp::max(1, input.params[0]) as usize,
+                    _ => {
+                        // @branchHint(.unlikely);
+                        // log.warn("invalid ICH command: {f}", .{input});
+                        return;
+                    }
+                }),
+
+                // else => log.warn("ignoring unimplemented CSI @: {f}", .{input}),
+                _ => {}
+            },
+
+            // DECSASD - Select Active Status Display
+            // '}' => decsasd: { ... }
+            b'}' => 'decsasd: {
+                // Verify we're getting a DECSASD command
+                // if (input.intermediates.len != 1 or input.intermediates[0] != '$') { ... }
+                if input.intermediates.len() != 1 || input.intermediates[0] != b'$' {
+                    // log.warn("unimplemented CSI callback: {f}", .{input});
+                    break 'decsasd;
+                }
+                // if (input.params.len != 1) { ... }
+                if input.params.len() != 1 {
+                    // log.warn("unimplemented CSI callback: {f}", .{input});
+                    break 'decsasd;
+                }
+
+                // const display: ansi.StatusDisplay = switch (input.params[0]) {
+                let display: ansi::StatusDisplay = match input.params[0] {
+                    0 => ansi::StatusDisplay::Main,
+                    1 => ansi::StatusDisplay::StatusLine,
+                    _ => {
+                        // log.warn("unimplemented CSI callback: {f}", .{input});
+                        break 'decsasd;
+                    }
+                };
+
+                self.handler.active_status_display(display);
+            }
+
+            // else => log.warn("unimplemented CSI action: {f}", .{input}),
+            _ => {}
+        }
     }
 
     // inline fn oscDispatch(self: *Self, cmd: osc.Command) void { ... }
-    fn osc_dispatch(&mut self, _cmd: osc::Command) {
-        todo!("vt oscDispatch (Dispatch phase)")
+    fn osc_dispatch(&mut self, cmd: osc::Command) {
+        // The branch hints here are based on real world data
+        // which indicates that the most common OSC commands are:
+        //
+        // 1. hyperlink_end
+        // 2. change_window_title
+        // 3. change_window_icon
+        // 4. hyperlink_start
+        // 5. report_pwd
+        // 6. color_operation
+        // 7. semantic_prompt
+        //
+        // Together, these 7 commands make up about 96% of all
+        // OSC commands encountered in real world scenarios.
+        //
+        // Additionally, within the prongs, unlikely branch
+        // hints have been added to branches that deal with
+        // invalid sequences/commands, this is in order to
+        // optimize for the happy path where we're getting
+        // valid data from the program we're running.
+        //
+        // ref: https://github.com/qwerasd205/asciinema-stats
+
+        // switch (cmd) {
+        match cmd {
+            // .semantic_prompt => |sp| { ... }
+            osc::Command::SemanticPrompt(sp) => {
+                // @branchHint(.likely);
+                self.handler.semantic_prompt(sp);
+            }
+
+            // .change_window_title => |title| { ... }
+            osc::Command::ChangeWindowTitle(title) => {
+                // @branchHint(.likely);
+                // if (!std.unicode.utf8ValidateSlice(title)) { ... }
+                if std::str::from_utf8(title.as_bytes()).is_err() {
+                    // @branchHint(.unlikely);
+                    // log.warn("change title request: invalid utf-8, ignoring request", .{});
+                    return;
+                }
+
+                self.handler.window_title(WindowTitle {
+                    title: title.as_bytes(),
+                });
+            }
+
+            // .change_window_icon => |icon| { ... }
+            osc::Command::ChangeWindowIcon(_icon) => {
+                // @branchHint(.likely);
+                // log.info("OSC 1 (change icon) received and ignored icon={s}", .{icon});
+            }
+
+            // .clipboard_contents => |clip| { ... }
+            osc::Command::ClipboardContents { kind, data } => {
+                self.handler.clipboard_contents(ClipboardContents {
+                    kind,
+                    data: data.as_bytes(),
+                });
+            }
+
+            // .report_pwd => |v| { ... }
+            osc::Command::ReportPwd { value } => {
+                // @branchHint(.likely);
+                self.handler.report_pwd(ReportPwd {
+                    url: value.as_bytes(),
+                });
+            }
+
+            // .mouse_shape => |v| { ... }
+            osc::Command::MouseShape { value } => {
+                // const shape = MouseShape.fromString(v.value) orelse { ... };
+                let shape = match MouseShape::from_string(value.as_bytes()) {
+                    Some(shape) => shape,
+                    None => {
+                        // @branchHint(.unlikely);
+                        // log.warn("unknown cursor shape: {s}", .{v.value});
+                        return;
+                    }
+                };
+
+                self.handler.mouse_shape(shape);
+            }
+
+            // .color_operation => |v| { ... }
+            osc::Command::ColorOperation {
+                op,
+                requests,
+                terminator,
+            } => {
+                // @branchHint(.likely);
+                self.handler.color_operation(ColorOperation {
+                    op,
+                    requests,
+                    terminator,
+                });
+            }
+
+            // .kitty_color_protocol => |v| { ... }
+            osc::Command::KittyColorProtocol(v) => {
+                self.handler.kitty_color_report(v);
+            }
+
+            // .show_desktop_notification => |v| { ... }
+            osc::Command::ShowDesktopNotification { title, body } => {
+                self.handler
+                    .show_desktop_notification(ShowDesktopNotification {
+                        title: title.as_bytes(),
+                        body: body.as_bytes(),
+                    });
+            }
+
+            // .hyperlink_start => |v| { ... }
+            osc::Command::HyperlinkStart { id, uri } => {
+                // @branchHint(.likely);
+                self.handler.start_hyperlink(StartHyperlink {
+                    uri: uri.as_bytes(),
+                    id: id.as_deref().map(str::as_bytes),
+                });
+            }
+
+            // .hyperlink_end => { ... }
+            osc::Command::HyperlinkEnd => {
+                // @branchHint(.likely);
+                self.handler.end_hyperlink();
+            }
+
+            // .conemu_progress_report => |v| { ... }
+            osc::Command::ConemuProgressReport(v) => {
+                self.handler.progress_report(v);
+            }
+
+            // .conemu_sleep, .conemu_show_message_box, .conemu_change_tab_title,
+            // .conemu_wait_input, .conemu_guimacro, .conemu_comment,
+            // .conemu_xterm_emulation, .conemu_output_environment_variable,
+            // .conemu_run_process, .kitty_text_sizing, .kitty_clipboard_protocol,
+            // .context_signal => { ... }
+            osc::Command::ConemuSleep { .. }
+            | osc::Command::ConemuShowMessageBox(_)
+            | osc::Command::ConemuChangeTabTitle(_)
+            | osc::Command::ConemuWaitInput
+            | osc::Command::ConemuGuimacro(_)
+            | osc::Command::ConemuComment(_)
+            | osc::Command::ConemuXtermEmulation { .. }
+            | osc::Command::ConemuOutputEnvironmentVariable(_)
+            | osc::Command::ConemuRunProcess(_)
+            | osc::Command::KittyTextSizing(_)
+            | osc::Command::KittyClipboardProtocol(_)
+            | osc::Command::ContextSignal(_) => {
+                // log.debug("unimplemented OSC callback: {}", .{cmd});
+            }
+
+            // .invalid => { ... }
+            osc::Command::Invalid => {
+                // @branchHint(.cold);
+                // This is an invalid internal state, not an invalid OSC
+                // string being parsed. We shouldn't see this.
+                // log.warn("invalid OSC, should never happen", .{});
+            }
+        }
     }
 
-    // inline fn configureCharset(self: *Self, intermediates, set) void { ... }
-    // PORT NOTE (vt-9 SKELETON): only called from `esc_dispatch` (itself a
-    // `todo!()` stub), so it is unused until the Dispatch phase wires the ESC
-    // charset finals. Allowed dead until then.
-    #[allow(dead_code)]
-    fn configure_charset(&mut self, _intermediates: &[u8], _set: charsets::Charset) {
-        todo!("vt configureCharset (Dispatch phase)")
+    // inline fn configureCharset(self: *Self, intermediates: []const u8, set: charsets.Charset) void { ... }
+    fn configure_charset(&mut self, intermediates: &[u8], set: charsets::Charset) {
+        // if (intermediates.len != 1) { ... }
+        if intermediates.len() != 1 {
+            // log.warn("invalid charset intermediate: {any}", .{intermediates});
+            return;
+        }
+
+        // const slot: charsets.Slots = switch (intermediates[0]) {
+        let slot: charsets::Slots = match intermediates[0] {
+            // TODO: support slots '-', '.', '/'
+            b'(' => charsets::Slots::G0,
+            b')' => charsets::Slots::G1,
+            b'*' => charsets::Slots::G2,
+            b'+' => charsets::Slots::G3,
+            _ => {
+                // @branchHint(.unlikely);
+                // log.warn("invalid charset intermediate: {any}", .{intermediates});
+                return;
+            }
+        };
+
+        self.handler
+            .configure_charset(ConfigureCharset { slot, charset: set });
     }
 
     // inline fn escDispatch(self: *Self, action: Parser.Action.ESC) void { ... }
-    fn esc_dispatch(&mut self, _action: parser::ESC) {
-        todo!("vt escDispatch (Dispatch phase)")
+    fn esc_dispatch(&mut self, action: parser::ESC) {
+        // The branch hints here are based on real world data
+        // which indicates that the most common ESC finals are:
+        //
+        // 1. B
+        // 2. \
+        // 3. 0
+        // 4. M
+        // 5. 8
+        // 6. 7
+        // 7. >
+        // 8. =
+        //
+        // Together, these 8 finals make up nearly 99% of all
+        // ESC sequences encountered in real world scenarios.
+        //
+        // Additionally, within the prongs, unlikely branch
+        // hints have been added to branches that deal with
+        // invalid sequences/commands, this is in order to
+        // optimize for the happy path where we're getting
+        // valid data from the program we're running.
+        //
+        // ref: https://github.com/qwerasd205/asciinema-stats
+
+        // switch (action.final) {
+        match action.final_ {
+            // Charsets
+            // 'B' => { ... }
+            b'B' => {
+                // @branchHint(.likely);
+                self.configure_charset(&action.intermediates, charsets::Charset::Ascii);
+            }
+            // 'A' => self.configureCharset(action.intermediates, .british),
+            b'A' => self.configure_charset(&action.intermediates, charsets::Charset::British),
+            // '0' => { ... }
+            b'0' => {
+                // @branchHint(.likely);
+                self.configure_charset(&action.intermediates, charsets::Charset::DecSpecial);
+            }
+
+            // DECSC - Save Cursor
+            // '7' => { ... }
+            b'7' => {
+                // @branchHint(.likely);
+                // switch (action.intermediates.len) {
+                match action.intermediates.len() {
+                    0 => self.handler.save_cursor(),
+                    _ => {
+                        // @branchHint(.unlikely);
+                        // log.warn("invalid command: {f}", .{action});
+                        #[allow(clippy::needless_return)]
+                        return;
+                    }
+                }
+            }
+
+            // '8' => blk: { ... }
+            b'8' => 'blk: {
+                // @branchHint(.likely);
+                // switch (action.intermediates.len) {
+                match action.intermediates.len() {
+                    // DECRC - Restore Cursor
+                    0 => {
+                        self.handler.restore_cursor();
+                        break 'blk;
+                    }
+
+                    // 1 => switch (action.intermediates[0]) {
+                    1 => match action.intermediates[0] {
+                        // DECALN - Fill Screen with E
+                        b'#' => {
+                            self.handler.decaln();
+                            break 'blk;
+                        }
+
+                        _ => {}
+                    },
+
+                    _ => {} // fall through
+                }
+
+                // log.warn("unimplemented ESC action: {f}", .{action});
+            }
+
+            // IND - Index
+            // 'D' => switch (action.intermediates.len) { ... }
+            b'D' => match action.intermediates.len() {
+                0 => self.handler.index(),
+                _ => {
+                    // @branchHint(.unlikely);
+                    // log.warn("invalid index command: {f}", .{action});
+                    #[allow(clippy::needless_return)]
+                    return;
+                }
+            },
+
+            // NEL - Next Line
+            // 'E' => switch (action.intermediates.len) { ... }
+            b'E' => match action.intermediates.len() {
+                0 => self.handler.next_line(),
+                _ => {
+                    // @branchHint(.unlikely);
+                    // log.warn("invalid next line command: {f}", .{action});
+                    #[allow(clippy::needless_return)]
+                    return;
+                }
+            },
+
+            // HTS - Horizontal Tab Set
+            // 'H' => switch (action.intermediates.len) { ... }
+            b'H' => match action.intermediates.len() {
+                0 => self.handler.tab_set(),
+                _ => {
+                    // @branchHint(.unlikely);
+                    // log.warn("invalid tab set command: {f}", .{action});
+                    #[allow(clippy::needless_return)]
+                    return;
+                }
+            },
+
+            // RI - Reverse Index
+            // 'M' => { ... }
+            b'M' => {
+                // @branchHint(.likely);
+                // switch (action.intermediates.len) {
+                match action.intermediates.len() {
+                    0 => self.handler.reverse_index(),
+                    _ => {
+                        // @branchHint(.unlikely);
+                        // log.warn("invalid reverse index command: {f}", .{action});
+                        #[allow(clippy::needless_return)]
+                        return;
+                    }
+                }
+            }
+
+            // SS2 - Single Shift 2
+            // 'N' => switch (action.intermediates.len) { ... }
+            b'N' => match action.intermediates.len() {
+                0 => self.handler.invoke_charset(InvokeCharset {
+                    bank: charsets::ActiveSlot::GL,
+                    charset: charsets::Slots::G2,
+                    locking: true,
+                }),
+                _ => {
+                    // @branchHint(.unlikely);
+                    // log.warn("invalid single shift 2 command: {f}", .{action});
+                    #[allow(clippy::needless_return)]
+                    return;
+                }
+            },
+
+            // SS3 - Single Shift 3
+            // 'O' => switch (action.intermediates.len) { ... }
+            b'O' => match action.intermediates.len() {
+                0 => self.handler.invoke_charset(InvokeCharset {
+                    bank: charsets::ActiveSlot::GL,
+                    charset: charsets::Slots::G3,
+                    locking: true,
+                }),
+                _ => {
+                    // @branchHint(.unlikely);
+                    // log.warn("invalid single shift 3 command: {f}", .{action});
+                    #[allow(clippy::needless_return)]
+                    return;
+                }
+            },
+
+            // SPA - Start of Guarded Area
+            // 'V' => switch (action.intermediates.len) { ... }
+            b'V' => match action.intermediates.len() {
+                0 => self.handler.protected_mode_iso(),
+                // else => log.warn("unimplemented ESC callback: {f}", .{action}),
+                _ => {}
+            },
+
+            // EPA - End of Guarded Area
+            // 'W' => switch (action.intermediates.len) { ... }
+            b'W' => match action.intermediates.len() {
+                0 => self.handler.protected_mode_off(),
+                // else => log.warn("unimplemented ESC callback: {f}", .{action}),
+                _ => {}
+            },
+
+            // DECID
+            // 'Z' => if (action.intermediates.len == 0) { ... } else log.warn(...),
+            b'Z' => {
+                if action.intermediates.len() == 0 {
+                    self.handler
+                        .device_attributes(device_attributes::Req::Primary);
+                }
+                // else log.warn("unimplemented ESC callback: {f}", .{action});
+            }
+
+            // RIS - Full Reset
+            // 'c' => switch (action.intermediates.len) { ... }
+            b'c' => match action.intermediates.len() {
+                0 => self.handler.full_reset(),
+                _ => {
+                    // log.warn("invalid full reset command: {f}", .{action});
+                    #[allow(clippy::needless_return)]
+                    return;
+                }
+            },
+
+            // LS2 - Locking Shift 2
+            // 'n' => switch (action.intermediates.len) { ... }
+            b'n' => match action.intermediates.len() {
+                0 => self.handler.invoke_charset(InvokeCharset {
+                    bank: charsets::ActiveSlot::GL,
+                    charset: charsets::Slots::G2,
+                    locking: false,
+                }),
+                _ => {
+                    // @branchHint(.unlikely);
+                    // log.warn("invalid single shift 2 command: {f}", .{action});
+                    #[allow(clippy::needless_return)]
+                    return;
+                }
+            },
+
+            // LS3 - Locking Shift 3
+            // 'o' => switch (action.intermediates.len) { ... }
+            b'o' => match action.intermediates.len() {
+                0 => self.handler.invoke_charset(InvokeCharset {
+                    bank: charsets::ActiveSlot::GL,
+                    charset: charsets::Slots::G3,
+                    locking: false,
+                }),
+                _ => {
+                    // @branchHint(.unlikely);
+                    // log.warn("invalid single shift 3 command: {f}", .{action});
+                    #[allow(clippy::needless_return)]
+                    return;
+                }
+            },
+
+            // LS1R - Locking Shift 1 Right
+            // '~' => switch (action.intermediates.len) { ... }
+            b'~' => match action.intermediates.len() {
+                0 => self.handler.invoke_charset(InvokeCharset {
+                    bank: charsets::ActiveSlot::GR,
+                    charset: charsets::Slots::G1,
+                    locking: false,
+                }),
+                _ => {
+                    // @branchHint(.unlikely);
+                    // log.warn("invalid locking shift 1 right command: {f}", .{action});
+                    #[allow(clippy::needless_return)]
+                    return;
+                }
+            },
+
+            // LS2R - Locking Shift 2 Right
+            // '}' => switch (action.intermediates.len) { ... }
+            b'}' => match action.intermediates.len() {
+                0 => self.handler.invoke_charset(InvokeCharset {
+                    bank: charsets::ActiveSlot::GR,
+                    charset: charsets::Slots::G2,
+                    locking: false,
+                }),
+                _ => {
+                    // @branchHint(.unlikely);
+                    // log.warn("invalid locking shift 2 right command: {f}", .{action});
+                    #[allow(clippy::needless_return)]
+                    return;
+                }
+            },
+
+            // LS3R - Locking Shift 3 Right
+            // '|' => switch (action.intermediates.len) { ... }
+            b'|' => match action.intermediates.len() {
+                0 => self.handler.invoke_charset(InvokeCharset {
+                    bank: charsets::ActiveSlot::GR,
+                    charset: charsets::Slots::G3,
+                    locking: false,
+                }),
+                _ => {
+                    // @branchHint(.unlikely);
+                    // log.warn("invalid locking shift 3 right command: {f}", .{action});
+                    #[allow(clippy::needless_return)]
+                    return;
+                }
+            },
+
+            // Set application keypad mode
+            // '=' => { ... }
+            b'=' => {
+                // @branchHint(.likely);
+                // switch (action.intermediates.len) {
+                match action.intermediates.len() {
+                    0 => self.handler.set_mode(Mode {
+                        mode: modes::Mode::KeypadKeys,
+                    }),
+                    // else => log.warn("unimplemented setMode: {f}", .{action}),
+                    _ => {}
+                }
+            }
+
+            // Reset application keypad mode
+            // '>' => { ... }
+            b'>' => {
+                // @branchHint(.likely);
+                // switch (action.intermediates.len) {
+                match action.intermediates.len() {
+                    0 => self.handler.reset_mode(Mode {
+                        mode: modes::Mode::KeypadKeys,
+                    }),
+                    // else => log.warn("unimplemented setMode: {f}", .{action}),
+                    _ => {}
+                }
+            }
+
+            // Sets ST (string terminator). We don't have to do anything
+            // because our parser always accepts ST.
+            // '\\' => { ... }
+            b'\\' => {
+                // @branchHint(.likely);
+            }
+
+            // else => log.warn("unimplemented ESC action: {f}", .{action}),
+            _ => {}
+        }
     }
 }
