@@ -89,6 +89,11 @@ pub use rustty_render_types::term_size as size;
 pub mod size_report;
 // pub const sys = @import("sys.zig");
 pub mod sys;
+// PORT NOTE: `terminal/Tabstops.zig` has no top-level re-export in `main.zig`
+// (it is an internal sibling imported by `Terminal.zig` for tab handling).
+// Declared here so the terminal can reference it; ported as a leaf in this
+// sub-batch.
+pub mod tabstops;
 // pub const tmux = if (options.tmux_control_mode) @import("tmux.zig") else struct {};
 pub mod tmux;
 // pub const x11_color = @import("x11_color.zig");
