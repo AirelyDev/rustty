@@ -456,7 +456,21 @@ pub struct LineIterator<'a> {
 
 impl<'a> LineIterator<'a> {
     pub fn next(&mut self) -> Option<Selection> {
-        todo!()
+        let current = self.current?;
+        let result = match self.screen.select_line(SelectLine {
+            pin: current,
+            whitespace: None,
+            semantic_prompt_boundary: false,
+        }) {
+            Some(r) => r,
+            None => {
+                self.current = None;
+                return None;
+            }
+        };
+
+        self.current = result.end().down(1);
+        Some(result)
     }
 }
 
@@ -2637,7 +2651,25 @@ impl Screen {
     /// managing memory for you, it also performs safety checks that the selection
     /// is always tracked.
     pub fn select(&mut self, sel_: Option<Selection>) -> Result<(), OutOfMemory> {
-        todo!()
+        let sel = match sel_ {
+            Some(sel) => sel,
+            None => {
+                self.clear_selection();
+                return Ok(());
+            }
+        };
+
+        // If this selection is untracked then we track it.
+        // errdefer if (!sel.tracked()) tracked_sel.deinit(self);
+        let tracked_sel = if sel.tracked() { sel } else { sel.track(self)? };
+
+        // Untrack prior selection
+        if let Some(old) = self.selection.take() {
+            old.deinit(self);
+        }
+        self.selection = Some(tracked_sel);
+        self.dirty.selection = true;
+        Ok(())
     }
 
     /// Same as select(null) but can't fail.
@@ -2671,7 +2703,66 @@ impl Screen {
         alloc: Allocator,
         opts: SelectionString<'_>,
     ) -> Result<Vec<u8>, OutOfMemory> {
-        todo!()
+        // We'll use this as our buffer to build our string.
+        // PORT NOTE: the reference builds a `std.Io.Writer.Allocating` over
+        // `alloc` and returns `toOwnedSliceSentinel(0)`. A `Vec<u8>` is the
+        // faithful sink (the same convention as `dumpStringAlloc`); the
+        // NUL-termination invariant of the `[:0]const u8` return is carried by
+        // the `Vec<u8>` (its length excludes the sentinel, matching
+        // `toOwnedSliceSentinel`).
+        let mut aw: Vec<u8> = Vec::new();
+
+        // Create a formatter and use that to emit our text.
+        let mut formatter: ScreenFormatter = ScreenFormatter::init(
+            self as *const Screen,
+            formatter::Options {
+                emit: formatter::Format::Plain,
+                unwrap: true,
+                trim: opts.trim,
+                // PORT NOTE: the reference `.{ .emit = .plain, .unwrap = true,
+                // .trim = opts.trim }` leaves the remaining `Options` fields at
+                // their struct-literal defaults (`codepoint_map = .{}`,
+                // background/foreground/palette = null). We mirror those here.
+                codepoint_map: Some(Vec::new()),
+                background: None,
+                foreground: None,
+                palette: None,
+            },
+        );
+        formatter.content = Content::Selection(Some(opts.sel));
+
+        // If we have a string map, we need to set that up.
+        let mut pins: Vec<Pin> = Vec::new();
+        if opts.map.is_some() {
+            formatter.pin_map = Some(formatter::PinMap {
+                alloc,
+                map: &mut pins,
+            });
+        }
+
+        // Emit. Since this is an allocating writer, a failed write
+        // just becomes an OOM.
+        formatter.format(&mut aw).map_err(|_| OutOfMemory)?;
+
+        // Build our final text and if we have a string map set that up.
+        let text = aw;
+        // errdefer alloc.free(text);
+        if let Some(map) = opts.map {
+            let map_string = text.clone();
+            // errdefer alloc.free(map_string);
+            // PORT NOTE: `try selectionString_tw.check(.copy_map);` — the
+            // `selectionString` tripwire (a fault-injection point exercised only
+            // by the one map-allocation-failure test) is DEFERRED to vt-11g
+            // along with that test. No map-using test exists in this sub-batch,
+            // so this path is ported but unexercised.
+            let map_pins = pins;
+            *map = StringMap {
+                string: map_string,
+                map: map_pins,
+            };
+        }
+
+        Ok(text)
     }
 
     /// Select the line under the given point. This will select across soft-wrapped
@@ -2679,11 +2770,256 @@ impl Screen {
     /// over whitespace but the line has non-whitespace characters elsewhere, the
     /// line will be selected.
     pub fn select_line(&self, opts: SelectLine<'_>) -> Option<Selection> {
-        todo!()
+        // _ = self;
+
+        // Get the current point semantic prompt state since that determines
+        // boundary conditions too. This makes it so that line selection can
+        // only happen within the same prompt state. For example, if you triple
+        // click output, but the shell uses spaces to soft-wrap to the prompt
+        // then the selection will stop prior to the prompt. See issue #1329.
+        let semantic_prompt_state: Option<pagepkg::SemanticContent> = 'state: {
+            if !opts.semantic_prompt_boundary {
+                break 'state None;
+            }
+            let rac = opts.pin.row_and_cell();
+            break 'state Some(unsafe { (*rac.cell).semantic_content() });
+        };
+
+        // The real start of the row is the first row in the soft-wrap.
+        let start_pin: Pin = 'start_pin: {
+            let mut it = opts
+                .pin
+                .row_iterator(pagelist::iter::Direction::LeftUp, None);
+            let mut it_prev: Pin = it.next().unwrap(); // skip self
+
+            // First, check the current row for semantic boundaries before the clicked position.
+            if let Some(v) = semantic_prompt_state {
+                let row = it_prev.row_and_cell().row;
+                let cells = unsafe { (*it_prev.node).data.get_cells(row) };
+                let cells = unsafe { &*cells };
+                // Scan backwards from clicked position to find where our content starts
+                for i in 0..(opts.pin.x as usize + 1) {
+                    let x_rev = opts.pin.x as usize - i;
+                    if cells[x_rev].semantic_content() != v {
+                        let mut copy = it_prev;
+                        copy.x = (x_rev + 1) as size::CellCountInt;
+                        break 'start_pin copy;
+                    }
+                }
+
+                // No boundary found before clicked position on current row.
+                // If row doesn't wrap from above, start is at column 0.
+                // Otherwise, continue checking previous rows.
+            }
+
+            // PORT NOTE: the reference `while (it.next()) |p| { ... } else { ... }`
+            // runs the `else` block only if the loop finishes without `break`.
+            // We mirror that with a labeled loop and a fall-through after it.
+            loop {
+                let p = match it.next() {
+                    Some(p) => p,
+                    None => {
+                        let mut copy = it_prev;
+                        copy.x = 0;
+                        break 'start_pin copy;
+                    }
+                };
+                let row = p.row_and_cell().row;
+
+                if !unsafe { (*row).wrap() } {
+                    let mut copy = it_prev;
+                    copy.x = 0;
+                    break 'start_pin copy;
+                }
+
+                if let Some(v) = semantic_prompt_state {
+                    // We need to check every cell in this row in reverse
+                    // order since we're going up and back.
+                    let cells = unsafe { (*p.node).data.get_cells(row) };
+                    let cells = unsafe { &*cells };
+                    for x in 0..cells.len() {
+                        let x_rev = cells.len() - 1 - x;
+                        let cell = cells[x_rev];
+                        if cell.semantic_content() != v {
+                            break 'start_pin it_prev;
+                        }
+                        it_prev = p;
+                        it_prev.x = x_rev as size::CellCountInt;
+                    }
+
+                    continue;
+                }
+
+                it_prev = p;
+            }
+        };
+
+        // The real end of the row is the final row in the soft-wrap.
+        let end_pin: Pin = 'end_pin: {
+            let mut it = opts
+                .pin
+                .row_iterator(pagelist::iter::Direction::RightDown, None);
+            while let Some(p) = it.next() {
+                let row = p.row_and_cell().row;
+
+                if let Some(v) = semantic_prompt_state {
+                    // We need to check every cell in this row
+                    let cells = unsafe { (*p.node).data.get_cells(row) };
+                    let cells = unsafe { &*cells };
+
+                    // If this is our pin row we can start from our x because
+                    // the start_pin logic already found the real start.
+                    let start_offset = if core::ptr::eq(p.node, opts.pin.node) && p.y == opts.pin.y
+                    {
+                        opts.pin.x as usize
+                    } else {
+                        0
+                    };
+
+                    // Handle the zero case specially because if the first
+                    // col doesn't match then we end at the end of the prior
+                    // row. But if this is the first row, we can't go back,
+                    // so we scan forward to find where our content ends.
+                    if start_offset == 0 && cells[0].semantic_content() != v {
+                        let mut prev = p.up(1).unwrap();
+                        prev.x = unsafe { (*p.node).data.size.cols } - 1;
+                        break 'end_pin prev;
+                    }
+
+                    // For every other case, we end at the prior cell.
+                    for (x, cell) in cells.iter().enumerate().skip(start_offset) {
+                        if cell.semantic_content() != v {
+                            let mut copy = p;
+                            copy.x = (x - 1) as size::CellCountInt;
+                            break 'end_pin copy;
+                        }
+                    }
+                }
+
+                if !unsafe { (*row).wrap() } {
+                    let mut copy = p;
+                    copy.x = unsafe { (*p.node).data.size.cols } - 1;
+                    break 'end_pin copy;
+                }
+            }
+
+            return None;
+        };
+
+        // Go forward from the start to find the first non-whitespace character.
+        let start: Pin = 'start: {
+            let whitespace = match opts.whitespace {
+                Some(w) => w,
+                None => break 'start start_pin,
+            };
+            let mut it =
+                start_pin.cell_iterator(pagelist::iter::Direction::RightDown, Some(end_pin));
+            while let Some(p) = it.next() {
+                let cell = p.row_and_cell().cell;
+                if !unsafe { (*cell).has_text() } {
+                    continue;
+                }
+
+                // Non-empty means we found it.
+                let this_whitespace = whitespace
+                    .iter()
+                    .any(|&w| w == unsafe { (*cell).codepoint() });
+                if this_whitespace {
+                    continue;
+                }
+
+                break 'start p;
+            }
+
+            return None;
+        };
+
+        // Go backward from the end to find the first non-whitespace character.
+        let end: Pin = 'end: {
+            let whitespace = match opts.whitespace {
+                Some(w) => w,
+                None => break 'end end_pin,
+            };
+            let mut it = end_pin.cell_iterator(pagelist::iter::Direction::LeftUp, Some(start_pin));
+            while let Some(p) = it.next() {
+                let cell = p.row_and_cell().cell;
+                if !unsafe { (*cell).has_text() } {
+                    continue;
+                }
+
+                // Non-empty means we found it.
+                let this_whitespace = whitespace
+                    .iter()
+                    .any(|&w| w == unsafe { (*cell).codepoint() });
+                if this_whitespace {
+                    continue;
+                }
+
+                break 'end p;
+            }
+
+            return None;
+        };
+
+        Some(Selection::init(start, end, false))
     }
 
     pub fn select_all(&mut self) -> Option<Selection> {
-        todo!()
+        let whitespace: &[u32] = &[0, b' ' as u32, b'\t' as u32];
+
+        let start: Pin = 'start: {
+            let mut it = self.pages.cell_iterator(
+                pagelist::iter::Direction::RightDown,
+                point::Point::Screen(point::Coordinate::default()),
+                None,
+            );
+            while let Some(p) = it.next() {
+                let cell = p.row_and_cell().cell;
+                if !unsafe { (*cell).has_text() } {
+                    continue;
+                }
+
+                // Non-empty means we found it.
+                let this_whitespace = whitespace
+                    .iter()
+                    .any(|&w| w == unsafe { (*cell).codepoint() });
+                if this_whitespace {
+                    continue;
+                }
+
+                break 'start p;
+            }
+
+            return None;
+        };
+
+        let end: Pin = 'end: {
+            let mut it = self.pages.cell_iterator(
+                pagelist::iter::Direction::LeftUp,
+                point::Point::Screen(point::Coordinate::default()),
+                None,
+            );
+            while let Some(p) = it.next() {
+                let cell = p.row_and_cell().cell;
+                if !unsafe { (*cell).has_text() } {
+                    continue;
+                }
+
+                // Non-empty means we found it.
+                let this_whitespace = whitespace
+                    .iter()
+                    .any(|&w| w == unsafe { (*cell).codepoint() });
+                if this_whitespace {
+                    continue;
+                }
+
+                break 'end p;
+            }
+
+            return None;
+        };
+
+        Some(Selection::init(start, end, false))
     }
 
     /// Select the nearest word to start point that is between start_pt and
@@ -2700,7 +3036,34 @@ impl Screen {
         end: Pin,
         boundary_codepoints: &[u32],
     ) -> Option<Selection> {
-        todo!()
+        let dir: pagelist::iter::Direction = if start.before(end) {
+            pagelist::iter::Direction::RightDown
+        } else {
+            pagelist::iter::Direction::LeftUp
+        };
+        let mut it = start.cell_iterator(dir, Some(end));
+        while let Some(pin) = it.next() {
+            // Boundary conditions
+            match dir {
+                pagelist::iter::Direction::RightDown => {
+                    if end.before(pin) {
+                        return None;
+                    }
+                }
+                pagelist::iter::Direction::LeftUp => {
+                    if pin.before(end) {
+                        return None;
+                    }
+                }
+            }
+
+            // If we found a word, then return it
+            if let Some(sel) = self.select_word(pin, boundary_codepoints) {
+                return Some(sel);
+            }
+        }
+
+        None
     }
 
     /// Select the word under the given point. A word is any consecutive series
@@ -2713,17 +3076,157 @@ impl Screen {
     /// The boundary_codepoints parameter should be a slice of u21 codepoints that
     /// mark word boundaries. This is expected to be pre-parsed from the config.
     pub fn select_word(&self, pin: Pin, boundary_codepoints: &[u32]) -> Option<Selection> {
-        todo!()
+        // _ = self;
+
+        // If our cell is empty we can't select a word, because we can't select
+        // areas where the screen is not yet written.
+        let start_cell = pin.row_and_cell().cell;
+        if !unsafe { (*start_cell).has_text() } {
+            return None;
+        }
+
+        // Determine if we are a boundary or not to determine what our boundary is.
+        let expect_boundary = boundary_codepoints
+            .iter()
+            .any(|&b| b == unsafe { (*start_cell).codepoint() });
+
+        // Go forwards to find our end boundary
+        let end: Pin = 'end: {
+            let mut it = pin.cell_iterator(pagelist::iter::Direction::RightDown, None);
+            let mut prev = it.next().unwrap(); // Consume one, our start
+            while let Some(p) = it.next() {
+                let rac = p.row_and_cell();
+                let cell = rac.cell;
+
+                // If we reached an empty cell its always a boundary
+                if !unsafe { (*cell).has_text() } {
+                    break 'end prev;
+                }
+
+                // If we do not match our expected set, we hit a boundary
+                let this_boundary = boundary_codepoints
+                    .iter()
+                    .any(|&b| b == unsafe { (*cell).codepoint() });
+                if this_boundary != expect_boundary {
+                    break 'end prev;
+                }
+
+                // If we are going to the next row and it isn't wrapped, we
+                // return the previous.
+                if p.x == unsafe { (*p.node).data.size.cols } - 1 && !unsafe { (*rac.row).wrap() } {
+                    break 'end p;
+                }
+
+                prev = p;
+            }
+
+            break 'end prev;
+        };
+
+        // Go backwards to find our start boundary
+        let start: Pin = 'start: {
+            let mut it = pin.cell_iterator(pagelist::iter::Direction::LeftUp, None);
+            let mut prev = it.next().unwrap(); // Consume one, our start
+            while let Some(p) = it.next() {
+                let rac = p.row_and_cell();
+                let cell = rac.cell;
+
+                // If we are going to the next row and it isn't wrapped, we
+                // return the previous.
+                if p.x == unsafe { (*p.node).data.size.cols } - 1 && !unsafe { (*rac.row).wrap() } {
+                    break 'start prev;
+                }
+
+                // If we reached an empty cell its always a boundary
+                if !unsafe { (*cell).has_text() } {
+                    break 'start prev;
+                }
+
+                // If we do not match our expected set, we hit a boundary
+                let this_boundary = boundary_codepoints
+                    .iter()
+                    .any(|&b| b == unsafe { (*cell).codepoint() });
+                if this_boundary != expect_boundary {
+                    break 'start prev;
+                }
+
+                prev = p;
+            }
+
+            break 'start prev;
+        };
+
+        Some(Selection::init(start, end, false))
     }
 
     pub fn select_output(&mut self, pin: Pin) -> Option<Selection> {
-        todo!()
+        // If our pin right now is not on output, then we return nothing.
+        if unsafe { (*pin.row_and_cell().cell).semantic_content() }
+            != pagepkg::SemanticContent::Output
+        {
+            return None;
+        }
+
+        // Get the post prior prompt from this pin. This is the prompt whose
+        // output we'll be capturing.
+        let prompt_pin: Pin = 'prompt: {
+            // If we have a prompt above this point (including this point),
+            // then thats the prompt we want to capture output from.
+            let mut it = pin.prompt_iterator(pagelist::iter::Direction::LeftUp, None);
+            if let Some(p) = it.next() {
+                break 'prompt p;
+            }
+
+            // If we don't have a prompt, then we assume that we're
+            // capturing all the output up to the next prompt.
+            let mut it = pin.prompt_iterator(pagelist::iter::Direction::RightDown, None);
+            let next = it.next()?;
+
+            // We'll capture from the start of the screen to just above
+            // the prompt and will trim the trailing whitespace.
+            let start_pin = self.pages.get_top_left(point::Tag::Screen);
+            let mut end_pin = next.up(1)?;
+            end_pin.x = unsafe { (*end_pin.node).data.size.cols } - 1;
+            let mut cell_it =
+                end_pin.cell_iterator(pagelist::iter::Direction::LeftUp, Some(start_pin));
+            while let Some(p) = cell_it.next() {
+                let cell = p.row_and_cell().cell;
+                end_pin = p;
+                if unsafe { (*cell).has_text() } {
+                    break;
+                }
+            }
+
+            return Some(Selection::init(start_pin, end_pin, false));
+        };
+
+        // Grab our content
+        let mut hl = self
+            .pages
+            .highlight_semantic_content(prompt_pin, pagepkg::SemanticContent::Output)?;
+
+        // Trim our trailing whitespace
+        let mut cell_it = hl
+            .end
+            .cell_iterator(pagelist::iter::Direction::LeftUp, Some(hl.start));
+        while let Some(p) = cell_it.next() {
+            let cell = p.row_and_cell().cell;
+            hl.end = p;
+            if unsafe { (*cell).has_text() } {
+                break;
+            }
+        }
+
+        Some(Selection::init(hl.start, hl.end, false))
     }
 
     /// Returns an iterator to move through the soft-wrapped lines starting
     /// from pin.
     pub fn line_iterator(&self, start: Pin) -> LineIterator<'_> {
-        todo!()
+        LineIterator {
+            screen: self,
+            current: Some(start),
+        }
     }
 
     /// Determine the inputs necessary to move the cursor to the given
@@ -3044,6 +3547,7 @@ mod tests {
     // The read/write + `cursorCopy x/y` tests depend on `dumpStringAlloc`
     // (DEFERRED), so they land with the dump methods in a later sub-batch.
     use super::*;
+    use crate::selection_codepoints;
     use crate::style;
 
     // test "Screen cursorCopy style deref"
@@ -6187,6 +6691,1405 @@ mod tests {
             let contents = dump(&s, vp());
             assert_eq!(contents, b"line1\nline2");
         }
+        s.deinit();
+    }
+
+    // PORT NOTE: helpers for the selection tests below.
+    //   `spin(s, pt)` mirrors `s.pages.pin(pt).?`.
+    //   `pfp_screen(s, p)` mirrors `s.pages.pointFromPin(.screen, p).?`.
+    //   `pfp_active(s, p)` mirrors `s.pages.pointFromPin(.active, p).?`.
+    //   `selstr(s, sel, trim)` mirrors `try s.selectionString(alloc, .{ .sel, .trim })`.
+    fn spin(s: &Screen, pt: point::Point) -> Pin {
+        s.pages.pin(pt).unwrap()
+    }
+    fn pscreen(x: size::CellCountInt, y: u32) -> point::Point {
+        point::Point::Screen(point::Coordinate { x, y })
+    }
+    fn pactive(x: size::CellCountInt, y: u32) -> point::Point {
+        point::Point::Active(point::Coordinate { x, y })
+    }
+    fn pfp_screen(s: &Screen, p: Pin) -> point::Point {
+        s.pages.point_from_pin(point::Tag::Screen, p).unwrap()
+    }
+    fn pfp_active(s: &Screen, p: Pin) -> point::Point {
+        s.pages.point_from_pin(point::Tag::Active, p).unwrap()
+    }
+    fn selstr(s: &mut Screen, sel: Selection, trim: bool) -> Vec<u8> {
+        s.selection_string(
+            Allocator,
+            SelectionString {
+                sel,
+                trim,
+                map: None,
+            },
+        )
+        .unwrap()
+    }
+
+    // test "Screen: selectAll"
+    #[test]
+    fn screen_select_all() {
+        let mut s = mkscreen(10, 10, 0);
+
+        {
+            s.test_write_string(b"ABC  DEF\n 123\n456").unwrap();
+            let sel = s.select_all().unwrap();
+            assert_eq!(pscreen(0, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(2, 2), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        {
+            s.test_write_string(b"\nFOO\n BAR\n BAZ\n QWERTY\n 12345678")
+                .unwrap();
+            let sel = s.select_all().unwrap();
+            assert_eq!(pscreen(0, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(8, 7), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectLine"
+    #[test]
+    fn screen_select_line() {
+        let mut s = mkscreen(10, 10, 0);
+        s.test_write_string(b"ABC  DEF\n 123\n456").unwrap();
+
+        // Outside of active area
+        // try testing.expect(s.selectLine(.{ .x = 13, .y = 0 }) == null);
+        // try testing.expect(s.selectLine(.{ .x = 0, .y = 5 }) == null);
+
+        // Going forward
+        {
+            let pin = spin(&s, pactive(0, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pscreen(0, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(7, 0), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Going backward
+        {
+            let pin = spin(&s, pactive(7, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pscreen(0, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(7, 0), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Going forward and backward
+        {
+            let pin = spin(&s, pactive(3, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pscreen(0, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(7, 0), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Outside active area
+        {
+            let pin = spin(&s, pactive(9, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pscreen(0, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(7, 0), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectLine across soft-wrap"
+    #[test]
+    fn screen_select_line_across_soft_wrap() {
+        let mut s = mkscreen(5, 10, 0);
+        s.test_write_string(b" 12 34012   \n 123").unwrap();
+
+        // Going forward
+        {
+            let pin = spin(&s, pactive(1, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pscreen(1, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(3, 1), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectLine across full soft-wrap"
+    #[test]
+    fn screen_select_line_across_full_soft_wrap() {
+        let mut s = mkscreen(5, 5, 0);
+        s.test_write_string(b"1ABCD2EFGH\n3IJKL").unwrap();
+
+        {
+            let pin = spin(&s, pactive(2, 1));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pscreen(0, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(4, 1), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectLine across soft-wrap ignores blank lines"
+    #[test]
+    fn screen_select_line_across_soft_wrap_ignores_blank_lines() {
+        let mut s = mkscreen(5, 10, 0);
+        s.test_write_string(b" 12 34012             \n 123")
+            .unwrap();
+
+        // Going forward
+        {
+            let pin = spin(&s, pactive(1, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pscreen(1, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(3, 1), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Going backward
+        {
+            let pin = spin(&s, pactive(1, 1));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pscreen(1, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(3, 1), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Going forward and backward
+        {
+            let pin = spin(&s, pactive(3, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pscreen(1, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(3, 1), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectLine disabled whitespace trimming"
+    #[test]
+    fn screen_select_line_disabled_whitespace_trimming() {
+        let mut s = mkscreen(5, 10, 0);
+        s.test_write_string(b" 12 34012   \n 123").unwrap();
+
+        // Going forward
+        {
+            let pin = spin(&s, pactive(1, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: None,
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pscreen(0, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(4, 2), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Non-wrapped
+        {
+            let pin = spin(&s, pactive(1, 3));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: None,
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pscreen(0, 3), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(4, 3), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectLine with scrollback"
+    #[test]
+    fn screen_select_line_with_scrollback() {
+        let mut s = mkscreen(2, 3, 5);
+        s.test_write_string(b"1A\n2B\n3C\n4D\n5E").unwrap();
+
+        // Selecting first line
+        {
+            let pin = spin(&s, pactive(0, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pactive(0, 0), pfp_active(&s, sel.start()));
+            assert_eq!(pactive(1, 0), pfp_active(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Selecting last line
+        {
+            let pin = spin(&s, pactive(0, 2));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pactive(0, 2), pfp_active(&s, sel.start()));
+            assert_eq!(pactive(1, 2), pfp_active(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectLine semantic prompt boundary"
+    #[test]
+    fn screen_select_line_semantic_prompt_boundary() {
+        let mut s = mkscreen(5, 10, 0);
+        s.test_write_string(b"ABCDE\n").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"A    ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Output);
+        s.test_write_string(b"> ").unwrap();
+
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"ABCDE\nA    \n> ");
+        }
+
+        // Selecting output stops at the prompt even if soft-wrapped
+        {
+            let pin = spin(&s, pactive(1, 1));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            let contents = selstr(&mut s, sel, false);
+            let expected = b"A";
+            assert_eq!(contents.as_slice(), expected);
+            sel.deinit(&mut s);
+        }
+        {
+            let pin = spin(&s, pactive(1, 2));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pactive(0, 2), pfp_active(&s, sel.start()));
+            assert_eq!(pactive(0, 2), pfp_active(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectLine semantic prompt to input boundary"
+    #[test]
+    fn screen_select_line_semantic_prompt_to_input_boundary() {
+        let mut s = mkscreen(10, 5, 0);
+
+        // Write prompt followed by user input on same row: "$>command"
+        // Using non-whitespace to avoid whitespace trimming affecting the test
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"$>").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"command").unwrap();
+
+        // Selecting from prompt should only select prompt
+        {
+            let pin = spin(&s, pactive(0, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pactive(0, 0), pfp_active(&s, sel.start()));
+            assert_eq!(pactive(1, 0), pfp_active(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Selecting from input should only select input
+        {
+            let pin = spin(&s, pactive(5, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pactive(2, 0), pfp_active(&s, sel.start()));
+            assert_eq!(pactive(8, 0), pfp_active(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectLine semantic input to output boundary"
+    #[test]
+    fn screen_select_line_semantic_input_to_output_boundary() {
+        let mut s = mkscreen(10, 5, 0);
+
+        // Row 0: user input
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"ls -la\n").unwrap();
+        // Row 1: command output
+        s.cursor_set_semantic_content(SemanticContentArg::Output);
+        s.test_write_string(b"file.txt").unwrap();
+
+        // Selecting from input should only select input
+        {
+            let pin = spin(&s, pactive(2, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            let contents = selstr(&mut s, sel, false);
+            assert_eq!(contents.as_slice(), b"ls -la");
+            sel.deinit(&mut s);
+        }
+
+        // Selecting from output should only select output
+        {
+            let pin = spin(&s, pactive(2, 1));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            let contents = selstr(&mut s, sel, false);
+            assert_eq!(contents.as_slice(), b"file.txt");
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectLine semantic mid-row boundary"
+    #[test]
+    fn screen_select_line_semantic_mid_row_boundary() {
+        let mut s = mkscreen(10, 5, 0);
+
+        // Single row with output then prompt then input: "out$>cmd"
+        // Using non-whitespace to avoid whitespace trimming affecting the test
+        s.cursor_set_semantic_content(SemanticContentArg::Output);
+        s.test_write_string(b"out").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"$>").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"cmd").unwrap();
+
+        // Selecting from output should stop at prompt
+        {
+            let pin = spin(&s, pactive(1, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pactive(0, 0), pfp_active(&s, sel.start()));
+            assert_eq!(pactive(2, 0), pfp_active(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Selecting from prompt should only select prompt
+        {
+            let pin = spin(&s, pactive(3, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pactive(3, 0), pfp_active(&s, sel.start()));
+            assert_eq!(pactive(4, 0), pfp_active(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Selecting from input should only select input
+        {
+            let pin = spin(&s, pactive(6, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pactive(5, 0), pfp_active(&s, sel.start()));
+            assert_eq!(pactive(7, 0), pfp_active(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectLine semantic boundary soft-wrap with mid-row transition"
+    #[test]
+    fn screen_select_line_semantic_boundary_soft_wrap_with_mid_row_transition() {
+        let mut s = mkscreen(5, 5, 0);
+
+        // Row 0: prompt "$ " + input "cmd" (soft-wraps)
+        // Row 1: input continues "12" + output "out"
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"$ ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"cmd12").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Output);
+        s.test_write_string(b"out").unwrap();
+
+        // Verify layout
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"$ cmd\n12out");
+        }
+
+        // Selecting from input on row 0 should get all input across soft-wrap
+        {
+            let pin = spin(&s, pactive(3, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            let contents = selstr(&mut s, sel, false);
+            assert_eq!(contents.as_slice(), b"cmd12");
+            sel.deinit(&mut s);
+        }
+
+        // Selecting from input on row 1 should get all input across soft-wrap
+        {
+            let pin = spin(&s, pactive(0, 1));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            let contents = selstr(&mut s, sel, false);
+            assert_eq!(contents.as_slice(), b"cmd12");
+            sel.deinit(&mut s);
+        }
+
+        // Selecting from output should only get output
+        {
+            let pin = spin(&s, pactive(3, 1));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            let contents = selstr(&mut s, sel, false);
+            assert_eq!(contents.as_slice(), b"out");
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectLine semantic boundary disabled"
+    #[test]
+    fn screen_select_line_semantic_boundary_disabled() {
+        let mut s = mkscreen(10, 5, 0);
+
+        // Write prompt followed by input
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"$ ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"command").unwrap();
+
+        // With semantic_prompt_boundary = false, should select entire line
+        {
+            let pin = spin(&s, pactive(0, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: false,
+                })
+                .unwrap();
+            let contents = selstr(&mut s, sel, false);
+            assert_eq!(contents.as_slice(), b"$ command");
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectLine semantic boundary first cell of row"
+    #[test]
+    fn screen_select_line_semantic_boundary_first_cell_of_row() {
+        let mut s = mkscreen(5, 5, 0);
+
+        // Row 0: input that soft-wraps
+        // Row 1: output starts at first cell
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"12345").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Output);
+        s.test_write_string(b"ABCDE").unwrap();
+
+        // Verify soft-wrap happened
+        {
+            let pin = spin(&s, pactive(0, 0));
+            let row = pin.row_and_cell().row;
+            assert!(unsafe { (*row).wrap() });
+        }
+
+        // Selecting from input should stop before output on row 1
+        {
+            let pin = spin(&s, pactive(2, 0));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pactive(0, 0), pfp_active(&s, sel.start()));
+            assert_eq!(pactive(4, 0), pfp_active(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Selecting from output should only get output
+        {
+            let pin = spin(&s, pactive(2, 1));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            assert_eq!(pactive(0, 1), pfp_active(&s, sel.start()));
+            assert_eq!(pactive(4, 1), pfp_active(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectLine semantic all same content"
+    #[test]
+    fn screen_select_line_semantic_all_same_content() {
+        let mut s = mkscreen(5, 5, 0);
+
+        // All prompt content that soft-wraps
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"prompt text").unwrap();
+
+        // Verify soft-wrap
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"promp\nt tex\nt");
+        }
+
+        // Should select all prompt content across soft-wraps
+        {
+            let pin = spin(&s, pactive(2, 1));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            let contents = selstr(&mut s, sel, false);
+            assert_eq!(contents.as_slice(), b"prompt text");
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // PORT NOTE: the selectWord tests use the default word boundary codepoints
+    // inline; mirrored here as a local const matching the reference array.
+    const SELECT_WORD_BOUNDARY: [u32; 20] = [
+        0,
+        b' ' as u32,
+        b'\t' as u32,
+        b'\'' as u32,
+        b'"' as u32,
+        '│' as u32,
+        b'`' as u32,
+        b'|' as u32,
+        b':' as u32,
+        b';' as u32,
+        b',' as u32,
+        b'(' as u32,
+        b')' as u32,
+        b'[' as u32,
+        b']' as u32,
+        b'{' as u32,
+        b'}' as u32,
+        b'<' as u32,
+        b'>' as u32,
+        b'$' as u32,
+    ];
+
+    // test "Screen: selectWord"
+    #[test]
+    fn screen_select_word() {
+        let mut s = mkscreen(10, 10, 0);
+        s.test_write_string(b"ABC  DEF\n 123\n456").unwrap();
+
+        let boundary_codepoints = &SELECT_WORD_BOUNDARY;
+
+        // Outside of active area
+        // try testing.expect(s.selectWord(.{ .x = 9, .y = 0 }) == null);
+        // try testing.expect(s.selectWord(.{ .x = 0, .y = 5 }) == null);
+
+        // Going forward
+        {
+            let pin = spin(&s, pactive(0, 0));
+            let sel = s.select_word(pin, boundary_codepoints).unwrap();
+            assert_eq!(pscreen(0, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(2, 0), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Going backward
+        {
+            let pin = spin(&s, pactive(2, 0));
+            let sel = s.select_word(pin, boundary_codepoints).unwrap();
+            assert_eq!(pscreen(0, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(2, 0), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Going forward and backward
+        {
+            let pin = spin(&s, pactive(1, 0));
+            let sel = s.select_word(pin, boundary_codepoints).unwrap();
+            assert_eq!(pscreen(0, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(2, 0), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Whitespace
+        {
+            let pin = spin(&s, pactive(3, 0));
+            let sel = s.select_word(pin, boundary_codepoints).unwrap();
+            assert_eq!(pscreen(3, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(4, 0), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Whitespace single char
+        {
+            let pin = spin(&s, pactive(0, 1));
+            let sel = s.select_word(pin, boundary_codepoints).unwrap();
+            assert_eq!(pscreen(0, 1), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(0, 1), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // End of screen
+        {
+            let pin = spin(&s, pactive(1, 2));
+            let sel = s.select_word(pin, boundary_codepoints).unwrap();
+            assert_eq!(pscreen(0, 2), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(2, 2), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectWord across soft-wrap"
+    #[test]
+    fn screen_select_word_across_soft_wrap() {
+        let mut s = mkscreen(5, 10, 0);
+        s.test_write_string(b" 1234012\n 123").unwrap();
+
+        let boundary_codepoints = &SELECT_WORD_BOUNDARY;
+
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b" 1234\n012\n 123");
+        }
+
+        // Going forward
+        {
+            let pin = spin(&s, pactive(1, 0));
+            let sel = s.select_word(pin, boundary_codepoints).unwrap();
+            assert_eq!(pscreen(1, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(2, 1), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Going backward
+        {
+            let pin = spin(&s, pactive(1, 1));
+            let sel = s.select_word(pin, boundary_codepoints).unwrap();
+            assert_eq!(pscreen(1, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(2, 1), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Going forward and backward
+        {
+            let pin = spin(&s, pactive(3, 0));
+            let sel = s.select_word(pin, boundary_codepoints).unwrap();
+            assert_eq!(pscreen(1, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(2, 1), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectWord whitespace across soft-wrap"
+    #[test]
+    fn screen_select_word_whitespace_across_soft_wrap() {
+        let mut s = mkscreen(5, 10, 0);
+        s.test_write_string(b"1       1\n 123").unwrap();
+
+        let boundary_codepoints = &SELECT_WORD_BOUNDARY;
+
+        // Going forward
+        {
+            let pin = spin(&s, pactive(1, 0));
+            let sel = s.select_word(pin, boundary_codepoints).unwrap();
+            assert_eq!(pscreen(1, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(2, 1), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Going backward
+        {
+            let pin = spin(&s, pactive(1, 1));
+            let sel = s.select_word(pin, boundary_codepoints).unwrap();
+            assert_eq!(pscreen(1, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(2, 1), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Going forward and backward
+        {
+            let pin = spin(&s, pactive(3, 0));
+            let sel = s.select_word(pin, boundary_codepoints).unwrap();
+            assert_eq!(pscreen(1, 0), pfp_screen(&s, sel.start()));
+            assert_eq!(pscreen(2, 1), pfp_screen(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectWord with character boundary"
+    #[test]
+    fn screen_select_word_with_character_boundary() {
+        let boundary_codepoints = &SELECT_WORD_BOUNDARY;
+
+        let cases: [&[u8]; 17] = [
+            " 'abc' \n123".as_bytes(),
+            " \"abc\" \n123".as_bytes(),
+            " │abc│ \n123".as_bytes(),
+            " `abc` \n123".as_bytes(),
+            " |abc| \n123".as_bytes(),
+            " :abc: \n123".as_bytes(),
+            " ;abc; \n123".as_bytes(),
+            " ,abc, \n123".as_bytes(),
+            " (abc( \n123".as_bytes(),
+            " )abc) \n123".as_bytes(),
+            " [abc[ \n123".as_bytes(),
+            " ]abc] \n123".as_bytes(),
+            " {abc{ \n123".as_bytes(),
+            " }abc} \n123".as_bytes(),
+            " <abc< \n123".as_bytes(),
+            " >abc> \n123".as_bytes(),
+            " $abc$ \n123".as_bytes(),
+        ];
+
+        for case in cases {
+            let mut s = mkscreen(20, 10, 0);
+            s.test_write_string(case).unwrap();
+
+            // Inside character forward
+            {
+                let pin = spin(&s, pactive(2, 0));
+                let sel = s.select_word(pin, boundary_codepoints).unwrap();
+                assert_eq!(pscreen(2, 0), pfp_screen(&s, sel.start()));
+                assert_eq!(pscreen(4, 0), pfp_screen(&s, sel.end()));
+                sel.deinit(&mut s);
+            }
+
+            // Inside character backward
+            {
+                let pin = spin(&s, pactive(4, 0));
+                let sel = s.select_word(pin, boundary_codepoints).unwrap();
+                assert_eq!(pscreen(2, 0), pfp_screen(&s, sel.start()));
+                assert_eq!(pscreen(4, 0), pfp_screen(&s, sel.end()));
+                sel.deinit(&mut s);
+            }
+
+            // Inside character bidirectional
+            {
+                let pin = spin(&s, pactive(3, 0));
+                let sel = s.select_word(pin, boundary_codepoints).unwrap();
+                assert_eq!(pscreen(2, 0), pfp_screen(&s, sel.start()));
+                assert_eq!(pscreen(4, 0), pfp_screen(&s, sel.end()));
+                sel.deinit(&mut s);
+            }
+
+            // On quote
+            // NOTE: this behavior is not ideal, so we can change this one day,
+            // but I think its also not that important compared to the above.
+            {
+                let pin = spin(&s, pactive(1, 0));
+                let sel = s.select_word(pin, boundary_codepoints).unwrap();
+                assert_eq!(pscreen(0, 0), pfp_screen(&s, sel.start()));
+                assert_eq!(pscreen(1, 0), pfp_screen(&s, sel.end()));
+                sel.deinit(&mut s);
+            }
+
+            s.deinit();
+        }
+    }
+
+    // test "Screen: selectOutput"
+    #[test]
+    fn screen_select_output() {
+        let mut s = mkscreen(10, 15, 0);
+
+        // Build content with cell-level semantic content:
+        // Row 0-1: output1 (output)
+        // Row 2: prompt2 (prompt)
+        // Row 3: input2 (input)
+        // Row 4-7: output2 (output, with overflow causing wrap)
+        // Row 8: "$ " (prompt) + "input3" (input)
+        // Row 9-11: output3 (output)
+        s.cursor_set_semantic_content(SemanticContentArg::Output);
+        s.test_write_string(b"output1\n").unwrap();
+        s.test_write_string(b"output1\n").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"prompt2\n").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"input2\n").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Output);
+        s.test_write_string(b"output2output2output2output2\n")
+            .unwrap();
+        s.test_write_string(b"output2\n").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"$ ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"input3\n").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Output);
+        s.test_write_string(b"output3\n").unwrap();
+        s.test_write_string(b"output3\n").unwrap();
+        s.test_write_string(b"output3").unwrap();
+
+        // First output block (rows 0-1), should select those rows
+        {
+            let pin = spin(&s, pactive(1, 1));
+            let sel = s.select_output(pin).unwrap();
+            let contents = selstr(&mut s, sel, false);
+            assert_eq!(contents.as_slice(), b"output1\noutput1");
+            sel.deinit(&mut s);
+        }
+        // Second output block (rows 4-7)
+        {
+            let pin = spin(&s, pactive(3, 7));
+            let sel = s.select_output(pin).unwrap();
+            let contents = selstr(&mut s, sel, false);
+            assert_eq!(
+                contents.as_slice(),
+                b"output2output2output2output2\noutput2"
+            );
+            sel.deinit(&mut s);
+        }
+        // Third output block (rows 9-11)
+        {
+            let pin = spin(&s, pactive(2, 10));
+            let sel = s.select_output(pin).unwrap();
+            assert_eq!(pactive(0, 9), pfp_active(&s, sel.start()));
+            assert_eq!(pactive(6, 11), pfp_active(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+        // Click on prompt should return null
+        {
+            let pin = spin(&s, pactive(1, 8));
+            assert!(s.select_output(pin).is_none());
+        }
+        // Click on input should return null
+        {
+            let pin = spin(&s, pactive(5, 8));
+            assert!(s.select_output(pin).is_none());
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectionString basic"
+    #[test]
+    fn screen_selection_string_basic() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = b"1ABCD\n2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+
+        {
+            let sel = Selection::init(spin(&s, pscreen(0, 1)), spin(&s, pscreen(2, 2)), false);
+            let contents = selstr(&mut s, sel, true);
+            let expected = b"2EFGH\n3IJ";
+            assert_eq!(contents.as_slice(), expected);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectionString start outside of written area"
+    #[test]
+    fn screen_selection_string_start_outside_of_written_area() {
+        let mut s = mkscreen(5, 10, 0);
+        let str = b"1ABCD\n2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+
+        {
+            let sel = Selection::init(spin(&s, pscreen(0, 5)), spin(&s, pscreen(2, 6)), false);
+            let contents = selstr(&mut s, sel, true);
+            let expected = b"";
+            assert_eq!(contents.as_slice(), expected);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectionString end outside of written area"
+    #[test]
+    fn screen_selection_string_end_outside_of_written_area() {
+        let mut s = mkscreen(5, 10, 0);
+        let str = b"1ABCD\n2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+
+        {
+            let sel = Selection::init(spin(&s, pscreen(0, 2)), spin(&s, pscreen(2, 6)), false);
+            let contents = selstr(&mut s, sel, true);
+            let expected = b"3IJKL";
+            assert_eq!(contents.as_slice(), expected);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectionString trim space"
+    #[test]
+    fn screen_selection_string_trim_space() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = b"1AB  \n2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+
+        let sel = Selection::init(spin(&s, pscreen(0, 0)), spin(&s, pscreen(2, 1)), false);
+
+        {
+            let contents = selstr(&mut s, sel, true);
+            let expected = b"1AB\n2EF";
+            assert_eq!(contents.as_slice(), expected);
+        }
+
+        // No trim
+        {
+            let contents = selstr(&mut s, sel, false);
+            let expected = b"1AB  \n2EF";
+            assert_eq!(contents.as_slice(), expected);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectionString trim empty line"
+    #[test]
+    fn screen_selection_string_trim_empty_line() {
+        let mut s = mkscreen(5, 5, 0);
+        let str = b"1AB  \n\n2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+
+        let sel = Selection::init(spin(&s, pscreen(0, 0)), spin(&s, pscreen(2, 2)), false);
+
+        {
+            let contents = selstr(&mut s, sel, true);
+            let expected = b"1AB\n\n2EF";
+            assert_eq!(contents.as_slice(), expected);
+        }
+
+        // No trim
+        {
+            let contents = selstr(&mut s, sel, false);
+            let expected = b"1AB  \n\n2EF";
+            assert_eq!(contents.as_slice(), expected);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectionString soft wrap"
+    #[test]
+    fn screen_selection_string_soft_wrap() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = b"1ABCD2EFGH3IJKL";
+        s.test_write_string(str).unwrap();
+
+        {
+            let sel = Selection::init(spin(&s, pscreen(0, 1)), spin(&s, pscreen(2, 2)), false);
+            let contents = selstr(&mut s, sel, true);
+            let expected = b"2EFGH3IJ";
+            assert_eq!(contents.as_slice(), expected);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectionString wide char"
+    #[test]
+    fn screen_selection_string_wide_char() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = "1A⚡".as_bytes();
+        s.test_write_string(str).unwrap();
+
+        {
+            let sel = Selection::init(spin(&s, pscreen(0, 0)), spin(&s, pscreen(3, 0)), false);
+            let contents = selstr(&mut s, sel, true);
+            let expected = str;
+            assert_eq!(contents.as_slice(), expected);
+        }
+
+        {
+            let sel = Selection::init(spin(&s, pscreen(0, 0)), spin(&s, pscreen(2, 0)), false);
+            let contents = selstr(&mut s, sel, true);
+            let expected = str;
+            assert_eq!(contents.as_slice(), expected);
+        }
+
+        {
+            let sel = Selection::init(spin(&s, pscreen(3, 0)), spin(&s, pscreen(3, 0)), false);
+            let contents = selstr(&mut s, sel, true);
+            let expected = "⚡".as_bytes();
+            assert_eq!(contents.as_slice(), expected);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectionString wide char with header"
+    #[test]
+    fn screen_selection_string_wide_char_with_header() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = "1ABC⚡".as_bytes();
+        s.test_write_string(str).unwrap();
+
+        {
+            let sel = Selection::init(spin(&s, pscreen(0, 0)), spin(&s, pscreen(4, 0)), false);
+            let contents = selstr(&mut s, sel, true);
+            let expected = str;
+            assert_eq!(contents.as_slice(), expected);
+        }
+
+        s.deinit();
+    }
+
+    // https://github.com/mitchellh/ghostty/issues/289
+    // test "Screen: selectionString empty with soft wrap"
+    #[test]
+    fn screen_selection_string_empty_with_soft_wrap() {
+        let mut s = mkscreen(5, 2, 0);
+
+        // Let me describe the situation that caused this because this
+        // test is not obvious. By writing an emoji below, we introduce
+        // one cell with the emoji and one cell as a "wide char spacer".
+        // We then soft wrap the line by writing spaces.
+        //
+        // By selecting only the tail, we'd select nothing and we had
+        // a logic error that would cause a crash.
+        s.test_write_string("👨".as_bytes()).unwrap();
+        s.test_write_string(b"      ").unwrap();
+
+        {
+            let sel = Selection::init(spin(&s, pscreen(1, 0)), spin(&s, pscreen(2, 0)), false);
+            let contents = selstr(&mut s, sel, true);
+            let expected = "👨".as_bytes();
+            assert_eq!(contents.as_slice(), expected);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectionString with zero width joiner"
+    #[test]
+    fn screen_selection_string_with_zero_width_joiner() {
+        let mut s = mkscreen(10, 1, 0);
+        let str = "👨\u{200d}".as_bytes(); // this has a ZWJ
+        s.test_write_string(str).unwrap();
+
+        // Integrity check
+        {
+            let pin = spin(&s, pscreen(0, 0));
+            let cell = pin.row_and_cell().cell;
+            assert_eq!(0x1F468u32, unsafe { (*cell).codepoint() });
+            assert_eq!(pagepkg::Wide::Wide, unsafe { (*cell).wide() });
+            let cps = unsafe { (*pin.node).data.lookup_grapheme(cell).unwrap() };
+            assert_eq!(1usize, cps.len());
+        }
+
+        // The real test
+        {
+            let sel = Selection::init(spin(&s, pscreen(0, 0)), spin(&s, pscreen(1, 0)), false);
+            let contents = selstr(&mut s, sel, true);
+            let expected = "👨\u{200d}".as_bytes();
+            assert_eq!(contents.as_slice(), expected);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: selectionString, rectangle, basic"
+    #[test]
+    fn screen_selection_string_rectangle_basic() {
+        let mut s = mkscreen(30, 5, 0);
+        let str = "Lorem ipsum dolor\nsit amet, consectetur\nadipiscing elit, sed do\neiusmod tempor incididunt\nut labore et dolore".as_bytes();
+        let sel = Selection::init(spin(&s, pscreen(2, 1)), spin(&s, pscreen(6, 3)), true);
+        let expected = "t ame\nipisc\nusmod".as_bytes();
+        s.test_write_string(str).unwrap();
+
+        let contents = selstr(&mut s, sel, true);
+        assert_eq!(contents.as_slice(), expected);
+
+        s.deinit();
+    }
+
+    // test "Screen: selectionString, rectangle, w/EOL"
+    #[test]
+    fn screen_selection_string_rectangle_w_eol() {
+        let mut s = mkscreen(30, 5, 0);
+        let str = "Lorem ipsum dolor\nsit amet, consectetur\nadipiscing elit, sed do\neiusmod tempor incididunt\nut labore et dolore".as_bytes();
+        let sel = Selection::init(spin(&s, pscreen(12, 0)), spin(&s, pscreen(26, 4)), true);
+        let expected = "dolor\nnsectetur\nlit, sed do\nor incididunt\n dolore".as_bytes();
+        s.test_write_string(str).unwrap();
+
+        let contents = selstr(&mut s, sel, true);
+        assert_eq!(contents.as_slice(), expected);
+
+        s.deinit();
+    }
+
+    // test "Screen: selectionString, rectangle, more complex w/breaks"
+    #[test]
+    fn screen_selection_string_rectangle_more_complex_w_breaks() {
+        let mut s = mkscreen(30, 8, 0);
+        let str = "Lorem ipsum dolor\nsit amet, consectetur\nadipiscing elit, sed do\neiusmod tempor incididunt\nut labore et dolore\n\nmagna aliqua. Ut enim\nad minim veniam, quis".as_bytes();
+        let sel = Selection::init(spin(&s, pscreen(11, 2)), spin(&s, pscreen(26, 7)), true);
+        let expected =
+            "elit, sed do\npor incididunt\nt dolore\n\na. Ut enim\nniam, quis".as_bytes();
+        s.test_write_string(str).unwrap();
+
+        let contents = selstr(&mut s, sel, true);
+        assert_eq!(contents.as_slice(), expected);
+
+        s.deinit();
+    }
+
+    // test "Screen: selectionString multi-page"
+    #[test]
+    fn screen_selection_string_multi_page() {
+        let mut s = mkscreen(10, 3, 2048);
+
+        let first_page_size = unsafe { (*s.pages.pages.first).data.capacity.rows };
+
+        // Lazy way to seek to the first page boundary.
+        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(true) };
+        for _ in 0..(first_page_size - 1) {
+            s.test_write_string(b"\n").unwrap();
+        }
+        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(false) };
+
+        s.test_write_string(b"123456789\n!@#$%^&*(\n123456789")
+            .unwrap();
+
+        {
+            let sel = Selection::init(spin(&s, pactive(0, 0)), spin(&s, pactive(2, 2)), false);
+            let contents = selstr(&mut s, sel, true);
+            let expected = b"123456789\n!@#$%^&*(\n123";
+            assert_eq!(contents.as_slice(), expected);
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: lineIterator"
+    #[test]
+    fn screen_line_iterator() {
+        let mut s = mkscreen(5, 5, 0);
+        let str = b"1ABCD\n2EFGH";
+        s.test_write_string(str).unwrap();
+
+        // Test the line iterator
+        // PORT NOTE: the reference holds the iterator's `*const Screen` and
+        // interleaves `iter.next()` with `selectionString` (a `*mut Screen`
+        // method). Rust's `LineIterator<'a>` borrows `&Screen`, so we collect
+        // both selections first (dropping the iterator borrow) before calling
+        // the `&mut self` `selection_string`. The order of operations and
+        // assertions is identical.
+        let start = spin(&s, vp());
+        let (sel0, sel1) = {
+            let mut iter = s.line_iterator(start);
+            let a = iter.next().unwrap();
+            let b = iter.next().unwrap();
+            (a, b)
+        };
+        {
+            let actual = selstr(&mut s, sel0, false);
+            assert_eq!(actual.as_slice(), b"1ABCD");
+        }
+        {
+            let actual = selstr(&mut s, sel1, false);
+            assert_eq!(actual.as_slice(), b"2EFGH");
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: lineIterator soft wrap"
+    #[test]
+    fn screen_line_iterator_soft_wrap() {
+        let mut s = mkscreen(5, 5, 0);
+        let str = b"1ABCD2EFGH\n3ABCD";
+        s.test_write_string(str).unwrap();
+
+        // Test the line iterator
+        // PORT NOTE: see `screen_line_iterator` — selections are collected
+        // before the `&mut self` `selection_string` calls due to Rust's
+        // borrow of `&Screen` by `LineIterator`.
+        let start = spin(&s, vp());
+        let (sel0, sel1) = {
+            let mut iter = s.line_iterator(start);
+            let a = iter.next().unwrap();
+            let b = iter.next().unwrap();
+            (a, b)
+        };
+        {
+            let actual = selstr(&mut s, sel0, false);
+            assert_eq!(actual.as_slice(), b"1ABCD2EFGH");
+        }
+        {
+            let actual = selstr(&mut s, sel1, false);
+            assert_eq!(actual.as_slice(), b"3ABCD");
+        }
+        // try testing.expect(iter.next() == null);
+
         s.deinit();
     }
 }
