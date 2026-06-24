@@ -15,6 +15,18 @@ authors.workspace = true
 [lints]
 workspace = true
 
+# Build-time terminal options (ported from terminal/build_options.zig's Options /
+# the generated `terminal_options` module). These are the build knobs the
+# reference `build.zig` toggles; the ported `options` module reads them via
+# `cfg!(feature = ...)`. Later vt sub-batches gate on `crate::options::*`.
+[features]
+# Whether Oniguruma regex support is available (reference `oniguruma`). Gates
+# Kitty graphics protocol and Tmux control mode. Off by default, matching a build
+# without the optional regex dependency.
+oniguruma = []
+# Whether to build SIMD-accelerated code paths (reference `simd`). Off by default.
+simd = []
+
 [dependencies]
 rustty-datastruct = { workspace = true }
 rustty-unicode = { workspace = true }
