@@ -10,15 +10,7 @@
 //!
 //! PORTS: ghostty src/terminal/ScreenSet.zig
 //!
-//! PORT STATUS: skeleton (vt-10) — types + method signatures; bodies `todo!()`
-//! land in vt-11.
-// PORT NOTE: this skeleton has `todo!()` method bodies (vt-11 lands the real
-// bodies), so the parameters/imports they will consume are not yet read. The
-// `unused_*` and `clippy::should_implement_trait` allows are skeleton-only and
-// drop out once the bodies land.
-#![allow(clippy::todo, dead_code, unused_variables, unused_imports)]
-#![allow(clippy::should_implement_trait)]
-
+//! PORT STATUS: complete (vt-11g) — types + all method bodies + the 2 tests.
 // const std = @import("std");
 // const assert = @import("../quirks.zig").inlineAssert;
 // const lib = @import("lib.zig");
@@ -74,21 +66,57 @@ pub struct ScreenSet {
 
 impl ScreenSet {
     pub fn init(alloc: Allocator, opts: crate::screen::Options) -> Result<ScreenSet, OutOfMemory> {
-        todo!()
+        // We need to initialize our initial primary screen
+        // const screen = try alloc.create(Screen);
+        // errdefer alloc.destroy(screen);
+        // screen.* = try .init(alloc, opts);
+        // PORT NOTE: the reference `alloc.create(Screen)` allocates uninitialized
+        // storage and the following `screen.* = try .init(...)` populates it (with
+        // an `errdefer alloc.destroy(screen)` covering the init failure). `Screen`
+        // has no self-referential pointers that require a fixed address before
+        // init, so the faithful Rust ordering is to construct the value first and
+        // only heap-allocate on success — that subsumes the `errdefer` (no leak on
+        // the init-error path).
+        let screen: *mut Screen = Box::into_raw(Box::new(Screen::init(alloc, opts)?));
+        let mut all: [Option<*mut Screen>; Key::COUNT] = [None; Key::COUNT];
+        all[Key::Primary as usize] = Some(screen);
+        Ok(ScreenSet {
+            active_key: Key::Primary,
+            active: screen,
+            all,
+            generations: [0; Key::COUNT],
+        })
     }
 
     pub fn deinit(&mut self, alloc: Allocator) {
-        todo!()
+        let _ = alloc;
+        // Destroy all initialized screens
+        // var it = self.all.iterator();
+        // while (it.next()) |entry| {
+        //     entry.value.*.deinit();
+        //     alloc.destroy(entry.value.*);
+        // }
+        for slot in self.all.iter_mut() {
+            if let Some(screen) = *slot {
+                // SAFETY: `screen` was produced by `Box::into_raw` in
+                // `init`/`get_init` and has not yet been freed; reclaim ownership
+                // so the `Box` drop both `deinit`s and frees it. `deinit` takes
+                // `&mut Screen`.
+                let mut boxed = unsafe { Box::from_raw(screen) };
+                boxed.deinit();
+                drop(boxed);
+            }
+        }
     }
 
     /// Get the screen for the given key, if it is initialized.
     pub fn get(&self, key: Key) -> Option<*mut Screen> {
-        todo!()
+        self.all[key as usize]
     }
 
     /// Get the current generation for the given screen key.
     pub fn generation(&self, key: Key) -> usize {
-        todo!()
+        self.generations[key as usize]
     }
 
     /// Get the screen for the given key, initializing it if necessary.
@@ -98,17 +126,111 @@ impl ScreenSet {
         key: Key,
         opts: crate::screen::Options,
     ) -> Result<*mut Screen, OutOfMemory> {
-        todo!()
+        if let Some(screen) = self.get(key) {
+            return Ok(screen);
+        }
+        // const screen = try alloc.create(Screen);
+        // errdefer alloc.destroy(screen);
+        // screen.* = try .init(alloc, opts);
+        // PORT NOTE: same create+init ordering as `init` (construct first, only
+        // heap-allocate on success — subsumes the reference's `errdefer`).
+        let screen: *mut Screen = Box::into_raw(Box::new(Screen::init(alloc, opts)?));
+        self.all[key as usize] = Some(screen);
+        Ok(screen)
     }
 
     /// Remove a key from the set. The primary screen cannot be removed (asserted).
     pub fn remove(&mut self, alloc: Allocator, key: Key) {
-        todo!()
+        let _ = alloc;
+        debug_assert!(key != Key::Primary);
+        // if (self.all.fetchRemove(key)) |screen| {
+        //     self.generations.put(key, self.generation(key) +% 1);
+        //     screen.deinit();
+        //     alloc.destroy(screen);
+        // }
+        if let Some(screen) = self.all[key as usize].take() {
+            self.generations[key as usize] = self.generation(key).wrapping_add(1);
+            // SAFETY: `screen` was produced by `Box::into_raw` and removed from
+            // `all` via `take`, so this is the unique owner; reclaim it to
+            // `deinit` and free.
+            let mut boxed = unsafe { Box::from_raw(screen) };
+            boxed.deinit();
+            drop(boxed);
+        }
     }
 
     /// Switch the active screen to the given key. Requires that the
     /// screen is initialized.
     pub fn switch_to(&mut self, key: Key) {
-        todo!()
+        self.active_key = key;
+        self.active = self.all[key as usize].unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::screen::Options;
+    use allocator_api2::alloc::Global;
+
+    // test ScreenSet
+    #[test]
+    fn screen_set() {
+        let alloc = Global;
+        let mut set: ScreenSet = ScreenSet::init(alloc, Options::default()).unwrap();
+        assert_eq!(set.active_key, Key::Primary);
+        assert_eq!(set.generation(Key::Primary), 0_usize);
+        assert_eq!(set.generation(Key::Alternate), 0_usize);
+
+        // Initialize a secondary screen
+        let _ = set
+            .get_init(alloc, Key::Alternate, Options::default())
+            .unwrap();
+        assert_eq!(set.generation(Key::Alternate), 0_usize);
+
+        set.switch_to(Key::Alternate);
+        assert_eq!(set.active_key, Key::Alternate);
+
+        set.deinit(alloc);
+    }
+
+    // test "ScreenSet generations"
+    #[test]
+    fn screen_set_generations() {
+        let alloc = Global;
+        let mut set: ScreenSet = ScreenSet::init(alloc, Options::default()).unwrap();
+
+        assert_eq!(set.generation(Key::Primary), 0_usize);
+        assert_eq!(set.generation(Key::Alternate), 0_usize);
+
+        // A no-op removal doesn't change the generation.
+        set.remove(alloc, Key::Alternate);
+        assert_eq!(set.generation(Key::Alternate), 0_usize);
+
+        // Initializing a screen doesn't change the generation.
+        let _ = set
+            .get_init(alloc, Key::Alternate, Options::default())
+            .unwrap();
+        assert_eq!(set.generation(Key::Alternate), 0_usize);
+
+        let alternate_generation = set.generation(Key::Alternate);
+        set.remove(alloc, Key::Alternate);
+        assert_eq!(
+            set.generation(Key::Alternate),
+            alternate_generation.wrapping_add(1)
+        );
+
+        // Reinitializing keeps the generation from the last removal, so stale
+        // handles can distinguish the new screen from the destroyed screen.
+        let _ = set
+            .get_init(alloc, Key::Alternate, Options::default())
+            .unwrap();
+        assert_eq!(
+            set.generation(Key::Alternate),
+            alternate_generation.wrapping_add(1)
+        );
+        assert_eq!(set.generation(Key::Primary), 0_usize);
+
+        set.deinit(alloc);
     }
 }

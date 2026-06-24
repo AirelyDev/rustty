@@ -169,6 +169,7 @@ impl SemanticPrompt {
     };
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SemanticClick {
     None,
     ClickEvents(osc::semantic_prompt::ClickEvents),
@@ -436,6 +437,42 @@ pub struct SelectionString<'a> {
     pub map: Option<&'a mut StringMap>,
 }
 
+// const selectionString_tw = tripwire.module(enum {
+//     copy_map,
+// }, selectionString);
+//
+// PORT NOTE: the Zig `tripwire.module(P, E)` is a comptime function returning a
+// type with type-static state. The Rust `rustty_util::tripwire::Module<P, E>` is
+// an INSTANCE holding the same state. To share that state between
+// `selectionString` (which calls `check`) and the `selectionString map
+// allocation failure cleanup` test (which calls `error_always`), we hold the
+// module in a `#[cfg(test)] thread_local!` and route access through the small
+// `cfg(test)` helper below. In non-test builds the helper is a no-op returning
+// `Ok(())`, mirroring the Zig `enabled = builtin.is_test` gate. (Reuses the
+// pagelist `init_tw` tripwire idiom.)
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum SelectionStringFp {
+    CopyMap,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static SELECTION_STRING_TW:
+        core::cell::RefCell<rustty_util::tripwire::Module<SelectionStringFp, OutOfMemory>> =
+        core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+// `try selectionString_tw.check(point)` for the `selectionString` tripwire
+// module. Only compiled in test builds; the call site is `#[cfg(test)]`-gated so
+// production `selectionString` is unchanged, mirroring the Zig
+// `enabled = builtin.is_test` gate where the non-test `check` is a no-op.
+#[cfg(test)]
+#[inline]
+fn selection_string_tw_check(point: SelectionStringFp) -> Result<(), OutOfMemory> {
+    SELECTION_STRING_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
 pub struct SelectLine<'a> {
     /// The pin of some part of the line to select.
     pub pin: Pin,
@@ -475,6 +512,7 @@ impl<'a> LineIterator<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PromptClickMove {
     pub left: usize,
     pub right: usize,
@@ -3180,11 +3218,19 @@ impl Screen {
         if let Some(map) = opts.map {
             let map_string = text.clone();
             // errdefer alloc.free(map_string);
-            // PORT NOTE: `try selectionString_tw.check(.copy_map);` — the
-            // `selectionString` tripwire (a fault-injection point exercised only
-            // by the one map-allocation-failure test) is DEFERRED to vt-11g
-            // along with that test. No map-using test exists in this sub-batch,
-            // so this path is ported but unexercised.
+            // PORT NOTE: the reference `errdefer alloc.free(map_string)` frees the
+            // duplicated string if `selectionString_tw.check`/`toOwnedSlice` fails.
+            // `map_string` is an owning `Vec` local, so any early `?` return below
+            // drops it automatically — that IS the faithful errdefer.
+            //
+            // try selectionString_tw.check(.copy_map);
+            // PORT NOTE: the `selectionString` tripwire is a fault-injection point
+            // exercised only by the one map-allocation-failure test; the check is
+            // `#[cfg(test)]`-gated (a no-op in production, mirroring the Zig
+            // `enabled = builtin.is_test` gate).
+            #[cfg(test)]
+            selection_string_tw_check(SelectionStringFp::CopyMap)?;
+            // const map_pins = try pins.toOwnedSlice(alloc);
             let map_pins = pins;
             *map = StringMap {
                 string: map_string,
@@ -3670,7 +3716,28 @@ impl Screen {
     /// that the shell will only move the cursor to input cells, so prompt cells
     /// and other blank cells are ignored as part of the movement calculation.
     pub fn prompt_click_move(&mut self, click_pin: Pin) -> PromptClickMove {
-        todo!()
+        // If we're not at an input cell with our cursor, no movement will
+        // ever be possible.
+        if self.cursor.semantic_content != pagepkg::SemanticContent::Input
+            && unsafe { (*self.cursor.page_cell).semantic_content() }
+                != pagepkg::SemanticContent::Input
+        {
+            return PromptClickMove::ZERO;
+        }
+
+        match &self.semantic_prompt.click {
+            // None doesn't support movement and click_events must use a
+            // different mechanism (SGR mouse events) that callers must handle.
+            SemanticClick::None | SemanticClick::ClickEvents(_) => PromptClickMove::ZERO,
+            SemanticClick::Cl(cl) => match cl {
+                // All of these currently use dumb line-based navigation.
+                // But eventually we'll support more.
+                osc::semantic_prompt::Click::Line
+                | osc::semantic_prompt::Click::Multiple
+                | osc::semantic_prompt::Click::ConservativeVertical
+                | osc::semantic_prompt::Click::SmartVertical => self.prompt_click_line(click_pin),
+            },
+        }
     }
 
     /// Determine the inputs required to move from the cursor to the given
@@ -3679,7 +3746,161 @@ impl Screen {
     ///
     /// This currently only supports moving a single line.
     fn prompt_click_line(&mut self, click_pin: Pin) -> PromptClickMove {
-        todo!()
+        // If our click pin is our cursor pin, no movement is needed.
+        // Do this early so we can assume later that they are different.
+        let cursor_pin = unsafe { *self.cursor.page_pin };
+        if cursor_pin.eql(click_pin) {
+            return PromptClickMove::ZERO;
+        }
+
+        // If our cursor is before our click, we're only emitting right inputs.
+        if cursor_pin.before(click_pin) {
+            let mut count: usize = 0;
+
+            // We go row-by-row because soft-wrapped rows are still a single
+            // line to a shell, so we can't just look at our page row.
+            let mut row_it =
+                cursor_pin.row_iterator(pagelist::iter::Direction::RightDown, Some(click_pin));
+            'row_it: while let Some(row_pin) = row_it.next() {
+                let rac = row_pin.row_and_cell();
+                let cells: &[pagepkg::Cell] = unsafe { &*(*row_pin.node).data.get_cells(rac.row) };
+
+                // Determine if this row is our cursor.
+                let is_cursor_row =
+                    std::ptr::eq(row_pin.node, cursor_pin.node) && row_pin.y == cursor_pin.y;
+
+                // If this is not the cursor row, verify it's still part of the
+                // continuation of our starting prompt.
+                if !is_cursor_row
+                    && unsafe { (*rac.row).semantic_prompt() }
+                        != pagepkg::SemanticPrompt::PromptContinuation
+                {
+                    break;
+                }
+
+                // Determine where our input starts.
+                let start_x: usize = 'start_x: {
+                    // If this is our cursor row then we start after the cursor.
+                    if is_cursor_row {
+                        break 'start_x cursor_pin.x as usize + 1;
+                    }
+
+                    // Otherwise, we start at the first input cell, because
+                    // we expect the shell to properly translate arrows across
+                    // lines to the start of the input. Some shells indent
+                    // where input starts on subsequent lines so we must do
+                    // this.
+                    for (x, cell) in cells.iter().enumerate() {
+                        if cell.semantic_content() == pagepkg::SemanticContent::Input {
+                            break 'start_x x;
+                        }
+                    }
+
+                    // We never found an input cell, so we need to move to the
+                    // next row.
+                    break 'start_x cells.len();
+                };
+
+                // Iterate over the input cells and assume arrow keys only
+                // jump to input cells.
+                for (x, cell) in cells.iter().enumerate().skip(start_x) {
+                    // Ignore non-input cells, but allow breaks. We assume
+                    // the shell will translate arrow keys to only input
+                    // areas.
+                    if cell.semantic_content() != pagepkg::SemanticContent::Input {
+                        continue;
+                    }
+
+                    // Increment our input count
+                    count += 1;
+
+                    // If this is our target, we're done.
+                    if std::ptr::eq(row_pin.node, click_pin.node)
+                        && row_pin.y == click_pin.y
+                        && x == click_pin.x as usize
+                    {
+                        break 'row_it;
+                    }
+                }
+
+                // If this row isn't soft-wrapped, we need to break out
+                // because line based moving only handles single lines.
+                // We're done!
+                if !unsafe { (*rac.row).wrap() } {
+                    // If we never found our pin, that means we clicked further
+                    // right/beyond it. If we're already on a non-empty input cell
+                    // then we add one so we can move to the newest, empty cell
+                    // at the end, matching typical editor behavior.
+                    if unsafe { (*self.cursor.page_cell).semantic_content() }
+                        == pagepkg::SemanticContent::Input
+                    {
+                        count += 1;
+                    }
+
+                    break;
+                }
+            }
+
+            return PromptClickMove {
+                left: 0,
+                right: count,
+            };
+        }
+
+        // Otherwise, cursor is after click, so we're emitting left inputs.
+        let mut count: usize = 0;
+
+        // We go row-by-row because soft-wrapped rows are still a single
+        // line to a shell, so we can't just look at our page row.
+        let mut row_it =
+            cursor_pin.row_iterator(pagelist::iter::Direction::LeftUp, Some(click_pin));
+        'row_it: while let Some(row_pin) = row_it.next() {
+            let rac = row_pin.row_and_cell();
+            let cells: &[pagepkg::Cell] = unsafe { &*(*row_pin.node).data.get_cells(rac.row) };
+
+            // Determine the length of the cells we look at in this row.
+            let end_len: usize = 'end_len: {
+                // If this is our cursor row then we end before the cursor.
+                if std::ptr::eq(row_pin.node, cursor_pin.node) && row_pin.y == cursor_pin.y {
+                    break 'end_len cursor_pin.x as usize;
+                }
+
+                // Otherwise, we end at the last cell in the row.
+                break 'end_len cells.len();
+            };
+
+            // Iterate backwards over the input cells.
+            for rev_x in 0..end_len {
+                let x: usize = end_len - 1 - rev_x;
+                let cell = &cells[x];
+
+                // Ignore non-input cells.
+                if cell.semantic_content() != pagepkg::SemanticContent::Input {
+                    continue;
+                }
+
+                // Increment our input count
+                count += 1;
+
+                // If this is our target, we're done.
+                if std::ptr::eq(row_pin.node, click_pin.node)
+                    && row_pin.y == click_pin.y
+                    && x == click_pin.x as usize
+                {
+                    break 'row_it;
+                }
+            }
+
+            // If this row is not a wrap continuation, then break out
+            if !unsafe { (*rac.row).wrap_continuation() } {
+                break;
+            }
+        }
+
+        PromptClickMove {
+            left: count,
+            right: 0,
+        }
     }
 
     pub fn dump_string(
@@ -9634,6 +9855,720 @@ mod tests {
                 .unwrap();
             assert_eq!(str, b"3");
         }
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove line right basic"
+    #[test]
+    fn screen_prompt_click_move_line_right_basic() {
+        let mut s = clone_clear_init(20, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Write a prompt and input
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"hello").unwrap();
+
+        // Move cursor back to start of input (column 2, the 'h')
+        s.cursor_absolute(2, 0);
+
+        // Click on first 'l' (column 4), should require 2 right movements (h->e->l)
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 4, y: 0 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        assert_eq!(result.right, 2);
+        assert_eq!(result.left, 0);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove line right cursor not on input"
+    #[test]
+    fn screen_prompt_click_move_line_right_cursor_not_on_input() {
+        let mut s = clone_clear_init(20, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Write a prompt and input
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"hello").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Output);
+
+        // Move cursor back to prompt area (column 0, the '>')
+        s.cursor_absolute(0, 0);
+
+        // Cursor is on prompt, not input - should return zero
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 4, y: 0 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        assert_eq!(result, PromptClickMove::ZERO);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove line right click on same position"
+    #[test]
+    fn screen_prompt_click_move_line_right_click_on_same_position() {
+        let mut s = clone_clear_init(20, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Write a prompt and input
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"hello").unwrap();
+
+        // Move cursor to column 4
+        s.cursor_absolute(4, 0);
+
+        // Click on same position - no movement needed
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 4, y: 0 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        assert_eq!(result, PromptClickMove::ZERO);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove line right skips non-input cells"
+    #[test]
+    fn screen_prompt_click_move_line_right_skips_non_input_cells() {
+        let mut s = clone_clear_init(20, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Write: "> h" then output "X" then input "llo"
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"h").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Output);
+        s.test_write_string(b"X").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"llo").unwrap();
+
+        // Move cursor to column 2 (the 'h')
+        s.cursor_absolute(2, 0);
+
+        // Click on 'l' at column 5 - should skip the 'X' output cell
+        // Movement: h (start) -> l (col 4) -> l (col 5) = 2 right movements
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 5, y: 0 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        assert_eq!(result.right, 2);
+        assert_eq!(result.left, 0);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove line right soft-wrapped line"
+    #[test]
+    fn screen_prompt_click_move_line_right_soft_wrapped_line() {
+        let mut s = clone_clear_init(10, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Write a prompt and input that wraps
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        // Write 8 chars of input, first row has 2 for prompt + 8 input = 10 cols
+        s.test_write_string(b"abcdefgh").unwrap();
+        // Continue on next row (soft-wrapped)
+        s.test_write_string(b"ij").unwrap();
+
+        // Verify soft wrap occurred
+        {
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Viewport(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"> abcdefgh\nij");
+        }
+
+        // Move cursor to column 2 (the 'a')
+        s.cursor_absolute(2, 0);
+
+        // Click on 'j' at column 1, row 1 - should count all input cells
+        // Movement: a->b->c->d->e->f->g->h->i->j = 9 right movements
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 1, y: 1 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        assert_eq!(result.right, 9);
+        assert_eq!(result.left, 0);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove disabled when click is none"
+    #[test]
+    fn screen_prompt_click_move_disabled_when_click_is_none() {
+        let mut s = clone_clear_init(20, 5, 0);
+
+        // Click mode is .none by default (disabled)
+        assert_eq!(s.semantic_prompt.click, SemanticClick::None);
+
+        // Write a prompt and input
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"hello").unwrap();
+
+        // Move cursor to start of input
+        s.cursor_absolute(2, 0);
+
+        // Click should return zero since click mode is disabled
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 4, y: 0 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        assert_eq!(result, PromptClickMove::ZERO);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove line right stops at hard wrap"
+    #[test]
+    fn screen_prompt_click_move_line_right_stops_at_hard_wrap() {
+        let mut s = clone_clear_init(20, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Write prompt and input on first line
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"hello").unwrap();
+        // Hard wrap (newline)
+        s.test_write_string(b"\n").unwrap();
+        s.test_write_string(b"world").unwrap();
+
+        // Move cursor to column 2 (the 'h')
+        s.cursor_absolute(2, 0);
+
+        // Click on 'w' at column 0, row 1 - but line mode stops at hard wrap
+        // Should only move to end of first line: h->e->l->l->o = 4 movements
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        // Should stop at end of first line, not cross hard wrap
+        assert_eq!(result.right, 5);
+        assert_eq!(result.left, 0);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove line right stops at non-continuation row"
+    #[test]
+    fn screen_prompt_click_move_line_right_stops_at_non_continuation_row() {
+        let mut s = clone_clear_init(20, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Row 0: PROMPT "> hello"
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"hello\n").unwrap();
+
+        // Row 1: CONTINUATION "world"
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Continuation,
+        ));
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"world\n").unwrap();
+
+        // Row 2: NEW PROMPT "> again"
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"again").unwrap();
+
+        // Verify content
+        {
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Viewport(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"> hello\nworld\n> again");
+        }
+
+        // Move cursor to 'w' at column 0, row 1
+        s.cursor_absolute(0, 1);
+
+        // Click on 'a' at column 2, row 2 - but row 2 is a new prompt
+        // Should stop at end of "world": w->o->r->l->d = 4 movements
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 2, y: 2 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        // Should stop at 'd' (end of world), not cross to new prompt
+        assert_eq!(result.right, 5);
+        assert_eq!(result.left, 0);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove line left basic"
+    #[test]
+    fn screen_prompt_click_move_line_left_basic() {
+        let mut s = clone_clear_init(20, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Write a prompt and input
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"hello").unwrap();
+
+        // Cursor is at column 7 (after 'o'), move it to column 6 (the 'o')
+        s.cursor_absolute(6, 0);
+
+        // Click on 'h' (column 2), should require 4 left movements (o->l->l->e->h)
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 2, y: 0 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        assert_eq!(result.left, 4);
+        assert_eq!(result.right, 0);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove line left skips non-input cells"
+    #[test]
+    fn screen_prompt_click_move_line_left_skips_non_input_cells() {
+        let mut s = clone_clear_init(20, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Write: "> h" then output "X" then input "llo"
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"h").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Output);
+        s.test_write_string(b"X").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"llo").unwrap();
+
+        // Move cursor to column 6 (the 'o')
+        s.cursor_absolute(6, 0);
+
+        // Click on 'h' at column 2 - should skip the 'X' output cell
+        // Movement: o->l->l->h = 3 left movements (skipping X)
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 2, y: 0 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        assert_eq!(result.left, 3);
+        assert_eq!(result.right, 0);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove line left soft-wrapped line"
+    #[test]
+    fn screen_prompt_click_move_line_left_soft_wrapped_line() {
+        let mut s = clone_clear_init(10, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Write a prompt and input that wraps
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        // Write 8 chars of input, first row has 2 for prompt + 8 input = 10 cols
+        s.test_write_string(b"abcdefgh").unwrap();
+        // Continue on next row (soft-wrapped)
+        s.test_write_string(b"ij").unwrap();
+
+        // Verify soft wrap occurred
+        {
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Viewport(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"> abcdefgh\nij");
+        }
+
+        // Cursor is at column 2, row 1 (after 'j'). Move to 'j' at column 1.
+        s.cursor_absolute(1, 1);
+
+        // Click on 'a' at column 2, row 0 - should count all input cells backwards
+        // Movement: j->i->h->g->f->e->d->c->b->a = 9 left movements
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 2, y: 0 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        assert_eq!(result.left, 9);
+        assert_eq!(result.right, 0);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove line left stops at hard wrap"
+    #[test]
+    fn screen_prompt_click_move_line_left_stops_at_hard_wrap() {
+        let mut s = clone_clear_init(20, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Write prompt and input on first line, then hard wrap
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"hello").unwrap();
+        // Hard wrap (newline)
+        s.test_write_string(b"\n").unwrap();
+        s.test_write_string(b"world").unwrap();
+
+        // Move cursor to 'd' at column 4, row 1 (an actual input cell)
+        s.cursor_absolute(4, 1);
+
+        // Click on 'h' at column 2, row 0 - but line mode stops at hard wrap
+        // Should only move to start of second line, not cross to row 0
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 2, y: 0 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        // Should stop at start of second line: d->l->r->o->w = 4 movements
+        assert_eq!(result.left, 4);
+        assert_eq!(result.right, 0);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove click right of input same line"
+    #[test]
+    fn screen_prompt_click_move_click_right_of_input_same_line() {
+        // Set up: "> hello" where "> " is prompt and "hello" is input
+        // Clicking to the right of the 'o' should move cursor past the input
+
+        let mut s = clone_clear_init(20, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Write a prompt and input
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"hello").unwrap();
+
+        // Move cursor to start of input (column 2, the 'h')
+        s.cursor_absolute(2, 0);
+
+        // Click beyond the input (column 15) - should move to one past the 'o'
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 15, y: 0 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        assert_eq!(result.right, 5);
+        assert_eq!(result.left, 0);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove click right of input cursor at end"
+    #[test]
+    fn screen_prompt_click_move_click_right_of_input_cursor_at_end() {
+        let mut s = clone_clear_init(20, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Write a prompt and input
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"hello").unwrap();
+
+        // Cursor is already at column 7 (one past 'o') after writing
+        // Click beyond the input (column 15) - no movement needed since
+        // cursor is already at the end position
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 15, y: 0 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        assert_eq!(result.right, 0);
+        assert_eq!(result.left, 0);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove click right of input on lower line"
+    #[test]
+    fn screen_prompt_click_move_click_right_of_input_on_lower_line() {
+        let mut s = clone_clear_init(20, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Write a prompt and input
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"hello").unwrap();
+
+        // Move cursor to start of input (column 2, the 'h')
+        s.cursor_absolute(2, 0);
+
+        // Click on a lower line (row 1) - should move to end of input
+        // This is outside the prompt area so should clamp to end
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 5, y: 1 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        // From 'h', we need to pass e, l, l, o (4 cells) + 1 past end = 5
+        assert_eq!(result.right, 5);
+        assert_eq!(result.left, 0);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove click right of input cursor at end lower line"
+    #[test]
+    fn screen_prompt_click_move_click_right_of_input_cursor_at_end_lower_line() {
+        let mut s = clone_clear_init(20, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Write a prompt and input
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"hello").unwrap();
+
+        // Cursor is at column 7 after writing (one past 'o')
+        // Click on a lower line (row 1) - cursor already at end, no movement needed
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 5, y: 1 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        assert_eq!(result.right, 0);
+        assert_eq!(result.left, 0);
+
+        s.deinit();
+    }
+
+    // test "Screen: promptClickMove click right of input cursor on last char"
+    #[test]
+    fn screen_prompt_click_move_click_right_of_input_cursor_on_last_char() {
+        let mut s = clone_clear_init(20, 5, 0);
+
+        // Enable line click mode
+        s.semantic_prompt.click = SemanticClick::Cl(osc::semantic_prompt::Click::Line);
+
+        // Write a prompt and input
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"hello").unwrap();
+
+        // Move cursor to last input char (column 6, the 'o')
+        s.cursor_absolute(6, 0);
+
+        // Click beyond the input (column 15)
+        let click_pin = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 15, y: 0 }))
+            .unwrap();
+        let result = s.prompt_click_move(click_pin);
+
+        assert_eq!(result.right, 1);
+        assert_eq!(result.left, 0);
+
+        s.deinit();
+    }
+
+    // test "selectionString map allocation failure cleanup"
+    #[test]
+    fn selection_string_map_allocation_failure_cleanup() {
+        use rustty_util::tripwire::ResetMode;
+
+        // This test verifies that if toOwnedSlice fails when building
+        // the StringMap, we don't leak the already-allocated map.string.
+        let mut s = clone_clear_init(10, 5, 0);
+
+        s.test_write_string(b"hello").unwrap();
+
+        // Get a selection
+        let sel = Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 4, y: 0 }))
+                .unwrap(),
+            false,
+        );
+
+        // Trigger allocation failure on toOwnedSlice
+        let mut map: StringMap = StringMap {
+            string: Vec::new(),
+            map: Vec::new(),
+        };
+        SELECTION_STRING_TW.with(|tw| {
+            tw.borrow_mut()
+                .errorAlways(SelectionStringFp::CopyMap, OutOfMemory)
+        });
+        let result = s.selection_string(
+            Allocator,
+            SelectionString {
+                sel,
+                // PORT NOTE: the reference omits `.trim`, taking the
+                // `SelectionString.trim` field default of `true`.
+                trim: true,
+                map: Some(&mut map),
+            },
+        );
+        assert!(matches!(result, Err(OutOfMemory)));
+        SELECTION_STRING_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+
+        // If this test passes without memory leaks (when run with testing.allocator),
+        // it means the errdefer properly cleaned up map.string when toOwnedSlice failed.
 
         s.deinit();
     }
