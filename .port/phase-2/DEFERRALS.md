@@ -46,6 +46,26 @@ From **vt-9 (stream)**:
    Dispatch/SIMD phase, at which point the `nextSliceCapped` body's inner
    comments come with it.
 
+   **Full deferred-SIMD surface** (the ~23 G3b "missing" on stream.zig all map
+   here, EXPECTED until the SIMD phase): `nextSliceCapped`, `consumeAllEscapes`,
+   `consumeUntilGround`, the `nextSlice` SIMD arm, and the `cp_buf`/max-codepoints
+   chunk-size consts + their `@setEvalBranchQuota` test-comptime comments.
+   `initAlloc` is NOT part of this seam — it was ported (stream.rs `init_alloc`)
+   as part of closing the vt-9 comment-fidelity gap.
+
+## Deferred to rustty-vt-c (C ABI layer)
+
+Embedded C-ABI declarations inside vt `.zig` files belong to the C FFI layer
+(`terminal/c` → the separate `rustty-vt-c` crate, PORT_PLAN module 12), not the
+pure-VT `rustty-vt` crate:
+
+1. **`stream.zig` `c_union`** (the Action type's `lib.TaggedUnion(...)` C-ABI
+   representation, ref stream.zig:228-234) — carries the
+   "TODO: Before shipping an ABI-compatible libghostty, verify this." +
+   "This was just arbitrarily chosen for now." comments. Deferred to rustty-vt-c
+   (it needs the C-ABI tagged-union machinery + the `[16]u64` size verification).
+   Watch for more embedded `c_*`/`lib.TaggedUnion`/C-ABI decls in Screen/Terminal.
+
 ## Pre-existing deferred seams (lower priority, noted)
 - `sgr.rs` local `SepList` — can be retargeted to re-export `parser::SepList` (vt-5
   defined the canonical one). Cosmetic; tracked PORT NOTE in sgr.rs.

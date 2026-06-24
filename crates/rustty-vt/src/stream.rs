@@ -2,13 +2,13 @@
 //!
 //! PORTS: ghostty src/terminal/stream.zig
 //!
-//! PORT STATUS: stub
+//! PORT STATUS: done (vt-9) — the `Handler` trait, `Stream<H>`, `init`/`deinit`,
+//! `next`/`next_slice`, the action router, and the full
+//! `csi`/`osc`/`esc`/`dcs`/`apc` dispatch, with `TestHandler`s + all 38 tests.
 //!
-//! SKELETON (vt-9): this sub-batch defines the `Handler` trait, the `Stream<H>`
-//! type, `init`/`deinit`, `next`/`next_slice`, and the action router. The
-//! per-final dispatch bodies (`csi_dispatch`/`osc_dispatch`/`esc_dispatch`) are
-//! stubbed `todo!()` so the crate builds; the Dispatch phase fills them in
-//! against this exact `Handler` surface.
+//! DEFERRED SEAM: the SIMD `next_slice` fast path (`nextSliceCapped`, gated on
+//! `options::SIMD`) — see `.port/phase-2/DEFERRALS.md`. The scalar fallback (the
+//! reference's own non-SIMD arm) runs unconditionally and is fully exercised.
 
 // PORT NOTE: the dispatch routines are a verbatim retargeting of the reference's
 // `switch` statements (notably `switch (input.intermediates.len)` /
@@ -551,8 +551,27 @@ pub trait Handler {
 }
 
 /// Returns a type that can process a stream of tty control characters.
+/// This will call the `vt` function on type T with the following signature:
+///
+///   fn(comptime action: Action.Key, value: Action.Value(action)) void
+///
+/// The handler type T can choose to react to whatever actions it cares
+/// about in its pursuit of implementing a terminal emulator or other
+/// functionality.
+///
+/// The Handler type must also have a `deinit` function.
+///
+/// The "comptime" key is on purpose (vs. a standard Zig tagged union)
+/// because it allows the compiler to optimize away unimplemented actions.
+/// e.g. you don't need to pay a conditional branching cost on every single
+/// action because the Zig compiler codegens separate code paths for every
+/// single action at comptime.
 // pub fn Stream(comptime H: type) type { return struct { ... }; }
-// PORT NOTE: ported as the generic `Stream<H: Handler>` struct.
+// PORT NOTE: ported as the generic `Stream<H: Handler>` struct. The reference's
+// comptime per-action codegen is mirrored by Rust monomorphization: `Stream<H>`
+// is specialized per handler `H`, and the `Handler` trait's default no-op methods
+// let the optimizer drop unimplemented actions — the same "no conditional cost on
+// every action" property the comptime `vt` dispatch gives the reference.
 pub struct Stream<'a, H: Handler> {
     // handler: Handler,
     pub handler: H,
@@ -584,6 +603,20 @@ impl<'a, H: Handler> Stream<'a, H> {
             parser: Parser::init(),
             utf8decoder: UTF8Decoder::new(),
         }
+    }
+
+    /// Initialize the stream that supports heap allocation as necessary.
+    // pub fn initAlloc(alloc: Allocator, h: Handler) Self {
+    // PORT NOTE: `alloc` is the OSC parser's allocator (Zig `std.mem.Allocator`
+    // -> `ZigAllocatorRef`); threading it enables dynamic OSC buffer growth
+    // (e.g. arbitrarily large OSC 52 clipboard payloads).
+    pub fn init_alloc(alloc: rustty_lib::allocator::ZigAllocatorRef<'a>, h: H) -> Stream<'a, H> {
+        // var self: Self = .init(h);
+        let mut stream = Stream::init(h);
+        // self.parser.osc_parser.alloc = alloc;
+        stream.parser.osc_parser.alloc = Some(alloc);
+        // return self;
+        stream
     }
 
     // pub fn deinit(self: *Self) void {
@@ -765,6 +798,11 @@ impl<'a, H: Handler> Stream<'a, H> {
         }
 
         // We explicitly inline this call here for performance reasons.
+        //
+        // We do this rather than mark Parser.next as inline because doing
+        // that causes weird behavior in some tests- I'm not sure if they
+        // miscompile or it's just very counter-intuitive comptime stuff,
+        // but regardless, this is the easy solution.
         // const actions = @call(.always_inline, Parser.next, .{ &self.parser, c });
         let actions = self.parser.next(c);
 
@@ -785,7 +823,11 @@ impl<'a, H: Handler> Stream<'a, H> {
             // trait method (default returns `false` = do not skip). The
             // reference's `catch |err| ...` path (a handler may return an
             // error) is folded into the default: a faithful handler's
-            // `vt_raw` returns the skip flag directly.
+            // `vt_raw` returns the skip flag directly. The reference's error
+            // arm rationale:
+            //   // Always skip erroneous actions because we can't
+            //   // be sure...
+            //   break :err true;
             if self.handler.vt_raw(&action) {
                 continue;
             }
