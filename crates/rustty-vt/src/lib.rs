@@ -119,6 +119,7 @@ pub mod screen_set;
 // pub const Scrollbar = PageList.Scrollbar;
 // pub const Selection = @import("Selection.zig");
 pub mod selection;
+pub mod selection_codepoints;
 // pub const SelectionGesture = @import("SelectionGesture.zig");
 pub mod selection_gesture;
 // pub const SizeReportStyle = csi.SizeReportStyle;
