@@ -1731,7 +1731,248 @@ impl Screen {
     /// in the future but it is not a priority particularly because this scenario
     /// (resize) is difficult.
     pub fn resize(&mut self, opts: Resize) -> Result<(), OutOfMemory> {
-        todo!()
+        // defer self.assertIntegrity();
+        // PORT NOTE: Rust has no `defer`. The reference runs `assertIntegrity`
+        // at every exit; we wrap the body in a closure and run the assert after.
+        let result = self.resize_inner(opts);
+        self.assert_integrity();
+        result
+    }
+
+    fn resize_inner(&mut self, opts: Resize) -> Result<(), OutOfMemory> {
+        // PORT NOTE: the reference here sets `self.kitty_images.dirty = true`
+        // inside `if (comptime build_options.kitty_graphics)`. Kitty graphics
+        // `ImageStorage` is DEFERRED to vt-12 (the field is the
+        // `graphics_storage::Deferred` placeholder).
+
+        // Release the cursor style while resizing just
+        // in case the cursor ends up on a different page.
+        let cursor_style = self.cursor.style;
+        self.cursor.style = style::Style::default();
+        self.manual_style_update()
+            .expect("manualStyleUpdate to default cannot fail");
+        // PORT NOTE: the reference restores the cursor style in a `defer` block.
+        // Rust has no `defer`; we run the restore at every exit below by routing
+        // the rest of the body through `resize_body` and restoring after.
+        let body = self.resize_body(opts, cursor_style);
+
+        // defer { restore cursor style }
+        self.cursor.style = cursor_style;
+        if self.manual_style_update().is_err() {
+            // This failure should not happen because manualStyleUpdate
+            // handles page splitting, overflow, and more. This should only
+            // happen if we're out of RAM. In this case, we'll just degrade
+            // gracefully back to the default style.
+            // log.err("failed to update style on cursor reload err={}", .{err});
+            self.cursor.style = style::Style::default();
+            self.cursor.style_id = 0;
+        }
+
+        body
+    }
+
+    fn resize_body(
+        &mut self,
+        opts: Resize,
+        _cursor_style: style::Style,
+    ) -> Result<(), OutOfMemory> {
+        // If we have a hyperlink, release it from the old page
+        // and then we need to re-add it to the new page. This needs
+        // to happen because resize below typically reallocates a
+        // new page so the old hyperlink is invalid.
+        let hyperlink_ = self.cursor.hyperlink;
+        if self.cursor.hyperlink_id != 0 {
+            // Note we do NOT use endHyperlink because we want to keep
+            // our allocated self.cursor.hyperlink valid.
+            let page: *mut Page =
+                unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+            unsafe {
+                let base = (*page).memory_ptr();
+                (*page)
+                    .hyperlink_set
+                    .release(base, self.cursor.hyperlink_id);
+            }
+            self.cursor.hyperlink_id = 0;
+            self.cursor.hyperlink = None;
+        }
+
+        // We need to insert a tracked pin for our saved cursor so we can
+        // modify its X/Y for reflow.
+        let saved_cursor_pin: Option<*mut Pin> = match &self.saved_cursor {
+            None => None,
+            Some(sc) => {
+                match self.pages.pin(point::Point::Active(point::Coordinate {
+                    x: sc.x,
+                    y: sc.y as u32,
+                })) {
+                    None => None,
+                    Some(pin) => Some(self.pages.track_pin(pin)?),
+                }
+            }
+        };
+        // PORT NOTE: the reference `defer if (saved_cursor_pin) |p|
+        // self.pages.untrackPin(p);` is run at every exit below via
+        // `resize_finish`.
+        let result = self.resize_finish(opts, hyperlink_, saved_cursor_pin);
+        if let Some(p) = saved_cursor_pin {
+            self.pages.untrack_pin(p);
+        }
+        result
+    }
+
+    fn resize_finish(
+        &mut self,
+        opts: Resize,
+        hyperlink_: Option<*mut hyperlink::Hyperlink>,
+        saved_cursor_pin: Option<*mut Pin>,
+    ) -> Result<(), OutOfMemory> {
+        // If our cursor is on a prompt or input line, clear it so the shell can
+        // redraw it. This works with OSC 133 semantic prompts.
+        //
+        // We check cursor.semantic_content rather than page_row.semantic_prompt
+        // because some shells (e.g., Nu) mark input areas with OSC 133 B but don't
+        // mark continuation lines with k=s. If the input spans multiple lines and
+        // continuation lines are unmarked, checking only page_row.semantic_prompt
+        // would miss them. By checking semantic_content, we assume that if the
+        // cursor is on anything other than command output, we're at a prompt/input
+        // line and should clear from there.
+        if !matches!(opts.prompt_redraw, osc::semantic_prompt::Redraw::False)
+            && !matches!(
+                self.cursor.semantic_content,
+                pagepkg::SemanticContent::Output
+            )
+        {
+            'prompt: {
+                match opts.prompt_redraw {
+                    osc::semantic_prompt::Redraw::False => unreachable!(),
+
+                    // For `.last`, only clear the current line where the cursor is.
+                    // For `.true`, clear all prompt lines starting from the beginning.
+                    osc::semantic_prompt::Redraw::Last => {
+                        let page: *mut Page = unsafe {
+                            core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data)
+                        };
+                        let row = self.cursor.page_row;
+                        let cells = unsafe { (*page).get_cells(row) };
+                        self.clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
+                            &mut *cells
+                        });
+                    }
+
+                    osc::semantic_prompt::Redraw::True => {
+                        let start = {
+                            let mut it = unsafe { *self.cursor.page_pin }
+                                .prompt_iterator(pagelist::iter::Direction::LeftUp, None);
+                            match it.next() {
+                                Some(p) => p,
+                                None => {
+                                    // This should never happen because promptIterator
+                                    // should always find a prompt if we already verified
+                                    // our row is some kind of prompt.
+                                    // log.warn("cursor on prompt line but promptIterator
+                                    //   found no prompt", .{});
+                                    break 'prompt;
+                                }
+                            }
+                        };
+
+                        // Clear cells from our start down. We replace it with spaces,
+                        // and do not physically erase the rows (eraseRows) because the
+                        // shell is going to expect this space to be available.
+                        let mut it = start.row_iterator(pagelist::iter::Direction::RightDown, None);
+                        while let Some(pin) = it.next() {
+                            let page: *mut Page =
+                                unsafe { core::ptr::addr_of_mut!((*pin.node).data) };
+                            let row = pin.row_and_cell().row;
+                            let cells = unsafe { (*page).get_cells(row) };
+                            self.clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
+                                &mut *cells
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Perform the resize operation.
+        self.pages.resize(pagelist::resize::Resize {
+            rows: Some(opts.rows),
+            cols: Some(opts.cols),
+            reflow: opts.reflow,
+            cursor: Some(pagelist::resize::Cursor {
+                x: self.cursor.x,
+                y: self.cursor.y,
+                pin: Some(self.cursor.page_pin),
+            }),
+        })?;
+
+        // If we have no scrollback and we shrunk our rows, we must explicitly
+        // erase our history. This is because PageList always keeps at least
+        // a page size of history.
+        if self.no_scrollback {
+            self.pages.erase_history(None);
+        }
+
+        // If our cursor was updated, we do a full reload so all our cursor
+        // state is correct.
+        self.cursor_reload();
+
+        // If we reflowed a saved cursor, update it.
+        if let Some(p) = saved_cursor_pin {
+            // This should never fail because a non-null saved_cursor_pin
+            // implies a non-null saved_cursor.
+            let pin_val = unsafe { *p };
+            match self.pages.point_from_pin(point::Tag::Active, pin_val) {
+                Some(pt) => {
+                    let sc = self.saved_cursor.as_mut().unwrap();
+                    sc.x = pt.coord().x;
+                    sc.y = pt.coord().y as size::CellCountInt;
+
+                    // If we had pending wrap set and we're no longer at the end of
+                    // the line, we unset the pending wrap and move the cursor to
+                    // reflect the correct next position.
+                    if sc.pending_wrap && sc.x != opts.cols - 1 {
+                        sc.pending_wrap = false;
+                        sc.x += 1;
+                    }
+                }
+                None => {
+                    // I think this can happen if the screen is resized to be
+                    // less rows or less cols and our saved cursor moves outside
+                    // the active area. In this case, there isn't anything really
+                    // reasonable we can do so we just move the cursor to the
+                    // top-left. It may be reasonable to also move the cursor to
+                    // match the primary cursor. Any behavior is fine since this is
+                    // totally unspecified.
+                    let sc = self.saved_cursor.as_mut().unwrap();
+                    sc.x = 0;
+                    sc.y = 0;
+                    sc.pending_wrap = false;
+                }
+            }
+        }
+
+        // Fix up our hyperlink if we had one.
+        if let Some(link) = hyperlink_ {
+            let uri = unsafe { (*link).uri.clone() };
+            let id_ = match unsafe { &(*link).id } {
+                hyperlink::HyperlinkId::Explicit(v) => Some(v.clone()),
+                hyperlink::HyperlinkId::Implicit(_) => None,
+            };
+            if let Err(_err) = self.start_hyperlink(&uri, id_.as_deref()) {
+                // This shouldn't happen because startHyperlink should handle
+                // resizing. This only happens if we're truly out of RAM. Degrade
+                // to forgetting the hyperlink.
+                // log.err("failed to update hyperlink on resize err={}", .{err});
+            }
+
+            // Remove our old link
+            let boxed = unsafe { Box::from_raw(link) };
+            boxed.deinit();
+            drop(boxed);
+        }
+
+        Ok(())
     }
 
     pub fn set_attribute(
@@ -3780,5 +4021,2172 @@ mod tests {
 
         s.deinit();
         s2.deinit();
+    }
+
+    // PORT NOTE: small helpers to keep the resize tests close to the Zig form.
+    // `mkscreen` mirrors `try init(alloc, .{ ... })`; `dump`/`dump_unwrapped`
+    // mirror `try s.dumpStringAlloc(alloc, <point>)`.
+    fn mkscreen(
+        cols: size::CellCountInt,
+        rows: size::CellCountInt,
+        max_scrollback: usize,
+    ) -> Screen {
+        Screen::init(
+            Allocator,
+            Options {
+                cols,
+                rows,
+                max_scrollback,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap()
+    }
+
+    fn vp() -> point::Point {
+        point::Point::Viewport(point::Coordinate::default())
+    }
+    fn scr() -> point::Point {
+        point::Point::Screen(point::Coordinate::default())
+    }
+    fn act() -> point::Point {
+        point::Point::Active(point::Coordinate::default())
+    }
+    fn dump(s: &Screen, pt: point::Point) -> Vec<u8> {
+        s.dump_string_alloc(Allocator, pt).unwrap()
+    }
+
+    // test "Screen: resize (no reflow) more rows"
+    #[test]
+    fn screen_resize_no_reflow_more_rows() {
+        let mut s = mkscreen(10, 3, 0);
+        let str = b"1ABCD\n2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+
+        // Resize
+        s.resize(Resize {
+            cols: 10,
+            rows: 10,
+            reflow: false,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, str);
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize (no reflow) less rows"
+    #[test]
+    fn screen_resize_no_reflow_less_rows() {
+        let mut s = mkscreen(10, 3, 0);
+        let str = b"1ABCD\n2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+        assert_eq!(5, s.cursor.x);
+        assert_eq!(2, s.cursor.y);
+        s.resize(Resize {
+            cols: 10,
+            rows: 2,
+            reflow: false,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        // Since we shrunk, we should adjust our cursor
+        assert_eq!(5, s.cursor.x);
+        assert_eq!(1, s.cursor.y);
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize (no reflow) less rows trims blank lines"
+    #[test]
+    fn screen_resize_no_reflow_less_rows_trims_blank_lines() {
+        let mut s = mkscreen(10, 3, 0);
+        let str = b"1ABCD";
+        s.test_write_string(str).unwrap();
+
+        // Write only a background color into the remaining rows
+        for y in 1..s.pages.rows {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: 0,
+                    y: y as u32,
+                }))
+                .unwrap();
+            unsafe {
+                (*list_cell.cell).set_content_tag(pagepkg::ContentTag::BgColorRgb);
+                (*list_cell.cell).set_content_color_rgb(pagepkg::CellRgb {
+                    r: 0xFF,
+                    g: 0,
+                    b: 0,
+                });
+            }
+        }
+
+        let cursor = s.cursor;
+        s.resize(Resize {
+            cols: 6,
+            rows: 2,
+            reflow: false,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        // Cursor should not move
+        assert_eq!(cursor.x, s.cursor.x);
+        assert_eq!(cursor.y, s.cursor.y);
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize (no reflow) more rows trims blank lines"
+    #[test]
+    fn screen_resize_no_reflow_more_rows_trims_blank_lines() {
+        let mut s = mkscreen(10, 3, 0);
+        let str = b"1ABCD";
+        s.test_write_string(str).unwrap();
+
+        // Write only a background color into the remaining rows
+        for y in 1..s.pages.rows {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: 0,
+                    y: y as u32,
+                }))
+                .unwrap();
+            unsafe {
+                (*list_cell.cell).set_content_tag(pagepkg::ContentTag::BgColorRgb);
+                (*list_cell.cell).set_content_color_rgb(pagepkg::CellRgb {
+                    r: 0xFF,
+                    g: 0,
+                    b: 0,
+                });
+            }
+        }
+
+        let cursor = s.cursor;
+        s.resize(Resize {
+            cols: 10,
+            rows: 7,
+            reflow: false,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        // Cursor should not move
+        assert_eq!(cursor.x, s.cursor.x);
+        assert_eq!(cursor.y, s.cursor.y);
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize (no reflow) more cols"
+    #[test]
+    fn screen_resize_no_reflow_more_cols() {
+        let mut s = mkscreen(10, 3, 0);
+        let str = b"1ABCD\n2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+        s.resize(Resize {
+            cols: 20,
+            rows: 3,
+            reflow: false,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, str);
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize (no reflow) less cols"
+    #[test]
+    fn screen_resize_no_reflow_less_cols() {
+        let mut s = mkscreen(10, 3, 0);
+        let str = b"1ABCD\n2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+        s.resize(Resize {
+            cols: 4,
+            rows: 3,
+            reflow: false,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABC\n2EFG\n3IJK");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize (no reflow) more rows with scrollback cursor end"
+    #[test]
+    fn screen_resize_no_reflow_more_rows_with_scrollback_cursor_end() {
+        let mut s = mkscreen(7, 3, 2);
+        let str = b"1ABCD\n2EFGH\n3IJKL\n4ABCD\n5EFGH";
+        s.test_write_string(str).unwrap();
+        s.resize(Resize {
+            cols: 7,
+            rows: 10,
+            reflow: false,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, str);
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize (no reflow) less rows with scrollback"
+    #[test]
+    fn screen_resize_no_reflow_less_rows_with_scrollback() {
+        let mut s = mkscreen(7, 3, 2);
+        let str = b"1ABCD\n2EFGH\n3IJKL\n4ABCD\n5EFGH";
+        s.test_write_string(str).unwrap();
+        s.resize(Resize {
+            cols: 7,
+            rows: 2,
+            reflow: false,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"4ABCD\n5EFGH");
+        }
+        s.deinit();
+    }
+
+    // https://github.com/mitchellh/ghostty/issues/1030
+    // test "Screen: resize (no reflow) less rows with empty trailing"
+    #[test]
+    fn screen_resize_no_reflow_less_rows_with_empty_trailing() {
+        let mut s = mkscreen(5, 3, 5);
+        let str = b"1\n2\n3\n4\n5\n6\n7\n8";
+        s.test_write_string(str).unwrap();
+        s.scroll_clear().unwrap();
+        s.cursor_absolute(0, 0);
+        s.test_write_string(b"A\nB").unwrap();
+
+        let cursor = s.cursor;
+        s.resize(Resize {
+            cols: 5,
+            rows: 2,
+            reflow: false,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        assert_eq!(cursor.x, s.cursor.x);
+        assert_eq!(cursor.y, s.cursor.y);
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"A\nB");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize (no reflow) more rows with soft wrapping"
+    #[test]
+    fn screen_resize_no_reflow_more_rows_with_soft_wrapping() {
+        let mut s = mkscreen(2, 3, 3);
+        let str = b"1A2B\n3C4E\n5F6G";
+        s.test_write_string(str).unwrap();
+
+        // Every second row should be wrapped
+        for y in 0..6 {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate {
+                    x: 0,
+                    y: y as u32,
+                }))
+                .unwrap();
+            let wrapped = y % 2 == 0;
+            assert_eq!(wrapped, unsafe { (*list_cell.row).wrap() });
+        }
+
+        // Resize
+        s.resize(Resize {
+            cols: 2,
+            rows: 10,
+            reflow: false,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1A\n2B\n3C\n4E\n5F\n6G");
+        }
+
+        // Every second row should be wrapped
+        for y in 0..6 {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate {
+                    x: 0,
+                    y: y as u32,
+                }))
+                .unwrap();
+            let wrapped = y % 2 == 0;
+            assert_eq!(wrapped, unsafe { (*list_cell.row).wrap() });
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize more rows no scrollback"
+    #[test]
+    fn screen_resize_more_rows_no_scrollback() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = b"1ABCD\n2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+        let cursor = s.cursor;
+        s.resize(Resize {
+            cols: 5,
+            rows: 10,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        // Cursor should not move
+        assert_eq!(cursor.x, s.cursor.x);
+        assert_eq!(cursor.y, s.cursor.y);
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, str);
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize more rows with empty scrollback"
+    #[test]
+    fn screen_resize_more_rows_with_empty_scrollback() {
+        let mut s = mkscreen(5, 3, 10);
+        let str = b"1ABCD\n2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+        let cursor = s.cursor;
+        s.resize(Resize {
+            cols: 5,
+            rows: 10,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        // Cursor should not move
+        assert_eq!(cursor.x, s.cursor.x);
+        assert_eq!(cursor.y, s.cursor.y);
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, str);
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize more rows with populated scrollback"
+    #[test]
+    fn screen_resize_more_rows_with_populated_scrollback() {
+        let mut s = mkscreen(5, 3, 5);
+        let str = b"1ABCD\n2EFGH\n3IJKL\n4ABCD\n5EFGH";
+        s.test_write_string(str).unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"3IJKL\n4ABCD\n5EFGH");
+        }
+
+        // Set our cursor to be on the "4"
+        s.cursor_absolute(0, 1);
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: s.cursor.x,
+                    y: s.cursor.y as u32,
+                }))
+                .unwrap();
+            assert_eq!('4' as u21, unsafe { (*list_cell.cell).content_codepoint() });
+        }
+
+        // Resize
+        s.resize(Resize {
+            cols: 5,
+            rows: 10,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        // Cursor should still be on the "4"
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: s.cursor.x,
+                    y: s.cursor.y as u32,
+                }))
+                .unwrap();
+            assert_eq!('4' as u21, unsafe { (*list_cell.cell).content_codepoint() });
+        }
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"3IJKL\n4ABCD\n5EFGH");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols no reflow"
+    #[test]
+    fn screen_resize_more_cols_no_reflow() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = b"1ABCD\n2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+
+        let cursor = s.cursor;
+        s.resize(Resize {
+            cols: 10,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        // Cursor should not move
+        assert_eq!(cursor.x, s.cursor.x);
+        assert_eq!(cursor.y, s.cursor.y);
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, str);
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        s.deinit();
+    }
+
+    // https://github.com/mitchellh/ghostty/issues/272#issuecomment-1676038963
+    // test "Screen: resize more cols perfect split"
+    #[test]
+    fn screen_resize_more_cols_perfect_split() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = b"1ABCD2EFGH3IJKL";
+        s.test_write_string(str).unwrap();
+        s.resize(Resize {
+            cols: 10,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"1ABCD2EFGH\n3IJKL");
+        }
+        s.deinit();
+    }
+
+    // https://github.com/mitchellh/ghostty/issues/1159
+    // test "Screen: resize (no reflow) more cols with scrollback scrolled up"
+    #[test]
+    fn screen_resize_no_reflow_more_cols_with_scrollback_scrolled_up() {
+        let mut s = mkscreen(5, 3, 5);
+        let str = b"1\n2\n3\n4\n5\n6\n7\n8";
+        s.test_write_string(str).unwrap();
+
+        // Cursor at bottom
+        assert_eq!(1 as size::CellCountInt, s.cursor.x);
+        assert_eq!(2 as size::CellCountInt, s.cursor.y);
+
+        s.scroll(Scroll::DeltaRow(-4));
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2\n3\n4");
+        }
+
+        s.resize(Resize {
+            cols: 8,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+
+        // Cursor remains at bottom
+        assert_eq!(1 as size::CellCountInt, s.cursor.x);
+        assert_eq!(2 as size::CellCountInt, s.cursor.y);
+        s.deinit();
+    }
+
+    // https://github.com/mitchellh/ghostty/issues/1159
+    // test "Screen: resize (no reflow) less cols with scrollback scrolled up"
+    #[test]
+    fn screen_resize_no_reflow_less_cols_with_scrollback_scrolled_up() {
+        let mut s = mkscreen(5, 3, 5);
+        let str = b"1\n2\n3\n4\n5\n6\n7\n8";
+        s.test_write_string(str).unwrap();
+
+        // Cursor at bottom
+        assert_eq!(1 as size::CellCountInt, s.cursor.x);
+        assert_eq!(2 as size::CellCountInt, s.cursor.y);
+
+        s.scroll(Scroll::DeltaRow(-4));
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2\n3\n4");
+        }
+
+        s.resize(Resize {
+            cols: 4,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        {
+            let contents = dump(&s, act());
+            assert_eq!(contents, b"6\n7\n8");
+        }
+
+        // Cursor remains at bottom
+        assert_eq!(1 as size::CellCountInt, s.cursor.x);
+        assert_eq!(2 as size::CellCountInt, s.cursor.y);
+
+        // Old implementation doesn't do this but it makes sense to me:
+        // {
+        //     const contents = try s.dumpStringAlloc(alloc, .{ .viewport = .{} });
+        //     defer alloc.free(contents);
+        //     try testing.expectEqualStrings("2\n3\n4", contents);
+        // }
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols no reflow preserves semantic prompt"
+    #[test]
+    fn screen_resize_more_cols_no_reflow_preserves_semantic_prompt() {
+        let mut s = mkscreen(5, 3, 0);
+
+        // Set one of the rows to be a prompt
+        s.cursor_set_semantic_content(SemanticContentArg::Output);
+        s.test_write_string(b"1ABCD\n").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"2EFGH").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Output);
+        s.test_write_string(b"\n3IJKL").unwrap();
+
+        s.resize(Resize {
+            cols: 10,
+            rows: 3,
+            reflow: false,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        let expected = b"1ABCD\n2EFGH\n3IJKL";
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, expected);
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, expected);
+        }
+
+        // Our one row should still be a semantic prompt, the others should not.
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+                .unwrap();
+            assert!(unsafe { (*list_cell.row).semantic_prompt() } == pagepkg::SemanticPrompt::None);
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+                .unwrap();
+            assert!(
+                unsafe { (*list_cell.row).semantic_prompt() } == pagepkg::SemanticPrompt::Prompt
+            );
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 2 }))
+                .unwrap();
+            assert!(unsafe { (*list_cell.row).semantic_prompt() } == pagepkg::SemanticPrompt::None);
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols with reflow that fits full width"
+    #[test]
+    fn screen_resize_more_cols_with_reflow_that_fits_full_width() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = b"1ABCD2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+
+        // Verify we soft wrapped
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD\n2EFGH\n3IJKL");
+        }
+
+        // Let's put our cursor on row 2, where the soft wrap is
+        s.cursor_absolute(0, 1);
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: s.cursor.x,
+                    y: s.cursor.y as u32,
+                }))
+                .unwrap();
+            assert_eq!('2' as u21, unsafe { (*list_cell.cell).content_codepoint() });
+        }
+
+        // Resize and verify we undid the soft wrap because we have space now
+        s.resize(Resize {
+            cols: 10,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, str);
+        }
+
+        // Our cursor should've moved
+        assert_eq!(5, s.cursor.x);
+        assert_eq!(0, s.cursor.y);
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols with reflow that ends in newline"
+    #[test]
+    fn screen_resize_more_cols_with_reflow_that_ends_in_newline() {
+        let mut s = mkscreen(6, 3, 0);
+        let str = b"1ABCD2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+
+        // Verify we soft wrapped
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD2\nEFGH\n3IJKL");
+        }
+
+        // Let's put our cursor on the last row
+        s.cursor_absolute(0, 2);
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: s.cursor.x,
+                    y: s.cursor.y as u32,
+                }))
+                .unwrap();
+            assert_eq!('3' as u21, unsafe { (*list_cell.cell).content_codepoint() });
+        }
+
+        // Resize and verify we undid the soft wrap because we have space now
+        s.resize(Resize {
+            cols: 10,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, str);
+        }
+
+        // Our cursor should still be on the 3
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: s.cursor.x,
+                    y: s.cursor.y as u32,
+                }))
+                .unwrap();
+            assert_eq!('3' as u21, unsafe { (*list_cell.cell).content_codepoint() });
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols with reflow that forces more wrapping"
+    #[test]
+    fn screen_resize_more_cols_with_reflow_that_forces_more_wrapping() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = b"1ABCD2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+
+        // Let's put our cursor on row 2, where the soft wrap is
+        s.cursor_absolute(0, 1);
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: s.cursor.x,
+                    y: s.cursor.y as u32,
+                }))
+                .unwrap();
+            assert_eq!('2' as u21, unsafe { (*list_cell.cell).content_codepoint() });
+        }
+
+        // Verify we soft wrapped
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD\n2EFGH\n3IJKL");
+        }
+
+        // Resize and verify we undid the soft wrap because we have space now
+        s.resize(Resize {
+            cols: 7,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD2E\nFGH\n3IJKL");
+        }
+
+        // Our cursor should've moved
+        assert_eq!(5 as size::CellCountInt, s.cursor.x);
+        assert_eq!(0 as size::CellCountInt, s.cursor.y);
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols with reflow that unwraps multiple times"
+    #[test]
+    fn screen_resize_more_cols_with_reflow_that_unwraps_multiple_times() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = b"1ABCD2EFGH3IJKL";
+        s.test_write_string(str).unwrap();
+
+        // Let's put our cursor on row 2, where the soft wrap is
+        s.cursor_absolute(0, 2);
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: s.cursor.x,
+                    y: s.cursor.y as u32,
+                }))
+                .unwrap();
+            assert_eq!('3' as u21, unsafe { (*list_cell.cell).content_codepoint() });
+        }
+
+        // Verify we soft wrapped
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD\n2EFGH\n3IJKL");
+        }
+
+        // Resize and verify we undid the soft wrap because we have space now
+        s.resize(Resize {
+            cols: 15,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD2EFGH3IJKL");
+        }
+
+        // Our cursor should've moved
+        assert_eq!(10 as size::CellCountInt, s.cursor.x);
+        assert_eq!(0 as size::CellCountInt, s.cursor.y);
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols with populated scrollback"
+    #[test]
+    fn screen_resize_more_cols_with_populated_scrollback() {
+        let mut s = mkscreen(5, 3, 5);
+        let str = b"1ABCD\n2EFGH\n3IJKL\n4ABCD5EFGH";
+        s.test_write_string(str).unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"3IJKL\n4ABCD\n5EFGH");
+        }
+
+        // // Set our cursor to be on the "5"
+        s.cursor_absolute(0, 2);
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: s.cursor.x,
+                    y: s.cursor.y as u32,
+                }))
+                .unwrap();
+            assert_eq!('5' as u21, unsafe { (*list_cell.cell).content_codepoint() });
+        }
+
+        // Resize
+        s.resize(Resize {
+            cols: 10,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL\n4ABCD5EFGH");
+        }
+
+        // Cursor should still be on the "5"
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: s.cursor.x,
+                    y: s.cursor.y as u32,
+                }))
+                .unwrap();
+            assert_eq!('5' as u21, unsafe { (*list_cell.cell).content_codepoint() });
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols bounded scrollback keeps viewport valid"
+    #[test]
+    fn screen_resize_more_cols_bounded_scrollback_keeps_viewport_valid() {
+        // Regression test for issue #12298.
+        //
+        // This needs to live at the Screen layer rather than PageList because the
+        // bad state only appears once Screen forwards the active cursor into the
+        // resize path. A direct PageList resize repro does not hit the same bug.
+        let mut s = mkscreen(2, 10, 10_000);
+
+        // Build 30 rows of scrollback on top of our 10-row viewport so we have a
+        // 40-row screen with history above the active area.
+        for _ in 0..30 {
+            let _ = s.pages.grow().unwrap();
+        }
+        s.cursor_reload();
+        assert_eq!(40usize, s.pages.scrollbar().total);
+
+        // Fill the entire screen with two-row wrapped runs:
+        // - even rows mark the end of a wrapped line
+        // - odd rows mark the continuation
+        //
+        // With 2 columns, each logical line occupies two rows. When we grow to 4
+        // columns with reflow enabled, those pairs unwrap back into single rows.
+        // That cuts the total row count down and is what stresses the viewport pin.
+        let cols = s.pages.cols;
+        let mut it = s
+            .pages
+            .page_iterator(pagelist::iter::Direction::RightDown, scr(), None);
+        while let Some(chunk) = it.next() {
+            let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*chunk.node).data) };
+            for y in chunk.start..chunk.end {
+                let rac = unsafe { (*page).get_row_and_cell(0, y as usize) };
+                if y % 2 == 0 {
+                    unsafe { (*rac.row).set_wrap(true) };
+                } else {
+                    unsafe { (*rac.row).set_wrap_continuation(true) };
+                }
+
+                for x in 0..cols {
+                    let rac = unsafe { (*page).get_row_and_cell(x as usize, y as usize) };
+                    unsafe { (*rac.cell).set_content_codepoint('A' as u21) };
+                }
+            }
+        }
+
+        // Pin the viewport to a history row just above the active area.
+        s.pages.scroll(pagelist::scroll::Scroll::Pin(
+            s.pages
+                .pin(point::Point::Screen(point::Coordinate { x: 0, y: 28 }))
+                .unwrap(),
+        ));
+        assert!(s.pages.viewport == pagelist::Viewport::Pin);
+        assert!(s.pages.get_bottom_right(point::Tag::Viewport).is_some());
+
+        // Growing columns triggers reflow, which unwraps the synthetic wrapped
+        // rows above. This used to panic during the resize path.
+        let rows = s.pages.rows;
+        s.resize(Resize {
+            cols: 4,
+            rows,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        // After the fix, the viewport is normalized back to the active area as
+        // soon as the pinned row lands there, so viewport queries remain valid.
+        assert_eq!(4usize, s.pages.cols as usize);
+        assert!(s.pages.scrollbar().total < 40);
+        assert!(s.pages.viewport == pagelist::Viewport::Active);
+        assert!(s.pages.get_bottom_right(point::Tag::Viewport).is_some());
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols with reflow"
+    #[test]
+    fn screen_resize_more_cols_with_reflow() {
+        let mut s = mkscreen(2, 3, 5);
+        let str = b"1ABC\n2DEF\n3ABC\n4DEF";
+        s.test_write_string(str).unwrap();
+
+        // Let's put our cursor on row 2, where the soft wrap is
+        s.cursor_absolute(0, 2);
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: s.cursor.x,
+                    y: s.cursor.y as u32,
+                }))
+                .unwrap();
+            assert_eq!('E' as u32, unsafe {
+                (*list_cell.cell).content_codepoint() as u32
+            });
+        }
+
+        // Verify we soft wrapped
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"BC\n4D\nEF");
+        }
+
+        // Resize and verify we undid the soft wrap because we have space now
+        s.resize(Resize {
+            cols: 7,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"1ABC\n2DEF\n3ABC\n4DEF");
+        }
+
+        // Our cursor should've moved
+        assert_eq!(2 as size::CellCountInt, s.cursor.x);
+        assert_eq!(2 as size::CellCountInt, s.cursor.y);
+        s.deinit();
+    }
+
+    // test "Screen: resize more rows and cols with wrapping"
+    #[test]
+    fn screen_resize_more_rows_and_cols_with_wrapping() {
+        let mut s = mkscreen(2, 4, 0);
+        let str = b"1A2B\n3C4D";
+        s.test_write_string(str).unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1A\n2B\n3C\n4D");
+        }
+
+        s.resize(Resize {
+            cols: 5,
+            rows: 10,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        // Cursor should move due to wrapping
+        assert_eq!(3 as size::CellCountInt, s.cursor.x);
+        assert_eq!(1 as size::CellCountInt, s.cursor.y);
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, str);
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize less rows no scrollback"
+    #[test]
+    fn screen_resize_less_rows_no_scrollback() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = b"1ABCD\n2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+
+        s.cursor_absolute(0, 0);
+        let cursor = s.cursor;
+        s.resize(Resize {
+            cols: 5,
+            rows: 1,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        // Cursor should not move
+        assert_eq!(cursor.x, s.cursor.x);
+        assert_eq!(cursor.y, s.cursor.y);
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"3IJKL");
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"3IJKL");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize less rows moving cursor"
+    #[test]
+    fn screen_resize_less_rows_moving_cursor() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = b"1ABCD\n2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+
+        // Put our cursor on the last line
+        s.cursor_absolute(1, 2);
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: s.cursor.x,
+                    y: s.cursor.y as u32,
+                }))
+                .unwrap();
+            assert_eq!('I' as u32, unsafe {
+                (*list_cell.cell).content_codepoint() as u32
+            });
+        }
+
+        // Resize
+        s.resize(Resize {
+            cols: 5,
+            rows: 1,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"3IJKL");
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"3IJKL");
+        }
+
+        // Cursor should be on the last line
+        assert_eq!(1 as size::CellCountInt, s.cursor.x);
+        assert_eq!(0 as size::CellCountInt, s.cursor.y);
+        s.deinit();
+    }
+
+    // test "Screen: resize less rows with empty scrollback"
+    #[test]
+    fn screen_resize_less_rows_with_empty_scrollback() {
+        let mut s = mkscreen(5, 3, 10);
+        let str = b"1ABCD\n2EFGH\n3IJKL";
+        s.test_write_string(str).unwrap();
+        s.resize(Resize {
+            cols: 5,
+            rows: 1,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"3IJKL");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize less rows with populated scrollback"
+    #[test]
+    fn screen_resize_less_rows_with_populated_scrollback() {
+        let mut s = mkscreen(5, 3, 5);
+        let str = b"1ABCD\n2EFGH\n3IJKL\n4ABCD\n5EFGH";
+        s.test_write_string(str).unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"3IJKL\n4ABCD\n5EFGH");
+        }
+
+        // Resize
+        s.resize(Resize {
+            cols: 5,
+            rows: 1,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"5EFGH");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize less rows with full scrollback"
+    #[test]
+    fn screen_resize_less_rows_with_full_scrollback() {
+        let mut s = mkscreen(5, 3, 3);
+        let str = b"00000\n1ABCD\n2EFGH\n3IJKL\n4ABCD\n5EFGH";
+        s.test_write_string(str).unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"3IJKL\n4ABCD\n5EFGH");
+        }
+
+        assert_eq!(4 as size::CellCountInt, s.cursor.x);
+        assert_eq!(2 as size::CellCountInt, s.cursor.y);
+
+        // Resize
+        s.resize(Resize {
+            cols: 5,
+            rows: 2,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        // Cursor should stay in the same relative place (bottom of the
+        // screen, same character).
+        assert_eq!(4 as size::CellCountInt, s.cursor.x);
+        assert_eq!(1 as size::CellCountInt, s.cursor.y);
+
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"00000\n1ABCD\n2EFGH\n3IJKL\n4ABCD\n5EFGH");
+        }
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"4ABCD\n5EFGH");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize less cols no reflow"
+    #[test]
+    fn screen_resize_less_cols_no_reflow() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = b"1AB\n2EF\n3IJ";
+        s.test_write_string(str).unwrap();
+
+        s.cursor_absolute(0, 0);
+        let cursor = s.cursor;
+        s.resize(Resize {
+            cols: 3,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        // Cursor should not move
+        assert_eq!(cursor.x, s.cursor.x);
+        assert_eq!(cursor.y, s.cursor.y);
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, str);
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize less cols with reflow but row space"
+    #[test]
+    fn screen_resize_less_cols_with_reflow_but_row_space() {
+        let mut s = mkscreen(5, 3, 1);
+        let str = b"1ABCD";
+        s.test_write_string(str).unwrap();
+
+        // Put our cursor on the end
+        s.cursor_absolute(4, 0);
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: s.cursor.x,
+                    y: s.cursor.y as u32,
+                }))
+                .unwrap();
+            assert_eq!('D' as u32, unsafe {
+                (*list_cell.cell).content_codepoint() as u32
+            });
+        }
+
+        s.resize(Resize {
+            cols: 3,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1AB\nCD");
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"1AB\nCD");
+        }
+
+        // Cursor should be on the last line
+        assert_eq!(1 as size::CellCountInt, s.cursor.x);
+        assert_eq!(1 as size::CellCountInt, s.cursor.y);
+        s.deinit();
+    }
+
+    // test "Screen: resize less cols with reflow with trimmed rows"
+    #[test]
+    fn screen_resize_less_cols_with_reflow_with_trimmed_rows() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = b"3IJKL\n4ABCD\n5EFGH";
+        s.test_write_string(str).unwrap();
+        s.resize(Resize {
+            cols: 3,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"CD\n5EF\nGH");
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"CD\n5EF\nGH");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize less cols with reflow with trimmed rows and scrollback"
+    #[test]
+    fn screen_resize_less_cols_with_reflow_with_trimmed_rows_and_scrollback() {
+        let mut s = mkscreen(5, 3, 1);
+        let str = b"3IJKL\n4ABCD\n5EFGH";
+        s.test_write_string(str).unwrap();
+        s.resize(Resize {
+            cols: 3,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"CD\n5EF\nGH");
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"3IJ\nKL\n4AB\nCD\n5EF\nGH");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize less cols with reflow previously wrapped"
+    #[test]
+    fn screen_resize_less_cols_with_reflow_previously_wrapped() {
+        let mut s = mkscreen(5, 3, 0);
+        let str = b"3IJKL4ABCD5EFGH";
+        s.test_write_string(str).unwrap();
+
+        // Check
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"3IJKL\n4ABCD\n5EFGH");
+        }
+
+        s.resize(Resize {
+            cols: 3,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        // {
+        //     const contents = try s.testString(alloc, .viewport);
+        //     defer alloc.free(contents);
+        //     const expected = "CD\n5EF\nGH";
+        //     try testing.expectEqualStrings(expected, contents);
+        // }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"ABC\nD5E\nFGH");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize less cols with reflow and scrollback"
+    #[test]
+    fn screen_resize_less_cols_with_reflow_and_scrollback() {
+        let mut s = mkscreen(5, 3, 5);
+        let str = b"1A\n2B\n3C\n4D\n5E";
+        s.test_write_string(str).unwrap();
+
+        // Put our cursor on the end
+        s.cursor_absolute(1, s.pages.rows - 1);
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: s.cursor.x,
+                    y: s.cursor.y as u32,
+                }))
+                .unwrap();
+            assert_eq!('E' as u32, unsafe {
+                (*list_cell.cell).content_codepoint() as u32
+            });
+        }
+
+        s.resize(Resize {
+            cols: 3,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"3C\n4D\n5E");
+        }
+
+        // Cursor should be on the last line
+        assert_eq!(1 as size::CellCountInt, s.cursor.x);
+        assert_eq!(2 as size::CellCountInt, s.cursor.y);
+        s.deinit();
+    }
+
+    // test "Screen: resize less cols with reflow previously wrapped and scrollback"
+    #[test]
+    fn screen_resize_less_cols_with_reflow_previously_wrapped_and_scrollback() {
+        let mut s = mkscreen(5, 3, 2);
+        let str = b"1ABCD2EFGH3IJKL4ABCD5EFGH";
+        s.test_write_string(str).unwrap();
+
+        // Check
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"3IJKL\n4ABCD\n5EFGH");
+        }
+
+        // Put our cursor on the end
+        s.cursor_absolute(s.pages.cols - 1, s.pages.rows - 1);
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: s.cursor.x,
+                    y: s.cursor.y as u32,
+                }))
+                .unwrap();
+            assert_eq!('H' as u32, unsafe {
+                (*list_cell.cell).content_codepoint() as u32
+            });
+        }
+
+        s.resize(Resize {
+            cols: 3,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"CD5\nEFG\nH");
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"1AB\nCD2\nEFG\nH3I\nJKL\n4AB\nCD5\nEFG\nH");
+        }
+
+        // Cursor should be on the last line
+        assert_eq!(0 as size::CellCountInt, s.cursor.x);
+        assert_eq!(2 as size::CellCountInt, s.cursor.y);
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate {
+                    x: s.cursor.x,
+                    y: s.cursor.y as u32,
+                }))
+                .unwrap();
+            assert_eq!('H' as u32, unsafe {
+                (*list_cell.cell).content_codepoint() as u32
+            });
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize less cols with scrollback keeps cursor row"
+    #[test]
+    fn screen_resize_less_cols_with_scrollback_keeps_cursor_row() {
+        let mut s = mkscreen(5, 3, 5);
+        let str = b"1A\n2B\n3C\n4D\n5E";
+        s.test_write_string(str).unwrap();
+
+        // Lets do a scroll and clear operation
+        s.scroll_clear().unwrap();
+
+        // Move our cursor to the beginning
+        s.cursor_absolute(0, 0);
+
+        s.resize(Resize {
+            cols: 3,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"");
+        }
+
+        // Cursor should be on the last line
+        assert_eq!(0 as size::CellCountInt, s.cursor.x);
+        assert_eq!(0 as size::CellCountInt, s.cursor.y);
+        s.deinit();
+    }
+
+    // test "Screen: resize more rows, less cols with reflow with scrollback"
+    #[test]
+    fn screen_resize_more_rows_less_cols_with_reflow_with_scrollback() {
+        let mut s = mkscreen(5, 3, 3);
+        let str = b"1ABCD\n2EFGH3IJKL\n4MNOP";
+        s.test_write_string(str).unwrap();
+
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"1ABCD\n2EFGH\n3IJKL\n4MNOP");
+        }
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL\n4MNOP");
+        }
+
+        s.resize(Resize {
+            cols: 2,
+            rows: 10,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"BC\nD\n2E\nFG\nH3\nIJ\nKL\n4M\nNO\nP");
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"1A\nBC\nD\n2E\nFG\nH3\nIJ\nKL\n4M\nNO\nP");
+        }
+        s.deinit();
+    }
+
+    // This seems like it should work fine but for some reason in practice
+    // in the initial implementation I found this bug! This is a regression
+    // test for that.
+    // test "Screen: resize more rows then shrink again"
+    #[test]
+    fn screen_resize_more_rows_then_shrink_again() {
+        let mut s = mkscreen(5, 3, 10);
+        let str = b"1ABC";
+        s.test_write_string(str).unwrap();
+
+        // Grow
+        s.resize(Resize {
+            cols: 5,
+            rows: 10,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, str);
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+
+        // Shrink
+        s.resize(Resize {
+            cols: 5,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, str);
+        }
+
+        // Grow again
+        s.resize(Resize {
+            cols: 5,
+            rows: 10,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, str);
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize less cols to eliminate wide char"
+    #[test]
+    fn screen_resize_less_cols_to_eliminate_wide_char() {
+        let mut s = mkscreen(2, 1, 0);
+        let str = "😀".as_bytes();
+        s.test_write_string(str).unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 0, y: 0 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::Wide, unsafe { (*list_cell.cell).wide() });
+            assert_eq!('😀' as u21, unsafe {
+                (*list_cell.cell).content_codepoint()
+            });
+        }
+
+        // Resize to 1 column can't fit a wide char. So it should be deleted.
+        s.resize(Resize {
+            cols: 1,
+            rows: 1,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"");
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 0, y: 0 }))
+                .unwrap();
+            assert_eq!(0 as u21, unsafe { (*list_cell.cell).content_codepoint() });
+            assert_eq!(pagepkg::Wide::Narrow, unsafe { (*list_cell.cell).wide() });
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize less cols to wrap wide char"
+    #[test]
+    fn screen_resize_less_cols_to_wrap_wide_char() {
+        let mut s = mkscreen(3, 3, 0);
+        let str = "x😀".as_bytes();
+        s.test_write_string(str).unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 1, y: 0 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::Wide, unsafe { (*list_cell.cell).wide() });
+            assert_eq!('😀' as u21, unsafe {
+                (*list_cell.cell).content_codepoint()
+            });
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 2, y: 0 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::SpacerTail, unsafe {
+                (*list_cell.cell).wide()
+            });
+        }
+
+        s.resize(Resize {
+            cols: 2,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, "x\n😀".as_bytes());
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 1, y: 0 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::SpacerHead, unsafe {
+                (*list_cell.cell).wide()
+            });
+            assert!(unsafe { (*list_cell.row).wrap() });
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize less cols to eliminate wide char with row space"
+    #[test]
+    fn screen_resize_less_cols_to_eliminate_wide_char_with_row_space() {
+        let mut s = mkscreen(2, 2, 0);
+        let str = "😀".as_bytes();
+        s.test_write_string(str).unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 0, y: 0 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::Wide, unsafe { (*list_cell.cell).wide() });
+            assert_eq!('😀' as u21, unsafe {
+                (*list_cell.cell).content_codepoint()
+            });
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 1, y: 0 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::SpacerTail, unsafe {
+                (*list_cell.cell).wide()
+            });
+        }
+
+        s.resize(Resize {
+            cols: 1,
+            rows: 2,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize less cols reflows cursor after wrapped text"
+    #[test]
+    fn screen_resize_less_cols_reflows_cursor_after_wrapped_text() {
+        let mut s = mkscreen(50, 7, 0);
+
+        for _ in 0..30 {
+            s.test_write_string(b"a").unwrap();
+        }
+
+        assert_eq!(0, s.cursor.y);
+        assert_eq!(30, s.cursor.x);
+
+        s.resize(Resize {
+            cols: 25,
+            rows: 7,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        assert_eq!(1, s.cursor.y);
+        assert_eq!(5, s.cursor.x);
+        s.deinit();
+    }
+
+    // test "Screen: resize less cols reflows cursor after empty cells"
+    #[test]
+    fn screen_resize_less_cols_reflows_cursor_after_empty_cells() {
+        let mut s = mkscreen(10, 3, 0);
+
+        s.test_write_string(b"abc").unwrap();
+        s.cursor_right(6);
+
+        assert_eq!(0, s.cursor.y);
+        assert_eq!(9, s.cursor.x);
+
+        s.resize(Resize {
+            cols: 5,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+
+        assert_eq!(1, s.cursor.y);
+        assert_eq!(4, s.cursor.x);
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols with wide spacer head"
+    #[test]
+    fn screen_resize_more_cols_with_wide_spacer_head() {
+        let mut s = mkscreen(3, 2, 0);
+        let str = "  😀".as_bytes();
+        s.test_write_string(str).unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, "  \n😀".as_bytes());
+        }
+
+        // So this is the key point: we end up with a wide spacer head at
+        // the end of row 1, then the emoji, then a wide spacer tail on row 2.
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 2, y: 0 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::SpacerHead, unsafe {
+                (*list_cell.cell).wide()
+            });
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 0, y: 1 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::Wide, unsafe { (*list_cell.cell).wide() });
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 1, y: 1 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::SpacerTail, unsafe {
+                (*list_cell.cell).wide()
+            });
+        }
+
+        s.resize(Resize {
+            cols: 4,
+            rows: 2,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 2, y: 0 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::Wide, unsafe { (*list_cell.cell).wide() });
+            assert_eq!('😀' as u21, unsafe {
+                (*list_cell.cell).content_codepoint()
+            });
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 3, y: 0 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::SpacerTail, unsafe {
+                (*list_cell.cell).wide()
+            });
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols with wide spacer head multiple lines"
+    #[test]
+    fn screen_resize_more_cols_with_wide_spacer_head_multiple_lines() {
+        let mut s = mkscreen(3, 3, 0);
+        let str = "xxxyy😀".as_bytes();
+        s.test_write_string(str).unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, "xxx\nyy\n😀".as_bytes());
+        }
+
+        // Similar to the "wide spacer head" test, but this time we'er going
+        // to increase our columns such that multiple rows are unwrapped.
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 2, y: 1 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::SpacerHead, unsafe {
+                (*list_cell.cell).wide()
+            });
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 0, y: 2 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::Wide, unsafe { (*list_cell.cell).wide() });
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 1, y: 2 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::SpacerTail, unsafe {
+                (*list_cell.cell).wide()
+            });
+        }
+
+        s.resize(Resize {
+            cols: 8,
+            rows: 2,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, str);
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 5, y: 0 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::Wide, unsafe { (*list_cell.cell).wide() });
+            assert_eq!('😀' as u21, unsafe {
+                (*list_cell.cell).content_codepoint()
+            });
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 6, y: 0 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::SpacerTail, unsafe {
+                (*list_cell.cell).wide()
+            });
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols requiring a wide spacer head"
+    #[test]
+    fn screen_resize_more_cols_requiring_a_wide_spacer_head() {
+        let mut s = mkscreen(2, 2, 0);
+        let str = "xx😀".as_bytes();
+        s.test_write_string(str).unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, "xx\n😀".as_bytes());
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 0, y: 1 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::Wide, unsafe { (*list_cell.cell).wide() });
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 1, y: 1 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::SpacerTail, unsafe {
+                (*list_cell.cell).wide()
+            });
+        }
+
+        // This resizes to 3 columns, which isn't enough space for our wide
+        // char to enter row 1. But we need to mark the wide spacer head on the
+        // end of the first row since we're wrapping to the next row.
+        s.resize(Resize {
+            cols: 3,
+            rows: 2,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, "xx\n😀".as_bytes());
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 2, y: 0 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::SpacerHead, unsafe {
+                (*list_cell.cell).wide()
+            });
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 0, y: 1 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::Wide, unsafe { (*list_cell.cell).wide() });
+            assert_eq!('😀' as u21, unsafe {
+                (*list_cell.cell).content_codepoint()
+            });
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Screen(point::Coordinate { x: 1, y: 1 }))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::SpacerTail, unsafe {
+                (*list_cell.cell).wide()
+            });
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols with cursor at prompt"
+    #[test]
+    fn screen_resize_more_cols_with_cursor_at_prompt() {
+        let mut s = mkscreen(10, 3, 5);
+
+        s.test_write_string(b"ABCDE\n").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(SemanticContentInput::ClearEol));
+        s.test_write_string(b"echo").unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"ABCDE\n> echo");
+        }
+
+        s.resize(Resize {
+            cols: 20,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::True,
+        })
+        .unwrap();
+
+        // Cursor should not move
+        assert_eq!(6, s.cursor.x);
+        assert_eq!(1, s.cursor.y);
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"ABCDE");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize more cols with cursor not at prompt"
+    #[test]
+    fn screen_resize_more_cols_with_cursor_not_at_prompt() {
+        let mut s = mkscreen(10, 3, 5);
+
+        s.test_write_string(b"ABCDE\n").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(SemanticContentInput::ClearEol));
+        s.test_write_string(b"echo\n").unwrap();
+        s.test_write_string(b"output").unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"ABCDE\n> echo\noutput");
+        }
+
+        s.resize(Resize {
+            cols: 20,
+            rows: 3,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::True,
+        })
+        .unwrap();
+
+        // Cursor should not move
+        assert_eq!(6, s.cursor.x);
+        assert_eq!(2, s.cursor.y);
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"ABCDE\n> echo\noutput");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize with prompt_redraw last clears only one line"
+    #[test]
+    fn screen_resize_with_prompt_redraw_last_clears_only_one_line() {
+        let mut s = mkscreen(10, 4, 5);
+
+        s.test_write_string(b"ABCDE\n").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"> ").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Input(
+            SemanticContentInput::ClearExplicit,
+        ));
+        s.test_write_string(b"hello\n").unwrap();
+        s.test_write_string(b"world").unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"ABCDE\n> hello\nworld");
+        }
+
+        // Cursor is at end of "world" line with semantic_content = .input
+        s.resize(Resize {
+            cols: 20,
+            rows: 4,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::Last,
+        })
+        .unwrap();
+
+        // With .last, only the current line where cursor is should be cleared
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"ABCDE\n> hello");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: resize with prompt_redraw last multiline prompt clears only last line"
+    #[test]
+    fn screen_resize_with_prompt_redraw_last_multiline_prompt_clears_only_last_line() {
+        let mut s = mkscreen(20, 5, 5);
+
+        // Create a 3-line prompt: 1 initial + 2 continuation lines
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Initial,
+        ));
+        s.test_write_string(b"line1\n").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Continuation,
+        ));
+        s.test_write_string(b"line2\n").unwrap();
+        s.cursor_set_semantic_content(SemanticContentArg::Prompt(
+            osc::semantic_prompt::PromptKind::Continuation,
+        ));
+        s.test_write_string(b"line3").unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"line1\nline2\nline3");
+        }
+
+        // Cursor is at end of line3 (the last continuation line)
+        s.resize(Resize {
+            cols: 30,
+            rows: 5,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::Last,
+        })
+        .unwrap();
+
+        // With .last, only line3 (where cursor is) should be cleared
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"line1\nline2");
+        }
+        s.deinit();
     }
 }
