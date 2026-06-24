@@ -10,8 +10,8 @@ units (structs→methods→tests, the PageList discipline), Screen/Terminal last
 | Batch | Modules | ~tests | Notes / risk |
 |---|---|---|---|
 | **vt-4** | selection_codepoints, cursor, focus, build_options+options, mouse (strip gobject), UTF8Decoder, Tabstops, dcs | ~21 | Trivial unblocked leaves, no cycles. **NEXT.** |
-| vt-5 | parse_table + Parser | 26 | Mutual cycle (struct/table-first). Parser refs an osc Action type → placeholder or order after vt-6. |
-| vt-6 | osc + encoding + 15 osc/parsers/* | 233 | Parent↔child cycle (all parsers import osc.zig). osc9 (61) + semantic_prompt (64) dominate. |
+| ~~vt-5~~ | parse_table + Parser | 26 | **REORDERED after vt-6**: Parser EMBEDS osc.Parser (field + dispatch + osc tests) → osc must land first. Mutual cycle parse_table↔Parser stays struct/table-first. |
+| **vt-6 (NEXT, before Parser)** | osc + encoding + **16** osc/parsers/* + kitty/color | ~243 | Parent↔child cycle, struct-first (osc.rs skeleton+stubs→fill). osc9(61)+semantic_prompt(64) dominate. (+hyperlink parser 8t, missed earlier.) |
 | vt-7 | kitty/{key,color,graphics_command,graphics_image,graphics_unicode,graphics_render,graphics,kitty} | 89 | Defer graphics_storage(→Screen) + graphics_exec(→Terminal) to vt-12. |
 | vt-8 | apc + apc/glyph/{response,request,Glossary,execute,glyph} | 67 | **External font/opentype dep** → sys-style hook seam. |
 | vt-9 | stream | 38 | Needs Parser/osc/kitty/mouse/UTF8Decoder (vt-4..7). |
