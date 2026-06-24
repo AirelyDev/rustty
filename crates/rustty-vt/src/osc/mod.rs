@@ -1,8 +1,875 @@
-//! rustty-vt osc
+//! OSC (Operating System Command) related functions and types.
+//!
+//! OSC is another set of control sequences for terminal programs that start with
+//! "ESC ]". Unlike CSI or standard ESC sequences, they may contain strings
+//! and other irregular formatting so a dedicated parser is created to handle it.
 //!
 //! PORTS: ghostty src/terminal/osc.zig
 //!
-//! PORT STATUS: stub
+//! PORT STATUS: skeleton — Command enum + Terminator + Parser state machine
+//! (init/deinit/reset/next/end) are ported; the per-command parsers in
+//! `parsers/*` are compiling stubs (correct signatures, `todo!()` bodies, no
+//! tests yet). osc.zig's own two `test {}` blocks (the `ProgressReport.State`
+//! ghostty.h check and the bottom `refAllDecls`) are deferred to the Verify
+//! phase, which runs once the parsers are filled.
+
+// PORT NOTE: Zig imports retargeted to ported crate paths (R2). `lib.Enum` is
+// `rustty_lib::Enum`; `kitty_color` is `crate::kitty::color`; `parsers`/
+// `encoding` are submodules of this module.
+use rustty_lib::r#enum::EnumType;
+use rustty_lib::target::Target;
+
+use crate::kitty::color as kitty_color;
 
 pub mod encoding;
 pub mod parsers;
+
+// pub const color = parsers.color;
+pub use parsers::color;
+// pub const semantic_prompt = parsers.semantic_prompt;
+pub use parsers::semantic_prompt;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Command {
+    /// This generally shouldn't ever be set except as an initial zero value.
+    /// Ignore it.
+    Invalid,
+
+    /// Set the window title of the terminal
+    ///
+    /// If title mode 0 is set text is expect to be hex encoded (i.e. utf-8
+    /// with each code unit further encoded with two hex digits).
+    ///
+    /// If title mode 2 is set or the terminal is setup for unconditional
+    /// utf-8 titles text is interpreted as utf-8. Else text is interpreted
+    /// as latin1.
+    ChangeWindowTitle(String),
+
+    /// Set the icon of the terminal window. The name of the icon is not
+    /// well defined, so this is currently ignored by Ghostty at the time
+    /// of writing this. We just parse it so that we don't get parse errors
+    /// in the log.
+    ChangeWindowIcon(String),
+
+    /// Semantic prompt command: https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/semantic-prompts.md
+    SemanticPrompt(SemanticPrompt),
+
+    /// Set or get clipboard contents. If data is null, then the current
+    /// clipboard contents are sent to the pty. If data is set, this
+    /// contents is set on the clipboard.
+    ClipboardContents {
+        kind: u8,
+        data: String,
+    },
+
+    /// OSC 7. Reports the current working directory of the shell. This is
+    /// a moderately flawed escape sequence but one that many major terminals
+    /// support so we also support it. To understand the flaws, read through
+    /// this terminal-wg issue: https://gitlab.freedesktop.org/terminal-wg/specifications/-/issues/20
+    ReportPwd {
+        /// The reported pwd value. This is not checked for validity. It should
+        /// be a file URL but it is up to the caller to utilize this value.
+        value: String,
+    },
+
+    /// OSC 22. Set the mouse shape. There doesn't seem to be a standard
+    /// naming scheme for cursors but it looks like terminals such as Foot
+    /// are moving towards using the W3C CSS cursor names. For OSC parsing,
+    /// we just parse whatever string is given.
+    MouseShape {
+        value: String,
+    },
+
+    /// OSC color operations to set, reset, or report color settings. Some OSCs
+    /// allow multiple operations to be specified in a single OSC so we need a
+    /// list-like datastructure to manage them. We use std.SegmentedList because
+    /// it minimizes the number of allocations and copies because a large
+    /// majority of the time there will be only one operation per OSC.
+    ///
+    /// Currently, these OSCs are handled by `color_operation`:
+    ///
+    /// 4, 5, 10-19, 104, 105, 110-119
+    ColorOperation {
+        op: color::Operation,
+        requests: color::List,
+        terminator: Terminator,
+    },
+
+    /// Kitty color protocol, OSC 21
+    /// https://sw.kovidgoyal.net/kitty/color-stack/#id1
+    KittyColorProtocol(kitty_color::OSC),
+
+    /// Show a desktop notification (OSC 9 or OSC 777)
+    ShowDesktopNotification {
+        title: String,
+        body: String,
+    },
+
+    /// Start a hyperlink (OSC 8)
+    HyperlinkStart {
+        id: Option<String>,
+        uri: String,
+    },
+
+    /// End a hyperlink (OSC 8)
+    HyperlinkEnd,
+
+    /// ConEmu sleep (OSC 9;1)
+    ConemuSleep {
+        duration_ms: u16,
+    },
+
+    /// ConEmu show GUI message box (OSC 9;2)
+    ConemuShowMessageBox(String),
+
+    /// ConEmu change tab title (OSC 9;3)
+    ConemuChangeTabTitle(ConemuChangeTabTitle),
+
+    /// ConEmu progress report (OSC 9;4)
+    ConemuProgressReport(ProgressReport),
+
+    /// ConEmu wait input (OSC 9;5)
+    ConemuWaitInput,
+
+    /// ConEmu GUI macro (OSC 9;6)
+    ConemuGuimacro(String),
+
+    /// ConEmu run process (OSC 9;7)
+    ConemuRunProcess(String),
+
+    /// ConEmu output environment variable (OSC 9;8)
+    ConemuOutputEnvironmentVariable(String),
+
+    /// ConEmu XTerm keyboard and output emulation (OSC 9;10)
+    /// https://conemu.github.io/en/TerminalModes.html
+    ConemuXtermEmulation {
+        /// null => do not change
+        /// false => turn off
+        /// true => turn on
+        keyboard: Option<bool>,
+        /// null => do not change
+        /// false => turn off
+        /// true => turn on
+        output: Option<bool>,
+    },
+
+    /// ConEmu comment (OSC 9;11)
+    ConemuComment(String),
+
+    /// Kitty text sizing protocol (OSC 66)
+    KittyTextSizing(parsers::kitty_text_sizing::OSC),
+
+    KittyClipboardProtocol(KittyClipboardProtocol),
+
+    /// OSC 3008. Hierarchical context signalling (UAPI spec).
+    /// https://uapi-group.org/specifications/specs/osc_context/
+    ContextSignal(parsers::context_signal::Command),
+}
+
+// PORT NOTE: `conemu_change_tab_title: union(enum) { reset, value: [:0]const u8 }`
+// — the anonymous tagged union is hoisted to a named type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConemuChangeTabTitle {
+    Reset,
+    Value(String),
+}
+
+impl Command {
+    // pub const SemanticPrompt = parsers.semantic_prompt.Command;
+    // pub const KittyClipboardProtocol = parsers.kitty_clipboard_protocol.OSC;
+
+    // PORT NOTE: `pub const Key = LibEnum(lib.target, &.{...})` — the union's
+    // tag type, built from `lib.target` (a comptime build value). For the
+    // ported crate the `Command` Rust enum above *is* the tagged union (its
+    // variants carry the same ordered keys as the `Key` LibEnum, in the
+    // identical order: invalid, change_window_title, change_window_icon,
+    // semantic_prompt, clipboard_contents, report_pwd, mouse_shape,
+    // color_operation, kitty_color_protocol, show_desktop_notification,
+    // hyperlink_start, hyperlink_end, conemu_sleep, conemu_show_message_box,
+    // conemu_change_tab_title, conemu_progress_report, conemu_wait_input,
+    // conemu_guimacro, conemu_run_process, conemu_output_environment_variable,
+    // conemu_xterm_emulation, conemu_comment, kitty_text_sizing,
+    // kitty_clipboard_protocol, context_signal). NOTE: Order matters, see
+    // LibEnum documentation.
+
+    // comptime {
+    //     assert(@sizeOf(Command) == switch (@sizeOf(usize)) {
+    //         4 => 44,
+    //         8 => 64,
+    //         else => unreachable,
+    //     });
+    // }
+    // PORT NOTE: the comptime `@sizeOf` assertion pins the Zig union's layout;
+    // Rust's enum layout is not byte-compatible with the Zig union (different
+    // niche/discriminant rules), so the size invariant is intentionally not
+    // asserted here. Carried as a comment per R2.
+}
+
+/// PORT NOTE: `parsers.semantic_prompt.Command` re-exported as
+/// `Command.SemanticPrompt`.
+pub type SemanticPrompt = parsers::semantic_prompt::Command;
+
+/// PORT NOTE: `parsers.kitty_clipboard_protocol.OSC` re-exported as
+/// `Command.KittyClipboardProtocol`.
+pub type KittyClipboardProtocol = parsers::kitty_clipboard_protocol::OSC;
+
+/// PORT NOTE: `Command.ProgressReport` — the ConEmu progress report payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgressReport {
+    pub state: ProgressReportState,
+    pub progress: Option<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgressReportState {
+    Remove,
+    Set,
+    Error,
+    Indeterminate,
+    Pause,
+}
+
+impl ProgressReportState {
+    // PORT NOTE: `pub const State = enum(c_int) {...}` — backed by `c_int`.
+    // `@intFromEnum` mirrored as the declaration order (0-based).
+    pub fn int_from_enum(self) -> i32 {
+        match self {
+            ProgressReportState::Remove => 0,
+            ProgressReportState::Set => 1,
+            ProgressReportState::Error => 2,
+            ProgressReportState::Indeterminate => 3,
+            ProgressReportState::Pause => 4,
+        }
+    }
+
+    // test "ghostty.h Command.ProgressReport.State" {
+    //     if (comptime build_options.artifact == .lib) return error.SkipZigTest;
+    //     try lib.checkGhosttyHEnum(State, "GHOSTTY_PROGRESS_STATE_");
+    // }
+    // PORT NOTE (vt-6): this `test {}` block (one of osc.zig's two) is deferred
+    // to the Verify phase per the skeleton task. It exercises the generated
+    // rustty.h enum binding, which is wired once the parsers/C surface land.
+}
+
+/// sync with ghostty_action_progress_report_s
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgressReportC {
+    pub state: i32,
+    pub progress: i8,
+}
+
+impl ProgressReport {
+    pub fn cval(self) -> ProgressReportC {
+        ProgressReportC {
+            state: self.state.int_from_enum(),
+            progress: match self.progress {
+                Some(progress) => progress.clamp(0, 100) as i8,
+                None => -1,
+            },
+        }
+    }
+}
+
+/// The terminator used to end an OSC command. For OSC commands that demand
+/// a response, we try to match the terminator used in the request since that
+/// is most likely to be accepted by the calling program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Terminator {
+    /// The preferred string terminator is ESC followed by \
+    St,
+
+    /// Some applications and terminals use BELL (0x07) as the string terminator.
+    Bel,
+}
+
+impl Terminator {
+    // pub const C = LibEnum(.c, &.{ "st", "bel" });
+    pub fn c() -> EnumType {
+        rustty_lib::Enum(Target::C, &[Some("st"), Some("bel")])
+    }
+
+    /// Initialize the terminator based on the last byte seen. If the
+    /// last byte is a BEL then we use BEL, otherwise we just assume ST.
+    pub fn init(ch: Option<u8>) -> Terminator {
+        match ch {
+            None => Terminator::St,
+            Some(0x07) => Terminator::Bel,
+            Some(_) => Terminator::St,
+        }
+    }
+
+    /// The terminator as a string. This is static memory so it doesn't
+    /// need to be freed.
+    pub fn string(self) -> &'static [u8] {
+        match self {
+            Terminator::St => b"\x1b\\",
+            Terminator::Bel => b"\x07",
+        }
+    }
+
+    // PORT NOTE: `cval` returns the `C` LibEnum value (`@intFromEnum` of "st"/
+    // "bel"). The descriptor's index for the matching key is the faithful value.
+    pub fn cval(self) -> i32 {
+        match self {
+            Terminator::St => Terminator::c().value("st") as i32,
+            Terminator::Bel => Terminator::c().value("bel") as i32,
+        }
+    }
+}
+
+impl std::fmt::Display for Terminator {
+    fn fmt(&self, writer: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // try writer.writeAll(self.string());
+        writer.write_str(std::str::from_utf8(self.string()).unwrap())
+    }
+}
+
+/// Maximum size of a "normal" OSC.
+pub const MAX_BUF: usize = 2048;
+
+pub struct Parser<'a> {
+    /// Optional allocator used to accept data longer than MAX_BUF.
+    /// This only applies to some commands (e.g. OSC 52) that can
+    /// reasonably exceed MAX_BUF.
+    pub alloc: Option<rustty_lib::allocator::ZigAllocatorRef<'a>>,
+
+    /// Current state of the parser.
+    pub state: State,
+
+    /// Buffer for temporary storage of OSC data
+    pub buffer: [u8; MAX_BUF],
+
+    /// Capture state. If this is set then we're actively capturing the
+    /// bytes coming into the parser.
+    pub capture: Option<Capture>,
+
+    /// The command that is the result of parsing.
+    pub command: Command,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum State {
+    Start,
+    Invalid,
+
+    // OSC command prefixes. Not all of these are valid OSCs, but may be
+    // needed to "bridge" to a valid OSC (e.g. to support OSC 777 we need to
+    // have a state "77" even though there is no OSC 77).
+    S0,
+    S1,
+    S2,
+    S3,
+    S4,
+    S5,
+    S6,
+    S7,
+    S8,
+    S9,
+    S30,
+    S300,
+    S3008,
+    S10,
+    S11,
+    S12,
+    S13,
+    S14,
+    S15,
+    S16,
+    S17,
+    S18,
+    S19,
+    S21,
+    S22,
+    S52,
+    S55,
+    S66,
+    S77,
+    S104,
+    S110,
+    S111,
+    S112,
+    S113,
+    S114,
+    S115,
+    S116,
+    S117,
+    S118,
+    S119,
+    S133,
+    S552,
+    S777,
+    S1337,
+    S5522,
+}
+
+/// PORT NOTE: the capture backing. The reference uses `std.Io.Writer` over
+/// either a fixed buffer or an allocating buffer. The skeleton models the
+/// captured bytes as an owned byte vector; the filled parser path threads the
+/// fixed/allocating distinction through `CaptureMode`.
+pub struct Capture {
+    pub backing: CaptureBacking,
+}
+
+pub enum CaptureBacking {
+    Fixed(Vec<u8>),
+    Allocating(Vec<u8>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureMode {
+    Fixed,
+    Allocating,
+}
+
+impl Capture {
+    pub fn deinit(&mut self) {
+        match &mut self.backing {
+            CaptureBacking::Fixed(_) => {}
+            CaptureBacking::Allocating(w) => {
+                w.clear();
+            }
+        }
+    }
+
+    /// Return the captured trailing data. This is the data from the
+    /// point that trailing data capture was requested.
+    pub fn trailing(&self) -> &[u8] {
+        match &self.backing {
+            CaptureBacking::Fixed(w) => w,
+            CaptureBacking::Allocating(w) => w,
+        }
+    }
+}
+
+impl<'a> Parser<'a> {
+    pub fn init(alloc: Option<rustty_lib::allocator::ZigAllocatorRef<'a>>) -> Parser<'a> {
+        // PORT NOTE: the Valgrind-guarded `buffer = undefined` initialization is
+        // a no-op observability hook in Zig; Rust requires the buffer be
+        // initialized, so we zero it.
+        Parser {
+            alloc,
+            state: State::Start,
+            capture: None,
+            command: Command::Invalid,
+            buffer: [0u8; MAX_BUF],
+        }
+    }
+
+    /// This must be called to clean up any allocated memory.
+    pub fn deinit(&mut self) {
+        self.reset();
+    }
+
+    /// Reset the parser state.
+    pub fn reset(&mut self) {
+        // If we're capturing, then stop it.
+        if let Some(cap) = self.capture.as_mut() {
+            cap.deinit();
+        }
+
+        // Handle any cleanup that individual OSCs require.
+        match &mut self.command {
+            Command::KittyColorProtocol(v) => {
+                // v.deinit(self.alloc orelse break :kitty_color_protocol);
+                if self.alloc.is_some() {
+                    v.deinit();
+                }
+            }
+            Command::ChangeWindowIcon(_)
+            | Command::ChangeWindowTitle(_)
+            | Command::ClipboardContents { .. }
+            | Command::ColorOperation { .. }
+            | Command::ConemuChangeTabTitle(_)
+            | Command::ConemuComment(_)
+            | Command::ConemuGuimacro(_)
+            | Command::ConemuOutputEnvironmentVariable(_)
+            | Command::ConemuProgressReport(_)
+            | Command::ConemuRunProcess(_)
+            | Command::ConemuShowMessageBox(_)
+            | Command::ConemuSleep { .. }
+            | Command::ConemuWaitInput
+            | Command::ConemuXtermEmulation { .. }
+            | Command::HyperlinkEnd
+            | Command::HyperlinkStart { .. }
+            | Command::Invalid
+            | Command::MouseShape { .. }
+            | Command::ReportPwd { .. }
+            | Command::SemanticPrompt(_)
+            | Command::ShowDesktopNotification { .. }
+            | Command::KittyTextSizing(_)
+            | Command::KittyClipboardProtocol(_)
+            | Command::ContextSignal(_) => {}
+        }
+
+        self.state = State::Start;
+        self.capture = None;
+        self.command = Command::Invalid;
+    }
+
+    /// Make sure that we have an allocator. If we don't, set the state to
+    /// invalid so that any additional OSC data is discarded.
+    fn ensure_allocator(&mut self) -> bool {
+        if self.alloc.is_some() {
+            return true;
+        }
+        // PORT NOTE: `const log = std.log.scoped(.osc);` — rustty has no logging
+        // facade wired into this crate (matching the convention used by PageList
+        // / DCS et al.), so the scoped logger and its calls are ported as
+        // commented lines.
+        // log.warn("An allocator is required to process OSC {t} but none was provided.", .{self.state});
+        self.state = State::Invalid;
+        false
+    }
+
+    /// Begin capturing trailing data. All inputs to next from this point
+    /// forward will be captured into the `self.capture.writer` buffer
+    /// which may be backed by either a fixed size or allocating buffer
+    /// depending on mode.
+    ///
+    /// Get the trailing data using `capture.trailing()`. Do not access
+    /// the writer directly.
+    fn capture_trailing(&mut self, mode: CaptureMode) {
+        // assert(self.capture == null);
+        debug_assert!(self.capture.is_none());
+        match mode {
+            CaptureMode::Fixed => {
+                self.capture = Some(Capture {
+                    backing: CaptureBacking::Fixed(Vec::new()),
+                });
+            }
+
+            CaptureMode::Allocating => {
+                if self.alloc.is_none() {
+                    // We don't have an allocator - fall back to a fixed buffer and hope
+                    // that it's big enough.
+                    self.capture_trailing(CaptureMode::Fixed);
+                    return;
+                }
+
+                // PORT NOTE: the allocating writer's `initCapacity(alloc, 2048)`
+                // failure path also falls back to the fixed buffer; here the
+                // backing `Vec` is grown on demand.
+                self.capture = Some(Capture {
+                    backing: CaptureBacking::Allocating(Vec::with_capacity(2048)),
+                });
+            }
+        }
+    }
+
+    /// Consume the next character c and advance the parser state.
+    pub fn next(&mut self, c: u8) {
+        // If the state becomes invalid for any reason, just discard
+        // any further input.
+        if self.state == State::Invalid {
+            return;
+        }
+
+        // If a writer has been initialized, we just accumulate the rest of the
+        // OSC sequence in the writer's buffer and skip the state machine.
+        if let Some(cap) = self.capture.as_mut() {
+            // cap.writer.writeByte(c) catch ... => self.state = .invalid;
+            match &mut cap.backing {
+                CaptureBacking::Fixed(w) => {
+                    // We have overflowed our buffer or had some other error, set the
+                    // state to invalid so that we discard any further input.
+                    if w.len() >= MAX_BUF {
+                        self.state = State::Invalid;
+                    } else {
+                        w.push(c);
+                    }
+                }
+                CaptureBacking::Allocating(w) => {
+                    w.push(c);
+                }
+            }
+            return;
+        }
+
+        match self.state {
+            // handled above, so should never be here
+            State::Invalid => unreachable!(),
+
+            State::Start => match c {
+                b'0' => self.state = State::S0,
+                b'1' => self.state = State::S1,
+                b'2' => self.state = State::S2,
+                b'3' => self.state = State::S3,
+                b'4' => self.state = State::S4,
+                b'5' => self.state = State::S5,
+                b'6' => self.state = State::S6,
+                b'7' => self.state = State::S7,
+                b'8' => self.state = State::S8,
+                b'9' => self.state = State::S9,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S3 => match c {
+                b'0' => self.state = State::S30,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S30 => match c {
+                b'0' => self.state = State::S300,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S300 => match c {
+                b'8' => self.state = State::S3008,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S3008 => match c {
+                b';' => self.capture_trailing(CaptureMode::Fixed),
+                _ => self.state = State::Invalid,
+            },
+
+            State::S1 => match c {
+                b';' => self.capture_trailing(CaptureMode::Fixed),
+                b'0' => self.state = State::S10,
+                b'1' => self.state = State::S11,
+                b'2' => self.state = State::S12,
+                b'3' => self.state = State::S13,
+                b'4' => self.state = State::S14,
+                b'5' => self.state = State::S15,
+                b'6' => self.state = State::S16,
+                b'7' => self.state = State::S17,
+                b'8' => self.state = State::S18,
+                b'9' => self.state = State::S19,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S10 => match c {
+                b';' => {
+                    if self.ensure_allocator() {
+                        self.capture_trailing(CaptureMode::Fixed)
+                    }
+                }
+                b'4' => self.state = State::S104,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S104 => match c {
+                b';' => {
+                    if self.ensure_allocator() {
+                        self.capture_trailing(CaptureMode::Fixed)
+                    }
+                }
+                _ => self.state = State::Invalid,
+            },
+
+            State::S11 => match c {
+                b';' => {
+                    if self.ensure_allocator() {
+                        self.capture_trailing(CaptureMode::Fixed)
+                    }
+                }
+                b'0' => self.state = State::S110,
+                b'1' => self.state = State::S111,
+                b'2' => self.state = State::S112,
+                b'3' => self.state = State::S113,
+                b'4' => self.state = State::S114,
+                b'5' => self.state = State::S115,
+                b'6' => self.state = State::S116,
+                b'7' => self.state = State::S117,
+                b'8' => self.state = State::S118,
+                b'9' => self.state = State::S119,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S4
+            | State::S12
+            | State::S14
+            | State::S15
+            | State::S16
+            | State::S17
+            | State::S18
+            | State::S19
+            | State::S21
+            | State::S110
+            | State::S111
+            | State::S112
+            | State::S113
+            | State::S114
+            | State::S115
+            | State::S116
+            | State::S117
+            | State::S118
+            | State::S119 => match c {
+                b';' => {
+                    if self.ensure_allocator() {
+                        self.capture_trailing(CaptureMode::Fixed)
+                    }
+                }
+                _ => self.state = State::Invalid,
+            },
+
+            State::S13 => match c {
+                b';' => {
+                    if self.ensure_allocator() {
+                        self.capture_trailing(CaptureMode::Fixed)
+                    }
+                }
+                b'3' => self.state = State::S133,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S2 => match c {
+                b';' => self.capture_trailing(CaptureMode::Fixed),
+                b'1' => self.state = State::S21,
+                b'2' => self.state = State::S22,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S5 => match c {
+                b';' => {
+                    if self.ensure_allocator() {
+                        self.capture_trailing(CaptureMode::Fixed)
+                    }
+                }
+                b'2' => self.state = State::S52,
+                b'5' => self.state = State::S55,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S6 => match c {
+                b'6' => self.state = State::S66,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S52 | State::S66 => match c {
+                b';' => self.capture_trailing(CaptureMode::Allocating),
+                _ => self.state = State::Invalid,
+            },
+
+            State::S55 => match c {
+                b'2' => self.state = State::S552,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S7 => match c {
+                b';' => self.capture_trailing(CaptureMode::Fixed),
+                b'7' => self.state = State::S77,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S77 => match c {
+                b'7' => self.state = State::S777,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S133 => match c {
+                b';' => self.capture_trailing(CaptureMode::Fixed),
+                b'7' => self.state = State::S1337,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S552 => match c {
+                b'2' => self.state = State::S5522,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S1337 => match c {
+                b';' => self.capture_trailing(CaptureMode::Fixed),
+                _ => self.state = State::Invalid,
+            },
+
+            State::S5522 => match c {
+                b';' => self.capture_trailing(CaptureMode::Allocating),
+                _ => self.state = State::Invalid,
+            },
+
+            State::S0 | State::S22 | State::S777 | State::S8 | State::S9 => match c {
+                b';' => self.capture_trailing(CaptureMode::Fixed),
+                _ => self.state = State::Invalid,
+            },
+        }
+    }
+
+    /// End the sequence and return the command, if any. If the return value
+    /// is null, then no valid command was found. The optional terminator_ch
+    /// is the final character in the OSC sequence. This is used to determine
+    /// the response terminator.
+    ///
+    /// The returned pointer is only valid until the next call to the parser.
+    /// Callers should copy out any data they wish to retain across calls.
+    pub fn end(&mut self, terminator_ch: Option<u8>) -> Option<&mut Command> {
+        match self.state {
+            State::Start => None,
+
+            State::Invalid => None,
+
+            State::S0 | State::S2 => parsers::change_window_title::parse(self, terminator_ch),
+
+            State::S1 => parsers::change_window_icon::parse(self, terminator_ch),
+
+            State::S4
+            | State::S5
+            | State::S10
+            | State::S11
+            | State::S12
+            | State::S13
+            | State::S14
+            | State::S15
+            | State::S16
+            | State::S17
+            | State::S18
+            | State::S19
+            | State::S104
+            | State::S110
+            | State::S111
+            | State::S112
+            | State::S113
+            | State::S114
+            | State::S115
+            | State::S116
+            | State::S117
+            | State::S118
+            | State::S119 => parsers::color::parse(self, terminator_ch),
+
+            State::S7 => parsers::report_pwd::parse(self, terminator_ch),
+
+            State::S8 => parsers::hyperlink::parse(self, terminator_ch),
+
+            State::S9 => parsers::osc9::parse(self, terminator_ch),
+
+            State::S21 => parsers::kitty_color::parse(self, terminator_ch),
+
+            State::S22 => parsers::mouse_shape::parse(self, terminator_ch),
+
+            State::S52 => parsers::clipboard_operation::parse(self, terminator_ch),
+
+            State::S55 => None,
+
+            State::S3 | State::S30 | State::S300 => None,
+
+            State::S3008 => parsers::context_signal::parse(self, terminator_ch),
+
+            State::S6 => None,
+
+            State::S66 => parsers::kitty_text_sizing::parse(self, terminator_ch),
+
+            State::S77 => None,
+
+            State::S133 => parsers::semantic_prompt::parse(self, terminator_ch),
+
+            State::S552 => None,
+
+            State::S777 => parsers::rxvt_extension::parse(self, terminator_ch),
+
+            State::S1337 => parsers::iterm2::parse(self, terminator_ch),
+
+            State::S5522 => parsers::kitty_clipboard_protocol::parse(self, terminator_ch),
+        }
+    }
+}
+
+// test {
+//     _ = parsers;
+//     _ = encoding;
+// }
+// PORT NOTE (vt-6): this `test {}` block (one of osc.zig's two) is a Zig
+// `refAllDecls` over `parsers` and `encoding`. It is deferred to the Verify
+// phase, which runs once the parsers are filled (they currently hold `todo!()`
+// stub bodies that would panic if executed).

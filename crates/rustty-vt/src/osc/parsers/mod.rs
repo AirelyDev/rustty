@@ -2,7 +2,10 @@
 //!
 //! PORTS: ghostty src/terminal/osc/parsers.zig
 //!
-//! PORT STATUS: stub
+//! PORT STATUS: skeleton — aggregator of the per-command OSC parsers. Each
+//! submodule currently holds a signature-faithful `parse` stub (`todo!()`) plus
+//! the public payload types referenced by the OSC parent `Command`; bodies and
+//! the `refAllDecls`/per-parser tests land in the fill phase.
 
 pub mod change_window_icon;
 pub mod change_window_title;

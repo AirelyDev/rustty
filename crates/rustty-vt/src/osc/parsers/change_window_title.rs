@@ -1,5 +1,12 @@
-//! rustty-vt osc/parsers/change_window_title
-//!
 //! PORTS: ghostty src/terminal/osc/parsers/change_window_title.zig
 //!
-//! PORT STATUS: stub
+//! PORT STATUS: stub — `parse` is a signature-faithful stub; body and tests
+//! land in the fill phase.
+
+use crate::osc::{Command, Parser};
+
+/// Parse OSC 0 and OSC 2
+#[allow(clippy::todo, unused_variables)]
+pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'a mut Command> {
+    todo!()
+}
