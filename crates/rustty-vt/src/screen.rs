@@ -51,6 +51,7 @@ use crate::page::u21;
 use crate::page::{Cell, Page, Row};
 use crate::pagelist::{self, OutOfMemory, PageList, Pin};
 use crate::point;
+use crate::selection;
 use crate::selection::Selection;
 use crate::size;
 use crate::string_map::StringMap;
@@ -739,7 +740,242 @@ impl Screen {
         top: point::Point,
         bot: Option<point::Point>,
     ) -> Result<Screen, OutOfMemory> {
-        todo!()
+        // Create a tracked pin remapper for our selection and cursor. Note
+        // that we may want to expose this generally in the future but at the
+        // time of doing this we don't need to.
+        //
+        // PORT NOTE: the reference threads a `*TrackedPinsRemap` into
+        // `pages.clone` via `opts.tracked_pins`. The Rust `PageList::clone`
+        // takes `&mut Clone` and populates `opts.tracked_pins` in place, so we
+        // own the `Clone` opts here and read the populated map back from it. The
+        // `pin_remap.deinit()` `defer` in the reference frees the HashMap; the
+        // Rust `HashMap` drops on scope exit.
+        let mut opts = pagelist::access::Clone {
+            top,
+            bot,
+            tracked_pins: Some(pagelist::access::TrackedPinsRemap::new()),
+        };
+
+        // PORT NOTE: `PageList::clone` returns `CloneError` (OutOfMemory |
+        // CloneFrom). `Screen::clone` returns `OutOfMemory` to match the
+        // reference's inferred error set; the only failure paths reachable here
+        // are allocator failures, so we map any clone error into `OutOfMemory`.
+        let mut pages = self.pages.clone(&mut opts).map_err(|_| OutOfMemory)?;
+        // errdefer pages.deinit();
+
+        let pin_remap = opts.tracked_pins.as_ref().unwrap();
+
+        // Find our cursor. If the cursor isn't in the cloned area, we move it
+        // to the top-left arbitrarily because a screen must have SOME cursor.
+        let cursor: Cursor = 'cursor: {
+            if let Some(&p) = pin_remap.get(&self.cursor.page_pin) {
+                'remap: {
+                    let page_rac = unsafe { (*p).row_and_cell() };
+                    let pt = match pages
+                        .point_from_pin(point::Tag::Active, unsafe { (*p).pin_copy() })
+                    {
+                        Some(pt) => pt,
+                        None => break 'remap,
+                    };
+                    break 'cursor self.clone_cursor(
+                        pt.coord().x as size::CellCountInt,
+                        pt.coord().y as size::CellCountInt,
+                        p,
+                        page_rac.row,
+                        page_rac.cell,
+                    );
+                }
+            }
+
+            let page_pin = pages.track_pin(Pin {
+                node: pages.pages.first,
+                x: 0,
+                y: 0,
+                garbage: false,
+            })?;
+            let page_rac = unsafe { (*page_pin).row_and_cell() };
+            self.clone_cursor(0, 0, page_pin, page_rac.row, page_rac.cell)
+        };
+
+        // Preserve our selection if we have one.
+        let sel: Option<Selection> = if let Some(sel) = self.selection {
+            'sel: {
+                debug_assert!(sel.tracked());
+
+                struct Ordered {
+                    tl: *mut Pin,
+                    br: *mut Pin,
+                }
+
+                let (tl_pin, br_pin) = match sel.bounds {
+                    selection::Bounds::Tracked { start, end } => (start, end),
+                    // PORT NOTE: the `tracked()` assert above guarantees this is a
+                    // tracked selection; the untracked arm is unreachable.
+                    selection::Bounds::Untracked { .. } => unreachable!(),
+                };
+
+                let ordered: Ordered = match sel.order(self) {
+                    selection::Order::Forward | selection::Order::MirroredForward => Ordered {
+                        tl: tl_pin,
+                        br: br_pin,
+                    },
+                    selection::Order::Reverse | selection::Order::MirroredReverse => Ordered {
+                        tl: br_pin,
+                        br: tl_pin,
+                    },
+                };
+
+                let start_pin: *mut Pin = match pin_remap.get(&ordered.tl) {
+                    Some(&p) => p,
+                    None => 'start: {
+                        // No start means it is outside the cloned area.
+
+                        // If we have no end pin then either
+                        // (1) our whole selection is outside the cloned area or
+                        // (2) our cloned area is within the selection
+                        if pin_remap.get(&ordered.br).is_none() {
+                            // We check if the selection bottom right pin is above
+                            // the cloned area or if the top left pin is below the
+                            // cloned area, in either of these cases it means that
+                            // the selection is fully out of bounds, so we have no
+                            // selection in the cloned area and break out now.
+                            let clone_top = match self.pages.pin(top) {
+                                Some(p) => p,
+                                None => break 'sel None,
+                            };
+                            let clone_top_y = self
+                                .pages
+                                .point_from_pin(point::Tag::Screen, clone_top)
+                                .unwrap()
+                                .coord()
+                                .y;
+                            if self
+                                .pages
+                                .point_from_pin(point::Tag::Screen, unsafe {
+                                    (*ordered.br).pin_copy()
+                                })
+                                .unwrap()
+                                .coord()
+                                .y
+                                < clone_top_y
+                            {
+                                break 'sel None;
+                            }
+                            if self
+                                .pages
+                                .point_from_pin(point::Tag::Screen, unsafe {
+                                    (*ordered.tl).pin_copy()
+                                })
+                                .unwrap()
+                                .coord()
+                                .y
+                                > clone_top_y
+                            {
+                                break 'sel None;
+                            }
+                        }
+
+                        // We move the top pin back in bounds to the top row.
+                        break 'start pages.track_pin(Pin {
+                            node: pages.pages.first,
+                            x: if sel.rectangle {
+                                unsafe { (*ordered.tl).x }
+                            } else {
+                                0
+                            },
+                            y: 0,
+                            garbage: false,
+                        })?;
+                    }
+                };
+
+                // If we got to this point it means that the selection is not
+                // fully out of bounds, so we move the bottom right pin back
+                // in bounds if it isn't already.
+                let end_pin: *mut Pin = match pin_remap.get(&ordered.br) {
+                    Some(&p) => p,
+                    None => pages.track_pin(Pin {
+                        node: pages.pages.last,
+                        x: if sel.rectangle {
+                            unsafe { (*ordered.br).x }
+                        } else {
+                            pages.cols - 1
+                        },
+                        y: unsafe { (*pages.pages.last).data.size.rows } - 1,
+                        garbage: false,
+                    })?,
+                };
+
+                Some(Selection {
+                    bounds: selection::Bounds::Tracked {
+                        start: start_pin,
+                        end: end_pin,
+                    },
+                    rectangle: sel.rectangle,
+                })
+            }
+        } else {
+            None
+        };
+
+        let result: Screen = Screen {
+            alloc,
+            pages,
+            no_scrollback: self.no_scrollback,
+            cursor,
+            selection: sel,
+            dirty: self.dirty,
+            // PORT NOTE: the reference `result` struct sets only `alloc`,
+            // `pages`, `no_scrollback`, `cursor`, `selection`, `dirty`. Every
+            // other field takes its Zig struct default (see the `Screen` field
+            // declarations): `saved_cursor = null`, `charset = .{}`,
+            // `protected_mode = .off`, `kitty_keyboard = .{}`,
+            // `kitty_images = .{}`, `semantic_prompt = .{}`. We materialize those
+            // defaults explicitly here.
+            saved_cursor: None,
+            charset: CharsetState::default(),
+            protected_mode: ansi::ProtectedMode::Off,
+            kitty_keyboard: kitty::KeyFlagStack::default(),
+            kitty_images: kitty::graphics_storage::Deferred,
+            semantic_prompt: SemanticPrompt::DISABLED,
+        };
+        result.assert_integrity();
+        Ok(result)
+    }
+
+    /// Build a cloned `Cursor` from the remapped pin/row/cell pointers,
+    /// mirroring the reference's inline cursor construction in `clone`. The
+    /// non-pin fields default exactly as the reference (which leaves them at
+    /// their Zig `Cursor` struct defaults in the cloned screen).
+    //
+    // PORT NOTE: extracted into a helper because the reference repeats the same
+    // cursor literal in both `clone` branches (remapped vs. top-left fallback);
+    // the only differences are x/y and the pin/row/cell pointers.
+    fn clone_cursor(
+        &self,
+        x: size::CellCountInt,
+        y: size::CellCountInt,
+        page_pin: *mut Pin,
+        page_row: *mut pagepkg::Row,
+        page_cell: *mut pagepkg::Cell,
+    ) -> Cursor {
+        Cursor {
+            x,
+            y,
+            cursor_style: CursorStyle::Block,
+            pending_wrap: false,
+            protected: false,
+            style: style::Style::default(),
+            style_id: style::DEFAULT_ID,
+            hyperlink_id: 0,
+            hyperlink_implicit_id: 0,
+            hyperlink: None,
+            semantic_content: pagepkg::SemanticContent::Output,
+            semantic_content_clear_eol: false,
+            page_pin,
+            page_row,
+            page_cell,
+        }
     }
 
     pub fn increase_capacity(
@@ -1580,11 +1816,19 @@ impl Screen {
     /// erase the rows meaning the memory will be reclaimed (if the underlying
     /// page is empty) and other rows will be shifted up.
     pub fn erase_history(&mut self, bl: Option<point::Point>) {
-        todo!()
+        // defer self.assertIntegrity();
+        // PORT NOTE: Rust has no `defer`; the reference runs `assertIntegrity` at
+        // the end, which here is the single exit path.
+        self.pages.erase_history(bl);
+        self.cursor_reload();
+        self.assert_integrity();
     }
 
     pub fn erase_active(&mut self, y: size::CellCountInt) {
-        todo!()
+        // defer self.assertIntegrity();
+        self.pages.erase_active(y);
+        self.cursor_reload();
+        self.assert_integrity();
     }
 
     // Clear the region specified by tl and bl, inclusive. Cleared cells are
@@ -1594,7 +1838,62 @@ impl Screen {
     // If protected is true, the protected flag will be respected and only
     // unprotected cells will be cleared. Otherwise, all cells will be cleared.
     pub fn clear_rows(&mut self, tl: point::Point, bl: Option<point::Point>, protected: bool) {
-        todo!()
+        // defer self.assertIntegrity();
+        // PORT NOTE: Rust has no `defer`; we run `assertIntegrity` at the end,
+        // the single exit path of this body.
+
+        let cols = self.pages.cols;
+        let mut it = self
+            .pages
+            .page_iterator(pagelist::iter::Direction::RightDown, tl, bl);
+        while let Some(chunk) = it.next() {
+            // PORT NOTE: `chunk.node` is the `*mut Node`; `&chunk.node.data` is
+            // the page. We take a raw `*mut Page` via `addr_of_mut!` (the page
+            // lives in the node) and read `chunk.rows()` (a `*mut [Row]`).
+            let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*chunk.node).data) };
+            let rows = chunk.rows();
+            let rows_len = rows.len();
+            let rows_base = rows as *mut Row;
+            for i in 0..rows_len {
+                let row: *mut Row = unsafe { rows_base.add(i) };
+
+                let cells_offset = unsafe { (*row).cells() };
+                // const cells_multi: [*]Cell = row.cells.ptr(chunk.node.data.memory);
+                let cells_multi: *mut Cell = unsafe { cells_offset.ptr((*page).memory_ptr()) };
+                // const cells = cells_multi[0..self.pages.cols];
+                let cells: *mut [Cell] =
+                    core::ptr::slice_from_raw_parts_mut(cells_multi, cols as usize);
+
+                // Clear all cells
+                if protected {
+                    self.clear_unprotected_cells(
+                        unsafe { &mut *page },
+                        unsafe { &mut *row },
+                        unsafe { &mut *cells },
+                    );
+                    // We need to preserve other row attributes since we only
+                    // cleared unprotected cells.
+                    unsafe { (*row).set_cells(cells_offset) };
+                } else {
+                    self.clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
+                        &mut *cells
+                    });
+                    // row.* = .{ .cells = cells_offset };
+                    // PORT NOTE: the reference resets the entire `Row` to a fresh
+                    // value carrying only the `cells` offset (all other row flags
+                    // — wrap, grapheme, styled, dirty, etc. — reset to their
+                    // zero/false defaults). We mirror that with a zeroed `Row`
+                    // whose cells offset is restored.
+                    let mut fresh = Row::zeroed();
+                    fresh.set_cells(cells_offset);
+                    unsafe { *row = fresh };
+                }
+
+                unsafe { (*row).set_dirty(true) };
+            }
+        }
+
+        self.assert_integrity();
     }
 
     /// Clear the cells with the blank cell.
@@ -1724,7 +2023,138 @@ impl Screen {
     }
 
     pub fn split_cell_boundary(&mut self, x: size::CellCountInt) {
-        todo!()
+        // const page = &self.cursor.page_pin.node.data;
+        let page: *mut Page =
+            unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
+
+        // PORT NOTE: stash the raw cursor pin/row pointers in locals up front so
+        // the `clear_cells(&mut self, ...)` calls below don't reborrow `self`
+        // through `self.cursor.*` while `self` is already mutably borrowed by the
+        // method receiver (a Rust borrow-checker constraint with no reference
+        // analogue). These are non-owning copies of the same raw pointers.
+        let cursor_page_pin: *mut Pin = self.cursor.page_pin;
+        let cursor_page_row: *mut Row = self.cursor.page_row;
+
+        unsafe { (*page).pause_integrity_checks(true) };
+        // defer page.pauseIntegrityChecks(false);
+        // PORT NOTE: Rust has no `defer`; this body has multiple early returns,
+        // so we resume integrity checks before each `return` and at the natural
+        // end. The reference's single `defer` runs at every exit identically.
+
+        // const cols = self.cursor.page_pin.node.data.size.cols;
+        let cols = unsafe { (*(*cursor_page_pin).node).data.size.cols };
+
+        // `x` may be up to an INCLUDING `cols`, since that signifies splitting
+        // the boundary to the right of the final cell in the row.
+        debug_assert!(x <= cols);
+
+        // [ A B C D E F|]
+        //              ^ Boundary between final cell and row end.
+        if x == cols {
+            if !unsafe { (*cursor_page_row).wrap() } {
+                unsafe { (*page).pause_integrity_checks(false) };
+                return;
+            }
+
+            let cells = unsafe { (*cursor_page_pin).cells(pagelist::pin::CellSubset::All) };
+            let cells_base = cells as *mut Cell;
+
+            // Spacer head at end of wrapped row.
+            if unsafe { (*cells_base.add(cols as usize - 1)).wide() } == pagepkg::Wide::SpacerHead {
+                let slice = core::ptr::slice_from_raw_parts_mut(
+                    unsafe { cells_base.add(cols as usize - 1) },
+                    1,
+                );
+                self.clear_cells(
+                    unsafe { &mut *page },
+                    unsafe { &mut *cursor_page_row },
+                    unsafe { &mut *slice },
+                );
+            }
+
+            unsafe { (*page).pause_integrity_checks(false) };
+            return;
+        }
+
+        // [|A B C D E F ]
+        //  ^ Boundary between first cell and row start.
+        //
+        //  OR
+        //
+        // [ A|B C D E F ]
+        //    ^ Boundary between first cell and second cell.
+        //
+        // First cell may be a wrapped wide cell with a spacer
+        // head on the previous row that needs to be cleared.
+        if (x == 0 || x == 1) && unsafe { (*cursor_page_row).wrap_continuation() } {
+            let cells = unsafe { (*cursor_page_pin).cells(pagelist::pin::CellSubset::All) };
+            let cells_base = cells as *mut Cell;
+
+            // If the first cell in a row is wide the previous row
+            // may have a spacer head which needs to be cleared.
+            if unsafe { (*cells_base).wide() } == pagepkg::Wide::Wide {
+                if let Some(p_row) = unsafe { (*cursor_page_pin).up(1) } {
+                    let p_rac = p_row.row_and_cell();
+                    let p_cells = p_row.cells(pagelist::pin::CellSubset::All);
+                    let p_cells_base = p_cells as *mut Cell;
+                    let p_cols = unsafe { (*p_row.node).data.size.cols };
+                    let p_cell = unsafe { *p_cells_base.add(p_cols as usize - 1) };
+                    if p_cell.wide() == pagepkg::Wide::SpacerHead {
+                        let p_page: *mut Page =
+                            unsafe { core::ptr::addr_of_mut!((*p_row.node).data) };
+                        let slice = core::ptr::slice_from_raw_parts_mut(
+                            unsafe { p_cells_base.add(p_cols as usize - 1) },
+                            1,
+                        );
+                        self.clear_cells(
+                            unsafe { &mut *p_page },
+                            unsafe { &mut *p_rac.row },
+                            unsafe { &mut *slice },
+                        );
+                    }
+                }
+            }
+        }
+
+        // If x is 0 then we're done.
+        if x == 0 {
+            unsafe { (*page).pause_integrity_checks(false) };
+            return;
+        }
+
+        // [ ... X|Y ... ]
+        //        ^ Boundary between two cells in the middle of the row.
+        {
+            debug_assert!(x > 0);
+            debug_assert!(x < cols);
+
+            let cells = unsafe { (*cursor_page_pin).cells(pagelist::pin::CellSubset::All) };
+            let cells_base = cells as *mut Cell;
+
+            let left = unsafe { *cells_base.add(x as usize - 1) };
+            match left.wide() {
+                // There should not be spacer heads in the middle of the row.
+                pagepkg::Wide::SpacerHead => unreachable!(),
+
+                // We don't need to do anything for narrow cells or spacer tails.
+                pagepkg::Wide::Narrow | pagepkg::Wide::SpacerTail => {}
+
+                // A wide char would be split, so must be cleared.
+                pagepkg::Wide::Wide => {
+                    let slice = core::ptr::slice_from_raw_parts_mut(
+                        unsafe { cells_base.add(x as usize - 1) },
+                        2,
+                    );
+                    self.clear_cells(
+                        unsafe { &mut *page },
+                        unsafe { &mut *cursor_page_row },
+                        unsafe { &mut *slice },
+                    );
+                }
+            }
+        }
+
+        unsafe { (*page).pause_integrity_checks(false) };
     }
 
     #[inline]
@@ -8089,6 +8519,1121 @@ mod tests {
             assert_eq!(actual.as_slice(), b"3ABCD");
         }
         // try testing.expect(iter.next() == null);
+
+        s.deinit();
+    }
+
+    // PORT NOTE: `init` helper mirroring the reference's
+    // `try init(alloc, .{ .cols, .rows, .max_scrollback })`. The kitty image
+    // limit fields are not exercised by these tests (kitty graphics is deferred
+    // to vt-12); they take the same defaults used by every other test in this
+    // module.
+    fn clone_clear_init(
+        cols: size::CellCountInt,
+        rows: size::CellCountInt,
+        max_scrollback: usize,
+    ) -> Screen {
+        Screen::init(
+            Allocator,
+            Options {
+                cols,
+                rows,
+                max_scrollback,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap()
+    }
+
+    // test "Screen: clone"
+    #[test]
+    fn screen_clone() {
+        let mut s = clone_clear_init(10, 3, 10);
+        s.test_write_string(b"1ABCD\n2EFGH").unwrap();
+        {
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"1ABCD\n2EFGH");
+        }
+        assert_eq!(5usize, s.cursor.x as usize);
+        assert_eq!(1usize, s.cursor.y as usize);
+
+        // Clone
+        let mut s2 = s
+            .clone(
+                Allocator,
+                point::Point::Active(point::Coordinate::default()),
+                None,
+            )
+            .unwrap();
+        {
+            let contents = s2
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"1ABCD\n2EFGH");
+        }
+        assert_eq!(5usize, s2.cursor.x as usize);
+        assert_eq!(1usize, s2.cursor.y as usize);
+
+        // Write to s1, should not be in s2
+        s.test_write_string(b"\n34567").unwrap();
+        {
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"1ABCD\n2EFGH\n34567");
+        }
+        {
+            let contents = s2
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"1ABCD\n2EFGH");
+        }
+        assert_eq!(5usize, s2.cursor.x as usize);
+        assert_eq!(1usize, s2.cursor.y as usize);
+
+        s2.deinit();
+        s.deinit();
+    }
+
+    // test "Screen: clone partial"
+    #[test]
+    fn screen_clone_partial() {
+        let mut s = clone_clear_init(10, 3, 10);
+        s.test_write_string(b"1ABCD\n2EFGH").unwrap();
+        {
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"1ABCD\n2EFGH");
+        }
+        assert_eq!(5usize, s.cursor.x as usize);
+        assert_eq!(1usize, s.cursor.y as usize);
+
+        // Clone
+        let mut s2 = s
+            .clone(
+                Allocator,
+                point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+                None,
+            )
+            .unwrap();
+        {
+            let contents = s2
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"2EFGH");
+        }
+
+        // Cursor is shifted since we cloned partial
+        assert_eq!(5usize, s2.cursor.x as usize);
+        assert_eq!(0usize, s2.cursor.y as usize);
+
+        s2.deinit();
+        s.deinit();
+    }
+
+    // test "Screen: clone partial cursor out of bounds"
+    #[test]
+    fn screen_clone_partial_cursor_out_of_bounds() {
+        let mut s = clone_clear_init(10, 3, 10);
+        s.test_write_string(b"1ABCD\n2EFGH").unwrap();
+        {
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"1ABCD\n2EFGH");
+        }
+        assert_eq!(5usize, s.cursor.x as usize);
+        assert_eq!(1usize, s.cursor.y as usize);
+
+        // Clone
+        let mut s2 = s
+            .clone(
+                Allocator,
+                point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+                Some(point::Point::Active(point::Coordinate { x: 0, y: 0 })),
+            )
+            .unwrap();
+        {
+            let contents = s2
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"1ABCD");
+        }
+
+        // Cursor is shifted since we cloned partial
+        assert_eq!(0usize, s2.cursor.x as usize);
+        assert_eq!(0usize, s2.cursor.y as usize);
+
+        s2.deinit();
+        s.deinit();
+    }
+
+    // test "Screen: clone contains full selection"
+    #[test]
+    fn screen_clone_contains_full_selection() {
+        let mut s = clone_clear_init(5, 3, 1);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+
+        // Select a single line
+        let cols = s.pages.cols;
+        s.select(Some(Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate {
+                    x: cols - 1,
+                    y: 1,
+                }))
+                .unwrap(),
+            false,
+        )))
+        .unwrap();
+
+        // Clone
+        let mut s2 = s
+            .clone(
+                Allocator,
+                point::Point::Active(point::Coordinate::default()),
+                None,
+            )
+            .unwrap();
+
+        // Our selection should remain valid
+        {
+            let sel = s2.selection.unwrap();
+            assert_eq!(
+                point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+                s2.pages
+                    .point_from_pin(point::Tag::Active, sel.start())
+                    .unwrap(),
+            );
+            assert_eq!(
+                point::Point::Active(point::Coordinate {
+                    x: s2.pages.cols - 1,
+                    y: 1,
+                }),
+                s2.pages
+                    .point_from_pin(point::Tag::Active, sel.end())
+                    .unwrap(),
+            );
+        }
+
+        s2.deinit();
+        s.deinit();
+    }
+
+    // test "Screen: clone contains none of selection"
+    #[test]
+    fn screen_clone_contains_none_of_selection() {
+        let mut s = clone_clear_init(5, 3, 1);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+
+        // Select a single line
+        let cols = s.pages.cols;
+        s.select(Some(Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate {
+                    x: cols - 1,
+                    y: 0,
+                }))
+                .unwrap(),
+            false,
+        )))
+        .unwrap();
+
+        // Clone
+        let mut s2 = s
+            .clone(
+                Allocator,
+                point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+                None,
+            )
+            .unwrap();
+
+        // Our selection should be null
+        assert!(s2.selection.is_none());
+
+        s2.deinit();
+        s.deinit();
+    }
+
+    // test "Screen: clone contains selection start cutoff"
+    #[test]
+    fn screen_clone_contains_selection_start_cutoff() {
+        let mut s = clone_clear_init(5, 3, 1);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+
+        // Select a single line
+        let cols = s.pages.cols;
+        s.select(Some(Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate {
+                    x: cols - 1,
+                    y: 1,
+                }))
+                .unwrap(),
+            false,
+        )))
+        .unwrap();
+
+        // Clone
+        let mut s2 = s
+            .clone(
+                Allocator,
+                point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+                None,
+            )
+            .unwrap();
+
+        // Our selection should remain valid
+        {
+            let sel = s2.selection.unwrap();
+            assert_eq!(
+                point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+                s2.pages
+                    .point_from_pin(point::Tag::Active, sel.start())
+                    .unwrap(),
+            );
+            assert_eq!(
+                point::Point::Active(point::Coordinate {
+                    x: s2.pages.cols - 1,
+                    y: 0,
+                }),
+                s2.pages
+                    .point_from_pin(point::Tag::Active, sel.end())
+                    .unwrap(),
+            );
+        }
+
+        s2.deinit();
+        s.deinit();
+    }
+
+    // test "Screen: clone contains selection end cutoff"
+    #[test]
+    fn screen_clone_contains_selection_end_cutoff() {
+        let mut s = clone_clear_init(5, 3, 1);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+
+        // Select a single line
+        s.select(Some(Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 2, y: 2 }))
+                .unwrap(),
+            false,
+        )))
+        .unwrap();
+
+        // Clone
+        let mut s2 = s
+            .clone(
+                Allocator,
+                point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+                Some(point::Point::Active(point::Coordinate { x: 0, y: 1 })),
+            )
+            .unwrap();
+
+        // Our selection should remain valid
+        {
+            let sel = s2.selection.unwrap();
+            assert_eq!(
+                point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+                s2.pages
+                    .point_from_pin(point::Tag::Active, sel.start())
+                    .unwrap(),
+            );
+            assert_eq!(
+                point::Point::Active(point::Coordinate {
+                    x: s2.pages.cols - 1,
+                    y: 2,
+                }),
+                s2.pages
+                    .point_from_pin(point::Tag::Active, sel.end())
+                    .unwrap(),
+            );
+        }
+
+        s2.deinit();
+        s.deinit();
+    }
+
+    // test "Screen: clone contains selection end cutoff reversed"
+    #[test]
+    fn screen_clone_contains_selection_end_cutoff_reversed() {
+        let mut s = clone_clear_init(5, 3, 1);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+
+        // Select a single line
+        s.select(Some(Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 2, y: 2 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+                .unwrap(),
+            false,
+        )))
+        .unwrap();
+
+        // Clone
+        let mut s2 = s
+            .clone(
+                Allocator,
+                point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+                Some(point::Point::Active(point::Coordinate { x: 0, y: 1 })),
+            )
+            .unwrap();
+
+        // Our selection should remain valid
+        {
+            let sel = s2.selection.unwrap();
+            assert_eq!(
+                point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+                s2.pages
+                    .point_from_pin(point::Tag::Active, sel.start())
+                    .unwrap(),
+            );
+            assert_eq!(
+                point::Point::Active(point::Coordinate {
+                    x: s2.pages.cols - 1,
+                    y: 2,
+                }),
+                s2.pages
+                    .point_from_pin(point::Tag::Active, sel.end())
+                    .unwrap(),
+            );
+        }
+
+        s2.deinit();
+        s.deinit();
+    }
+
+    // test "Screen: clone contains subset of selection"
+    #[test]
+    fn screen_clone_contains_subset_of_selection() {
+        let mut s = clone_clear_init(5, 4, 1);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL\n4ABCD").unwrap();
+
+        // Select the full screen
+        s.select(Some(Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 3 }))
+                .unwrap(),
+            false,
+        )))
+        .unwrap();
+
+        // Clone
+        let mut s2 = s
+            .clone(
+                Allocator,
+                point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+                Some(point::Point::Active(point::Coordinate { x: 0, y: 2 })),
+            )
+            .unwrap();
+
+        // Our selection should remain valid
+        {
+            let sel = s2.selection.unwrap();
+            assert_eq!(
+                point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+                s2.pages
+                    .point_from_pin(point::Tag::Active, sel.start())
+                    .unwrap(),
+            );
+            assert_eq!(
+                point::Point::Active(point::Coordinate {
+                    x: s2.pages.cols - 1,
+                    y: 3,
+                }),
+                s2.pages
+                    .point_from_pin(point::Tag::Active, sel.end())
+                    .unwrap(),
+            );
+        }
+
+        s2.deinit();
+        s.deinit();
+    }
+
+    // test "Screen: clone contains subset of rectangle selection"
+    #[test]
+    fn screen_clone_contains_subset_of_rectangle_selection() {
+        let mut s = clone_clear_init(5, 4, 1);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL\n4ABCD").unwrap();
+
+        // Select the full screen from x=1 to x=3
+        s.select(Some(Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 1, y: 0 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 3, y: 3 }))
+                .unwrap(),
+            true,
+        )))
+        .unwrap();
+
+        // Clone
+        let mut s2 = s
+            .clone(
+                Allocator,
+                point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+                Some(point::Point::Active(point::Coordinate { x: 0, y: 2 })),
+            )
+            .unwrap();
+
+        // Our selection should remain valid and be properly clipped
+        // preserving the columns of the start and end points of the
+        // selection.
+        {
+            let sel = s2.selection.unwrap();
+            assert_eq!(
+                point::Point::Active(point::Coordinate { x: 1, y: 0 }),
+                s2.pages
+                    .point_from_pin(point::Tag::Active, sel.start())
+                    .unwrap(),
+            );
+            assert_eq!(
+                point::Point::Active(point::Coordinate { x: 3, y: 3 }),
+                s2.pages
+                    .point_from_pin(point::Tag::Active, sel.end())
+                    .unwrap(),
+            );
+        }
+
+        s2.deinit();
+        s.deinit();
+    }
+
+    // test "Screen: clone basic"
+    #[test]
+    fn screen_clone_basic() {
+        let mut s = clone_clear_init(10, 3, 0);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+
+        {
+            let mut s2 = s
+                .clone(
+                    Allocator,
+                    point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+                    Some(point::Point::Active(point::Coordinate { x: 0, y: 1 })),
+                )
+                .unwrap();
+
+            // Test our contents rotated
+            let contents = s2
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"2EFGH");
+
+            s2.deinit();
+        }
+
+        {
+            let mut s2 = s
+                .clone(
+                    Allocator,
+                    point::Point::Active(point::Coordinate { x: 0, y: 1 }),
+                    Some(point::Point::Active(point::Coordinate { x: 0, y: 2 })),
+                )
+                .unwrap();
+
+            // Test our contents rotated
+            let contents = s2
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"2EFGH\n3IJKL");
+
+            s2.deinit();
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: clone empty viewport"
+    #[test]
+    fn screen_clone_empty_viewport() {
+        let mut s = clone_clear_init(10, 3, 0);
+
+        {
+            let mut s2 = s
+                .clone(
+                    Allocator,
+                    point::Point::Viewport(point::Coordinate { x: 0, y: 0 }),
+                    Some(point::Point::Viewport(point::Coordinate { x: 0, y: 0 })),
+                )
+                .unwrap();
+
+            // Test our contents rotated
+            let contents = s2
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Viewport(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"");
+
+            s2.deinit();
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: clone one line viewport"
+    #[test]
+    fn screen_clone_one_line_viewport() {
+        let mut s = clone_clear_init(10, 3, 0);
+        s.test_write_string(b"1ABC").unwrap();
+
+        {
+            let mut s2 = s
+                .clone(
+                    Allocator,
+                    point::Point::Viewport(point::Coordinate { x: 0, y: 0 }),
+                    Some(point::Point::Viewport(point::Coordinate { x: 0, y: 0 })),
+                )
+                .unwrap();
+
+            // Test our contents
+            let contents = s2
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Viewport(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"1ABC");
+
+            s2.deinit();
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: clone empty active"
+    #[test]
+    fn screen_clone_empty_active() {
+        let mut s = clone_clear_init(10, 3, 0);
+
+        {
+            let mut s2 = s
+                .clone(
+                    Allocator,
+                    point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+                    Some(point::Point::Active(point::Coordinate { x: 0, y: 0 })),
+                )
+                .unwrap();
+
+            // Test our contents rotated
+            let contents = s2
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"");
+
+            s2.deinit();
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: clone one line active with extra space"
+    #[test]
+    fn screen_clone_one_line_active_with_extra_space() {
+        let mut s = clone_clear_init(10, 3, 0);
+        s.test_write_string(b"1ABC").unwrap();
+
+        {
+            let mut s2 = s
+                .clone(
+                    Allocator,
+                    point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+                    None,
+                )
+                .unwrap();
+
+            // Test our contents rotated
+            let contents = s2
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"1ABC");
+
+            s2.deinit();
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: clear history with no history"
+    #[test]
+    fn screen_clear_history_with_no_history() {
+        let mut s = clone_clear_init(10, 3, 3);
+        s.test_write_string(b"4ABCD\n5EFGH\n6IJKL").unwrap();
+        assert!(s.pages.viewport == pagelist::Viewport::Active);
+        s.erase_history(None);
+        assert!(s.pages.viewport == pagelist::Viewport::Active);
+        {
+            // Test our contents rotated
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Viewport(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"4ABCD\n5EFGH\n6IJKL");
+        }
+        {
+            // Test our contents rotated
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Screen(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"4ABCD\n5EFGH\n6IJKL");
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: clear history"
+    #[test]
+    fn screen_clear_history() {
+        let mut s = clone_clear_init(10, 3, 3);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL\n4ABCD\n5EFGH\n6IJKL")
+            .unwrap();
+        assert!(s.pages.viewport == pagelist::Viewport::Active);
+
+        // Scroll to top
+        s.scroll(Scroll::Top);
+        {
+            // Test our contents rotated
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Viewport(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"1ABCD\n2EFGH\n3IJKL");
+        }
+
+        s.erase_history(None);
+        assert!(s.pages.viewport == pagelist::Viewport::Active);
+        {
+            // Test our contents rotated
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Viewport(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"4ABCD\n5EFGH\n6IJKL");
+        }
+        {
+            // Test our contents rotated
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Screen(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"4ABCD\n5EFGH\n6IJKL");
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen: clear above cursor"
+    #[test]
+    fn screen_clear_above_cursor() {
+        let mut s = clone_clear_init(10, 10, 3);
+        s.test_write_string(b"4ABCD\n5EFGH\n6IJKL").unwrap();
+        s.clear_rows(
+            point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+            Some(point::Point::Active(point::Coordinate {
+                x: 0,
+                y: (s.cursor.y - 1) as u32,
+            })),
+            false,
+        );
+        {
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Viewport(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"\n\n6IJKL");
+        }
+        {
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Screen(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"\n\n6IJKL");
+        }
+
+        assert_eq!(5usize, s.cursor.x as usize);
+        assert_eq!(2usize, s.cursor.y as usize);
+
+        s.deinit();
+    }
+
+    // test "Screen: clear above cursor with history"
+    #[test]
+    fn screen_clear_above_cursor_with_history() {
+        let mut s = clone_clear_init(10, 3, 3);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL\n").unwrap();
+        s.test_write_string(b"4ABCD\n5EFGH\n6IJKL").unwrap();
+        s.clear_rows(
+            point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+            Some(point::Point::Active(point::Coordinate {
+                x: 0,
+                y: (s.cursor.y - 1) as u32,
+            })),
+            false,
+        );
+        {
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Viewport(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"\n\n6IJKL");
+        }
+        {
+            let contents = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Screen(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(contents, b"1ABCD\n2EFGH\n3IJKL\n\n\n6IJKL");
+        }
+
+        assert_eq!(5usize, s.cursor.x as usize);
+        assert_eq!(2usize, s.cursor.y as usize);
+
+        s.deinit();
+    }
+
+    // test "Screen clearRows active one line"
+    #[test]
+    fn screen_clear_rows_active_one_line() {
+        let mut s = clone_clear_init(80, 24, 1000);
+
+        s.test_write_string(b"hello, world").unwrap();
+        s.clear_rows(
+            point::Point::Active(point::Coordinate::default()),
+            None,
+            false,
+        );
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 0 })));
+        let str = s
+            .dump_string_alloc(
+                Allocator,
+                point::Point::Screen(point::Coordinate::default()),
+            )
+            .unwrap();
+        assert_eq!(str, b"");
+
+        s.deinit();
+    }
+
+    // test "Screen clearRows active multi line"
+    #[test]
+    fn screen_clear_rows_active_multi_line() {
+        let mut s = clone_clear_init(80, 24, 1000);
+
+        s.test_write_string(b"hello\nworld").unwrap();
+        s.clear_rows(
+            point::Point::Active(point::Coordinate::default()),
+            None,
+            false,
+        );
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 0 })));
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 1 })));
+        let str = s
+            .dump_string_alloc(
+                Allocator,
+                point::Point::Screen(point::Coordinate::default()),
+            )
+            .unwrap();
+        assert_eq!(str, b"");
+
+        s.deinit();
+    }
+
+    // test "Screen clearRows active styled line"
+    #[test]
+    fn screen_clear_rows_active_styled_line() {
+        let mut s = clone_clear_init(80, 24, 1000);
+
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.test_write_string(b"hello world").unwrap();
+        s.set_attribute(crate::sgr::Attribute::Unset).unwrap();
+
+        // We should have one style
+        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        assert_eq!(1usize, unsafe { (*page).styles.count() });
+
+        s.clear_rows(
+            point::Point::Active(point::Coordinate::default()),
+            None,
+            false,
+        );
+
+        // We should have none because active cleared it
+        assert_eq!(0usize, unsafe { (*page).styles.count() });
+
+        let str = s
+            .dump_string_alloc(
+                Allocator,
+                point::Point::Screen(point::Coordinate::default()),
+            )
+            .unwrap();
+        assert_eq!(str, b"");
+
+        s.deinit();
+    }
+
+    // test "Screen clearRows protected"
+    #[test]
+    fn screen_clear_rows_protected() {
+        let mut s = clone_clear_init(80, 24, 1000);
+
+        s.test_write_string(b"UNPROTECTED").unwrap();
+        s.cursor.protected = true;
+        s.test_write_string(b"PROTECTED").unwrap();
+        s.cursor.protected = false;
+        s.test_write_string(b"UNPROTECTED").unwrap();
+        s.test_write_string(b"\n").unwrap();
+        s.cursor.protected = true;
+        s.test_write_string(b"PROTECTED").unwrap();
+        s.cursor.protected = false;
+        s.test_write_string(b"UNPROTECTED").unwrap();
+        s.cursor.protected = true;
+        s.test_write_string(b"PROTECTED").unwrap();
+        s.cursor.protected = false;
+
+        s.clear_rows(
+            point::Point::Active(point::Coordinate::default()),
+            None,
+            true,
+        );
+
+        let str = s
+            .dump_string_alloc(
+                Allocator,
+                point::Point::Screen(point::Coordinate::default()),
+            )
+            .unwrap();
+        assert_eq!(
+            str,
+            b"           PROTECTED\nPROTECTED           PROTECTED".as_slice()
+        );
+
+        s.deinit();
+    }
+
+    // test "Screen eraseRows history"
+    #[test]
+    fn screen_erase_rows_history() {
+        let mut s = clone_clear_init(5, 5, 1000);
+
+        s.test_write_string(b"1\n2\n3\n4\n5\n6").unwrap();
+
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"2\n3\n4\n5\n6");
+        }
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Screen(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"1\n2\n3\n4\n5\n6");
+        }
+
+        s.erase_history(None);
+
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"2\n3\n4\n5\n6");
+        }
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Screen(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"2\n3\n4\n5\n6");
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen eraseRows history with more lines"
+    #[test]
+    fn screen_erase_rows_history_with_more_lines() {
+        let mut s = clone_clear_init(5, 5, 1000);
+
+        s.test_write_string(b"A\nB\nC\n1\n2\n3\n4\n5\n6").unwrap();
+
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"2\n3\n4\n5\n6");
+        }
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Screen(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"A\nB\nC\n1\n2\n3\n4\n5\n6");
+        }
+
+        s.erase_history(None);
+
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"2\n3\n4\n5\n6");
+        }
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Screen(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"2\n3\n4\n5\n6");
+        }
+
+        s.deinit();
+    }
+
+    // test "Screen eraseRows active partial"
+    #[test]
+    fn screen_erase_rows_active_partial() {
+        let mut s = clone_clear_init(5, 5, 0);
+
+        s.test_write_string(b"1\n2\n3").unwrap();
+
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"1\n2\n3");
+        }
+
+        s.erase_active(1);
+
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Active(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"3");
+        }
+        {
+            let str = s
+                .dump_string_alloc(
+                    Allocator,
+                    point::Point::Screen(point::Coordinate::default()),
+                )
+                .unwrap();
+            assert_eq!(str, b"3");
+        }
 
         s.deinit();
     }
