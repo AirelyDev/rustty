@@ -28,3 +28,6 @@ workspace = true
 
 [dependencies]
 rustty-util.workspace = true
+# Faithful Rust map of Zig's `std.mem.Allocator` (the child allocator threaded
+# through `ArenaAllocator`). `Global` reproduces the prior `std::alloc` path.
+allocator-api2.workspace = true

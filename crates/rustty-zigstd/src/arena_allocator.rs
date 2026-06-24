@@ -3,17 +3,25 @@
 //! PORT STATUS: infra (faithful-semantics port of Zig stdlib; not in the 3234
 //! contract)
 //!
-//! This allocator takes the system allocator as its backing ("child") allocator,
-//! wraps it, and provides an interface where you can allocate and then free it
-//! all together. Calls to free an individual item only free the item if it was
-//! the most recent allocation, otherwise calls to free do nothing.
+//! This allocator takes an existing ("child") allocator, wraps it, and provides
+//! an interface where you can allocate and then free it all together. Calls to
+//! free an individual item only free the item if it was the most recent
+//! allocation, otherwise calls to free do nothing.
 //!
 //! This is a faithful port of `std.heap.ArenaAllocator`: it reproduces the exact
 //! observable semantics the port relies on — a growing `BufNode` linked list, a
 //! bump pointer (`end_index`), per-node geometric growth, "free the most recent"
 //! `free`/`resize`, and the three `reset` modes (`FreeAll`, `RetainCapacity`,
-//! `RetainWithLimit(n)`). Backing memory is the Rust system allocator
-//! (`std::alloc`), the faithful map of Zig's `gpa`/`page_allocator`.
+//! `RetainWithLimit(n)`).
+//!
+//! Faithful to Zig, the arena stores a `child_allocator` and `init(child)`
+//! always takes one (Zig: `ArenaAllocator.init(child_allocator)`). The backing
+//! nodes are allocated/freed through that child via the `allocator-api2`
+//! `Allocator` trait — the stable polyfill of `core::alloc::Allocator` and the
+//! faithful map of Zig's `std.mem.Allocator` (`allocate`/`deallocate` map to
+//! `rawAlloc`/`rawFree`). Every existing caller passes
+//! [`allocator_api2::alloc::Global`], which is exactly the prior `std::alloc`
+//! path, so observable behavior is unchanged.
 //!
 //! The Zig original stores a `BufNode` *header* at the front of each backing
 //! allocation, followed by the usable bytes:
@@ -27,9 +35,8 @@
 //! usable). We reproduce this layout byte-for-byte so the geometric-growth and
 //! reset arithmetic match Zig exactly.
 
-use core::alloc::Layout;
+use allocator_api2::alloc::{Allocator, Global, Layout};
 use core::ptr::NonNull;
-use std::alloc;
 
 /// Header stored at the front of every backing allocation, exactly like Zig's
 /// `BufNode`. `data` is the total size (in bytes) of the backing allocation,
@@ -83,8 +90,19 @@ pub enum ResetMode {
 /// Faithful port of `std.heap.ArenaAllocator`.
 ///
 /// Inner state mirrors Zig's `State`: a `buffer_list` (singly linked, LIFO
-/// prepend) and an `end_index` bump pointer into the *first* node.
-pub struct ArenaAllocator {
+/// prepend) and an `end_index` bump pointer into the *first* node. Like Zig,
+/// the arena also stores its `child_allocator` (`child`) — backing nodes are
+/// allocated and freed through it.
+///
+/// `A` is the child allocator type (`allocator-api2`'s `Allocator` trait, the
+/// faithful map of Zig's `std.mem.Allocator`). It defaults to
+/// [`Global`] — the prior `std::alloc` path — so existing call sites that do
+/// not care about the child stay terse and behavior-identical.
+pub struct ArenaAllocator<A: Allocator = Global> {
+    /// The backing ("child") allocator. Faithful to Zig's `child_allocator`:
+    /// every backing node is allocated via `child.allocate` and freed via
+    /// `child.deallocate`.
+    child: A,
     /// LIFO list of backing nodes. `first` is the most-recently-created node and
     /// is the one we bump into.
     first: Option<NonNull<BufNode>>,
@@ -92,10 +110,23 @@ pub struct ArenaAllocator {
     end_index: usize,
 }
 
-impl ArenaAllocator {
-    /// Creates a new arena over the system (child) allocator.
-    pub fn init() -> ArenaAllocator {
+impl ArenaAllocator<Global> {
+    /// Creates a new arena over the global (`std::alloc`) child allocator.
+    ///
+    /// Convenience for `ArenaAllocator::with_child(Global)`; equivalent to Zig's
+    /// `ArenaAllocator.init(std.heap.page_allocator/gpa)` with the system
+    /// allocator as the child.
+    pub fn init() -> ArenaAllocator<Global> {
+        ArenaAllocator::with_child(Global)
+    }
+}
+
+impl<A: Allocator> ArenaAllocator<A> {
+    /// Faithful port of `ArenaAllocator.init(child_allocator)`: creates a new
+    /// arena that allocates its backing nodes through `child`.
+    pub fn with_child(child: A) -> ArenaAllocator<A> {
         ArenaAllocator {
+            child,
             first: None,
             end_index: 0,
         }
@@ -116,14 +147,18 @@ impl ArenaAllocator {
     ///
     /// # Safety
     /// `node` must point to a live backing allocation previously produced by
-    /// `raw_alloc_node`/`create_node`, whose `data` field is its true total
-    /// size. After this call the node memory is freed and must not be used.
-    unsafe fn raw_free_node(node: NonNull<BufNode>) {
+    /// `raw_alloc_node`/`create_node` *of this arena*, whose `data` field is its
+    /// true total size. After this call the node memory is freed and must not be
+    /// used.
+    unsafe fn raw_free_node(&self, node: NonNull<BufNode>) {
         let total = unsafe { node.as_ref().data };
         let layout = Self::node_layout(total);
-        // SAFETY: `node` was allocated with this exact layout (same align,
-        // same `total` recorded in `data`).
-        unsafe { alloc::dealloc(node.as_ptr().cast::<u8>(), layout) };
+        // SAFETY: `node` was allocated from `self.child` with this exact layout
+        // (same align, same `total` recorded in `data`). Maps to Zig
+        // `child_allocator.rawFree`.
+        unsafe {
+            self.child.deallocate(node.cast::<u8>(), layout);
+        }
     }
 
     /// Faithful port of `deinit`: free every node in the buffer list.
@@ -132,7 +167,7 @@ impl ArenaAllocator {
         while let Some(node) = it {
             // This has to occur before the free because the free frees node.
             let next_it = unsafe { node.as_ref().next };
-            unsafe { Self::raw_free_node(node) };
+            unsafe { self.raw_free_node(node) };
             it = next_it;
         }
         self.first = None;
@@ -157,13 +192,15 @@ impl ArenaAllocator {
     /// header. Returns `None` on allocation failure (faithful to Zig's
     /// `rawAlloc orelse return null`). The node's `next` is left as the caller
     /// wants; here we initialize it to `None` and the caller prepends.
-    fn raw_alloc_node(total: usize) -> Option<NonNull<BufNode>> {
+    fn raw_alloc_node(&self, total: usize) -> Option<NonNull<BufNode>> {
         let layout = Self::node_layout(total);
-        // SAFETY: layout has non-zero size (total >= size_of::<BufNode>() > 0).
-        let raw = unsafe { alloc::alloc(layout) };
-        let ptr = NonNull::new(raw.cast::<BufNode>())?;
-        // SAFETY: `ptr` is freshly allocated, suitably aligned and sized for a
-        // `BufNode`; we initialize all fields before any read.
+        // Maps to Zig `child_allocator.rawAlloc(...) orelse return null`.
+        // `allocate` returns `NonNull<[u8]>`; we only need the data pointer.
+        let raw = self.child.allocate(layout).ok()?;
+        let ptr = raw.cast::<BufNode>();
+        // SAFETY: `ptr` is freshly allocated by the child, suitably aligned and
+        // sized for a `BufNode` (layout uses BufNode alignment, total >=
+        // size_of::<BufNode>()); we initialize all fields before any read.
         unsafe {
             ptr.as_ptr().write(BufNode {
                 data: total,
@@ -182,7 +219,7 @@ impl ArenaAllocator {
         let actual_min_size = minimum_size + (buf_node_size() + 16);
         let big_enough_len = prev_len + actual_min_size;
         let len = big_enough_len + big_enough_len / 2;
-        let mut buf_node = Self::raw_alloc_node(len)?;
+        let mut buf_node = self.raw_alloc_node(len)?;
         // prepend(&buf_node.node): new node becomes the head.
         unsafe { buf_node.as_mut().next = self.first };
         self.first = Some(buf_node);
@@ -318,7 +355,7 @@ impl ArenaAllocator {
                 maybe_first_node = Some(node);
                 break;
             }
-            unsafe { Self::raw_free_node(node) };
+            unsafe { self.raw_free_node(node) };
             it = next_it;
         }
         debug_assert!(
@@ -337,36 +374,30 @@ impl ArenaAllocator {
                 // Perfect, no need to invoke the child allocator.
                 return true;
             }
-            // Zig tries rawResize first; the system allocator's only growth
-            // primitive is realloc, which may move and would invalidate the
-            // header pointer we hand around — but here the node has NO live
-            // allocations carved from it (we reset end_index to 0 and the only
-            // outstanding references are to memory whose lifetime ends at reset,
-            // by the arena contract). So a realloc is sound: we update `first`
-            // to the (possibly moved) pointer. This matches Zig's "manual
-            // realloc" fallback (rawAlloc + rawFree) but reuses the allocator's
-            // realloc for the system allocator, which is the faithful map.
-            let old_layout = Self::node_layout(cur_total);
-            // SAFETY: `first_node` was allocated with `old_layout`; `total_size`
-            // is a valid non-zero size; realloc may move the block.
-            let new_raw =
-                unsafe { alloc::realloc(first_node.as_ptr().cast::<u8>(), old_layout, total_size) };
-            match NonNull::new(new_raw.cast::<BufNode>()) {
-                Some(mut new_node) => {
-                    // realloc preserves the leading bytes (the header), but we
-                    // re-write `data`/`next` to be explicit and correct.
-                    unsafe {
-                        new_node.as_mut().data = total_size;
-                        new_node.as_mut().next = None;
-                    }
+            // Zig tries `rawResize` first and, if that fails (the general case
+            // for an arbitrary child allocator), does a "manual realloc":
+            // `rawAlloc(total_size) orelse return false`, then `rawFree(old)`.
+            // The `allocator-api2` `Allocator::grow` is not guaranteed in-place
+            // and may move the block; since the retained node has NO live
+            // allocations carved from it (we reset `end_index` to 0 and, by the
+            // arena contract, outstanding references die at reset), the faithful
+            // map is exactly Zig's manual-realloc fallback: allocate a fresh
+            // node from the child and free the old one.
+            match self.raw_alloc_node(total_size) {
+                Some(new_node) => {
+                    // SAFETY: `first_node` is the live retained node, allocated
+                    // from `self.child` with `cur_total` recorded in `data`.
+                    unsafe { self.raw_free_node(first_node) };
+                    // `raw_alloc_node` already wrote `{ data: total_size, next:
+                    // None }` into `new_node`; install it as the sole node.
                     self.first = Some(new_node);
                     true
                 }
                 None => {
-                    // We failed to preheat the arena properly. On realloc
-                    // failure the original block is still valid (Rust contract),
-                    // so the arena keeps the original node and stays functional.
-                    // Signal failure to the user, matching Zig.
+                    // We failed to preheat the arena properly. The original
+                    // `first_node` is still live and installed as `self.first`,
+                    // so the arena stays fully functional. Signal failure to the
+                    // user, matching Zig.
                     false
                 }
             }
@@ -393,7 +424,7 @@ impl ArenaAllocator {
     }
 }
 
-impl Drop for ArenaAllocator {
+impl<A: Allocator> Drop for ArenaAllocator<A> {
     fn drop(&mut self) {
         // Faithful port of `deinit`.
         self.free_all_nodes();
@@ -404,11 +435,28 @@ impl Drop for ArenaAllocator {
 mod tests {
     use super::*;
 
+    /// Faithful to Zig `ArenaAllocator.init(child_allocator)`: the child is a
+    /// real, threaded parameter. `with_child(Global)` is the explicit form of
+    /// `init()` and must behave identically (Global == the `std::alloc` path).
+    #[test]
+    fn with_child_global_threads_explicit_allocator() {
+        let mut arena = ArenaAllocator::with_child(Global);
+        let p = arena.alloc_bytes(128, 16).unwrap();
+        assert_eq!(p.as_ptr() as usize % 16, 0);
+        unsafe { core::ptr::write_bytes(p.as_ptr(), 0x5A, 128) };
+        assert!(arena.node_count() >= 1);
+        assert!(arena.reset(ResetMode::RetainCapacity));
+        let q = arena.alloc_bytes(64, 8).unwrap();
+        unsafe { core::ptr::write_bytes(q.as_ptr(), 0, 64) };
+    }
+
     /// Faithful analog of basic alloc patterns: many allocations, all live,
     /// distinct, and correctly sized/aligned.
     #[test]
     fn alloc_basic_distinct_and_aligned() {
-        let mut arena = ArenaAllocator::init();
+        // Explicit child threading (faithful to Zig init(child)); Global is the
+        // prior std::alloc path so behavior is unchanged.
+        let mut arena = ArenaAllocator::with_child(Global);
         let mut ptrs = Vec::new();
         for i in 0..64usize {
             let n = 16 + i;

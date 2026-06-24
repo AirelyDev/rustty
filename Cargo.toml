@@ -114,6 +114,11 @@ rustty-apprt = { path = "crates/rustty-apprt" }
 rustty-cli = { path = "crates/rustty-cli" }
 # Additive infra glue (R1): Zig stdlib equivalents; not in the parity contract.
 rustty-zigstd = { path = "crates/rustty-zigstd" }
+# Stable polyfill of the unstable `core::alloc::Allocator` trait. This is the
+# faithful Rust map of Zig's `std.mem.Allocator`: `Allocator::allocate(Layout)`
+# / `deallocate` map to Zig `rawAlloc`/`rawFree`. `Global` == the current
+# `std::alloc` path, so threading it as the child allocator is behavior-preserving.
+allocator-api2 = "0.2"
 
 # Workspace-wide lints. Kept conservative for the scaffold phase; tightened as
 # real ported code lands. R1/R5: never weaken to pass — lint exceptions must be
