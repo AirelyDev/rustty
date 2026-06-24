@@ -4,13 +4,10 @@
 //!
 //! PORTS: ghostty src/terminal/Selection.zig
 //!
-//! PORT STATUS: skeleton (vt-10) — types + method signatures; bodies `todo!()`
-//! land in vt-11.
-// PORT NOTE: this skeleton has `todo!()` method bodies (vt-11 lands the real
-// bodies), so the parameters/imports they will consume are not yet read. The
-// `unused_*` and `clippy::should_implement_trait` allows are skeleton-only and
-// drop out once the bodies land.
-#![allow(clippy::todo, dead_code, unused_variables, unused_imports)]
+//! PORT STATUS: ported (vt-11d) — full Selection: bounds/order/containment/
+//! adjust + the 18 Selection tests.
+// PORT NOTE: `start_ptr`/`end_ptr` mirror the reference's `startPtr`/`endPtr`
+// (non-trait-method `start`/`end` naming kept verbatim from the reference).
 #![allow(clippy::should_implement_trait)]
 
 // const std = @import("std");
@@ -22,9 +19,12 @@
 // const PageList = @import("PageList.zig");
 // const Screen = @import("Screen.zig");
 // const Pin = PageList.Pin;
+use crate::page;
+use crate::pagelist::iter::Direction;
 use crate::pagelist::Pin;
 use crate::point;
 use crate::screen::Screen;
+use crate::size;
 
 // PORT NOTE: the reference `Allocator.Error` maps to `pagelist::OutOfMemory`
 // (the crate's allocator error), matching the PageList allocator seam.
@@ -85,22 +85,37 @@ impl Selection {
     }
 
     pub fn deinit(self, s: &mut Screen) {
-        todo!()
+        match self.bounds {
+            Bounds::Tracked { start, end } => {
+                s.pages.untrack_pin(start);
+                s.pages.untrack_pin(end);
+            }
+
+            Bounds::Untracked { .. } => {}
+        }
     }
 
     /// Returns true if this selection is equal to another selection.
     pub fn eql(self, other: Selection) -> bool {
-        todo!()
+        self.start().eql(other.start())
+            && self.end().eql(other.end())
+            && self.rectangle == other.rectangle
     }
 
     /// The starting pin of the selection. This is NOT ordered.
     pub fn start_ptr(&mut self) -> *mut Pin {
-        todo!()
+        match &mut self.bounds {
+            Bounds::Untracked { start, .. } => start as *mut Pin,
+            Bounds::Tracked { start, .. } => *start,
+        }
     }
 
     /// The ending pin of the selection. This is NOT ordered.
     pub fn end_ptr(&mut self) -> *mut Pin {
-        todo!()
+        match &mut self.bounds {
+            Bounds::Untracked { end, .. } => end as *mut Pin,
+            Bounds::Tracked { end, .. } => *end,
+        }
     }
 
     pub fn start(self) -> Pin {
@@ -119,13 +134,43 @@ impl Selection {
 
     /// Returns true if this is a tracked selection.
     pub fn tracked(&self) -> bool {
-        todo!()
+        match self.bounds {
+            Bounds::Untracked { .. } => false,
+            Bounds::Tracked { .. } => true,
+        }
     }
 
     /// Convert this selection a tracked selection. It is asserted this is
     /// an untracked selection. The tracked selection is returned.
     pub fn track(&self, s: &mut Screen) -> Result<Selection, OutOfMemory> {
-        todo!()
+        debug_assert!(!self.tracked());
+
+        // Track our pins
+        let (start_pin, end_pin) = match self.bounds {
+            Bounds::Untracked { start, end } => (start, end),
+            // PORT NOTE: the reference reads `self.bounds.untracked.start/.end`
+            // directly (a checked union access asserted above); the Rust port's
+            // exhaustive `match` makes the `tracked` arm unreachable given the
+            // `debug_assert!(!self.tracked())` above.
+            Bounds::Tracked { .. } => unreachable!(),
+        };
+        let tracked_start = s.pages.track_pin(start_pin)?;
+        // errdefer s.pages.untrackPin(tracked_start);
+        let tracked_end = match s.pages.track_pin(end_pin) {
+            Ok(p) => p,
+            Err(e) => {
+                s.pages.untrack_pin(tracked_start);
+                return Err(e);
+            }
+        };
+
+        Ok(Selection {
+            bounds: Bounds::Tracked {
+                start: tracked_start,
+                end: tracked_end,
+            },
+            rectangle: self.rectangle,
+        })
     }
 
     /// Returns the top left point of the selection.
@@ -218,7 +263,17 @@ impl Selection {
     /// Note that only forward and reverse are useful desired orders for this
     /// function. All other orders act as if forward order was desired.
     pub fn ordered(self, s: &Screen, desired: Order) -> Selection {
-        todo!()
+        if self.order(s) == desired {
+            return Selection::init(self.start(), self.end(), self.rectangle);
+        }
+
+        let tl = self.top_left(s);
+        let br = self.bottom_right(s);
+        match desired {
+            Order::Forward => Selection::init(tl, br, self.rectangle),
+            Order::Reverse => Selection::init(br, tl, self.rectangle),
+            _ => Selection::init(tl, br, self.rectangle),
+        }
     }
 
     /// Returns true if the selection contains the given point.
@@ -227,7 +282,50 @@ impl Selection {
     /// many points to check, it is cheaper to do the containment logic
     /// yourself and cache the topleft/bottomright.
     pub fn contains(self, s: &Screen, pin: Pin) -> bool {
-        todo!()
+        let tl_pin = self.top_left(s);
+        let br_pin = self.bottom_right(s);
+
+        // This is definitely not very efficient. Low-hanging fruit to
+        // improve this.
+        let tl = s
+            .pages
+            .point_from_pin(point::Tag::Screen, tl_pin)
+            .unwrap()
+            .coord();
+        let br = s
+            .pages
+            .point_from_pin(point::Tag::Screen, br_pin)
+            .unwrap()
+            .coord();
+        let p = s
+            .pages
+            .point_from_pin(point::Tag::Screen, pin)
+            .unwrap()
+            .coord();
+
+        // If we're in rectangle select, we can short-circuit with an easy check
+        // here
+        if self.rectangle {
+            return p.y >= tl.y && p.y <= br.y && p.x >= tl.x && p.x <= br.x;
+        }
+
+        // If tl/br are same line
+        if tl.y == br.y {
+            return p.y == tl.y && p.x >= tl.x && p.x <= br.x;
+        }
+
+        // If on top line, just has to be left of X
+        if p.y == tl.y {
+            return p.x >= tl.x;
+        }
+
+        // If on bottom line, just has to be right of X
+        if p.y == br.y {
+            return p.x <= br.x;
+        }
+
+        // If between the top/bottom, always good.
+        p.y > tl.y && p.y < br.y
     }
 
     /// Get a selection for a single row in the screen. This will return null
@@ -238,7 +336,29 @@ impl Selection {
     /// the coordinates. If you are calling this repeatedly, prefer
     /// `containedRowCached`.
     pub fn contained_row(self, s: &Screen, pin: Pin) -> Option<Selection> {
-        todo!()
+        let tl_pin = self.top_left(s);
+        let br_pin = self.bottom_right(s);
+
+        // This is definitely not very efficient. Low-hanging fruit to
+        // improve this. Callers should prefer containedRowCached if they
+        // can swing it.
+        let tl = s
+            .pages
+            .point_from_pin(point::Tag::Screen, tl_pin)
+            .unwrap()
+            .coord();
+        let br = s
+            .pages
+            .point_from_pin(point::Tag::Screen, br_pin)
+            .unwrap()
+            .coord();
+        let p = s
+            .pages
+            .point_from_pin(point::Tag::Screen, pin)
+            .unwrap()
+            .coord();
+
+        self.contained_row_cached(s, tl_pin, br_pin, pin, tl, br, p)
     }
 
     /// Same as containedRow but useful if you're calling it repeatedly
@@ -254,13 +374,206 @@ impl Selection {
         br: point::Coordinate,
         p: point::Coordinate,
     ) -> Option<Selection> {
-        todo!()
+        if p.y < tl.y || p.y > br.y {
+            return None;
+        }
+
+        // Rectangle case: we can return early as the x range will always be the
+        // same. We've already validated that the row is in the selection.
+        if self.rectangle {
+            return Some(Selection::init(
+                {
+                    let mut copy: Pin = pin;
+                    copy.x = tl.x;
+                    copy
+                },
+                {
+                    let mut copy: Pin = pin;
+                    copy.x = br.x;
+                    copy
+                },
+                true,
+            ));
+        }
+
+        if p.y == tl.y {
+            // If the selection is JUST this line, return it as-is.
+            if p.y == br.y {
+                return Some(Selection::init(tl_pin, br_pin, false));
+            }
+
+            // Selection top-left line matches only.
+            return Some(Selection::init(
+                tl_pin,
+                {
+                    let mut copy: Pin = pin;
+                    copy.x = s.pages.cols - 1;
+                    copy
+                },
+                false,
+            ));
+        }
+
+        // Row is our bottom selection, so we return the selection from the
+        // beginning of the line to the br. We know our selection is more than
+        // one line (due to conditionals above)
+        if p.y == br.y {
+            debug_assert!(p.y != tl.y);
+            return Some(Selection::init(
+                {
+                    let mut copy: Pin = pin;
+                    copy.x = 0;
+                    copy
+                },
+                br_pin,
+                false,
+            ));
+        }
+
+        // Row is somewhere between our selection lines so we return the full line.
+        Some(Selection::init(
+            {
+                let mut copy: Pin = pin;
+                copy.x = 0;
+                copy
+            },
+            {
+                let mut copy: Pin = pin;
+                copy.x = s.pages.cols - 1;
+                copy
+            },
+            false,
+        ))
     }
 
     /// Adjust the selection by some given adjustment. An adjustment allows
     /// a selection to be expanded slightly left, right, up, down, etc.
     pub fn adjust(&mut self, s: &Screen, adjustment: Adjustment) {
-        todo!()
+        // Note that we always adjust "end" because end always represents
+        // the last point of the selection by mouse, not necessarily the
+        // top/bottom visually. So this results in the correct behavior
+        // whether the user drags up or down.
+        // PORT NOTE: `endPtr()` returns a `*Pin`; the Rust port carries it as a
+        // raw `*mut Pin` so it does not borrow `self`, which lets the recursive
+        // `self.adjust(...)` dispatch arms below re-borrow `self` mutably.
+        let end_pin = self.end_ptr();
+        match adjustment {
+            Adjustment::Up => {
+                if let Some(new_end) = unsafe { (*end_pin).up(1) } {
+                    unsafe {
+                        *end_pin = new_end;
+                    }
+                } else {
+                    self.adjust(s, Adjustment::BeginningOfLine);
+                }
+            }
+
+            Adjustment::Down => {
+                // Find the next non-blank row
+                let mut current = unsafe { *end_pin };
+                let mut found = false;
+                while let Some(next) = current.down(1) {
+                    let rac = next.row_and_cell();
+                    let cells = unsafe { (*next.node).data.get_cells(rac.row) };
+                    if page::Cell::has_text_any(unsafe { &*cells }) {
+                        unsafe {
+                            *end_pin = next;
+                        }
+                        found = true;
+                        break;
+                    }
+                    current = next;
+                }
+                if !found {
+                    // If we're at the bottom, just go to the end of the line
+                    self.adjust(s, Adjustment::EndOfLine);
+                }
+            }
+
+            Adjustment::Left => {
+                let mut it = unsafe { (*end_pin).cell_iterator(Direction::LeftUp, None) };
+                let _ = it.next();
+                while let Some(next) = it.next() {
+                    let rac = next.row_and_cell();
+                    if unsafe { (*rac.cell).has_text() } {
+                        unsafe {
+                            *end_pin = next;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            Adjustment::Right => {
+                // Step right, wrapping to the next row down at the start of each new line,
+                // until we find a non-empty cell.
+                let mut it = unsafe { (*end_pin).cell_iterator(Direction::RightDown, None) };
+                let _ = it.next();
+                while let Some(next) = it.next() {
+                    let rac = next.row_and_cell();
+                    if unsafe { (*rac.cell).has_text() } {
+                        unsafe {
+                            *end_pin = next;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            Adjustment::PageUp => {
+                if let Some(new_end) = unsafe { (*end_pin).up(s.pages.rows as usize) } {
+                    unsafe {
+                        *end_pin = new_end;
+                    }
+                } else {
+                    self.adjust(s, Adjustment::Home);
+                }
+            }
+
+            Adjustment::PageDown => {
+                if let Some(new_end) = unsafe { (*end_pin).down(s.pages.rows as usize) } {
+                    unsafe {
+                        *end_pin = new_end;
+                    }
+                } else {
+                    self.adjust(s, Adjustment::End);
+                }
+            }
+
+            Adjustment::Home => unsafe {
+                *end_pin = s
+                    .pages
+                    .pin(point::Point::Screen(point::Coordinate { x: 0, y: 0 }))
+                    .unwrap();
+            },
+
+            Adjustment::End => {
+                let mut it = s.pages.row_iterator(
+                    Direction::LeftUp,
+                    point::Point::Screen(point::Coordinate::default()),
+                    None,
+                );
+                while let Some(next) = it.next() {
+                    let rac = next.row_and_cell();
+                    let cells = unsafe { (*next.node).data.get_cells(rac.row) };
+                    if page::Cell::has_text_any(unsafe { &*cells }) {
+                        unsafe {
+                            *end_pin = next;
+                            (*end_pin).x = (cells.len() - 1) as size::CellCountInt;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            Adjustment::BeginningOfLine => unsafe {
+                (*end_pin).x = 0;
+            },
+
+            Adjustment::EndOfLine => unsafe {
+                (*end_pin).x = (*(*end_pin).node).data.size.cols - 1;
+            },
+        }
     }
 }
 
@@ -301,4 +614,737 @@ pub enum Adjustment {
     PageDown,
     BeginningOfLine,
     EndOfLine,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::screen::Options;
+    use allocator_api2::alloc::Global as Allocator;
+
+    // PORT NOTE: helper for `Screen.init(testing.allocator, .{ .cols, .rows,
+    // .max_scrollback })`. The reference struct-literal sets only those three
+    // fields; the Rust `Options` carries the deferred kitty fields, so we fill
+    // those via `..Options::default()`.
+    fn screen_init(cols: u16, rows: u16, max_scrollback: usize) -> Screen {
+        Screen::init(
+            Allocator,
+            Options {
+                cols,
+                rows,
+                max_scrollback,
+                ..Options::default()
+            },
+        )
+        .unwrap()
+    }
+
+    // PORT NOTE: shorthand for `s.pages.pin(.{ .screen = .{ .x, .y } }).?`.
+    fn pin_screen(s: &Screen, x: u16, y: u32) -> Pin {
+        s.pages
+            .pin(point::Point::Screen(point::Coordinate { x, y }))
+            .unwrap()
+    }
+
+    // PORT NOTE: shorthand for `s.pages.pointFromPin(.screen, p).?`.
+    fn point_from(s: &Screen, p: Pin) -> point::Point {
+        s.pages.point_from_pin(point::Tag::Screen, p).unwrap()
+    }
+
+    fn scr(x: u16, y: u32) -> point::Point {
+        point::Point::Screen(point::Coordinate { x, y })
+    }
+
+    // PORT NOTE: the `containedRow`/`ordered` reference tests use
+    // `testing.expectEqual(Selection, Selection)`, which compares the whole
+    // struct (node ptr + x + y + rectangle). `Selection::eql` is the faithful
+    // equivalent for these untracked selections (pins originate from the same
+    // screen so node pointers match), so we assert through it.
+    fn expect_sel_eq(expected: Selection, got: Selection) {
+        assert!(expected.eql(got));
+    }
+
+    // test "Selection: adjust right"
+    #[test]
+    fn selection_adjust_right() {
+        let mut s = screen_init(10, 10, 0);
+        s.test_write_string(b"A1234\nB5678\nC1234\nD5678").unwrap();
+
+        // Simple movement right
+        {
+            let mut sel = Selection::init(pin_screen(&s, 5, 1), pin_screen(&s, 3, 3), false);
+            sel.adjust(&s, Adjustment::Right);
+
+            assert_eq!(scr(5, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(4, 3), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Already at end of the line.
+        {
+            let mut sel = Selection::init(pin_screen(&s, 4, 1), pin_screen(&s, 4, 2), false);
+            sel.adjust(&s, Adjustment::Right);
+
+            assert_eq!(scr(4, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(0, 3), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Already at end of the screen
+        {
+            let mut sel = Selection::init(pin_screen(&s, 5, 1), pin_screen(&s, 4, 3), false);
+            sel.adjust(&s, Adjustment::Right);
+
+            assert_eq!(scr(5, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(4, 3), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Selection: adjust left"
+    #[test]
+    fn selection_adjust_left() {
+        let mut s = screen_init(10, 10, 0);
+        s.test_write_string(b"A1234\nB5678\nC1234\nD5678").unwrap();
+
+        // Simple movement left
+        {
+            let mut sel = Selection::init(pin_screen(&s, 5, 1), pin_screen(&s, 3, 3), false);
+            sel.adjust(&s, Adjustment::Left);
+
+            // Start line
+            assert_eq!(scr(5, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(2, 3), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Already at beginning of the line.
+        {
+            let mut sel = Selection::init(pin_screen(&s, 5, 1), pin_screen(&s, 0, 3), false);
+            sel.adjust(&s, Adjustment::Left);
+
+            // Start line
+            assert_eq!(scr(5, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(4, 2), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Selection: adjust left skips blanks"
+    #[test]
+    fn selection_adjust_left_skips_blanks() {
+        let mut s = screen_init(10, 10, 0);
+        s.test_write_string(b"A1234\nB5678\nC12\nD56").unwrap();
+
+        // Same line
+        {
+            let mut sel = Selection::init(pin_screen(&s, 5, 1), pin_screen(&s, 4, 3), false);
+            sel.adjust(&s, Adjustment::Left);
+
+            // Start line
+            assert_eq!(scr(5, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(2, 3), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Edge
+        {
+            let mut sel = Selection::init(pin_screen(&s, 5, 1), pin_screen(&s, 0, 3), false);
+            sel.adjust(&s, Adjustment::Left);
+
+            // Start line
+            assert_eq!(scr(5, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(2, 2), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Selection: adjust up"
+    #[test]
+    fn selection_adjust_up() {
+        let mut s = screen_init(10, 10, 0);
+        s.test_write_string(b"A\nB\nC\nD\nE").unwrap();
+
+        // Not on the first line
+        {
+            let mut sel = Selection::init(pin_screen(&s, 5, 1), pin_screen(&s, 3, 3), false);
+            sel.adjust(&s, Adjustment::Up);
+
+            assert_eq!(scr(5, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(3, 2), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // On the first line
+        {
+            let mut sel = Selection::init(pin_screen(&s, 5, 1), pin_screen(&s, 3, 0), false);
+            sel.adjust(&s, Adjustment::Up);
+
+            assert_eq!(scr(5, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(0, 0), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Selection: adjust down"
+    #[test]
+    fn selection_adjust_down() {
+        let mut s = screen_init(10, 10, 0);
+        s.test_write_string(b"A\nB\nC\nD\nE").unwrap();
+
+        // Not on the first line
+        {
+            let mut sel = Selection::init(pin_screen(&s, 5, 1), pin_screen(&s, 3, 3), false);
+            sel.adjust(&s, Adjustment::Down);
+
+            assert_eq!(scr(5, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(3, 4), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // On the last line
+        {
+            let mut sel = Selection::init(pin_screen(&s, 4, 1), pin_screen(&s, 3, 4), false);
+            sel.adjust(&s, Adjustment::Down);
+
+            assert_eq!(scr(4, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(9, 4), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Selection: adjust down with not full screen"
+    #[test]
+    fn selection_adjust_down_with_not_full_screen() {
+        let mut s = screen_init(10, 10, 0);
+        s.test_write_string(b"A\nB\nC").unwrap();
+
+        // On the last line
+        {
+            let mut sel = Selection::init(pin_screen(&s, 4, 1), pin_screen(&s, 3, 2), false);
+            sel.adjust(&s, Adjustment::Down);
+
+            // Start line
+            assert_eq!(scr(4, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(9, 2), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Selection: adjust home"
+    #[test]
+    fn selection_adjust_home() {
+        let mut s = screen_init(10, 10, 0);
+        s.test_write_string(b"A\nB\nC").unwrap();
+
+        // On the last line
+        {
+            let mut sel = Selection::init(pin_screen(&s, 4, 1), pin_screen(&s, 1, 2), false);
+            sel.adjust(&s, Adjustment::Home);
+
+            // Start line
+            assert_eq!(scr(4, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(0, 0), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Selection: adjust end with not full screen"
+    #[test]
+    fn selection_adjust_end_with_not_full_screen() {
+        let mut s = screen_init(10, 10, 0);
+        s.test_write_string(b"A\nB\nC").unwrap();
+
+        // On the last line
+        {
+            let mut sel = Selection::init(pin_screen(&s, 4, 0), pin_screen(&s, 1, 1), false);
+            sel.adjust(&s, Adjustment::End);
+
+            // Start line
+            assert_eq!(scr(4, 0), point_from(&s, sel.start()));
+            assert_eq!(scr(9, 2), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Selection: adjust beginning of line"
+    #[test]
+    fn selection_adjust_beginning_of_line() {
+        let mut s = screen_init(8, 10, 0);
+        s.test_write_string(b"A12 B34\nC12 D34").unwrap();
+
+        // Not at beginning of the line
+        {
+            let mut sel = Selection::init(pin_screen(&s, 5, 1), pin_screen(&s, 5, 1), false);
+            sel.adjust(&s, Adjustment::BeginningOfLine);
+
+            // Start line
+            assert_eq!(scr(5, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(0, 1), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Already at beginning of the line
+        {
+            let mut sel = Selection::init(pin_screen(&s, 5, 1), pin_screen(&s, 0, 1), false);
+            sel.adjust(&s, Adjustment::BeginningOfLine);
+
+            // Start line
+            assert_eq!(scr(5, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(0, 1), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // End pin moves to start pin
+        {
+            let mut sel = Selection::init(pin_screen(&s, 0, 1), pin_screen(&s, 5, 1), false);
+            sel.adjust(&s, Adjustment::BeginningOfLine);
+
+            // Start line
+            assert_eq!(scr(0, 1), point_from(&s, sel.start()));
+            assert_eq!(scr(0, 1), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Selection: adjust end of line"
+    #[test]
+    fn selection_adjust_end_of_line() {
+        let mut s = screen_init(8, 10, 0);
+        s.test_write_string(b"A12 B34\nC12 D34").unwrap();
+
+        // Not at end of the line
+        {
+            let mut sel = Selection::init(pin_screen(&s, 1, 0), pin_screen(&s, 1, 0), false);
+            sel.adjust(&s, Adjustment::EndOfLine);
+
+            assert_eq!(scr(1, 0), point_from(&s, sel.start()));
+            assert_eq!(scr(7, 0), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // Already at end of the line
+        {
+            let mut sel = Selection::init(pin_screen(&s, 1, 0), pin_screen(&s, 7, 0), false);
+            sel.adjust(&s, Adjustment::EndOfLine);
+
+            assert_eq!(scr(1, 0), point_from(&s, sel.start()));
+            assert_eq!(scr(7, 0), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        // End pin moves to start pin
+        {
+            let mut sel = Selection::init(pin_screen(&s, 7, 0), pin_screen(&s, 1, 0), false);
+            sel.adjust(&s, Adjustment::EndOfLine);
+
+            // Start line
+            assert_eq!(scr(7, 0), point_from(&s, sel.start()));
+            assert_eq!(scr(7, 0), point_from(&s, sel.end()));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Selection: order, standard"
+    #[test]
+    fn selection_order_standard() {
+        let mut s = screen_init(100, 100, 1);
+
+        {
+            // forward, multi-line
+            let sel = Selection::init(pin_screen(&s, 2, 1), pin_screen(&s, 2, 2), false);
+            assert!(sel.order(&s) == Order::Forward);
+            sel.deinit(&mut s);
+        }
+        {
+            // reverse, multi-line
+            let sel = Selection::init(pin_screen(&s, 2, 2), pin_screen(&s, 2, 1), false);
+            assert!(sel.order(&s) == Order::Reverse);
+            sel.deinit(&mut s);
+        }
+        {
+            // forward, same-line
+            let sel = Selection::init(pin_screen(&s, 2, 1), pin_screen(&s, 3, 1), false);
+            assert!(sel.order(&s) == Order::Forward);
+            sel.deinit(&mut s);
+        }
+        {
+            // forward, single char
+            let sel = Selection::init(pin_screen(&s, 2, 1), pin_screen(&s, 2, 1), false);
+            assert!(sel.order(&s) == Order::Forward);
+            sel.deinit(&mut s);
+        }
+        {
+            // reverse, single line
+            let sel = Selection::init(pin_screen(&s, 2, 1), pin_screen(&s, 1, 1), false);
+            assert!(sel.order(&s) == Order::Reverse);
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "Selection: order, rectangle"
+    #[test]
+    fn selection_order_rectangle() {
+        let mut s = screen_init(100, 100, 1);
+
+        // Conventions:
+        // TL - top left
+        // BL - bottom left
+        // TR - top right
+        // BR - bottom right
+        {
+            // forward (TL -> BR)
+            let sel = Selection::init(pin_screen(&s, 1, 1), pin_screen(&s, 2, 2), true);
+            assert!(sel.order(&s) == Order::Forward);
+            sel.deinit(&mut s);
+        }
+        {
+            // reverse (BR -> TL)
+            let sel = Selection::init(pin_screen(&s, 2, 2), pin_screen(&s, 1, 1), true);
+            assert!(sel.order(&s) == Order::Reverse);
+            sel.deinit(&mut s);
+        }
+        {
+            // mirrored_forward (TR -> BL)
+            let sel = Selection::init(pin_screen(&s, 3, 1), pin_screen(&s, 1, 3), true);
+            assert!(sel.order(&s) == Order::MirroredForward);
+            sel.deinit(&mut s);
+        }
+        {
+            // mirrored_reverse (BL -> TR)
+            let sel = Selection::init(pin_screen(&s, 1, 3), pin_screen(&s, 3, 1), true);
+            assert!(sel.order(&s) == Order::MirroredReverse);
+            sel.deinit(&mut s);
+        }
+        {
+            // forward, single line (left -> right )
+            let sel = Selection::init(pin_screen(&s, 1, 1), pin_screen(&s, 3, 1), true);
+            assert!(sel.order(&s) == Order::Forward);
+            sel.deinit(&mut s);
+        }
+        {
+            // reverse, single line (right -> left)
+            let sel = Selection::init(pin_screen(&s, 3, 1), pin_screen(&s, 1, 1), true);
+            assert!(sel.order(&s) == Order::Reverse);
+            sel.deinit(&mut s);
+        }
+        {
+            // forward, single column (top -> bottom)
+            let sel = Selection::init(pin_screen(&s, 2, 1), pin_screen(&s, 2, 3), true);
+            assert!(sel.order(&s) == Order::Forward);
+            sel.deinit(&mut s);
+        }
+        {
+            // reverse, single column (bottom -> top)
+            let sel = Selection::init(pin_screen(&s, 2, 3), pin_screen(&s, 2, 1), true);
+            assert!(sel.order(&s) == Order::Reverse);
+            sel.deinit(&mut s);
+        }
+        {
+            // forward, single cell
+            let sel = Selection::init(pin_screen(&s, 1, 1), pin_screen(&s, 1, 1), true);
+            assert!(sel.order(&s) == Order::Forward);
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "topLeft"
+    #[test]
+    fn top_left() {
+        let mut s = screen_init(10, 10, 0);
+        {
+            // forward
+            let sel = Selection::init(pin_screen(&s, 1, 1), pin_screen(&s, 3, 1), true);
+            let tl = sel.top_left(&s);
+            assert_eq!(scr(1, 1), point_from(&s, tl));
+            sel.deinit(&mut s);
+        }
+        {
+            // reverse
+            let sel = Selection::init(pin_screen(&s, 3, 1), pin_screen(&s, 1, 1), true);
+            let tl = sel.top_left(&s);
+            assert_eq!(scr(1, 1), point_from(&s, tl));
+            sel.deinit(&mut s);
+        }
+        {
+            // mirrored_forward
+            let sel = Selection::init(pin_screen(&s, 3, 1), pin_screen(&s, 1, 3), true);
+            let tl = sel.top_left(&s);
+            assert_eq!(scr(1, 1), point_from(&s, tl));
+            sel.deinit(&mut s);
+        }
+        {
+            // mirrored_reverse
+            let sel = Selection::init(pin_screen(&s, 1, 3), pin_screen(&s, 3, 1), true);
+            let tl = sel.top_left(&s);
+            assert_eq!(scr(1, 1), point_from(&s, tl));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "bottomRight"
+    #[test]
+    fn bottom_right() {
+        let mut s = screen_init(10, 10, 0);
+        {
+            // forward
+            let sel = Selection::init(pin_screen(&s, 1, 1), pin_screen(&s, 3, 1), false);
+            let br = sel.bottom_right(&s);
+            assert_eq!(scr(3, 1), point_from(&s, br));
+            sel.deinit(&mut s);
+        }
+        {
+            // reverse
+            let sel = Selection::init(pin_screen(&s, 3, 1), pin_screen(&s, 1, 1), false);
+            let br = sel.bottom_right(&s);
+            assert_eq!(scr(3, 1), point_from(&s, br));
+            sel.deinit(&mut s);
+        }
+        {
+            // mirrored_forward
+            let sel = Selection::init(pin_screen(&s, 3, 1), pin_screen(&s, 1, 3), true);
+            let br = sel.bottom_right(&s);
+            assert_eq!(scr(3, 3), point_from(&s, br));
+            sel.deinit(&mut s);
+        }
+        {
+            // mirrored_reverse
+            let sel = Selection::init(pin_screen(&s, 1, 3), pin_screen(&s, 3, 1), true);
+            let br = sel.bottom_right(&s);
+            assert_eq!(scr(3, 3), point_from(&s, br));
+            sel.deinit(&mut s);
+        }
+
+        s.deinit();
+    }
+
+    // test "ordered"
+    #[test]
+    fn ordered() {
+        let mut s = screen_init(10, 10, 0);
+        {
+            // forward
+            let sel = Selection::init(pin_screen(&s, 1, 1), pin_screen(&s, 3, 1), false);
+            let sel_reverse = Selection::init(pin_screen(&s, 3, 1), pin_screen(&s, 1, 1), false);
+            expect_sel_eq(sel.ordered(&s, Order::Forward), sel);
+            expect_sel_eq(sel.ordered(&s, Order::Reverse), sel_reverse);
+            expect_sel_eq(sel.ordered(&s, Order::MirroredForward), sel);
+        }
+        {
+            // reverse
+            let sel = Selection::init(pin_screen(&s, 3, 1), pin_screen(&s, 1, 1), false);
+            let sel_forward = Selection::init(pin_screen(&s, 1, 1), pin_screen(&s, 3, 1), false);
+            expect_sel_eq(sel.ordered(&s, Order::Forward), sel_forward);
+            expect_sel_eq(sel.ordered(&s, Order::Reverse), sel);
+            expect_sel_eq(sel.ordered(&s, Order::MirroredForward), sel_forward);
+        }
+        {
+            // mirrored_forward
+            let sel = Selection::init(pin_screen(&s, 3, 1), pin_screen(&s, 1, 3), true);
+            let sel_forward = Selection::init(pin_screen(&s, 1, 1), pin_screen(&s, 3, 3), true);
+            let sel_reverse = Selection::init(pin_screen(&s, 3, 3), pin_screen(&s, 1, 1), true);
+            expect_sel_eq(sel.ordered(&s, Order::Forward), sel_forward);
+            expect_sel_eq(sel.ordered(&s, Order::Reverse), sel_reverse);
+            expect_sel_eq(sel.ordered(&s, Order::MirroredReverse), sel_forward);
+        }
+        {
+            // mirrored_reverse
+            let sel = Selection::init(pin_screen(&s, 1, 3), pin_screen(&s, 3, 1), true);
+            let sel_forward = Selection::init(pin_screen(&s, 1, 1), pin_screen(&s, 3, 3), true);
+            let sel_reverse = Selection::init(pin_screen(&s, 3, 3), pin_screen(&s, 1, 1), true);
+            expect_sel_eq(sel.ordered(&s, Order::Forward), sel_forward);
+            expect_sel_eq(sel.ordered(&s, Order::Reverse), sel_reverse);
+            expect_sel_eq(sel.ordered(&s, Order::MirroredForward), sel_forward);
+        }
+
+        s.deinit();
+    }
+
+    // test "Selection: contains"
+    #[test]
+    fn selection_contains() {
+        let mut s = screen_init(10, 10, 0);
+        {
+            let sel = Selection::init(pin_screen(&s, 5, 1), pin_screen(&s, 3, 2), false);
+
+            assert!(sel.contains(&s, pin_screen(&s, 6, 1)));
+            assert!(sel.contains(&s, pin_screen(&s, 1, 2)));
+            assert!(!sel.contains(&s, pin_screen(&s, 1, 1)));
+            assert!(!sel.contains(&s, pin_screen(&s, 5, 2)));
+        }
+
+        // Reverse
+        {
+            let sel = Selection::init(pin_screen(&s, 3, 2), pin_screen(&s, 5, 1), false);
+
+            assert!(sel.contains(&s, pin_screen(&s, 6, 1)));
+            assert!(sel.contains(&s, pin_screen(&s, 1, 2)));
+            assert!(!sel.contains(&s, pin_screen(&s, 1, 1)));
+            assert!(!sel.contains(&s, pin_screen(&s, 5, 2)));
+        }
+
+        // Single line
+        {
+            let sel = Selection::init(pin_screen(&s, 5, 1), pin_screen(&s, 8, 1), false);
+
+            assert!(sel.contains(&s, pin_screen(&s, 6, 1)));
+            assert!(!sel.contains(&s, pin_screen(&s, 2, 1)));
+            assert!(!sel.contains(&s, pin_screen(&s, 9, 1)));
+        }
+
+        s.deinit();
+    }
+
+    // test "Selection: contains, rectangle"
+    #[test]
+    fn selection_contains_rectangle() {
+        let mut s = screen_init(15, 15, 0);
+        {
+            let sel = Selection::init(pin_screen(&s, 3, 3), pin_screen(&s, 7, 9), true);
+
+            assert!(sel.contains(&s, pin_screen(&s, 5, 6))); // Center
+            assert!(sel.contains(&s, pin_screen(&s, 3, 6))); // Left border
+            assert!(sel.contains(&s, pin_screen(&s, 7, 6))); // Right border
+            assert!(sel.contains(&s, pin_screen(&s, 5, 3))); // Top border
+            assert!(sel.contains(&s, pin_screen(&s, 5, 9))); // Bottom border
+
+            assert!(!sel.contains(&s, pin_screen(&s, 5, 2))); // Above center
+            assert!(!sel.contains(&s, pin_screen(&s, 5, 10))); // Below center
+            assert!(!sel.contains(&s, pin_screen(&s, 2, 6))); // Left center
+            assert!(!sel.contains(&s, pin_screen(&s, 8, 6))); // Right center
+            assert!(!sel.contains(&s, pin_screen(&s, 8, 3))); // Just right of top right
+            assert!(!sel.contains(&s, pin_screen(&s, 2, 9))); // Just left of bottom left
+        }
+
+        // Reverse
+        {
+            let sel = Selection::init(pin_screen(&s, 7, 9), pin_screen(&s, 3, 3), true);
+
+            assert!(sel.contains(&s, pin_screen(&s, 5, 6))); // Center
+            assert!(sel.contains(&s, pin_screen(&s, 3, 6))); // Left border
+            assert!(sel.contains(&s, pin_screen(&s, 7, 6))); // Right border
+            assert!(sel.contains(&s, pin_screen(&s, 5, 3))); // Top border
+            assert!(sel.contains(&s, pin_screen(&s, 5, 9))); // Bottom border
+
+            assert!(!sel.contains(&s, pin_screen(&s, 5, 2))); // Above center
+            assert!(!sel.contains(&s, pin_screen(&s, 5, 10))); // Below center
+            assert!(!sel.contains(&s, pin_screen(&s, 2, 6))); // Left center
+            assert!(!sel.contains(&s, pin_screen(&s, 8, 6))); // Right center
+            assert!(!sel.contains(&s, pin_screen(&s, 8, 3))); // Just right of top right
+            assert!(!sel.contains(&s, pin_screen(&s, 2, 9))); // Just left of bottom left
+        }
+
+        // Single line
+        // NOTE: This is the same as normal selection but we just do it for brevity
+        {
+            let sel = Selection::init(pin_screen(&s, 5, 1), pin_screen(&s, 10, 1), true);
+
+            assert!(sel.contains(&s, pin_screen(&s, 6, 1)));
+            assert!(!sel.contains(&s, pin_screen(&s, 2, 1)));
+            assert!(!sel.contains(&s, pin_screen(&s, 12, 1)));
+        }
+
+        s.deinit();
+    }
+
+    // test "Selection: containedRow"
+    #[test]
+    fn selection_contained_row() {
+        let mut s = screen_init(10, 5, 0);
+
+        {
+            let sel = Selection::init(pin_screen(&s, 5, 1), pin_screen(&s, 3, 3), false);
+
+            // Not contained
+            assert!(sel.contained_row(&s, pin_screen(&s, 1, 4)).is_none());
+
+            // Start line
+            expect_sel_eq(
+                Selection::init(sel.start(), pin_screen(&s, s.pages.cols - 1, 1), false),
+                sel.contained_row(&s, pin_screen(&s, 1, 1)).unwrap(),
+            );
+
+            // End line
+            expect_sel_eq(
+                Selection::init(pin_screen(&s, 0, 3), sel.end(), false),
+                sel.contained_row(&s, pin_screen(&s, 2, 3)).unwrap(),
+            );
+
+            // Middle line
+            expect_sel_eq(
+                Selection::init(
+                    pin_screen(&s, 0, 2),
+                    pin_screen(&s, s.pages.cols - 1, 2),
+                    false,
+                ),
+                sel.contained_row(&s, pin_screen(&s, 2, 2)).unwrap(),
+            );
+        }
+
+        // Rectangle
+        {
+            let sel = Selection::init(pin_screen(&s, 3, 1), pin_screen(&s, 6, 3), true);
+
+            // Not contained
+            assert!(sel.contained_row(&s, pin_screen(&s, 1, 4)).is_none());
+
+            // Start line
+            expect_sel_eq(
+                Selection::init(pin_screen(&s, 3, 1), pin_screen(&s, 6, 1), true),
+                sel.contained_row(&s, pin_screen(&s, 1, 1)).unwrap(),
+            );
+
+            // End line
+            expect_sel_eq(
+                Selection::init(pin_screen(&s, 3, 3), pin_screen(&s, 6, 3), true),
+                sel.contained_row(&s, pin_screen(&s, 2, 3)).unwrap(),
+            );
+
+            // Middle line
+            expect_sel_eq(
+                Selection::init(pin_screen(&s, 3, 2), pin_screen(&s, 6, 2), true),
+                sel.contained_row(&s, pin_screen(&s, 2, 2)).unwrap(),
+            );
+        }
+
+        // Single-line selection
+        {
+            let sel = Selection::init(pin_screen(&s, 2, 1), pin_screen(&s, 6, 1), false);
+
+            // Not contained
+            assert!(sel.contained_row(&s, pin_screen(&s, 1, 0)).is_none());
+            assert!(sel.contained_row(&s, pin_screen(&s, 1, 2)).is_none());
+
+            // Contained
+            expect_sel_eq(sel, sel.contained_row(&s, pin_screen(&s, 1, 1)).unwrap());
+        }
+
+        s.deinit();
+    }
 }
