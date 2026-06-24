@@ -81,6 +81,13 @@ impl TempDir {
         slice_to(&self.name_buf, 0)
     }
 
+    /// Access the directory handle. In the reference `TempDir.dir` is a public
+    /// `std.fs.Dir` field; callers (e.g. Kitty graphics image tests) use it to
+    /// write/realpath/access files inside the temp directory.
+    pub fn dir(&self) -> &Dir {
+        &self.dir
+    }
+
     /// Finish with the temporary directory. This deletes all contents in the
     /// directory.
     pub fn deinit(&mut self) {
@@ -126,6 +133,32 @@ impl Dir {
     /// `std.fs.Dir.deleteTree`: recursively delete `sub_path` and its contents.
     fn deleteTree(&self, sub_path: &[u8]) -> std::io::Result<()> {
         std::fs::remove_dir_all(self.path.join(os_str_from_bytes(sub_path)))
+    }
+
+    /// `std.fs.Dir.writeFile`: create (truncating) the file at `sub_path` within
+    /// this directory and write `data` to it.
+    pub fn writeFile(&self, sub_path: &str, data: &[u8]) -> std::io::Result<()> {
+        std::fs::write(self.path.join(sub_path), data)
+    }
+
+    /// `std.fs.Dir.realpath`: resolve `sub_path` (relative to this directory)
+    /// to a canonical absolute path, returning the path bytes. The reference
+    /// fills a caller-provided `[max_path_bytes]u8` buffer; the Rust port
+    /// returns an owning `PathBuf` and the caller obtains the bytes from it.
+    pub fn realpath(&self, sub_path: &str) -> std::io::Result<PathBuf> {
+        std::fs::canonicalize(self.path.join(sub_path))
+    }
+
+    /// `std.fs.Dir.access`: check that `path` is accessible. `path` may be
+    /// absolute (the reference passes the realpath result) or relative to this
+    /// directory. Returns `FileNotFound` (`NotFound`) when it does not exist.
+    pub fn access(&self, path: &Path) -> std::io::Result<()> {
+        let full = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.path.join(path)
+        };
+        std::fs::metadata(full).map(|_| ())
     }
 }
 

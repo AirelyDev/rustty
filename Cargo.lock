@@ -581,6 +581,7 @@ dependencies = [
  "rustty-unicode",
  "rustty-util",
  "rustty-zigstd",
+ "zlib-sys",
 ]
 
 [[package]]

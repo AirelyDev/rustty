@@ -1,14 +1,11 @@
 /* adler32.c -- compute the Adler-32 checksum of a data stream
  * Copyright (C) 1995-2011, 2016 Mark Adler
  * For conditions of distribution and use, see copyright notice in zlib.h
- *
- * R3 vendored verbatim from upstream zlib 1.3.1 (the SAME library the reference
- * links). Built standalone via the `cc` crate; no ghostty dependency.
  */
 
-#include "zlib.h"
+/* @(#) $Id$ */
 
-local uLong adler32_combine_ OF((uLong adler1, uLong adler2, z_off64_t len2));
+#include "zutil.h"
 
 #define BASE 65521U     /* largest prime smaller than 65536 */
 #define NMAX 5552
@@ -158,6 +155,10 @@ local uLong adler32_combine_(uLong adler1, uLong adler2, z_off64_t len2) {
 }
 
 /* ========================================================================= */
-uLong ZEXPORT adler32_combine(uLong adler1, uLong adler2, long len2) {
+uLong ZEXPORT adler32_combine(uLong adler1, uLong adler2, z_off_t len2) {
+    return adler32_combine_(adler1, adler2, len2);
+}
+
+uLong ZEXPORT adler32_combine64(uLong adler1, uLong adler2, z_off64_t len2) {
     return adler32_combine_(adler1, adler2, len2);
 }

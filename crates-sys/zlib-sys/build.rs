@@ -11,16 +11,33 @@
 //!      when a wider header surface is vendored).
 //!   4. `cargo:rustc-link-*` is emitted by `cc` (static archive `libz`).
 //!
-//! Phase-1 vendors the `adler32` checksum translation unit — a small, fully
-//! self-contained unit (depends only on `vendor/zlib.h` + `vendor/zconf.h`) that
-//! produces bit-exact, known-answer output — to prove the R3 toolchain links
-//! end-to-end. Additional zlib translation units are appended to `SOURCES` as
-//! the crates that need them are carved; the pattern is unchanged.
+//! Phase-1 vendored the `adler32` checksum translation unit — a small, fully
+//! self-contained unit — to prove the R3 toolchain links end-to-end. Additional
+//! zlib translation units are appended to `SOURCES` as the crates that need them
+//! are carved; the pattern is unchanged. The Kitty graphics image port
+//! (`terminal/kitty/graphics_image.zig`) needs DEFLATE decompression
+//! (`std.compress.flate`), so the verbatim upstream inflate translation units
+//! (`crc32`, `inftrees`, `inffast`, `inflate`) plus the one-shot `uncompr`
+//! entry point and shared `zutil` support are now vendored and compiled here.
 
 use std::path::PathBuf;
 
 /// Vendored zlib translation units compiled into this crate.
-const SOURCES: &[&str] = &["vendor/adler32.c"];
+///
+/// `adler32`/`crc32` provide the checksums; `inftrees`/`inffast`/`inflate`
+/// provide the DEFLATE decompressor; `uncompr` provides the one-shot
+/// `uncompress` entry point; `zutil` provides the shared support routines.
+/// These are the verbatim upstream zlib 1.3.1 sources needed for the inflate
+/// (decompression) surface the reference's `std.compress.flate` covers.
+const SOURCES: &[&str] = &[
+    "vendor/adler32.c",
+    "vendor/crc32.c",
+    "vendor/inftrees.c",
+    "vendor/inffast.c",
+    "vendor/inflate.c",
+    "vendor/uncompr.c",
+    "vendor/zutil.c",
+];
 
 fn main() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

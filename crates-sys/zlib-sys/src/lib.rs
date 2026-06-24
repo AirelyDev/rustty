@@ -11,7 +11,7 @@
 
 #![allow(non_camel_case_types)]
 
-use std::os::raw::{c_uint, c_ulong};
+use std::os::raw::{c_char, c_int, c_uint, c_ulong, c_void};
 
 extern "C" {
     /// Update a running Adler-32 checksum with `buf[0..len-1]` and return the
@@ -21,6 +21,189 @@ extern "C" {
     /// # Safety
     /// `buf` must point to at least `len` readable bytes, or be NULL.
     pub fn adler32(adler: c_ulong, buf: *const u8, len: c_uint) -> c_ulong;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming inflate (DEFLATE decompression) FFI surface.
+//
+// This is the streaming inflate API (`inflateInit2_`/`inflate`/`inflateEnd`)
+// plus the ABI-stable `z_stream` control block. It is the C-side primitive the
+// reference's `std.compress.flate.Decompress` (zlib mode) covers: incremental
+// decompression of a zlib-wrapped DEFLATE stream into a growable output buffer.
+// ---------------------------------------------------------------------------
+
+/// The zlib stream control block (`z_stream` / `z_stream_s`). The layout is the
+/// long-stable public zlib ABI; we reproduce it exactly so the C inflate
+/// routines read/write the correct fields. Fields we do not consume are still
+/// declared so the struct size and offsets match the C definition.
+#[repr(C)]
+pub struct z_stream {
+    /// next input byte
+    pub next_in: *const u8,
+    /// number of bytes available at next_in
+    pub avail_in: c_uint,
+    /// total number of input bytes read so far
+    pub total_in: c_ulong,
+
+    /// next output byte will go here
+    pub next_out: *mut u8,
+    /// remaining free space at next_out
+    pub avail_out: c_uint,
+    /// total number of bytes output so far
+    pub total_out: c_ulong,
+
+    /// last error message, NULL if no error
+    pub msg: *const c_char,
+    /// internal state, not visible by applications
+    pub state: *mut c_void,
+
+    /// used to allocate the internal state
+    pub zalloc: *mut c_void,
+    /// used to free the internal state
+    pub zfree: *mut c_void,
+    /// private data object passed to zalloc and zfree
+    pub opaque: *mut c_void,
+
+    /// best guess about the data type: binary or text for deflate, or the
+    /// decoding state for inflate
+    pub data_type: c_int,
+    /// Adler-32 or CRC-32 value of the uncompressed data
+    pub adler: c_ulong,
+    /// reserved for future use
+    pub reserved: c_ulong,
+}
+
+/// zlib version string the headers we vendored describe (`ZLIB_VERSION`).
+/// `inflateInit2_` checks the first byte against the compiled library.
+pub const ZLIB_VERSION: &[u8] = b"1.3.1\0";
+
+/// `Z_OK` — operation completed without error.
+pub const Z_OK: c_int = 0;
+/// `Z_STREAM_END` — the end of the compressed stream was reached.
+pub const Z_STREAM_END: c_int = 1;
+/// `Z_NO_FLUSH` — the normal inflate flush mode.
+pub const Z_NO_FLUSH: c_int = 0;
+/// Default window bits for a zlib-wrapped stream (`MAX_WBITS` = 15).
+pub const MAX_WBITS: c_int = 15;
+
+extern "C" {
+    /// `inflateInit2_`: initialize `strm` for decompression with `window_bits`
+    /// (the public `inflateInit2` macro forwards version/size here).
+    ///
+    /// # Safety
+    /// `strm` must point to a zeroed `z_stream`; `version`/`stream_size` must
+    /// describe this crate's compiled zlib.
+    pub fn inflateInit2_(
+        strm: *mut z_stream,
+        window_bits: c_int,
+        version: *const c_char,
+        stream_size: c_int,
+    ) -> c_int;
+
+    /// `inflate`: decompress as much as possible, updating the `next_*`/`avail_*`
+    /// fields. Returns `Z_OK`, `Z_STREAM_END`, or a negative error code.
+    ///
+    /// # Safety
+    /// `strm` must be a stream previously initialized by `inflateInit2_` with
+    /// valid input/output buffers described by its fields.
+    pub fn inflate(strm: *mut z_stream, flush: c_int) -> c_int;
+
+    /// `inflateEnd`: release all dynamically allocated state for `strm`.
+    ///
+    /// # Safety
+    /// `strm` must be a stream previously initialized by `inflateInit2_`.
+    pub fn inflateEnd(strm: *mut z_stream) -> c_int;
+}
+
+/// Error returned by [`inflate_zlib`] when the input is not a valid
+/// zlib-wrapped DEFLATE stream or decompression otherwise fails.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InflateError;
+
+/// Decompress a zlib-wrapped DEFLATE stream (`data`) into a freshly allocated
+/// `Vec<u8>`, refusing to produce more than `max_size` output bytes.
+///
+/// This is the safe wrapper over the streaming inflate API. It grows the output
+/// buffer incrementally (mirroring a streaming reader that appends remaining
+/// bytes with a size limit) and returns [`InflateError`] on any malformed input
+/// or if the decompressed size would exceed `max_size`.
+pub fn inflate_zlib(data: &[u8], max_size: usize) -> Result<Vec<u8>, InflateError> {
+    // SAFETY: a fully zeroed z_stream is the documented pre-init state; all
+    // pointer fields are NULL so zlib installs its own allocator.
+    let mut strm: z_stream = unsafe { std::mem::zeroed() };
+
+    // SAFETY: `strm` is a valid zeroed stream; ZLIB_VERSION/size describe our
+    // compiled zlib. MAX_WBITS selects the zlib (Adler-32 wrapped) format.
+    let rc = unsafe {
+        inflateInit2_(
+            &mut strm,
+            MAX_WBITS,
+            ZLIB_VERSION.as_ptr() as *const c_char,
+            std::mem::size_of::<z_stream>() as c_int,
+        )
+    };
+    if rc != Z_OK {
+        return Err(InflateError);
+    }
+
+    // Guard so `inflateEnd` always runs, even on the error paths below.
+    struct Guard(*mut z_stream);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            // SAFETY: the stream was successfully initialized above.
+            unsafe {
+                inflateEnd(self.0);
+            }
+        }
+    }
+    let _guard = Guard(&mut strm);
+
+    strm.next_in = data.as_ptr();
+    strm.avail_in = data.len() as c_uint;
+
+    let mut out: Vec<u8> = Vec::new();
+    // Decompress in chunks, growing the output until the stream ends.
+    let chunk: usize = 64 * 1024;
+    loop {
+        let prev_len = out.len();
+        if prev_len >= max_size {
+            // We have hit the cap without seeing stream end: too large.
+            // Allow exactly max_size but anything beyond is a failure.
+            // Probe whether more output remains by attempting one more byte.
+        }
+        let grow = chunk.min(max_size.saturating_sub(prev_len).max(1));
+        out.resize(prev_len + grow, 0);
+
+        // SAFETY: out has `prev_len + grow` bytes; next_out points at the free
+        // tail and avail_out is the free length.
+        strm.next_out = unsafe { out.as_mut_ptr().add(prev_len) };
+        strm.avail_out = grow as c_uint;
+
+        // SAFETY: strm is initialized with valid in/out buffers.
+        let rc = unsafe { inflate(&mut strm, Z_NO_FLUSH) };
+
+        let produced = grow - strm.avail_out as usize;
+        out.truncate(prev_len + produced);
+
+        match rc {
+            Z_STREAM_END => return Ok(out),
+            Z_OK => {
+                if strm.avail_out != 0 {
+                    // inflate made no forward progress with output space left
+                    // and no stream end: treat as malformed.
+                    if produced == 0 && strm.avail_in == 0 {
+                        return Err(InflateError);
+                    }
+                }
+                if out.len() >= max_size {
+                    // Output reached the cap but the stream did not end.
+                    return Err(InflateError);
+                }
+                // Otherwise loop to provide more output space.
+            }
+            _ => return Err(InflateError),
+        }
+    }
 }
 
 /// Safe wrapper computing the zlib Adler-32 checksum of `data`.
@@ -66,5 +249,38 @@ mod tests {
         // SAFETY: NULL buf with len 0 is the documented "return initial value".
         let seed = unsafe { adler32(0, std::ptr::null(), 0) };
         assert_eq!(seed as u32, 1);
+    }
+
+    /// Known-answer test for the inflate (decompression) surface: a zlib stream
+    /// produced by `zlib.compress(b"hello, world! hello, world!", 9)` must
+    /// inflate back to the original bytes. This proves the vendored inflate
+    /// translation units link and run correctly end-to-end.
+    #[test]
+    fn inflate_zlib_known_answer() {
+        let compressed: &[u8] = &[
+            120, 218, 203, 72, 205, 201, 201, 215, 81, 40, 207, 47, 202, 73, 81, 84, 200, 64, 230,
+            1, 0, 134, 251, 9, 115,
+        ];
+        let expected: &[u8] = b"hello, world! hello, world!";
+        let out = inflate_zlib(compressed, 4 * 1024 * 1024).unwrap();
+        assert_eq!(out.as_slice(), expected);
+    }
+
+    /// Malformed input is rejected.
+    #[test]
+    fn inflate_zlib_invalid_data() {
+        let garbage: &[u8] = &[0xde, 0xad, 0xbe, 0xef, 0x00, 0x01, 0x02, 0x03];
+        assert_eq!(inflate_zlib(garbage, 4 * 1024 * 1024), Err(InflateError));
+    }
+
+    /// Output exceeding the size cap is rejected.
+    #[test]
+    fn inflate_zlib_too_large() {
+        let compressed: &[u8] = &[
+            120, 218, 203, 72, 205, 201, 201, 215, 81, 40, 207, 47, 202, 73, 81, 84, 200, 64, 230,
+            1, 0, 134, 251, 9, 115,
+        ];
+        // The decompressed output is 27 bytes; a cap of 10 must fail.
+        assert_eq!(inflate_zlib(compressed, 10), Err(InflateError));
     }
 }
