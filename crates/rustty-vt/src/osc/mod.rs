@@ -441,6 +441,39 @@ impl Capture {
             CaptureBacking::Allocating(w) => w,
         }
     }
+
+    /// Return a mutable view of the captured trailing data. Used by parsers
+    /// that need to overwrite a separator byte with a sentinel in place
+    /// (e.g. OSC 777 rxvt).
+    pub fn trailing_mut(&mut self) -> &mut [u8] {
+        match &mut self.backing {
+            CaptureBacking::Fixed(w) => w,
+            CaptureBacking::Allocating(w) => w,
+        }
+    }
+
+    /// PORT NOTE: `cap.writer.writeByte(c)` — mirror the overflow semantics of
+    /// `Parser.next`: the fixed backing fails (`error.WriteFailed`) once the
+    /// `MAX_BUF` capacity is exhausted, while the allocating backing always
+    /// succeeds (growing on demand).
+    /// Returns `true` on success and `false` on the `error.WriteFailed`
+    /// overflow path (the natural mirror of the Zig `writeByte(c) catch`).
+    pub fn write_byte(&mut self, c: u8) -> bool {
+        match &mut self.backing {
+            CaptureBacking::Fixed(w) => {
+                if w.len() >= MAX_BUF {
+                    false
+                } else {
+                    w.push(c);
+                    true
+                }
+            }
+            CaptureBacking::Allocating(w) => {
+                w.push(c);
+                true
+            }
+        }
+    }
 }
 
 impl<'a> Parser<'a> {
