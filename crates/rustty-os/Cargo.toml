@@ -36,6 +36,11 @@ rustty-build-config = { workspace = true }
 # the resources-dir env var prefix) used by `os/resourcesdir.zig` after
 # retargeting. Source-of-truth `rustty-identity` crate (single owner of identity).
 rustty-identity = { workspace = true }
+# R1/R4 parity seam: the explicit-allocator trait (`core::alloc::Allocator`
+# polyfill) that is the faithful map of Zig's `std.mem.Allocator`. The ported
+# `pageAllocator()` (PageList.zig) implements this trait so it can be threaded as
+# a real `Allocator` parameter exactly as the reference threads a `std.mem.Allocator`.
+allocator-api2 = { workspace = true }
 
 # Raw FFI bindings to the platform libc (syscalls/constants used across os/*).
 # R3: `libc` binds the SAME system library the reference's Zig `std.c`/`std.posix`

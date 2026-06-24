@@ -43,6 +43,11 @@ pub mod mach;
 pub mod macos;
 pub mod mouse;
 pub mod open;
+// PORT: `PageList.pageAllocator()` (src/terminal/PageList.zig). The page
+// allocator is OS-specific (darwin tagged mmap vs generic posix page allocator),
+// so it is hosted in this `os` crate, mirroring the reference's reach into
+// `../os/mach.zig` for the darwin path.
+pub mod page_allocator;
 pub mod passwd;
 pub mod path;
 pub mod pipe;

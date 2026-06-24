@@ -486,6 +486,7 @@ version = "0.1.0"
 name = "rustty-os"
 version = "0.1.0"
 dependencies = [
+ "allocator-api2",
  "cc",
  "gettext-sys",
  "libc",
