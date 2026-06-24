@@ -1,0 +1,50 @@
+export const meta = {
+  name: 'alloc-stack-audit',
+  description: 'Phase 1 of the allocation-stack audit (Zig ref vs rustty port): parallel per-component MAP + analysis of fidelity AND optimality (alloc count/size/align/reuse/zeroing/peak+steady RSS/latency/startup/soundness), each finding adversarially refuted, then synthesized into a prioritized report. ANALYSIS ONLY — no code changes; produces .port/phase-2/ALLOC_AUDIT.md for human review before any implementation.',
+  phases: [
+    { title: 'Map', detail: 'one agent per component: Zig-vs-Rust fidelity + optimality findings' },
+    { title: 'Refute', detail: 'adversarial skeptic per significant finding — confirm or kill' },
+    { title: 'Synthesize', detail: 'prioritized report -> .port/phase-2/ALLOC_AUDIT.md' },
+  ],
+}
+const G = '/Users/gael/projects/ghostty', R = '/Users/gael/projects/rustty'
+const COMMON = 'You are auditing the rustty (Ghostty Zig->Rust port) ALLOCATION STACK. REFERENCE = Zig: Ghostty ' + G + ' (pinned) + the Zig 0.15.2 stdlib (find via `zig env` or the rustty-zigstd PORT NOTES which cite the std paths). PORT = ' + R + '. READ-ONLY: do not modify any file. '
+  + 'GOAL: ensure the Rust implementation is OPTIMAL and FAITHFUL. Assess BOTH: (a) FIDELITY — does the Rust reproduce the reference allocation behavior (sizes, alignment, zeroing, reuse/free-list, lifetimes, OOM semantics)? (b) OPTIMALITY — allocation COUNT, total bytes, alignment waste, reuse efficiency, zeroing cost, peak + steady-state RSS, latency, startup, binary size. Flag every DIVERGENCE (regression OR improvement vs reference) and every OPTIMIZATION opportunity. "Revisit anything" — including the core memory-model choice (std::alloc-direct vs a faithful threaded-Allocator/arena), is in scope. Classify each finding: SOUNDNESS (UB/leak/abort risk) | FIDELITY (behavioral divergence from reference) | PERF (latency/throughput) | MEMORY (peak/steady/fragmentation) | PARITY-SAFE-FIX (improves without breaking Goal-1) | GOAL-2 (optimization needing parity gating). Give concrete file:line evidence; quantify where possible (e.g. "N allocs/page vs 1 in ref"). Do NOT hand-wave — cite the actual code. '
+const RULES = 'Capture command output to a var/file then read it; do not guess. '
+async function robust(p, o) { let r = await agent(p, o); if (!r) r = await agent(p, { ...o, label: (o.label || 'a') + '-retry' }); return r }
+const FIND = { type: 'object', additionalProperties: true, required: ['component', 'findings'], properties: { component: { type: 'string' }, fidelity_verdict: { type: 'string', enum: ['FAITHFUL', 'DIVERGENT', 'MIXED'] }, findings: { type: 'array', items: { type: 'object', additionalProperties: true, required: ['title', 'kind', 'severity'], properties: { title: { type: 'string' }, kind: { type: 'string', enum: ['SOUNDNESS', 'FIDELITY', 'PERF', 'MEMORY', 'PARITY_SAFE_FIX', 'GOAL_2'] }, severity: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] }, evidence: { type: 'string' }, ref_behavior: { type: 'string' }, port_behavior: { type: 'string' }, recommendation: { type: 'string' } } } }, notes: { type: 'string' } } }
+const VERD = { type: 'object', additionalProperties: true, required: ['title', 'verdict'], properties: { title: { type: 'string' }, verdict: { type: 'string', enum: ['CONFIRMED', 'REFUTED', 'OVERSTATED'] }, reason: { type: 'string' }, adjusted_severity: { type: 'string' } } }
+
+const COMPONENTS = [
+  { key: 'zigstd-arena', t: 'rustty-zigstd ArenaAllocator (' + R + '/crates/rustty-zigstd/src/arena_allocator.rs) vs Zig std.heap.ArenaAllocator. Audit: growth strategy (BufNode chain / block doubling), retained-capacity on reset, alignment, alloc-count vs reference, whether the Rust faithfully reproduces the arena block-growth (or does per-alloc std::alloc).' },
+  { key: 'zigstd-mempool', t: 'rustty-zigstd MemoryPool (' + R + '/crates/rustty-zigstd/src/memory_pool.rs) vs Zig std.heap.MemoryPool / MemoryPoolAligned. Used for the Node and Pin pools. Audit: free-list reuse, arena-backed batch growth vs per-item alloc, alignment, reset retain semantics, and whether MemoryPoolAligned semantics (used by the reference PagePool) are reproduced.' },
+  { key: 'zigstd-hashmap', t: 'rustty-zigstd AutoArrayHashMap (' + R + '/crates/rustty-zigstd/src/array_hash_map.rs) vs Zig std.AutoArrayHashMapUnmanaged. Used for the PinSet. Audit: load factor, probe strategy, index+entry array growth, rehash cost, alloc count/size vs reference; any divergence in capacity growth.' },
+  { key: 'pagepool', t: 'The hand-rolled PageList PagePool (' + R + '/crates/rustty-vt/src/pagelist/mod.rs ~line 212: `arena: Vec<NonNull<u8>>` + per-page std::alloc::alloc_zeroed + free_list) vs the reference `std.heap.MemoryPoolAligned([std_size]u8, page_align)` + `arena.child_allocator` (PageList.zig ~65). THE KEY COMPONENT. Audit: does the Rust batch page backing like MemoryPoolAligned (which allocates std_size buffers from an arena that grows in blocks) or does it do ONE std::alloc per page (more syscalls/allocs, worse latency+fragmentation)? Compare alloc COUNT per N pages, the reset retain_with_limit + zeroing behavior, non-standard (>std_size) page handling, and peak/steady RSS. Quantify the per-page alloc-count divergence if any.' },
+  { key: 'page-alloc-oom', t: 'Page allocation + OOM path: PagePool/page_impl.rs std::alloc::alloc_zeroed + `handle_alloc_error` (abort) + page-alignment vs Zig pageAllocator() (PageList.zig:322, darwin-specific) / page_allocator / mmap. Audit: (1) the inconsistency — init was made OOM-FALLIBLE via tripwire failpoints, yet REAL OOM still aborts via handle_alloc_error (does the reference return error.OutOfMemory instead of aborting? if so this is a FIDELITY+SOUNDNESS divergence). (2) zeroing cost (alloc_zeroed always zeroes; reference mmap is lazily-zeroed by the OS — perf/RSS difference). (3) page alignment correctness + waste.' },
+  { key: 'memory-model', t: 'The overall memory-model wiring: PageList::MemoryPool (NodePool+PinPool+PagePool+PinSet) lifecycle/init/deinit/reset (' + R + '/crates/rustty-vt/src/pagelist/mod.rs) vs reference MemoryPool struct (PageList.zig:77-115). Audit the BIG decision: the reference THREADS a std.mem.Allocator (arena.child_allocator = pageAllocator) so all page memory comes from one arena; the Rust port uses std::alloc DIRECTLY (no threaded allocator). Assess fidelity, perf (one-arena batch vs many std::alloc calls), peak RSS, and whether revisiting toward a faithful single-arena model would be better. Also audit reset/retain_with_limit + the @memset(0) retained-buffer zeroing fidelity.' },
+  { key: 'aliasing-soundness', t: 'Raw-pointer access soundness across the pagelist production methods (' + R + '/crates/rustty-vt/src/pagelist/*.rs): there are ~15 `let X: *mut Page = unsafe { &mut (*..).data }` sites (grow.rs 6, resize.rs 7, mod.rs 1, erase.rs 1) — the &mut-derived raw-ptr pattern that just caused a Stacked-Borrows UB at resize.rs:741 (fixed via addr_of_mut!). Audit ALL remaining sites: which hold the &mut-derived ptr across an aliasing call (latent Miri UB) vs which are used immediately (sound)? grep them, read each context. Recommend which need the addr_of_mut! idiom. Also assess general page/cell/row raw-pointer access soundness + any unnecessary unsafe.' },
+]
+
+phase('Map')
+const found = await parallel(COMPONENTS.map(c => () =>
+  robust(COMMON + RULES + 'COMPONENT TO AUDIT: ' + c.t + '\nReturn component + fidelity_verdict + findings[] (each title/kind/severity/evidence/ref_behavior/port_behavior/recommendation).',
+    { schema: FIND, effort: 'high', label: 'audit:' + c.key, phase: 'Map' })
+))
+const findings = found.filter(Boolean).flatMap(f => (f.findings || []).map(x => ({ ...x, component: f.component })))
+log(`audit: ${findings.length} raw findings across ${found.filter(Boolean).length} components`)
+
+phase('Refute')
+// adversarially verify only the actionable findings (high/critical or SOUNDNESS/FIDELITY)
+const toCheck = findings.filter(f => ['critical', 'high'].includes(f.severity) || ['SOUNDNESS', 'FIDELITY'].includes(f.kind))
+const verdicts = await parallel(toCheck.map(f => () =>
+  robust(COMMON + 'ADVERSARIALLY REFUTE this audit finding — default to REFUTED/OVERSTATED unless the code clearly proves it. Read the cited code yourself.\nFINDING: ' + JSON.stringify(f) + '\nIs the divergence/issue REAL (CONFIRMED), false (REFUTED), or real-but-exaggerated (OVERSTATED)? Give the code-grounded reason.',
+    { schema: VERD, effort: 'high', label: 'refute', phase: 'Refute' })
+))
+const confirmed = verdicts.filter(Boolean).filter(v => v.verdict !== 'REFUTED')
+
+phase('Synthesize')
+const report = await robust(COMMON +
+  'TASK: synthesize the allocation-stack audit into a prioritized report. Confirmed/adjusted findings: ' + JSON.stringify(confirmed) + '\nAll raw findings (for context): ' + JSON.stringify(findings).slice(0, 12000) + '\n'
+  + 'Write ' + R + '/.port/phase-2/ALLOC_AUDIT.md with: (1) executive summary + the single most important call (e.g. the PagePool per-page-alloc vs batched-arena question, the handle_alloc_error OOM divergence, the memory-model choice); (2) a prioritized table of CONFIRMED findings (component | kind | severity | ref vs port | recommendation); (3) a "Recommended changes" section split into PARITY-SAFE fixes (do now), GOAL-2 optimizations (parity-gated), and OPEN ARCHITECTURAL QUESTIONS for the human (e.g. revisit std::alloc-direct vs single-arena model); (4) a "Measurements needed" list (what to benchmark Zig-vs-Rust to settle perf/memory claims — for a follow-up phase). Be decisive and concrete. Return a short summary of the top findings + the file path.',
+  { schema: { type: 'object', additionalProperties: true, required: ['summary'], properties: { summary: { type: 'string' }, top_findings: { type: 'array', items: { type: 'string' } }, report_path: { type: 'string' } } }, effort: 'high', label: 'synthesize', phase: 'Synthesize' })
+return { findings_count: findings.length, confirmed_count: confirmed.length, report }
