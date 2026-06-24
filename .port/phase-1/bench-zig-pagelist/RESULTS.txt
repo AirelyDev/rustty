@@ -1,0 +1,105 @@
+================================================================================
+ZIG REFERENCE PageList BENCHMARK — /Users/gael/projects/ghostty (READ-ONLY)
+================================================================================
+Date: 2026-06-23
+Host: Apple Silicon (arm64), macOS (Darwin 25.5.0), 48 GiB RAM
+Zig:  0.15.2
+Build: ReleaseFast (-Doptimize=ReleaseFast) for latency+RSS; alloc-count is build-mode-independent.
+Method: Standalone Zig exe built OUTSIDE the reference tree (/tmp/zigbench), importing
+        ghostty src/lib_vt.zig (libghostty-vt root) as the `terminal` module with a
+        faithfully-reconstructed terminal_options (artifact=.lib, simd=false,
+        oniguruma=false, slow_runtime_safety=false). The reference tree was NOT modified.
+        PageList.pageAllocator() on Darwin = mach.taggedPageAllocator (mmap-backed,
+        lazy-zero), wrapped by PagePool = MemoryPoolAligned([std_size]u8) OVER an
+        std.heap.ArenaAllocator (geometric 1.5x growth).
+
+WORKLOAD (identical to rustty bench; one iteration):
+  PageList.init(80,24, max=1 GiB)
+   -> grow() until total_rows >= 2000 (forces page allocs)
+   -> scroll across viewport (scroll{.row=r} for every r, then .active)
+   -> clone(active+scrollback, full screen)
+   -> resize cols 200 then 40 then 80 (reflow + page churn)
+   -> reset()   [retain_with_limit — ghostty reset() retains pool capacity]
+   -> deinit()
+
+--------------------------------------------------------------------------------
+[MEASURED] LATENCY (per full workload iteration), ReleaseFast
+--------------------------------------------------------------------------------
+3 independent runs, iters=1000 warmup=100 each:
+  RUN1: min=693083 ns  median=736917 ns  mean=747252 ns  p99=932125 ns   max=1013125 ns
+  RUN2: min=675208 ns  median=743500 ns  mean=755960 ns  p99=996375 ns   max=1079791 ns
+  RUN3: min=684583 ns  median=735916 ns  mean=752207 ns  p99=1001542 ns  max=2539917 ns(outlier)
+  => Representative: median ~= 737-743 us, min ~= 675-693 us, mean ~= 750 us.
+
+--------------------------------------------------------------------------------
+[MEASURED] PEAK RSS (/usr/bin/time -l), ReleaseFast
+--------------------------------------------------------------------------------
+  Full run (1000 iters):  maximum RSS = 7,880,704 bytes (~7.88 MB)
+                          peak memory footprint = 7,356,800 bytes
+                          page reclaims = 515,667
+  Single iteration:       maximum RSS = 7,733,248 bytes (~7.73 MB)
+                          peak memory footprint = 7,192,936 bytes
+  => Per-iteration working set is the dominant term (~7.7 MB); RSS does not grow
+     across iterations (init/deinit fully reclaims), confirming no leak.
+
+--------------------------------------------------------------------------------
+[MEASURED] PAGE GEOMETRY (--info; from page.zig page.Page.layout(std_capacity))
+--------------------------------------------------------------------------------
+  page_size_min (macOS arm64)         = 16384 bytes (16 KiB)
+  std_capacity                        = {cols=215, rows=215, styles=128, grapheme_bytes=8192}
+  std page total_size (std_size)      = 589824 bytes  (= 36 x 16 KiB)
+  PagePool.item_size (aligned)        = 589824 bytes  (std_size already page_size_min-aligned)
+
+--------------------------------------------------------------------------------
+[MEASURED] LOGICAL PAGE-POOL ALLOCATIONS per stage (--accounting; pl.page_size/item_size)
+--------------------------------------------------------------------------------
+  STAGE init        : page_size=589824    total_rows=24    -> 1 std page (plus pool preheat(4) reserved)
+  STAGE grow(->2000) : grow_calls=1976  new-node grows=3   page_size=2359296  total_rows=2000 -> 4 std pages
+                       (3 NEW page allocations beyond the initial page; NO pruning — max=1GiB)
+  STAGE scroll      : page_size=2359296   total_rows=2000  -> 4 std pages (no alloc; scroll is pointer moves)
+  STAGE clone       : clone_page_size=2359296  clone_total_rows=2000 -> 4 std pages (fresh pool, preheat=page_count)
+  STAGE resize->200 : page_size=5308416   total_rows=1976  -> 9 std-page-equiv (PEAK; reflow grows page set)
+  STAGE resize->40  : page_size=1179648   total_rows=1976  -> 2 std-page-equiv (reflow shrinks)
+  STAGE resize->80  : page_size=2359296   total_rows=1976  -> 4 std-page-equiv
+  STAGE reset       : page_size=589824    total_rows=24    -> 1 std page (pool capacity retained)
+
+  => Live logical page-alloc events in main PageList over one workload:
+       init 1 + grow 3 (new) + resize churn (re-allocations up to 9-page peak) ;
+       clone allocates its own 4-page pool separately.
+     Peak simultaneous std-page footprint in the live list = 9 pages (5,308,416 bytes)
+     at resize->200, plus the clone's transient 4-page pool.
+
+--------------------------------------------------------------------------------
+[MEASURED] UNDERLYING PAGE-ALLOCATOR SYSCALLS (mmap count) — arena replay (--arena-sim)
+--------------------------------------------------------------------------------
+NOTE: dtruss/fs_usage require root (SIP) and non-interactive sudo is unavailable here,
+so direct mmap-syscall tracing of the live binary was INFEASIBLE. Instead this is
+MEASURED by replaying the exact std-page item allocation sequence through a REAL
+std.heap.ArenaAllocator over the REAL std.heap.page_allocator, wrapped in a counting
+allocator (identical mechanics to PagePool's arena). Faithful, just isolated.
+
+  items=4  (init preheat path)        -> underlying page allocs = 2 ; bytes = 3,182,736
+  items=8                              -> underlying page allocs = 3 ; bytes = 7,502,136
+  items=9  (workload live peak)        -> underlying page allocs = 3 ; bytes = 7,502,136
+  items=13                             -> underlying page allocs = 4 ; bytes = 14,890,572
+
+  => The arena's 1.5x geometric growth amortizes mmaps: backing page-allocator
+     allocations are O(log(items)). For this workload the main PagePool needs
+     ~3 underlying mmaps (to back up to 9 std pages); arena_resize on the page
+     allocator always FAILS (each growth = a fresh mmap node), so growth count =
+     number of geometric arena nodes, not number of pages.
+
+--------------------------------------------------------------------------------
+[DERIVED-from-code] LAZY-ZERO / mmap characteristics
+--------------------------------------------------------------------------------
+  - pageAllocator() on Darwin = mach.taggedPageAllocator(.application_specific_1):
+    mmap(MAP_ANON) tagged memory => kernel-zeroed lazily (zero-fill-on-demand);
+    pages are not physically backed until first touch (matches low page-faults=0
+    and reclaim-driven footprint above).
+  - std page = 589824 B is a multiple of 16 KiB (asserted: total_size % page_size_min == 0),
+    so every std page is exactly 36 hardware pages.
+  - MemoryPool preheats 4 std pages at init (page_preheat=4) => init reserves
+    4*589824 = 2,359,296 B of pool capacity even though only 1 page is used.
+  - reset() uses retain_with_limit = page_count*item_size, so the pool keeps backing
+    for ceil(rows/cap.rows) pages (1 page for 24 rows) and does NOT munmap on reset.
+================================================================================
