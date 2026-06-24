@@ -85,6 +85,7 @@ use rustty_render_types::term_size::OffsetBuf;
 use rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged;
 use rustty_zigstd::memory_pool::MemoryPool as ZigMemoryPool;
 
+use allocator_api2::alloc::Global;
 use core::ptr::NonNull;
 
 use crate::page as pagepkg;
@@ -409,11 +410,15 @@ impl MemoryPool {
     // the testing-allocator leak detection.
 
     pub fn init(preheat: usize) -> Result<MemoryPool, OutOfMemory> {
-        let node_pool = NodePool::init_preheated(preheat).map_err(|_| OutOfMemory)?;
+        // PORT NOTE (R1 allocator threading): the faithful Zig
+        // `MemoryPool(T).initPreheated(allocator, n)` takes the arena's child
+        // allocator. Every PageList caller passes `Global` — exactly the prior
+        // `std::alloc` path — so observable behavior is unchanged.
+        let node_pool = NodePool::init_preheated(Global, preheat).map_err(|_| OutOfMemory)?;
         // errdefer node_pool.deinit();
         let page_pool = PagePool::init_preheated(preheat);
         // errdefer page_pool.deinit();
-        let pin_pool = PinPool::init_preheated(8).map_err(|_| OutOfMemory)?;
+        let pin_pool = PinPool::init_preheated(Global, 8).map_err(|_| OutOfMemory)?;
         // errdefer pin_pool.deinit();
         Ok(MemoryPool {
             nodes: node_pool,

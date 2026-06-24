@@ -24,3 +24,7 @@ rustty-lib = { workspace = true }
 rustty-util = { workspace = true }
 rustty-render-types = { workspace = true }
 rustty-zigstd = { workspace = true }
+# Faithful Rust map of Zig's `std.mem.Allocator` (the child threaded through the
+# zigstd MemoryPool/ArenaAllocator). `Global` reproduces the prior `std::alloc`
+# path, so PageList behavior is unchanged.
+allocator-api2 = { workspace = true }

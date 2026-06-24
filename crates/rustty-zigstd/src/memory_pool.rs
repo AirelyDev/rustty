@@ -22,8 +22,14 @@
 //!   * `MemoryPoolAligned` over-aligns items (e.g. page-aligned pages in
 //!     `PageList`).
 //!
-//! Backing memory is the Rust system allocator (`std::alloc`) via
-//! [`ArenaAllocator`] — the faithful map of Zig's child allocator.
+//! Faithful to Zig, the pool OWNS an [`ArenaAllocator`] and `init(child)` always
+//! takes that arena's child allocator (Zig: `MemoryPool(T).init(allocator)`
+//! forwards to `ArenaAllocator.init(allocator)`). `init_preheated(child, n)`
+//! mirrors `initPreheated(allocator, n)`. The child is the `allocator-api2`
+//! `Allocator` trait — the stable polyfill of `core::alloc::Allocator` and the
+//! faithful map of Zig's `std.mem.Allocator`. Every existing caller passes
+//! [`allocator_api2::alloc::Global`], which is exactly the prior `std::alloc`
+//! path, so observable behavior is unchanged.
 //!
 //! NOTE on `undefined`: Zig writes `ptr.* = undefined` on create/destroy to poison
 //! contents. In Rust we hand back raw, uninitialized-typed storage; the slot
@@ -33,6 +39,8 @@
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of};
 use core::ptr::NonNull;
+
+use allocator_api2::alloc::{Allocator, Global};
 
 use crate::arena_allocator::{ArenaAllocator, ResetMode};
 
@@ -53,8 +61,14 @@ struct Node {
 ///
 /// `GROWABLE` mirrors `Options.growable`: when `false`, `create()` past the
 /// preheated capacity returns `Err(OutOfMemory)`.
-pub struct MemoryPoolExtra<T, const ALIGN: usize, const GROWABLE: bool> {
-    arena: ArenaAllocator,
+///
+/// `A` is the child allocator type of the owned [`ArenaAllocator`]
+/// (`allocator-api2`'s `Allocator` trait, the faithful map of Zig's
+/// `std.mem.Allocator`). It defaults to [`Global`] — the prior `std::alloc`
+/// path — so existing call sites that do not care about the child stay terse
+/// and behavior-identical.
+pub struct MemoryPoolExtra<T, const ALIGN: usize, const GROWABLE: bool, A: Allocator = Global> {
+    arena: ArenaAllocator<A>,
     free_list: Option<NonNull<Node>>,
     _marker: PhantomData<T>,
 }
@@ -63,7 +77,9 @@ pub struct MemoryPoolExtra<T, const ALIGN: usize, const GROWABLE: bool> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutOfMemory;
 
-impl<T, const ALIGN: usize, const GROWABLE: bool> MemoryPoolExtra<T, ALIGN, GROWABLE> {
+impl<T, const ALIGN: usize, const GROWABLE: bool, A: Allocator>
+    MemoryPoolExtra<T, ALIGN, GROWABLE, A>
+{
     /// Size of the memory pool items. This is not necessarily the same as
     /// `size_of::<T>()` as the pool also uses the items for internal means
     /// (the free-list `Node`). Faithful: `max(size_of(Node), size_of(Item))`.
@@ -81,20 +97,22 @@ impl<T, const ALIGN: usize, const GROWABLE: bool> MemoryPoolExtra<T, ALIGN, GROW
         ),
     );
 
-    /// Creates a new memory pool.
-    pub fn init() -> Self {
+    /// Faithful port of `MemoryPool(T).init(allocator)`: creates a new memory
+    /// pool whose owned arena allocates its backing nodes through `child`.
+    pub fn init(child: A) -> Self {
         MemoryPoolExtra {
-            arena: ArenaAllocator::init(),
+            arena: ArenaAllocator::with_child(child),
             free_list: None,
             _marker: PhantomData,
         }
     }
 
-    /// Creates a new memory pool and pre-allocates `initial_size` items. This
-    /// allows up to `initial_size` active allocations before an `OutOfMemory`
-    /// error happens when calling `create()`.
-    pub fn init_preheated(initial_size: usize) -> Result<Self, OutOfMemory> {
-        let mut pool = Self::init();
+    /// Faithful port of `MemoryPool(T).initPreheated(allocator, initial_size)`:
+    /// creates a new memory pool over `child` and pre-allocates `initial_size`
+    /// items. This allows up to `initial_size` active allocations before an
+    /// `OutOfMemory` error happens when calling `create()`.
+    pub fn init_preheated(child: A, initial_size: usize) -> Result<Self, OutOfMemory> {
+        let mut pool = Self::init(child);
         // errdefer pool.deinit(): on failure, dropping `pool` frees the arena.
         pool.preheat(initial_size)?;
         Ok(pool)
@@ -194,7 +212,9 @@ impl<T, const ALIGN: usize, const GROWABLE: bool> MemoryPoolExtra<T, ALIGN, GROW
     }
 }
 
-impl<T, const ALIGN: usize, const GROWABLE: bool> Drop for MemoryPoolExtra<T, ALIGN, GROWABLE> {
+impl<T, const ALIGN: usize, const GROWABLE: bool, A: Allocator> Drop
+    for MemoryPoolExtra<T, ALIGN, GROWABLE, A>
+{
     fn drop(&mut self) {
         // Faithful port of `deinit`: free the arena (all slots at once). The
         // ArenaAllocator's own Drop releases every backing node.
@@ -203,11 +223,11 @@ impl<T, const ALIGN: usize, const GROWABLE: bool> Drop for MemoryPoolExtra<T, AL
 
 /// `MemoryPool(Item)` — natural alignment, growable. Faithful alias for
 /// `MemoryPoolExtra(Item, .{})`.
-pub type MemoryPool<T> = MemoryPoolExtra<T, 0, true>;
+pub type MemoryPool<T, A = Global> = MemoryPoolExtra<T, 0, true, A>;
 
 /// `MemoryPoolAligned(Item, alignment)` — over-aligned items (e.g. page-aligned),
 /// growable. Faithful alias; pass the desired byte alignment as `ALIGN`.
-pub type MemoryPoolAligned<T, const ALIGN: usize> = MemoryPoolExtra<T, ALIGN, true>;
+pub type MemoryPoolAligned<T, const ALIGN: usize, A = Global> = MemoryPoolExtra<T, ALIGN, true, A>;
 
 /// `const fn max` for computing `ITEM_SIZE`/`ITEM_ALIGNMENT` in const context.
 const fn max_usize(a: usize, b: usize) -> usize {
@@ -226,7 +246,7 @@ mod tests {
     /// middle, and assert the next create reuses that exact slot (LIFO reuse).
     #[test]
     fn basic_create_destroy_reuse() {
-        let mut pool: MemoryPool<u32> = MemoryPool::init();
+        let mut pool: MemoryPool<u32> = MemoryPool::init(Global);
 
         let p1 = pool.create().unwrap();
         let p2 = pool.create().unwrap();
@@ -263,7 +283,7 @@ mod tests {
     /// is the first one create() returns.
     #[test]
     fn lifo_ordering() {
-        let mut pool: MemoryPool<u64> = MemoryPool::init();
+        let mut pool: MemoryPool<u64> = MemoryPool::init(Global);
         let a = pool.create().unwrap();
         let b = pool.create().unwrap();
         let c = pool.create().unwrap();
@@ -295,7 +315,7 @@ mod tests {
     /// Port of the Zig test "preheating (success)".
     #[test]
     fn preheating_success() {
-        let mut pool: MemoryPool<u32> = MemoryPool::init_preheated(4).unwrap();
+        let mut pool: MemoryPool<u32> = MemoryPool::init_preheated(Global, 4).unwrap();
         let a = pool.create().unwrap();
         let b = pool.create().unwrap();
         let c = pool.create().unwrap();
@@ -314,7 +334,7 @@ mod tests {
     #[test]
     fn growable_false_caps_at_preheat() {
         let mut pool: MemoryPoolExtra<u32, 0, false> =
-            MemoryPoolExtra::<u32, 0, false>::init_preheated(4).unwrap();
+            MemoryPoolExtra::<u32, 0, false, Global>::init_preheated(Global, 4).unwrap();
         let a = pool.create().unwrap();
         let b = pool.create().unwrap();
         let c = pool.create().unwrap();
@@ -342,7 +362,7 @@ mod tests {
         struct Foo {
             data: u64,
         }
-        let mut pool: MemoryPool<Foo> = MemoryPool::init();
+        let mut pool: MemoryPool<Foo> = MemoryPool::init(Global);
         let foo = pool.create().unwrap();
         assert_eq!(foo.as_ptr() as usize % 16, 0);
         unsafe { foo.as_ptr().write(Foo { data: 0 }) };
@@ -357,7 +377,7 @@ mod tests {
         struct Foo {
             data: u64,
         }
-        let mut pool: MemoryPoolAligned<Foo, 16> = MemoryPoolAligned::<Foo, 16>::init();
+        let mut pool: MemoryPoolAligned<Foo, 16> = MemoryPoolAligned::<Foo, 16>::init(Global);
         let foo = pool.create().unwrap();
         assert_eq!(foo.as_ptr() as usize % 16, 0);
         unsafe { foo.as_ptr().write(Foo { data: 0 }) };
@@ -370,7 +390,7 @@ mod tests {
         const PAGE: usize = 4096;
         // Stand-in for `[std_size]u8` with page alignment.
         let mut pool: MemoryPoolAligned<[u8; 256], PAGE> =
-            MemoryPoolAligned::<[u8; 256], PAGE>::init_preheated(2).unwrap();
+            MemoryPoolAligned::<[u8; 256], PAGE>::init_preheated(Global, 2).unwrap();
         let a = pool.create().unwrap();
         let b = pool.create().unwrap();
         assert_eq!(a.as_ptr() as usize % PAGE, 0);
@@ -387,7 +407,7 @@ mod tests {
     /// Growth: many creates beyond preheat succeed and stay distinct.
     #[test]
     fn growth_beyond_preheat() {
-        let mut pool: MemoryPool<u32> = MemoryPool::init_preheated(2).unwrap();
+        let mut pool: MemoryPool<u32> = MemoryPool::init_preheated(Global, 2).unwrap();
         let mut ptrs = Vec::new();
         for i in 0..100u32 {
             let p = pool.create().unwrap();
@@ -407,7 +427,7 @@ mod tests {
     /// reset() clears the free list and resets the arena; the pool keeps working.
     #[test]
     fn reset_clears_and_reuses() {
-        let mut pool: MemoryPool<u64> = MemoryPool::init();
+        let mut pool: MemoryPool<u64> = MemoryPool::init(Global);
         let a = pool.create().unwrap();
         let b = pool.create().unwrap();
         unsafe {
