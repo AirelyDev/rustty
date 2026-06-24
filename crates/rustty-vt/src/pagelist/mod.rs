@@ -307,9 +307,13 @@ impl MemoryPool {
     // }
     //
     // PORT NOTE: `MemoryPool::deinit` is the `Drop` of each sub-pool; dropping
-    // the `MemoryPool` runs `pages`/`nodes`/`pins` destructors (the reference
-    // frees `pages` first, then `nodes`, then `pins` — Rust drops fields in
-    // declaration order, matching that ordering).
+    // the `MemoryPool` runs the `pages`/`nodes`/`pins` destructors. The
+    // reference frees them in the order `pages`, `nodes`, `pins`, but that
+    // order is not observable: each sub-pool is a self-contained
+    // `MemoryPoolAligned` arena over its own child allocator with no
+    // cross-pool references, so the destructors are independent and may run in
+    // any order. (Rust happens to drop fields in declaration order, which is
+    // the same order, but nothing depends on it.)
 
     /// `MemoryPool.reset`: reset all sub-pools. Only the `retain_with_limit`
     /// mode is used by PageList (`reset`), so we model it directly with the

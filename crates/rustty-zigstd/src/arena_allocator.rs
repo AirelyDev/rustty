@@ -133,14 +133,15 @@ impl<A: Allocator> ArenaAllocator<A> {
     }
 
     /// Layout for a backing allocation of `total` bytes with `BufNode`
-    /// alignment. `total` always includes the `BufNode` header.
+    /// alignment. `total` always includes the `BufNode` header. Returns `None`
+    /// when the size/align pair is invalid (e.g. `total` overflows the rounded
+    /// allocation size), faithful to Zig's `orelse return null` on the alloc
+    /// path: an unsatisfiable size is reported as OOM rather than a panic.
     #[inline]
-    fn node_layout(total: usize) -> Layout {
-        // SAFETY-NOTE (parity): alignment is a power of two (align_of) and
-        // `total` is a finite size computed from the geometric growth formula;
-        // Layout::from_size_align validates both.
-        Layout::from_size_align(total, buf_node_alignment())
-            .expect("arena node layout (size/align) must be valid")
+    fn node_layout(total: usize) -> Option<Layout> {
+        // Alignment is a power of two (`align_of`); `from_size_align` still
+        // validates that `total` does not overflow once rounded up to `align`.
+        Layout::from_size_align(total, buf_node_alignment()).ok()
     }
 
     /// `child_allocator.rawFree` of an entire backing node allocation.
@@ -152,7 +153,12 @@ impl<A: Allocator> ArenaAllocator<A> {
     /// used.
     unsafe fn raw_free_node(&self, node: NonNull<BufNode>) {
         let total = unsafe { node.as_ref().data };
-        let layout = Self::node_layout(total);
+        // `node` is a live backing node, so its layout was necessarily valid at
+        // alloc time and `data` round-trips that exact `total`; `node_layout`
+        // therefore cannot fail here. Faithful to Zig, which frees with the same
+        // recomputed layout it allocated with.
+        let layout = Self::node_layout(total)
+            .expect("live backing node has a valid layout (validated at alloc)");
         // SAFETY: `node` was allocated from `self.child` with this exact layout
         // (same align, same `total` recorded in `data`). Maps to Zig
         // `child_allocator.rawFree`.
@@ -193,7 +199,9 @@ impl<A: Allocator> ArenaAllocator<A> {
     /// `rawAlloc orelse return null`). The node's `next` is left as the caller
     /// wants; here we initialize it to `None` and the caller prepends.
     fn raw_alloc_node(&self, total: usize) -> Option<NonNull<BufNode>> {
-        let layout = Self::node_layout(total);
+        // An invalid size/align pair is unsatisfiable; report it as OOM rather
+        // than panicking. Mirrors Zig `... orelse return null`.
+        let layout = Self::node_layout(total)?;
         // Maps to Zig `child_allocator.rawAlloc(...) orelse return null`.
         // `allocate` returns `NonNull<[u8]>`; we only need the data pointer.
         let raw = self.child.allocate(layout).ok()?;
