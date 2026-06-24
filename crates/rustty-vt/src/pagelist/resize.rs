@@ -738,7 +738,13 @@ impl PageList {
         chunk: super::iter::Chunk,
     ) -> Result<(), super::OutOfMemory> {
         assert!(cols > self.cols);
-        let page: *mut crate::page::Page = unsafe { &mut (*chunk.node).data };
+        // PORT NOTE: raw `*mut` via addr_of_mut! (not `&mut .. as *mut`). The
+        // reference `const page = &chunk.node.data` is a Zig pointer; a Rust
+        // `&mut`-derived raw ptr gets a Unique tag that the page-splitting loop
+        // below invalidates (create_page / row copies retag the same data),
+        // causing a Stacked-Borrows use-after-invalidate. addr_of_mut! keeps a
+        // plain raw pointer with no Unique parent. (Miri-verified.)
+        let page: *mut crate::page::Page = unsafe { core::ptr::addr_of_mut!((*chunk.node).data) };
 
         // Update our col count
         let old_cols = self.cols;
