@@ -36,6 +36,20 @@ pub enum Action {
     EndCommand,                      // 'D'
 }
 
+impl Command {
+    // PORT NOTE: `pub fn init(action: Action) Command` — the only `Command`
+    // method needed by callers in the current fill phase (used by osc9.zig's
+    // OSC 9;12 mapping). The rest of the `Command` machinery (`readOption`,
+    // `writeCommandLine`, `Option`/`Click`/`PromptKind`/`Redraw`) lands when the
+    // semantic_prompt parser body itself is filled.
+    pub fn init(action: Action) -> Command {
+        Command {
+            action,
+            options_unvalidated: String::new(),
+        }
+    }
+}
+
 /// Parse OSC 133
 #[allow(clippy::todo, unused_variables)]
 pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'a mut OSCCommand> {
