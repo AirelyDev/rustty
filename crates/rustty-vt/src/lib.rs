@@ -132,6 +132,10 @@ pub mod string_map;
 // pub const Style = style.Style;
 // pub const Terminal = @import("Terminal.zig");
 pub mod terminal;
+// PORT NOTE: `terminal/UTF8Decoder.zig` has no top-level re-export in `main.zig`
+// (it is an internal sibling imported by the stream path). Declared here so the
+// stream can reference it; ported as a leaf in this sub-batch.
+pub mod utf8_decoder;
 // pub const TerminalStream = stream_terminal.Stream;
 // pub const Stream = stream.Stream;
 // pub const StreamAction = stream.Action;
