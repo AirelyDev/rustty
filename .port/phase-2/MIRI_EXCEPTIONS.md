@@ -66,3 +66,29 @@ with a hard timeout; if a test stops timing out, it leaves the list automaticall
   these 23 via ASan + tracking allocator; `.port/tools/gates/sanitizers.sh`
   (ASan + TSan; LSan/MSan/HWASan = Linux-CI lanes).
 - Result: **0 PageList unsafe path is unverified.**
+
+---
+
+## Crate-scale Miri compile wall (rustty-vt, from vt-11a onward)
+
+By vt-11a (PageList + osc + kitty + stream + Screen-SCC), `cargo +nightly miri test
+-p rustty-vt` takes **66+ min just to compile the crate to MIR** before any test
+runs — and it pulls C deps Miri cannot execute (zlib-sys, simd base64 FFI). Per-
+sub-batch full Miri is therefore **infeasible** (66 min × every sub-batch).
+
+**Go-forward memory-safety gate for rustty-vt (R6 "right tool"):**
+- **Per sub-batch (fast, every iteration):** ASan via `sanitizers.sh` (catches
+  UAF/OOB/double-free — the real risk for the `*mut Pin`/`*mut Row`/`*mut Cell`
+  raw pointers) + the **`addr_of_mut!` raw-pointer discipline** (structurally
+  avoids the Stacked-Borrows aliasing class Miri catches — used everywhere a
+  `*mut Page`/cell is derived) + adversarial faithfulness review.
+- **Periodic deep-check (full Miri):** one long/overnight `cargo miri test -p
+  rustty-vt` run at sub-batch FINALES (e.g. the vt-11 "complete Screen" gate) and
+  on smaller still-tractable crates (rustty-zigstd/os Miri stay green every run).
+  The Screen-foundation tests are light (small screens) so they DO interpret once
+  compiled — the wall is the compile, not the interpretation.
+- NOT splitting rustty-vt into sub-crates (would speed Miri but diverge from the
+  faithful "one terminal/ module = one crate" design — R2/R3).
+
+This extends, not weakens, the gate: ASan + discipline cover per-sub-batch; full
+Miri still runs, at crate-completion granularity instead of per-sub-batch.
