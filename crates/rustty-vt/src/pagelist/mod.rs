@@ -213,7 +213,134 @@ use crate::page::PAGE_SIZE_MIN;
 //   * `reset(.retain_with_limit)` resets the arena and then zeroes the retained
 //     arena buffers (audit #3): retained memory is not re-`mmap`ed so it is not
 //     implicitly OS-zeroed (the reference `@memset(0)` over the arena BufNodes).
-type PagePool = DynamicMemoryPoolAligned<PageAllocator>;
+//
+// PORT NOTE (leak gate, R6): the reference `pageAllocator()` returns
+// `std.testing.allocator` under `builtin.is_test` so the test runner detects any
+// leaked page. We reproduce that faithfully UNDER TEST: the page pool's backing
+// (child) allocator is `PageBackingAlloc`, which is a plain `PageAllocator` in a
+// normal build but a `rustty_zigstd::TrackingAllocator<PageAllocator>` under
+// `cfg(test)`. The tracking wrapper records into the process-global
+// [`page_tracking::PAGE_TRACKER`] so a test can assert ZERO outstanding page
+// allocations after `deinit`/`reset` — native-speed leak coverage on the heavy
+// resize/reflow/clone paths where Miri times out. The wrapper changes NOTHING
+// observable about the memory; it only counts. The non-`cfg(test)` library never
+// references the tracker, exactly as the reference only swaps the allocator under
+// `is_test`.
+#[cfg(not(test))]
+type PageBackingAlloc = PageAllocator;
+#[cfg(test)]
+type PageBackingAlloc =
+    rustty_zigstd::tracking_allocator::TrackingAllocator<'static, PageAllocator>;
+
+type PagePool = DynamicMemoryPoolAligned<PageBackingAlloc>;
+
+/// Construct the page pool's backing (child) allocator. In a normal build this is
+/// just `page_allocator()`; under test it is the same `page_allocator()` wrapped
+/// in a `TrackingAllocator` that records into the global [`page_tracking`] tracker
+/// (the faithful map of `pageAllocator()` returning `std.testing.allocator`).
+#[inline]
+fn page_backing_alloc() -> PageBackingAlloc {
+    #[cfg(not(test))]
+    {
+        page_allocator()
+    }
+    #[cfg(test)]
+    {
+        rustty_zigstd::tracking_allocator::TrackingAllocator::with_state(
+            page_allocator(),
+            page_tracking::tracker_static(),
+        )
+    }
+}
+
+/// TEST-ONLY page-allocation tracker — the scoped faithful equivalent of Zig's
+/// `std.testing.allocator` leak check on the page path (R6). Every page the pool
+/// (standard pages) AND the direct non-standard path allocate/free is counted
+/// here, so a test can assert ZERO outstanding after `deinit`/`reset`.
+#[cfg(test)]
+pub(crate) mod page_tracking {
+    use rustty_zigstd::tracking_allocator::TrackerState;
+
+    thread_local! {
+        // THREAD-LOCAL tracker shared by the page pool's `TrackingAllocator` child
+        // and the direct non-standard page alloc/free path on THIS thread, so BOTH
+        // page sources of a single PageList feed one outstanding-count — exactly
+        // like Zig's single `pageAllocator()`/`std.testing.allocator`. It is
+        // thread-local (not a process-global static) so concurrently-running tests
+        // — `cargo test` runs each test on its own thread — get ISOLATED counts and
+        // do not pollute each other's outstanding totals. A PageList and all its
+        // page churn live on the thread that created it, so all of its page
+        // alloc/free hit the same thread-local tracker.
+        static PAGE_TRACKER: TrackerState = const { TrackerState::new() };
+    }
+
+    /// Run `f` with a borrow of the current thread's page tracker.
+    pub(crate) fn with_tracker<R>(f: impl FnOnce(&TrackerState) -> R) -> R {
+        PAGE_TRACKER.with(|t| f(t))
+    }
+
+    /// Obtain a `&'static TrackerState` for the current thread's page tracker.
+    ///
+    /// The `TrackingAllocator` child stored in the page pool needs a
+    /// `&'static TrackerState`. A `thread_local!` value is `'static` for the life
+    /// of the thread; we extend the borrow with a pointer read inside the
+    /// `with(...)` closure. This is sound for our use: the page pool (and thus the
+    /// wrapper holding this reference) never outlives the thread that created it
+    /// (a PageList is not `Send` across the wrapper boundary in these tests), so
+    /// the thread-local outlives every use of the returned reference.
+    pub(crate) fn tracker_static() -> &'static TrackerState {
+        PAGE_TRACKER.with(|t| {
+            // SAFETY: `t` points at this thread's thread-local `TrackerState`,
+            // which lives until the thread exits. The page pool holding the
+            // returned reference is dropped before the thread exits (it is owned by
+            // a test-local PageList), so the reference never dangles.
+            let p: *const TrackerState = t;
+            unsafe { &*p }
+        })
+    }
+
+    /// A scope guard for leak-checking page churn in a single test. Snapshots the
+    /// thread-local tracker on construction; on `assert_returned_to_baseline` it
+    /// asserts the outstanding counts came back to the snapshot (i.e. every page
+    /// allocated during the scope was freed). A baseline delta (rather than
+    /// absolute zero) tolerates any page allocations that pre-existed the scope on
+    /// this thread; the thread-local isolation means no OTHER test perturbs it.
+    pub(crate) struct PageLeakScope {
+        base_allocs: usize,
+        base_bytes: usize,
+    }
+
+    impl PageLeakScope {
+        pub(crate) fn new() -> PageLeakScope {
+            with_tracker(|t| PageLeakScope {
+                base_allocs: t.outstanding_allocs(),
+                base_bytes: t.outstanding_bytes(),
+            })
+        }
+
+        /// Outstanding page allocations created since this scope began.
+        pub(crate) fn delta_allocs(&self) -> isize {
+            with_tracker(|t| t.outstanding_allocs() as isize - self.base_allocs as isize)
+        }
+
+        /// Assert every page allocated since this scope began has been freed.
+        #[track_caller]
+        pub(crate) fn assert_returned_to_baseline(&self) {
+            with_tracker(|t| {
+                let da = t.outstanding_allocs() as isize - self.base_allocs as isize;
+                let db = t.outstanding_bytes() as isize - self.base_bytes as isize;
+                assert!(
+                    da == 0 && db == 0,
+                    "page leak detected: {da} page allocation(s) / {db} byte(s) not \
+                     returned to the page pool after deinit/reset (served {} alloc, \
+                     {} free overall on this thread)",
+                    t.total_allocs(),
+                    t.total_frees(),
+                );
+            });
+        }
+    }
+}
 
 /// List of pins, known as "tracked" pins. These are pins that are kept
 /// up to date automatically through page-modifying operations.
@@ -288,7 +415,7 @@ impl MemoryPool {
         let node_pool = NodePool::init_preheated(Global, preheat).map_err(|_| OutOfMemory)?;
         // errdefer node_pool.deinit();
         let page_pool =
-            PagePool::init_preheated(page_allocator(), std_size(), PAGE_SIZE_MIN, preheat)
+            PagePool::init_preheated(page_backing_alloc(), std_size(), PAGE_SIZE_MIN, preheat)
                 .map_err(|_| OutOfMemory)?;
         // errdefer page_pool.deinit();
         let pin_pool = PinPool::init_preheated(Global, 8).map_err(|_| OutOfMemory)?;
@@ -1379,7 +1506,10 @@ impl PageList {
     // `pool.pages.arena.child_allocator` access and keep the seam explicit.
     fn alloc_non_standard(total_size: usize) -> Result<NonNull<u8>, OutOfMemory> {
         let layout = Self::non_standard_layout(total_size);
-        let alloc = page_allocator();
+        // Under test, route through the SAME tracking wrapper / global tracker the
+        // page pool's child uses, so non-standard pages are leak-counted too
+        // (faithful: in Zig the single `pageAllocator()` serves both paths).
+        let alloc = page_backing_alloc();
         let slice = alloc.allocate(layout).map_err(|_| OutOfMemory)?;
         Ok(slice.cast::<u8>())
     }
@@ -1390,7 +1520,7 @@ impl PageList {
         let page: *const Page = unsafe { &(*node).data };
         let (ptr, len) = Self::page_memory(page as *mut Page);
         let layout = Self::non_standard_layout(len);
-        let alloc = page_allocator();
+        let alloc = page_backing_alloc();
         // SAFETY: `ptr`/`len` describe a buffer previously returned by
         // `alloc_non_standard` (page allocator) with this exact layout.
         unsafe { alloc.deallocate(NonNull::new(ptr).unwrap(), layout) };

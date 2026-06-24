@@ -10888,3 +10888,169 @@ fn pagelist_resize_no_reflow_more_cols_remaps_pins_in_backfill_path() {
     s.untrack_pin(tracked);
     s.deinit();
 }
+
+// ===========================================================================
+// Page-pool leak coverage (scoped `std.testing.allocator` equivalent, R6).
+//
+// These tests are NOT ports of reference `test {}` blocks — they are the Rust
+// faithful equivalent of the leak detection Zig's test runner gives for free via
+// `pageAllocator()` returning `std.testing.allocator`. Under `cfg(test)` the page
+// pool's backing allocator is a `TrackingAllocator` recording into the global
+// `page_tracking` tracker (see mod.rs). Each test exercises representative page
+// churn and then asserts every page allocated during the test was returned to the
+// pool after `deinit`/`reset`. This gives native-speed page-leak coverage on the
+// heavy resize/reflow and clone-over-many-pages paths where Miri times out.
+// ===========================================================================
+
+use super::page_tracking::PageLeakScope;
+
+/// Grow scrollback to several pages, scroll around, then deinit — assert every
+/// page allocated during the churn was freed (no page leak).
+#[test]
+fn pagelist_pagepool_no_leak_grow_and_scroll() {
+    let scope = PageLeakScope::new();
+    {
+        let mut s = PageList::init(80, 24, None).unwrap();
+
+        // Grow until we have at least several pages chained, forcing real page
+        // allocations from the pool.
+        let mut pages = 0usize;
+        while pages < 4 {
+            let _ = s.grow().unwrap();
+            pages = 0;
+            let mut it = s.pages.first;
+            while !it.is_null() {
+                pages += 1;
+                it = unsafe { (*it).next };
+            }
+        }
+
+        // We should have created real page churn (more than the baseline page).
+        assert!(
+            scope.delta_allocs() > 0,
+            "expected the grow churn to allocate at least one new page"
+        );
+
+        // Scroll the viewport around the scrollback and back to active.
+        s.scroll(Scroll::Top);
+        s.scroll(Scroll::DeltaRow(5));
+        s.scroll(Scroll::Active);
+
+        s.deinit();
+    }
+    // After deinit every page allocated during this scope must be returned.
+    scope.assert_returned_to_baseline();
+}
+
+/// HEAVY path: build a large scrollback, clone the whole thing (which builds a
+/// second PageList over many pages), then deinit both — assert no page leak. This
+/// is exactly the kind of many-page churn Miri cannot run to completion.
+#[test]
+fn pagelist_pagepool_no_leak_clone_many_pages() {
+    let scope = PageLeakScope::new();
+    {
+        let mut s = PageList::init(80, 24, None).unwrap();
+        // Grow a large scrollback so the clone copies many pages.
+        s.grow_rows(500).unwrap();
+
+        assert!(
+            scope.delta_allocs() > 0,
+            "expected grow_rows to allocate scrollback pages"
+        );
+
+        let mut opts = super::access::Clone {
+            top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+            bot: None,
+            tracked_pins: None,
+        };
+        let mut s2 = s.clone(&mut opts).unwrap();
+        // The clone really copied the rows.
+        assert_eq!(s.total_rows(), s2.total_rows());
+
+        // Deinit both; all pages from both PageLists must come back.
+        s2.deinit();
+        s.deinit();
+    }
+    scope.assert_returned_to_baseline();
+}
+
+/// HEAVY path: resize with reflow over a multi-page scrollback (shrink then grow
+/// columns, forcing reflow to allocate and free pages), then deinit — assert no
+/// page leak. Reflow is the most allocation-churny PageList path.
+#[test]
+fn pagelist_pagepool_no_leak_resize_reflow() {
+    let scope = PageLeakScope::new();
+    {
+        let mut s = PageList::init(80, 24, None).unwrap();
+        s.grow_rows(300).unwrap();
+
+        // Fill rows with content so reflow actually has to move/repack cells
+        // (and so column shrink can't just trim trailing blanks).
+        {
+            let mut it = s.row_iterator(
+                super::iter::Direction::RightDown,
+                point::Point::Active(point::Coordinate::default()),
+                None,
+            );
+            while let Some(p) = it.next() {
+                let rac = p.row_and_cell();
+                let cells = unsafe { (*p.node).data.get_cells(rac.row) };
+                let len = cells.len();
+                for x in 0..len {
+                    unsafe {
+                        (*cells)[x] = cell_codepoint(('A' as u32) + (x as u32 % 26));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            scope.delta_allocs() > 0,
+            "expected grow_rows to allocate scrollback pages before reflow"
+        );
+
+        // Shrink columns with reflow (heavy: repacks every row across pages).
+        s.resize(super::resize::Resize {
+            cols: Some(40),
+            rows: None,
+            reflow: true,
+            cursor: None,
+        })
+        .unwrap();
+        assert_eq!(40, s.cols);
+
+        // Grow columns back with reflow (heavy: unpacks rows again).
+        s.resize(super::resize::Resize {
+            cols: Some(100),
+            rows: None,
+            reflow: true,
+            cursor: None,
+        })
+        .unwrap();
+        assert_eq!(100, s.cols);
+
+        s.deinit();
+    }
+    scope.assert_returned_to_baseline();
+}
+
+/// `reset()` returns the pool to (near) baseline: build scrollback across several
+/// pages, reset, then deinit — assert no page leak across the reset+deinit cycle.
+#[test]
+fn pagelist_pagepool_no_leak_reset_then_deinit() {
+    let scope = PageLeakScope::new();
+    {
+        let mut s = PageList::init(80, 24, None).unwrap();
+        s.grow_rows(200).unwrap();
+        assert!(scope.delta_allocs() > 0);
+
+        // reset() retains a bounded amount of pool capacity but must not leak.
+        s.reset();
+
+        // Churn again after reset to exercise the retained/zeroed arena path.
+        s.grow_rows(200).unwrap();
+
+        s.deinit();
+    }
+    scope.assert_returned_to_baseline();
+}

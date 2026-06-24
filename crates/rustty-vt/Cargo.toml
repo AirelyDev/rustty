@@ -28,3 +28,14 @@ rustty-zigstd = { workspace = true }
 # zigstd MemoryPool/ArenaAllocator). `Global` reproduces the prior `std::alloc`
 # path, so PageList behavior is unchanged.
 allocator-api2 = { workspace = true }
+
+[dev-dependencies]
+# TEST-ONLY: enable the `tracking` feature of rustty-zigstd so the PageList tests
+# can wrap the page pool's `PageAllocator` child in a `TrackingAllocator` (the
+# scoped faithful equivalent of Zig's `pageAllocator()` returning
+# `std.testing.allocator` under `is_test`) and assert ZERO outstanding page
+# allocations after deinit — native-speed leak coverage where Miri times out (R6).
+# A dev-dependency activates the feature ONLY for test/bench/example builds, so the
+# tracking wrapper is compiled into the `cfg(test)` PageList page pool and is
+# absent from the production library.
+rustty-zigstd = { workspace = true, features = ["tracking"] }

@@ -26,6 +26,13 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+# TEST-ONLY: expose `tracking_allocator::TrackingAllocator` (the scoped faithful
+# equivalent of Zig's `std.testing.allocator`) to downstream test builds — e.g.
+# rustty-vt enables it as a dev-dependency feature to leak-check the PageList page
+# pool natively where Miri times out (R6). OFF by default; never in production.
+tracking = []
+
 [dependencies]
 rustty-util.workspace = true
 # Faithful Rust map of Zig's `std.mem.Allocator` (the child allocator threaded

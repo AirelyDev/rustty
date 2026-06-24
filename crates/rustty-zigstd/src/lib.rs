@@ -27,3 +27,10 @@
 pub mod arena_allocator;
 pub mod array_hash_map;
 pub mod memory_pool;
+
+// TEST-ONLY leak-counting allocator (scoped faithful equivalent of Zig's
+// `std.testing.allocator`). Compiled under `cfg(test)` for this crate's own unit
+// tests, and under the `tracking` feature so downstream crates (rustty-vt's
+// PageList tests) can wire it onto the page pool where Miri times out (R6).
+#[cfg(any(test, feature = "tracking"))]
+pub mod tracking_allocator;
