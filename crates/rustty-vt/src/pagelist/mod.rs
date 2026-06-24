@@ -620,6 +620,10 @@ pub struct PageList {
 // `before`, `leftWrap`, `rightWrap`, `downOverflow`, `upOverflow`, etc.) lands
 // in `pin.rs` (the pin cluster). For the CORE methods we need the field layout
 // (`node`/`y`/`x`/`garbage`) and the `pinIsValid` walk; both are defined here.
+// PORT NOTE: Zig `Pin` is a trivially-copyable value type (passed/stored by
+// value throughout Selection/Screen). `Clone`/`Copy` mirror that — the `node`
+// raw pointer is a non-owning back-reference, so copying is bit-for-bit faithful.
+#[derive(Clone, Copy)]
 pub struct Pin {
     pub node: *mut Node,
     pub y: size::CellCountInt,
