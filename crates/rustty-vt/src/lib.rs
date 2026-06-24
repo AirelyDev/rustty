@@ -48,6 +48,10 @@ pub mod osc;
 pub mod point;
 // pub const color = @import("color.zig");
 pub mod color;
+// PORT NOTE: `terminal/cursor.zig` has no top-level re-export in `main.zig`
+// (it is an internal sibling imported by `Screen.zig` for the cursor `Style`
+// enum). Declared here so `screen` can reference it.
+pub mod cursor;
 // pub const device_attributes = @import("device_attributes.zig");
 pub mod device_attributes;
 // pub const device_status = @import("device_status.zig");
