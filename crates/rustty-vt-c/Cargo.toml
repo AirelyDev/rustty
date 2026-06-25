@@ -24,3 +24,4 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [dependencies]
 rustty-vt = { workspace = true }
 rustty-lib = { workspace = true }
+allocator-api2 = { workspace = true }
