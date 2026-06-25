@@ -36,10 +36,17 @@ use std::os::raw::c_int;
 pub mod allocator;
 pub mod build_info;
 pub mod color;
+mod cwrap;
 pub mod focus;
+pub mod key_event;
 pub mod modes;
+pub mod mouse_event;
+pub mod paste;
 pub mod result;
+pub mod size_report;
 pub mod sys;
+#[cfg(test)]
+mod test_util;
 mod writer;
 
 // PORT NOTE (DEFERRED): `pub const types = @import("types.zig");` and
@@ -225,6 +232,485 @@ pub unsafe extern "C" fn rustty_sys_set(option: c_int, value: *const std::ffi::c
     };
     // SAFETY: `value` validity for `opt` is the caller's contract.
     unsafe { sys::set(opt, value) }.to_c_int()
+}
+
+// ----- paste -----
+// pub const paste_is_safe = paste.is_safe;  (ghostty_paste_is_safe)
+/// C: rustty_paste_is_safe
+///
+/// # Safety
+/// `data`, if non-null, must point to `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_paste_is_safe(data: *const u8, len: usize) -> bool {
+    // SAFETY: `data`/`len` validity is the caller's contract.
+    unsafe { paste::is_safe(data, len) }
+}
+
+// pub const paste_encode = paste.encode;  (ghostty_paste_encode)
+/// C: rustty_paste_encode
+///
+/// # Safety
+/// `data`, if non-null, must point to `data_len` writable bytes; `out`, if
+/// non-null, must point to `out_len` writable bytes; `out_written` must be a
+/// valid, writable pointer to `usize`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_paste_encode(
+    data: *mut u8,
+    data_len: usize,
+    bracketed: bool,
+    out: *mut u8,
+    out_len: usize,
+    out_written: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { paste::encode(data, data_len, bracketed, out, out_len, out_written) }.to_c_int()
+}
+
+// ----- size_report -----
+// pub const size_report_encode = size_report.encode;  (ghostty_size_report_encode)
+/// C: rustty_size_report_encode
+///
+/// # Safety
+/// `out`, if non-null, must point to `out_len` writable bytes; `out_written`
+/// must be a valid, writable pointer to `usize`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_size_report_encode(
+    style: size_report::Style,
+    size: size_report::Size,
+    out: *mut u8,
+    out_len: usize,
+    out_written: *mut usize,
+) -> c_int {
+    // SAFETY: `out`/`out_written` validity is the caller's contract.
+    unsafe { size_report::encode(style, size, out, out_len, out_written) }.to_c_int()
+}
+
+// ----- key_event -----
+// PORT NOTE: the `set_action`/`set_key` `intToEnum` runtime-safety guards live
+// here on the raw `c_int` crossing the C boundary; an out-of-range value is
+// dropped (a no-op, mirroring the reference's `log.warn` + early `return`). The
+// `key::Mods` is crossed as its documented `u16` backing (a packed C bitfield).
+
+// pub const key_event_new = key_event.new;  (ghostty_key_event_new)
+/// C: rustty_key_event_new
+///
+/// # Safety
+/// `alloc`, if non-null, must point to a valid allocator; `result` must be a
+/// valid, writable pointer to a key-event handle.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_new(
+    alloc: *const rustty_lib::allocator::Allocator,
+    result: *mut key_event::Event,
+) -> c_int {
+    // SAFETY: `alloc`/`result` validity is the caller's contract.
+    unsafe { key_event::new(alloc.as_ref(), result) }.to_c_int()
+}
+
+// pub const key_event_free = key_event.free;  (ghostty_key_event_free)
+/// C: rustty_key_event_free
+///
+/// # Safety
+/// `event`, if non-null, must be a handle returned by `rustty_key_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_free(event: key_event::Event) {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { key_event::free(event) }
+}
+
+// pub const key_event_set_action = key_event.set_action;  (ghostty_key_event_set_action)
+/// C: rustty_key_event_set_action
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_key_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_set_action(event: key_event::Event, action: c_int) {
+    // _ = std.meta.intToEnum(key.Action, ...) catch { log.warn(...); return; };
+    let Some(a) = key_action_from_c_int(action) else {
+        // log.warn("set_action invalid action value={d}", .{...});
+        eprintln!("set_action invalid action value={action}");
+        return;
+    };
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { key_event::set_action(event, a) }
+}
+
+// pub const key_event_get_action = key_event.get_action;  (ghostty_key_event_get_action)
+/// C: rustty_key_event_get_action
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_key_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_get_action(event: key_event::Event) -> c_int {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { key_event::get_action(event) as c_int }
+}
+
+// pub const key_event_set_key = key_event.set_key;  (ghostty_key_event_set_key)
+/// C: rustty_key_event_set_key
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_key_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_set_key(event: key_event::Event, k: c_int) {
+    // _ = std.meta.intToEnum(key.Key, ...) catch { log.warn(...); return; };
+    let Some(key) = key_key_from_c_int(k) else {
+        // log.warn("set_key invalid key value={d}", .{...});
+        eprintln!("set_key invalid key value={k}");
+        return;
+    };
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { key_event::set_key(event, key) }
+}
+
+// pub const key_event_get_key = key_event.get_key;  (ghostty_key_event_get_key)
+/// C: rustty_key_event_get_key
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_key_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_get_key(event: key_event::Event) -> c_int {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { key_event::get_key(event) as c_int }
+}
+
+// pub const key_event_set_mods = key_event.set_mods;  (ghostty_key_event_set_mods)
+/// C: rustty_key_event_set_mods
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_key_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_set_mods(
+    event: key_event::Event,
+    mods: rustty_vt::input::key_mods::ModsBacking,
+) {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { key_event::set_mods(event, rustty_vt::input::key::Mods::from_int(mods)) }
+}
+
+// pub const key_event_get_mods = key_event.get_mods;  (ghostty_key_event_get_mods)
+/// C: rustty_key_event_get_mods
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_key_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_get_mods(
+    event: key_event::Event,
+) -> rustty_vt::input::key_mods::ModsBacking {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { key_event::get_mods(event) }.int()
+}
+
+// pub const key_event_set_consumed_mods = key_event.set_consumed_mods;  (ghostty_key_event_set_consumed_mods)
+/// C: rustty_key_event_set_consumed_mods
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_key_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_set_consumed_mods(
+    event: key_event::Event,
+    consumed_mods: rustty_vt::input::key_mods::ModsBacking,
+) {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe {
+        key_event::set_consumed_mods(event, rustty_vt::input::key::Mods::from_int(consumed_mods))
+    }
+}
+
+// pub const key_event_get_consumed_mods = key_event.get_consumed_mods;  (ghostty_key_event_get_consumed_mods)
+/// C: rustty_key_event_get_consumed_mods
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_key_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_get_consumed_mods(
+    event: key_event::Event,
+) -> rustty_vt::input::key_mods::ModsBacking {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { key_event::get_consumed_mods(event) }.int()
+}
+
+// pub const key_event_set_composing = key_event.set_composing;  (ghostty_key_event_set_composing)
+/// C: rustty_key_event_set_composing
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_key_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_set_composing(event: key_event::Event, composing: bool) {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { key_event::set_composing(event, composing) }
+}
+
+// pub const key_event_get_composing = key_event.get_composing;  (ghostty_key_event_get_composing)
+/// C: rustty_key_event_get_composing
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_key_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_get_composing(event: key_event::Event) -> bool {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { key_event::get_composing(event) }
+}
+
+// pub const key_event_set_utf8 = key_event.set_utf8;  (ghostty_key_event_set_utf8)
+/// C: rustty_key_event_set_utf8
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_key_event_new`; `utf8`, if
+/// non-null, must point to `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_set_utf8(
+    event: key_event::Event,
+    utf8: *const u8,
+    len: usize,
+) {
+    // SAFETY: `event`/`utf8` validity is the caller's contract.
+    unsafe { key_event::set_utf8(event, utf8, len) }
+}
+
+// pub const key_event_get_utf8 = key_event.get_utf8;  (ghostty_key_event_get_utf8)
+/// C: rustty_key_event_get_utf8
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_key_event_new`; `len`, if
+/// non-null, must be a valid, writable pointer to `usize`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_get_utf8(
+    event: key_event::Event,
+    len: *mut usize,
+) -> *const u8 {
+    // SAFETY: `event`/`len` validity is the caller's contract.
+    unsafe { key_event::get_utf8(event, len) }
+}
+
+// pub const key_event_set_unshifted_codepoint = key_event.set_unshifted_codepoint;
+//   (ghostty_key_event_set_unshifted_codepoint)
+/// C: rustty_key_event_set_unshifted_codepoint
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_key_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_set_unshifted_codepoint(
+    event: key_event::Event,
+    codepoint: u32,
+) {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { key_event::set_unshifted_codepoint(event, codepoint) }
+}
+
+// pub const key_event_get_unshifted_codepoint = key_event.get_unshifted_codepoint;
+//   (ghostty_key_event_get_unshifted_codepoint)
+/// C: rustty_key_event_get_unshifted_codepoint
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_key_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_event_get_unshifted_codepoint(event: key_event::Event) -> u32 {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { key_event::get_unshifted_codepoint(event) }
+}
+
+// PORT NOTE: range-checked `c_int -> enum` projections for the guarded setters.
+// `key::Key`/`key::Action`/`mouse::Action`/`mouse::Button` are contiguous
+// `#[repr(C)]` enums; the range check IS `std.meta.intToEnum` (reject out-of-
+// range), after which a `transmute` from the validated `c_int` is the enum.
+const KEY_KEY_COUNT: c_int = 176; // contiguous 0..=175
+fn key_key_from_c_int(v: c_int) -> Option<rustty_vt::input::key::Key> {
+    if (0..KEY_KEY_COUNT).contains(&v) {
+        // SAFETY: `v` is a valid `key::Key` discriminant (range-checked above).
+        Some(unsafe { std::mem::transmute::<c_int, rustty_vt::input::key::Key>(v) })
+    } else {
+        None
+    }
+}
+
+fn key_action_from_c_int(v: c_int) -> Option<rustty_vt::input::key::Action> {
+    match v {
+        0 => Some(rustty_vt::input::key::Action::Release),
+        1 => Some(rustty_vt::input::key::Action::Press),
+        2 => Some(rustty_vt::input::key::Action::Repeat),
+        _ => None,
+    }
+}
+
+fn mouse_action_from_c_int(v: c_int) -> Option<rustty_vt::input::mouse::Action> {
+    match v {
+        0 => Some(rustty_vt::input::mouse::Action::Press),
+        1 => Some(rustty_vt::input::mouse::Action::Release),
+        2 => Some(rustty_vt::input::mouse::Action::Motion),
+        _ => None,
+    }
+}
+
+fn mouse_button_from_c_int(v: c_int) -> Option<rustty_vt::input::mouse::Button> {
+    if (0..=11).contains(&v) {
+        // SAFETY: `v` is a valid `mouse::Button` discriminant (range-checked).
+        Some(unsafe { std::mem::transmute::<c_int, rustty_vt::input::mouse::Button>(v) })
+    } else {
+        None
+    }
+}
+
+// ----- mouse_event -----
+// PORT NOTE: the `set_action`/`set_button` `intToEnum` guards live here on the
+// raw `c_int`; `mouse::Mods` is crossed as its `u16` backing; `Position` (Pos)
+// is an `#[repr(C)]` `{ f32, f32 }` crossed by value.
+
+// pub const mouse_event_new = mouse_event.new;  (ghostty_mouse_event_new)
+/// C: rustty_mouse_event_new
+///
+/// # Safety
+/// `alloc`, if non-null, must point to a valid allocator; `result` must be a
+/// valid, writable pointer to a mouse-event handle.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_event_new(
+    alloc: *const rustty_lib::allocator::Allocator,
+    result: *mut mouse_event::Event,
+) -> c_int {
+    // SAFETY: `alloc`/`result` validity is the caller's contract.
+    unsafe { mouse_event::new(alloc.as_ref(), result) }.to_c_int()
+}
+
+// pub const mouse_event_free = mouse_event.free;  (ghostty_mouse_event_free)
+/// C: rustty_mouse_event_free
+///
+/// # Safety
+/// `event`, if non-null, must be a handle returned by `rustty_mouse_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_event_free(event: mouse_event::Event) {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { mouse_event::free(event) }
+}
+
+// pub const mouse_event_set_action = mouse_event.set_action;  (ghostty_mouse_event_set_action)
+/// C: rustty_mouse_event_set_action
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_event_set_action(event: mouse_event::Event, action: c_int) {
+    // _ = std.meta.intToEnum(Action, ...) catch { log.warn(...); return; };
+    let Some(a) = mouse_action_from_c_int(action) else {
+        // log.warn("set_action invalid action value={d}", .{...});
+        eprintln!("set_action invalid action value={action}");
+        return;
+    };
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { mouse_event::set_action(event, a) }
+}
+
+// pub const mouse_event_get_action = mouse_event.get_action;  (ghostty_mouse_event_get_action)
+/// C: rustty_mouse_event_get_action
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_event_get_action(event: mouse_event::Event) -> c_int {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { mouse_event::get_action(event) as c_int }
+}
+
+// pub const mouse_event_set_button = mouse_event.set_button;  (ghostty_mouse_event_set_button)
+/// C: rustty_mouse_event_set_button
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_event_set_button(event: mouse_event::Event, button: c_int) {
+    // _ = std.meta.intToEnum(Button, ...) catch { log.warn(...); return; };
+    let Some(b) = mouse_button_from_c_int(button) else {
+        // log.warn("set_button invalid button value={d}", .{...});
+        eprintln!("set_button invalid button value={button}");
+        return;
+    };
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { mouse_event::set_button(event, b) }
+}
+
+// pub const mouse_event_clear_button = mouse_event.clear_button;  (ghostty_mouse_event_clear_button)
+/// C: rustty_mouse_event_clear_button
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_event_clear_button(event: mouse_event::Event) {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { mouse_event::clear_button(event) }
+}
+
+// pub const mouse_event_get_button = mouse_event.get_button;  (ghostty_mouse_event_get_button)
+/// C: rustty_mouse_event_get_button
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_mouse_event_new`; `out`, if
+/// non-null, must be a valid, writable pointer to a `c_int` button code.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_event_get_button(
+    event: mouse_event::Event,
+    out: *mut c_int,
+) -> bool {
+    // PORT NOTE: the reference writes the `Button` enum (a `c_int`) through `out`.
+    let mut b: mouse_event::Button = mouse_event::Button::Unknown;
+    // SAFETY: `event` validity is the caller's contract.
+    let has = unsafe { mouse_event::get_button(event, &mut b) };
+    if has && !out.is_null() {
+        // SAFETY: `out` is a valid writable pointer (caller contract).
+        unsafe { *out = b as c_int };
+    }
+    has
+}
+
+// pub const mouse_event_set_mods = mouse_event.set_mods;  (ghostty_mouse_event_set_mods)
+/// C: rustty_mouse_event_set_mods
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_event_set_mods(
+    event: mouse_event::Event,
+    mods: rustty_vt::input::key_mods::ModsBacking,
+) {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { mouse_event::set_mods(event, rustty_vt::input::key::Mods::from_int(mods)) }
+}
+
+// pub const mouse_event_get_mods = mouse_event.get_mods;  (ghostty_mouse_event_get_mods)
+/// C: rustty_mouse_event_get_mods
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_event_get_mods(
+    event: mouse_event::Event,
+) -> rustty_vt::input::key_mods::ModsBacking {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { mouse_event::get_mods(event) }.int()
+}
+
+// pub const mouse_event_set_position = mouse_event.set_position;  (ghostty_mouse_event_set_position)
+/// C: rustty_mouse_event_set_position
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_event_set_position(
+    event: mouse_event::Event,
+    pos: mouse_event::Position,
+) {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { mouse_event::set_position(event, pos) }
+}
+
+// pub const mouse_event_get_position = mouse_event.get_position;  (ghostty_mouse_event_get_position)
+/// C: rustty_mouse_event_get_position
+///
+/// # Safety
+/// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_event_get_position(
+    event: mouse_event::Event,
+) -> mouse_event::Position {
+    // SAFETY: `event` validity is the caller's contract.
+    unsafe { mouse_event::get_position(event) }
 }
 
 #[cfg(test)]
