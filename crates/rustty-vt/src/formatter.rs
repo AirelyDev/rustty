@@ -392,6 +392,7 @@ impl TerminalFormatter {
     }
 }
 
+/// Screen formatter formats a single terminal screen (e.g. primary vs alt).
 pub struct ScreenFormatter<'a> {
     /// The screen to format.
     pub screen: *const Screen,
@@ -756,6 +757,7 @@ fn copy_options(opts: &Options) -> Options {
     }
 }
 
+/// PageList formatter formats multiple pages as represented by a PageList.
 pub struct PageListFormatter<'a> {
     /// The pagelist to format.
     pub list: *const PageList,
