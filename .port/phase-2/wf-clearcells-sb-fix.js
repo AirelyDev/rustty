@@ -1,0 +1,31 @@
+export const meta = {
+  name: 'clearcells-sb-fix',
+  description: 'Fix a real pre-existing Stacked-Borrows UB caught by restored per-sub-batch Miri (vt-12b-3a): Screen::clear_cells(&mut self, page:&mut Page, row:&mut Row, cells:&mut [Cell]) holds STRONGLY-PROTECTED &mut args while its trailing assert_integrity() re-reads the same cell memory via self.pages -> UB. Zig passes *Page/*Row/[]Cell (UNPROTECTED). Faithful fix: make these args (and any sibling method with the same &mut-Page/Row/cells-across-assert_integrity pattern) RAW POINTERS, matching Zig + the addr_of_mut! discipline.',
+  phases: [
+    { title: 'Fix', detail: 'sweep + convert &mut Page/Row/[Cell] args (held across assert_integrity) to raw pointers; update callers' },
+    { title: 'Verify', detail: 'Miri-clean on clear/erase/clone tests + no regression + ASan + scoped-G3b' },
+  ],
+}
+const G = '/Users/gael/projects/ghostty', R = '/Users/gael/projects/rustty'
+const T = G + '/src/terminal'
+const GATES = R + '/.port/tools/gates'
+const RULES = 'OBEY: PARITY CONSTITUTION + ' + R + '/.port/PORT_RULES.md. R1 = 100% fidelity, every comment verbatim. Reference READ-ONLY ' + T + '/Screen.zig + page.zig. '
+  + 'ROOT CAUSE (Miri Stacked Borrows): a method takes `&mut Page`/`&mut Row`/`&mut [Cell]` as ARGS (strongly-protected for the call) then calls assert_integrity() which walks self.pages and re-reads the SAME cell memory through a different tag -> "would remove strongly-protected tag" UB. The Zig reference passes `*Page`/`*Row`/`[]Cell` (Zig pointers/slices are UNPROTECTED), so it is sound there. This is the SAME class as the resize.rs `&mut (*).data` -> addr_of_mut! fix. '
+  + 'FAITHFUL FIX: convert the offending `&mut Page/Row/[Cell]` ARGS to RAW pointers (`*mut Page`, `*mut Row`, `*mut [Cell]` or `*mut Cell`+len) — matching Zig\'s unprotected pointer/slice semantics — and reconstruct a LOCAL `&mut [Cell]`/`&mut Page` ONLY for the brief mutation scope, dropped BEFORE any assert_integrity call. Update all callers to pass `core::ptr::addr_of_mut!`-derived raw pointers (most already hold the cells via addr_of_mut!). Do NOT weaken/remove assert_integrity. '
+  + 'MIRI: this fix is validated BY Miri (the whole point). Run Miri in ISOLATION. Run gates FOREGROUND. Commit trailer "Co-Authored-By: Claude Opus 4.8 (1M context)". '
+async function robust(p, o) { let r = await agent(p, o); if (!r) r = await agent(p, { ...o, label: (o.label || 'a') + '-retry' }); return r }
+const STEP = { type: 'object', additionalProperties: true, required: ['ok', 'blockers'], properties: { ok: { type: 'boolean' }, methods_fixed: { type: 'array', items: { type: 'string' } }, builds: { type: 'boolean' }, tests_passing: { type: 'integer' }, commit: { type: 'string' }, notes: { type: 'string' }, blockers: { type: 'array', items: { type: 'string' } } } }
+const VERIFY = { type: 'object', additionalProperties: true, required: ['verdict', 'blockers'], properties: { verdict: { type: 'string', enum: ['GREEN', 'RED'] }, miri_clean: { type: 'boolean' }, tests_passing: { type: 'integer' }, asan_clean: { type: 'boolean' }, g3b_clean: { type: 'boolean' }, ub_eliminated: { type: 'boolean' }, notes: { type: 'string' }, blockers: { type: 'array', items: { type: 'string' } } } }
+
+phase('Fix')
+const fix = await robust(RULES +
+  'TASK (fix the clear_cells Stacked-Borrows UB + sweep siblings). (1) In crates/rustty-vt/src/screen.rs, change clear_cells (line ~1945) so its `page`/`row`/`cells` args are RAW pointers (`*mut Page`, `*mut Row`, `*mut [Cell]` or `*mut Cell`+len) instead of `&mut` — faithful to Zig `clearCells(self, page:*Page, row:*Row, cells:[]Cell)`. Reconstruct local `&mut` ONLY for the brief clearing loop; ensure NO `&mut` to that memory is live when assert_integrity() is called. (2) SWEEP screen.rs (+ page_impl.rs / pagelist if needed) for OTHER methods exhibiting the same pattern — a `&mut Page`/`&mut Row`/`&mut [Cell]` ARG held across an assert_integrity()/verify_integrity() call (e.g. clear_unprotected_cells, split_cell_boundary, clear_rows, blank_cell-adjacent) — and apply the same raw-pointer fix. (3) Update ALL callers (screen.rs + terminal.rs erase methods) to pass `core::ptr::addr_of_mut!` raw pointers. '
+  + 'GATES FOREGROUND: cargo build -p rustty-vt; cargo test -p rustty-vt (1061 still pass, no regression); cargo +nightly miri test -p rustty-vt on the previously-FAILING tests in ISOLATION (screen::tests::screen_clear_rows_active_one_line + 2-3 terminal erase tests that call clear_cells) => 0 UB/leak (the fix is proven by these now passing under Miri); clippy -p rustty-vt --all-targets -- -D warnings; fmt --check; scoped G3b on screen.rs (no comments dropped). Commit "rustty: fix clear_cells Stacked-Borrows UB — raw-ptr args (faithful to Zig unprotected *Page/[]Cell)". Return ok+methods_fixed+builds+tests_passing+commit+notes(which methods + callers changed)+blockers.',
+  { schema: STEP, effort: 'high', label: 'fix', phase: 'Fix' })
+
+phase('Verify')
+const verify = await robust(RULES +
+  'TASK (independent verify — default RED; this is a UB fix, Miri is the gate). Fix: ' + JSON.stringify(fix && { commit: fix.commit, methods_fixed: fix.methods_fixed, blockers: fix.blockers }) + '\n'
+  + 'Confirm FOREGROUND: cargo build -p rustty-vt; cargo test -p rustty-vt (no regression vs 1061); cargo +nightly miri test -p rustty-vt in ISOLATION on (a) the previously-UB test screen::tests::screen_clear_rows_active_one_line, (b) 3 terminal erase tests (erase_chars/erase_line/delete_chars that hit clear_cells), (c) a clone test — ALL 0 UB/leak (ub_eliminated: confirm the "strongly protected" SB error is GONE); `bash ' + GATES + '/sanitizers.sh rustty-vt terminal address` + `... screen address` (ASan clean); clippy --all-targets -D + fmt --check + ' + GATES + '/check_acyclic.sh. Scoped G3b on screen.rs: no comment dropped by the signature change (g3b_clean). Confirm the raw-ptr args are FAITHFUL to Zig (Zig passes *Page/*Row/[]Cell unprotected) — not a weakening. Verdict GREEN only if Miri now clean on the previously-failing tests AND no regression AND ASan clean AND g3b_clean. Report verdict + miri_clean + ub_eliminated + tests_passing + asan_clean + g3b_clean + blockers.',
+  { schema: VERIFY, effort: 'high', label: 'verify', phase: 'Verify' })
+return { fix, verify }
