@@ -6,15 +6,19 @@
 //!
 //! vt-12b-7a fills the STATE-mutating dispatch arms (the `vtFallible` arms that
 //! call already-ported Terminal methods), the Effects scaffolding, and the
-//! simple helpers (`horizontalTab`/`horizontalTabBack`/`setMode`). The
-//! RESPONSE/QUERY arms (device_attributes/device_status/report_*/request_mode*/
-//! send_mode_report/query_kitty_keyboard/color_operation/kitty_color_report) are
-//! filled in vt-12b-7b and remain `todo!()`; APC end + kitty/glyph are stubbed.
+//! simple helpers (`horizontalTab`/`horizontalTabBack`/`setMode`). vt-12b-7b
+//! fills the RESPONSE/QUERY arms (device_attributes/device_status/report_*/
+//! request_mode*/send_mode_report/query_kitty_keyboard/enquiry/xtversion/
+//! size_report/window_title/report_pwd) — they encode a VT response and write it
+//! via the Effects `write_pty` callback. APC end + kitty/glyph stay stubbed
+//! (font-blocked, deferred past vt-12; see DEFERRALS.md).
 
-// PORT NOTE (vt-12b-7a): the RESPONSE/QUERY arms left as `todo!()` keep tripping
-// clippy::todo, and the apc-stub fields are not all read yet, so we retain the
-// skeleton allows until vt-12b-7b removes them.
-#![allow(clippy::todo)]
+// PORT NOTE (vt-12b-7b): the RESPONSE/QUERY arms are now filled, so the
+// `clippy::todo` allow is dropped. `dead_code`/`unused_variables` are retained:
+// the reference's no-op arms (`.title_push`/`.title_pop`/`.dcs_*`/`.apc_put`/
+// `.show_desktop_notification`/...) carry value params they ignore, and the
+// APC-stub fields/`vt_raw` argument remain unread until the deferred protocols
+// reactivate.
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
@@ -712,6 +716,402 @@ impl<'a> Handler<'a> {
         Ok(())
     }
 
+    // fn reportDeviceAttributes(self: *Handler, req: device_attributes.Req) void {
+    //     const func = self.effects.device_attributes orelse return;
+    //     const attrs = func(self);
+    //
+    //     var stack = std.heap.stackFallback(128, self.terminal.gpa());
+    //     const alloc = stack.get();
+    //
+    //     var aw: std.Io.Writer.Allocating = .init(alloc);
+    //     defer aw.deinit();
+    //
+    //     attrs.encode(req, &aw.writer) catch return;
+    //
+    //     const written = aw.toOwnedSliceSentinel(0) catch return;
+    //     defer alloc.free(written);
+    //     self.writePty(written);
+    // }
+    //
+    // PORT NOTE (vt-12b-7b): the reference accumulates the encoded response into a
+    // `std.Io.Writer.Allocating` (a `stackFallback(128, ...)`-backed growable
+    // buffer) and then writes the owned sentinel slice. Rust's `String` is the
+    // growable byte accumulator here; `device_attributes::Attributes::encode`
+    // writes via `core::fmt::Write` (matching the reference `attrs.encode`), and
+    // an encode failure (`catch return`) is the `is_err()` early-out. The
+    // resulting bytes (no sentinel needed at the `&[u8]` callback boundary) are
+    // handed to `writePty`.
+    fn report_device_attributes(&mut self, req: device_attributes::Req) {
+        let Some(func) = self.effects.device_attributes else {
+            return;
+        };
+        let attrs = func(self);
+
+        let mut aw = String::new();
+        if attrs.encode(req, &mut aw).is_err() {
+            return;
+        }
+
+        self.write_pty(aw.as_bytes());
+    }
+
+    // fn deviceStatus(self: *Handler, req: device_status.Request) void {
+    //     switch (req) {
+    //         .operating_status => self.writePty("\x1B[0n"),
+    //
+    //         .cursor_position => { ... },
+    //
+    //         .color_scheme => { ... },
+    //     }
+    // }
+    fn device_status(&mut self, req: device_status::Request) {
+        match req {
+            // .operating_status => self.writePty("\x1B[0n"),
+            device_status::Request::OperatingStatus => self.write_pty(b"\x1B[0n"),
+
+            // .cursor_position => {
+            //     const pos: struct { x: usize, y: usize } =
+            //         if (self.terminal.modes.get(.origin)) .{
+            //             .x = self.terminal.screens.active.cursor.x -| self.terminal.scrolling_region.left,
+            //             .y = self.terminal.screens.active.cursor.y -| self.terminal.scrolling_region.top,
+            //         } else .{
+            //             .x = self.terminal.screens.active.cursor.x,
+            //             .y = self.terminal.screens.active.cursor.y,
+            //         };
+            //
+            //     var buf: [64]u8 = undefined;
+            //     const resp = std.fmt.bufPrintZ(&buf, "\x1B[{};{}R", .{ pos.y + 1, pos.x + 1 }) catch return;
+            //     self.writePty(resp);
+            // },
+            device_status::Request::CursorPosition => {
+                let (x, y): (usize, usize) = if self.term().modes.get(modes::Mode::Origin) {
+                    let cx = self.term().active_mut().cursor.x;
+                    let cy = self.term().active_mut().cursor.y;
+                    let left = self.term().scrolling_region.left;
+                    let top = self.term().scrolling_region.top;
+                    (
+                        cx.saturating_sub(left) as usize,
+                        cy.saturating_sub(top) as usize,
+                    )
+                } else {
+                    (
+                        self.term().active_mut().cursor.x as usize,
+                        self.term().active_mut().cursor.y as usize,
+                    )
+                };
+
+                // PORT NOTE: the reference formats into a fixed `[64]u8` via
+                // `bufPrintZ`; Rust's `String` accumulator is the analog (the
+                // 64-byte cap is a Zig stack-buffer detail, not observable).
+                let resp = format!("\x1B[{};{}R", y + 1, x + 1);
+                self.write_pty(resp.as_bytes());
+            }
+
+            // .color_scheme => {
+            //     const func = self.effects.color_scheme orelse return;
+            //     const scheme = func(self) orelse return;
+            //     self.writePty(switch (scheme) {
+            //         .dark => "\x1B[?997;1n",
+            //         .light => "\x1B[?997;2n",
+            //     });
+            // },
+            device_status::Request::ColorScheme => {
+                let Some(func) = self.effects.color_scheme else {
+                    return;
+                };
+                let Some(scheme) = func(self) else {
+                    return;
+                };
+                self.write_pty(match scheme {
+                    device_status::ColorScheme::Dark => b"\x1B[?997;1n",
+                    device_status::ColorScheme::Light => b"\x1B[?997;2n",
+                });
+            }
+        }
+    }
+
+    // fn reportEnquiry(self: *Handler) void {
+    //     const func = self.effects.enquiry orelse return;
+    //     const response = func(self);
+    //     if (response.len == 0) return;
+    //     var buf: [256]u8 = undefined;
+    //     if (response.len >= buf.len) return;
+    //     @memcpy(buf[0..response.len], response);
+    //     buf[response.len] = 0;
+    //     self.writePty(buf[0..response.len :0]);
+    // }
+    //
+    // PORT NOTE (vt-12b-7b): the reference copies the response into a fixed
+    // `[256]u8` (NUL-terminating it) and rejects responses `>= 256` bytes. We
+    // preserve both guards (empty -> silent; `>= 256` -> silent); the sentinel
+    // copy is a Zig encoding detail, so we pass the response slice directly.
+    fn report_enquiry(&mut self) {
+        let Some(func) = self.effects.enquiry else {
+            return;
+        };
+        let response = func(self);
+        if response.is_empty() {
+            return;
+        }
+        if response.len() >= 256 {
+            return;
+        }
+        self.write_pty(response);
+    }
+
+    // fn reportXtversion(self: *Handler) void {
+    //     const version = if (self.effects.xtversion) |func| func(self) else "";
+    //     var buf: [288]u8 = undefined;
+    //     const resp = std.fmt.bufPrintZ(
+    //         &buf,
+    //         "\x1BP>|{s}\x1B\\",
+    //         .{if (version.len > 0) version else "libghostty"},
+    //     ) catch return;
+    //     self.writePty(resp);
+    // }
+    //
+    // PORT NOTE (R2 ghostty->rustty): the reference's fallback version string is
+    // "libghostty"; retargeted to "librustty" per the rename rule. The DCS
+    // wrapping (`ESC P > | <version> ESC \`) is unchanged.
+    fn report_xtversion(&mut self) {
+        let version: &[u8] = if let Some(func) = self.effects.xtversion {
+            func(self)
+        } else {
+            b""
+        };
+        // PORT NOTE: the reference formats into a fixed `[288]u8`; Rust's `Vec`
+        // accumulator is the analog. A non-UTF-8 version slice is written
+        // verbatim, so we build the byte sequence directly rather than via a
+        // format string (the `{s}` in the reference is a raw byte splice).
+        let mut resp: Vec<u8> = Vec::new();
+        resp.extend_from_slice(b"\x1BP>|");
+        if version.is_empty() {
+            resp.extend_from_slice(b"librustty");
+        } else {
+            resp.extend_from_slice(version);
+        }
+        resp.extend_from_slice(b"\x1B\\");
+        self.write_pty(&resp);
+    }
+
+    // fn reportSize(self: *Handler, style: csi.SizeReportStyle) void { ... }
+    fn report_size(&mut self, style: csi::SizeReportStyle) {
+        // Almost all size reports will fit in 256 bytes so try that
+        // on the stack before falling back to a heap allocation.
+        // var stack = std.heap.stackFallback(256, self.terminal.gpa());
+        // const alloc = stack.get();
+        //
+        // // Allocating writing to accumulate the response.
+        // var aw: std.Io.Writer.Allocating = .init(alloc);
+        // defer aw.deinit();
+        //
+        // PORT NOTE (vt-12b-7b): the reference accumulates into a
+        // `stackFallback(256, ...)`-backed `std.Io.Writer.Allocating`; Rust's
+        // `String` is the growable accumulator. An encode/print failure
+        // (`catch return` / `catch |err| { log.warn(...); return; }`) is the
+        // `is_err()` early-out.
+        let mut aw = String::new();
+
+        // Build the response.
+        match style {
+            // .csi_21_t => {
+            //     const title = self.terminal.getTitle() orelse "";
+            //     aw.writer.print("\x1b]l{s}\x1b\\", .{title}) catch return;
+            // },
+            csi::SizeReportStyle::Csi21T => {
+                // PORT NOTE: the title is a raw byte slice spliced via `{s}`; we
+                // build the bytes directly to avoid assuming UTF-8.
+                let mut resp: Vec<u8> = Vec::new();
+                resp.extend_from_slice(b"\x1b]l");
+                if let Some(title) = self.term().get_title() {
+                    resp.extend_from_slice(title);
+                }
+                resp.extend_from_slice(b"\x1b\\");
+                self.write_pty(&resp);
+                return;
+            }
+
+            // .csi_14_t, .csi_16_t, .csi_18_t => {
+            //     const get_size = self.effects.size orelse return;
+            //     const s = get_size(self) orelse return;
+            //     const report_style: size_report.Style = switch (style) {
+            //         .csi_14_t => .csi_14_t,
+            //         .csi_16_t => .csi_16_t,
+            //         .csi_18_t => .csi_18_t,
+            //         .csi_21_t => unreachable,
+            //     };
+            //     size_report.encode(&aw.writer, report_style, s) catch |err| {
+            //         log.warn("error encoding size report err={}", .{err});
+            //         return;
+            //     };
+            // },
+            csi::SizeReportStyle::Csi14T
+            | csi::SizeReportStyle::Csi16T
+            | csi::SizeReportStyle::Csi18T => {
+                let Some(get_size) = self.effects.size else {
+                    return;
+                };
+                let Some(s) = get_size(self) else {
+                    return;
+                };
+                let report_style: size_report::Style = match style {
+                    csi::SizeReportStyle::Csi14T => size_report::Style::Csi14T,
+                    csi::SizeReportStyle::Csi16T => size_report::Style::Csi16T,
+                    csi::SizeReportStyle::Csi18T => size_report::Style::Csi18T,
+                    csi::SizeReportStyle::Csi21T => unreachable!(),
+                };
+                if size_report::encode(&mut aw, report_style, s).is_err() {
+                    // log.warn("error encoding size report err={}", .{err});
+                    return;
+                }
+            }
+        }
+
+        // const resp = aw.toOwnedSliceSentinel(0) catch return;
+        // defer alloc.free(resp);
+        // self.writePty(resp);
+        self.write_pty(aw.as_bytes());
+    }
+
+    // fn windowTitle(self: *Handler, title_raw: []const u8) void { ... }
+    fn do_window_title(&mut self, title_raw: &[u8]) {
+        // Prevent DoS attacks by limiting title length.
+        // const max_title_len = 1024;
+        // const title = if (title_raw.len > max_title_len) title: {
+        //     log.warn("title length {d} exceeds max length {d}, truncating", ...);
+        //     break :title title_raw[0..max_title_len];
+        // } else title_raw;
+        let max_title_len = 1024;
+        let title = if title_raw.len() > max_title_len {
+            // log.warn("title length {d} exceeds max length {d}, truncating", ...);
+            &title_raw[0..max_title_len]
+        } else {
+            title_raw
+        };
+
+        // self.terminal.setTitle(title) catch |err| {
+        //     log.warn("error setting title err={}", .{err});
+        //     return;
+        // };
+        if self.term().set_title(title).is_err() {
+            // log.warn("error setting title err={}", .{err});
+            return;
+        }
+
+        // const func = self.effects.title_changed orelse return;
+        // func(self);
+        let Some(func) = self.effects.title_changed else {
+            return;
+        };
+        func(self);
+    }
+
+    // fn reportPwd(self: *Handler, url_raw: []const u8) void { ... }
+    fn do_report_pwd(&mut self, url_raw: &[u8]) {
+        // Prevent DoS attacks by limiting url length. Headroom for
+        // Linux PATH_MAX (4096) plus URI scheme/host and percent-encoding.
+        // const max_url_len = 4096;
+        // const url = if (url_raw.len > max_url_len) url: {
+        //     log.warn("pwd url length {d} exceeds max length {d}, truncating", ...);
+        //     break :url url_raw[0..max_url_len];
+        // } else url_raw;
+        let max_url_len = 4096;
+        let url = if url_raw.len() > max_url_len {
+            // log.warn("pwd url length {d} exceeds max length {d}, truncating", ...);
+            &url_raw[0..max_url_len]
+        } else {
+            url_raw
+        };
+
+        // We store the raw payload unparsed. Embedders read it via
+        // getPwd() and are responsible for decoding any URI scheme.
+        // self.terminal.setPwd(url) catch |err| {
+        //     log.warn("error setting pwd err={}", .{err});
+        //     return;
+        // };
+        if self.term().set_pwd(url).is_err() {
+            // log.warn("error setting pwd err={}", .{err});
+            return;
+        }
+
+        // const func = self.effects.pwd_changed orelse return;
+        // func(self);
+        let Some(func) = self.effects.pwd_changed else {
+            return;
+        };
+        func(self);
+    }
+
+    // fn requestMode(self: *Handler, mode: modes.Mode) void {
+    //     const report = self.terminal.modes.getReport(.fromMode(mode));
+    //     self.sendModeReport(report);
+    // }
+    fn do_request_mode(&mut self, mode: modes::Mode) {
+        let report = self
+            .term()
+            .modes
+            .get_report(modes::ModeTag::from_mode(mode));
+        self.send_mode_report(report);
+    }
+
+    // fn requestModeUnknown(self: *Handler, mode_raw: u16, ansi: bool) void {
+    //     const report = self.terminal.modes.getReport(.{
+    //         .value = @truncate(mode_raw),
+    //         .ansi = ansi,
+    //     });
+    //     self.sendModeReport(report);
+    // }
+    fn do_request_mode_unknown(&mut self, mode_raw: u16, ansi: bool) {
+        let report = self.term().modes.get_report(modes::ModeTag {
+            // .value = @truncate(mode_raw),
+            value: mode_raw & 0x7FFF,
+            ansi,
+        });
+        self.send_mode_report(report);
+    }
+
+    // fn sendModeReport(self: *Handler, report: modes.Report) void {
+    //     var buf: [modes.Report.max_size + 1]u8 = undefined;
+    //     var writer: std.Io.Writer = .fixed(&buf);
+    //     report.encode(&writer) catch |err| {
+    //         log.warn("error encoding mode report err={}", .{err});
+    //         return;
+    //     };
+    //     const len = writer.buffered().len;
+    //     buf[len] = 0;
+    //     self.writePty(buf[0..len :0]);
+    // }
+    //
+    // PORT NOTE (vt-12b-7b): the reference encodes into a fixed
+    // `[Report.max_size + 1]u8` (the +1 is the NUL sentinel slot). Rust's
+    // `String` accumulator is the analog; the sentinel slot is a Zig encoding
+    // detail, so we pass the buffered bytes directly.
+    fn send_mode_report(&mut self, report: modes::Report) {
+        let mut buf = String::new();
+        if report.encode(&mut buf).is_err() {
+            // log.warn("error encoding mode report err={}", .{err});
+            return;
+        }
+        self.write_pty(buf.as_bytes());
+    }
+
+    // fn queryKittyKeyboard(self: *Handler) void {
+    //     // Max response is "\x1b[?31u\x00" (7 bytes): the flags are a u5 (max 31).
+    //     var buf: [32]u8 = undefined;
+    //     const resp = std.fmt.bufPrintZ(&buf, "\x1b[?{}u", .{
+    //         self.terminal.screens.active.kitty_keyboard.current().int(),
+    //     }) catch return;
+    //     self.writePty(resp);
+    // }
+    fn query_kitty_keyboard(&mut self) {
+        // Max response is "\x1b[?31u\x00" (7 bytes): the flags are a u5 (max 31).
+        // PORT NOTE: the reference formats into a fixed `[32]u8`; Rust's `String`
+        // is the analog accumulator.
+        let flags = self.term().active_mut().kitty_keyboard.current().int();
+        let resp = format!("\x1b[?{flags}u");
+        self.write_pty(resp.as_bytes());
+    }
+
     // fn apcEnd(self: *Handler) void
     //
     // PORT NOTE (vt-12b-7a): APC (kitty-graphics/glyph) is font-blocked and
@@ -723,9 +1123,11 @@ impl<'a> Handler<'a> {
 
 // impl stream::Handler for Handler ------------------------------------------
 //
-// PORT NOTE: every method is `todo!()` for the vt-12a skeleton. The bodies are
-// the per-action arms of the reference `vtFallible` switch (plus the OSC/DCS/APC
-// helpers), filled in vt-12b-7.
+// PORT NOTE: each method body is the corresponding per-action arm of the
+// reference `vtFallible` switch (plus the OSC/DCS/APC helpers): the
+// state-mutating arms landed in vt-12b-7a and the response/query arms in
+// vt-12b-7b. The APC end + kitty/glyph arms remain stubbed (font-blocked,
+// deferred past vt-12; see DEFERRALS.md).
 impl<'a> stream::Handler for Handler<'a> {
     // pub fn deinit(self: *Handler) void { self.apc_handler.deinit(); }
     fn deinit(&mut self) {
@@ -782,7 +1184,7 @@ impl<'a> stream::Handler for Handler<'a> {
 
     // .enquiry => self.reportEnquiry(),
     fn enquiry(&mut self) {
-        todo!()
+        self.report_enquiry();
     }
 
     // .invoke_charset => self.terminal.invokeCharset(value.bank, value.charset, value.locking),
@@ -1060,12 +1462,12 @@ impl<'a> stream::Handler for Handler<'a> {
 
     // .request_mode => self.requestMode(value.mode),
     fn request_mode(&mut self, v: stream::Mode) {
-        todo!()
+        self.do_request_mode(v.mode);
     }
 
     // .request_mode_unknown => self.requestModeUnknown(value.mode, value.ansi),
     fn request_mode_unknown(&mut self, v: stream::RawMode) {
-        todo!()
+        self.do_request_mode_unknown(v.mode, v.ansi);
     }
 
     // .top_and_bottom_margin => self.terminal.setTopAndBottomMargin(value.top_left, value.bottom_right),
@@ -1148,7 +1550,7 @@ impl<'a> stream::Handler for Handler<'a> {
 
     // .size_report => self.reportSize(value),
     fn size_report(&mut self, v: csi::SizeReportStyle) {
-        todo!()
+        self.report_size(v);
     }
 
     // .title_push, .title_pop => {} (have no terminal-modifying effect)
@@ -1159,22 +1561,22 @@ impl<'a> stream::Handler for Handler<'a> {
 
     // .xtversion => self.reportXtversion(),
     fn xtversion(&mut self) {
-        todo!()
+        self.report_xtversion();
     }
 
     // .device_attributes => self.reportDeviceAttributes(value),
     fn device_attributes(&mut self, req: device_attributes::Req) {
-        todo!()
+        self.report_device_attributes(req);
     }
 
     // .device_status => self.deviceStatus(value.request),
     fn device_status(&mut self, v: stream::DeviceStatus) {
-        todo!()
+        Handler::device_status(self, v.request);
     }
 
     // .kitty_keyboard_query => self.queryKittyKeyboard(),
     fn kitty_keyboard_query(&mut self) {
-        todo!()
+        self.query_kitty_keyboard();
     }
 
     // .kitty_keyboard_push => self.terminal.screens.active.kitty_keyboard.push(value.flags),
@@ -1255,12 +1657,12 @@ impl<'a> stream::Handler for Handler<'a> {
 
     // .window_title => self.windowTitle(value.title),
     fn window_title(&mut self, v: stream::WindowTitle) {
-        todo!()
+        self.do_window_title(v.title);
     }
 
     // .report_pwd => self.reportPwd(value.url),
     fn report_pwd(&mut self, v: stream::ReportPwd) {
-        todo!()
+        self.do_report_pwd(v.url);
     }
 
     // .show_desktop_notification => {} (have no terminal-modifying effect)
@@ -2063,10 +2465,29 @@ mod tests {
 
     // test "ignores query actions"
     //
-    // PORT NOTE (vt-12b-7a): DEFERRED to vt-12b-7b. This drives `\x1B[c`
-    // (device_attributes), `\x1B[5n`/`\x1B[6n` (device_status) — the
-    // RESPONSE/QUERY arms still `todo!()` here. It is reactivated once those
-    // arms land in 12b-7b (where readonly effects make them silent no-ops).
+    // PORT NOTE (vt-12b-7b): reactivated now that the RESPONSE/QUERY arms are
+    // filled. With default (readonly) effects, `\x1B[c` (device_attributes) and
+    // `\x1B[5n`/`\x1B[6n` (device_status) are silent no-ops, so the terminal
+    // remains functional afterward.
+    #[test]
+    fn ignores_query_actions() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        {
+            let mut s = t.vt_stream();
+            // These should be ignored without error
+            s.next_slice(b"\x1B[c"); // Device attributes
+            s.next_slice(b"\x1B[5n"); // Device status report
+            s.next_slice(b"\x1B[6n"); // Cursor position report
+
+            // Terminal should still be functional
+            s.next_slice(b"Test");
+        }
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(str.as_slice(), b"Test");
+
+        t.deinit(Global);
+    }
 
     // test "stream: CSI W with intermediate but no params"
     #[test]
@@ -2113,6 +2534,700 @@ mod tests {
         let str = t.plain_string(Global).unwrap();
         assert_eq!(str.as_slice(), b"AfterBell");
 
+        t.deinit(Global);
+    }
+
+    // -- vt-12b-7b response/query effect tests --------------------------------
+    //
+    // PORT NOTE (vt-12b-7b): the reference tests capture the `write_pty` output
+    // into a local-struct `var` static (`S.written`/`S.last_response`) inside a
+    // `fn writePty(...)` callback. Rust's `write_pty` is a bare `fn` pointer (no
+    // closures/captures), so the captured bytes are routed through a
+    // `thread_local!` cell. The `CAPTURE` helpers below are the analog of the
+    // reference's per-test `S` struct: `cap_write_pty` is the `writePty` callback
+    // (it stores the latest response, freeing/replacing the prior one — matching
+    // the reference's `if (old) free; dupe` pattern); `cap_take`/`cap_reset` read
+    // and clear it. Effect callbacks that return fixed strings
+    // (`enquiry`/`xtversion`/`getSize`/`colorScheme`/`da`/`titleChanged`) become
+    // free `fn`s. The `title_changed`/`bell` counters likewise live in a cell.
+
+    thread_local! {
+        static CAPTURE: core::cell::RefCell<Option<Vec<u8>>> = const { core::cell::RefCell::new(None) };
+        static COUNTER: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+
+    fn cap_reset() {
+        CAPTURE.with(|c| *c.borrow_mut() = None);
+        COUNTER.with(|c| c.set(0));
+    }
+
+    fn cap_take() -> Option<Vec<u8>> {
+        CAPTURE.with(|c| c.borrow().clone())
+    }
+
+    // fn writePty(_: *Handler, data: [:0]const u8) void { ...dupe into S.written... }
+    fn cap_write_pty(_: &mut Handler, data: &[u8]) {
+        CAPTURE.with(|c| *c.borrow_mut() = Some(data.to_vec()));
+    }
+
+    // test "request mode DECRQM with write_pty callback"
+    #[test]
+    fn request_mode_decrqm_with_write_pty_callback() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        // Without callback, DECRQM should not crash
+        {
+            let mut s = t.vt_stream();
+            // DECRQM for mode 7 (wraparound) — should be silently ignored
+            s.next_slice(b"\x1B[?7$p");
+        }
+
+        t.full_reset();
+
+        // With callback, DECRQM should produce a response
+        {
+            cap_reset();
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(cap_write_pty);
+
+            // Wraparound mode (7) is set by default
+            s.next_slice(b"\x1B[?7$p");
+            assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[?7;1$y");
+
+            // Disable wraparound and query again
+            s.next_slice(b"\x1B[?7l");
+            s.next_slice(b"\x1B[?7$p");
+            assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[?7;2$y");
+
+            // Query an unknown mode
+            s.next_slice(b"\x1B[?9999$p");
+            assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[?9999;0$y");
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "window_title effect is called"
+    #[test]
+    fn window_title_effect_is_called() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        // fn titleChanged(_: *Handler) void { title_changed_count += 1; }
+        fn title_changed(_: &mut Handler) {
+            COUNTER.with(|c| c.set(c.get() + 1));
+        }
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.title_changed = Some(title_changed);
+
+        {
+            // Set window title via OSC 2
+            s.next_slice(b"\x1b]2;Hello World\x1b\\");
+        }
+        assert_eq!(t.get_title().unwrap(), b"Hello World");
+        assert_eq!(1_usize, COUNTER.with(|c| c.get()));
+
+        t.deinit(Global);
+    }
+
+    // test "window_title effect not called without callback"
+    #[test]
+    fn window_title_effect_not_called_without_callback() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        {
+            let mut s = t.vt_stream();
+            // Should not crash when no callback is set
+            s.next_slice(b"\x1b]2;Hello World\x1b\\");
+        }
+
+        // Title should still be set on terminal state
+        assert_eq!(t.get_title().unwrap(), b"Hello World");
+
+        {
+            let mut s = t.vt_stream();
+            // Terminal should still be functional
+            s.next_slice(b"Test");
+        }
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(str.as_slice(), b"Test");
+
+        t.deinit(Global);
+    }
+
+    // test "window_title effect with empty title"
+    #[test]
+    fn window_title_effect_with_empty_title() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        fn title_changed(_: &mut Handler) {
+            COUNTER.with(|c| c.set(c.get() + 1));
+        }
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.title_changed = Some(title_changed);
+
+        {
+            // Set empty window title
+            s.next_slice(b"\x1b]2;\x1b\\");
+        }
+        assert!(t.get_title().is_none());
+        assert_eq!(1_usize, COUNTER.with(|c| c.get()));
+
+        t.deinit(Global);
+    }
+
+    // test "kitty_keyboard_query"
+    #[test]
+    fn kitty_keyboard_query() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+
+        // Default kitty keyboard flags should be 0
+        s.next_slice(b"\x1b[?u");
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1b[?0u");
+
+        // Push kitty keyboard mode with flags and query again
+        cap_reset();
+        s.next_slice(b"\x1b[>1u"); // push with disambiguate flag
+        s.next_slice(b"\x1b[?u");
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1b[?1u");
+
+        drop(s);
+        t.deinit(Global);
+    }
+
+    // test "xtversion default"
+    //
+    // PORT NOTE (R2 ghostty->rustty): the reference asserts the fallback version
+    // "libghostty"; the retargeted fallback emits "librustty".
+    #[test]
+    fn xtversion_default() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+
+        {
+            // Without xtversion effect set, should report "librustty"
+            s.next_slice(b"\x1b[>0q");
+        }
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1bP>|librustty\x1b\\");
+
+        t.deinit(Global);
+    }
+
+    // test "xtversion with effect"
+    #[test]
+    fn xtversion_with_effect() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        // fn xtversion(_: *Handler) []const u8 { return "ghostty 1.2.3"; }
+        fn xtversion(_: &mut Handler) -> &'static [u8] {
+            b"ghostty 1.2.3"
+        }
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.effects.xtversion = Some(xtversion);
+
+        {
+            s.next_slice(b"\x1b[>0q");
+        }
+        assert_eq!(
+            cap_take().unwrap().as_slice(),
+            b"\x1bP>|ghostty 1.2.3\x1b\\"
+        );
+
+        t.deinit(Global);
+    }
+
+    // test "xtversion with empty string effect"
+    //
+    // PORT NOTE (R2 ghostty->rustty): the empty-string effect falls back to the
+    // retargeted "librustty".
+    #[test]
+    fn xtversion_with_empty_string_effect() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        // fn xtversion(_: *Handler) []const u8 { return ""; }
+        fn xtversion(_: &mut Handler) -> &'static [u8] {
+            b""
+        }
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.effects.xtversion = Some(xtversion);
+
+        {
+            // Empty string from effect should fall back to "librustty"
+            s.next_slice(b"\x1b[>0q");
+        }
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1bP>|librustty\x1b\\");
+
+        t.deinit(Global);
+    }
+
+    // fn getSize(_: *Handler) ?size_report.Size {
+    //     return .{ .rows = 24, .columns = 80, .cell_width = 9, .cell_height = 18 };
+    // }
+    fn get_size(_: &mut Handler) -> Option<size_report::Size> {
+        Some(size_report::Size {
+            rows: 24,
+            columns: 80,
+            cell_width: 9,
+            cell_height: 18,
+        })
+    }
+
+    // test "size report csi_14_t with effect"
+    #[test]
+    fn size_report_csi_14_t_with_effect() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.effects.size = Some(get_size);
+
+        {
+            // CSI 14 t - report text area size in pixels
+            s.next_slice(b"\x1b[14t");
+        }
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1b[4;432;720t");
+
+        t.deinit(Global);
+    }
+
+    // test "size report csi_16_t with effect"
+    #[test]
+    fn size_report_csi_16_t_with_effect() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.effects.size = Some(get_size);
+
+        {
+            // CSI 16 t - report cell size in pixels
+            s.next_slice(b"\x1b[16t");
+        }
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1b[6;18;9t");
+
+        t.deinit(Global);
+    }
+
+    // test "size report csi_18_t with effect"
+    #[test]
+    fn size_report_csi_18_t_with_effect() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.effects.size = Some(get_size);
+
+        {
+            // CSI 18 t - report text area size in characters
+            s.next_slice(b"\x1b[18t");
+        }
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1b[8;24;80t");
+
+        t.deinit(Global);
+    }
+
+    // test "size report no effect callback"
+    #[test]
+    fn size_report_no_effect_callback() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+
+        {
+            // Without size effect, size reports should be silently ignored
+            s.next_slice(b"\x1b[14t");
+        }
+        assert!(cap_take().is_none());
+
+        t.deinit(Global);
+    }
+
+    // test "size report csi_21_t title"
+    #[test]
+    fn size_report_csi_21_t_title() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+
+        {
+            // Set a title first
+            s.next_slice(b"\x1b]2;My Title\x1b\\");
+
+            // CSI 21 t - report title (no size effect needed)
+            s.next_slice(b"\x1b[21t");
+        }
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1b]lMy Title\x1b\\");
+
+        t.deinit(Global);
+    }
+
+    // test "enquiry no effect"
+    #[test]
+    fn enquiry_no_effect() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+
+        {
+            // ENQ without enquiry effect should not write anything
+            s.next_slice(b"\x05");
+        }
+        assert!(cap_take().is_none());
+
+        t.deinit(Global);
+    }
+
+    // test "enquiry with effect"
+    #[test]
+    fn enquiry_with_effect() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        // fn enquiry(_: *Handler) []const u8 { return "ghostty"; }
+        fn enquiry(_: &mut Handler) -> &'static [u8] {
+            b"ghostty"
+        }
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.effects.enquiry = Some(enquiry);
+
+        {
+            s.next_slice(b"\x05");
+        }
+        assert_eq!(cap_take().unwrap().as_slice(), b"ghostty");
+
+        t.deinit(Global);
+    }
+
+    // test "enquiry with empty response"
+    #[test]
+    fn enquiry_with_empty_response() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        // fn enquiry(_: *Handler) []const u8 { return ""; }
+        fn enquiry(_: &mut Handler) -> &'static [u8] {
+            b""
+        }
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.effects.enquiry = Some(enquiry);
+
+        {
+            // Empty enquiry response should not write anything
+            s.next_slice(b"\x05");
+        }
+        assert!(cap_take().is_none());
+
+        t.deinit(Global);
+    }
+
+    // test "device status: operating status"
+    #[test]
+    fn device_status_operating_status() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+
+        {
+            // CSI 5 n — operating status report
+            s.next_slice(b"\x1B[5n");
+        }
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[0n");
+
+        t.deinit(Global);
+    }
+
+    // test "device status: cursor position"
+    #[test]
+    fn device_status_cursor_position() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+
+        // Default position is 0,0 — reported as 1,1
+        s.next_slice(b"\x1B[6n");
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[1;1R");
+
+        // Move cursor to row 5, col 10
+        s.next_slice(b"\x1B[5;10H");
+        s.next_slice(b"\x1B[6n");
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[5;10R");
+
+        drop(s);
+        t.deinit(Global);
+    }
+
+    // test "device status: cursor position with origin mode"
+    #[test]
+    fn device_status_cursor_position_with_origin_mode() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+
+        {
+            // Set scroll region rows 5-20
+            s.next_slice(b"\x1B[5;20r");
+            // Enable origin mode
+            s.next_slice(b"\x1B[?6h");
+            // Move to row 3, col 5 within the region
+            s.next_slice(b"\x1B[3;5H");
+            // Query cursor position
+            s.next_slice(b"\x1B[6n");
+        }
+        // Should report position relative to the scroll region
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[3;5R");
+
+        t.deinit(Global);
+    }
+
+    // fn colorScheme(_: *Handler) ?device_status.ColorScheme { return .dark; }
+    fn color_scheme_dark(_: &mut Handler) -> Option<device_status::ColorScheme> {
+        Some(device_status::ColorScheme::Dark)
+    }
+
+    // fn colorScheme(_: *Handler) ?device_status.ColorScheme { return .light; }
+    fn color_scheme_light(_: &mut Handler) -> Option<device_status::ColorScheme> {
+        Some(device_status::ColorScheme::Light)
+    }
+
+    // test "device status: color scheme dark"
+    #[test]
+    fn device_status_color_scheme_dark() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.effects.color_scheme = Some(color_scheme_dark);
+
+        {
+            // CSI ? 996 n — color scheme query
+            s.next_slice(b"\x1B[?996n");
+        }
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[?997;1n");
+
+        t.deinit(Global);
+    }
+
+    // test "device status: color scheme light"
+    #[test]
+    fn device_status_color_scheme_light() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.effects.color_scheme = Some(color_scheme_light);
+
+        {
+            // CSI ? 996 n — color scheme query
+            s.next_slice(b"\x1B[?996n");
+        }
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[?997;2n");
+
+        t.deinit(Global);
+    }
+
+    // test "device status: color scheme without callback"
+    #[test]
+    fn device_status_color_scheme_without_callback() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+
+        {
+            // Without color_scheme effect, query should be silently ignored
+            s.next_slice(b"\x1B[?996n");
+        }
+        assert!(cap_take().is_none());
+
+        t.deinit(Global);
+    }
+
+    // test "device status: readonly ignores all"
+    #[test]
+    fn device_status_readonly_ignores_all() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        {
+            let mut s = t.vt_stream();
+            // All device status queries should be silently ignored without effects
+            s.next_slice(b"\x1B[5n");
+            s.next_slice(b"\x1B[6n");
+            s.next_slice(b"\x1B[?996n");
+
+            // Terminal should still be functional
+            s.next_slice(b"Test");
+        }
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(str.as_slice(), b"Test");
+
+        t.deinit(Global);
+    }
+
+    // fn da(_: *Handler) device_attributes.Attributes { return .{}; }
+    fn da_default(_: &mut Handler) -> device_attributes::Attributes {
+        device_attributes::Attributes::default()
+    }
+
+    // test "device attributes: primary DA"
+    #[test]
+    fn device_attributes_primary_da() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.effects.device_attributes = Some(da_default);
+
+        {
+            s.next_slice(b"\x1B[c");
+        }
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1b[?62;22c");
+
+        t.deinit(Global);
+    }
+
+    // test "device attributes: secondary DA"
+    #[test]
+    fn device_attributes_secondary_da() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.effects.device_attributes = Some(da_default);
+
+        {
+            s.next_slice(b"\x1B[>c");
+        }
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1b[>1;0;0c");
+
+        t.deinit(Global);
+    }
+
+    // test "device attributes: tertiary DA"
+    #[test]
+    fn device_attributes_tertiary_da() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.effects.device_attributes = Some(da_default);
+
+        {
+            s.next_slice(b"\x1B[=c");
+        }
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1bP!|00000000\x1b\\");
+
+        t.deinit(Global);
+    }
+
+    // test "device attributes: readonly ignores"
+    #[test]
+    fn device_attributes_readonly_ignores() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        {
+            let mut s = t.vt_stream();
+            // All DA queries should be silently ignored without effects
+            s.next_slice(b"\x1B[c");
+            s.next_slice(b"\x1B[>c");
+            s.next_slice(b"\x1B[=c");
+
+            // Terminal should still be functional
+            s.next_slice(b"Test");
+        }
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(str.as_slice(), b"Test");
+
+        t.deinit(Global);
+    }
+
+    // fn da(_: *Handler) device_attributes.Attributes {
+    //     return .{
+    //         .primary = .{
+    //             .conformance_level = .vt420,
+    //             .features = &.{ .ansi_color, .clipboard },
+    //         },
+    //         .secondary = .{
+    //             .device_type = .vt420,
+    //             .firmware_version = 100,
+    //         },
+    //     };
+    // }
+    fn da_custom(_: &mut Handler) -> device_attributes::Attributes {
+        device_attributes::Attributes {
+            primary: device_attributes::Primary {
+                conformance_level: device_attributes::ConformanceLevel::VT420,
+                features: &[
+                    device_attributes::Feature::AnsiColor,
+                    device_attributes::Feature::Clipboard,
+                ],
+            },
+            secondary: device_attributes::Secondary {
+                device_type: device_attributes::DeviceType::VT420,
+                firmware_version: 100,
+                ..device_attributes::Secondary::default()
+            },
+            ..device_attributes::Attributes::default()
+        }
+    }
+
+    // test "device attributes: custom response"
+    #[test]
+    fn device_attributes_custom_response() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.effects.device_attributes = Some(da_custom);
+
+        s.next_slice(b"\x1B[c");
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1b[?64;22;52c");
+
+        s.next_slice(b"\x1B[>c");
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1b[>41;100;0c");
+
+        drop(s);
         t.deinit(Global);
     }
 }
