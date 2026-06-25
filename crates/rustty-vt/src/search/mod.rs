@@ -2,7 +2,8 @@
 //!
 //! PORTS: ghostty src/terminal/search.zig
 //!
-//! PORT STATUS: stub
+//! PORT STATUS: in-progress (vt-15). `sliding_window` is FILLED; the remaining
+//! submodules (active/pagelist/screen/viewport/thread) are still stubs.
 
 pub mod active;
 pub mod pagelist;
