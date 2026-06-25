@@ -27,6 +27,10 @@ RSF = "/Users/gael/projects/rustty/crates/rustty-font/src"
 GHC = "/Users/gael/projects/ghostty/src/cli"
 RSA = "/Users/gael/projects/rustty/crates/rustty-args/src"
 
+# rustty-terminfo: GH base differs (src/terminfo, not src/terminal). Stage C.
+GHT = "/Users/gael/projects/ghostty/src/terminfo"
+RST = "/Users/gael/projects/rustty/crates/rustty-terminfo/src"
+
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
@@ -86,6 +90,16 @@ MAP = {
     "args":              ([f"{GHC}/args.zig"], [f"{RSA}/args.rs", f"{RSA}/args/tests.rs"], 0),
     "comma_splitter":    ([f"{GHC}/CommaSplitter.zig"], [f"{RSA}/comma_splitter.rs"], 0),
     "cli_diagnostics":   ([f"{GHC}/diagnostics.zig"], [f"{RSA}/diagnostics.rs"], 0),
+    # Stage C — rustty-terminfo (GH base = src/terminfo, not src/terminal).
+    # Source.zig (2t: "xtgettcap map" + "encode") -> source.rs.
+    # ghostty.zig (1t: "encode") -> entry.rs (the terminfo entry; names carry
+    # the rustty R2 identity via rustty-identity, table ported verbatim).
+    # main.zig has one anonymous `test { refAllDecls }` (NOT counted by zig_count,
+    # which skips anonymous `test {`); its Rust analogue (lib.rs ref_all_decls)
+    # is a +1 helper margin. terminfo total: zig=3 counted, rust=4 -> rust >= zig.
+    "terminfo_source":   ([f"{GHT}/Source.zig"], [f"{RST}/source.rs"], 0),
+    "terminfo_entry":    ([f"{GHT}/ghostty.zig"], [f"{RST}/entry.rs"], 0),
+    "terminfo_main":     ([f"{GHT}/main.zig"], [f"{RST}/lib.rs"], 0),
 }
 
 def expand(globs):
