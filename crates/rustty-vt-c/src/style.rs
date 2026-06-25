@@ -2,12 +2,13 @@
 //!
 //! PORTS: ghostty src/terminal/c/style.zig
 //!
-//! PORT STATUS: SKELETON (cluster Stage B). The extern struct/union/enum layouts
+//! PORT STATUS: FILLED (cluster Stage B v2). The extern struct/union/enum layouts
 //! are byte-exact; `from_color`/`from_style`/`default_style`/`style_is_default`
-//! bodies are `todo!()` placeholders filled in a later sub-batch.
+//! bodies + all `test {}` blocks are ported.
 
 use rustty_vt::color::RGB;
 use rustty_vt::style as style_pkg;
+use std::mem::size_of;
 
 // const style = @import("../style.zig");
 // const color = @import("../color.zig");
@@ -45,8 +46,28 @@ pub struct Color {
 impl Color {
     // pub fn fromColor(c: style.Style.Color) Color
     pub fn from_color(c: style_pkg::Color) -> Color {
-        let _ = c;
-        todo!("vt-c style::Color::from_color")
+        // return switch (c) {
+        //     .none => .{ .tag = .none, .value = .{ ._padding = 0 } },
+        //     .palette => |idx| .{ .tag = .palette, .value = .{ .palette = idx } },
+        //     .rgb => |rgb| .{ .tag = .rgb, .value = .{ .rgb = rgb.cval() } },
+        // };
+        match c {
+            style_pkg::Color::None => Color {
+                tag: ColorTag::None,
+                value: ColorValue { _padding: 0 },
+            },
+            style_pkg::Color::Palette(idx) => Color {
+                tag: ColorTag::Palette,
+                value: ColorValue { palette: idx },
+            },
+            // PORT NOTE: `rgb.cval()` yields `color.RGB.C`; in rustty `RGB` already
+            // IS that `#[repr(C)] { r, g, b: u8 }` C-ABI type, so `cval()` is the
+            // identity on `RGB`.
+            style_pkg::Color::Rgb(rgb) => Color {
+                tag: ColorTag::Rgb,
+                value: ColorValue { rgb },
+            },
+        }
     }
 }
 
@@ -78,8 +99,31 @@ pub struct Style {
 impl Style {
     // pub fn fromStyle(s: style.Style) Style
     pub fn from_style(s: style_pkg::Style) -> Style {
-        let _ = s;
-        todo!("vt-c style::Style::from_style")
+        // return .{
+        //     .fg_color = .fromColor(s.fg_color),
+        //     .bg_color = .fromColor(s.bg_color),
+        //     .underline_color = .fromColor(s.underline_color),
+        //     .bold = s.flags.bold, .italic = s.flags.italic, .faint = s.flags.faint,
+        //     .blink = s.flags.blink, .inverse = s.flags.inverse, .invisible = s.flags.invisible,
+        //     .strikethrough = s.flags.strikethrough, .overline = s.flags.overline,
+        //     .underline = @intFromEnum(s.flags.underline),
+        // };
+        Style {
+            // size: usize = @sizeOf(Style),
+            size: size_of::<Style>(),
+            fg_color: Color::from_color(s.fg_color),
+            bg_color: Color::from_color(s.bg_color),
+            underline_color: Color::from_color(s.underline_color),
+            bold: s.flags.bold,
+            italic: s.flags.italic,
+            faint: s.flags.faint,
+            blink: s.flags.blink,
+            inverse: s.flags.inverse,
+            invisible: s.flags.invisible,
+            strikethrough: s.flags.strikethrough,
+            overline: s.flags.overline,
+            underline: s.flags.underline as std::os::raw::c_int,
+        }
     }
 }
 
@@ -89,8 +133,12 @@ impl Style {
 /// # Safety
 /// `result` must be a valid, writable pointer to a `Style`.
 pub unsafe fn default_style(result: *mut Style) {
-    let _ = result;
-    todo!("vt-c style::default_style")
+    // result.* = .fromStyle(.{});
+    // SAFETY: `result` validity is the caller's contract.
+    unsafe { *result = Style::from_style(style_pkg::Style::default()) };
+    // assert(result.size == @sizeOf(Style));
+    // SAFETY: `result` validity is the caller's contract.
+    assert!(unsafe { (*result).size } == size_of::<Style>());
 }
 
 /// Returns true if the style is the default style.
@@ -99,6 +147,95 @@ pub unsafe fn default_style(result: *mut Style) {
 /// # Safety
 /// `s` must be a valid, readable pointer to a `Style`.
 pub unsafe fn style_is_default(s: *const Style) -> bool {
-    let _ = s;
-    todo!("vt-c style::style_is_default")
+    // assert(s.size == @sizeOf(Style));
+    // SAFETY: `s` validity is the caller's contract.
+    let s = unsafe { &*s };
+    assert!(s.size == size_of::<Style>());
+    // return s.fg_color.tag == .none and s.bg_color.tag == .none and
+    //     s.underline_color.tag == .none and s.bold == false and ... and s.underline == 0;
+    s.fg_color.tag == ColorTag::None
+        && s.bg_color.tag == ColorTag::None
+        && s.underline_color.tag == ColorTag::None
+        && !s.bold
+        && !s.italic
+        && !s.faint
+        && !s.blink
+        && !s.inverse
+        && !s.invisible
+        && !s.strikethrough
+        && !s.overline
+        && s.underline == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustty_vt::color::RGB;
+    use std::os::raw::c_int;
+
+    // test "default style"
+    #[test]
+    fn default_style_test() {
+        // var s: Style = undefined; default_style(&s);
+        let mut s = std::mem::MaybeUninit::<Style>::uninit();
+        unsafe { default_style(s.as_mut_ptr()) };
+        let s = unsafe { s.assume_init() };
+        // try testing.expect(style_is_default(&s));
+        assert!(unsafe { style_is_default(&s) });
+        // try testing.expectEqual(ColorTag.none, s.fg_color.tag);
+        assert_eq!(ColorTag::None, s.fg_color.tag);
+        assert_eq!(ColorTag::None, s.bg_color.tag);
+        assert_eq!(ColorTag::None, s.underline_color.tag);
+        // try testing.expect(!s.bold);
+        assert!(!s.bold);
+        assert!(!s.italic);
+        // try testing.expectEqual(@as(c_int, 0), s.underline);
+        assert_eq!(0 as c_int, s.underline);
+    }
+
+    // test "convert style with colors"
+    #[test]
+    fn convert_style_with_colors() {
+        // const zig_style: style.Style = .{
+        //     .fg_color = .{ .palette = 42 },
+        //     .bg_color = .{ .rgb = .{ .r = 255, .g = 128, .b = 64 } },
+        //     .underline_color = .none,
+        //     .flags = .{ .bold = true, .underline = .curly },
+        // };
+        let zig_style = style_pkg::Style {
+            fg_color: style_pkg::Color::Palette(42),
+            bg_color: style_pkg::Color::Rgb(RGB {
+                r: 255,
+                g: 128,
+                b: 64,
+            }),
+            underline_color: style_pkg::Color::None,
+            flags: style_pkg::Flags {
+                bold: true,
+                underline: rustty_vt::sgr::Underline::Curly,
+                ..Default::default()
+            },
+        };
+
+        // const c_style: Style = .fromStyle(zig_style);
+        let c_style = Style::from_style(zig_style);
+        // try testing.expectEqual(ColorTag.palette, c_style.fg_color.tag);
+        assert_eq!(ColorTag::Palette, c_style.fg_color.tag);
+        // try testing.expectEqual(@as(u8, 42), c_style.fg_color.value.palette);
+        assert_eq!(42u8, unsafe { c_style.fg_color.value.palette });
+        // try testing.expectEqual(ColorTag.rgb, c_style.bg_color.tag);
+        assert_eq!(ColorTag::Rgb, c_style.bg_color.tag);
+        // try testing.expectEqual(@as(u8, 255), c_style.bg_color.value.rgb.r);
+        assert_eq!(255u8, unsafe { c_style.bg_color.value.rgb.r });
+        assert_eq!(128u8, unsafe { c_style.bg_color.value.rgb.g });
+        assert_eq!(64u8, unsafe { c_style.bg_color.value.rgb.b });
+        // try testing.expectEqual(ColorTag.none, c_style.underline_color.tag);
+        assert_eq!(ColorTag::None, c_style.underline_color.tag);
+        // try testing.expect(c_style.bold);
+        assert!(c_style.bold);
+        // try testing.expectEqual(@as(c_int, 3), c_style.underline);
+        assert_eq!(3 as c_int, c_style.underline);
+        // try testing.expect(!style_is_default(&c_style));
+        assert!(!unsafe { style_is_default(&c_style) });
+    }
 }
