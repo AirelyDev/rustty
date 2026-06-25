@@ -1,0 +1,32 @@
+export const meta = {
+  name: 'vt12c-screen',
+  description: 'rustty-vt vt-12c-screen: port the 23 deferred Screen.zig test bodies (increaseCapacity / cursorDown-insufficient-capacity / setAttribute-OOM-split / cursorSetHyperlink-OOM / hyperlink-resize+reuse / scrollback / scroll-above / scrolling-pruned / select-replaces-pins / dirty-tracking) — now unblocked by Terminal + ImageStorage + the tripwire. Drives Screen.zig test-region G3b -> 0. +~23 tests. Last vt-12c reactivation before the Terminal finale.',
+  phases: [
+    { title: 'Port', detail: 'the 23 deferred Screen tests' },
+    { title: 'Verify', detail: 'Screen.zig test-region G3b->0 + tests + Miri-subset + ASan + faithfulness' },
+  ],
+}
+const G = '/Users/gael/projects/ghostty', R = '/Users/gael/projects/rustty'
+const T = G + '/src/terminal'
+const GATES = R + '/.port/tools/gates'
+const SCREEN_G3B = 'python3 ' + GATES + '/check_comment_coverage.py --crate vt --ref-files ' + T + '/Screen.zig --port-glob "' + R + '/crates/rustty-vt/src/screen.rs"'
+const RULES = 'OBEY: PARITY CONSTITUTION + ' + R + '/.port/PORT_RULES.md. R1 = 100% fidelity (every comment verbatim; tests assertion-for-assertion, independent expected values, NOTHING dropped). Reference READ-ONLY ' + T + '/Screen.zig. vt-12b + 12c-fmt + 12c-kitty done; 1394 tests pass. These 23 Screen tests were deferred (DEFERRALS.md, from the vt-11g restore pass) because they needed Terminal/ImageStorage/tripwire — ALL now available (Terminal ported, ImageStorage ported in 12c-kitty, rustty_util::tripwire ported). Plan: ' + R + '/.port/phase-2/SCREEN_SCC_PLAN.md. '
+  + 'KEY: the OOM tests use the tripwire fault-injection (reuse the pagelist/Screen tripwire idiom); the hyperlink/scrollback/scroll-above/increaseCapacity tests build a Screen + drive page churn; select-replaces-pins uses Selection (done). [:0]const u8->Vec<u8>; *mut Pin faithful; SOUNDNESS RULE (memory): no &mut Page/Row/Cell/Screen args re-read across assert_integrity -> raw ptrs / mem::take where a method borrows a self field that aliases. '
+  + 'MIRI: per MIRI_EXCEPTIONS.md (restored) Miri-subset on new tests in ISOLATION (heavy multi-page ones may be Miri-slow -> pick light ones; heavy stay ASan-covered). PROCESS LESSON: SCOPED G3b — after this, Screen.zig test-region missing -> 0 (these were the residual). '
+  + 'Run gates FOREGROUND. Commit trailer "Co-Authored-By: Claude Opus 4.8 (1M context)". Update DEFERRALS.md (the 23-deferred-Screen-tests entry -> RESOLVED). '
+async function robust(p, o) { let r = await agent(p, o); if (!r) r = await agent(p, { ...o, label: (o.label || 'a') + '-retry' }); return r }
+const STEP = { type: 'object', additionalProperties: true, required: ['ok', 'blockers'], properties: { ok: { type: 'boolean' }, tests_passing: { type: 'integer' }, screen_tests_ported: { type: 'integer' }, screen_g3b_missing: { type: 'integer' }, builds: { type: 'boolean' }, commit: { type: 'string' }, notes: { type: 'string' }, blockers: { type: 'array', items: { type: 'string' } } } }
+const VERIFY = { type: 'object', additionalProperties: true, required: ['verdict', 'blockers'], properties: { verdict: { type: 'string', enum: ['GREEN', 'RED'] }, tests_passing: { type: 'integer' }, miri_subset_clean: { type: 'boolean' }, asan_clean: { type: 'boolean' }, screen_g3b_missing: { type: 'integer' }, screen_complete: { type: 'boolean' }, tautological_tests: { type: 'array', items: { type: 'string' } }, notes: { type: 'string' }, blockers: { type: 'array', items: { type: 'string' } } } }
+
+phase('Port')
+const port = await robust(RULES +
+  'TASK (port the 23 deferred Screen tests). In crates/rustty-vt/src/screen.rs, port the 23 deferred Screen.zig test{} blocks (the increaseCapacity / cursorDown-insufficient-capacity / setAttribute-OOM-split / cursorSetHyperlink-OOM / hyperlink-resize+reuse / scrollback / scroll-above / scrolling-pruned / select-replaces-pins / dirty-tracking cluster — find them via the DEFERRALS.md entry + the in-source PORT NOTE markers) as #[test], assertion-for-assertion. OOM tests use the tripwire; heavy multi-page tests are fine (ASan-covered). Remove the deferral PORT NOTE markers as you port each. '
+  + 'GATES FOREGROUND: cargo build -p rustty-vt; cargo test -p rustty-vt (your ~23 new tests pass + 1394 prior no regression); SCOPED G3b `' + SCREEN_G3B + '` — the Screen.zig TEST-region missing should now be 0 (these were the residual; the only remaining Screen missing should be the documented kitty-ImageStorage-hook/valgrind PRODUCTION deferrals — and even those may now resolve since ImageStorage is ported, so check); cargo +nightly miri test -p rustty-vt on 2-3 light new tests (ISOLATED, 0 UB/leak); `bash ' + GATES + '/sanitizers.sh rustty-vt screen address` (ASan clean); clippy -p rustty-vt --all-targets -- -D warnings; fmt --check. Commit "rustty: port the 23 deferred Screen tests (vt-12c-screen)". Update DEFERRALS.md. Return ok+tests_passing+screen_tests_ported+screen_g3b_missing+builds+commit+notes+blockers.',
+  { schema: STEP, effort: 'high', label: 'port', phase: 'Port' })
+
+phase('Verify')
+const verify = await robust(RULES +
+  'TASK (independent verify — default RED). Port: ' + JSON.stringify(port && { commit: port.commit, screen_tests_ported: port.screen_tests_ported, screen_g3b_missing: port.screen_g3b_missing, blockers: port.blockers }) + '\n'
+  + 'Confirm FOREGROUND: cargo build -p rustty-vt; cargo test -p rustty-vt (the ~23 new tests pass + no regression vs 1394); cargo +nightly miri test -p rustty-vt on ~3 light new tests (ISOLATED, 0 UB/leak); `bash ' + GATES + '/sanitizers.sh rustty-vt screen address` (ASan clean); clippy --all-targets -D + fmt --check + ' + GATES + '/check_acyclic.sh. SCOPED G3b `' + SCREEN_G3B + '`: report missing; confirm the Screen test-region is now 0 missing and any residual PRODUCTION missing maps to a still-documented deferral (e.g. valgrind) — if ImageStorage is now ported, the kitty_images-hook missing should also be gone (screen_complete = Screen.zig fully ported or only valgrind-deferred). Spot-check 3 tests (an increaseCapacity-multi-page, a setAttribute-OOM tripwire, a hyperlink-resize-reuse) faithful vs Screen.zig, not tautological. Verdict GREEN only if build + tests + Miri-subset + ASan + clippy + fmt green AND Screen test-region G3b=0 AND no regression. Report verdict + tests_passing + miri_subset_clean + asan_clean + screen_g3b_missing + screen_complete + tautological_tests + blockers.',
+  { schema: VERIFY, effort: 'high', label: 'verify', phase: 'Verify' })
+return { port, verify }
