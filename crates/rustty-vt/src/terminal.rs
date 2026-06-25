@@ -15991,4 +15991,407 @@ mod tests {
 
         t.deinit(alloc);
     }
+
+    // ===========================================================================
+    // vt-12 recovery: Terminal input-sweep family + full-diff stragglers.
+    // ===========================================================================
+
+    // test "Terminal: input with no control characters"
+    #[test]
+    fn terminal_input_with_no_control_characters() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(40, 40)).unwrap();
+
+        // Basic grid writing
+        for c in "hello".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 5);
+        {
+            let str = t.plain_string(alloc).unwrap();
+            assert_eq!(str.as_slice(), "hello".as_bytes());
+        }
+
+        // The first row should be dirty
+        assert!(t.is_dirty(screen_pt(5, 0)));
+        assert!(!t.is_dirty(screen_pt(5, 1)));
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: input with basic wraparound"
+    #[test]
+    fn terminal_input_with_basic_wraparound() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 40)).unwrap();
+
+        // Basic grid writing
+        for c in "helloworldabc12".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 2);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 4);
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        {
+            let str = t.plain_string(alloc).unwrap();
+            assert_eq!(str.as_slice(), "hello\nworld\nabc12".as_bytes());
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: input with basic wraparound dirty"
+    #[test]
+    fn terminal_input_with_basic_wraparound_dirty() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 40)).unwrap();
+
+        for c in "hello".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(t.is_dirty(screen_pt(4, 0)));
+        t.clear_dirty();
+        t.print('w' as u32).unwrap();
+
+        // Old row is dirty because cursor moved from there
+        assert!(t.is_dirty(screen_pt(4, 0)));
+        assert!(t.is_dirty(screen_pt(0, 1)));
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: input that forces scroll"
+    #[test]
+    fn terminal_input_that_forces_scroll() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(1, 5)).unwrap();
+
+        // Basic grid writing
+        for c in "abcdef".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 4);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+        {
+            let str = t.plain_string(alloc).unwrap();
+            assert_eq!(str.as_slice(), "b\nc\nd\ne\nf".as_bytes());
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: input unique style per cell"
+    #[test]
+    fn terminal_input_unique_style_per_cell() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(30, 30)).unwrap();
+
+        for y in 0..t.rows {
+            for x in 0..t.cols {
+                t.set_cursor_pos(y as usize, x as usize);
+                t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+                    r: x as u8,
+                    g: y as u8,
+                    b: 0,
+                }))
+                .unwrap();
+                t.print('x' as u32).unwrap();
+            }
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: input glitch text"
+    #[test]
+    fn terminal_input_glitch_text() {
+        const GLITCH: &[u8] = include_bytes!("res/glitch.txt");
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(30, 30)).unwrap();
+
+        // Get our initial grapheme capacity.
+        let grapheme_cap = {
+            let page = t.active_mut().pages.pages.first;
+            unsafe { (*page).data.capacity.grapheme_bytes }
+        };
+
+        // Print glitch text until our capacity changes
+        loop {
+            let page = t.active_mut().pages.pages.first;
+            if unsafe { (*page).data.capacity.grapheme_bytes } != grapheme_cap {
+                break;
+            }
+            t.print_string(GLITCH).unwrap();
+        }
+
+        // We're testing to make sure that grapheme capacity gets increased.
+        let page = t.active_mut().pages.pages.first;
+        assert!(unsafe { (*page).data.capacity.grapheme_bytes } > grapheme_cap);
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: zero-width character at start"
+    #[test]
+    fn terminal_zero_width_character_at_start() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // This used to crash the terminal. This is not allowed so we should
+        // just ignore it.
+        t.print(0x200D).unwrap();
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+
+        // Should not be dirty since we changed nothing.
+        assert!(!t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: ignored VS16 doesn't mark dirty"
+    #[test]
+    fn terminal_ignored_vs16_doesnt_mark_dirty() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        // Disable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, false);
+
+        t.print(0x2764).unwrap(); // Heart
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.clear_dirty();
+        t.print(0xFE0F).unwrap(); // VS16 to make wide
+        assert!(!t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: invalid VS16 doesn't mark dirty"
+    #[test]
+    fn terminal_invalid_vs16_doesnt_mark_dirty() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        // Disable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, false);
+
+        t.print('x' as u32).unwrap();
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.clear_dirty();
+        t.print(0xFE0F).unwrap(); // VS16 to make wide
+        assert!(!t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: multicodepoint grapheme marks dirty on every codepoint"
+    #[test]
+    fn terminal_multicodepoint_grapheme_marks_dirty_on_every_codepoint() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        // https://github.com/mitchellh/ghostty/issues/289
+        // This is: 👨‍👩‍👧 (which may or may not render correctly)
+        t.print(0x1F468).unwrap();
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        t.clear_dirty();
+        t.print(0x200D).unwrap();
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        t.clear_dirty();
+        t.print(0x1F469).unwrap();
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        t.clear_dirty();
+        t.print(0x200D).unwrap();
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        t.clear_dirty();
+        t.print(0x1F467).unwrap();
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        // We should have 2 cells taken up. It is one character but "wide".
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: horizontal tab back with cursor before left margin"
+    #[test]
+    fn terminal_horizontal_tab_back_with_cursor_before_left_margin() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(20, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::Origin, true);
+        t.save_cursor();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(5, 0);
+        t.restore_cursor();
+        t.horizontal_tab_back();
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "X".as_bytes());
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: setCursorPos (original test)"
+    #[test]
+    fn terminal_set_cursor_pos_original_test() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+
+        // Setting it to 0 should keep it zero (1 based)
+        t.set_cursor_pos(0, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+
+        // Should clamp to size
+        t.set_cursor_pos(81, 81);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 79);
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 79);
+
+        // Should reset pending wrap
+        t.set_cursor_pos(0, 80);
+        t.print('c' as u32).unwrap();
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.set_cursor_pos(0, 80);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        // Origin mode
+        t.modes.set(modespkg::Mode::Origin, true);
+
+        // No change without a scroll region
+        t.set_cursor_pos(81, 81);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 79);
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 79);
+
+        // Set the scroll region
+        t.set_top_and_bottom_margin(10, t.rows as usize);
+        t.set_cursor_pos(0, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 9);
+
+        t.set_cursor_pos(1, 1);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 9);
+
+        t.set_cursor_pos(100, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 79);
+
+        t.set_top_and_bottom_margin(10, 11);
+        t.set_cursor_pos(2, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 10);
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: garbage collect overwritten"
+    #[test]
+    fn terminal_garbage_collect_overwritten() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        t.print('A' as u32).unwrap();
+        t.set_cursor_pos(1, 1);
+        t.set_attribute(sgr::Attribute::Unset).unwrap();
+        t.print('B' as u32).unwrap();
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 'B' as u32);
+            assert!(unsafe { (*cell).style_id() } == 0);
+        }
+
+        // verify we have no styles in our style map
+        let page =
+            unsafe { core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data) };
+        assert_eq!(0usize, unsafe { (*page).styles.count() });
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: do not garbage collect old styles in use"
+    #[test]
+    fn terminal_do_not_garbage_collect_old_styles_in_use() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        t.print('A' as u32).unwrap();
+        t.set_attribute(sgr::Attribute::Unset).unwrap();
+        t.print('B' as u32).unwrap();
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 'B' as u32);
+            assert!(unsafe { (*cell).style_id() } == 0);
+        }
+
+        // verify we have no styles in our style map
+        let page =
+            unsafe { core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data) };
+        assert_eq!(1usize, unsafe { (*page).styles.count() });
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: DECALN"
+    #[test]
+    fn terminal_decaln() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(2, 2)).unwrap();
+
+        // Initial value
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('B' as u32).unwrap();
+        t.decaln().unwrap();
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+
+        for y in 0..t.rows {
+            assert!(t.is_dirty(active_pt(0, y as u32)));
+        }
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "EE\nEE".as_bytes());
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: setProtectedMode"
+    #[test]
+    fn terminal_set_protected_mode() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        assert!(!unsafe { (*t.screens.active).cursor.protected });
+        t.set_protected_mode(ansi::ProtectedMode::Off);
+        assert!(!unsafe { (*t.screens.active).cursor.protected });
+        t.set_protected_mode(ansi::ProtectedMode::Iso);
+        assert!(unsafe { (*t.screens.active).cursor.protected });
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        assert!(unsafe { (*t.screens.active).cursor.protected });
+        t.set_protected_mode(ansi::ProtectedMode::Off);
+        assert!(!unsafe { (*t.screens.active).cursor.protected });
+
+        t.deinit(alloc);
+    }
 }
