@@ -2117,28 +2117,482 @@ impl Terminal {
     ///
     /// Does not change the cursor position.
     pub fn delete_chars(&mut self, count_req: usize) {
-        todo!()
+        if count_req == 0 {
+            return;
+        }
+
+        // If our cursor is outside the margins then do nothing. We DO reset
+        // wrap state still so this must remain below the above logic.
+        if unsafe { (*self.screens.active).cursor.x } < self.scrolling_region.left
+            || unsafe { (*self.screens.active).cursor.x } > self.scrolling_region.right
+        {
+            return;
+        }
+
+        // left is just the cursor position but as a multi-pointer
+        // const left: [*]Cell = @ptrCast(self.screens.active.cursor.page_cell);
+        let left: *mut pagepkg::Cell = unsafe { (*self.screens.active).cursor.page_cell };
+        // var page = &self.screens.active.cursor.page_pin.node.data;
+        let page: *mut Page = unsafe {
+            core::ptr::addr_of_mut!((*(*(*self.screens.active).cursor.page_pin).node).data)
+        };
+
+        // Remaining cols from our cursor to the right margin.
+        let rem = self.scrolling_region.right - unsafe { (*self.screens.active).cursor.x } + 1;
+
+        // We can only insert blanks up to our remaining cols
+        let count = core::cmp::min(count_req, rem as usize) as size::CellCountInt;
+
+        let cursor_x = unsafe { (*self.screens.active).cursor.x };
+        let sr_right = self.scrolling_region.right;
+        self.active_mut().split_cell_boundary(cursor_x);
+        self.active_mut().split_cell_boundary(cursor_x + count);
+        self.active_mut().split_cell_boundary(sr_right + 1);
+
+        // This is the amount of space at the right of the scroll region
+        // that will NOT be blank, so we need to shift the correct cols right.
+        // "scroll_amount" is the number of such cols.
+        let scroll_amount = rem - count;
+        // var x: [*]Cell = left;
+        let mut x: *mut pagepkg::Cell = left;
+        if scroll_amount > 0 {
+            unsafe { (*page).pause_integrity_checks(true) };
+            // defer page.pauseIntegrityChecks(false);
+
+            // const right: [*]Cell = left + (scroll_amount - 1);
+            let right: *mut pagepkg::Cell = unsafe { left.add((scroll_amount - 1) as usize) };
+
+            // while (@intFromPtr(x) <= @intFromPtr(right)) : (x += 1) {
+            while (x as usize) <= (right as usize) {
+                // const src: *Cell = @ptrCast(x + count);
+                let src: *mut pagepkg::Cell = unsafe { x.add(count as usize) };
+                // const dst: *Cell = @ptrCast(x);
+                let dst: *mut pagepkg::Cell = x;
+                unsafe { (*page).swap_cells(src, dst) };
+                x = unsafe { x.add(1) };
+            }
+
+            unsafe { (*page).pause_integrity_checks(false) };
+        }
+
+        // Insert blanks. The blanks preserve the background color.
+        // self.screens.active.clearCells(page, ..., x[0 .. rem - scroll_amount]);
+        let row: *mut Row = unsafe { (*self.screens.active).cursor.page_row };
+        let cells = core::ptr::slice_from_raw_parts_mut(x, (rem - scroll_amount) as usize);
+        self.active_mut()
+            .clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
+                &mut *cells
+            });
+
+        // Our row's soft-wrap is always reset.
+        self.active_mut().cursor_reset_wrap();
+
+        // Our row is always dirty
+        self.active_mut().cursor_mark_dirty();
     }
 
     pub fn erase_chars(&mut self, count_req: usize) {
-        todo!()
+        let count = {
+            let remaining = self.cols - unsafe { (*self.screens.active).cursor.x };
+            let mut end = core::cmp::min(
+                remaining,
+                core::cmp::max(count_req, 1) as size::CellCountInt,
+            );
+
+            // If our last cell is a wide char then we need to also clear the
+            // cell beyond it since we can't just split a wide char.
+            if end != remaining {
+                let last = self.active_mut().cursor_cell_right(end - 1);
+                if unsafe { (*last).wide() } == pagepkg::Wide::Wide {
+                    end += 1;
+                }
+            }
+
+            end
+        };
+
+        // Handle any boundary conditions on the edges of the erased area.
+        //
+        // TODO(qwerasd): This isn't actually correct if you take in to account
+        // protected modes. We need to figure out how to make `clearCells` or at
+        // least `clearUnprotectedCells` handle boundary conditions...
+        let cursor_x = unsafe { (*self.screens.active).cursor.x };
+        self.active_mut().split_cell_boundary(cursor_x);
+        self.active_mut().split_cell_boundary(cursor_x + count);
+
+        // Reset our row's soft-wrap.
+        self.active_mut().cursor_reset_wrap();
+
+        // Mark our cursor row as dirty
+        self.active_mut().cursor_mark_dirty();
+
+        // Clear the cells
+        // const cells: [*]Cell = @ptrCast(self.screens.active.cursor.page_cell);
+        let cells: *mut pagepkg::Cell = unsafe { (*self.screens.active).cursor.page_cell };
+
+        let page: *mut Page = unsafe {
+            core::ptr::addr_of_mut!((*(*(*self.screens.active).cursor.page_pin).node).data)
+        };
+        let row: *mut Row = unsafe { (*self.screens.active).cursor.page_row };
+        let cells_slice = core::ptr::slice_from_raw_parts_mut(cells, count as usize);
+
+        // If we never had a protection mode, then we can assume no cells
+        // are protected and go with the fast path. If the last protection
+        // mode was not ISO we also always ignore protection attributes.
+        if unsafe { (*self.screens.active).protected_mode } != ansi::ProtectedMode::Iso {
+            self.active_mut()
+                .clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
+                    &mut *cells_slice
+                });
+            return;
+        }
+
+        self.active_mut().clear_unprotected_cells(
+            unsafe { &mut *page },
+            unsafe { &mut *row },
+            unsafe { &mut *cells_slice },
+        );
     }
 
     /// Erase the line.
     pub fn erase_line(&mut self, mode: csi::EraseLine, protected_req: bool) {
-        todo!()
+        // Get our start/end positions depending on mode.
+        let (start, end): (size::CellCountInt, size::CellCountInt) = match mode {
+            csi::EraseLine::Right => {
+                let mut x = unsafe { (*self.screens.active).cursor.x };
+
+                // If our X is a wide spacer tail then we need to erase the
+                // previous cell too so we don't split a multi-cell character.
+                if x > 0
+                    && unsafe { (*(*self.screens.active).cursor.page_cell).wide() }
+                        == pagepkg::Wide::SpacerTail
+                {
+                    x -= 1;
+                }
+
+                // Reset our row's soft-wrap.
+                self.active_mut().cursor_reset_wrap();
+
+                (x, self.cols)
+            }
+
+            csi::EraseLine::Left => {
+                let mut x = unsafe { (*self.screens.active).cursor.x };
+
+                // If our x is a wide char we need to delete the tail too.
+                if unsafe { (*(*self.screens.active).cursor.page_cell).wide() }
+                    == pagepkg::Wide::Wide
+                {
+                    x += 1;
+                }
+
+                (0, x + 1)
+            }
+
+            // Note that it seems like complete should reset the soft-wrap
+            // state of the line but in xterm it does not.
+            csi::EraseLine::Complete => (0, self.cols),
+
+            _ => {
+                // log.err("unimplemented erase line mode: {}", .{mode});
+                return;
+            }
+        };
+
+        // All modes will clear the pending wrap state and we know we have
+        // a valid mode at this point.
+        unsafe { (*self.screens.active).cursor.pending_wrap = false };
+
+        // We always mark our row as dirty
+        self.active_mut().cursor_mark_dirty();
+
+        // Start of our cells
+        // const cells: [*]Cell = cells - self.screens.active.cursor.x;
+        let cells: *mut pagepkg::Cell = {
+            let cells: *mut pagepkg::Cell = unsafe { (*self.screens.active).cursor.page_cell };
+            let x = unsafe { (*self.screens.active).cursor.x };
+            unsafe { cells.sub(x as usize) }
+        };
+
+        // We respect protected attributes if explicitly requested (probably
+        // a DECSEL sequence) or if our last protected mode was ISO even if its
+        // not currently set.
+        let protected = unsafe { (*self.screens.active).protected_mode }
+            == ansi::ProtectedMode::Iso
+            || protected_req;
+
+        let page: *mut Page = unsafe {
+            core::ptr::addr_of_mut!((*(*(*self.screens.active).cursor.page_pin).node).data)
+        };
+        let row: *mut Row = unsafe { (*self.screens.active).cursor.page_row };
+        // cells[start..end]
+        let cells_slice = core::ptr::slice_from_raw_parts_mut(
+            unsafe { cells.add(start as usize) },
+            (end - start) as usize,
+        );
+
+        // If we're not respecting protected attributes, we can use a fast-path
+        // to fill the entire line.
+        if !protected {
+            self.active_mut()
+                .clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
+                    &mut *cells_slice
+                });
+            return;
+        }
+
+        self.active_mut().clear_unprotected_cells(
+            unsafe { &mut *page },
+            unsafe { &mut *row },
+            unsafe { &mut *cells_slice },
+        );
     }
 
     /// Erase the display.
     pub fn erase_display(&mut self, mode: csi::EraseDisplay, protected_req: bool) {
-        todo!()
+        // We respect protected attributes if explicitly requested (probably
+        // a DECSEL sequence) or if our last protected mode was ISO even if its
+        // not currently set.
+        let protected = unsafe { (*self.screens.active).protected_mode }
+            == ansi::ProtectedMode::Iso
+            || protected_req;
+
+        match mode {
+            csi::EraseDisplay::ScrollComplete => {
+                // self.screens.active.scrollClear() catch |err| { ... };
+                if self.active_mut().scroll_clear().is_err() {
+                    // log.warn("scroll clear failed, doing a normal clear err={}", .{err});
+                    self.erase_display(csi::EraseDisplay::Complete, protected_req);
+                    return;
+                }
+
+                // Unsets pending wrap state
+                unsafe { (*self.screens.active).cursor.pending_wrap = false };
+
+                // PORT NOTE: the reference clears Kitty graphics state here inside
+                // `if (comptime build_options.kitty_graphics)`. Kitty graphics
+                // `ImageStorage` is DEFERRED to vt-12 so we omit the
+                // `kitty_images.delete` call (matching `scroll_clear`/`clear_rows`
+                // which likewise defer the Kitty graphics seam).
+            }
+
+            csi::EraseDisplay::Complete => {
+                // If we're on the primary screen and our last non-empty row is
+                // a prompt, then we do a scroll_complete instead. This is a
+                // heuristic to get the generally desirable behavior that ^L
+                // at a prompt scrolls the screen contents prior to clearing.
+                // Most shells send `ESC [ H ESC [ 2 J` so we can't just check
+                // our current cursor position. See #905
+                if self.screens.active_key == crate::screen_set::Key::Primary {
+                    'at_prompt: {
+                        // Go from the bottom of the active up and see if we're
+                        // at a prompt.
+                        let active_br =
+                            match self.active_mut().pages.get_bottom_right(point::Tag::Active) {
+                                Some(p) => p,
+                                None => break 'at_prompt,
+                            };
+                        let tl = self.active_mut().pages.get_top_left(point::Tag::Active);
+                        let mut it = active_br
+                            .row_iterator(crate::pagelist::iter::Direction::LeftUp, Some(tl));
+                        // while (it.next()) |p| { switch (...) { .prompt,
+                        // .prompt_continuation => break, .none => break :at_prompt } }
+                        // else break :at_prompt;
+                        // PORT NOTE: Zig's `while (cond) {...} else {...}` runs the
+                        // `else` only on normal loop exhaustion. We mirror it: a
+                        // `found` flag set true only on the prompt/continuation
+                        // `break`; any other exit (`.none` or exhaustion) leaves it
+                        // false and falls through to `break 'at_prompt`.
+                        let mut found = false;
+                        // PORT NOTE: every match arm `break`s, so this `while let`
+                        // only ever runs one iteration (the reference `while` is
+                        // identical: the bottom-most active row decides). We keep
+                        // the loop form to mirror the reference `while...else`
+                        // exhaustion semantics and allow the resulting lint.
+                        #[allow(clippy::never_loop)]
+                        while let Some(p) = it.next() {
+                            let row = p.row_and_cell().row;
+                            match unsafe { (*row).semantic_prompt() } {
+                                // If we're at a prompt or input area, then we are at a prompt.
+                                pagepkg::SemanticPrompt::Prompt
+                                | pagepkg::SemanticPrompt::PromptContinuation => {
+                                    found = true;
+                                    break;
+                                }
+
+                                // If we have command output, then we're most certainly not
+                                // at a prompt.
+                                pagepkg::SemanticPrompt::None => break,
+                            }
+                        }
+                        if !found {
+                            break 'at_prompt;
+                        }
+
+                        // self.screens.active.scrollClear() catch {};
+                        // If we fail, we just fall back to doing a normal clear
+                        // so we don't worry about the error.
+                        let _ = self.active_mut().scroll_clear();
+                    }
+                }
+
+                // All active area
+                self.active_mut().clear_rows(
+                    point::Point::Active(point::Coordinate::default()),
+                    None,
+                    protected,
+                );
+
+                // Unsets pending wrap state
+                unsafe { (*self.screens.active).cursor.pending_wrap = false };
+
+                // PORT NOTE: the reference clears Kitty graphics state here inside
+                // `if (comptime build_options.kitty_graphics)`. Kitty graphics
+                // `ImageStorage` is DEFERRED to vt-12; omitted here (see the
+                // `scroll_complete` note above).
+
+                // Cleared screen dirty bit
+                self.flags.dirty.clear = true;
+            }
+
+            csi::EraseDisplay::Below => {
+                // All lines to the right (including the cursor)
+                self.erase_line(csi::EraseLine::Right, protected_req);
+
+                // All lines below
+                if unsafe { (*self.screens.active).cursor.y } + 1 < self.rows {
+                    let y = unsafe { (*self.screens.active).cursor.y } + 1;
+                    self.active_mut().clear_rows(
+                        point::Point::Active(point::Coordinate { x: 0, y: y as u32 }),
+                        None,
+                        protected,
+                    );
+                }
+
+                // Unsets pending wrap state. Should be done by eraseLine.
+                assert!(!unsafe { (*self.screens.active).cursor.pending_wrap });
+            }
+
+            csi::EraseDisplay::Above => {
+                // Erase to the left (including the cursor)
+                self.erase_line(csi::EraseLine::Left, protected_req);
+
+                // All lines above
+                if unsafe { (*self.screens.active).cursor.y } > 0 {
+                    let y = unsafe { (*self.screens.active).cursor.y } - 1;
+                    self.active_mut().clear_rows(
+                        point::Point::Active(point::Coordinate::default()),
+                        Some(point::Point::Active(point::Coordinate {
+                            x: 0,
+                            y: y as u32,
+                        })),
+                        protected,
+                    );
+                }
+
+                // Unsets pending wrap state
+                assert!(!unsafe { (*self.screens.active).cursor.pending_wrap });
+            }
+
+            csi::EraseDisplay::Scrollback => self.active_mut().erase_history(None),
+        }
     }
 
     /// Resets all margins and fills the whole screen with the character 'E'
     ///
     /// Sets the cursor to the top left corner.
     pub fn decaln(&mut self) -> Result<(), OutOfMemory> {
-        todo!()
+        // Clear our stylistic attributes. This is the only thing that can
+        // fail so we do it first so we can undo it.
+        let old_style = unsafe { (*self.screens.active).cursor.style };
+        unsafe {
+            (*self.screens.active).cursor.style = style::Style {
+                bg_color: (*self.screens.active).cursor.style.bg_color,
+                fg_color: (*self.screens.active).cursor.style.fg_color,
+                ..style::Style::default()
+            }
+        };
+        // errdefer self.screens.active.cursor.style = old_style;
+        // PORT NOTE: the reference `errdefer` restores the saved style if
+        // `manualStyleUpdate` fails. In Rust we restore explicitly on the error
+        // path before returning.
+        if self.active_mut().manual_style_update().is_err() {
+            unsafe { (*self.screens.active).cursor.style = old_style };
+            return Err(OutOfMemory);
+        }
+
+        // Reset margins, also sets cursor to top-left
+        self.scrolling_region = ScrollingRegion {
+            top: 0,
+            bottom: self.rows - 1,
+            left: 0,
+            right: self.cols - 1,
+        };
+
+        // Origin mode is disabled
+        self.modes.set(modespkg::Mode::Origin, false);
+
+        // Move our cursor to the top-left
+        self.set_cursor_pos(1, 1);
+
+        // Use clearRows instead of eraseDisplay because we must NOT respect
+        // protected attributes here.
+        self.active_mut().clear_rows(
+            point::Point::Active(point::Coordinate::default()),
+            None,
+            false,
+        );
+
+        // Fill with Es by moving the cursor but reset it after.
+        loop {
+            // const page = &self.screens.active.cursor.page_pin.node.data;
+            let page: *mut Page = unsafe {
+                core::ptr::addr_of_mut!((*(*(*self.screens.active).cursor.page_pin).node).data)
+            };
+            // const row = self.screens.active.cursor.page_row;
+            let row: *mut Row = unsafe { (*self.screens.active).cursor.page_row };
+            // const cells_multi: [*]Cell = row.cells.ptr(page.memory);
+            // const cells = cells_multi[0..page.size.cols];
+            let cells_offset = unsafe { (*row).cells() };
+            let cells_multi: *mut pagepkg::Cell = unsafe { cells_offset.ptr((*page).memory_ptr()) };
+            let cols = unsafe { (*page).size.cols } as usize;
+
+            // @memset(cells, .{ ... });
+            let style_id = unsafe { (*self.screens.active).cursor.style_id };
+            for i in 0..cols {
+                let cell: *mut pagepkg::Cell = unsafe { cells_multi.add(i) };
+                let mut new_cell = pagepkg::Cell::zeroed();
+                new_cell.set_content_tag(pagepkg::ContentTag::Codepoint);
+                new_cell.set_content_codepoint('E' as u21);
+                new_cell.set_style_id(style_id);
+                // DECALN does not respect protected state. Verified with xterm.
+                new_cell.set_protected(false);
+                unsafe { *cell = new_cell };
+            }
+
+            // If we have a ref-counted style, increase
+            if style_id != style::DEFAULT_ID {
+                unsafe {
+                    let base = (*page).memory_ptr();
+                    (*page).styles.use_multiple(base, style_id, cols as _);
+                }
+                unsafe { (*row).set_styled(true) };
+            }
+
+            // We messed with the page so assert its integrity here.
+            unsafe { (*page).assert_integrity() };
+
+            self.active_mut().cursor_mark_dirty();
+            if unsafe { (*self.screens.active).cursor.y } == self.rows - 1 {
+                break;
+            }
+            self.active_mut().cursor_down(1);
+        }
+
+        // Reset the cursor to the top-left
+        self.set_cursor_pos(1, 1);
+
+        Ok(())
     }
 
     /// Execute a kitty graphics command. The buf is used to populate with
@@ -2310,12 +2764,20 @@ impl Terminal {
 
     /// Returns true if the point is dirty, used for testing.
     fn is_dirty(&self, pt: point::Point) -> bool {
-        todo!()
+        // return t.screens.active.pages.getCell(pt).?.isDirty();
+        unsafe {
+            (*self.screens.active)
+                .pages
+                .get_cell(pt)
+                .unwrap()
+                .is_dirty()
+        }
     }
 
     /// Clear all dirty bits. Testing only.
     fn clear_dirty(&mut self) {
-        todo!()
+        // t.screens.active.pages.clearDirty();
+        self.active_mut().pages.clear_dirty();
     }
 
     // --- PORT NOTE: Rust-only glue (no logic; not from Terminal.zig) -------
@@ -2369,6 +2831,12 @@ mod tests {
     // `t.screens.active.pages.getCell(.{ .screen = .{ .x, .y } })`.
     fn screen_pt(x: size::CellCountInt, y: u32) -> point::Point {
         point::Point::Screen(point::Coordinate { x, y })
+    }
+
+    // Active-point helper mirroring the reference
+    // `.{ .active = .{ .x, .y } }` literals used in the dirty-bit assertions.
+    fn active_pt(x: size::CellCountInt, y: u32) -> point::Point {
+        point::Point::Active(point::Coordinate { x, y })
     }
 
     // test "Terminal: zero-width character attaches to pending wrap cell"
@@ -3395,4 +3863,722 @@ mod tests {
     // PORT NOTE (vt-12b-2 deferral): test "Terminal: saveCursor pending wrap
     // state" restores a pending-wrap cursor then prints, which soft-wraps via
     // `print_wrap()` → `index()` (still `todo!()`); deferred to vt-12b-3b.
+
+    // === vt-12b-3a: erase methods ===========================================
+    //
+    // PORT NOTE (vt-12b-3a deferral): erase tests that drive still-`todo!()`
+    // methods are deferred to vt-12b-3b. Specifically deferred are any test
+    // that:
+    //   - soft-wraps (multi-row via `print_wrap()` → `index()`), or uses
+    //     `linefeed()`/`\n` in `print_string` (also `index()`),
+    //   - calls `set_attribute` (SGR; the "preserves background sgr",
+    //     "handles refcounted styles", "preserves color", "preserves cursor"
+    //     groups),
+    //   - calls `set_protected_mode` (the protected-attribute groups),
+    //   - calls `set_top_and_bottom_margin` / `set_left_and_right_margin` /
+    //     `scroll_down` (the decaln + scroll-region + right-margin groups).
+    // The `decaln`, `erase_display` (all modes but `Scrollback`/single-row),
+    // and protected `erase_line`/`erase_chars` test groups land in vt-12b-3b
+    // once those methods are filled.
+
+    // test "Terminal: eraseChars simple operation"
+    #[test]
+    fn terminal_erase_chars_simple_operation() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 1);
+        t.clear_dirty();
+        t.erase_chars(2);
+        t.print('X' as u32).unwrap();
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(!t.is_dirty(active_pt(0, 1)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "X C".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseChars minimum one"
+    #[test]
+    fn terminal_erase_chars_minimum_one() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 1);
+        t.clear_dirty();
+        t.erase_chars(0);
+        t.print('X' as u32).unwrap();
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "XBC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseChars beyond screen edge"
+    #[test]
+    fn terminal_erase_chars_beyond_screen_edge() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "  ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 4);
+        t.erase_chars(10);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  A".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseChars wide character"
+    #[test]
+    fn terminal_erase_chars_wide_character() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print('橋' as u32).unwrap();
+        for c in "BC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 1);
+        t.erase_chars(1);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "X BC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseChars resets pending wrap"
+    #[test]
+    fn terminal_erase_chars_resets_pending_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.erase_chars(1);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABCDX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // PORT NOTE (vt-12b-3a deferral): test "Terminal: eraseChars resets wrap"
+    // prints "ABCDE123" on a 5-col screen, which soft-wraps via `print_wrap()`
+    // → `index()` (still `todo!()`); deferred to vt-12b-3b.
+
+    // PORT NOTE (vt-12b-3a deferral): tests "Terminal: eraseChars preserves
+    // background sgr", "eraseChars handles refcounted styles", and the
+    // "eraseChars protected attributes *" group drive `set_attribute` /
+    // `set_protected_mode` (still `todo!()`); deferred to vt-12b-3b.
+
+    // test "Terminal: eraseChars wide char boundary conditions"
+    #[test]
+    fn terminal_erase_chars_wide_char_boundary_conditions() {
+        let mut t = Terminal::init(Global, opts(8, 1)).unwrap();
+
+        t.print_string("😀a😀b😀".as_bytes()).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "😀a😀b😀".as_bytes());
+        }
+
+        t.set_cursor_pos(1, 2);
+        t.erase_chars(3);
+        unsafe {
+            (*core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data))
+                .assert_integrity()
+        };
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "     b😀".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseChars wide char splits proper cell boundaries"
+    #[test]
+    fn terminal_erase_chars_wide_char_splits_proper_cell_boundaries() {
+        let mut t = Terminal::init(Global, opts(30, 1)).unwrap();
+
+        // This is a test for a bug: https://github.com/ghostty-org/ghostty/issues/2817
+        // To explain the setup:
+        // (1) We need our wide characters starting on an even (1-based) column.
+        // (2) We need our cursor to be in the middle somewhere.
+        // (3) We need our count to be less than our cursor X and on a split cell.
+        // The bug was that we split the wrong cell boundaries.
+
+        t.print_string("x食べて下さい".as_bytes()).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "x食べて下さい".as_bytes());
+        }
+
+        t.set_cursor_pos(1, 6); // At: て
+        t.erase_chars(4); // Delete: て下
+        unsafe {
+            (*core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data))
+                .assert_integrity()
+        };
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "x食べ    さい".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // PORT NOTE (vt-12b-3a deferral): test "Terminal: eraseChars wide char wrap
+    // boundary conditions" soft-wraps via `print_string` → `print_wrap()` →
+    // `index()` (still `todo!()`); deferred to vt-12b-3b.
+
+    // test "Terminal: deleteChars"
+    #[test]
+    fn terminal_delete_chars() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 2);
+
+        t.clear_dirty();
+        t.delete_chars(2);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ADE".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteChars zero count"
+    #[test]
+    fn terminal_delete_chars_zero_count() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 2);
+
+        t.clear_dirty();
+        t.delete_chars(0);
+        assert!(!t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABCDE".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteChars more than half"
+    #[test]
+    fn terminal_delete_chars_more_than_half() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 2);
+
+        t.clear_dirty();
+        t.delete_chars(3);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AE".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteChars more than line width"
+    #[test]
+    fn terminal_delete_chars_more_than_line_width() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 2);
+
+        t.clear_dirty();
+        t.delete_chars(10);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteChars should shift left"
+    #[test]
+    fn terminal_delete_chars_should_shift_left() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 2);
+
+        t.clear_dirty();
+        t.delete_chars(1);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ACDE".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteChars resets pending wrap"
+    #[test]
+    fn terminal_delete_chars_resets_pending_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.delete_chars(1);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABCDX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // PORT NOTE (vt-12b-3a deferral): test "Terminal: deleteChars resets wrap"
+    // prints "ABCDE123" on a 5-col screen, soft-wrapping via `print_wrap()` →
+    // `index()` (still `todo!()`); deferred to vt-12b-3b.
+
+    // test "Terminal: deleteChars simple operation"
+    #[test]
+    fn terminal_delete_chars_simple_operation() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.print_string("ABC123".as_bytes()).unwrap();
+        t.set_cursor_pos(1, 3);
+
+        t.clear_dirty();
+        t.delete_chars(2);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AB23".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // PORT NOTE (vt-12b-3a deferral): test "Terminal: deleteChars preserves
+    // background sgr" drives `set_attribute` (still `todo!()`); deferred to
+    // vt-12b-3b.
+
+    // test "Terminal: deleteChars outside scroll region"
+    #[test]
+    fn terminal_delete_chars_outside_scroll_region() {
+        let mut t = Terminal::init(Global, opts(6, 10)).unwrap();
+
+        t.print_string("ABC123".as_bytes()).unwrap();
+        t.scrolling_region.left = 2;
+        t.scrolling_region.right = 4;
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.clear_dirty();
+        t.delete_chars(2);
+        assert!(!t.is_dirty(active_pt(0, 0)));
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC123".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteChars inside scroll region"
+    #[test]
+    fn terminal_delete_chars_inside_scroll_region() {
+        let mut t = Terminal::init(Global, opts(6, 10)).unwrap();
+
+        t.print_string("ABC123".as_bytes()).unwrap();
+        t.scrolling_region.left = 2;
+        t.scrolling_region.right = 4;
+        t.set_cursor_pos(1, 4);
+
+        t.clear_dirty();
+        t.delete_chars(1);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC2 3".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteChars split wide character from spacer tail"
+    #[test]
+    fn terminal_delete_chars_split_wide_character_from_spacer_tail() {
+        let mut t = Terminal::init(Global, opts(6, 10)).unwrap();
+
+        t.print_string("A橋123".as_bytes()).unwrap();
+        t.set_cursor_pos(1, 3);
+        t.delete_chars(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A 123".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteChars split wide character from wide"
+    #[test]
+    fn terminal_delete_chars_split_wide_character_from_wide() {
+        let mut t = Terminal::init(Global, opts(6, 10)).unwrap();
+
+        t.print_string("橋123".as_bytes()).unwrap();
+        t.set_cursor_pos(1, 1);
+        t.delete_chars(1);
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, '1' as u21);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteChars split wide character from end"
+    #[test]
+    fn terminal_delete_chars_split_wide_character_from_end() {
+        let mut t = Terminal::init(Global, opts(6, 10)).unwrap();
+
+        t.print_string("A橋123".as_bytes()).unwrap();
+        t.set_cursor_pos(1, 1);
+        t.delete_chars(1);
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x6A4B);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+        }
+
+        t.deinit(Global);
+    }
+
+    // PORT NOTE (vt-12b-3a deferral): test "Terminal: deleteChars with a spacer
+    // head at the end" prints "0123橋123" on a 5-col screen, soft-wrapping the
+    // wide char (spacer head) via `print_wrap()` → `index()` (still `todo!()`);
+    // deferred to vt-12b-3b.
+
+    // test "Terminal: deleteChars split wide character tail"
+    #[test]
+    fn terminal_delete_chars_split_wide_character_tail() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_cursor_pos(1, (t.cols - 1) as usize);
+        t.print(0x6A4B).unwrap(); // 橋
+        t.carriage_return();
+        t.delete_chars((t.cols - 1) as usize);
+        t.print('0' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "0".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteChars wide char boundary conditions"
+    #[test]
+    fn terminal_delete_chars_wide_char_boundary_conditions() {
+        let mut t = Terminal::init(Global, opts(8, 1)).unwrap();
+
+        // EXPLANATION(qwerasd):
+        //
+        // There are 3 or 4 boundaries to be concerned with in deleteChars,
+        // depending on how you count them. Consider the following terminal:
+        //
+        //   +--------+
+        // 0 |.ABCDEF.|
+        //   : ^      : (^ = cursor)
+        //   +--------+
+        //
+        // if we DCH 3 we get
+        //
+        //   +--------+
+        // 0 |.DEF....|
+        //   +--------+
+        //
+        // The boundaries exist at the following points then:
+        //
+        //   +--------+
+        // 0 |.ABCDEF.|
+        //   :11 22 33:
+        //   +--------+
+        //
+        // I'm counting 2 for double since it's both the end of the deleted
+        // content and the start of the content that is shifted in to place.
+        //
+        // Now consider wide characters (represented as `WW`) at these boundaries:
+        //
+        //   +--------+
+        // 0 |WWaWWbWW|
+        //   : ^      : (^ = cursor)
+        //   : ^^^    : (^ = deleted by DCH 3)
+        //   +--------+
+        //
+        // -> DCH 3
+        // -> The first 2 wide characters are split & destroyed (verified in xterm)
+        //
+        //   +--------+
+        // 0 |..bWW...|
+        //   +--------+
+
+        t.print_string("😀a😀b😀".as_bytes()).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "😀a😀b😀".as_bytes());
+        }
+
+        t.set_cursor_pos(1, 2);
+        t.delete_chars(3);
+        unsafe {
+            (*core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data))
+                .assert_integrity()
+        };
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  b😀".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // PORT NOTE (vt-12b-3a deferral): test "Terminal: deleteChars wide char wrap
+    // boundary conditions" soft-wraps via `print_string` → `print_wrap()` →
+    // `index()`, and "deleteChars wide char across right margin" drives
+    // `set_left_and_right_margin` (both still `todo!()`); deferred to vt-12b-3b.
+
+    // test "Terminal: eraseLine simple erase right"
+    #[test]
+    fn terminal_erase_line_simple_erase_right() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 3);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Right, false);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AB".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine resets pending wrap"
+    #[test]
+    fn terminal_erase_line_resets_pending_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.erase_line(csi::EraseLine::Right, false);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print('B' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABCDB".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // PORT NOTE (vt-12b-3a deferral): test "Terminal: eraseLine resets wrap"
+    // prints "ABCDE123" on a 5-col screen, soft-wrapping via `print_wrap()` →
+    // `index()` (still `todo!()`); deferred to vt-12b-3b.
+
+    // PORT NOTE (vt-12b-3a deferral): tests "Terminal: eraseLine right preserves
+    // background sgr" and the "eraseLine right protected *" group drive
+    // `set_attribute` / `set_protected_mode` (still `todo!()`); deferred to
+    // vt-12b-3b.
+
+    // test "Terminal: eraseLine right wide character"
+    #[test]
+    fn terminal_erase_line_right_wide_character() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        for c in "AB".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.print('橋' as u32).unwrap();
+        for c in "DE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 4);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Right, false);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AB".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine simple erase left"
+    #[test]
+    fn terminal_erase_line_simple_erase_left() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 3);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Left, false);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "   DE".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine left resets wrap"
+    #[test]
+    fn terminal_erase_line_left_resets_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Left, false);
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print('B' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "    B".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine left wide character"
+    #[test]
+    fn terminal_erase_line_left_wide_character() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        for c in "AB".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.print('橋' as u32).unwrap();
+        for c in "DE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 3);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Left, false);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "    DE".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // PORT NOTE (vt-12b-3a deferral): the "Terminal: eraseLine left protected
+    // *", "eraseLine complete *", "eraseLine left preserves background sgr"
+    // groups drive `set_attribute` / `set_protected_mode` (still `todo!()`);
+    // deferred to vt-12b-3b.
+
+    // PORT NOTE (vt-12b-3a deferral): the entire "Terminal: eraseDisplay *"
+    // group is deferred to vt-12b-3b. Every test drives a still-`todo!()`
+    // method: they use `carriage_return()` + `linefeed()` (→ `index()`) to
+    // build multi-row content, and/or `set_attribute` / `set_protected_mode`.
+    // The `erase_display` method itself is filled in this batch.
 }
