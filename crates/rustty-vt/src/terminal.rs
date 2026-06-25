@@ -67,6 +67,7 @@ use crate::osc;
 use crate::page as pagepkg;
 use crate::page::u21;
 use crate::page::{Page, Row};
+use crate::pagelist;
 use crate::pagelist::OutOfMemory;
 use crate::point;
 use crate::screen::Screen;
@@ -428,6 +429,116 @@ pub struct Terminal {
 
     /// These are just a packed set of flags we may set on the terminal.
     pub flags: Flags,
+}
+
+/// PORT NOTE: `scrollUp`/`scrollDown` use a `defer` block to restore the
+/// cursor x/y and pending_wrap on every exit. Rust has no `defer`; this RAII
+/// guard reproduces it — its `Drop` runs the same restore logic whenever the
+/// guard leaves scope (normal exit, early `return`, or error `?`).
+struct CursorRestoreGuard {
+    screen: *mut Screen,
+    old_x: size::CellCountInt,
+    old_y: size::CellCountInt,
+    old_wrap: bool,
+}
+
+impl Drop for CursorRestoreGuard {
+    fn drop(&mut self) {
+        // self.screens.active.cursorAbsolute(old_x, old_y);
+        unsafe { (*self.screen).cursor_absolute(self.old_x, self.old_y) };
+        // self.screens.active.cursor.pending_wrap = old_wrap;
+        unsafe { (*self.screen).cursor.pending_wrap = self.old_wrap };
+    }
+}
+
+/// PORT NOTE: `index` defers its cursor semantic-prompt handling to AFTER the
+/// scroll because it may need to apply to new rows. Rust has no `defer`; this
+/// RAII guard's `Drop` reproduces that deferred block, reading `screen.cursor`
+/// at drop time (post-scroll) and running on every exit path of `index`.
+struct SemanticIndexGuard {
+    screen: *mut Screen,
+}
+
+impl Drop for SemanticIndexGuard {
+    fn drop(&mut self) {
+        let screen = self.screen;
+        // if (screen.cursor.semantic_content != .output) {
+        if unsafe { (*screen).cursor.semantic_content } != pagepkg::SemanticContent::Output {
+            // @branchHint(.unlikely);
+
+            // Always reset any semantic content clear-eol state.
+            //
+            // The specification is not clear what "end-of-line" means. If we
+            // discover that there are more scenarios we should be unsetting
+            // this we should document and test it.
+            // if (screen.cursor.semantic_content_clear_eol) {
+            if unsafe { (*screen).cursor.semantic_content_clear_eol } {
+                // screen.cursor.semantic_content = .output;
+                unsafe { (*screen).cursor.semantic_content = pagepkg::SemanticContent::Output };
+                // screen.cursor.semantic_content_clear_eol = false;
+                unsafe { (*screen).cursor.semantic_content_clear_eol = false };
+            } else {
+                // If we aren't clearing our state at EOL and we're not output,
+                // then we mark the new row as a prompt continuation. This is
+                // to work around shells that don't send OSC 133 k=s sequences
+                // for continuations.
+                //
+                // This can be a false positive if the shell changes content
+                // type later and outputs something. We handle that in the
+                // semanticPrompt function.
+                // screen.cursor.page_row.semantic_prompt = .prompt_continuation;
+                unsafe {
+                    (*(*screen).cursor.page_row)
+                        .set_semantic_prompt(pagepkg::SemanticPrompt::PromptContinuation)
+                };
+            }
+        } else {
+            // This should never be set in the output mode.
+            // assert(!screen.cursor.semantic_content_clear_eol);
+            assert!(!unsafe { (*screen).cursor.semantic_content_clear_eol });
+        }
+    }
+}
+
+/// PORT NOTE: `insertLines`/`deleteLines` end with a `defer` that returns the
+/// cursor to the left margin on the row it started on and clears pending_wrap.
+/// This RAII guard reproduces that on every exit path.
+struct ShiftLinesEndGuard {
+    screen: *mut Screen,
+    left: size::CellCountInt,
+    start_y: size::CellCountInt,
+}
+
+impl Drop for ShiftLinesEndGuard {
+    fn drop(&mut self) {
+        // self.screens.active.cursorAbsolute(self.scrolling_region.left, start_y);
+        unsafe { (*self.screen).cursor_absolute(self.left, self.start_y) };
+        // Always unset pending wrap
+        // self.screens.active.cursor.pending_wrap = false;
+        unsafe { (*self.screen).cursor.pending_wrap = false };
+    }
+}
+
+/// PORT NOTE: reproduces `defer self.screens.active.pages.untrackPin(cur_p)`.
+/// `Drop` untracks the pin on every exit path.
+struct TrackedPinGuard {
+    screen: *mut Screen,
+    pin: *mut crate::pagelist::Pin,
+}
+
+impl Drop for TrackedPinGuard {
+    fn drop(&mut self) {
+        unsafe { (*self.screen).pages.untrack_pin(self.pin) };
+    }
+}
+
+/// PORT NOTE: helper for the reference slice expression `cells[start..end]`
+/// over a raw `*mut [Cell]`. Reproduces the sub-slice as a raw `*mut [Cell]`
+/// (no intermediate `&mut [Cell]`, preserving the unprotected-pointer aliasing
+/// the reference relies on).
+fn ptr_slice_range(cells: *mut [pagepkg::Cell], start: usize, end: usize) -> *mut [pagepkg::Cell] {
+    let base: *mut pagepkg::Cell = cells as *mut pagepkg::Cell;
+    core::ptr::slice_from_raw_parts_mut(unsafe { base.add(start) }, end - start)
 }
 
 impl Terminal {
@@ -1886,7 +1997,150 @@ impl Terminal {
     ///
     /// This unsets the pending wrap state without wrapping.
     pub fn index(&mut self) -> Result<(), OutOfMemory> {
-        todo!()
+        // const screen: *Screen = self.screens.active;
+        let screen: *mut Screen = self.screens.active;
+
+        // Unset pending wrap state
+        // screen.cursor.pending_wrap = false;
+        unsafe { (*screen).cursor.pending_wrap = false };
+
+        // We handle our cursor semantic prompt state AFTER doing the
+        // scrolling, because we may need to apply to new rows.
+        // defer if (screen.cursor.semantic_content != .output) { ... } else { ... };
+        // PORT NOTE: Rust has no `defer`; this RAII guard reproduces the
+        // semantic-content handling that the reference defers to AFTER the
+        // scroll. Its `Drop` reads `screen.cursor` at drop time (post-scroll),
+        // matching the reference's deferred evaluation, and runs on every exit
+        // path (including the early `return`s and the `?`).
+        let _semantic = SemanticIndexGuard { screen };
+
+        // Outside of the scroll region we move the cursor one line down.
+        // if (screen.cursor.y < self.scrolling_region.top or
+        //     screen.cursor.y > self.scrolling_region.bottom)
+        if unsafe { (*screen).cursor.y } < self.scrolling_region.top
+            || unsafe { (*screen).cursor.y } > self.scrolling_region.bottom
+        {
+            // We only move down if we're not already at the bottom of
+            // the screen.
+            // if (screen.cursor.y < self.rows - 1) {
+            if unsafe { (*screen).cursor.y } < self.rows - 1 {
+                // screen.cursorDown(1);
+                unsafe { (*screen).cursor_down(1) };
+            }
+
+            return Ok(());
+        }
+
+        // If the cursor is inside the scrolling region and on the bottom-most
+        // line, then we scroll up. If our scrolling region is the full screen
+        // we create scrollback.
+        // if (screen.cursor.y == self.scrolling_region.bottom and
+        //     screen.cursor.x >= self.scrolling_region.left and
+        //     screen.cursor.x <= self.scrolling_region.right)
+        if unsafe { (*screen).cursor.y } == self.scrolling_region.bottom
+            && unsafe { (*screen).cursor.x } >= self.scrolling_region.left
+            && unsafe { (*screen).cursor.x } <= self.scrolling_region.right
+        {
+            // if (comptime build_options.kitty_graphics) {
+            //     // Scrolling dirties the images because it updates their placements pins.
+            //     screen.kitty_images.dirty = true;
+            // }
+            // PORT NOTE (vt-12 deferral): Kitty graphics `ImageStorage` is
+            // deferred, so the `kitty_images.dirty = true` flag set under
+            // `if (comptime build_options.kitty_graphics)` is omitted.
+
+            // If our scrolling region is at the top, we create scrollback.
+            // if (self.scrolling_region.top == 0 and
+            //     self.scrolling_region.left == 0 and
+            //     self.scrolling_region.right == self.cols - 1)
+            if self.scrolling_region.top == 0
+                && self.scrolling_region.left == 0
+                && self.scrolling_region.right == self.cols - 1
+            {
+                // try screen.cursorScrollAbove();
+                self.active_mut().cursor_scroll_above()?;
+                return Ok(());
+            }
+
+            // Slow path for left and right scrolling region margins.
+            // if (self.scrolling_region.left != 0 or
+            //     self.scrolling_region.right != self.cols - 1 or
+            //     !screen.blankCell().isZero())
+            if self.scrolling_region.left != 0
+                || self.scrolling_region.right != self.cols - 1
+                // PERF(mitchellh): If we have an SGR background set then
+                // we need to preserve that background in our erased rows.
+                // scrollUp does that but eraseRowBounded below does not.
+                // However, scrollUp is WAY slower. We should optimize this
+                // case to work in the eraseRowBounded codepath and remove
+                // this check.
+                || !unsafe { (*screen).blank_cell() }.is_zero()
+            {
+                // try self.scrollUp(1);
+                self.scroll_up(1)?;
+                return Ok(());
+            }
+
+            // Otherwise use a fast path function from PageList to efficiently
+            // scroll the contents of the scrolling region.
+
+            // Preserve old cursor just for assertions
+            // const old_cursor = screen.cursor;
+            let old_cursor_x = unsafe { (*screen).cursor.x };
+            let old_cursor_y = unsafe { (*screen).cursor.y };
+
+            // try screen.pages.eraseRowBounded(
+            //     .{ .active = .{ .y = self.scrolling_region.top } },
+            //     self.scrolling_region.bottom - self.scrolling_region.top,
+            // );
+            let sr_top = self.scrolling_region.top;
+            let sr_bottom = self.scrolling_region.bottom;
+            self.active_mut().pages.erase_row_bounded(
+                point::Point::Active(point::Coordinate {
+                    x: 0,
+                    y: sr_top as u32,
+                }),
+                (sr_bottom - sr_top) as usize,
+            )?;
+
+            // eraseRow and eraseRowBounded will end up moving the cursor pin
+            // up by 1, so we need to move it back down. A `cursorReload`
+            // would be better option but this is more efficient and this is
+            // a super hot path so we do this instead.
+            // assert(screen.cursor.x == old_cursor.x);
+            assert!(unsafe { (*screen).cursor.x } == old_cursor_x);
+            // assert(screen.cursor.y == old_cursor.y);
+            assert!(unsafe { (*screen).cursor.y } == old_cursor_y);
+            // screen.cursor.y -= 1;
+            unsafe { (*screen).cursor.y -= 1 };
+            // screen.cursorDown(1);
+            unsafe { (*screen).cursor_down(1) };
+
+            // The operations above can prune our cursor style so we need to
+            // update. This should never fail because the above can only FREE
+            // memory.
+            // screen.manualStyleUpdate() catch |err| {
+            //     std.log.warn("deleteLines manualStyleUpdate err={}", .{err});
+            //     screen.cursor.style = .{};
+            //     screen.manualStyleUpdate() catch unreachable;
+            // };
+            if unsafe { (*screen).manual_style_update() }.is_err() {
+                // std.log.warn("deleteLines manualStyleUpdate err={}", .{err});
+                unsafe { (*screen).cursor.style = style::Style::default() };
+                unsafe { (*screen).manual_style_update() }.unwrap();
+            }
+
+            return Ok(());
+        }
+
+        // Increase cursor by 1, maximum to bottom of scroll region
+        // if (screen.cursor.y < self.scrolling_region.bottom) {
+        if unsafe { (*screen).cursor.y } < self.scrolling_region.bottom {
+            // screen.cursorDown(1);
+            unsafe { (*screen).cursor_down(1) };
+        }
+
+        Ok(())
     }
 
     /// Move the cursor to the previous line in the scrolling region, possibly
@@ -1902,7 +2156,20 @@ impl Terminal {
     ///   * If the cursor is not on the top-most line of the scrolling region:
     ///     move the cursor one line up
     pub fn reverse_index(&mut self) {
-        todo!()
+        // if (self.screens.active.cursor.y != self.scrolling_region.top or
+        //     self.screens.active.cursor.x < self.scrolling_region.left or
+        //     self.screens.active.cursor.x > self.scrolling_region.right)
+        if unsafe { (*self.screens.active).cursor.y } != self.scrolling_region.top
+            || unsafe { (*self.screens.active).cursor.x } < self.scrolling_region.left
+            || unsafe { (*self.screens.active).cursor.x } > self.scrolling_region.right
+        {
+            // self.cursorUp(1);
+            self.cursor_up(1);
+            return;
+        }
+
+        // self.scrollDown(1);
+        self.scroll_down(1);
     }
 
     /// Set Cursor Position. Move cursor to the position indicated
@@ -2017,17 +2284,89 @@ impl Terminal {
     ///
     /// Top and bottom are 1-indexed.
     pub fn set_top_and_bottom_margin(&mut self, top_req: usize, bottom_req: usize) {
-        todo!()
+        // const top = @max(1, top_req);
+        let top = core::cmp::max(1, top_req);
+        // const bottom = @min(self.rows, if (bottom_req == 0) self.rows else bottom_req);
+        let bottom = core::cmp::min(
+            self.rows as usize,
+            if bottom_req == 0 {
+                self.rows as usize
+            } else {
+                bottom_req
+            },
+        );
+        // if (top >= bottom) return;
+        if top >= bottom {
+            return;
+        }
+
+        // self.scrolling_region.top = @intCast(top - 1);
+        self.scrolling_region.top = (top - 1) as size::CellCountInt;
+        // self.scrolling_region.bottom = @intCast(bottom - 1);
+        self.scrolling_region.bottom = (bottom - 1) as size::CellCountInt;
+        // self.setCursorPos(1, 1);
+        self.set_cursor_pos(1, 1);
     }
 
     /// DECSLRM
     pub fn set_left_and_right_margin(&mut self, left_req: usize, right_req: usize) {
-        todo!()
+        // We must have this mode enabled to do anything
+        // if (!self.modes.get(.enable_left_and_right_margin)) return;
+        if !self.modes.get(modespkg::Mode::EnableLeftAndRightMargin) {
+            return;
+        }
+
+        // const left = @max(1, left_req);
+        let left = core::cmp::max(1, left_req);
+        // const right = @min(self.cols, if (right_req == 0) self.cols else right_req);
+        let right = core::cmp::min(
+            self.cols as usize,
+            if right_req == 0 {
+                self.cols as usize
+            } else {
+                right_req
+            },
+        );
+        // if (left >= right) return;
+        if left >= right {
+            return;
+        }
+
+        // self.scrolling_region.left = @intCast(left - 1);
+        self.scrolling_region.left = (left - 1) as size::CellCountInt;
+        // self.scrolling_region.right = @intCast(right - 1);
+        self.scrolling_region.right = (right - 1) as size::CellCountInt;
+        // self.setCursorPos(1, 1);
+        self.set_cursor_pos(1, 1);
     }
 
     /// Scroll the text down by one row.
     pub fn scroll_down(&mut self, count: usize) {
-        todo!()
+        // Preserve our x/y to restore.
+        // const old_x = self.screens.active.cursor.x;
+        // const old_y = self.screens.active.cursor.y;
+        // const old_wrap = self.screens.active.cursor.pending_wrap;
+        // defer {
+        //     self.screens.active.cursorAbsolute(old_x, old_y);
+        //     self.screens.active.cursor.pending_wrap = old_wrap;
+        // }
+        // PORT NOTE: Rust has no `defer`; this RAII guard restores the cursor
+        // x/y and pending_wrap when it drops at end of scope, mirroring the
+        // reference `defer`. It runs on every exit path.
+        let _restore = CursorRestoreGuard {
+            screen: self.screens.active,
+            old_x: unsafe { (*self.screens.active).cursor.x },
+            old_y: unsafe { (*self.screens.active).cursor.y },
+            old_wrap: unsafe { (*self.screens.active).cursor.pending_wrap },
+        };
+
+        // Move to the top of the scroll region
+        // self.screens.active.cursorAbsolute(self.scrolling_region.left, self.scrolling_region.top);
+        let sr_left = self.scrolling_region.left;
+        let sr_top = self.scrolling_region.top;
+        self.active_mut().cursor_absolute(sr_left, sr_top);
+        // self.insertLines(count);
+        self.insert_lines(count);
     }
 
     /// Removes amount lines from the top of the scroll region. The remaining lines
@@ -2038,12 +2377,83 @@ impl Terminal {
     ///
     /// Does not change the (absolute) cursor position.
     pub fn scroll_up(&mut self, count: usize) -> Result<(), OutOfMemory> {
-        todo!()
+        // Preserve our x/y to restore.
+        // const old_x = self.screens.active.cursor.x;
+        // const old_y = self.screens.active.cursor.y;
+        // const old_wrap = self.screens.active.cursor.pending_wrap;
+        // defer {
+        //     self.screens.active.cursorAbsolute(old_x, old_y);
+        //     self.screens.active.cursor.pending_wrap = old_wrap;
+        // }
+        // PORT NOTE: see scroll_down — RAII guard mirrors the reference `defer`,
+        // restoring the cursor on every return (including the early `?`).
+        let _restore = CursorRestoreGuard {
+            screen: self.screens.active,
+            old_x: unsafe { (*self.screens.active).cursor.x },
+            old_y: unsafe { (*self.screens.active).cursor.y },
+            old_wrap: unsafe { (*self.screens.active).cursor.pending_wrap },
+        };
+
+        // If our scroll region is at the top and we have no left/right
+        // margins then we move the scrolled out text into the scrollback.
+        if self.scrolling_region.top == 0
+            && self.scrolling_region.left == 0
+            && self.scrolling_region.right == self.cols - 1
+        {
+            // Scrolling dirties the images because it updates their placements pins.
+            // if (comptime build_options.kitty_graphics) {
+            //     self.screens.active.kitty_images.dirty = true;
+            // }
+            // PORT NOTE (vt-12 deferral): Kitty graphics `ImageStorage` is
+            // deferred, so the `kitty_images.dirty = true` flag set under
+            // `if (comptime build_options.kitty_graphics)` is omitted (matches
+            // the other Kitty-graphics seam deferrals in this file).
+
+            // Clamp count to the scroll region height.
+            // const region_height = self.scrolling_region.bottom + 1;
+            let region_height = self.scrolling_region.bottom as usize + 1;
+            // const adjusted_count = @min(count, region_height);
+            let adjusted_count = core::cmp::min(count, region_height);
+
+            // TODO: Create an optimized version that can scroll N times
+            // This isn't critical because in most cases, scrollUp is used
+            // with count=1, but it's still a big optimization opportunity.
+
+            // Move our cursor to the bottom of the scroll region so we can
+            // use the cursorScrollAbove function to create scrollback
+            // self.screens.active.cursorAbsolute(0, self.scrolling_region.bottom);
+            let sr_bottom = self.scrolling_region.bottom;
+            self.active_mut().cursor_absolute(0, sr_bottom);
+            // for (0..adjusted_count) |_| try self.screens.active.cursorScrollAbove();
+            for _ in 0..adjusted_count {
+                self.active_mut().cursor_scroll_above()?;
+            }
+            return Ok(());
+        }
+
+        // Move to the top of the scroll region
+        // self.screens.active.cursorAbsolute(self.scrolling_region.left, self.scrolling_region.top);
+        let sr_left = self.scrolling_region.left;
+        let sr_top = self.scrolling_region.top;
+        self.active_mut().cursor_absolute(sr_left, sr_top);
+        // self.deleteLines(count);
+        self.delete_lines(count);
+
+        Ok(())
     }
 
     /// Scroll the viewport of the terminal grid.
     pub fn scroll_viewport(&mut self, behavior: ScrollViewport) {
-        todo!()
+        // self.screens.active.scroll(switch (behavior) {
+        //     .top => .{ .top = {} },
+        //     .bottom => .{ .active = {} },
+        //     .delta => |delta| .{ .delta_row = delta },
+        // });
+        self.active_mut().scroll(match behavior {
+            ScrollViewport::Top => crate::screen::Scroll::Top,
+            ScrollViewport::Bottom => crate::screen::Scroll::Active,
+            ScrollViewport::Delta(delta) => crate::screen::Scroll::DeltaRow(delta),
+        });
     }
 
     /// To be called before shifting a row (as in insertLines and deleteLines)
@@ -2051,8 +2461,89 @@ impl Terminal {
     /// Takes care of boundary conditions such as potentially split wide chars
     /// across scrolling region boundaries and orphaned spacer heads at line
     /// ends.
-    fn row_will_be_shifted(&mut self, page: &mut Page, row: &mut Row) {
-        todo!()
+    // PORT NOTE (SOUNDNESS): the reference takes `page: *Page, row: *Row` and
+    // re-reads that memory through `clearGrapheme`/`updateRowGraphemeFlag`
+    // (which call `assertIntegrity`) while those pointers are live. Zig
+    // pointers are UNPROTECTED, so we mirror them as raw `*mut Page`/`*mut Row`
+    // rather than `&mut` to avoid Stacked-Borrows aliasing UB (the
+    // clear_cells UB-fix rule). We reconstruct local mutable accesses only for
+    // the brief field mutations, never holding a `&mut Page` across an
+    // integrity check.
+    fn row_will_be_shifted(&mut self, page: *mut Page, row: *mut Row) {
+        // const cells = row.cells.ptr(page.memory.ptr);
+        let cells: *mut pagepkg::Cell = unsafe { (*row).cells().ptr((*page).memory_ptr()) };
+
+        // If our scrolling region includes the rightmost column then we
+        // need to turn any spacer heads in to normal empty cells, since
+        // once we move them they no longer correspond with soft-wrapped
+        // wide characters.
+        //
+        // If it contains either of the 2 leftmost columns, then the wide
+        // characters in the first column which may be associated with a
+        // spacer head will be either moved or cleared, so we also need
+        // to turn the spacer heads in to empty cells in that case.
+        // if (self.scrolling_region.right == self.cols - 1 or
+        //     self.scrolling_region.left < 2)
+        if self.scrolling_region.right == self.cols - 1 || self.scrolling_region.left < 2 {
+            // const end_cell: *Cell = &cells[page.size.cols - 1];
+            let page_cols = unsafe { (*page).size.cols };
+            let end_cell: *mut pagepkg::Cell = unsafe { cells.add((page_cols - 1) as usize) };
+            // if (end_cell.wide == .spacer_head) {
+            if unsafe { (*end_cell).wide() } == pagepkg::Wide::SpacerHead {
+                // end_cell.wide = .narrow;
+                unsafe { (*end_cell).set_wide(pagepkg::Wide::Narrow) };
+            }
+        }
+
+        // If the leftmost or rightmost cells of our scrolling region
+        // are parts of wide chars, we need to clear the cells' contents
+        // since they'd be split by the move.
+        // const left_cell: *Cell = &cells[self.scrolling_region.left];
+        let left_cell: *mut pagepkg::Cell =
+            unsafe { cells.add(self.scrolling_region.left as usize) };
+        // const right_cell: *Cell = &cells[self.scrolling_region.right];
+        let right_cell: *mut pagepkg::Cell =
+            unsafe { cells.add(self.scrolling_region.right as usize) };
+
+        // if (left_cell.wide == .spacer_tail) {
+        if unsafe { (*left_cell).wide() } == pagepkg::Wide::SpacerTail {
+            // const wide_cell: *Cell = &cells[self.scrolling_region.left - 1];
+            let wide_cell: *mut pagepkg::Cell =
+                unsafe { cells.add((self.scrolling_region.left - 1) as usize) };
+            // if (wide_cell.hasGrapheme()) {
+            if unsafe { (*wide_cell).has_grapheme() } {
+                // page.clearGrapheme(wide_cell);
+                unsafe { (*page).clear_grapheme(wide_cell) };
+                // page.updateRowGraphemeFlag(row);
+                unsafe { (*page).update_row_grapheme_flag(row) };
+            }
+            // wide_cell.content.codepoint = 0;
+            unsafe { (*wide_cell).set_content_codepoint(0) };
+            // wide_cell.wide = .narrow;
+            unsafe { (*wide_cell).set_wide(pagepkg::Wide::Narrow) };
+            // left_cell.wide = .narrow;
+            unsafe { (*left_cell).set_wide(pagepkg::Wide::Narrow) };
+        }
+
+        // if (right_cell.wide == .wide) {
+        if unsafe { (*right_cell).wide() } == pagepkg::Wide::Wide {
+            // const tail_cell: *Cell = &cells[self.scrolling_region.right + 1];
+            let tail_cell: *mut pagepkg::Cell =
+                unsafe { cells.add((self.scrolling_region.right + 1) as usize) };
+            // if (right_cell.hasGrapheme()) {
+            if unsafe { (*right_cell).has_grapheme() } {
+                // page.clearGrapheme(right_cell);
+                unsafe { (*page).clear_grapheme(right_cell) };
+                // page.updateRowGraphemeFlag(row);
+                unsafe { (*page).update_row_grapheme_flag(row) };
+            }
+            // right_cell.content.codepoint = 0;
+            unsafe { (*right_cell).set_content_codepoint(0) };
+            // right_cell.wide = .narrow;
+            unsafe { (*right_cell).set_wide(pagepkg::Wide::Narrow) };
+            // tail_cell.wide = .narrow;
+            unsafe { (*tail_cell).set_wide(pagepkg::Wide::Narrow) };
+        }
     }
 
     /// Insert amount lines at the current cursor row. The contents of the line
@@ -2074,7 +2565,289 @@ impl Terminal {
     ///
     /// Moves the cursor to the left margin.
     pub fn insert_lines(&mut self, count: usize) {
-        todo!()
+        // Rare, but happens
+        // if (count == 0) return;
+        if count == 0 {
+            return;
+        }
+
+        // If the cursor is outside the scroll region we do nothing.
+        // if (self.screens.active.cursor.y < self.scrolling_region.top or
+        //     self.screens.active.cursor.y > self.scrolling_region.bottom or
+        //     self.screens.active.cursor.x < self.scrolling_region.left or
+        //     self.screens.active.cursor.x > self.scrolling_region.right) return;
+        if unsafe { (*self.screens.active).cursor.y } < self.scrolling_region.top
+            || unsafe { (*self.screens.active).cursor.y } > self.scrolling_region.bottom
+            || unsafe { (*self.screens.active).cursor.x } < self.scrolling_region.left
+            || unsafe { (*self.screens.active).cursor.x } > self.scrolling_region.right
+        {
+            return;
+        }
+
+        // if (comptime build_options.kitty_graphics) {
+        //     // Scrolling dirties the images because it updates their placements pins.
+        //     self.screens.active.kitty_images.dirty = true;
+        // }
+        // PORT NOTE (vt-12 deferral): Kitty graphics `kitty_images.dirty` is omitted.
+
+        // At the end we need to return the cursor to the row it started on.
+        // const start_y = self.screens.active.cursor.y;
+        let start_y = unsafe { (*self.screens.active).cursor.y };
+        // defer {
+        //     self.screens.active.cursorAbsolute(self.scrolling_region.left, start_y);
+        //     // Always unset pending wrap
+        //     self.screens.active.cursor.pending_wrap = false;
+        // }
+        // PORT NOTE: RAII guard reproduces the reference `defer`, restoring the
+        // cursor to the left margin / start row and clearing pending_wrap on
+        // every exit path.
+        let _restore = ShiftLinesEndGuard {
+            screen: self.screens.active,
+            left: self.scrolling_region.left,
+            start_y,
+        };
+
+        // We have a slower path if we have left or right scroll margins.
+        // const left_right = self.scrolling_region.left > 0 or
+        //     self.scrolling_region.right < self.cols - 1;
+        let left_right =
+            self.scrolling_region.left > 0 || self.scrolling_region.right < self.cols - 1;
+
+        // Remaining rows from our cursor to the bottom of the scroll region.
+        // const rem = self.scrolling_region.bottom - self.screens.active.cursor.y + 1;
+        let rem = self.scrolling_region.bottom - unsafe { (*self.screens.active).cursor.y } + 1;
+
+        // We can only insert lines up to our remaining lines in the scroll
+        // region. So we take whichever is smaller.
+        // const adjusted_count = @min(count, rem);
+        let adjusted_count = core::cmp::min(count, rem as usize) as size::CellCountInt;
+
+        // Create a new tracked pin which we'll use to navigate the page list
+        // so that if we need to adjust capacity it will be properly tracked.
+        // var cur_p = self.screens.active.pages.trackPin(
+        //     self.screens.active.cursor.page_pin.down(rem - 1).?,
+        // ) catch |err| { ... @panic("insertLines trackPin OOM"); };
+        // defer self.screens.active.pages.untrackPin(cur_p);
+        let down_pin =
+            unsafe { (*(*self.screens.active).cursor.page_pin).down((rem - 1) as usize) }.unwrap();
+        let cur_p: *mut crate::pagelist::Pin = match self.active_mut().pages.track_pin(down_pin) {
+            Ok(p) => p,
+            Err(_err) => {
+                // comptime assert(@TypeOf(err) == error{OutOfMemory});
+                //
+                // This error scenario means that our GPA is OOM. This is not a
+                // situation we can gracefully handle. We can't just ignore insertLines
+                // because it'll result in a corrupted screen. Ideally in the future
+                // we flag the state as broken and show an error message to the user.
+                // For now, we panic.
+                // log.err("insertLines trackPin error err={}", .{err});
+                // @panic("insertLines trackPin OOM");
+                panic!("insertLines trackPin OOM");
+            }
+        };
+        // PORT NOTE: RAII guard reproduces `defer untrackPin(cur_p)`.
+        let _untrack = TrackedPinGuard {
+            screen: self.screens.active,
+            pin: cur_p,
+        };
+
+        // Our current y position relative to the cursor
+        // var y: usize = rem;
+        let mut y: usize = rem as usize;
+
+        // Traverse from the bottom up
+        // while (y > 0) {
+        while y > 0 {
+            // const cur_rac = cur_p.rowAndCell();
+            // const cur_row: *Row = cur_rac.row;
+            let cur_row: *mut Row = unsafe { (*cur_p).row_and_cell() }.row;
+
+            // If this is one of the lines we need to shift, do so
+            // if (y > adjusted_count) {
+            if y > adjusted_count as usize {
+                // const off_p = cur_p.up(adjusted_count).?;
+                let off_p = unsafe { (*cur_p).up(adjusted_count as usize) }.unwrap();
+                // const off_rac = off_p.rowAndCell();
+                // const off_row: *Row = off_rac.row;
+                let off_row: *mut Row = off_p.row_and_cell().row;
+
+                // self.rowWillBeShifted(&cur_p.node.data, cur_row);
+                let cur_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*cur_p).node).data) };
+                self.row_will_be_shifted(cur_page, cur_row);
+                // self.rowWillBeShifted(&off_p.node.data, off_row);
+                let off_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*off_p.node).data) };
+                self.row_will_be_shifted(off_page, off_row);
+
+                // If our scrolling region is full width, then we unset wrap.
+                // if (!left_right) {
+                if !left_right {
+                    // off_row.wrap = false;
+                    unsafe { (*off_row).set_wrap(false) };
+                    // cur_row.wrap = false;
+                    unsafe { (*cur_row).set_wrap(false) };
+                    // off_row.wrap_continuation = false;
+                    unsafe { (*off_row).set_wrap_continuation(false) };
+                    // cur_row.wrap_continuation = false;
+                    unsafe { (*cur_row).set_wrap_continuation(false) };
+                }
+
+                // const src_p = off_p;
+                // const src_row = off_row;
+                // const dst_p = cur_p;
+                // const dst_row = cur_row;
+                let src_p = off_p;
+                let src_row = off_row;
+                // dst_p is cur_p (the tracked pin), dst_row is cur_row.
+
+                // If our page doesn't match, then we need to do a copy from
+                // one page to another. This is the slow path.
+                // if (src_p.node != dst_p.node) {
+                if !std::ptr::eq(src_p.node, unsafe { (*cur_p).node }) {
+                    // dst_p.node.data.clonePartialRowFrom(
+                    //     &src_p.node.data, dst_row, src_row,
+                    //     self.scrolling_region.left, self.scrolling_region.right + 1,
+                    // ) catch |err| { ... continue; };
+                    let dst_page: *mut Page =
+                        unsafe { core::ptr::addr_of_mut!((*(*cur_p).node).data) };
+                    let src_page: *const Page = unsafe { core::ptr::addr_of!((*src_p.node).data) };
+                    let clone_res = unsafe {
+                        (*dst_page).clone_partial_row_from(
+                            src_page,
+                            cur_row,
+                            src_row,
+                            self.scrolling_region.left as usize,
+                            (self.scrolling_region.right + 1) as usize,
+                        )
+                    };
+                    if let Err(err) = clone_res {
+                        // Adjust our page capacity to make
+                        // room for we didn't have space for
+                        // _ = self.screens.active.increaseCapacity(dst_p.node, switch (err) {...})
+                        //     catch |e| switch (e) {...};
+                        let adjustment = match err {
+                            // Rehash the sets
+                            pagepkg::CloneFromError::StyleSetNeedsRehash
+                            | pagepkg::CloneFromError::HyperlinkSetNeedsRehash => None,
+
+                            // Increase style memory
+                            pagepkg::CloneFromError::StyleSetOutOfMemory => {
+                                Some(pagelist::grow::IncreaseCapacity::Styles)
+                            }
+
+                            // Increase string memory
+                            pagepkg::CloneFromError::StringAllocOutOfMemory => {
+                                Some(pagelist::grow::IncreaseCapacity::StringBytes)
+                            }
+
+                            // Increase hyperlink memory
+                            pagepkg::CloneFromError::HyperlinkSetOutOfMemory
+                            | pagepkg::CloneFromError::HyperlinkMapOutOfMemory => {
+                                Some(pagelist::grow::IncreaseCapacity::HyperlinkBytes)
+                            }
+
+                            // Increase grapheme memory
+                            pagepkg::CloneFromError::GraphemeMapOutOfMemory
+                            | pagepkg::CloneFromError::GraphemeAllocOutOfMemory => {
+                                Some(pagelist::grow::IncreaseCapacity::GraphemeBytes)
+                            }
+                        };
+                        let cur_node = unsafe { (*cur_p).node };
+                        match self.active_mut().increase_capacity(cur_node, adjustment) {
+                            Ok(_) => {}
+                            Err(e) => match e {
+                                // System OOM. We have no way to recover from this
+                                // currently. We should probably change insertLines
+                                // to raise an error here.
+                                pagelist::grow::IncreaseCapacityError::OutOfMemory => {
+                                    panic!("increaseCapacity system allocator OOM")
+                                }
+
+                                // The page can't accommodate the managed memory required
+                                // for this operation. We previously just corrupted
+                                // memory here so a crash is better. The right long
+                                // term solution is to allocate a new page here
+                                // move this row to the new page, and start over.
+                                pagelist::grow::IncreaseCapacityError::OutOfSpace => {
+                                    panic!("increaseCapacity OutOfSpace")
+                                }
+                            },
+                        }
+
+                        // Continue the loop to try handling this row again.
+                        continue;
+                    }
+                } else {
+                    // if (!left_right) {
+                    if !left_right {
+                        // Swap the src/dst cells. This ensures that our dst gets the
+                        // proper shifted rows and src gets non-garbage cell data that
+                        // we can clear.
+                        // const dst = dst_row.*;
+                        // dst_row.* = src_row.*;
+                        // src_row.* = dst;
+                        // PORT NOTE: `Row` is `Copy`; the three-step swap of the
+                        // pointed-to rows is `core::ptr::swap` (same memory effect,
+                        // no overlap since src_p.node == dst_p.node but distinct rows).
+                        unsafe { core::ptr::swap(cur_row, src_row) };
+
+                        // Ensure what we did didn't corrupt the page
+                        // cur_p.node.data.assertIntegrity();
+                        let cur_page: *const Page =
+                            unsafe { core::ptr::addr_of!((*(*cur_p).node).data) };
+                        unsafe { (*cur_page).assert_integrity() };
+                    } else {
+                        // Left/right scroll margins we have to
+                        // copy cells, which is much slower...
+                        // const page = &cur_p.node.data;
+                        let page: *mut Page =
+                            unsafe { core::ptr::addr_of_mut!((*(*cur_p).node).data) };
+                        // page.moveCells(src_row, self.scrolling_region.left,
+                        //     dst_row, self.scrolling_region.left,
+                        //     (self.scrolling_region.right - self.scrolling_region.left) + 1);
+                        unsafe {
+                            (*page).move_cells(
+                                src_row,
+                                self.scrolling_region.left as usize,
+                                cur_row,
+                                self.scrolling_region.left as usize,
+                                ((self.scrolling_region.right - self.scrolling_region.left) + 1)
+                                    as usize,
+                            )
+                        };
+                    }
+                }
+            } else {
+                // Clear the cells for this row, it has been shifted.
+                // self.rowWillBeShifted(&cur_p.node.data, cur_row);
+                let cur_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*cur_p).node).data) };
+                self.row_will_be_shifted(cur_page, cur_row);
+                // const page = &cur_p.node.data;
+                let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*cur_p).node).data) };
+                // const cells = page.getCells(cur_row);
+                let cells: *mut [pagepkg::Cell] = unsafe { (*page).get_cells(cur_row) };
+                // self.screens.active.clearCells(page, cur_row,
+                //     cells[self.scrolling_region.left .. self.scrolling_region.right + 1]);
+                let sub = ptr_slice_range(
+                    cells,
+                    self.scrolling_region.left as usize,
+                    (self.scrolling_region.right + 1) as usize,
+                );
+                self.active_mut().clear_cells(page, cur_row, sub);
+            }
+
+            // Mark the row as dirty
+            // cur_p.markDirty();
+            unsafe { (*cur_p).mark_dirty() };
+
+            // We have successfully processed a line.
+            // y -= 1;
+            y -= 1;
+            // Move our pin up to the next row.
+            // if (cur_p.up(1)) |p| cur_p.* = p;
+            if let Some(p) = unsafe { (*cur_p).up(1) } {
+                unsafe { *cur_p = p };
+            }
+        }
     }
 
     /// Removes amount lines from the current cursor row down. The remaining lines
@@ -2094,7 +2867,269 @@ impl Terminal {
     ///
     /// Moves the cursor to the left margin.
     pub fn delete_lines(&mut self, count: usize) {
-        todo!()
+        // Rare, but happens
+        // if (count == 0) return;
+        if count == 0 {
+            return;
+        }
+
+        // If the cursor is outside the scroll region we do nothing.
+        // if (self.screens.active.cursor.y < self.scrolling_region.top or
+        //     self.screens.active.cursor.y > self.scrolling_region.bottom or
+        //     self.screens.active.cursor.x < self.scrolling_region.left or
+        //     self.screens.active.cursor.x > self.scrolling_region.right) return;
+        if unsafe { (*self.screens.active).cursor.y } < self.scrolling_region.top
+            || unsafe { (*self.screens.active).cursor.y } > self.scrolling_region.bottom
+            || unsafe { (*self.screens.active).cursor.x } < self.scrolling_region.left
+            || unsafe { (*self.screens.active).cursor.x } > self.scrolling_region.right
+        {
+            return;
+        }
+
+        // if (comptime build_options.kitty_graphics) {
+        //     // Scrolling dirties the images because it updates their placements pins.
+        //     self.screens.active.kitty_images.dirty = true;
+        // }
+        // PORT NOTE (vt-12 deferral): Kitty graphics `kitty_images.dirty` is omitted.
+
+        // At the end we need to return the cursor to the row it started on.
+        // const start_y = self.screens.active.cursor.y;
+        let start_y = unsafe { (*self.screens.active).cursor.y };
+        // defer {
+        //     self.screens.active.cursorAbsolute(self.scrolling_region.left, start_y);
+        //     // Always unset pending wrap
+        //     self.screens.active.cursor.pending_wrap = false;
+        // }
+        // PORT NOTE: RAII guard reproduces the reference `defer` (see insertLines).
+        let _restore = ShiftLinesEndGuard {
+            screen: self.screens.active,
+            left: self.scrolling_region.left,
+            start_y,
+        };
+
+        // We have a slower path if we have left or right scroll margins.
+        // const left_right = self.scrolling_region.left > 0 or
+        //     self.scrolling_region.right < self.cols - 1;
+        let left_right =
+            self.scrolling_region.left > 0 || self.scrolling_region.right < self.cols - 1;
+
+        // Remaining rows from our cursor to the bottom of the scroll region.
+        // const rem = self.scrolling_region.bottom - self.screens.active.cursor.y + 1;
+        let rem = self.scrolling_region.bottom - unsafe { (*self.screens.active).cursor.y } + 1;
+
+        // We can only insert lines up to our remaining lines in the scroll
+        // region. So we take whichever is smaller.
+        // const adjusted_count = @min(count, rem);
+        let adjusted_count = core::cmp::min(count, rem as usize) as size::CellCountInt;
+
+        // Create a new tracked pin which we'll use to navigate the page list
+        // so that if we need to adjust capacity it will be properly tracked.
+        // var cur_p = self.screens.active.pages.trackPin(
+        //     self.screens.active.cursor.page_pin.*,
+        // ) catch |err| { ... @panic("deleteLines trackPin OOM"); };
+        // defer self.screens.active.pages.untrackPin(cur_p);
+        let cursor_pin = unsafe { *(*self.screens.active).cursor.page_pin };
+        let cur_p: *mut crate::pagelist::Pin = match self.active_mut().pages.track_pin(cursor_pin) {
+            Ok(p) => p,
+            Err(_err) => {
+                // See insertLines
+                // comptime assert(@TypeOf(err) == error{OutOfMemory});
+                // log.err("deleteLines trackPin error err={}", .{err});
+                // @panic("deleteLines trackPin OOM");
+                panic!("deleteLines trackPin OOM");
+            }
+        };
+        // PORT NOTE: RAII guard reproduces `defer untrackPin(cur_p)`.
+        let _untrack = TrackedPinGuard {
+            screen: self.screens.active,
+            pin: cur_p,
+        };
+
+        // Our current y position relative to the cursor
+        // var y: usize = 0;
+        let mut y: usize = 0;
+
+        // Traverse from the top down
+        // while (y < rem) {
+        while y < rem as usize {
+            // const cur_rac = cur_p.rowAndCell();
+            // const cur_row: *Row = cur_rac.row;
+            let cur_row: *mut Row = unsafe { (*cur_p).row_and_cell() }.row;
+
+            // If this is one of the lines we need to shift, do so
+            // if (y < rem - adjusted_count) {
+            if y < (rem - adjusted_count) as usize {
+                // const off_p = cur_p.down(adjusted_count).?;
+                let off_p = unsafe { (*cur_p).down(adjusted_count as usize) }.unwrap();
+                // const off_rac = off_p.rowAndCell();
+                // const off_row: *Row = off_rac.row;
+                let off_row: *mut Row = off_p.row_and_cell().row;
+
+                // self.rowWillBeShifted(&cur_p.node.data, cur_row);
+                let cur_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*cur_p).node).data) };
+                self.row_will_be_shifted(cur_page, cur_row);
+                // self.rowWillBeShifted(&off_p.node.data, off_row);
+                let off_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*off_p.node).data) };
+                self.row_will_be_shifted(off_page, off_row);
+
+                // If our scrolling region is full width, then we unset wrap.
+                // if (!left_right) {
+                if !left_right {
+                    // off_row.wrap = false;
+                    unsafe { (*off_row).set_wrap(false) };
+                    // cur_row.wrap = false;
+                    unsafe { (*cur_row).set_wrap(false) };
+                    // off_row.wrap_continuation = false;
+                    unsafe { (*off_row).set_wrap_continuation(false) };
+                    // cur_row.wrap_continuation = false;
+                    unsafe { (*cur_row).set_wrap_continuation(false) };
+                }
+
+                // const src_p = off_p;
+                // const src_row = off_row;
+                // const dst_p = cur_p;
+                // const dst_row = cur_row;
+                let src_p = off_p;
+                let src_row = off_row;
+                // dst_p is cur_p (the tracked pin), dst_row is cur_row.
+
+                // If our page doesn't match, then we need to do a copy from
+                // one page to another. This is the slow path.
+                // if (src_p.node != dst_p.node) {
+                if !std::ptr::eq(src_p.node, unsafe { (*cur_p).node }) {
+                    // dst_p.node.data.clonePartialRowFrom(...) catch |err| { ... continue; };
+                    let dst_page: *mut Page =
+                        unsafe { core::ptr::addr_of_mut!((*(*cur_p).node).data) };
+                    let src_page: *const Page = unsafe { core::ptr::addr_of!((*src_p.node).data) };
+                    let clone_res = unsafe {
+                        (*dst_page).clone_partial_row_from(
+                            src_page,
+                            cur_row,
+                            src_row,
+                            self.scrolling_region.left as usize,
+                            (self.scrolling_region.right + 1) as usize,
+                        )
+                    };
+                    if let Err(err) = clone_res {
+                        // Adjust our page capacity to make
+                        // room for we didn't have space for
+                        // _ = self.screens.active.increaseCapacity(dst_p.node, switch (err) {...})
+                        //     catch |e| switch (e) {...};
+                        let adjustment = match err {
+                            // Rehash the sets
+                            pagepkg::CloneFromError::StyleSetNeedsRehash
+                            | pagepkg::CloneFromError::HyperlinkSetNeedsRehash => None,
+
+                            // Increase style memory
+                            pagepkg::CloneFromError::StyleSetOutOfMemory => {
+                                Some(pagelist::grow::IncreaseCapacity::Styles)
+                            }
+
+                            // Increase string memory
+                            pagepkg::CloneFromError::StringAllocOutOfMemory => {
+                                Some(pagelist::grow::IncreaseCapacity::StringBytes)
+                            }
+
+                            // Increase hyperlink memory
+                            pagepkg::CloneFromError::HyperlinkSetOutOfMemory
+                            | pagepkg::CloneFromError::HyperlinkMapOutOfMemory => {
+                                Some(pagelist::grow::IncreaseCapacity::HyperlinkBytes)
+                            }
+
+                            // Increase grapheme memory
+                            pagepkg::CloneFromError::GraphemeMapOutOfMemory
+                            | pagepkg::CloneFromError::GraphemeAllocOutOfMemory => {
+                                Some(pagelist::grow::IncreaseCapacity::GraphemeBytes)
+                            }
+                        };
+                        let cur_node = unsafe { (*cur_p).node };
+                        match self.active_mut().increase_capacity(cur_node, adjustment) {
+                            Ok(_) => {}
+                            Err(e) => match e {
+                                // See insertLines
+                                pagelist::grow::IncreaseCapacityError::OutOfMemory => {
+                                    panic!("increaseCapacity system allocator OOM")
+                                }
+
+                                pagelist::grow::IncreaseCapacityError::OutOfSpace => {
+                                    panic!("increaseCapacity OutOfSpace")
+                                }
+                            },
+                        }
+
+                        // Continue the loop to try handling this row again.
+                        continue;
+                    }
+                } else {
+                    // if (!left_right) {
+                    if !left_right {
+                        // Swap the src/dst cells. This ensures that our dst gets the
+                        // proper shifted rows and src gets non-garbage cell data that
+                        // we can clear.
+                        // const dst = dst_row.*;
+                        // dst_row.* = src_row.*;
+                        // src_row.* = dst;
+                        // PORT NOTE: see insertLines — `core::ptr::swap` of the rows.
+                        unsafe { core::ptr::swap(cur_row, src_row) };
+
+                        // Ensure what we did didn't corrupt the page
+                        // cur_p.node.data.assertIntegrity();
+                        let cur_page: *const Page =
+                            unsafe { core::ptr::addr_of!((*(*cur_p).node).data) };
+                        unsafe { (*cur_page).assert_integrity() };
+                    } else {
+                        // Left/right scroll margins we have to
+                        // copy cells, which is much slower...
+                        // const page = &cur_p.node.data;
+                        let page: *mut Page =
+                            unsafe { core::ptr::addr_of_mut!((*(*cur_p).node).data) };
+                        // page.moveCells(src_row, self.scrolling_region.left,
+                        //     dst_row, self.scrolling_region.left,
+                        //     (self.scrolling_region.right - self.scrolling_region.left) + 1);
+                        unsafe {
+                            (*page).move_cells(
+                                src_row,
+                                self.scrolling_region.left as usize,
+                                cur_row,
+                                self.scrolling_region.left as usize,
+                                ((self.scrolling_region.right - self.scrolling_region.left) + 1)
+                                    as usize,
+                            )
+                        };
+                    }
+                }
+            } else {
+                // Clear the cells for this row, it's from out of bounds.
+                // self.rowWillBeShifted(&cur_p.node.data, cur_row);
+                let cur_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*cur_p).node).data) };
+                self.row_will_be_shifted(cur_page, cur_row);
+                // const page = &cur_p.node.data;
+                let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*cur_p).node).data) };
+                // const cells = page.getCells(cur_row);
+                let cells: *mut [pagepkg::Cell] = unsafe { (*page).get_cells(cur_row) };
+                // self.screens.active.clearCells(page, cur_row,
+                //     cells[self.scrolling_region.left .. self.scrolling_region.right + 1]);
+                let sub = ptr_slice_range(
+                    cells,
+                    self.scrolling_region.left as usize,
+                    (self.scrolling_region.right + 1) as usize,
+                );
+                self.active_mut().clear_cells(page, cur_row, sub);
+            }
+
+            // Mark the row as dirty
+            // cur_p.markDirty();
+            unsafe { (*cur_p).mark_dirty() };
+
+            // We have successfully processed a line.
+            // y += 1;
+            y += 1;
+            // Move our pin down to the next row.
+            // if (cur_p.down(1)) |p| cur_p.* = p;
+            if let Some(p) = unsafe { (*cur_p).down(1) } {
+                unsafe { *cur_p = p };
+            }
+        }
     }
 
     /// Inserts spaces at current cursor position moving existing cell contents
@@ -2105,7 +3140,148 @@ impl Terminal {
     ///
     /// The inserted cells are colored according to the current SGR state.
     pub fn insert_blanks(&mut self, count: usize) {
-        todo!()
+        // Unset pending wrap state without wrapping. Note: this purposely
+        // happens BEFORE the scroll region check below, because that's what
+        // xterm does.
+        // self.screens.active.cursor.pending_wrap = false;
+        unsafe { (*self.screens.active).cursor.pending_wrap = false };
+
+        // If we're given a zero then we do nothing. The rest of this function
+        // assumes count > 0 and will crash if zero so return early. Note that
+        // this shouldn't be possible with real CSI sequences because the value
+        // is clamped to 1 min.
+        // if (count == 0) return;
+        if count == 0 {
+            return;
+        }
+
+        // If our cursor is outside the margins then do nothing. We DO reset
+        // wrap state still so this must remain below the above logic.
+        // if (self.screens.active.cursor.x < self.scrolling_region.left or
+        //     self.screens.active.cursor.x > self.scrolling_region.right) return;
+        if unsafe { (*self.screens.active).cursor.x } < self.scrolling_region.left
+            || unsafe { (*self.screens.active).cursor.x } > self.scrolling_region.right
+        {
+            return;
+        }
+
+        // If our count is larger than the remaining amount, we just erase right.
+        // We only do this if we can erase the entire line (no right margin).
+        // if (right_limit == self.cols and
+        //     count > right_limit - self.screens.active.cursor.x)
+        // {
+        //     self.eraseLine(.right, false);
+        //     return;
+        // }
+
+        // left is just the cursor position but as a multi-pointer
+        // const left: [*]Cell = @ptrCast(self.screens.active.cursor.page_cell);
+        let left: *mut pagepkg::Cell = unsafe { (*self.screens.active).cursor.page_cell };
+        // var page = &self.screens.active.cursor.page_pin.node.data;
+        let page: *mut Page = unsafe {
+            core::ptr::addr_of_mut!((*(*(*self.screens.active).cursor.page_pin).node).data)
+        };
+
+        // If our X is a wide spacer tail then we need to erase the
+        // previous cell too so we don't split a multi-cell character.
+        // if (self.screens.active.cursor.page_cell.wide == .spacer_tail) {
+        if unsafe { (*(*self.screens.active).cursor.page_cell).wide() } == pagepkg::Wide::SpacerTail
+        {
+            // assert(self.screens.active.cursor.x > 0);
+            assert!(unsafe { (*self.screens.active).cursor.x } > 0);
+            // self.screens.active.clearCells(page, self.screens.active.cursor.page_row, (left - 1)[0..2]);
+            let row: *mut Row = unsafe { (*self.screens.active).cursor.page_row };
+            let cells = core::ptr::slice_from_raw_parts_mut(unsafe { left.sub(1) }, 2);
+            self.active_mut().clear_cells(page, row, cells);
+        }
+
+        // Remaining cols from our cursor to the right margin.
+        // const rem = self.scrolling_region.right - self.screens.active.cursor.x + 1;
+        let rem = self.scrolling_region.right - unsafe { (*self.screens.active).cursor.x } + 1;
+
+        // If the cell at the right margin is wide, its spacer tail is
+        // outside the scroll region and would be orphaned by either the
+        // shift or the clear. Clean up both halves up front.
+        {
+            // const right_cell: *Cell = @ptrCast(left + (rem - 1));
+            let right_cell: *mut pagepkg::Cell = unsafe { left.add((rem - 1) as usize) };
+            // if (right_cell.wide == .wide) self.screens.active.clearCells(
+            //     page, self.screens.active.cursor.page_row,
+            //     @as([*]Cell, @ptrCast(right_cell))[0..2]);
+            if unsafe { (*right_cell).wide() } == pagepkg::Wide::Wide {
+                let row: *mut Row = unsafe { (*self.screens.active).cursor.page_row };
+                let cells = core::ptr::slice_from_raw_parts_mut(right_cell, 2);
+                self.active_mut().clear_cells(page, row, cells);
+            }
+        }
+
+        // We can only insert blanks up to our remaining cols
+        // const adjusted_count = @min(count, rem);
+        let adjusted_count = core::cmp::min(count, rem as usize) as size::CellCountInt;
+
+        // This is the amount of space at the right of the scroll region
+        // that will NOT be blank, so we need to shift the correct cols right.
+        // "scroll_amount" is the number of such cols.
+        // const scroll_amount = rem - adjusted_count;
+        let scroll_amount = rem - adjusted_count;
+        // if (scroll_amount > 0) {
+        if scroll_amount > 0 {
+            // page.pauseIntegrityChecks(true);
+            unsafe { (*page).pause_integrity_checks(true) };
+            // defer page.pauseIntegrityChecks(false);
+
+            // var x: [*]Cell = left + (scroll_amount - 1);
+            let mut x: *mut pagepkg::Cell = unsafe { left.add((scroll_amount - 1) as usize) };
+
+            // If our last cell we're shifting is wide, then we need to clear
+            // it to be empty so we don't split the multi-cell char.
+            // const end: *Cell = @ptrCast(x);
+            let end: *mut pagepkg::Cell = x;
+            // if (end.wide == .wide) {
+            if unsafe { (*end).wide() } == pagepkg::Wide::Wide {
+                // const end_multi: [*]Cell = @ptrCast(end);
+                let end_multi: *mut pagepkg::Cell = end;
+                // assert(end_multi[1].wide == .spacer_tail);
+                assert!(unsafe { (*end_multi.add(1)).wide() } == pagepkg::Wide::SpacerTail);
+                // self.screens.active.clearCells(page, self.screens.active.cursor.page_row, end_multi[0..2]);
+                let row: *mut Row = unsafe { (*self.screens.active).cursor.page_row };
+                let cells = core::ptr::slice_from_raw_parts_mut(end_multi, 2);
+                self.active_mut().clear_cells(page, row, cells);
+            }
+
+            // We work backwards so we don't overwrite data.
+            // while (@intFromPtr(x) >= @intFromPtr(left)) : (x -= 1) {
+            while (x as usize) >= (left as usize) {
+                // const src: *Cell = @ptrCast(x);
+                let src: *mut pagepkg::Cell = x;
+                // const dst: *Cell = @ptrCast(x + adjusted_count);
+                let dst: *mut pagepkg::Cell = unsafe { x.add(adjusted_count as usize) };
+                // page.swapCells(src, dst);
+                unsafe { (*page).swap_cells(src, dst) };
+                // PORT NOTE: the reference `x -= 1` decrements a `[*]Cell` (one
+                // Cell). On the final iteration `x == left`, so the next
+                // decrement would form a pointer one-before-`left`; the loop then
+                // exits on the condition. We mirror this without computing an
+                // out-of-bounds pointer: decrement only while we won't underflow,
+                // otherwise break (the condition `x >= left` would be false).
+                if std::ptr::eq(x, left) {
+                    break;
+                }
+                x = unsafe { x.sub(1) };
+            }
+
+            unsafe { (*page).pause_integrity_checks(false) };
+        }
+
+        // Insert blanks. The blanks preserve the background color.
+        // self.screens.active.clearCells(page, self.screens.active.cursor.page_row, left[0..adjusted_count]);
+        let row: *mut Row = unsafe { (*self.screens.active).cursor.page_row };
+        let cells = core::ptr::slice_from_raw_parts_mut(left, adjusted_count as usize);
+        self.active_mut().clear_cells(page, row, cells);
+
+        // Our row is always dirty
+        // self.screens.active.cursorMarkDirty();
+        self.active_mut().cursor_mark_dirty();
     }
 
     /// Removes amount characters from the current cursor position to the right.
@@ -4561,9 +5737,1201 @@ mod tests {
     // groups drive `set_attribute` / `set_protected_mode` (still `todo!()`);
     // deferred to vt-12b-3b.
 
-    // PORT NOTE (vt-12b-3a deferral): the entire "Terminal: eraseDisplay *"
-    // group is deferred to vt-12b-3b. Every test drives a still-`todo!()`
-    // method: they use `carriage_return()` + `linefeed()` (→ `index()`) to
-    // build multi-row content, and/or `set_attribute` / `set_protected_mode`.
-    // The `erase_display` method itself is filled in this batch.
+    // PORT NOTE (vt-12b-3a deferral): the "Terminal: eraseDisplay *" tests that
+    // drive `set_attribute` / `set_protected_mode` (SGR/protected variants)
+    // remain deferred — those methods are still `todo!()`. The non-SGR
+    // eraseDisplay tests (`simple erase below/above`, `below/above split
+    // multi-cell`, `scroll complete`) are now portable (`index()`/`linefeed()`
+    // exist) but are tracked with the broader eraseDisplay group and ported in
+    // a follow-up to keep this batch focused on scroll/lines/margins.
+
+    // ===================================================================
+    // vt-12b-3b: scroll / lines / margins tests (+ deferred linefeed tests)
+    // ===================================================================
+
+    // test "Terminal: linefeed and carriage return"
+    #[test]
+    fn terminal_linefeed_and_carriage_return() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Print and CR.
+        for c in "hello".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.clear_dirty();
+        t.carriage_return();
+
+        // CR should not mark row dirty because it doesn't change rendering.
+        assert!(!t.is_dirty(screen_pt(0, 0)));
+
+        t.linefeed().unwrap();
+
+        // LF marks row dirty due to cursor movement
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        assert!(t.is_dirty(screen_pt(0, 1)));
+
+        for c in "world".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 1);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 5);
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "hello\nworld".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: linefeed unsets pending wrap"
+    #[test]
+    fn terminal_linefeed_unsets_pending_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 80)).unwrap();
+
+        // Basic grid writing
+        for c in "hello".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.clear_dirty();
+        t.linefeed().unwrap();
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        assert!(t.is_dirty(screen_pt(0, 1)));
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: linefeed mode automatic carriage return"
+    #[test]
+    fn terminal_linefeed_mode_automatic_carriage_return() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        // Basic grid writing
+        t.modes.set(modespkg::Mode::Linefeed, true);
+        t.print_string("123456".as_bytes()).unwrap();
+        t.linefeed().unwrap();
+        t.print('X' as u32).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "123456\nX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: setTopAndBottomMargin simple"
+    #[test]
+    fn terminal_set_top_and_bottom_margin_simple() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_top_and_bottom_margin(0, 0);
+
+        t.clear_dirty();
+        t.scroll_down(1);
+
+        // Mark the rows we moved as dirty.
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(t.is_dirty(active_pt(0, 3)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\nABC\nDEF\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: setTopAndBottomMargin top only"
+    #[test]
+    fn terminal_set_top_and_bottom_margin_top_only() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_top_and_bottom_margin(2, 0);
+
+        t.clear_dirty();
+        t.scroll_down(1);
+
+        // This is dirty because the cursor moves from this row
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(t.is_dirty(active_pt(0, 3)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\n\nDEF\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: setTopAndBottomMargin top and bottom"
+    #[test]
+    fn terminal_set_top_and_bottom_margin_top_and_bottom() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_top_and_bottom_margin(1, 2);
+
+        t.clear_dirty();
+        t.scroll_down(1);
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(!t.is_dirty(active_pt(0, 2)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\nABC\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: setTopAndBottomMargin top equal to bottom"
+    #[test]
+    fn terminal_set_top_and_bottom_margin_top_equal_to_bottom() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_top_and_bottom_margin(2, 2);
+
+        t.clear_dirty();
+        t.scroll_down(1);
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(t.is_dirty(active_pt(0, 3)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\nABC\nDEF\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: setLeftAndRightMargin simple"
+    #[test]
+    fn terminal_set_left_and_right_margin_simple() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(0, 0);
+
+        t.clear_dirty();
+        t.erase_chars(1);
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(!t.is_dirty(active_pt(0, 1)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), " BC\nDEF\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: setLeftAndRightMargin left only"
+    #[test]
+    fn terminal_set_left_and_right_margin_left_only() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(2, 0);
+        assert_eq!(t.scrolling_region.left as usize, 1);
+        assert_eq!(t.scrolling_region.right as usize, (t.cols - 1) as usize);
+        t.set_cursor_pos(1, 2);
+
+        t.clear_dirty();
+        t.insert_lines(1);
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(t.is_dirty(active_pt(0, 3)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A\nDBC\nGEF\n HI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: setLeftAndRightMargin left and right"
+    #[test]
+    fn terminal_set_left_and_right_margin_left_and_right() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(1, 2);
+        t.set_cursor_pos(1, 2);
+
+        t.clear_dirty();
+        t.insert_lines(1);
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(t.is_dirty(active_pt(0, 3)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  C\nABF\nDEI\nGH".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: setLeftAndRightMargin left equal right"
+    #[test]
+    fn terminal_set_left_and_right_margin_left_equal_right() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(2, 2);
+        t.set_cursor_pos(1, 2);
+
+        t.clear_dirty();
+        t.insert_lines(1);
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(t.is_dirty(active_pt(0, 3)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\nABC\nDEF\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: setLeftAndRightMargin mode 69 unset"
+    #[test]
+    fn terminal_set_left_and_right_margin_mode_69_unset() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, false);
+        t.set_left_and_right_margin(1, 2);
+        t.set_cursor_pos(1, 2);
+
+        t.clear_dirty();
+        t.insert_lines(1);
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(t.is_dirty(active_pt(0, 3)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\nABC\nDEF\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertLines simple"
+    #[test]
+    fn terminal_insert_lines_simple() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_cursor_pos(2, 2);
+
+        t.clear_dirty();
+        t.insert_lines(1);
+
+        assert!(!t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(t.is_dirty(active_pt(0, 3)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\n\nDEF\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertLines outside of scroll region"
+    #[test]
+    fn terminal_insert_lines_outside_of_scroll_region() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_top_and_bottom_margin(3, 4);
+        t.set_cursor_pos(2, 2);
+
+        t.clear_dirty();
+        t.insert_lines(1);
+
+        assert!(!t.is_dirty(active_pt(0, 0)));
+        assert!(!t.is_dirty(active_pt(0, 1)));
+        assert!(!t.is_dirty(active_pt(0, 2)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\nDEF\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertLines top/bottom scroll region"
+    #[test]
+    fn terminal_insert_lines_top_bottom_scroll_region() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("123".as_bytes()).unwrap();
+        t.set_top_and_bottom_margin(1, 3);
+        t.set_cursor_pos(2, 2);
+
+        t.clear_dirty();
+        t.insert_lines(1);
+
+        assert!(!t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(!t.is_dirty(active_pt(0, 3)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\n\nDEF\n123".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertLines zero"
+    #[test]
+    fn terminal_insert_lines_zero() {
+        let mut t = Terminal::init(Global, opts(2, 5)).unwrap();
+
+        // This should do nothing
+        t.set_cursor_pos(1, 1);
+        t.insert_lines(0);
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertLines with scroll region"
+    #[test]
+    fn terminal_insert_lines_with_scroll_region() {
+        let mut t = Terminal::init(Global, opts(2, 6)).unwrap();
+
+        // Initial value
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('B' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('C' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('D' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('E' as u32).unwrap();
+
+        t.set_top_and_bottom_margin(1, 2);
+        t.set_cursor_pos(1, 1);
+
+        t.clear_dirty();
+        t.insert_lines(1);
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(!t.is_dirty(active_pt(0, 2)));
+
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "X\nA\nC\nD\nE".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertLines more than remaining"
+    #[test]
+    fn terminal_insert_lines_more_than_remaining() {
+        let mut t = Terminal::init(Global, opts(2, 5)).unwrap();
+
+        // Initial value
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('B' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('C' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('D' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('E' as u32).unwrap();
+
+        // Move to row 2
+        t.set_cursor_pos(2, 1);
+
+        // Insert a bunch of  lines
+        t.clear_dirty();
+        t.insert_lines(20);
+
+        assert!(!t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertLines resets pending wrap"
+    #[test]
+    fn terminal_insert_lines_resets_pending_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.insert_lines(1);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print('B' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "B\nABCDE".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertLines resets wrap"
+    #[test]
+    fn terminal_insert_lines_resets_wrap() {
+        let mut t = Terminal::init(Global, opts(3, 3)).unwrap();
+
+        t.print('1' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "ABCDEF".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 1);
+        t.insert_lines(1);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "X\n1\nABC".as_bytes());
+        }
+
+        {
+            let list_cell = unsafe { (*t.screens.active).pages.get_cell(active_pt(0, 2)) }.unwrap();
+            let row = list_cell.row;
+            assert!(!unsafe { (*row).wrap() });
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertLines left/right scroll region"
+    #[test]
+    fn terminal_insert_lines_left_right_scroll_region() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.print_string("ABC123".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF456".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI789".as_bytes()).unwrap();
+        t.scrolling_region.left = 1;
+        t.scrolling_region.right = 3;
+        t.set_cursor_pos(2, 2);
+
+        t.clear_dirty();
+        t.insert_lines(1);
+
+        assert!(!t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(t.is_dirty(active_pt(0, 3)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC123\nD   56\nGEF489\n HI7".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollUp simple"
+    #[test]
+    fn terminal_scroll_up_simple() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_cursor_pos(2, 2);
+
+        let cursor_x = unsafe { (*t.screens.active).cursor.x };
+        let cursor_y = unsafe { (*t.screens.active).cursor.y };
+        let viewport_before = t.active_mut().pages.get_top_left(point::Tag::Viewport);
+        t.scroll_up(1).unwrap();
+        assert_eq!(cursor_x, unsafe { (*t.screens.active).cursor.x });
+        assert_eq!(cursor_y, unsafe { (*t.screens.active).cursor.y });
+
+        // Viewport should have moved. Our entire page should've scrolled!
+        // The viewport moving will cause our render state to make the full
+        // frame as dirty.
+        let viewport_after = t.active_mut().pages.get_top_left(point::Tag::Viewport);
+        assert!(!viewport_before.eql(viewport_after));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "DEF\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollDown simple"
+    #[test]
+    fn terminal_scroll_down_simple() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_cursor_pos(2, 2);
+
+        let cursor_x = unsafe { (*t.screens.active).cursor.x };
+        let cursor_y = unsafe { (*t.screens.active).cursor.y };
+        t.clear_dirty();
+        t.scroll_down(1);
+        assert_eq!(cursor_x, unsafe { (*t.screens.active).cursor.x });
+        assert_eq!(cursor_y, unsafe { (*t.screens.active).cursor.y });
+
+        for y in 0..5u32 {
+            assert!(t.is_dirty(active_pt(0, y)));
+        }
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\nABC\nDEF\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: reverseIndex"
+    #[test]
+    fn terminal_reverse_index() {
+        let mut t = Terminal::init(Global, opts(2, 5)).unwrap();
+
+        // Initial value
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('B' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('C' as u32).unwrap();
+        t.reverse_index();
+        t.print('D' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A\nBD\nC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index"
+    #[test]
+    fn terminal_index() {
+        let mut t = Terminal::init(Global, opts(2, 5)).unwrap();
+
+        t.index().unwrap();
+        t.print('A' as u32).unwrap();
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\nA".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index from the bottom"
+    #[test]
+    fn terminal_index_from_the_bottom() {
+        let mut t = Terminal::init(Global, opts(2, 5)).unwrap();
+
+        t.set_cursor_pos(5, 1);
+        t.print('A' as u32).unwrap();
+        t.cursor_left(1); // undo moving right from 'A'
+
+        t.clear_dirty();
+        t.index().unwrap();
+        t.print('B' as u32).unwrap();
+
+        assert!(t.is_dirty(active_pt(0, 3)));
+        assert!(t.is_dirty(active_pt(0, 4)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n\n\nA\nB".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index outside of scrolling region"
+    #[test]
+    fn terminal_index_outside_of_scrolling_region() {
+        let mut t = Terminal::init(Global, opts(2, 5)).unwrap();
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        t.set_top_and_bottom_margin(2, 5);
+        t.index().unwrap();
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 1);
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index from the bottom outside of scroll region"
+    #[test]
+    fn terminal_index_from_the_bottom_outside_of_scroll_region() {
+        let mut t = Terminal::init(Global, opts(2, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(1, 2);
+        t.set_cursor_pos(5, 1);
+        t.print('A' as u32).unwrap();
+        t.clear_dirty();
+        t.index().unwrap();
+        t.print('B' as u32).unwrap();
+        assert!(t.is_dirty(active_pt(0, 4)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n\n\n\nAB".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index no scroll region, top of screen"
+    #[test]
+    fn terminal_index_no_scroll_region_top_of_screen() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.clear_dirty();
+        t.index().unwrap();
+        t.print('X' as u32).unwrap();
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A\n X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines simple"
+    #[test]
+    fn terminal_delete_lines_simple() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_cursor_pos(2, 2);
+
+        t.clear_dirty();
+        t.delete_lines(1);
+
+        assert!(!t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(t.is_dirty(active_pt(0, 3)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines with scroll region"
+    #[test]
+    fn terminal_delete_lines_with_scroll_region() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Initial value
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('B' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('C' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('D' as u32).unwrap();
+
+        t.set_top_and_bottom_margin(1, 3);
+        t.set_cursor_pos(1, 1);
+
+        t.clear_dirty();
+        t.delete_lines(1);
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(!t.is_dirty(active_pt(0, 3)));
+
+        t.print('E' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "E\nC\n\nD".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines with scroll region, large count"
+    #[test]
+    fn terminal_delete_lines_with_scroll_region_large_count() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Initial value
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('B' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('C' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('D' as u32).unwrap();
+
+        t.set_top_and_bottom_margin(1, 3);
+        t.set_cursor_pos(1, 1);
+
+        t.clear_dirty();
+        t.delete_lines(5);
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(!t.is_dirty(active_pt(0, 3)));
+
+        t.print('E' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "E\n\n\nD".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks zero"
+    #[test]
+    fn terminal_insert_blanks_zero() {
+        let mut t = Terminal::init(Global, opts(5, 2)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.print('B' as u32).unwrap();
+        t.print('C' as u32).unwrap();
+        t.set_cursor_pos(1, 1);
+
+        t.insert_blanks(0);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks"
+    #[test]
+    fn terminal_insert_blanks() {
+        // NOTE: this is not verified with conformance tests, so these
+        // tests might actually be verifying wrong behavior.
+        let mut t = Terminal::init(Global, opts(5, 2)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.print('B' as u32).unwrap();
+        t.print('C' as u32).unwrap();
+        t.set_cursor_pos(1, 1);
+
+        t.clear_dirty();
+        t.insert_blanks(2);
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(!t.is_dirty(active_pt(0, 1)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  ABC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks pushes off end"
+    #[test]
+    fn terminal_insert_blanks_pushes_off_end() {
+        // NOTE: this is not verified with conformance tests, so these
+        // tests might actually be verifying wrong behavior.
+        let mut t = Terminal::init(Global, opts(3, 2)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.print('B' as u32).unwrap();
+        t.print('C' as u32).unwrap();
+        t.set_cursor_pos(1, 1);
+
+        t.clear_dirty();
+        t.insert_blanks(2);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  A".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks more than size"
+    #[test]
+    fn terminal_insert_blanks_more_than_size() {
+        // NOTE: this is not verified with conformance tests, so these
+        // tests might actually be verifying wrong behavior.
+        let mut t = Terminal::init(Global, opts(3, 2)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.print('B' as u32).unwrap();
+        t.print('C' as u32).unwrap();
+        t.set_cursor_pos(1, 1);
+
+        t.clear_dirty();
+        t.insert_blanks(5);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks no scroll region, fits"
+    #[test]
+    fn terminal_insert_blanks_no_scroll_region_fits() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 1);
+
+        t.clear_dirty();
+        t.insert_blanks(2);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  ABC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks shift off screen"
+    #[test]
+    fn terminal_insert_blanks_shift_off_screen() {
+        let mut t = Terminal::init(Global, opts(5, 10)).unwrap();
+
+        for c in "  ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 3);
+        t.clear_dirty();
+        t.insert_blanks(2);
+        assert!(t.is_dirty(active_pt(0, 0)));
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  X A".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks split multi-cell character"
+    #[test]
+    fn terminal_insert_blanks_split_multi_cell_character() {
+        let mut t = Terminal::init(Global, opts(5, 10)).unwrap();
+
+        for c in "123".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.print('橋' as u32).unwrap();
+        t.set_cursor_pos(1, 1);
+        t.clear_dirty();
+        t.insert_blanks(1);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), " 123".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks inside left/right scroll region"
+    #[test]
+    fn terminal_insert_blanks_inside_left_right_scroll_region() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.scrolling_region.left = 2;
+        t.scrolling_region.right = 4;
+        t.set_cursor_pos(1, 3);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 3);
+
+        t.clear_dirty();
+        t.insert_blanks(2);
+        assert!(t.is_dirty(active_pt(0, 0)));
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  X A".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks outside left/right scroll region"
+    #[test]
+    fn terminal_insert_blanks_outside_left_right_scroll_region() {
+        let mut t = Terminal::init(Global, opts(6, 10)).unwrap();
+
+        t.set_cursor_pos(1, 4);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.scrolling_region.left = 2;
+        t.scrolling_region.right = 4;
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.clear_dirty();
+        t.insert_blanks(2);
+        assert!(!t.is_dirty(active_pt(0, 0)));
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "   ABX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // PORT NOTE: NOT a port of a reference `test {}` block. This is the
+    // page-pool tracking-allocator gate for this batch's page-touching methods
+    // (scroll_up/scroll_down/insert_lines/delete_lines, which delegate row
+    // movement and scrollback creation to `pagelist`). Under `cfg(test)` the
+    // page pool's backing allocator records into the global `page_tracking`
+    // tracker; this test drives multi-page scroll + insert churn and asserts
+    // every page allocated during the scope is returned after `deinit` (no
+    // page leak across the tracked-pin / page-split paths).
+    #[test]
+    fn terminal_pagepool_no_leak_scroll_insert_multi_page() {
+        let scope = crate::pagelist::page_tracking::PageLeakScope::new();
+        {
+            let mut t = Terminal::init(Global, opts(20, 5)).unwrap();
+
+            // Fill enough rows (with scrollback) to force several pages of
+            // churn through the scroll path.
+            for i in 0..400u32 {
+                let line = format!("row{i:04}");
+                t.print_string(line.as_bytes()).unwrap();
+                t.carriage_return();
+                t.linefeed().unwrap();
+            }
+
+            // scroll_up at the full-screen top creates scrollback (cursorScrollAbove)
+            for _ in 0..50 {
+                t.scroll_up(1).unwrap();
+            }
+
+            // scroll_down delegates to insert_lines.
+            for _ in 0..20 {
+                t.scroll_down(1);
+            }
+
+            // Drive insert/delete lines with a scroll region too.
+            t.set_top_and_bottom_margin(1, 4);
+            t.set_cursor_pos(1, 1);
+            for _ in 0..30 {
+                t.insert_lines(2);
+                t.delete_lines(1);
+            }
+
+            // We should have produced real page churn.
+            assert!(
+                scope.delta_allocs() > 0,
+                "expected scroll/insert churn to allocate at least one new page"
+            );
+
+            t.deinit(Global);
+        }
+        // After deinit every page allocated during this scope must be returned.
+        scope.assert_returned_to_baseline();
+    }
 }
