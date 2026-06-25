@@ -8437,9 +8437,38 @@ mod tests {
         t.deinit(Global);
     }
 
-    // PORT NOTE (vt-12b-3a deferral): test "Terminal: eraseChars resets wrap"
-    // prints "ABCDE123" on a 5-col screen, which soft-wraps via `print_wrap()`
-    // → `index()` (still `todo!()`); deferred to vt-12b-3b.
+    // test "Terminal: eraseChars resets wrap"
+    #[test]
+    fn terminal_erase_chars_resets_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE123".chars() {
+            t.print(c as u32).unwrap();
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap();
+            let row = list_cell.row;
+            assert!(unsafe { (*row).wrap() });
+        }
+
+        t.set_cursor_pos(1, 1);
+        t.erase_chars(1);
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap();
+            let row = list_cell.row;
+            assert!(!unsafe { (*row).wrap() });
+        }
+
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "XBCDE\n123".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
 
     // PORT NOTE (vt-12b-3a deferral): tests "Terminal: eraseChars preserves
     // background sgr", "eraseChars handles refcounted styles", and the
@@ -8506,9 +8535,37 @@ mod tests {
         t.deinit(Global);
     }
 
-    // PORT NOTE (vt-12b-3a deferral): test "Terminal: eraseChars wide char wrap
-    // boundary conditions" soft-wraps via `print_string` → `print_wrap()` →
-    // `index()` (still `todo!()`); deferred to vt-12b-3b.
+    // test "Terminal: eraseChars wide char wrap boundary conditions"
+    #[test]
+    fn terminal_erase_chars_wide_char_wrap_boundary_conditions() {
+        let mut t = Terminal::init(Global, opts(8, 3)).unwrap();
+
+        t.print_string(".......😀abcde😀......".as_bytes()).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), ".......\n😀abcde\n😀......".as_bytes());
+
+            let unwrapped = t.plain_string_unwrapped(Global).unwrap();
+            assert_eq!(unwrapped.as_slice(), ".......😀abcde😀......".as_bytes());
+        }
+
+        t.set_cursor_pos(2, 2);
+        t.erase_chars(3);
+        unsafe {
+            (*core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data))
+                .assert_integrity()
+        };
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), ".......\n    cde\n😀......".as_bytes());
+
+            let unwrapped = t.plain_string_unwrapped(Global).unwrap();
+            assert_eq!(unwrapped.as_slice(), ".......     cde\n😀......".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
 
     // test "Terminal: deleteChars"
     #[test]
@@ -8641,9 +8698,37 @@ mod tests {
         t.deinit(Global);
     }
 
-    // PORT NOTE (vt-12b-3a deferral): test "Terminal: deleteChars resets wrap"
-    // prints "ABCDE123" on a 5-col screen, soft-wrapping via `print_wrap()` →
-    // `index()` (still `todo!()`); deferred to vt-12b-3b.
+    // test "Terminal: deleteChars resets wrap"
+    #[test]
+    fn terminal_delete_chars_resets_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE123".chars() {
+            t.print(c as u32).unwrap();
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap();
+            let row = list_cell.row;
+            assert!(unsafe { (*row).wrap() });
+        }
+        t.set_cursor_pos(1, 1);
+        t.delete_chars(1);
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap();
+            let row = list_cell.row;
+            assert!(!unsafe { (*row).wrap() });
+        }
+
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "XCDE\n123".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
 
     // test "Terminal: deleteChars simple operation"
     #[test]
@@ -8780,10 +8865,32 @@ mod tests {
         t.deinit(Global);
     }
 
-    // PORT NOTE (vt-12b-3a deferral): test "Terminal: deleteChars with a spacer
-    // head at the end" prints "0123橋123" on a 5-col screen, soft-wrapping the
-    // wide char (spacer head) via `print_wrap()` → `index()` (still `todo!()`);
-    // deferred to vt-12b-3b.
+    // test "Terminal: deleteChars with a spacer head at the end"
+    #[test]
+    fn terminal_delete_chars_with_a_spacer_head_at_the_end() {
+        let mut t = Terminal::init(Global, opts(5, 10)).unwrap();
+
+        t.print_string("0123橋123".as_bytes()).unwrap();
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(4, 0)).unwrap();
+            let row = list_cell.row;
+            let cell = list_cell.cell;
+            assert_eq!(pagepkg::Wide::SpacerHead, unsafe { (*cell).wide() });
+            assert!(unsafe { (*row).wrap() });
+        }
+
+        t.set_cursor_pos(1, 1);
+        t.delete_chars(1);
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(3, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(0 as u21, unsafe { (*cell).codepoint() });
+            assert_eq!(pagepkg::Wide::Narrow, unsafe { (*cell).wide() });
+        }
+
+        t.deinit(Global);
+    }
 
     // test "Terminal: deleteChars split wide character tail"
     #[test]
@@ -8871,10 +8978,108 @@ mod tests {
         t.deinit(Global);
     }
 
-    // PORT NOTE (vt-12b-3a deferral): test "Terminal: deleteChars wide char wrap
-    // boundary conditions" soft-wraps via `print_string` → `print_wrap()` →
-    // `index()`, and "deleteChars wide char across right margin" drives
-    // `set_left_and_right_margin` (both still `todo!()`); deferred to vt-12b-3b.
+    // test "Terminal: deleteChars wide char wrap boundary conditions"
+    #[test]
+    fn terminal_delete_chars_wide_char_wrap_boundary_conditions() {
+        let mut t = Terminal::init(Global, opts(8, 3)).unwrap();
+
+        // EXPLANATION(qwerasd):
+        // (cont. from "Terminal: deleteChars wide char boundary conditions")
+        //
+        // Additionally consider soft-wrapped wide chars (`H` = spacer head):
+        //
+        //   +--------+
+        // 0 |.......H…
+        // 1 …WWabcdeH…
+        //   : ^      : (^ = cursor)
+        //   : ^^^    : (^ = deleted by DCH 3)
+        // 2 …WW......|
+        //   +--------+
+        //
+        // -> DCH 3
+        // -> First wide character split and destroyed, including spacer head,
+        //    second spacer head removed (verified in xterm).
+        // -> Wrap state of row reset
+        //
+        //   +--------+
+        // 0 |........|
+        // 1 |.cde....|
+        // 2 |WW......|
+        //   +--------+
+        //
+
+        t.print_string(".......😀abcde😀......".as_bytes()).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), ".......\n😀abcde\n😀......".as_bytes());
+
+            let unwrapped = t.plain_string_unwrapped(Global).unwrap();
+            assert_eq!(unwrapped.as_slice(), ".......😀abcde😀......".as_bytes());
+        }
+
+        t.set_cursor_pos(2, 2);
+        t.delete_chars(3);
+        unsafe {
+            (*core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data))
+                .assert_integrity()
+        };
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), ".......\n cde\n😀......".as_bytes());
+
+            let unwrapped = t.plain_string_unwrapped(Global).unwrap();
+            assert_eq!(unwrapped.as_slice(), ".......  cde\n😀......".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteChars wide char across right margin"
+    #[test]
+    fn terminal_delete_chars_wide_char_across_right_margin() {
+        let mut t = Terminal::init(Global, opts(8, 3)).unwrap();
+
+        // scroll region
+        //    VVVVVV
+        //  +-######-+
+        //  |.abcdeWW|
+        //  : ^      : (^ = cursor)
+        //  +--------+
+        //
+        // DCH 1
+
+        t.print_string("123456橋".as_bytes()).unwrap();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(2, 7);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "123456橋".as_bytes());
+        }
+
+        t.set_cursor_pos(1, 2);
+        t.delete_chars(1);
+        unsafe {
+            (*core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data))
+                .assert_integrity()
+        };
+
+        // NOTE: This behavior is slightly inconsistent with xterm. xterm
+        // _visually_ splits the wide character (half the wide character shows
+        // up in col 6 and half in col 8). In all other wide char split scenarios,
+        // xterm clears the cell. Therefore, we've chosen to clear the cell here.
+        // Given we have space, we also could actually preserve it, but I haven't
+        // yet found a terminal that behaves that way. We should be open to
+        // revisiting this behavior but for now we're going with the simpler
+        // impl.
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "13456".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
 
     // test "Terminal: eraseLine simple erase right"
     #[test]
@@ -8918,9 +9123,35 @@ mod tests {
         t.deinit(Global);
     }
 
-    // PORT NOTE (vt-12b-3a deferral): test "Terminal: eraseLine resets wrap"
-    // prints "ABCDE123" on a 5-col screen, soft-wrapping via `print_wrap()` →
-    // `index()` (still `todo!()`); deferred to vt-12b-3b.
+    // test "Terminal: eraseLine resets wrap"
+    #[test]
+    fn terminal_erase_line_resets_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE123".chars() {
+            t.print(c as u32).unwrap();
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap();
+            assert!(unsafe { (*list_cell.row).wrap() });
+        }
+
+        t.set_cursor_pos(1, 1);
+        t.erase_line(csi::EraseLine::Right, false);
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap();
+            assert!(!unsafe { (*list_cell.row).wrap() });
+        }
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "X\n123".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
 
     // PORT NOTE (vt-12b-3a deferral): tests "Terminal: eraseLine right preserves
     // background sgr" and the "eraseLine right protected *" group drive
@@ -10449,6 +10680,100 @@ mod tests {
         {
             let str = t.plain_string(Global).unwrap();
             assert_eq!(str.as_slice(), "\n    A\n    B\nX   C".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: decaln reset margins"
+    #[test]
+    fn terminal_decaln_reset_margins() {
+        let mut t = Terminal::init(Global, opts(3, 3)).unwrap();
+
+        // Initial value
+        t.modes.set(modespkg::Mode::Origin, true);
+        t.set_top_and_bottom_margin(2, 3);
+        t.decaln().unwrap();
+        t.scroll_down(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\nEEE\nEEE".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: decaln preserves color"
+    #[test]
+    fn terminal_decaln_preserves_color() {
+        let mut t = Terminal::init(Global, opts(3, 3)).unwrap();
+
+        // Initial value
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.modes.set(modespkg::Mode::Origin, true);
+        t.set_top_and_bottom_margin(2, 3);
+        t.decaln().unwrap();
+        t.scroll_down(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\nEEE\nEEE".as_bytes());
+        }
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(
+                pagepkg::CellRgb {
+                    r: 0xFF,
+                    g: 0,
+                    b: 0,
+                },
+                unsafe { (*cell).content_color_rgb() }
+            );
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: DECALN resets graphemes with protected mode"
+    #[test]
+    fn terminal_decaln_resets_graphemes_with_protected_mode() {
+        let mut t = Terminal::init(Global, opts(3, 3)).unwrap();
+
+        // Add protected mode. A previous version of DECALN accidentally preserved
+        // protected mode which left dangling managed memory.
+        t.set_protected_mode(ansi::ProtectedMode::Iso);
+
+        // This is: 👨‍👩‍👧 (which may or may not render correctly)
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+        t.print(0x1F468).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F469).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F467).unwrap();
+
+        t.decaln().unwrap();
+
+        assert_eq!(0usize, unsafe { (*t.screens.active).cursor.y } as usize);
+        assert_eq!(0usize, unsafe { (*t.screens.active).cursor.x } as usize);
+        assert!(unsafe { (*t.screens.active).cursor.protected });
+        assert!(unsafe { (*t.screens.active).protected_mode } == ansi::ProtectedMode::Iso);
+
+        for y in 0..t.rows {
+            assert!(t.is_dirty(active_pt(0, y as u32)));
+        }
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "EEE\nEEE\nEEE".as_bytes());
         }
 
         t.deinit(Global);
@@ -13529,6 +13854,41 @@ mod tests {
         {
             let buf = t.print_attributes(&mut storage).unwrap();
             assert_eq!(buf, "0".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay simple erase below"
+    #[test]
+    fn terminal_erase_display_simple_erase_below() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "DEF".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "GHI".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(2, 2);
+
+        t.clear_dirty();
+        t.erase_display(csi::EraseDisplay::Below, false);
+
+        assert!(!t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\nD".as_bytes());
         }
 
         t.deinit(Global);
