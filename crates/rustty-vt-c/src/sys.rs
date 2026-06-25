@@ -1,0 +1,722 @@
+//! rustty-vt-c sys
+//!
+//! PORTS: ghostty src/terminal/c/sys.zig
+//!
+//! PORT STATUS: done
+
+// PORT NOTE: the reference imports are
+//   const std = @import("std");
+//   const builtin = @import("builtin");
+//   const lib = @import("../lib.zig");
+//   const CAllocator = lib.alloc.Allocator;
+//   const terminal_sys = @import("../sys.zig");
+//   const Result = @import("result.zig").Result;
+// `terminal_sys` is rustty-vt's `sys` module (the swappable `decode_png` slot,
+// `Image`, `DecodeError`); `CAllocator` is rustty-lib's C `Allocator`.
+
+#![allow(non_upper_case_globals)]
+
+use crate::result::Result;
+use rustty_lib::allocator::Allocator as CAllocator;
+use rustty_vt::sys as terminal_sys;
+use std::sync::Mutex;
+
+/// C: GhosttySysImage -> RusttySysImage (R2)
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Image {
+    pub width: u32,
+    pub height: u32,
+    pub data: *mut u8,
+    pub data_len: usize,
+}
+
+/// C: GhosttySysDecodePngFn -> RusttySysDecodePngFn (R2)
+// PORT NOTE: `*const fn (?*anyopaque, *const CAllocator, [*]const u8, usize,
+// *Image) callconv(...) bool`. The userdata is `?*anyopaque`, the data buffer is
+// `(ptr, len)`, and `*Image` is the out-image.
+pub type DecodePngFn =
+    extern "C" fn(*mut std::ffi::c_void, *const CAllocator, *const u8, usize, *mut Image) -> bool;
+
+/// C: GhosttySysLogLevel -> RusttySysLogLevel (R2)
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogLevel {
+    Error = 0,
+    Warning = 1,
+    Info = 2,
+    Debug = 3,
+}
+
+impl LogLevel {
+    // pub fn fromStd(level: std.log.Level) LogLevel { ... }
+    // PORT NOTE: rustty has no `std.log.Level`; the equivalent is the `StdLevel`
+    // shim below mirroring Zig's `{ err, warn, info, debug }`.
+    pub fn from_std(level: StdLevel) -> LogLevel {
+        match level {
+            StdLevel::Err => LogLevel::Error,
+            StdLevel::Warn => LogLevel::Warning,
+            StdLevel::Info => LogLevel::Info,
+            StdLevel::Debug => LogLevel::Debug,
+        }
+    }
+}
+
+/// PORT NOTE: `std.log.Level` analog (`{ err, warn, info, debug }`) used by
+/// `LogLevel::from_std` and `log_fn`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StdLevel {
+    Err,
+    Warn,
+    Info,
+    Debug,
+}
+
+/// C: GhosttySysLogFn -> RusttySysLogFn (R2)
+pub type LogFn = extern "C" fn(*mut std::ffi::c_void, LogLevel, *const u8, usize, *const u8, usize);
+
+/// C: GhosttySysOption -> RusttySysOption (R2)
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Option_ {
+    Userdata = 0,
+    DecodePng = 1,
+    Log = 2,
+}
+
+// pub fn InType(comptime self: Option) type { ... }
+// PORT NOTE: the per-tag input type for `setTyped`:
+//   .userdata    => ?*const anyopaque
+//   .decode_png  => ?DecodePngFn
+//   .log         => ?LogFn
+// Rust has no comptime type-returning fn; each `set` arm casts `value`
+// accordingly (preserving the same tag/type correspondence).
+
+/// Global state for the sys interface so we can call through to the C
+/// callbacks from Zig.
+// PORT NOTE: the reference is `const Global = struct { userdata, decode_png, log }`
+// held in a mutable module `var global`. Rust forbids a plain mutable static, so
+// the global is wrapped in a `Mutex` (mutated only at startup, exactly the Zig
+// contract). The fn-pointer/userdata raw values are `Send`-safe to store here.
+struct Global {
+    userdata: *mut std::ffi::c_void,
+    decode_png: core::option::Option<DecodePngFn>,
+    log: core::option::Option<LogFn>,
+}
+
+// PORT NOTE: raw `*mut c_void`/`extern "C" fn` are not `Send` by default; the
+// global is only mutated at startup and read under the lock, matching the Zig
+// `var` contract. The unsafe `Send` is the minimal glue required to hold the
+// state in a `Mutex` (no behavior change).
+unsafe impl Send for Global {}
+
+/// Global state for the C sys interface.
+// var global: Global = .{};
+static GLOBAL: Mutex<Global> = Mutex::new(Global {
+    userdata: std::ptr::null_mut(),
+    decode_png: None,
+    log: None,
+});
+
+/// Zig-compatible wrapper that calls through to the stored C callback.
+/// The C callback allocates the pixel data through the provided allocator,
+/// so we can take ownership directly.
+// PORT NOTE: the reference signature is
+//   fn decodePngWrapper(alloc: std.mem.Allocator, data: []const u8)
+//       terminal_sys.DecodeError!terminal_sys.Image
+// rustty's `terminal_sys.DecodePngFn` is `fn(&[u8]) -> Result<Image, DecodeError>`
+// (no allocator parameter — allocation is the Rust allocator's job). The C
+// callback still receives a `*const CAllocator`; we hand it the rustty-lib C
+// allocator built from the GLOBAL/default allocator so the callback can allocate.
+fn decode_png_wrapper(
+    data: &[u8],
+) -> core::result::Result<terminal_sys::Image, terminal_sys::DecodeError> {
+    // const func = global.decode_png orelse return error.InvalidData;
+    let g = GLOBAL.lock().unwrap();
+    let func = match g.decode_png {
+        Some(f) => f,
+        None => return Err(terminal_sys::DecodeError::InvalidData),
+    };
+    let userdata = g.userdata;
+    drop(g);
+
+    // const c_alloc = CAllocator.fromZig(&alloc);
+    // PORT NOTE: the reference forwards the Zig allocator passed by the caller as
+    // the C allocator. rustty's `DecodePngFn` carries no allocator, so we build a
+    // C allocator backed by the process default (the rustty analog of the
+    // always-available allocator), matching the "callback allocates through the
+    // provided allocator" contract.
+    let zig_alloc = rustty_lib::allocator::GlobalZigAllocator;
+    let zref = rustty_lib::allocator::ZigAllocatorRef::new(&zig_alloc);
+    let c_alloc = CAllocator::from_zig(&zref);
+
+    // var out: Image = undefined;
+    let mut out = Image {
+        width: 0,
+        height: 0,
+        data: std::ptr::null_mut(),
+        data_len: 0,
+    };
+    // if (!func(global.userdata, &c_alloc, data.ptr, data.len, &out)) return error.InvalidData;
+    if !func(userdata, &c_alloc, data.as_ptr(), data.len(), &mut out) {
+        return Err(terminal_sys::DecodeError::InvalidData);
+    }
+
+    // const result_data = out.data orelse return error.InvalidData;
+    if out.data.is_null() {
+        return Err(terminal_sys::DecodeError::InvalidData);
+    }
+
+    // return .{ .width = out.width, .height = out.height, .data = result_data[0..out.data_len] };
+    // PORT NOTE (ownership model): the reference's `terminal_sys.Image.data` is a
+    // `[]u8` it takes ownership of directly. rustty's `Image.data` is a `Vec<u8>`
+    // (owned, frees on drop via the Rust allocator), so we copy the
+    // callback-allocated bytes into a Vec; this preserves the same observable
+    // image (width/height/bytes) without aliasing two allocators' ownership.
+    let bytes = unsafe { std::slice::from_raw_parts(out.data, out.data_len) }.to_vec();
+    Ok(terminal_sys::Image {
+        width: out.width,
+        height: out.height,
+        data: bytes,
+    })
+}
+
+/// PORT NOTE: `pub fn set(option: Option, value: ?*const anyopaque)
+/// callconv(...) Result`. The C calling convention is the `extern "C"` wrapper
+/// in `lib.rs` (`rustty_sys_set`).
+///
+/// # Safety
+/// `value` must be valid for the type required by `option` (a fn-pointer for
+/// `DecodePng`/`Log`, an arbitrary userdata pointer for `Userdata`), or null.
+pub unsafe fn set(option: Option_, value: *const std::ffi::c_void) -> Result {
+    // if (comptime std.debug.runtime_safety) {
+    //     _ = std.meta.intToEnum(Option, @intFromEnum(option)) catch {
+    //         return .invalid_value;
+    //     };
+    // }
+    // PORT NOTE: `option: Option_` is already a valid tag in this typed path; the
+    // integer-range guard lives in the `extern "C"` wrapper in `lib.rs`.
+
+    // return switch (option) {
+    //     inline else => |comptime_option| setTyped(comptime_option, @ptrCast(@alignCast(value))),
+    // };
+    // SAFETY: `value` matches `option`'s input type (caller contract).
+    unsafe { set_typed(option, value) }
+}
+
+// fn setTyped(comptime option: Option, value: option.InType()) Result { ... }
+// # Safety: `value` must match `option`'s input type.
+unsafe fn set_typed(option: Option_, value: *const std::ffi::c_void) -> Result {
+    let mut g = GLOBAL.lock().unwrap();
+    match option {
+        // .userdata => global.userdata = @constCast(value),
+        Option_::Userdata => g.userdata = value as *mut std::ffi::c_void,
+        // .decode_png => {
+        //     global.decode_png = value;
+        //     terminal_sys.decode_png = if (value != null) &decodePngWrapper else null;
+        // },
+        Option_::DecodePng => {
+            // PORT NOTE: `value` is `?DecodePngFn` (a fn-pointer or null).
+            g.decode_png = if value.is_null() {
+                None
+            } else {
+                // SAFETY: `value` is a `DecodePngFn` fn-pointer (caller contract).
+                Some(unsafe { std::mem::transmute::<*const std::ffi::c_void, DecodePngFn>(value) })
+            };
+            *terminal_sys::decode_png.write().unwrap() = if value.is_null() {
+                None
+            } else {
+                Some(decode_png_wrapper as terminal_sys::DecodePngFn)
+            };
+        }
+        // .log => global.log = value,
+        Option_::Log => {
+            g.log = if value.is_null() {
+                None
+            } else {
+                // SAFETY: `value` is a `LogFn` fn-pointer (caller contract).
+                Some(unsafe { std::mem::transmute::<*const std::ffi::c_void, LogFn>(value) })
+            };
+        }
+    }
+    // return .success;
+    Result::Success
+}
+
+/// Dispatch a log message to the installed C callback, if any.
+// fn emitLog(level: LogLevel, scope: []const u8, message: []const u8) void { ... }
+fn emit_log(level: LogLevel, scope: &[u8], message: &[u8]) {
+    // const func = global.log orelse return;
+    let g = GLOBAL.lock().unwrap();
+    let func = match g.log {
+        Some(f) => f,
+        None => return,
+    };
+    let userdata = g.userdata;
+    drop(g);
+    // func(global.userdata, level, scope.ptr, scope.len, message.ptr, message.len);
+    func(
+        userdata,
+        level,
+        scope.as_ptr(),
+        scope.len(),
+        message.as_ptr(),
+        message.len(),
+    );
+}
+
+/// Emits logs in chunks. Almost all logs will be less than the chunk size
+/// but this allows emitting larger logs without heap allocation.
+// const LogEmitter = struct { c_level, scope_text, buf: [2048]u8, pos: usize, ... }
+struct LogEmitter<'a> {
+    c_level: LogLevel,
+    scope_text: &'a [u8],
+    buf: [u8; 2048],
+    pos: usize,
+}
+
+impl LogEmitter<'_> {
+    // fn write(self: *@This(), bytes: []const u8) error{}!usize { ... }
+    fn write(&mut self, bytes: &[u8]) -> usize {
+        // var remaining = bytes;
+        let mut remaining = bytes;
+        // while (remaining.len > 0) {
+        while !remaining.is_empty() {
+            // const space = self.buf.len - self.pos;
+            let space = self.buf.len() - self.pos;
+            // if (space == 0) { self.flush(); continue; }
+            if space == 0 {
+                self.flush();
+                continue;
+            }
+
+            // const n = @min(remaining.len, space);
+            let n = remaining.len().min(space);
+            // @memcpy(self.buf[self.pos..][0..n], remaining[0..n]);
+            self.buf[self.pos..self.pos + n].copy_from_slice(&remaining[0..n]);
+            // self.pos += n;
+            self.pos += n;
+            // remaining = remaining[n..];
+            remaining = &remaining[n..];
+        }
+
+        // return bytes.len;
+        bytes.len()
+    }
+
+    // fn flush(self: *@This()) void { ... }
+    fn flush(&mut self) {
+        // if (self.pos == 0) return;
+        if self.pos == 0 {
+            return;
+        }
+        // emitLog(self.c_level, self.scope_text, self.buf[0..self.pos]);
+        emit_log(self.c_level, self.scope_text, &self.buf[0..self.pos]);
+        // self.pos = 0;
+        self.pos = 0;
+    }
+}
+
+/// Custom std.log sink for C ABI builds.
+///
+/// When a log callback is installed via rustty_sys_set(), messages are
+/// dispatched through it. When no callback is installed, messages are
+/// silently discarded. Large messages that exceed the stack buffer are
+/// delivered across multiple callback invocations.
+// pub fn logFn(comptime level, comptime scope, comptime format, args) void { ... }
+// PORT NOTE: the reference is Zig's `std.log` sink: it takes the comptime level,
+// scope, format string and runtime args, formats them via a `GenericWriter` into
+// the `LogEmitter`, then flushes. rustty has no comptime log sink; `log_fn`
+// takes the runtime level, the scope name, and the already-formatted message
+// (`core::fmt::Arguments`), reproducing the same chunked dispatch.
+pub fn log_fn(level: StdLevel, scope: &str, args: core::fmt::Arguments) {
+    // if (global.log == null) return;
+    if GLOBAL.lock().unwrap().log.is_none() {
+        return;
+    }
+
+    // const scope_text: []const u8 = if (scope == .default) "" else @tagName(scope);
+    // PORT NOTE: the `.default` scope maps to the empty string; any named scope
+    // maps to its name. Callers pass "" for the default scope.
+    let scope_text: &[u8] = scope.as_bytes();
+    // const c_level = LogLevel.fromStd(level);
+    let c_level = LogLevel::from_std(level);
+
+    // var ctx: LogEmitter = .{ .c_level = c_level, .scope_text = scope_text };
+    let mut ctx = LogEmitter {
+        c_level,
+        scope_text,
+        buf: [0u8; 2048],
+        pos: 0,
+    };
+    // const writer: std.io.GenericWriter(...) = .{ .context = &ctx };
+    // nosuspend writer.print(format, args) catch {};
+    // PORT NOTE: `writer.print(format, args)` formats into the `LogEmitter`. We
+    // format `args` into an owned string and feed it through `LogEmitter::write`,
+    // which is the same byte stream the GenericWriter would produce.
+    let formatted = std::fmt::format(args);
+    ctx.write(formatted.as_bytes());
+    // ctx.flush();
+    ctx.flush();
+}
+
+/// Built-in log callback that writes to stderr.
+///
+/// Formats each message as "[level](scope): message\n". Can be passed
+/// directly to rustty_sys_set(RUSTTY_SYS_OPT_LOG, &rustty_sys_log_stderr).
+///
+/// Uses std.debug.lockStderrWriter for thread-safe, mutex-protected output.
+/// On freestanding/wasm targets this is a no-op (no stderr available).
+// pub fn logStderr(_, level, scope_ptr, scope_len, message_ptr, message_len)
+//     callconv(...) void { ... }
+/// PORT NOTE: the C calling convention is the `extern "C"` wrapper in `lib.rs`
+/// (`rustty_sys_log_stderr`).
+///
+/// # Safety
+/// `scope_ptr`/`message_ptr` must point to `scope_len`/`message_len` valid bytes.
+pub unsafe fn log_stderr(
+    _userdata: *mut std::ffi::c_void,
+    level: LogLevel,
+    scope_ptr: *const u8,
+    scope_len: usize,
+    message_ptr: *const u8,
+    message_len: usize,
+) {
+    // if (comptime builtin.target.cpu.arch.isWasm()) return;
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
+
+    // const scope = scope_ptr[0..scope_len];
+    // SAFETY: `scope_ptr`/`message_ptr` describe valid byte regions (caller).
+    let scope = unsafe { std::slice::from_raw_parts(scope_ptr, scope_len) };
+    // const message = message_ptr[0..message_len];
+    let message = unsafe { std::slice::from_raw_parts(message_ptr, message_len) };
+
+    // const level_text = switch (level) { ... };
+    let level_text = match level {
+        LogLevel::Error => "error",
+        LogLevel::Warning => "warning",
+        LogLevel::Info => "info",
+        LogLevel::Debug => "debug",
+    };
+
+    // var buffer: [64]u8 = undefined;
+    // const writer = std.debug.lockStderrWriter(&buffer);
+    // defer std.debug.unlockStderrWriter();
+    // PORT NOTE: rustty uses Rust's `eprint!`, which holds the stderr lock for the
+    // duration of the write — the same thread-safe, mutex-protected output the
+    // reference gets from `lockStderrWriter`/`unlockStderrWriter`.
+    use std::io::Write as _;
+    let stderr = std::io::stderr();
+    let mut lock = stderr.lock();
+    // nosuspend { if (scope.len > 0) { ... } else { ... } }
+    if !scope.is_empty() {
+        // writer.print("[{s}]({s}): {s}\n", .{ level_text, scope, message });
+        // PORT NOTE: the trailing `\n` is emitted by `writeln!` (identical bytes).
+        let _ = writeln!(
+            lock,
+            "[{}]({}): {}",
+            level_text,
+            String::from_utf8_lossy(scope),
+            String::from_utf8_lossy(message)
+        );
+    } else {
+        // writer.print("[{s}]: {s}\n", .{ level_text, message });
+        // PORT NOTE: the trailing `\n` is emitted by `writeln!` (identical bytes).
+        let _ = writeln!(
+            lock,
+            "[{}]: {}",
+            level_text,
+            String::from_utf8_lossy(message)
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // PORT NOTE: the reference tests share the module `var global` and Zig runs
+    // tests serially. Rust runs tests in parallel, so every sys test that touches
+    // the shared GLOBAL state acquires this lock first to serialize them (the
+    // moral equivalent of Zig's serial execution). Poison is recovered because a
+    // panicking test holds it only transiently.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_tests() -> std::sync::MutexGuard<'static, ()> {
+        match TEST_LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        }
+    }
+
+    // Reset GLOBAL + the rustty-vt decode_png slot to a known empty state. Holds
+    // and returns the serialization guard so the whole test body runs without
+    // another sys test mutating GLOBAL concurrently (mirroring Zig's serial run).
+    fn reset_global() -> std::sync::MutexGuard<'static, ()> {
+        let guard = lock_tests();
+        GLOBAL.clear_poison();
+        let mut g = GLOBAL.lock().unwrap();
+        g.userdata = std::ptr::null_mut();
+        g.decode_png = None;
+        g.log = None;
+        drop(g);
+        *terminal_sys::decode_png.write().unwrap() = None;
+        guard
+    }
+
+    #[test]
+    fn set_decode_png_with_null_clears() {
+        // Start from a known state.
+        // global.decode_png = null;
+        // terminal_sys.decode_png = null;
+        let _guard = reset_global();
+
+        // try std.testing.expectEqual(Result.success, set(.decode_png, null));
+        assert_eq!(Result::Success, unsafe {
+            set(Option_::DecodePng, std::ptr::null())
+        });
+        // try std.testing.expect(terminal_sys.decode_png == null);
+        assert!(terminal_sys::decode_png.read().unwrap().is_none());
+    }
+
+    #[test]
+    fn set_decode_png_installs_wrapper() {
+        let _guard = reset_global();
+        // const S = struct { fn decode(...) bool { out.* = .{...}; return true; } };
+        extern "C" fn decode(
+            _u: *mut std::ffi::c_void,
+            _a: *const CAllocator,
+            _d: *const u8,
+            _l: usize,
+            out: *mut Image,
+        ) -> bool {
+            unsafe {
+                *out = Image {
+                    width: 1,
+                    height: 1,
+                    data: std::ptr::null_mut(),
+                    data_len: 0,
+                };
+            }
+            true
+        }
+
+        // try std.testing.expectEqual(Result.success, set(.decode_png, @ptrCast(&S.decode)));
+        assert_eq!(Result::Success, unsafe {
+            set(Option_::DecodePng, decode as *const std::ffi::c_void)
+        });
+        // try std.testing.expect(terminal_sys.decode_png != null);
+        assert!(terminal_sys::decode_png.read().unwrap().is_some());
+
+        // Clear it again.
+        // try std.testing.expectEqual(Result.success, set(.decode_png, null));
+        assert_eq!(Result::Success, unsafe {
+            set(Option_::DecodePng, std::ptr::null())
+        });
+        // try std.testing.expect(terminal_sys.decode_png == null);
+        assert!(terminal_sys::decode_png.read().unwrap().is_none());
+    }
+
+    #[test]
+    fn set_log_with_null_clears() {
+        // global.log = null;
+        let _guard = reset_global();
+
+        // try std.testing.expectEqual(Result.success, set(.log, null));
+        assert_eq!(Result::Success, unsafe {
+            set(Option_::Log, std::ptr::null())
+        });
+        // try std.testing.expect(global.log == null);
+        assert!(GLOBAL.lock().unwrap().log.is_none());
+    }
+
+    #[test]
+    fn set_log_installs_callback() {
+        let _guard = reset_global();
+        // const S = struct { var called: bool = false; fn logCb(...) void { called = true; } };
+        static CALLED: Mutex<bool> = Mutex::new(false);
+        extern "C" fn log_cb(
+            _u: *mut std::ffi::c_void,
+            _lvl: LogLevel,
+            _sp: *const u8,
+            _sl: usize,
+            _mp: *const u8,
+            _ml: usize,
+        ) {
+            *CALLED.lock().unwrap() = true;
+        }
+        *CALLED.lock().unwrap() = false;
+
+        // try std.testing.expectEqual(Result.success, set(.log, @ptrCast(&S.logCb)));
+        assert_eq!(Result::Success, unsafe {
+            set(Option_::Log, log_cb as *const std::ffi::c_void)
+        });
+        // try std.testing.expect(global.log != null);
+        assert!(GLOBAL.lock().unwrap().log.is_some());
+
+        // emitLog(.info, "test", "hello");
+        emit_log(LogLevel::Info, b"test", b"hello");
+        // try std.testing.expect(S.called);
+        assert!(*CALLED.lock().unwrap());
+
+        // Clear it again.
+        // S.called = false;
+        *CALLED.lock().unwrap() = false;
+        // try std.testing.expectEqual(Result.success, set(.log, null));
+        assert_eq!(Result::Success, unsafe {
+            set(Option_::Log, std::ptr::null())
+        });
+        // try std.testing.expect(global.log == null);
+        assert!(GLOBAL.lock().unwrap().log.is_none());
+
+        // emitLog(.info, "test", "should not arrive");
+        emit_log(LogLevel::Info, b"test", b"should not arrive");
+        // try std.testing.expect(!S.called);
+        assert!(!*CALLED.lock().unwrap());
+    }
+
+    // PORT NOTE: the four logFn tests use a callback that accumulates the call
+    // count + total message length into module-static counters. Rust closures
+    // can't be `extern "C"`, so we use a `Mutex`-guarded static pair, matching
+    // the Zig `var call_count`/`var total_len`. The shared GLOBAL `TEST_LOCK`
+    // (held via `reset_global`) serializes them so the statics don't race.
+    static CALL_COUNT: Mutex<usize> = Mutex::new(0);
+    static TOTAL_LEN: Mutex<usize> = Mutex::new(0);
+
+    extern "C" fn counting_log_cb(
+        _u: *mut std::ffi::c_void,
+        _lvl: LogLevel,
+        _sp: *const u8,
+        _sl: usize,
+        _mp: *const u8,
+        msg_len: usize,
+    ) {
+        *CALL_COUNT.lock().unwrap() += 1;
+        *TOTAL_LEN.lock().unwrap() += msg_len;
+        // Each chunk must not exceed the buffer size.
+        debug_assert!(msg_len <= 2048);
+    }
+
+    fn install_counting_log() {
+        // Recover any poison left by a previously panicking assertion (the
+        // TEST_LOCK serializes us, so this is a clean reset point).
+        CALL_COUNT.clear_poison();
+        TOTAL_LEN.clear_poison();
+        *CALL_COUNT.lock().unwrap() = 0;
+        *TOTAL_LEN.lock().unwrap() = 0;
+        GLOBAL.lock().unwrap().log = Some(counting_log_cb);
+    }
+
+    #[test]
+    fn logfn_small_message_single_chunk() {
+        let _guard = reset_global();
+        install_counting_log();
+
+        // logFn(.info, .default, "hello", .{});
+        log_fn(StdLevel::Info, "", format_args!("hello"));
+
+        // try std.testing.expectEqual(@as(usize, 1), S.call_count);
+        assert_eq!(1usize, *CALL_COUNT.lock().unwrap());
+        // try std.testing.expectEqual(@as(usize, 5), S.total_len);
+        assert_eq!(5usize, *TOTAL_LEN.lock().unwrap());
+
+        GLOBAL.lock().unwrap().log = None;
+    }
+
+    #[test]
+    fn logfn_message_exceeding_chunk_size_is_split() {
+        let _guard = reset_global();
+        install_counting_log();
+
+        // Format a message larger than the 2048-byte buffer.
+        // 'A' repeated 3000 times via a fill format.
+        // const fill: [3000]u8 = .{0x41} ** 3000;
+        let fill = [0x41u8; 3000];
+        // logFn(.info, .default, "{s}", .{@as([]const u8, &fill)});
+        log_fn(
+            StdLevel::Info,
+            "",
+            format_args!("{}", core::str::from_utf8(&fill).unwrap()),
+        );
+
+        // try std.testing.expect(S.call_count >= 2);
+        assert!(*CALL_COUNT.lock().unwrap() >= 2);
+        // try std.testing.expectEqual(@as(usize, 3000), S.total_len);
+        assert_eq!(3000usize, *TOTAL_LEN.lock().unwrap());
+
+        GLOBAL.lock().unwrap().log = None;
+    }
+
+    #[test]
+    fn logfn_message_exactly_at_chunk_boundary() {
+        let _guard = reset_global();
+        install_counting_log();
+
+        // Exactly 2048 bytes — should emit one full chunk, no remainder.
+        // const fill: [2048]u8 = .{0x42} ** 2048;
+        let fill = [0x42u8; 2048];
+        log_fn(
+            StdLevel::Info,
+            "",
+            format_args!("{}", core::str::from_utf8(&fill).unwrap()),
+        );
+
+        // try std.testing.expectEqual(@as(usize, 1), S.call_count);
+        assert_eq!(1usize, *CALL_COUNT.lock().unwrap());
+        // try std.testing.expectEqual(@as(usize, 2048), S.total_len);
+        assert_eq!(2048usize, *TOTAL_LEN.lock().unwrap());
+
+        GLOBAL.lock().unwrap().log = None;
+    }
+
+    #[test]
+    fn logfn_message_exactly_double_chunk_size() {
+        let _guard = reset_global();
+        install_counting_log();
+
+        // Exactly 4096 bytes — should emit exactly two full chunks.
+        // const fill: [4096]u8 = .{0x43} ** 4096;
+        let fill = [0x43u8; 4096];
+        log_fn(
+            StdLevel::Info,
+            "",
+            format_args!("{}", core::str::from_utf8(&fill).unwrap()),
+        );
+
+        // try std.testing.expectEqual(@as(usize, 2), S.call_count);
+        assert_eq!(2usize, *CALL_COUNT.lock().unwrap());
+        // try std.testing.expectEqual(@as(usize, 4096), S.total_len);
+        assert_eq!(4096usize, *TOTAL_LEN.lock().unwrap());
+
+        GLOBAL.lock().unwrap().log = None;
+    }
+
+    #[test]
+    fn set_userdata() {
+        let _guard = reset_global();
+        // var data: u32 = 42;
+        let mut data: u32 = 42;
+        // try std.testing.expectEqual(Result.success, set(.userdata, @ptrCast(&data)));
+        assert_eq!(Result::Success, unsafe {
+            set(
+                Option_::Userdata,
+                &mut data as *mut u32 as *const std::ffi::c_void,
+            )
+        });
+        // try std.testing.expect(global.userdata == @as(?*anyopaque, @ptrCast(&data)));
+        assert_eq!(
+            GLOBAL.lock().unwrap().userdata,
+            &mut data as *mut u32 as *mut std::ffi::c_void
+        );
+
+        // Clear it.
+        // try std.testing.expectEqual(Result.success, set(.userdata, null));
+        assert_eq!(Result::Success, unsafe {
+            set(Option_::Userdata, std::ptr::null())
+        });
+        // try std.testing.expect(global.userdata == null);
+        assert!(GLOBAL.lock().unwrap().userdata.is_null());
+    }
+}

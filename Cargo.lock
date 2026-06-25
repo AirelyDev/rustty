@@ -588,6 +588,7 @@ dependencies = [
 name = "rustty-vt-c"
 version = "0.1.0"
 dependencies = [
+ "rustty-lib",
  "rustty-vt",
 ]
 
