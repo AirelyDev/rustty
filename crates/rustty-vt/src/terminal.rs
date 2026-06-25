@@ -4867,6 +4867,19 @@ mod tests {
         }
     }
 
+    // Same as `opts` but with a caller-supplied `max_scrollback`, mirroring
+    // reference inits like `.{ .rows, .cols, .max_scrollback = 0 }`.
+    fn opts_sb(
+        cols: size::CellCountInt,
+        rows: size::CellCountInt,
+        max_scrollback: usize,
+    ) -> Options {
+        Options {
+            max_scrollback,
+            ..opts(cols, rows)
+        }
+    }
+
     // Screen-point getCell helper mirroring the reference
     // `t.screens.active.pages.getCell(.{ .screen = .{ .x, .y } })`.
     fn screen_pt(x: size::CellCountInt, y: u32) -> point::Point {
@@ -4877,6 +4890,12 @@ mod tests {
     // `.{ .active = .{ .x, .y } }` literals used in the dirty-bit assertions.
     fn active_pt(x: size::CellCountInt, y: u32) -> point::Point {
         point::Point::Active(point::Coordinate { x, y })
+    }
+
+    // Viewport-point helper mirroring the reference
+    // `t.screens.active.pages.getCell(.{ .viewport = .{ .x, .y } })` literals.
+    fn viewport_pt(x: size::CellCountInt, y: u32) -> point::Point {
+        point::Point::Viewport(point::Coordinate { x, y })
     }
 
     // test "Terminal: zero-width character attaches to pending wrap cell"
@@ -9141,6 +9160,469 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "Terminal: scrollUp moves hyperlink"
+    #[test]
+    fn terminal_scroll_up_moves_hyperlink() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.active_mut().end_hyperlink();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_cursor_pos(2, 2);
+        t.scroll_up(1).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "DEF\nGHI".as_bytes());
+        }
+
+        for x in 0..3 {
+            let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 0)).unwrap();
+            let row = list_cell.row;
+            assert!(unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+            assert_eq!(id, 1 as crate::hyperlink::Id);
+            let page = unsafe { core::ptr::addr_of_mut!((*list_cell.node).data) };
+            assert_eq!(unsafe { (*page).hyperlink_set.count() }, 1);
+        }
+        for x in 0..3 {
+            let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 1)).unwrap();
+            let row = list_cell.row;
+            assert!(!unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(!unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) };
+            assert!(id.is_none());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollUp clears hyperlink"
+    #[test]
+    fn terminal_scroll_up_clears_hyperlink() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.active_mut().end_hyperlink();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_cursor_pos(2, 2);
+        t.scroll_up(1).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "DEF\nGHI".as_bytes());
+        }
+
+        for x in 0..3 {
+            let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 0)).unwrap();
+            let row = list_cell.row;
+            assert!(!unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(!unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) };
+            assert!(id.is_none());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollUp top/bottom scroll region"
+    #[test]
+    fn terminal_scroll_up_top_bottom_scroll_region() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_top_and_bottom_margin(2, 3);
+        t.set_cursor_pos(1, 1);
+
+        t.clear_dirty();
+        t.scroll_up(1).unwrap();
+
+        // This is dirty because the cursor moves from this row
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollUp left/right scroll region"
+    #[test]
+    fn terminal_scroll_up_left_right_scroll_region() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.print_string("ABC123".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF456".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI789".as_bytes()).unwrap();
+        t.scrolling_region.left = 1;
+        t.scrolling_region.right = 3;
+        t.set_cursor_pos(2, 2);
+
+        let cursor_x = unsafe { (*t.screens.active).cursor.x };
+        let cursor_y = unsafe { (*t.screens.active).cursor.y };
+        t.clear_dirty();
+        t.scroll_up(1).unwrap();
+        assert_eq!(cursor_x, unsafe { (*t.screens.active).cursor.x });
+        assert_eq!(cursor_y, unsafe { (*t.screens.active).cursor.y });
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AEF423\nDHI756\nG   89".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollUp left/right scroll region hyperlink"
+    #[test]
+    fn terminal_scroll_up_left_right_scroll_region_hyperlink() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.print_string("ABC123".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+        t.print_string("DEF456".as_bytes()).unwrap();
+        t.active_mut().end_hyperlink();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI789".as_bytes()).unwrap();
+        t.scrolling_region.left = 1;
+        t.scrolling_region.right = 3;
+        t.set_cursor_pos(2, 2);
+        t.scroll_up(1).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AEF423\nDHI756\nG   89".as_bytes());
+        }
+
+        // First row gets some hyperlinks
+        {
+            for x in 0..1 {
+                let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 0)).unwrap();
+                let cell = list_cell.cell;
+                assert!(!unsafe { (*cell).hyperlink() });
+                let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) };
+                assert!(id.is_none());
+            }
+            for x in 1..4 {
+                let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 0)).unwrap();
+                let row = list_cell.row;
+                assert!(unsafe { (*row).hyperlink() });
+                let cell = list_cell.cell;
+                assert!(unsafe { (*cell).hyperlink() });
+                let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+                assert_eq!(id, 1 as crate::hyperlink::Id);
+                let page = unsafe { core::ptr::addr_of_mut!((*list_cell.node).data) };
+                assert_eq!(unsafe { (*page).hyperlink_set.count() }, 1);
+            }
+            for x in 4..6 {
+                let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 0)).unwrap();
+                let cell = list_cell.cell;
+                assert!(!unsafe { (*cell).hyperlink() });
+                let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) };
+                assert!(id.is_none());
+            }
+        }
+
+        // Second row preserves hyperlink where we didn't scroll
+        {
+            for x in 0..1 {
+                let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 1)).unwrap();
+                let row = list_cell.row;
+                assert!(unsafe { (*row).hyperlink() });
+                let cell = list_cell.cell;
+                assert!(unsafe { (*cell).hyperlink() });
+                let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+                assert_eq!(id, 1 as crate::hyperlink::Id);
+                let page = unsafe { core::ptr::addr_of_mut!((*list_cell.node).data) };
+                assert_eq!(unsafe { (*page).hyperlink_set.count() }, 1);
+            }
+            for x in 1..4 {
+                let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 1)).unwrap();
+                let cell = list_cell.cell;
+                assert!(!unsafe { (*cell).hyperlink() });
+                let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) };
+                assert!(id.is_none());
+            }
+            for x in 4..6 {
+                let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 1)).unwrap();
+                let row = list_cell.row;
+                assert!(unsafe { (*row).hyperlink() });
+                let cell = list_cell.cell;
+                assert!(unsafe { (*cell).hyperlink() });
+                let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+                assert_eq!(id, 1 as crate::hyperlink::Id);
+                let page = unsafe { core::ptr::addr_of_mut!((*list_cell.node).data) };
+                assert_eq!(unsafe { (*page).hyperlink_set.count() }, 1);
+            }
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollUp preserves pending wrap"
+    #[test]
+    fn terminal_scroll_up_preserves_pending_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_cursor_pos(1, 5);
+        t.print('A' as u32).unwrap();
+        t.set_cursor_pos(2, 5);
+        t.print('B' as u32).unwrap();
+        t.set_cursor_pos(3, 5);
+        t.print('C' as u32).unwrap();
+        t.scroll_up(1).unwrap();
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "    B\n    C\n\nX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollUp full top/bottom region"
+    #[test]
+    fn terminal_scroll_up_full_top_bottom_region() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("top".as_bytes()).unwrap();
+        t.set_cursor_pos(5, 1);
+        t.print_string("ABCDE".as_bytes()).unwrap();
+        t.set_top_and_bottom_margin(2, 5);
+
+        t.clear_dirty();
+        t.scroll_up(4).unwrap();
+
+        // This is dirty because the cursor moves from this row
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "top".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollUp full top/bottomleft/right scroll region"
+    #[test]
+    fn terminal_scroll_up_full_top_bottomleft_right_scroll_region() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("top".as_bytes()).unwrap();
+        t.set_cursor_pos(5, 1);
+        t.print_string("ABCDE".as_bytes()).unwrap();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_top_and_bottom_margin(2, 5);
+        t.set_left_and_right_margin(2, 4);
+
+        t.clear_dirty();
+        t.scroll_up(4).unwrap();
+
+        // This is dirty because the cursor moves from this row
+        assert!(t.is_dirty(active_pt(0, 0)));
+        for y in 1..5u32 {
+            assert!(t.is_dirty(active_pt(0, y)));
+        }
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "top\n\n\n\nA   E".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollUp creates scrollback in primary screen"
+    #[test]
+    fn terminal_scroll_up_creates_scrollback_in_primary_screen() {
+        // When in primary screen with full-width scroll region at top,
+        // scrollUp (CSI S) should push lines into scrollback like xterm.
+        let mut t = Terminal::init(Global, opts_sb(5, 5, 10)).unwrap();
+
+        // Fill the screen with content
+        t.print_string("AAAAA".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("BBBBB".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("CCCCC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DDDDD".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("EEEEE".as_bytes()).unwrap();
+
+        t.clear_dirty();
+
+        // Scroll up by 1, which should push "AAAAA" into scrollback
+        t.scroll_up(1).unwrap();
+
+        // The cursor row (new empty row) should be dirty
+        assert!(unsafe { (*(*t.screens.active).cursor.page_row).dirty() });
+
+        // The active screen should now show BBBBB through EEEEE plus one blank line
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "BBBBB\nCCCCC\nDDDDD\nEEEEE".as_bytes());
+        }
+
+        // Now scroll to the top to see scrollback - AAAAA should be there
+        t.active_mut().scroll(crate::screen::Scroll::Top);
+        {
+            let str = t.plain_string(Global).unwrap();
+            // Should see AAAAA in scrollback
+            assert_eq!(
+                str.as_slice(),
+                "AAAAA\nBBBBB\nCCCCC\nDDDDD\nEEEEE".as_bytes()
+            );
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollUp with max_scrollback zero"
+    #[test]
+    fn terminal_scroll_up_with_max_scrollback_zero() {
+        // When max_scrollback is 0, scrollUp should still work but not retain history
+        let mut t = Terminal::init(Global, opts_sb(5, 5, 0)).unwrap();
+
+        t.print_string("AAAAA".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("BBBBB".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("CCCCC".as_bytes()).unwrap();
+
+        t.scroll_up(1).unwrap();
+
+        // Active screen should show scrolled content
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "BBBBB\nCCCCC".as_bytes());
+        }
+
+        // Scroll to top - should be same as active since no scrollback
+        t.active_mut().scroll(crate::screen::Scroll::Top);
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "BBBBB\nCCCCC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollUp with max_scrollback zero and top margin"
+    #[test]
+    fn terminal_scroll_up_with_max_scrollback_zero_and_top_margin() {
+        // When max_scrollback is 0 and top margin is set, should use deleteLines path
+        let mut t = Terminal::init(Global, opts_sb(5, 5, 0)).unwrap();
+
+        t.print_string("AAAAA".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("BBBBB".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("CCCCC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DDDDD".as_bytes()).unwrap();
+
+        // Set top margin (not at row 0)
+        t.set_top_and_bottom_margin(2, 5);
+
+        t.scroll_up(1).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            // First row preserved, rest scrolled
+            assert_eq!(str.as_slice(), "AAAAA\nCCCCC\nDDDDD".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollUp with max_scrollback zero and left/right margin"
+    #[test]
+    fn terminal_scroll_up_with_max_scrollback_zero_and_left_right_margin() {
+        // When max_scrollback is 0 with left/right margins, uses deleteLines path
+        let mut t = Terminal::init(Global, opts_sb(10, 5, 0)).unwrap();
+
+        t.print_string("AAAAABBBBB".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("CCCCCDDDDD".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("EEEEEFFFFF".as_bytes()).unwrap();
+
+        // Set left/right margins (columns 2-6, 1-indexed = indices 1-5)
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(2, 6);
+
+        t.scroll_up(1).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            // cols 1-5 scroll, col 0 and cols 6+ preserved
+            assert_eq!(
+                str.as_slice(),
+                "ACCCCDBBBB\nCEEEEFDDDD\nE     FFFF".as_bytes()
+            );
+        }
+
+        t.deinit(Global);
+    }
+
     // test "Terminal: scrollDown simple"
     #[test]
     fn terminal_scroll_down_simple() {
@@ -9174,6 +9656,274 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "Terminal: scrollDown hyperlink moves"
+    #[test]
+    fn terminal_scroll_down_hyperlink_moves() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.active_mut().end_hyperlink();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_cursor_pos(2, 2);
+        t.scroll_down(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\nABC\nDEF\nGHI".as_bytes());
+        }
+
+        for x in 0..3 {
+            let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 1)).unwrap();
+            let row = list_cell.row;
+            assert!(unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+            assert_eq!(id, 1 as crate::hyperlink::Id);
+            let page = unsafe { core::ptr::addr_of_mut!((*list_cell.node).data) };
+            assert_eq!(unsafe { (*page).hyperlink_set.count() }, 1);
+        }
+        for x in 0..3 {
+            let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 0)).unwrap();
+            let row = list_cell.row;
+            assert!(!unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(!unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) };
+            assert!(id.is_none());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollDown outside of scroll region"
+    #[test]
+    fn terminal_scroll_down_outside_of_scroll_region() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_top_and_bottom_margin(3, 4);
+        t.set_cursor_pos(2, 2);
+
+        let cursor_x = unsafe { (*t.screens.active).cursor.x };
+        let cursor_y = unsafe { (*t.screens.active).cursor.y };
+        t.clear_dirty();
+        t.scroll_down(1);
+        assert_eq!(cursor_x, unsafe { (*t.screens.active).cursor.x });
+        assert_eq!(cursor_y, unsafe { (*t.screens.active).cursor.y });
+
+        assert!(!t.is_dirty(active_pt(0, 0)));
+
+        // This is dirty because the cursor moves from this row
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(t.is_dirty(active_pt(0, 3)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\nDEF\n\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollDown left/right scroll region"
+    #[test]
+    fn terminal_scroll_down_left_right_scroll_region() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.print_string("ABC123".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF456".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI789".as_bytes()).unwrap();
+        t.scrolling_region.left = 1;
+        t.scrolling_region.right = 3;
+        t.set_cursor_pos(2, 2);
+
+        let cursor_x = unsafe { (*t.screens.active).cursor.x };
+        let cursor_y = unsafe { (*t.screens.active).cursor.y };
+        t.clear_dirty();
+        t.scroll_down(1);
+        assert_eq!(cursor_x, unsafe { (*t.screens.active).cursor.x });
+        assert_eq!(cursor_y, unsafe { (*t.screens.active).cursor.y });
+
+        for y in 0..4u32 {
+            assert!(t.is_dirty(active_pt(0, y)));
+        }
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A   23\nDBC156\nGEF489\n HI7".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollDown left/right scroll region hyperlink"
+    #[test]
+    fn terminal_scroll_down_left_right_scroll_region_hyperlink() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+        t.print_string("ABC123".as_bytes()).unwrap();
+        t.active_mut().end_hyperlink();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF456".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI789".as_bytes()).unwrap();
+        t.scrolling_region.left = 1;
+        t.scrolling_region.right = 3;
+        t.set_cursor_pos(2, 2);
+        t.scroll_down(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A   23\nDBC156\nGEF489\n HI7".as_bytes());
+        }
+
+        // First row preserves hyperlink where we didn't scroll
+        {
+            for x in 0..1 {
+                let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 0)).unwrap();
+                let row = list_cell.row;
+                assert!(unsafe { (*row).hyperlink() });
+                let cell = list_cell.cell;
+                assert!(unsafe { (*cell).hyperlink() });
+                let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+                assert_eq!(id, 1 as crate::hyperlink::Id);
+                let page = unsafe { core::ptr::addr_of_mut!((*list_cell.node).data) };
+                assert_eq!(unsafe { (*page).hyperlink_set.count() }, 1);
+            }
+            for x in 1..4 {
+                let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 0)).unwrap();
+                let cell = list_cell.cell;
+                assert!(!unsafe { (*cell).hyperlink() });
+                let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) };
+                assert!(id.is_none());
+            }
+            for x in 4..6 {
+                let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 0)).unwrap();
+                let row = list_cell.row;
+                assert!(unsafe { (*row).hyperlink() });
+                let cell = list_cell.cell;
+                assert!(unsafe { (*cell).hyperlink() });
+                let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+                assert_eq!(id, 1 as crate::hyperlink::Id);
+                let page = unsafe { core::ptr::addr_of_mut!((*list_cell.node).data) };
+                assert_eq!(unsafe { (*page).hyperlink_set.count() }, 1);
+            }
+        }
+
+        // Second row gets some hyperlinks
+        {
+            for x in 0..1 {
+                let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 1)).unwrap();
+                let cell = list_cell.cell;
+                assert!(!unsafe { (*cell).hyperlink() });
+                let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) };
+                assert!(id.is_none());
+            }
+            for x in 1..4 {
+                let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 1)).unwrap();
+                let row = list_cell.row;
+                assert!(unsafe { (*row).hyperlink() });
+                let cell = list_cell.cell;
+                assert!(unsafe { (*cell).hyperlink() });
+                let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+                assert_eq!(id, 1 as crate::hyperlink::Id);
+                let page = unsafe { core::ptr::addr_of_mut!((*list_cell.node).data) };
+                assert_eq!(unsafe { (*page).hyperlink_set.count() }, 1);
+            }
+            for x in 4..6 {
+                let list_cell = t.active_mut().pages.get_cell(viewport_pt(x, 1)).unwrap();
+                let cell = list_cell.cell;
+                assert!(!unsafe { (*cell).hyperlink() });
+                let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) };
+                assert!(id.is_none());
+            }
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollDown outside of left/right scroll region"
+    #[test]
+    fn terminal_scroll_down_outside_of_left_right_scroll_region() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.print_string("ABC123".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF456".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI789".as_bytes()).unwrap();
+        t.scrolling_region.left = 1;
+        t.scrolling_region.right = 3;
+        t.set_cursor_pos(1, 1);
+
+        let cursor_x = unsafe { (*t.screens.active).cursor.x };
+        let cursor_y = unsafe { (*t.screens.active).cursor.y };
+        t.clear_dirty();
+        t.scroll_down(1);
+        assert_eq!(cursor_x, unsafe { (*t.screens.active).cursor.x });
+        assert_eq!(cursor_y, unsafe { (*t.screens.active).cursor.y });
+
+        for y in 0..4u32 {
+            assert!(t.is_dirty(active_pt(0, y)));
+        }
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A   23\nDBC156\nGEF489\n HI7".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scrollDown preserves pending wrap"
+    #[test]
+    fn terminal_scroll_down_preserves_pending_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 10)).unwrap();
+
+        t.set_cursor_pos(1, 5);
+        t.print('A' as u32).unwrap();
+        t.set_cursor_pos(2, 5);
+        t.print('B' as u32).unwrap();
+        t.set_cursor_pos(3, 5);
+        t.print('C' as u32).unwrap();
+        t.scroll_down(1);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n    A\n    B\nX   C".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
     // test "Terminal: reverseIndex"
     #[test]
     fn terminal_reverse_index() {
@@ -9197,6 +9947,208 @@ mod tests {
         {
             let str = t.plain_string(Global).unwrap();
             assert_eq!(str.as_slice(), "A\nBD\nC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: reverseIndex from the top"
+    #[test]
+    fn terminal_reverse_index_from_the_top() {
+        let mut t = Terminal::init(Global, opts(2, 5)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('B' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+
+        t.set_cursor_pos(1, 1);
+        t.reverse_index();
+        t.print('D' as u32).unwrap();
+
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.set_cursor_pos(1, 1);
+        t.reverse_index();
+        t.print('E' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "E\nD\nA\nB".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: reverseIndex top of scrolling region"
+    #[test]
+    fn terminal_reverse_index_top_of_scrolling_region() {
+        let mut t = Terminal::init(Global, opts(2, 10)).unwrap();
+
+        // Initial value
+        t.set_cursor_pos(2, 1);
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('B' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('C' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('D' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+
+        // Set our scroll region
+        t.set_top_and_bottom_margin(2, 5);
+        t.set_cursor_pos(2, 1);
+        t.reverse_index();
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\nX\nA\nB\nC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: reverseIndex top of screen"
+    #[test]
+    fn terminal_reverse_index_top_of_screen() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.set_cursor_pos(2, 1);
+        t.print('B' as u32).unwrap();
+        t.set_cursor_pos(3, 1);
+        t.print('C' as u32).unwrap();
+        t.set_cursor_pos(1, 1);
+        t.reverse_index();
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "X\nA\nB\nC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: reverseIndex not top of screen"
+    #[test]
+    fn terminal_reverse_index_not_top_of_screen() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.set_cursor_pos(2, 1);
+        t.print('B' as u32).unwrap();
+        t.set_cursor_pos(3, 1);
+        t.print('C' as u32).unwrap();
+        t.set_cursor_pos(2, 1);
+        t.reverse_index();
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "X\nB\nC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: reverseIndex top/bottom margins"
+    #[test]
+    fn terminal_reverse_index_top_bottom_margins() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.set_cursor_pos(2, 1);
+        t.print('B' as u32).unwrap();
+        t.set_cursor_pos(3, 1);
+        t.print('C' as u32).unwrap();
+        t.set_top_and_bottom_margin(2, 3);
+        t.set_cursor_pos(2, 1);
+        t.reverse_index();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A\n\nB".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: reverseIndex outside top/bottom margins"
+    #[test]
+    fn terminal_reverse_index_outside_top_bottom_margins() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.set_cursor_pos(2, 1);
+        t.print('B' as u32).unwrap();
+        t.set_cursor_pos(3, 1);
+        t.print('C' as u32).unwrap();
+        t.set_top_and_bottom_margin(2, 3);
+        t.set_cursor_pos(1, 1);
+        t.reverse_index();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A\nB\nC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: reverseIndex left/right margins"
+    #[test]
+    fn terminal_reverse_index_left_right_margins() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.set_cursor_pos(2, 1);
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.set_cursor_pos(3, 1);
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(2, 3);
+        t.set_cursor_pos(1, 2);
+        t.reverse_index();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A\nDBC\nGEF\n HI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: reverseIndex outside left/right margins"
+    #[test]
+    fn terminal_reverse_index_outside_left_right_margins() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.set_cursor_pos(2, 1);
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.set_cursor_pos(3, 1);
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(2, 3);
+        t.set_cursor_pos(1, 1);
+        t.reverse_index();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\nDEF\nGHI".as_bytes());
         }
 
         t.deinit(Global);
@@ -9295,6 +10247,442 @@ mod tests {
         {
             let str = t.plain_string(Global).unwrap();
             assert_eq!(str.as_slice(), "A\n X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index scrolling with hyperlink"
+    #[test]
+    fn terminal_index_scrolling_with_hyperlink() {
+        let mut t = Terminal::init(Global, opts(2, 5)).unwrap();
+
+        t.set_cursor_pos(5, 1);
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+        t.print('A' as u32).unwrap();
+        t.active_mut().end_hyperlink();
+        t.cursor_left(1); // undo moving right from 'A'
+        t.index().unwrap();
+        t.print('B' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n\n\nA\nB".as_bytes());
+        }
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(viewport_pt(0, 3)).unwrap();
+            let row = list_cell.row;
+            assert!(unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+            assert_eq!(id, 1 as crate::hyperlink::Id);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(viewport_pt(0, 4)).unwrap();
+            let row = list_cell.row;
+            assert!(!unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(!unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) };
+            assert!(id.is_none());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index bottom of primary screen"
+    #[test]
+    fn terminal_index_bottom_of_primary_screen() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_cursor_pos(5, 1);
+        t.print('A' as u32).unwrap();
+        t.clear_dirty();
+        t.index().unwrap();
+        t.print('X' as u32).unwrap();
+
+        assert!(t.is_dirty(active_pt(0, 3)));
+        assert!(t.is_dirty(active_pt(0, 4)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n\n\nA\n X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index bottom of primary screen background sgr"
+    #[test]
+    fn terminal_index_bottom_of_primary_screen_background_sgr() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_cursor_pos(5, 1);
+        t.print('A' as u32).unwrap();
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.index().unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n\n\nA".as_bytes());
+            for x in 0..5 {
+                let list_cell = t.active_mut().pages.get_cell(active_pt(x, 4)).unwrap();
+                let cell = list_cell.cell;
+                assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+                assert_eq!(
+                    pagepkg::CellRgb {
+                        r: 0xFF,
+                        g: 0,
+                        b: 0,
+                    },
+                    unsafe { (*cell).content_color_rgb() }
+                );
+            }
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index inside scroll region"
+    #[test]
+    fn terminal_index_inside_scroll_region() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(1, 3);
+        t.print('A' as u32).unwrap();
+        t.clear_dirty();
+        t.index().unwrap();
+        t.print('X' as u32).unwrap();
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A\n X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index bottom of scroll region with hyperlinks"
+    #[test]
+    fn terminal_index_bottom_of_scroll_region_with_hyperlinks() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(1, 2);
+        t.print('A' as u32).unwrap();
+        t.index().unwrap();
+        t.carriage_return();
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+        t.print('B' as u32).unwrap();
+        t.active_mut().end_hyperlink();
+        t.index().unwrap();
+        t.carriage_return();
+        t.print('C' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "B\nC".as_bytes());
+        }
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(viewport_pt(0, 0)).unwrap();
+            let row = list_cell.row;
+            assert!(unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+            assert_eq!(id, 1 as crate::hyperlink::Id);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(viewport_pt(0, 1)).unwrap();
+            let row = list_cell.row;
+            assert!(!unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(!unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) };
+            assert!(id.is_none());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index bottom of scroll region clear hyperlinks"
+    #[test]
+    fn terminal_index_bottom_of_scroll_region_clear_hyperlinks() {
+        let mut t = Terminal::init(Global, opts_sb(5, 5, 0)).unwrap();
+
+        t.set_top_and_bottom_margin(2, 3);
+        t.set_cursor_pos(2, 1);
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+        t.print('A' as u32).unwrap();
+        t.active_mut().end_hyperlink();
+        t.index().unwrap();
+        t.carriage_return();
+        t.print('B' as u32).unwrap();
+        t.index().unwrap();
+        t.carriage_return();
+        t.print('C' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\nB\nC".as_bytes());
+        }
+
+        for y in 1..3 {
+            let list_cell = t.active_mut().pages.get_cell(viewport_pt(0, y)).unwrap();
+            let row = list_cell.row;
+            assert!(!unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(!unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) };
+            assert!(id.is_none());
+            let page = unsafe { core::ptr::addr_of_mut!((*list_cell.node).data) };
+            assert_eq!(unsafe { (*page).hyperlink_set.count() }, 0);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index bottom of scroll region with background SGR"
+    #[test]
+    fn terminal_index_bottom_of_scroll_region_with_background_sgr() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(1, 3);
+        t.set_cursor_pos(4, 1);
+        t.print('B' as u32).unwrap();
+        t.set_cursor_pos(3, 1);
+        t.print('A' as u32).unwrap();
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.index().unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\nA\n\nB".as_bytes());
+        }
+
+        for x in 0..t.cols {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(x, 2)).unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(
+                pagepkg::CellRgb {
+                    r: 0xFF,
+                    g: 0,
+                    b: 0,
+                },
+                unsafe { (*cell).content_color_rgb() }
+            );
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index bottom of primary screen with scroll region"
+    #[test]
+    fn terminal_index_bottom_of_primary_screen_with_scroll_region() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(1, 3);
+        t.set_cursor_pos(3, 1);
+        t.print('A' as u32).unwrap();
+        t.set_cursor_pos(5, 1);
+        t.clear_dirty();
+        t.index().unwrap();
+        t.index().unwrap();
+        t.index().unwrap();
+        t.print('X' as u32).unwrap();
+
+        for y in 0..4u32 {
+            assert!(!t.is_dirty(active_pt(0, y)));
+        }
+        assert!(t.is_dirty(active_pt(0, 4)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n\nA\n\nX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index outside left/right margin"
+    #[test]
+    fn terminal_index_outside_left_right_margin() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(1, 3);
+        t.scrolling_region.left = 3;
+        t.scrolling_region.right = 5;
+        t.set_cursor_pos(3, 3);
+        t.print('A' as u32).unwrap();
+        t.set_cursor_pos(3, 1);
+        t.clear_dirty();
+        t.index().unwrap();
+        t.print('X' as u32).unwrap();
+
+        assert!(t.is_dirty(active_pt(0, 2)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n\nX A".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index inside left/right margin"
+    #[test]
+    fn terminal_index_inside_left_right_margin() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.print_string("AAAAAA".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("AAAAAA".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("AAAAAA".as_bytes()).unwrap();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_top_and_bottom_margin(1, 3);
+        t.set_left_and_right_margin(1, 3);
+        t.set_cursor_pos(3, 1);
+
+        t.clear_dirty();
+        t.index().unwrap();
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 2);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AAAAAA\nAAAAAA\n   AAA".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index bottom of scroll region creates scrollback"
+    #[test]
+    fn terminal_index_bottom_of_scroll_region_creates_scrollback() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(1, 3);
+        t.print_string("1\n2\n3".as_bytes()).unwrap();
+        t.set_cursor_pos(4, 1);
+        t.print('X' as u32).unwrap();
+        t.set_cursor_pos(3, 1);
+        t.index().unwrap();
+        t.print('Y' as u32).unwrap();
+
+        {
+            let str = t
+                .active_mut()
+                .dump_string_alloc(Global, viewport_pt(0, 0))
+                .unwrap();
+            assert_eq!(str.as_slice(), "2\n3\nY\nX".as_bytes());
+        }
+        {
+            let str = t
+                .active_mut()
+                .dump_string_alloc(Global, screen_pt(0, 0))
+                .unwrap();
+            assert_eq!(str.as_slice(), "1\n2\n3\nY\nX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index bottom of scroll region no scrollback"
+    #[test]
+    fn terminal_index_bottom_of_scroll_region_no_scrollback() {
+        let mut t = Terminal::init(Global, opts_sb(5, 5, 0)).unwrap();
+
+        t.set_top_and_bottom_margin(1, 3);
+        t.set_cursor_pos(4, 1);
+        t.print('B' as u32).unwrap();
+        t.set_cursor_pos(3, 1);
+        t.print('A' as u32).unwrap();
+        t.clear_dirty();
+        t.index().unwrap();
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\nA\n X\nB".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: index bottom of scroll region blank line preserves SGR"
+    #[test]
+    fn terminal_index_bottom_of_scroll_region_blank_line_preserves_sgr() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(1, 3);
+        t.print_string("1\n2\n3".as_bytes()).unwrap();
+        t.set_cursor_pos(4, 1);
+        t.print('X' as u32).unwrap();
+        t.set_cursor_pos(3, 1);
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.index().unwrap();
+
+        {
+            let str = t
+                .active_mut()
+                .dump_string_alloc(Global, viewport_pt(0, 0))
+                .unwrap();
+            assert_eq!(str.as_slice(), "2\n3\n\nX".as_bytes());
+        }
+        {
+            let str = t
+                .active_mut()
+                .dump_string_alloc(Global, screen_pt(0, 0))
+                .unwrap();
+            assert_eq!(str.as_slice(), "1\n2\n3\n\nX".as_bytes());
+        }
+        for x in 0..t.cols {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(x, 2)).unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(
+                pagepkg::CellRgb {
+                    r: 0xFF,
+                    g: 0,
+                    b: 0,
+                },
+                unsafe { (*cell).content_color_rgb() }
+            );
         }
 
         t.deinit(Global);
