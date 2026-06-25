@@ -92,3 +92,25 @@ sub-batch full Miri is therefore **infeasible** (66 min × every sub-batch).
 
 This extends, not weakens, the gate: ASan + discipline cover per-sub-batch; full
 Miri still runs, at crate-completion granularity instead of per-sub-batch.
+
+---
+
+## UPDATE (post Screen-SCC): the compile wall was an anomaly — per-sub-batch Miri RESTORED
+
+The vt-11a "66+ min Miri compile" was NOT reproducible. An isolated full-crate Miri
+run on the Screen-SCC clone tests (the highest Stacked-Borrows risk — the pin-remap
+into cloned pages) **compiled AND ran 15 clone tests in 44 s total, 0 UB / 0 leak**.
+The 66-min figure was a cold-cache + concurrent-workflow-contention artifact in one
+verify agent, not a fundamental wall.
+
+**Revised go-forward (restores the user's "keep full Miri" preference):**
+- **Per sub-batch:** run Miri on a SMALL subset of the just-filled tests that touch
+  raw pointers (cursor/pin/clone/page-ptr paths) — feasible (~tens of seconds with a
+  warm Miri target cache) — alongside ASan + the `addr_of_mut!` discipline. Run Miri
+  in ISOLATION (not concurrent with other heavy workflows) to keep it fast.
+- **At finales:** a broader Miri pass on the module's tractable tests.
+- Heavy/many-page tests still time out under Miri (the original PageList exception
+  list stands) → ASan covers those.
+
+Net: Miri is back as a per-sub-batch gate for the raw-pointer-risky tests on vt-12+,
+not just a periodic check.
