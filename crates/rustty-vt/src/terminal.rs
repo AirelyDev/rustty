@@ -5313,6 +5313,1866 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "Terminal: print single very long line"
+    #[test]
+    fn terminal_print_single_very_long_line() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        // This would crash for issue 1400. So the assertion here is
+        // that we simply do not crash.
+        for _ in 0..1000 {
+            t.print('x' as u32).unwrap();
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print wide char"
+    #[test]
+    fn terminal_print_wide_char() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        t.print(0x1F600).unwrap(); // Smiley face
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1F600);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+        }
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print wide char at edge creates spacer head"
+    #[test]
+    fn terminal_print_wide_char_at_edge_creates_spacer_head() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.set_cursor_pos(1, 10);
+        t.print(0x1F600).unwrap(); // Smiley face
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 1);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(9, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerHead);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1F600);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 1)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+        }
+
+        // Our first row just had a spacer head added which does not affect
+        // rendering so only the place where the wide char was printed
+        // should be marked.
+        // BUT old row is dirty because cursor moved from there
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        assert!(t.is_dirty(screen_pt(0, 1)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print wide char with 1-column width"
+    #[test]
+    fn terminal_print_wide_char_with_1_column_width() {
+        let mut t = Terminal::init(Global, opts(1, 2)).unwrap();
+
+        t.print('😀' as u32).unwrap(); // 0x1F600
+
+        // This prints a space so we should be dirty.
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print wide char in single-width terminal"
+    #[test]
+    fn terminal_print_wide_char_in_single_width_terminal() {
+        let mut t = Terminal::init(Global, opts(1, 80)).unwrap();
+
+        t.print(0x1F600).unwrap(); // Smiley face
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+        }
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print over wide char at 0,0"
+    #[test]
+    fn terminal_print_over_wide_char_at_0_0() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        t.print(0x1F600).unwrap(); // Smiley face
+        t.set_cursor_pos(0, 0);
+        t.print('A' as u32).unwrap();
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 1);
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 'A' as u21);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+        }
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        assert!(!t.is_dirty(screen_pt(0, 1)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print over wide char at col 0 corrupts previous row"
+    #[test]
+    fn terminal_print_over_wide_char_at_col_0_corrupts_previous_row() {
+        // Crash found by AFL++ fuzzer (afl-out/stream/default/crashes/id:000002).
+        //
+        // printCell, when overwriting a wide cell with a narrow cell at x<=1
+        // and y>0, sets the last cell of the previous row to .narrow — even
+        // when that cell is a .spacer_tail rather than a .spacer_head. This
+        // orphans the .wide cell at cols-2.
+        let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+
+        // Fill rows 0 and 1 with wide chars (5 per row on a 10-col terminal).
+        for _ in 0..10 {
+            t.print(0x4E2D).unwrap();
+        }
+
+        // Move cursor to row 1, col 0 (on top of a wide char) and print a
+        // narrow character. This triggers printCell's .wide branch which
+        // corrupts row 0's last cell: col 9 changes from .spacer_tail to
+        // .narrow, orphaning the .wide at col 8.
+        t.set_cursor_pos(2, 1);
+        t.print('A' as u32).unwrap();
+
+        // Row 1, col 0 should be narrow (we just overwrote the wide char).
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            assert_eq!(unsafe { (*list_cell.cell).wide() }, pagepkg::Wide::Narrow);
+        }
+        // Row 0, col 8 should still be .wide (the last wide char on the row).
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(8, 0)).unwrap();
+            assert_eq!(unsafe { (*list_cell.cell).wide() }, pagepkg::Wide::Wide);
+        }
+        // Row 0, col 9 must remain .spacer_tail to pair with the .wide at col 8.
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(9, 0)).unwrap();
+            assert_eq!(
+                unsafe { (*list_cell.cell).wide() },
+                pagepkg::Wide::SpacerTail
+            );
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print over wide spacer tail"
+    #[test]
+    fn terminal_print_over_wide_spacer_tail() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print('橋' as u32).unwrap();
+        t.set_cursor_pos(1, 2);
+        t.print('X' as u32).unwrap();
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 'X' as u21);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+        }
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), " X".as_bytes());
+        }
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print over wide char with bold"
+    #[test]
+    fn terminal_print_over_wide_char_with_bold() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        t.print(0x1F600).unwrap(); // Smiley face
+                                   // verify we have styles in our style map
+        {
+            let page = unsafe {
+                core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data)
+            };
+            assert_eq!(1usize, unsafe { (*page).styles.count() });
+        }
+
+        // Go back and overwrite with no style
+        t.set_cursor_pos(0, 0);
+        t.set_attribute(sgr::Attribute::Unset).unwrap();
+        t.print('A' as u32).unwrap(); // Smiley face
+
+        // verify our style is gone
+        {
+            let page = unsafe {
+                core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data)
+            };
+            assert_eq!(0usize, unsafe { (*page).styles.count() });
+        }
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print over wide char with bg color"
+    #[test]
+    fn terminal_print_over_wide_char_with_bg_color() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.print(0x1F600).unwrap(); // Smiley face
+                                   // verify we have styles in our style map
+        {
+            let page = unsafe {
+                core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data)
+            };
+            assert_eq!(1usize, unsafe { (*page).styles.count() });
+        }
+
+        // Go back and overwrite with no style
+        t.set_cursor_pos(0, 0);
+        t.set_attribute(sgr::Attribute::Unset).unwrap();
+        t.print('A' as u32).unwrap(); // Smiley face
+
+        // verify our style is gone
+        {
+            let page = unsafe {
+                core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data)
+            };
+            assert_eq!(0usize, unsafe { (*page).styles.count() });
+        }
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print multicodepoint grapheme, disabled mode 2027"
+    #[test]
+    fn terminal_print_multicodepoint_grapheme_disabled_mode_2027() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // https://github.com/mitchellh/ghostty/issues/289
+        // This is: 👨‍👩‍👧 (which may or may not render correctly)
+        t.print(0x1F468).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F469).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F467).unwrap();
+
+        // We should have 6 cells taken up
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 6);
+
+        // Assert various properties about our screen to verify
+        // we have all expected cells.
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1F468);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+            let cps = unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.unwrap();
+            assert_eq!(cps.len(), 1);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert!(!unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+            assert!(unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.is_none());
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(2, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1F469);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+            let cps = unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.unwrap();
+            assert_eq!(cps.len(), 1);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(3, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert!(!unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+            assert!(unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.is_none());
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(4, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1F467);
+            assert!(!unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+            assert!(unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.is_none());
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(5, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert!(!unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+            assert!(unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.is_none());
+        }
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print multicodepoint grapheme, mode 2027"
+    #[test]
+    fn terminal_print_multicodepoint_grapheme_mode_2027() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        // https://github.com/mitchellh/ghostty/issues/289
+        // This is: 👨‍👩‍👧 (which may or may not render correctly)
+        t.print(0x1F468).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F469).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F467).unwrap();
+
+        // We should have 2 cells taken up. It is one character but "wide".
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+
+        // Row should be dirty
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        // Assert various properties about our screen to verify
+        // we have all expected cells.
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1F468);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+            let cps = unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.unwrap();
+            assert_eq!(cps.len(), 4);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert!(!unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: Fitzpatrick skin tone next valid base"
+    #[test]
+    fn terminal_fitzpatrick_skin_tone_next_valid_base() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        // This is: "👋🏿" (waving hand with dark skin tone)
+        t.print(0x1F44B).unwrap(); // 👋 Waving hand (valid base)
+        t.print(0x1F3FF).unwrap(); // 🏿 Dark skin tone modifier
+
+        // The skin tone should combine with the base emoji into a single grapheme cluster,
+        // taking 2 cells (wide character).
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+
+        // Row should be dirty
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        // The base emoji should be in cell 0 with the skin tone as a grapheme
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1F44B);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: Fitzpatrick skin tone next to non-base"
+    #[test]
+    fn terminal_fitzpatrick_skin_tone_next_to_non_base() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        // This is: "🏿" (which may not render correctly in your editor!)
+        t.print(0x22).unwrap(); // "
+        t.print(0x1F3FF).unwrap(); // Dark skin tone
+        t.print(0x22).unwrap(); // "
+
+        // We should have 4 cells taken up. Importantly, the skin tone
+        // should not join with the quotes.
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 4);
+
+        // Row should be dirty
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        // Assert various properties about our screen to verify
+        // we have all expected cells.
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x22);
+            assert!(!unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1F3FF);
+            assert!(!unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(3, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x22);
+            assert!(!unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: VS15 to make narrow character"
+    #[test]
+    fn terminal_vs15_to_make_narrow_character() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        t.print(0x2614).unwrap(); // Umbrella with rain drops, width=2
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        t.clear_dirty();
+
+        // We should have 2 cells taken up. It is one character but "wide".
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+
+        t.print(0xFE0E).unwrap(); // VS15 to make narrow
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        t.clear_dirty();
+
+        // VS15 should send us back a cell since our char is no longer wide.
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "☔︎".as_bytes());
+        }
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x2614);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+            let cps = unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.unwrap();
+            assert_eq!(cps.len(), 1);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: VS15 on already narrow emoji"
+    #[test]
+    fn terminal_vs15_on_already_narrow_emoji() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        t.print(0x26C8).unwrap(); // Thunder cloud and rain, width=1
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        t.clear_dirty();
+        t.print(0xFE0E).unwrap(); // VS15 to make narrow
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        t.clear_dirty();
+
+        // Character takes up one cell
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "⛈︎".as_bytes());
+        }
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x26C8);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+            let cps = unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.unwrap();
+            assert_eq!(cps.len(), 1);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: VS15 to make narrow character with pending wrap"
+    #[test]
+    fn terminal_vs15_to_make_narrow_character_with_pending_wrap() {
+        let mut t = Terminal::init(Global, opts(4, 5)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        assert!(t.modes.get(modespkg::Mode::Wraparound));
+
+        t.print(0x1F34B).unwrap(); // Lemon, width=2
+        t.print(0x2614).unwrap(); // Umbrella with rain drops, width=2
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        t.clear_dirty();
+
+        // We only move to the end of the line because we're in a pending wrap
+        // state.
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 3);
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        t.print(0xFE0E).unwrap(); // VS15 to make narrow
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        t.clear_dirty();
+
+        // VS15 should clear the pending wrap state
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 3);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "🍋☔︎".as_bytes());
+        }
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(2, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x2614);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+            let cps = unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.unwrap();
+            assert_eq!(cps.len(), 1);
+        }
+
+        // VS15 should not affect the previous grapheme
+        {
+            let lemon_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap().cell;
+            assert_eq!(unsafe { (*lemon_cell).content_codepoint() }, 0x1F34B);
+            assert_eq!(unsafe { (*lemon_cell).wide() }, pagepkg::Wide::Wide);
+            let spacer_cell = t.active_mut().pages.get_cell(screen_pt(1, 0)).unwrap().cell;
+            assert_eq!(unsafe { (*spacer_cell).content_codepoint() }, 0);
+            assert_eq!(unsafe { (*spacer_cell).wide() }, pagepkg::Wide::SpacerTail);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: VS16 to make wide character on next line"
+    #[test]
+    fn terminal_vs16_to_make_wide_character_on_next_line() {
+        let mut t = Terminal::init(Global, opts(3, 5)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        t.cursor_right(2);
+        t.print('#' as u32).unwrap();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        assert!(t.is_dirty(screen_pt(2, 0)));
+        t.clear_dirty();
+
+        t.print(0xFE0F).unwrap(); // VS16 to make wide
+
+        assert!(t.is_dirty(screen_pt(2, 0)));
+        t.clear_dirty();
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 1);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        {
+            // Previous cell turns into spacer_head
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(2, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert!(!unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerHead);
+        }
+        {
+            // '#' cell is wide
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, '#' as u21);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(
+                unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.unwrap(),
+                &[0xFE0F]
+            );
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+        }
+        {
+            // spacer_tail
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 1)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert!(!unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: VS16 to make wide character on next line with hyperlink"
+    #[test]
+    fn terminal_vs16_to_make_wide_character_on_next_line_with_hyperlink() {
+        // Regression test for the crash fixed in print's grapheme `.wide` path:
+        // writing a spacer_head at the screen edge before row.wrap was set.
+        let mut t = Terminal::init(Global, opts(3, 5)).unwrap();
+
+        // Enable grapheme clustering and activate a hyperlink so printCell
+        // calls cursorSetHyperlink (which runs page integrity checks).
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+
+        t.cursor_right(2);
+        t.print('#' as u32).unwrap();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        // Without the fix, this panicked with UnwrappedSpacerHead.
+        t.print(0xFE0F).unwrap(); // VS16 to make wide
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 1);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        {
+            // Previous cell turns into spacer_head and remains hyperlinked.
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(2, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerHead);
+            assert!(unsafe { (*cell).hyperlink() });
+            assert!(unsafe { (*list_cell.row).wrap() });
+        }
+        {
+            // '#' cell is now wide and still hyperlinked.
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, '#' as u21);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(
+                unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.unwrap(),
+                &[0xFE0F]
+            );
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+            assert!(unsafe { (*cell).hyperlink() });
+        }
+        {
+            // spacer_tail inherits hyperlink as part of the same grapheme cell.
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 1)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+            assert!(unsafe { (*cell).hyperlink() });
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: VS16 to make wide character with pending wrap"
+    #[test]
+    fn terminal_vs16_to_make_wide_character_with_pending_wrap() {
+        let mut t = Terminal::init(Global, opts(3, 5)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        t.cursor_right(1);
+        t.print('#' as u32).unwrap();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        t.print(0xFE0F).unwrap(); // VS16 to make wide
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        {
+            // '#' cell is wide
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, '#' as u21);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(
+                unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.unwrap(),
+                &[0xFE0F]
+            );
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+        }
+        {
+            // spacer_tail
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(2, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert!(!unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: VS16 to make wide character with mode 2027"
+    #[test]
+    fn terminal_vs16_to_make_wide_character_with_mode_2027() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        t.print(0x2764).unwrap(); // Heart
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        t.clear_dirty();
+        t.print(0xFE0F).unwrap(); // VS16 to make wide
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        t.clear_dirty();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "❤️".as_bytes());
+        }
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x2764);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+            let cps = unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.unwrap();
+            assert_eq!(cps.len(), 1);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: VS16 repeated with mode 2027"
+    #[test]
+    fn terminal_vs16_repeated_with_mode_2027() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        t.print(0x2764).unwrap(); // Heart
+        t.print(0xFE0F).unwrap(); // VS16 to make wide
+        t.print(0x2764).unwrap(); // Heart
+        t.print(0xFE0F).unwrap(); // VS16 to make wide
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "❤️❤️".as_bytes());
+        }
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x2764);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+            let cps = unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.unwrap();
+            assert_eq!(cps.len(), 1);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(2, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x2764);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+            let cps = unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.unwrap();
+            assert_eq!(cps.len(), 1);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print Devanagari grapheme should be wide on next line"
+    #[test]
+    fn terminal_print_devanagari_grapheme_should_be_wide_on_next_line() {
+        let mut t = Terminal::init(Global, opts(3, 5)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        t.cursor_right(2);
+
+        // क्‍ष
+        t.print(0x0915).unwrap();
+        t.print(0x094D).unwrap();
+        t.print(0x200D).unwrap();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        // This one increases the width to wide
+        t.print(0x0937).unwrap();
+
+        // We should have 2 cells taken up. It is one character but "wide".
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 1);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        {
+            // Previous cell turns into spacer_head
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(2, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert!(!unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerHead);
+        }
+        {
+            // Devanagari grapheme is wide
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x0915);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(
+                unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.unwrap(),
+                &[0x094D, 0x200D, 0x0937]
+            );
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 1)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print Devanagari grapheme should be wide on next page"
+    #[test]
+    fn terminal_print_devanagari_grapheme_should_be_wide_on_next_page() {
+        let rows = pagepkg::std_capacity().rows;
+        let cols = pagepkg::std_capacity().cols;
+        let mut t = Terminal::init(Global, opts(cols, rows)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        t.cursor_down((rows - 1) as usize);
+
+        let page_cap_rows = unsafe { (*t.active_mut().pages.pages.first).data.capacity.rows };
+        for _ in rows..page_cap_rows {
+            t.index().unwrap();
+        }
+
+        t.cursor_right((cols - 1) as usize);
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, cols - 1);
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, rows - 1);
+
+        // क्‍ष
+        t.print(0x0915).unwrap();
+        t.print(0x094D).unwrap();
+        t.print(0x200D).unwrap();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, cols - 1);
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        // This one increases the width to wide
+        t.print(0x0937).unwrap();
+
+        // We should have 2 cells taken up. It is one character but "wide".
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, rows - 1);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        {
+            // Previous cell turns into spacer_head
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(active_pt(cols - 1, (rows - 2) as u32))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert!(!unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerHead);
+        }
+        {
+            // Devanagari grapheme is wide
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(active_pt(0, (rows - 1) as u32))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x0915);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(
+                unsafe { (*list_cell.node).data.lookup_grapheme(cell) }.unwrap(),
+                &[0x094D, 0x200D, 0x0937]
+            );
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+        }
+        {
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(active_pt(1, (rows - 1) as u32))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: overwrite grapheme should clear grapheme data"
+    #[test]
+    fn terminal_overwrite_grapheme_should_clear_grapheme_data() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        t.print(0x26C8).unwrap(); // Thunder cloud and rain
+        t.print(0xFE0E).unwrap(); // VS15 to make narrow
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        t.clear_dirty();
+
+        t.set_cursor_pos(1, 1);
+        t.print('A' as u32).unwrap();
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A".as_bytes());
+        }
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 'A' as u21);
+            assert!(!unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: overwrite multicodepoint grapheme clears grapheme data"
+    #[test]
+    fn terminal_overwrite_multicodepoint_grapheme_clears_grapheme_data() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        // https://github.com/mitchellh/ghostty/issues/289
+        // This is: 👨‍👩‍👧 (which may or may not render correctly)
+        t.print(0x1F468).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F469).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F467).unwrap();
+
+        // We should have 2 cells taken up. It is one character but "wide".
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+
+        // We should have one cell with graphemes
+        let page =
+            unsafe { core::ptr::addr_of!((*(*(*t.screens.active).cursor.page_pin).node).data) };
+        assert_eq!(unsafe { (*page).grapheme_count() }, 1);
+
+        // Move back and overwrite wide
+        t.set_cursor_pos(1, 1);
+        t.clear_dirty();
+        t.print('X' as u32).unwrap();
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 1);
+        assert_eq!(unsafe { (*page).grapheme_count() }, 0);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: overwrite multicodepoint grapheme tail clears grapheme data"
+    #[test]
+    fn terminal_overwrite_multicodepoint_grapheme_tail_clears_grapheme_data() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        // https://github.com/mitchellh/ghostty/issues/289
+        // This is: 👨‍👩‍👧 (which may or may not render correctly)
+        t.print(0x1F468).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F469).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F467).unwrap();
+
+        // We should have 2 cells taken up. It is one character but "wide".
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+
+        // We should have one cell with graphemes
+        let page =
+            unsafe { core::ptr::addr_of!((*(*(*t.screens.active).cursor.page_pin).node).data) };
+        assert_eq!(unsafe { (*page).grapheme_count() }, 1);
+
+        // Move back and overwrite wide
+        t.set_cursor_pos(1, 2);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), " X".as_bytes());
+        }
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+        assert_eq!(unsafe { (*page).grapheme_count() }, 0);
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print writes to bottom if scrolled"
+    #[test]
+    fn terminal_print_writes_to_bottom_if_scrolled() {
+        let mut t = Terminal::init(Global, opts(5, 2)).unwrap();
+
+        // Basic grid writing
+        for c in "hello".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(0, 0);
+
+        // Make newlines so we create scrollback
+        // 3 pushes hello off the screen
+        t.index().unwrap();
+        t.index().unwrap();
+        t.index().unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "".as_bytes());
+        }
+
+        // Scroll to the top
+        t.active_mut().scroll(crate::screen::Scroll::Top);
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "hello".as_bytes());
+        }
+
+        // Type
+        t.print('A' as u32).unwrap();
+        t.active_mut().scroll(crate::screen::Scroll::Active);
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\nA".as_bytes());
+        }
+
+        assert!(
+            t.is_dirty(active_pt(unsafe { (*t.screens.active).cursor.x }, unsafe {
+                (*t.screens.active).cursor.y
+            }
+                as u32))
+        );
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print charset"
+    #[test]
+    fn terminal_print_charset() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // G1 should have no effect
+        t.configure_charset(charsets::Slots::G1, charsets::Charset::DecSpecial);
+        t.configure_charset(charsets::Slots::G2, charsets::Charset::DecSpecial);
+        t.configure_charset(charsets::Slots::G3, charsets::Charset::DecSpecial);
+
+        // No dirty to configure charset
+        assert!(!t.is_dirty(screen_pt(0, 0)));
+
+        // Basic grid writing
+        t.print('`' as u32).unwrap();
+        t.configure_charset(charsets::Slots::G0, charsets::Charset::Utf8);
+        t.print('`' as u32).unwrap();
+        t.configure_charset(charsets::Slots::G0, charsets::Charset::Ascii);
+        t.print('`' as u32).unwrap();
+        t.configure_charset(charsets::Slots::G0, charsets::Charset::DecSpecial);
+        t.print('`' as u32).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "```◆".as_bytes());
+        }
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print charset outside of ASCII"
+    #[test]
+    fn terminal_print_charset_outside_of_ascii() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // G1 should have no effect
+        t.configure_charset(charsets::Slots::G1, charsets::Charset::DecSpecial);
+        t.configure_charset(charsets::Slots::G2, charsets::Charset::DecSpecial);
+        t.configure_charset(charsets::Slots::G3, charsets::Charset::DecSpecial);
+
+        // No dirty to configure charset
+        assert!(!t.is_dirty(screen_pt(0, 0)));
+
+        // Basic grid writing
+        t.configure_charset(charsets::Slots::G0, charsets::Charset::DecSpecial);
+        t.print('`' as u32).unwrap();
+        t.print(0x1F600).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "◆ ".as_bytes());
+        }
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print invoke charset"
+    #[test]
+    fn terminal_print_invoke_charset() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        t.configure_charset(charsets::Slots::G1, charsets::Charset::DecSpecial);
+
+        t.print('`' as u32).unwrap();
+
+        // Invokecharset but should not mark dirty on its own
+        t.clear_dirty();
+        t.invoke_charset(charsets::ActiveSlot::GL, charsets::Slots::G1, false);
+        assert!(!t.is_dirty(screen_pt(0, 0)));
+        t.print('`' as u32).unwrap();
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        t.print('`' as u32).unwrap();
+        t.invoke_charset(charsets::ActiveSlot::GL, charsets::Slots::G0, false);
+        t.print('`' as u32).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "`◆◆`".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print kitty unicode placeholder"
+    #[test]
+    fn terminal_print_kitty_unicode_placeholder() {
+        if !crate::options::KITTY_GRAPHICS {
+            return;
+        }
+
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.print(kitty::graphics_unicode::PLACEHOLDER).unwrap();
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 1);
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(
+                unsafe { (*cell).content_codepoint() },
+                kitty::graphics_unicode::PLACEHOLDER
+            );
+            assert!(unsafe { (*list_cell.row).kitty_virtual_placeholder() });
+        }
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: soft wrap"
+    #[test]
+    fn terminal_soft_wrap() {
+        let mut t = Terminal::init(Global, opts(3, 80)).unwrap();
+
+        // Basic grid writing
+        for c in "hello".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 1);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "hel\nlo".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: soft wrap with semantic prompt"
+    #[test]
+    fn terminal_soft_wrap_with_semantic_prompt() {
+        let mut t = Terminal::init(Global, opts(3, 80)).unwrap();
+
+        // Mark our prompt.
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::PromptStart,
+        ))
+        .unwrap();
+        // Should not make anything dirty on its own.
+        assert!(!t.is_dirty(screen_pt(0, 0)));
+
+        // Write and wrap
+        for c in "hello".chars() {
+            t.print(c as u32).unwrap();
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            assert_eq!(
+                unsafe { (*list_cell.row).semantic_prompt() },
+                pagepkg::SemanticPrompt::Prompt
+            );
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            assert_eq!(
+                unsafe { (*list_cell.row).semantic_prompt() },
+                pagepkg::SemanticPrompt::PromptContinuation
+            );
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: disabled wraparound with wide char and one space"
+    #[test]
+    fn terminal_disabled_wraparound_with_wide_char_and_one_space() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::Wraparound, false);
+
+        // This puts our cursor at the end and there is NO SPACE for a
+        // wide character.
+        t.print_string("AAAA".as_bytes()).unwrap();
+        t.clear_dirty();
+        t.print(0x1F6A8).unwrap(); // Police car light
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 4);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AAAA".as_bytes());
+        }
+
+        // Make sure we printed nothing
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(4, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+        }
+
+        // Should not be dirty since we didn't modify anything
+        assert!(!t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: disabled wraparound with wide char and no space"
+    #[test]
+    fn terminal_disabled_wraparound_with_wide_char_and_no_space() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::Wraparound, false);
+
+        // This puts our cursor at the end and there is NO SPACE for a
+        // wide character.
+        t.print_string("AAAAA".as_bytes()).unwrap();
+        t.clear_dirty();
+        t.print(0x1F6A8).unwrap(); // Police car light
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 4);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AAAAA".as_bytes());
+        }
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(4, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 'A' as u21);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+        }
+
+        // Should not be dirty since we didn't modify anything
+        assert!(!t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: disabled wraparound with wide grapheme and half space"
+    #[test]
+    fn terminal_disabled_wraparound_with_wide_grapheme_and_half_space() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+        t.modes.set(modespkg::Mode::Wraparound, false);
+
+        // This puts our cursor at the end and there is NO SPACE for a
+        // wide character.
+        t.print_string("AAAA".as_bytes()).unwrap();
+        t.print(0x2764).unwrap(); // Heart
+        t.clear_dirty();
+        t.print(0xFE0F).unwrap(); // VS16 to make wide
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 4);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AAAA❤".as_bytes());
+        }
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(4, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, '❤' as u21);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+        }
+
+        // Should not be dirty since we didn't modify anything
+        assert!(!t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print right margin wrap"
+    #[test]
+    fn terminal_print_right_margin_wrap() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.print_string("123456789".as_bytes()).unwrap();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(3, 5);
+        t.set_cursor_pos(1, 5);
+        t.print_string("XY".as_bytes()).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "1234X6789\n  Y".as_bytes());
+        }
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap();
+            let row = list_cell.row;
+            assert!(!unsafe { (*row).wrap() });
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print right margin wrap dirty tracking"
+    #[test]
+    fn terminal_print_right_margin_wrap_dirty_tracking() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.print_string("123456789".as_bytes()).unwrap();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(3, 5);
+        t.set_cursor_pos(1, 5);
+
+        // Writing our X on the first line should mark only that line dirty.
+        t.clear_dirty();
+        t.print('X' as u32).unwrap();
+        assert!(t.is_dirty(screen_pt(4, 0)));
+        assert!(!t.is_dirty(screen_pt(2, 1)));
+
+        // Writing our Y should wrap. It marks both rows dirty because the
+        // cursor moved.
+        t.clear_dirty();
+        t.print('Y' as u32).unwrap();
+        assert!(t.is_dirty(screen_pt(4, 0)));
+        assert!(t.is_dirty(screen_pt(2, 1)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "1234X6789\n  Y".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print right margin outside"
+    #[test]
+    fn terminal_print_right_margin_outside() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.print_string("123456789".as_bytes()).unwrap();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(3, 5);
+        t.set_cursor_pos(1, 6);
+        t.clear_dirty();
+        t.print_string("XY".as_bytes()).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "12345XY89".as_bytes());
+        }
+
+        assert!(t.is_dirty(screen_pt(5, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print right margin outside wrap"
+    #[test]
+    fn terminal_print_right_margin_outside_wrap() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.print_string("123456789".as_bytes()).unwrap();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(3, 5);
+        t.set_cursor_pos(1, 10);
+        t.print_string("XY".as_bytes()).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "123456789X\n  Y".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print wide char at right margin does not create spacer head"
+    #[test]
+    fn terminal_print_wide_char_at_right_margin_does_not_create_spacer_head() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(3, 5);
+        t.set_cursor_pos(1, 5);
+        t.print(0x1F600).unwrap(); // Smiley face
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 1);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 4);
+
+        // Both rows dirty because the cursor moved
+        assert!(t.is_dirty(screen_pt(4, 0)));
+        assert!(t.is_dirty(screen_pt(4, 1)));
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(4, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+
+            let row = list_cell.row;
+            assert!(!unsafe { (*row).wrap() });
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(2, 1)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x1F600);
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(3, 1)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::SpacerTail);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print with hyperlink"
+    #[test]
+    fn terminal_print_with_hyperlink() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Setup our hyperlink and print
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+        t.print_string("123456".as_bytes()).unwrap();
+
+        // Verify all our cells have a hyperlink
+        for x in 0..6 {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(x, 0)).unwrap();
+            let row = list_cell.row;
+            assert!(unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+            assert_eq!(id, 1 as crate::hyperlink::Id);
+        }
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print over cell with same hyperlink"
+    #[test]
+    fn terminal_print_over_cell_with_same_hyperlink() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Setup our hyperlink and print
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+        t.print_string("123456".as_bytes()).unwrap();
+        t.set_cursor_pos(1, 1);
+        t.print_string("123456".as_bytes()).unwrap();
+
+        // Verify all our cells have a hyperlink
+        for x in 0..6 {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(x, 0)).unwrap();
+            let row = list_cell.row;
+            assert!(unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+            assert_eq!(id, 1 as crate::hyperlink::Id);
+        }
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print and end hyperlink"
+    #[test]
+    fn terminal_print_and_end_hyperlink() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Setup our hyperlink and print
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+        t.print_string("123".as_bytes()).unwrap();
+        t.active_mut().end_hyperlink();
+        t.print_string("456".as_bytes()).unwrap();
+
+        // Verify all our cells have a hyperlink
+        for x in 0..3 {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(x, 0)).unwrap();
+            let row = list_cell.row;
+            assert!(unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+            assert_eq!(id, 1 as crate::hyperlink::Id);
+        }
+        for x in 3..6 {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(x, 0)).unwrap();
+            let row = list_cell.row;
+            assert!(unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(!unsafe { (*cell).hyperlink() });
+        }
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print and change hyperlink"
+    #[test]
+    fn terminal_print_and_change_hyperlink() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Setup our hyperlink and print
+        t.active_mut()
+            .start_hyperlink("http://one.example.com".as_bytes(), None)
+            .unwrap();
+        t.print_string("123".as_bytes()).unwrap();
+        t.active_mut()
+            .start_hyperlink("http://two.example.com".as_bytes(), None)
+            .unwrap();
+        t.print_string("456".as_bytes()).unwrap();
+
+        // Verify all our cells have a hyperlink
+        for x in 0..3 {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(x, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+            assert_eq!(id, 1 as crate::hyperlink::Id);
+        }
+        for x in 3..6 {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(x, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+            assert_eq!(id, 2 as crate::hyperlink::Id);
+        }
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: overwrite hyperlink"
+    #[test]
+    fn terminal_overwrite_hyperlink() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Setup our hyperlink and print
+        t.active_mut()
+            .start_hyperlink("http://one.example.com".as_bytes(), None)
+            .unwrap();
+        t.print_string("123".as_bytes()).unwrap();
+        t.set_cursor_pos(1, 1);
+        t.active_mut().end_hyperlink();
+        t.print_string("456".as_bytes()).unwrap();
+
+        // Verify all our cells have a hyperlink
+        for x in 0..3 {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(x, 0)).unwrap();
+            let page = unsafe { core::ptr::addr_of!((*list_cell.node).data) };
+            let row = list_cell.row;
+            assert!(!unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(!unsafe { (*cell).hyperlink() });
+            assert!(unsafe { (*page).lookup_hyperlink(cell) }.is_none());
+            assert_eq!(unsafe { (*page).hyperlink_set.count() }, 0);
+        }
+
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        t.deinit(Global);
+    }
+
+    // Printing a wide char at the right edge with an active hyperlink causes
+    // printCell to write a spacer_head before printWrap sets the row wrap
+    // flag. The integrity check inside setHyperlink (or increaseCapacity)
+    // sees the unwrapped spacer head and panics. Found via fuzzing.
+    // test "Terminal: print wide char at right edge with hyperlink"
+    #[test]
+    fn terminal_print_wide_char_at_right_edge_with_hyperlink() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+
+        // Move cursor to the last column (1-indexed)
+        t.set_cursor_pos(1, 10);
+
+        // Print a wide character; this will call printCell(0, .spacer_head)
+        // at the right edge before calling printWrap, triggering the
+        // integrity violation.
+        t.print(0x4E2D).unwrap(); // U+4E2D '中'
+
+        // Cursor wraps to row 2, after the wide char + spacer tail
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 1);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+
+        // Row 0, col 9: spacer head with hyperlink
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(9, 0)).unwrap();
+            assert_eq!(
+                unsafe { (*list_cell.cell).wide() },
+                pagepkg::Wide::SpacerHead
+            );
+            assert!(unsafe { (*list_cell.cell).hyperlink() });
+            assert!(unsafe { (*list_cell.row).wrap() });
+        }
+        // Row 1, col 0: the wide char with hyperlink
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            assert_eq!(unsafe { (*list_cell.cell).content_codepoint() }, 0x4E2D);
+            assert_eq!(unsafe { (*list_cell.cell).wide() }, pagepkg::Wide::Wide);
+            assert!(unsafe { (*list_cell.cell).hyperlink() });
+        }
+        // Row 1, col 1: spacer tail with hyperlink
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 1)).unwrap();
+            assert_eq!(
+                unsafe { (*list_cell.cell).wide() },
+                pagepkg::Wide::SpacerTail
+            );
+            assert!(unsafe { (*list_cell.cell).hyperlink() });
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: default style is empty"
+    #[test]
+    fn terminal_default_style_is_empty() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print('A' as u32).unwrap();
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 'A' as u21);
+            assert_eq!(unsafe { (*cell).style_id() }, 0);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: print with style marks the row as styled"
+    #[test]
+    fn terminal_print_with_style_marks_the_row_as_styled() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        t.print('A' as u32).unwrap();
+        t.set_attribute(sgr::Attribute::Unset).unwrap();
+        t.print('B' as u32).unwrap();
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            assert!(unsafe { (*list_cell.row).styled() });
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: printRepeat simple"
+    #[test]
+    fn terminal_print_repeat_simple() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("A".as_bytes()).unwrap();
+        t.print_repeat(1).unwrap();
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AA".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: printRepeat wrap"
+    #[test]
+    fn terminal_print_repeat_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("    A".as_bytes()).unwrap();
+        t.print_repeat(1).unwrap();
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "    A\nA".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: printRepeat no previous character"
+    #[test]
+    fn terminal_print_repeat_no_previous_character() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_repeat(1).unwrap();
+        assert!(!t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
     // PORT NOTE (vt-12b-2 deferral): test "Terminal: linefeed mode automatic
     // carriage return" calls `linefeed()`, which dispatches to `index()` —
     // still `todo!()` until vt-12b-3b. Deferred there with the other
