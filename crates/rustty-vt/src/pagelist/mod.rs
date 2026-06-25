@@ -623,7 +623,10 @@ pub struct PageList {
 // PORT NOTE: Zig `Pin` is a trivially-copyable value type (passed/stored by
 // value throughout Selection/Screen). `Clone`/`Copy` mirror that — the `node`
 // raw pointer is a non-owning back-reference, so copying is bit-for-bit faithful.
-#[derive(Clone, Copy)]
+// PORT NOTE: `PartialEq`/`Eq`/`Debug` mirror Zig's automatic struct equality and
+// formatting (used by the formatter tests' `expectEqual(Pin{...}, ...)`). The
+// `node` raw pointer compares by address (pointer identity), matching Zig.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Pin {
     pub node: *mut Node,
     pub y: size::CellCountInt,

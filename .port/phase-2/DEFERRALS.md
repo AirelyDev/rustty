@@ -29,30 +29,27 @@ From **vt-7 (kitty)** — these need `Screen`/`Terminal`/`ImageStorage`:
 
 **vt-12 acceptance gain:** +~41 tests (19+8+14) and graphics_unicode G3b → 0 missing.
 
-From **vt-11b (formatter production + Screen dump)**:
+From **vt-11b (formatter production + Screen dump)** — **RESOLVED in vt-12c-fmt:**
 
-5. **ALL ~100 `formatter.zig` `test{}` blocks.** Every formatter test constructs
-   its fixture via `Terminal.init(...)` + `t.vtStream()` (the parser entry point),
-   which is Terminal-gated → vt-12. The reference test names span
-   `"Page …"`, `"PageList …"`, `"Screen …"` (formatter-level, distinct from the
-   `Screen.zig` screen tests), `"TerminalFormatter …"`, plus HTML/VT/style/
-   hyperlink/charset/codepoint-map variants. Reference: `formatter.zig:1591`
-   onward. The **production formatters are fully ported and live now**
-   (`PageFormatter` incl. the `formatWithState` core loop + `TrailingState`,
-   `PageListFormatter`, `ScreenFormatter` + all cell/writer/style helpers); they
-   are exercised in vt-11b via the `Screen` read/write + `cursorCopy x/y` dump
-   tests (`screen::tests::screen_read_and_write*`, `screen_cursor_copy_x_y`).
-   The dedicated formatter tests are scheduled for vt-12 when `Terminal::vtStream`
-   exists to build their fixtures.
+5. ~~**ALL ~100 `formatter.zig` `test{}` blocks.**~~ **RESOLVED (vt-12c-fmt).**
+   All 100 formatter `test{}` blocks are ported as `#[test]`, assertion-for-
+   assertion, in `crates/rustty-vt/src/formatter.rs` (`mod tests`). Each builds its
+   fixture via `Terminal::init(...)` + `t.vt_stream().next_slice(...)` (now
+   available) and asserts the round-trip/output. Span: `"Page …"`, `"PageList …"`,
+   `"Screen …"`, `"TerminalFormatter …"`, plus HTML/VT/style/hyperlink/charset/
+   codepoint-map variants. Scoped formatter.zig G3b → missing=0.
 
-6. **`TerminalFormatter` (formatter.zig:141).** Stays a compiling stub
-   (`init`/`format` are `todo!()`); needs the ported `Terminal` type (the
-   `terminal: *const Terminal` field is held back). Its `Extra` packed-struct and
-   the `palette`/`modes`/`scrolling_region`/`tabstops`/`pwd`/`keyboard` emission
-   paths land in vt-12. The 5 `TerminalFormatter`-driven Screen tests defer with it.
+6. ~~**`TerminalFormatter` (formatter.zig:141).**~~ **RESOLVED (vt-12c-fmt).**
+   `TerminalFormatter::{init,format}` are filled (no more `todo!()`): the
+   `terminal: *const Terminal` field is restored and `format` composes the
+   already-ported `ScreenFormatter`/`PageListFormatter`/`PageFormatter` while
+   emitting the `palette`/`modes`/`scrolling_region`/`tabstops`/`pwd`/`keyboard`
+   Extra. The 5 `TerminalFormatter`-driven (`"Terminal vt …"`) Screen tests are
+   ported alongside it.
 
-**vt-12 acceptance gain (formatter):** +~100 formatter tests + 5 TerminalFormatter
-tests, and `TerminalFormatter::{init,format}` → 0 `todo!()`.
+**vt-12c-fmt acceptance gain (formatter):** +100 formatter tests (incl. the 5
+`Terminal vt …` tests), `TerminalFormatter::{init,format}` → 0 `todo!()`, and
+scoped `formatter.zig` G3b → 0 missing.
 
 ## Deferred Screen.zig tests (not-yet-ported test bodies) — vt-11/vt-12 cluster
 

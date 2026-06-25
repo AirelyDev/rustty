@@ -2,18 +2,16 @@
 //!
 //! PORTS: ghostty src/terminal/formatter.zig
 //!
-//! PORT STATUS: production formatters FILLED (vt-11b) — `PageFormatter` (incl.
-//! the `formatWithState` core loop + `TrailingState`), `PageListFormatter`, and
-//! `ScreenFormatter` + all cell/writer/style helpers are ported and exercised
-//! via Screen dump tests. `TerminalFormatter` remains a compiling stub (needs
-//! `Terminal`, vt-12); the ~100 formatter `test{}` blocks defer to vt-12 (they
-//! build fixtures via `Terminal::vtStream`). See DEFERRALS.md.
-// PORT NOTE: the remaining `clippy::todo`/`dead_code`/`unused_*` allows now cover
-// ONLY the `TerminalFormatter::{init,format}` stub bodies (`todo!()`) and the
-// args/imports they will consume once `Terminal` lands in vt-12. The production
-// formatters below are fully ported. `should_implement_trait` is for the inherent
-// `format` methods (faithful to the reference's `format` name, not `std::fmt`).
-#![allow(clippy::todo, dead_code, unused_variables, unused_imports)]
+//! PORT STATUS: FILLED (vt-12c-fmt) — `PageFormatter` (incl. the
+//! `formatWithState` core loop + `TrailingState`), `PageListFormatter`,
+//! `ScreenFormatter`, and `TerminalFormatter` + all cell/writer/style helpers are
+//! ported. `TerminalFormatter::{init,format}` compose the production formatters
+//! and emit palette/modes/scrolling_region/tabstops/pwd/kitty_keyboard Extra. All
+//! ~100 formatter `test{}` blocks are ported (they build fixtures via
+//! `Terminal::vt_stream`). See DEFERRALS.md.
+// PORT NOTE: `should_implement_trait` is for the inherent `format` methods
+// (faithful to the reference's `format` name, not `std::fmt`).
+#![allow(dead_code)]
 #![allow(clippy::should_implement_trait)]
 
 // const std = @import("std");
@@ -46,6 +44,7 @@ use crate::point::Coordinate;
 use crate::screen::Screen;
 use crate::selection::Selection;
 use crate::size;
+use crate::terminal::Terminal;
 
 // PORT NOTE: the reference allocator maps to `allocator_api2::alloc::Global`
 // (the crate's allocator seam).
@@ -276,15 +275,12 @@ pub struct PinMap<'a> {
 /// For styled formatting, this will emit the palette colors at the
 /// beginning so that the output can be rendered properly according to
 /// the current terminal state.
-//
-// PORT NOTE: `TerminalFormatter` is a COMPILING STUB. It depends on `Terminal`
-// (`terminal: *const Terminal`), which is ported in vt-12. The struct and its
-// `Extra` packed-struct are defined here verbatim (with comments preserved) but
-// the `terminal` field is held back until `Terminal` exists. `init`/`format`
-// are signature stubs with `todo!()` bodies.
-pub struct TerminalFormatter {
-    // PORT NOTE: `terminal: *const Terminal` — DEFERRED to vt-12 (needs the
-    // ported `Terminal` type). Restored once `terminal.rs` lands.
+pub struct TerminalFormatter<'a> {
+    /// The terminal to format.
+    // PORT NOTE: `terminal: *const Terminal`; deref on access (the caller
+    // guarantees the terminal outlives the formatter).
+    pub terminal: *const Terminal,
+
     /// The common options
     pub opts: Options,
 
@@ -305,7 +301,7 @@ pub struct TerminalFormatter {
     /// its an arbitrary choice.
     ///
     /// Warning: there is a significant performance hit to track this
-    pub pin_map: Option<PinMap<'static>>,
+    pub pin_map: Option<PinMap<'a>>,
 }
 
 // PORT NOTE: nested `TerminalFormatter.Extra` packed struct, hoisted to a
@@ -379,16 +375,232 @@ impl TerminalExtra {
     };
 }
 
-impl TerminalFormatter {
-    // PORT NOTE: `init` takes `terminal: *const Terminal` in the reference;
-    // DEFERRED to vt-12. The stub signature omits the terminal argument until
-    // `Terminal` is ported.
-    pub fn init(opts: Options) -> TerminalFormatter {
-        todo!()
+impl<'a> TerminalFormatter<'a> {
+    pub fn init(terminal: *const Terminal, opts: Options) -> TerminalFormatter<'a> {
+        TerminalFormatter {
+            terminal,
+            opts,
+            content: Content::Selection(None),
+            extra: TerminalExtra::STYLES,
+            pin_map: None,
+        }
     }
 
-    pub fn format(self, writer: &mut dyn io::Write) -> io::Result<()> {
-        todo!()
+    pub fn format(mut self, writer: &mut dyn io::Write) -> io::Result<()> {
+        // PORT NOTE: `self.terminal` is a `*const Terminal`. The reference
+        // accesses fields directly; we deref the raw pointer (the caller
+        // guarantees the terminal outlives the formatter).
+        let terminal: &Terminal = unsafe { &*self.terminal };
+
+        // Emit palette before screen content if using VT format. Technically
+        // we could do this after but this way if replay is slow for whatever
+        // reason the colors will be right right away.
+        'palette: {
+            if self.extra.palette {
+                match self.opts.emit {
+                    Format::Plain => break 'palette,
+
+                    Format::Vt => {
+                        for (i, rgb) in terminal.colors.palette.current.iter().enumerate() {
+                            write!(
+                                writer,
+                                "\x1b]4;{};rgb:{:02x}/{:02x}/{:02x}\x1b\\",
+                                i, rgb.r, rgb.g, rgb.b,
+                            )?;
+                        }
+                    }
+
+                    // For HTML, we emit CSS to setup our palette variables.
+                    Format::Html => {
+                        writer.write_all(b"<style>:root{")?;
+                        for (i, rgb) in terminal.colors.palette.current.iter().enumerate() {
+                            write!(
+                                writer,
+                                "--vt-palette-{}: #{:02x}{:02x}{:02x};",
+                                i, rgb.r, rgb.g, rgb.b,
+                            )?;
+                        }
+                        writer.write_all(b"}</style>")?;
+                    }
+                }
+
+                // If we have a pin_map, add the bytes we wrote to map.
+                if let Some(m) = self.pin_map.as_mut() {
+                    let mut discarding = Discarding::new();
+                    let mut extra_formatter: TerminalFormatter = TerminalFormatter {
+                        terminal: self.terminal,
+                        opts: copy_options(&self.opts),
+                        content: Content::None,
+                        extra: TerminalExtra::NONE,
+                        pin_map: None,
+                    };
+                    extra_formatter.extra.palette = true;
+                    extra_formatter.format(&mut discarding)?;
+
+                    // Map all those bytes to the same pin. Use the top left to ensure
+                    // the node pointer is always properly initialized.
+                    let pin = unsafe { &*terminal.screens.active }
+                        .pages
+                        .get_top_left(point::Tag::Screen);
+                    for _ in 0..discarding.count {
+                        m.map.push(pin);
+                    }
+                }
+            }
+        }
+
+        // Emit terminal modes that differ from defaults. We probably have
+        // some modes we want to emit before and some after, but for now for
+        // simplicity we just emit them all before. If we make this more complex
+        // later we should add test cases for it.
+        if self.opts.emit == Format::Vt && self.extra.modes {
+            // PORT NOTE: the reference `inline for (@typeInfo(modespkg.Mode)
+            // .@"enum".fields)` iterates every mode in declaration order. We
+            // iterate the bit-indexed `Mode` table; for each mode the current
+            // value is `modes.get(mode)`, the default is the per-mode default
+            // bit (`@field(modes.default, field.name)`), and the tag is the
+            // bitcast `ModeTag` (giving `ansi`/`value`).
+            for mode in crate::modes::Mode::all() {
+                let current = terminal.modes.get(mode);
+                let default_val = terminal.modes.default.get_mode(mode);
+
+                if current != default_val {
+                    let tag = crate::modes::ModeTag::from_mode(mode);
+                    let prefix: &str = if tag.ansi { "" } else { "?" };
+                    let suffix: &str = if current { "h" } else { "l" };
+                    write!(writer, "\x1b[{}{}{}", prefix, tag.value, suffix)?;
+                }
+            }
+
+            // If we have a pin_map, add the bytes we wrote to map.
+            if let Some(m) = self.pin_map.as_mut() {
+                let mut discarding = Discarding::new();
+                let mut extra_formatter: TerminalFormatter = TerminalFormatter {
+                    terminal: self.terminal,
+                    opts: copy_options(&self.opts),
+                    content: Content::None,
+                    extra: TerminalExtra::NONE,
+                    pin_map: None,
+                };
+                extra_formatter.extra.modes = true;
+                extra_formatter.format(&mut discarding)?;
+
+                // Map all those bytes to the same pin. Use the top left to ensure
+                // the node pointer is always properly initialized.
+                let pin = unsafe { &*terminal.screens.active }
+                    .pages
+                    .get_top_left(point::Tag::Screen);
+                for _ in 0..discarding.count {
+                    m.map.push(pin);
+                }
+            }
+        }
+
+        let mut screen_formatter: ScreenFormatter =
+            ScreenFormatter::init(terminal.screens.active, copy_options(&self.opts));
+        screen_formatter.content = match &self.content {
+            Content::None => Content::None,
+            Content::Selection(sel) => Content::Selection(*sel),
+        };
+        screen_formatter.extra = self.extra.screen;
+        if let Some(m) = self.pin_map.as_mut() {
+            screen_formatter.pin_map = Some(PinMap {
+                alloc: m.alloc,
+                map: &mut *m.map,
+            });
+        }
+        screen_formatter.format(writer)?;
+
+        // Extra terminal state to emit after the screen contents so that
+        // it doesn't impact the emitted contents.
+        if self.opts.emit == Format::Vt {
+            // Emit scrolling region using DECSTBM and DECSLRM
+            if self.extra.scrolling_region {
+                let region = &terminal.scrolling_region;
+
+                // DECSTBM: top and bottom margins (1-indexed)
+                // Only emit if not the full screen
+                if region.top != 0 || region.bottom != terminal.rows - 1 {
+                    write!(writer, "\x1b[{};{}r", region.top + 1, region.bottom + 1)?;
+                }
+
+                // DECSLRM: left and right margins (1-indexed)
+                // Only emit if not the full width
+                if region.left != 0 || region.right != terminal.cols - 1 {
+                    write!(writer, "\x1b[{};{}s", region.left + 1, region.right + 1)?;
+                }
+            }
+
+            // Emit tabstop positions
+            if self.extra.tabstops {
+                // Clear all tabs (CSI 3 g)
+                write!(writer, "\x1b[3g")?;
+
+                // Set each configured tabstop by moving cursor and using HTS
+                for col in 0..terminal.cols {
+                    if terminal.tabstops.get(col as usize) {
+                        // Move cursor to the column (1-indexed)
+                        write!(writer, "\x1b[{}G", col + 1)?;
+                        // Set tab (HTS)
+                        write!(writer, "\x1bH")?;
+                    }
+                }
+            }
+
+            // Emit keyboard modes such as ModifyOtherKeys
+            if self.extra.keyboard {
+                // Only emit if modify_other_keys_2 is true
+                if terminal.flags.modify_other_keys_2 {
+                    write!(writer, "\x1b[>4;2m")?;
+                }
+            }
+
+            // Emit present working directory using OSC 7
+            if self.extra.pwd {
+                let pwd = terminal.pwd.as_slice();
+                if !pwd.is_empty() {
+                    writer.write_all(b"\x1b]7;")?;
+                    writer.write_all(pwd)?;
+                    writer.write_all(b"\x1b\\")?;
+                }
+            }
+
+            // If we have a pin_map, add the bytes we wrote to map.
+            if let Some(m) = self.pin_map.as_mut() {
+                let mut discarding = Discarding::new();
+                let mut extra_formatter: TerminalFormatter = TerminalFormatter {
+                    terminal: self.terminal,
+                    opts: copy_options(&self.opts),
+                    content: Content::None,
+                    extra: TerminalExtra::NONE,
+                    pin_map: None,
+                };
+                extra_formatter.extra.scrolling_region = self.extra.scrolling_region;
+                extra_formatter.extra.tabstops = self.extra.tabstops;
+                extra_formatter.extra.keyboard = self.extra.keyboard;
+                extra_formatter.extra.pwd = self.extra.pwd;
+                extra_formatter.format(&mut discarding)?;
+
+                let pin = if !m.map.is_empty() {
+                    let last = m.map[m.map.len() - 1];
+                    Pin {
+                        node: last.node,
+                        x: last.x,
+                        y: last.y,
+                        garbage: last.garbage,
+                    }
+                } else {
+                    unsafe { &*terminal.screens.active }
+                        .pages
+                        .get_top_left(point::Tag::Screen)
+                };
+                for _ in 0..discarding.count {
+                    m.map.push(pin);
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -1628,10 +1840,7 @@ impl<'a> PageFormatter<'a> {
                 // deref to the `Option<&Palette>` the style formatter expects.
                 formatter.palette = self.opts.palette.map(|p| unsafe { &*p });
                 let mut adapter = IoToFmt::new(writer);
-                write_fmt_result(&mut adapter, |w| {
-                    use core::fmt::Write as _;
-                    formatter.format(w)
-                })
+                write_fmt_result(&mut adapter, |w| formatter.format(w))
             }
 
             // We use `display: inline` so that the div doesn't impact
@@ -1703,5 +1912,3989 @@ impl<'a> PageFormatter<'a> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // PORT NOTE: the reference test bodies use index loops (`for (0..N) |i|`) and
+    // index `point_map.items[offset + i]`. We keep the faithful indexed form
+    // rather than the iterator form clippy would prefer.
+    #![allow(clippy::needless_range_loop)]
+
+    use super::*;
+    use crate::terminal::{Colors, Options as TermOptions, Terminal};
+    use allocator_api2::alloc::Global;
+
+    // PORT NOTE: the reference tests call `Terminal.init(alloc, .{ .cols, .rows })`
+    // relying on `Options` field defaults. Rust `Options` has no field defaults,
+    // so this helper supplies them verbatim (mirroring terminal.rs's test `opts`).
+    fn opts(cols: size::CellCountInt, rows: size::CellCountInt) -> TermOptions {
+        TermOptions {
+            cols,
+            rows,
+            max_scrollback: 10_000,
+            colors: Colors {
+                background: crate::color::DynamicRGB::UNSET,
+                foreground: crate::color::DynamicRGB::UNSET,
+                cursor: crate::color::DynamicRGB::UNSET,
+                palette: crate::color::DynamicPalette::default_palette(),
+            },
+            default_modes: crate::modes::ModePacked::default(),
+            kitty_image_storage_limit: 320 * 1000 * 1000,
+            kitty_image_loading_limits: crate::kitty::graphics_image::Limits::DIRECT,
+        }
+    }
+
+    // PORT NOTE: `&pages.pages.last.?.data` — deref the raw last node to a
+    // `*const Page`. The caller guarantees the node outlives the formatter.
+    unsafe fn last_page(pages: &PageList) -> *const Page {
+        unsafe { &(*pages.pages.last).data }
+    }
+
+    // PORT NOTE: `std.mem.trimStart(u8, s, pat)` — strip leading bytes that are
+    // any of the bytes in `pat` (Zig trims the *set* of bytes).
+    fn trim_start<'a>(s: &'a [u8], pat: &[u8]) -> &'a [u8] {
+        let mut i = 0;
+        while i < s.len() && pat.contains(&s[i]) {
+            i += 1;
+        }
+        &s[i..]
+    }
+
+    // PORT NOTE: `std.mem.indexOf(u8, haystack, needle)`.
+    fn index_of(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        if needle.is_empty() {
+            return Some(0);
+        }
+        haystack.windows(needle.len()).position(|w| w == needle)
+    }
+
+    // PORT NOTE: `Coordinate{ .x, .y }` helper for assertions.
+    fn coord(x: size::CellCountInt, y: u32) -> Coordinate {
+        Coordinate { x, y }
+    }
+
+    // PORT NOTE: `Pin{ .node, .x, .y }` helper; the reference `Pin` has no
+    // `garbage` field, so we default it to false (untracked pins are never
+    // garbage).
+    fn pin(node: *mut crate::pagelist::Node, x: size::CellCountInt, y: size::CellCountInt) -> Pin {
+        Pin {
+            node,
+            x,
+            y,
+            garbage: false,
+        }
+    }
+
+    // test "Page plain single line"
+    #[test]
+    fn page_plain_single_line() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello, world");
+        }
+
+        // Verify we have only a single page
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        // Create the formatter
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+
+        // Test our point map.
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        // Verify output
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello, world");
+        let page_ref = unsafe { &*page };
+        assert_eq!(page_ref.size.rows as usize, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 12, state.cells);
+
+        // Verify our point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..output.len() {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain single line soft-wrapped unwrapped"
+    #[test]
+    fn page_plain_single_line_soft_wrapped_unwrapped() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(3, 5)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello!");
+        }
+
+        // Verify we have only a single page
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        // Create the formatter
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(
+            page,
+            Options {
+                emit: Format::Plain,
+                unwrap: true,
+                ..Options::plain()
+            },
+        );
+
+        // Test our point map.
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        // Verify output
+        // Note: we don't test the trailing state, which may have bugs
+        // with unwrap...
+        let _ = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello!");
+
+        // Verify our point map
+        assert_eq!(output.len(), point_map.len());
+        assert_eq!(coord(0, 0), point_map[0]);
+        assert_eq!(coord(1, 0), point_map[1]);
+        assert_eq!(coord(2, 0), point_map[2]);
+        assert_eq!(coord(0, 1), point_map[3]);
+        assert_eq!(coord(1, 1), point_map[4]);
+        assert_eq!(coord(2, 1), point_map[5]);
+        t.deinit(Global);
+    }
+
+    // test "Page plain single wide char"
+    #[test]
+    fn page_plain_single_wide_char() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice("1A⚡".as_bytes());
+        }
+
+        // Verify we have only a single page
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        // Create the formatter
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+
+        // Full string
+        {
+            builder.clear();
+            let mut point_map: Vec<Coordinate> = Vec::new();
+            let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+            formatter.point_map = Some(PointMap {
+                alloc: Global,
+                map: &mut point_map,
+            });
+            let state = formatter.format_with_state(&mut builder).unwrap();
+            let output = builder.as_slice();
+            assert_eq!(output, "1A⚡".as_bytes());
+            assert_eq!(page_ref.size.rows as usize, state.rows);
+            assert_eq!(page_ref.size.cols as usize - 4, state.cells);
+
+            // Verify our point map
+            assert_eq!(output.len(), point_map.len());
+            for i in 2..output.len() {
+                assert_eq!(coord(2, 0), point_map[i]);
+            }
+        }
+
+        // Wide only (from start)
+        {
+            builder.clear();
+            let mut point_map: Vec<Coordinate> = Vec::new();
+            let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+            formatter.point_map = Some(PointMap {
+                alloc: Global,
+                map: &mut point_map,
+            });
+            formatter.start_x = 2;
+            let state = formatter.format_with_state(&mut builder).unwrap();
+            let output = builder.as_slice();
+            assert_eq!(output, "⚡".as_bytes());
+            assert_eq!(page_ref.size.rows as usize, state.rows);
+            assert_eq!(page_ref.size.cols as usize - 4, state.cells);
+
+            // Verify our point map
+            assert_eq!(output.len(), point_map.len());
+            for i in 0..output.len() {
+                assert_eq!(coord(2, 0), point_map[i]);
+            }
+        }
+
+        // Wide only (from tail)
+        {
+            builder.clear();
+            let mut point_map: Vec<Coordinate> = Vec::new();
+            let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+            formatter.point_map = Some(PointMap {
+                alloc: Global,
+                map: &mut point_map,
+            });
+            formatter.start_x = 3;
+            let state = formatter.format_with_state(&mut builder).unwrap();
+            let output = builder.as_slice();
+            assert_eq!(output, "⚡".as_bytes());
+            assert_eq!(page_ref.size.rows as usize, state.rows);
+            assert_eq!(page_ref.size.cols as usize - 4, state.cells);
+
+            // Verify our point map
+            assert_eq!(output.len(), point_map.len());
+            for i in 0..output.len() {
+                assert_eq!(coord(2, 0), point_map[i]);
+            }
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain single wide char soft-wrapped unwrapped"
+    #[test]
+    fn page_plain_single_wide_char_soft_wrapped_unwrapped() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(3, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice("1A⚡".as_bytes());
+        }
+
+        // Verify we have only a single page
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        // Create the formatter
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+
+        // Full string
+        {
+            builder.clear();
+            let mut point_map: Vec<Coordinate> = Vec::new();
+            let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+            formatter.opts.unwrap = true;
+            formatter.point_map = Some(PointMap {
+                alloc: Global,
+                map: &mut point_map,
+            });
+            let state = formatter.format_with_state(&mut builder).unwrap();
+            let output = builder.as_slice();
+            assert_eq!(output, "1A⚡".as_bytes());
+            assert_eq!(page_ref.size.rows as usize - 1, state.rows);
+            assert_eq!(page_ref.size.cols as usize - 2, state.cells);
+
+            // Verify our point map
+            assert_eq!(output.len(), point_map.len());
+            for i in 2..output.len() {
+                assert_eq!(coord(0, 1), point_map[i]);
+            }
+        }
+
+        // Full string (ending on spacer head)
+        {
+            builder.clear();
+            let mut point_map: Vec<Coordinate> = Vec::new();
+            let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+            formatter.opts.unwrap = true;
+            formatter.point_map = Some(PointMap {
+                alloc: Global,
+                map: &mut point_map,
+            });
+            formatter.end_x = Some(2);
+            formatter.end_y = Some(0);
+            let _ = formatter.format_with_state(&mut builder).unwrap();
+            let output = builder.as_slice();
+            assert_eq!(output, "1A⚡".as_bytes());
+
+            // Verify our point map
+            assert_eq!(output.len(), point_map.len());
+            for i in 2..output.len() {
+                assert_eq!(coord(0, 1), point_map[i]);
+            }
+        }
+
+        // Wide only (from start)
+        {
+            builder.clear();
+            let mut point_map: Vec<Coordinate> = Vec::new();
+            let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+            formatter.opts.unwrap = true;
+            formatter.point_map = Some(PointMap {
+                alloc: Global,
+                map: &mut point_map,
+            });
+            formatter.start_x = 2;
+            let state = formatter.format_with_state(&mut builder).unwrap();
+            let output = builder.as_slice();
+            assert_eq!(output, "⚡".as_bytes());
+            assert_eq!(page_ref.size.rows as usize - 1, state.rows);
+            assert_eq!(page_ref.size.cols as usize - 2, state.cells);
+
+            // Verify our point map
+            assert_eq!(output.len(), point_map.len());
+            for i in 0..output.len() {
+                assert_eq!(coord(0, 1), point_map[i]);
+            }
+        }
+
+        // Wide only (from tail)
+        {
+            builder.clear();
+            let mut point_map: Vec<Coordinate> = Vec::new();
+            let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+            formatter.opts.unwrap = true;
+            formatter.point_map = Some(PointMap {
+                alloc: Global,
+                map: &mut point_map,
+            });
+            formatter.start_y = 1;
+            formatter.start_x = 1;
+            let state = formatter.format_with_state(&mut builder).unwrap();
+            let output = builder.as_slice();
+            assert_eq!(output, "⚡".as_bytes());
+            assert_eq!(page_ref.size.rows as usize - 1, state.rows);
+            assert_eq!(page_ref.size.cols as usize - 2, state.cells);
+
+            // Verify our point map
+            assert_eq!(output.len(), point_map.len());
+            for i in 0..output.len() {
+                assert_eq!(coord(0, 1), point_map[i]);
+            }
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain multiline"
+    #[test]
+    fn page_plain_multiline() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello\r\nworld");
+        }
+
+        // Verify we have only a single page
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        // Create the formatter
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        // Verify output
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello\nworld");
+        assert_eq!(page_ref.size.rows as usize - 1, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 5, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        assert_eq!(coord(4, 0), point_map[5]); // \n
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 1), point_map[6 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain multiline rectangle"
+    #[test]
+    fn page_plain_multiline_rectangle() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello\r\nworld");
+        }
+
+        // Verify we have only a single page
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        // Create the formatter
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.start_x = 1;
+        formatter.end_x = Some(3);
+        formatter.rectangle = true;
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        // Verify output
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"ell\norl");
+        assert_eq!(page_ref.size.rows as usize - 1, state.rows);
+        assert_eq!(0, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..3 {
+            assert_eq!(coord((i + 1) as size::CellCountInt, 0), point_map[i]);
+        }
+        assert_eq!(coord(3, 0), point_map[3]); // \n
+        for i in 0..3 {
+            assert_eq!(coord((i + 1) as size::CellCountInt, 1), point_map[4 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain multi blank lines"
+    #[test]
+    fn page_plain_multi_blank_lines() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello\r\n\r\n\r\nworld");
+        }
+
+        // Verify we have only a single page
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        // Create the formatter
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        // Verify output
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello\n\n\nworld");
+        assert_eq!(page_ref.size.rows as usize - 3, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 5, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        assert_eq!(coord(4, 0), point_map[5]); // \n after row 0
+        assert_eq!(coord(0, 1), point_map[6]); // \n after blank row 1
+        assert_eq!(coord(0, 2), point_map[7]); // \n after blank row 2
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 3), point_map[8 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain trailing blank lines"
+    #[test]
+    fn page_plain_trailing_blank_lines() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello\r\nworld\r\n\r\n");
+        }
+
+        // Verify we have only a single page
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        // Create the formatter
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        // Verify output. We expect there to be no trailing newlines because
+        // we can't differentiate trailing blank lines as being meaningful because
+        // the page formatter can't see the cursor position.
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello\nworld");
+        assert_eq!(page_ref.size.rows as usize - 1, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 5, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        assert_eq!(coord(4, 0), point_map[5]); // \n
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 1), point_map[6 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain trailing whitespace"
+    #[test]
+    fn page_plain_trailing_whitespace() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello   \r\nworld   ");
+        }
+
+        // Verify we have only a single page
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        // Create the formatter
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        // Verify output. We expect there to be no trailing newlines because
+        // we can't differentiate trailing blank lines as being meaningful because
+        // the page formatter can't see the cursor position.
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello\nworld");
+        assert_eq!(page_ref.size.rows as usize - 1, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 5, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        assert_eq!(coord(4, 0), point_map[5]); // \n
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 1), point_map[6 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain trailing whitespace no trim"
+    #[test]
+    fn page_plain_trailing_whitespace_no_trim() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello   \r\nworld  ");
+        }
+
+        // Verify we have only a single page
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        // Create the formatter
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(
+            page,
+            Options {
+                emit: Format::Plain,
+                trim: false,
+                ..Options::plain()
+            },
+        );
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        // Verify output. We expect there to be no trailing newlines because
+        // we can't differentiate trailing blank lines as being meaningful because
+        // the page formatter can't see the cursor position.
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello   \nworld  ");
+        assert_eq!(page_ref.size.rows as usize - 1, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 7, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..8 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        assert_eq!(coord(7, 0), point_map[8]); // \n
+        for i in 0..7 {
+            assert_eq!(coord(i as size::CellCountInt, 1), point_map[9 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain with prior trailing state rows"
+    #[test]
+    fn page_plain_with_prior_trailing_state_rows() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.trailing_state = Some(TrailingState { rows: 2, cells: 0 });
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"\n\nhello");
+        assert_eq!(page_ref.size.rows as usize, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 5, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        assert_eq!(coord(0, 0), point_map[0]); // \n first blank row
+        assert_eq!(coord(0, 1), point_map[1]); // \n second blank row
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[2 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain with prior trailing state cells no wrapped line"
+    #[test]
+    fn page_plain_with_prior_trailing_state_cells_no_wrapped_line() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.trailing_state = Some(TrailingState { rows: 0, cells: 3 });
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // Blank cells are reset when row is not a wrap continuation
+        assert_eq!(output, b"hello");
+        assert_eq!(page_ref.size.rows as usize, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 5, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain with prior trailing state cells with wrap continuation"
+    #[test]
+    fn page_plain_with_prior_trailing_state_cells_with_wrap_continuation() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"world");
+        }
+
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+
+        // Surgically modify the first row to be a wrap continuation
+        let row = page_ref.get_row(0);
+        unsafe { (*row).set_wrap_continuation(true) };
+
+        let mut formatter: PageFormatter = PageFormatter::init(
+            page,
+            Options {
+                emit: Format::Plain,
+                unwrap: true,
+                ..Options::plain()
+            },
+        );
+        formatter.trailing_state = Some(TrailingState { rows: 0, cells: 3 });
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // Blank cells are preserved when row is a wrap continuation with unwrap enabled
+        assert_eq!(output, b"   world");
+        assert_eq!(page_ref.size.rows as usize, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 5, state.cells);
+
+        // Verify point map - 3 spaces from prior trailing state + "world"
+        assert_eq!(output.len(), point_map.len());
+        // The 3 blank cells can't go back beyond (0,0) so they all map to (0,0)
+        assert_eq!(coord(0, 0), point_map[0]); // space
+        assert_eq!(coord(0, 0), point_map[1]); // space
+        assert_eq!(coord(0, 0), point_map[2]); // space
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[3 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain soft-wrapped without unwrap"
+    #[test]
+    fn page_plain_soft_wrapped_without_unwrap() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(10, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello world test");
+        }
+
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // Without unwrap, wrapped lines show as separate lines
+        assert_eq!(output, b"hello worl\nd test");
+        assert_eq!(page_ref.size.rows as usize - 1, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 6, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..10 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        assert_eq!(coord(9, 0), point_map[10]); // \n
+        for i in 0..6 {
+            assert_eq!(coord(i as size::CellCountInt, 1), point_map[11 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain soft-wrapped with unwrap"
+    #[test]
+    fn page_plain_soft_wrapped_with_unwrap() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(10, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello world test");
+        }
+
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(
+            page,
+            Options {
+                emit: Format::Plain,
+                unwrap: true,
+                ..Options::plain()
+            },
+        );
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // With unwrap, wrapped lines are joined together
+        assert_eq!(output, b"hello world test");
+        assert_eq!(page_ref.size.rows as usize - 1, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 6, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..10 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        for i in 0..6 {
+            assert_eq!(coord(i as size::CellCountInt, 1), point_map[10 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain soft-wrapped 3 lines without unwrap"
+    #[test]
+    fn page_plain_soft_wrapped_3_lines_without_unwrap() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(10, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello world this is a test");
+        }
+
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // Without unwrap, wrapped lines show as separate lines
+        assert_eq!(output, b"hello worl\nd this is\na test");
+        assert_eq!(page_ref.size.rows as usize - 2, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 6, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..10 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        assert_eq!(coord(9, 0), point_map[10]); // \n
+        for i in 0..9 {
+            assert_eq!(coord(i as size::CellCountInt, 1), point_map[11 + i]);
+        }
+        assert_eq!(coord(8, 1), point_map[20]); // \n
+        for i in 0..6 {
+            assert_eq!(coord(i as size::CellCountInt, 2), point_map[21 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain soft-wrapped 3 lines with unwrap"
+    #[test]
+    fn page_plain_soft_wrapped_3_lines_with_unwrap() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(10, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello world this is a test");
+        }
+
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(
+            page,
+            Options {
+                emit: Format::Plain,
+                unwrap: true,
+                ..Options::plain()
+            },
+        );
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // With unwrap, wrapped lines are joined together
+        assert_eq!(output, b"hello world this is a test");
+        assert_eq!(page_ref.size.rows as usize - 2, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 6, state.cells);
+
+        // Verify point map - unwrapped text spans 3 rows
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..10 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        for i in 0..10 {
+            assert_eq!(coord(i as size::CellCountInt, 1), point_map[10 + i]);
+        }
+        for i in 0..6 {
+            assert_eq!(coord(i as size::CellCountInt, 2), point_map[20 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain start_y subset"
+    #[test]
+    fn page_plain_start_y_subset() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello\r\nworld\r\ntest");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.start_y = 1;
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"world\ntest");
+        assert_eq!(page_ref.size.rows as usize - 2, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 4, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 1), point_map[i]);
+        }
+        assert_eq!(coord(4, 1), point_map[5]); // \n
+        for i in 0..4 {
+            assert_eq!(coord(i as size::CellCountInt, 2), point_map[6 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain end_y subset"
+    #[test]
+    fn page_plain_end_y_subset() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello\r\nworld\r\ntest");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.end_y = Some(1);
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello\nworld");
+        assert_eq!(1, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 5, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        assert_eq!(coord(4, 0), point_map[5]); // \n
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 1), point_map[6 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain start_y and end_y range"
+    #[test]
+    fn page_plain_start_y_and_end_y_range() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello\r\nworld\r\ntest\r\nfoo");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.start_y = 1;
+        formatter.end_y = Some(2);
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"world\ntest");
+        assert_eq!(1, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 4, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 1), point_map[i]);
+        }
+        assert_eq!(coord(4, 1), point_map[5]); // \n
+        for i in 0..4 {
+            assert_eq!(coord(i as size::CellCountInt, 2), point_map[6 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain start_y out of bounds"
+    #[test]
+    fn page_plain_start_y_out_of_bounds() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.start_y = 30;
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"");
+        assert_eq!(0, state.rows);
+        assert_eq!(0, state.cells);
+
+        // Verify point map is empty
+        assert_eq!(0, point_map.len());
+        t.deinit(Global);
+    }
+
+    // test "Page plain end_y greater than rows"
+    #[test]
+    fn page_plain_end_y_greater_than_rows() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.end_y = Some(30);
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // Should clamp to page.size.rows and work normally
+        assert_eq!(output, b"hello");
+        assert_eq!(page_ref.size.rows as usize, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 5, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain end_y less than start_y"
+    #[test]
+    fn page_plain_end_y_less_than_start_y() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.start_y = 5;
+        formatter.end_y = Some(2);
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"");
+        assert_eq!(0, state.rows);
+        assert_eq!(0, state.cells);
+
+        // Verify point map is empty
+        assert_eq!(0, point_map.len());
+        t.deinit(Global);
+    }
+
+    // test "Page plain start_x on first row only"
+    #[test]
+    fn page_plain_start_x_on_first_row_only() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello world");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.start_x = 6;
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"world");
+        assert_eq!(page_ref.size.rows as usize, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 11, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..5 {
+            assert_eq!(coord((i + 6) as size::CellCountInt, 0), point_map[i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain end_x on last row only"
+    #[test]
+    fn page_plain_end_x_on_last_row_only() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"first line\r\nsecond line\r\nthird line");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.end_y = Some(2);
+        formatter.end_x = Some(4);
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"first line\nsecond line\nthird");
+        assert_eq!(1, state.rows);
+        assert_eq!(0, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..10 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        assert_eq!(coord(9, 0), point_map[10]); // \n
+        for i in 0..11 {
+            assert_eq!(coord(i as size::CellCountInt, 1), point_map[11 + i]);
+        }
+        assert_eq!(coord(10, 1), point_map[22]); // \n
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 2), point_map[23 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain start_x and end_x multiline"
+    #[test]
+    fn page_plain_start_x_and_end_x_multiline() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello world\r\ntest case\r\nfoo bar");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.start_x = 6;
+        formatter.end_y = Some(2);
+        formatter.end_x = Some(2);
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // First row: "world" (start_x=6 to end of row)
+        // Second row: "test case" (full row)
+        // Third row: "foo" (start to end_x=2, inclusive)
+        assert_eq!(output, b"world\ntest case\nfoo");
+        assert_eq!(1, state.rows);
+        assert_eq!(0, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..5 {
+            assert_eq!(coord((i + 6) as size::CellCountInt, 0), point_map[i]);
+        }
+        assert_eq!(coord(10, 0), point_map[5]); // \n
+        for i in 0..9 {
+            assert_eq!(coord(i as size::CellCountInt, 1), point_map[6 + i]);
+        }
+        assert_eq!(coord(8, 1), point_map[15]); // \n
+        for i in 0..3 {
+            assert_eq!(coord(i as size::CellCountInt, 2), point_map[16 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain start_x out of bounds"
+    #[test]
+    fn page_plain_start_x_out_of_bounds() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.start_x = 100;
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"");
+        assert_eq!(0, state.rows);
+        assert_eq!(0, state.cells);
+
+        // Verify point map is empty
+        assert_eq!(0, point_map.len());
+        t.deinit(Global);
+    }
+
+    // test "Page plain end_x greater than cols"
+    #[test]
+    fn page_plain_end_x_greater_than_cols() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.end_x = Some(100);
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello");
+        assert_eq!(page_ref.size.rows as usize, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 5, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain end_x less than start_x single row"
+    #[test]
+    fn page_plain_end_x_less_than_start_x_single_row() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.start_x = 10;
+        formatter.end_y = Some(0);
+        formatter.end_x = Some(5);
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"");
+        assert_eq!(0, state.rows);
+        assert_eq!(0, state.cells);
+
+        // Verify point map is empty
+        assert_eq!(0, point_map.len());
+        t.deinit(Global);
+    }
+
+    // test "Page plain start_y non-zero ignores trailing state"
+    #[test]
+    fn page_plain_start_y_non_zero_ignores_trailing_state() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello\r\nworld");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.start_y = 1;
+        formatter.trailing_state = Some(TrailingState { rows: 5, cells: 10 });
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // Should NOT output the 5 newlines from trailing_state because start_y is non-zero
+        assert_eq!(output, b"world");
+        assert_eq!(page_ref.size.rows as usize - 1, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 5, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 1), point_map[i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain start_x non-zero ignores trailing state"
+    #[test]
+    fn page_plain_start_x_non_zero_ignores_trailing_state() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello world");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.start_x = 6;
+        formatter.trailing_state = Some(TrailingState { rows: 2, cells: 8 });
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // Should NOT output the 2 newlines or 8 spaces from trailing_state because start_x is non-zero
+        assert_eq!(output, b"world");
+        assert_eq!(page_ref.size.rows as usize, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 11, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..5 {
+            assert_eq!(coord((i + 6) as size::CellCountInt, 0), point_map[i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain start_y and start_x zero uses trailing state"
+    #[test]
+    fn page_plain_start_y_and_start_x_zero_uses_trailing_state() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        formatter.start_y = 0;
+        formatter.start_x = 0;
+        formatter.trailing_state = Some(TrailingState { rows: 2, cells: 0 });
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // SHOULD output the 2 newlines from trailing_state because both start_y and start_x are 0
+        assert_eq!(output, b"\n\nhello");
+        assert_eq!(page_ref.size.rows as usize, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 5, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        assert_eq!(coord(0, 0), point_map[0]); // \n first blank row
+        assert_eq!(coord(0, 1), point_map[1]); // \n second blank row
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[2 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page plain single line with styling"
+    #[test]
+    fn page_plain_single_line_with_styling() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello, \x1b[1mworld\x1b[0m");
+        }
+
+        // Verify we have only a single page
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        // Create the formatter
+        let page = unsafe { last_page(pages) };
+        let page_ref = unsafe { &*page };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+
+        // Verify output
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello, world");
+        assert_eq!(page_ref.size.rows as usize, state.rows);
+        assert_eq!(page_ref.size.cols as usize - 12, state.cells);
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..12 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page VT single line plain text"
+    #[test]
+    fn page_vt_single_line_plain_text() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::vt());
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello");
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page VT single line with bold"
+    #[test]
+    fn page_vt_single_line_with_bold() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[1mhello\x1b[0m");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::vt());
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"\x1b[0m\x1b[1mhello\x1b[0m");
+
+        // Verify point map - style sequences should point to first character they style
+        assert_eq!(output.len(), point_map.len());
+        // \x1b[0m = 4 bytes, \x1b[1m = 4 bytes, total 8 bytes of style sequences
+        // All style bytes should map to the first styled character at (0, 0)
+        for i in 0..8 {
+            assert_eq!(coord(0, 0), point_map[i]);
+        }
+        // Then "hello" maps to its respective positions
+        for i in 0..5 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[8 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page VT multiple styles"
+    #[test]
+    fn page_vt_multiple_styles() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[1mhello \x1b[3mworld\x1b[0m");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::vt());
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(
+            output,
+            b"\x1b[0m\x1b[1mhello \x1b[0m\x1b[1m\x1b[3mworld\x1b[0m"
+        );
+
+        // Verify point map matches output length
+        assert_eq!(output.len(), point_map.len());
+        t.deinit(Global);
+    }
+
+    // test "Page VT with foreground color"
+    #[test]
+    fn page_vt_with_foreground_color() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[31mred\x1b[0m");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::vt());
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"\x1b[0m\x1b[38;5;1mred\x1b[0m");
+
+        // Verify point map - style sequences should point to first character they style
+        assert_eq!(output.len(), point_map.len());
+        // \x1b[0m = 4 bytes, \x1b[38;5;1m = 9 bytes, total 13 bytes of style sequences
+        // All style bytes should map to the first styled character at (0, 0)
+        for i in 0..13 {
+            assert_eq!(coord(0, 0), point_map[i]);
+        }
+        // Then "red" maps to its respective positions
+        for i in 0..3 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[13 + i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page VT with background and foreground colors"
+    #[test]
+    fn page_vt_with_background_and_foreground_colors() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let formatter: PageFormatter = PageFormatter::init(
+            page,
+            Options {
+                emit: Format::Vt,
+                background: Some(crate::color::RGB {
+                    r: 0x12,
+                    g: 0x34,
+                    b: 0x56,
+                }),
+                foreground: Some(crate::color::RGB {
+                    r: 0xab,
+                    g: 0xcd,
+                    b: 0xef,
+                }),
+                ..Options::vt()
+            },
+        );
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+
+        // Should emit OSC 10 for foreground, OSC 11 for background, then the text
+        assert_eq!(
+            output,
+            b"\x1b]10;rgb:ab/cd/ef\x1b\\\x1b]11;rgb:12/34/56\x1b\\hello"
+        );
+        t.deinit(Global);
+    }
+
+    // test "Page VT multi-line with styles"
+    #[test]
+    fn page_vt_multi_line_with_styles() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[1mfirst\x1b[0m\r\n\x1b[3msecond\x1b[0m");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::vt());
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // Note: style is reset before newline to prevent background colors from
+        // bleeding to the next line's leading cells.
+        assert_eq!(
+            output,
+            b"\x1b[0m\x1b[1mfirst\x1b[0m\r\n\x1b[0m\x1b[3msecond\x1b[0m"
+        );
+
+        // Verify point map matches output length
+        assert_eq!(output.len(), point_map.len());
+        t.deinit(Global);
+    }
+
+    // test "Page VT duplicate style not emitted twice"
+    #[test]
+    fn page_vt_duplicate_style_not_emitted_twice() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[1mhel\x1b[1mlo\x1b[0m");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::vt());
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"\x1b[0m\x1b[1mhello\x1b[0m");
+
+        // Verify point map matches output length
+        assert_eq!(output.len(), point_map.len());
+        t.deinit(Global);
+    }
+
+    // test "PageList plain single line"
+    #[test]
+    fn pagelist_plain_single_line() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello, world");
+        }
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
+        let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello, world");
+
+        // Verify pin map
+        assert_eq!(output.len(), pin_map.len());
+        let node = unsafe { (*t.screens.active).pages.pages.first };
+        for i in 0..output.len() {
+            assert_eq!(pin(node, i as size::CellCountInt, 0), pin_map[i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "PageList plain spanning two pages"
+    #[test]
+    fn pagelist_plain_spanning_two_pages() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let first_page_rows =
+            unsafe { (*(*t.screens.active).pages.pages.first).data.capacity.rows };
+        {
+            let mut s = t.vt_stream();
+            // Fill the first page almost completely
+            for _ in 0..first_page_rows - 1 {
+                s.next_slice(b"\r\n");
+            }
+            s.next_slice(b"page one");
+        }
+        let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
+        // Verify we're still on one page
+        assert!(unsafe { core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
+        // Add one more newline to push content to a second page
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\r\n");
+        }
+        assert!(unsafe { !core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
+        // Write content on the second page
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"page two");
+        }
+
+        // Format the entire PageList
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let full_output = builder.as_slice();
+        let output = trim_start(full_output, b"\n");
+        assert_eq!(output, b"page one\npage two");
+
+        // Verify pin map
+        assert_eq!(full_output.len(), pin_map.len());
+        let first_node = unsafe { (*pages_ptr).pages.first };
+        let last_node = unsafe { (*pages_ptr).pages.last };
+        let trimmed_count = full_output.len() - output.len();
+
+        // First part (trimmed blank lines) maps to first node
+        for i in 0..trimmed_count {
+            assert_eq!(first_node, pin_map[i].node);
+        }
+
+        // "page one" (8 chars) maps to first node
+        for i in 0..8 {
+            let idx = trimmed_count + i;
+            assert_eq!(first_node, pin_map[idx].node);
+            assert_eq!(i as size::CellCountInt, pin_map[idx].x);
+        }
+
+        // \n - maps to last node as it represents the transition to new page
+        assert_eq!(last_node, pin_map[trimmed_count + 8].node);
+
+        // "page two" (8 chars) maps to last node
+        for i in 0..8 {
+            let idx = trimmed_count + 9 + i;
+            assert_eq!(last_node, pin_map[idx].node);
+            assert_eq!(i as size::CellCountInt, pin_map[idx].x);
+        }
+        t.deinit(Global);
+    }
+
+    // test "PageList soft-wrapped line spanning two pages without unwrap"
+    #[test]
+    fn pagelist_soft_wrapped_line_spanning_two_pages_without_unwrap() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+        let first_page_rows =
+            unsafe { (*(*t.screens.active).pages.pages.first).data.capacity.rows };
+        {
+            let mut s = t.vt_stream();
+            // Fill the first page with soft-wrapped content
+            for _ in 0..first_page_rows - 1 {
+                s.next_slice(b"\r\n");
+            }
+            s.next_slice(b"hello world test");
+        }
+        let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
+        // Verify we're on two pages due to wrapping
+        assert!(unsafe { !core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
+
+        // Format without unwrap - should show line breaks
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let full_output = builder.as_slice();
+        let output = trim_start(full_output, b"\n");
+        assert_eq!(output, b"hello worl\nd test");
+
+        // Verify pin map
+        assert_eq!(full_output.len(), pin_map.len());
+        let first_node = unsafe { (*pages_ptr).pages.first };
+        let last_node = unsafe { (*pages_ptr).pages.last };
+        let trimmed_count = full_output.len() - output.len();
+
+        // First part (trimmed blank lines) maps to first node
+        for i in 0..trimmed_count {
+            assert_eq!(first_node, pin_map[i].node);
+        }
+
+        // First line maps to first node
+        for i in 0..10 {
+            let idx = trimmed_count + i;
+            assert_eq!(first_node, pin_map[idx].node);
+        }
+
+        // \n - maps to last node as it represents the transition to new page
+        assert_eq!(last_node, pin_map[trimmed_count + 10].node);
+
+        // "d test" (6 chars) maps to last node
+        for i in 0..6 {
+            let idx = trimmed_count + 11 + i;
+            assert_eq!(last_node, pin_map[idx].node);
+        }
+        t.deinit(Global);
+    }
+
+    // test "PageList soft-wrapped line spanning two pages with unwrap"
+    #[test]
+    fn pagelist_soft_wrapped_line_spanning_two_pages_with_unwrap() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+        let first_page_rows =
+            unsafe { (*(*t.screens.active).pages.pages.first).data.capacity.rows };
+        {
+            let mut s = t.vt_stream();
+            // Fill the first page with soft-wrapped content
+            for _ in 0..first_page_rows - 1 {
+                s.next_slice(b"\r\n");
+            }
+            s.next_slice(b"hello world test");
+        }
+        let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
+        // Verify we're on two pages due to wrapping
+        assert!(unsafe { !core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
+
+        // Format with unwrap - should join the wrapped lines
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut formatter: PageListFormatter = PageListFormatter::init(
+            pages_ptr,
+            Options {
+                emit: Format::Plain,
+                unwrap: true,
+                ..Options::plain()
+            },
+        );
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let full_output = builder.as_slice();
+        let output = trim_start(full_output, b"\r\n");
+        assert_eq!(output, b"hello world test");
+
+        // Verify pin map
+        assert_eq!(full_output.len(), pin_map.len());
+        let first_node = unsafe { (*pages_ptr).pages.first };
+        let last_node = unsafe { (*pages_ptr).pages.last };
+        let trimmed_count = full_output.len() - output.len();
+
+        // First part (trimmed blank lines) maps to first node
+        for i in 0..trimmed_count {
+            assert_eq!(first_node, pin_map[i].node);
+        }
+
+        // First line from first page
+        for i in 0..10 {
+            let idx = trimmed_count + i;
+            assert_eq!(first_node, pin_map[idx].node);
+        }
+
+        // "d test" (6 chars) from last page
+        for i in 0..6 {
+            let idx = trimmed_count + 10 + i;
+            assert_eq!(last_node, pin_map[idx].node);
+        }
+        t.deinit(Global);
+    }
+
+    // test "PageList VT spanning two pages"
+    #[test]
+    fn pagelist_vt_spanning_two_pages() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let first_page_rows =
+            unsafe { (*(*t.screens.active).pages.pages.first).data.capacity.rows };
+        {
+            let mut s = t.vt_stream();
+            // Fill the first page almost completely
+            for _ in 0..first_page_rows - 1 {
+                s.next_slice(b"\r\n");
+            }
+            s.next_slice(b"\x1b[1mpage one");
+        }
+        let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
+        // Verify we're still on one page
+        assert!(unsafe { core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
+        // Add one more newline to push content to a second page
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\r\n");
+        }
+        assert!(unsafe { !core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
+        // New content is still styled
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"page two");
+        }
+
+        // Format the entire PageList with VT
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::vt());
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let full_output = builder.as_slice();
+        let output = trim_start(full_output, b"\r\n");
+        assert_eq!(
+            output,
+            b"\x1b[0m\x1b[1mpage one\x1b[0m\r\n\x1b[0m\x1b[1mpage two\x1b[0m"
+        );
+
+        // Verify pin map
+        assert_eq!(full_output.len(), pin_map.len());
+        let first_node = unsafe { (*pages_ptr).pages.first };
+        let last_node = unsafe { (*pages_ptr).pages.last };
+
+        // Just verify we have entries for both pages in the pin map
+        let mut first_count: usize = 0;
+        let mut last_count: usize = 0;
+        for p in pin_map.iter() {
+            if p.node == first_node {
+                first_count += 1;
+            }
+            if p.node == last_node {
+                last_count += 1;
+            }
+        }
+        assert!(first_count > 0);
+        assert!(last_count > 0);
+        t.deinit(Global);
+    }
+
+    // test "PageList plain with x offset on single page"
+    #[test]
+    fn pagelist_plain_with_x_offset_on_single_page() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello world\r\ntest case\r\nfoo bar");
+        }
+        let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
+        let node = unsafe { (*pages_ptr).pages.first };
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
+        formatter.top_left = Some(pin(node, 6, 0));
+        formatter.bottom_right = Some(pin(node, 2, 2));
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"world\ntest case\nfoo");
+
+        // Verify pin map
+        assert_eq!(output.len(), pin_map.len());
+        for p in pin_map.iter() {
+            assert_eq!(node, p.node);
+        }
+
+        // "world" starts at x=6, y=0
+        for i in 0..5 {
+            assert_eq!((6 + i) as size::CellCountInt, pin_map[i].x);
+            assert_eq!(0, pin_map[i].y);
+        }
+        t.deinit(Global);
+    }
+
+    // test "PageList plain with x offset spanning two pages"
+    #[test]
+    fn pagelist_plain_with_x_offset_spanning_two_pages() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let first_page_rows =
+            unsafe { (*(*t.screens.active).pages.pages.first).data.capacity.rows };
+        {
+            let mut s = t.vt_stream();
+            // Fill first page almost completely
+            for _ in 0..first_page_rows - 1 {
+                s.next_slice(b"\r\n");
+            }
+            s.next_slice(b"hello world");
+        }
+        let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
+        // Verify we're still on one page
+        assert!(unsafe { core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
+        // Push to second page
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\r\n");
+        }
+        assert!(unsafe { !core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"foo bar test");
+        }
+        let first_node = unsafe { (*pages_ptr).pages.first };
+        let last_node = unsafe { (*pages_ptr).pages.last };
+        let first_node_size_rows = unsafe { (*first_node).data.size.rows };
+
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
+        formatter.top_left = Some(pin(first_node, 6, first_node_size_rows - 1));
+        formatter.bottom_right = Some(pin(last_node, 2, 1));
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let full_output = builder.as_slice();
+        let output = trim_start(full_output, b"\n");
+        assert_eq!(output, b"world\nfoo");
+
+        // Verify pin map
+        assert_eq!(full_output.len(), pin_map.len());
+        let trimmed_count = full_output.len() - output.len();
+
+        // "world" (5 chars) from first page
+        for i in 0..5 {
+            let idx = trimmed_count + i;
+            assert_eq!(first_node, pin_map[idx].node);
+            assert_eq!((6 + i) as size::CellCountInt, pin_map[idx].x);
+        }
+
+        // \n - maps to last node as it represents the transition to new page
+        assert_eq!(last_node, pin_map[trimmed_count + 5].node);
+
+        // "foo" (3 chars) from last page
+        for i in 0..3 {
+            let idx = trimmed_count + 6 + i;
+            assert_eq!(last_node, pin_map[idx].node);
+            assert_eq!(i as size::CellCountInt, pin_map[idx].x);
+        }
+        t.deinit(Global);
+    }
+
+    // test "PageList plain with start_x only"
+    #[test]
+    fn pagelist_plain_with_start_x_only() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello world");
+        }
+        let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
+        let node = unsafe { (*pages_ptr).pages.first };
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
+        formatter.top_left = Some(pin(node, 6, 0));
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"world");
+
+        // Verify pin map
+        assert_eq!(output.len(), pin_map.len());
+        for i in 0..5 {
+            assert_eq!(node, pin_map[i].node);
+            assert_eq!((6 + i) as size::CellCountInt, pin_map[i].x);
+            assert_eq!(0, pin_map[i].y);
+        }
+        t.deinit(Global);
+    }
+
+    // test "PageList plain with end_x only"
+    #[test]
+    fn pagelist_plain_with_end_x_only() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello world\r\ntest");
+        }
+        let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
+        let node = unsafe { (*pages_ptr).pages.first };
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
+        formatter.bottom_right = Some(pin(node, 2, 1));
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello world\ntes");
+
+        // Verify pin map
+        assert_eq!(output.len(), pin_map.len());
+
+        // "hello world" (11 chars) on y=0
+        for i in 0..11 {
+            assert_eq!(node, pin_map[i].node);
+            assert_eq!(i as size::CellCountInt, pin_map[i].x);
+            assert_eq!(0, pin_map[i].y);
+        }
+
+        // \n
+        assert_eq!(node, pin_map[11].node);
+
+        // "tes" (3 chars) on y=1
+        for i in 0..3 {
+            assert_eq!(node, pin_map[12 + i].node);
+            assert_eq!(i as size::CellCountInt, pin_map[12 + i].x);
+            assert_eq!(1, pin_map[12 + i].y);
+        }
+        t.deinit(Global);
+    }
+
+    // test "PageList plain rectangle basic"
+    #[test]
+    fn pagelist_plain_rectangle_basic() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(30, 5)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"Lorem ipsum dolor\r\n");
+            s.next_slice(b"sit amet, consectetur\r\n");
+            s.next_slice(b"adipiscing elit, sed do\r\n");
+            s.next_slice(b"eiusmod tempor incididunt\r\n");
+            s.next_slice(b"ut labore et dolore");
+        }
+        let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
+        let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
+        formatter.top_left = unsafe { (*pages_ptr).pin(crate::point::Point::Screen(coord(2, 1))) };
+        formatter.bottom_right =
+            unsafe { (*pages_ptr).pin(crate::point::Point::Screen(coord(6, 3))) };
+        formatter.rectangle = true;
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        let expected = "t ame\nipisc\nusmod";
+        assert_eq!(output, expected.as_bytes());
+        t.deinit(Global);
+    }
+
+    // test "PageList plain rectangle with EOL"
+    #[test]
+    fn pagelist_plain_rectangle_with_eol() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(30, 5)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"Lorem ipsum dolor\r\n");
+            s.next_slice(b"sit amet, consectetur\r\n");
+            s.next_slice(b"adipiscing elit, sed do\r\n");
+            s.next_slice(b"eiusmod tempor incididunt\r\n");
+            s.next_slice(b"ut labore et dolore");
+        }
+        let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
+        let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
+        formatter.top_left = unsafe { (*pages_ptr).pin(crate::point::Point::Screen(coord(12, 0))) };
+        formatter.bottom_right =
+            unsafe { (*pages_ptr).pin(crate::point::Point::Screen(coord(26, 4))) };
+        formatter.rectangle = true;
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        let expected = "dolor\nnsectetur\nlit, sed do\nor incididunt\n dolore";
+        assert_eq!(output, expected.as_bytes());
+        t.deinit(Global);
+    }
+
+    // test "PageList plain rectangle more complex with breaks"
+    #[test]
+    fn pagelist_plain_rectangle_more_complex_with_breaks() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(30, 8)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"Lorem ipsum dolor\r\n");
+            s.next_slice(b"sit amet, consectetur\r\n");
+            s.next_slice(b"adipiscing elit, sed do\r\n");
+            s.next_slice(b"eiusmod tempor incididunt\r\n");
+            s.next_slice(b"ut labore et dolore\r\n");
+            s.next_slice(b"\r\n");
+            s.next_slice(b"magna aliqua. Ut enim\r\n");
+            s.next_slice(b"ad minim veniam, quis");
+        }
+        let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
+        let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
+        formatter.top_left = unsafe { (*pages_ptr).pin(crate::point::Point::Screen(coord(11, 2))) };
+        formatter.bottom_right =
+            unsafe { (*pages_ptr).pin(crate::point::Point::Screen(coord(26, 7))) };
+        formatter.rectangle = true;
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        let expected = "elit, sed do\npor incididunt\nt dolore\n\na. Ut enim\nniam, quis";
+        assert_eq!(output, expected.as_bytes());
+        t.deinit(Global);
+    }
+
+    // test "TerminalFormatter plain no selection"
+    #[test]
+    fn terminalformatter_plain_no_selection() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello\r\nworld");
+        }
+        let t_ptr: *const Terminal = &t;
+        let formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::plain());
+        formatter.format(&mut builder).unwrap();
+        assert_eq!(builder.as_slice(), b"hello\nworld");
+        t.deinit(Global);
+    }
+
+    // test "TerminalFormatter vt with palette"
+    #[test]
+    fn terminalformatter_vt_with_palette() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            // Modify some palette colors using VT sequences
+            s.next_slice(b"\x1b]4;0;rgb:12/34/56\x1b\\");
+            s.next_slice(b"\x1b]4;1;rgb:ab/cd/ef\x1b\\");
+            s.next_slice(b"\x1b]4;255;rgb:ff/00/ff\x1b\\");
+            s.next_slice(b"test");
+        }
+        let t_ptr: *const Terminal = &t;
+        let formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::vt());
+        formatter.format(&mut builder).unwrap();
+        let output = builder.clone();
+
+        // Create a second terminal and apply the output
+        let mut t2 = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s2 = t2.vt_stream();
+            s2.next_slice(output.as_slice());
+        }
+
+        // Verify the palettes match
+        assert_eq!(t.colors.palette.current[0], t2.colors.palette.current[0]);
+        assert_eq!(t.colors.palette.current[1], t2.colors.palette.current[1]);
+        assert_eq!(
+            t.colors.palette.current[255],
+            t2.colors.palette.current[255]
+        );
+        t.deinit(Global);
+        t2.deinit(Global);
+    }
+
+    // test "TerminalFormatter with selection"
+    #[test]
+    fn terminalformatter_with_selection() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"line1\r\nline2\r\nline3");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let tl = pages.pin(crate::point::Point::Active(coord(0, 1))).unwrap();
+        let br = pages.pin(crate::point::Point::Active(coord(4, 1))).unwrap();
+        let t_ptr: *const Terminal = &t;
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::plain());
+        formatter.content = Content::Selection(Some(Selection::init(tl, br, false)));
+        formatter.format(&mut builder).unwrap();
+        assert_eq!(builder.as_slice(), b"line2");
+        t.deinit(Global);
+    }
+
+    // test "TerminalFormatter plain with pin_map"
+    #[test]
+    fn terminalformatter_plain_with_pin_map() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello, world");
+        }
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let t_ptr: *const Terminal = &t;
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::plain());
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello, world");
+
+        // Verify pin map
+        assert_eq!(output.len(), pin_map.len());
+        let node = unsafe { (*t.screens.active).pages.pages.first };
+        for i in 0..output.len() {
+            assert_eq!(pin(node, i as size::CellCountInt, 0), pin_map[i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "TerminalFormatter plain multiline with pin_map"
+    #[test]
+    fn terminalformatter_plain_multiline_with_pin_map() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello\r\nworld");
+        }
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let t_ptr: *const Terminal = &t;
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::plain());
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello\nworld");
+
+        // Verify pin map
+        assert_eq!(output.len(), pin_map.len());
+        let node = unsafe { (*t.screens.active).pages.pages.first };
+        // "hello" (5 chars)
+        for i in 0..5 {
+            assert_eq!(node, pin_map[i].node);
+            assert_eq!(i as size::CellCountInt, pin_map[i].x);
+            assert_eq!(0, pin_map[i].y);
+        }
+        // "\n" maps to end of first line
+        assert_eq!(node, pin_map[5].node);
+        // "world" (5 chars)
+        for i in 0..5 {
+            let idx = 6 + i;
+            assert_eq!(node, pin_map[idx].node);
+            assert_eq!(i as size::CellCountInt, pin_map[idx].x);
+            assert_eq!(1, pin_map[idx].y);
+        }
+        t.deinit(Global);
+    }
+
+    // test "TerminalFormatter vt with palette and pin_map"
+    #[test]
+    fn terminalformatter_vt_with_palette_and_pin_map() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            // Modify some palette colors using VT sequences
+            s.next_slice(b"\x1b]4;0;rgb:12/34/56\x1b\\");
+            s.next_slice(b"test");
+        }
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let t_ptr: *const Terminal = &t;
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::vt());
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+
+        // Verify pin map - palette bytes should be mapped to top left
+        assert_eq!(output.len(), pin_map.len());
+        let node = unsafe { (*t.screens.active).pages.pages.first };
+        for i in 0..output.len() {
+            assert_eq!(node, pin_map[i].node);
+        }
+        t.deinit(Global);
+    }
+
+    // test "TerminalFormatter with selection and pin_map"
+    #[test]
+    fn terminalformatter_with_selection_and_pin_map() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"line1\r\nline2\r\nline3");
+        }
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let pages = unsafe { &(*t.screens.active).pages };
+        let tl = pages.pin(crate::point::Point::Active(coord(0, 1))).unwrap();
+        let br = pages.pin(crate::point::Point::Active(coord(4, 1))).unwrap();
+        let t_ptr: *const Terminal = &t;
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::plain());
+        formatter.content = Content::Selection(Some(Selection::init(tl, br, false)));
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"line2");
+
+        // Verify pin map
+        assert_eq!(output.len(), pin_map.len());
+        let node = unsafe { (*t.screens.active).pages.pages.first };
+        // "line2" (5 chars) from row 1
+        for i in 0..5 {
+            assert_eq!(node, pin_map[i].node);
+            assert_eq!(i as size::CellCountInt, pin_map[i].x);
+            assert_eq!(1, pin_map[i].y);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Screen plain single line"
+    #[test]
+    fn screen_plain_single_line() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello, world");
+        }
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let screen_ptr: *const Screen = t.screens.active;
+        let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::plain());
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello, world");
+
+        // Verify pin map
+        assert_eq!(output.len(), pin_map.len());
+        let node = unsafe { (*t.screens.active).pages.pages.first };
+        for i in 0..output.len() {
+            assert_eq!(pin(node, i as size::CellCountInt, 0), pin_map[i]);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Screen plain multiline"
+    #[test]
+    fn screen_plain_multiline() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello\r\nworld");
+        }
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let screen_ptr: *const Screen = t.screens.active;
+        let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::plain());
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello\nworld");
+
+        // Verify pin map
+        assert_eq!(output.len(), pin_map.len());
+        let node = unsafe { (*t.screens.active).pages.pages.first };
+        // "hello" (5 chars)
+        for i in 0..5 {
+            assert_eq!(node, pin_map[i].node);
+            assert_eq!(i as size::CellCountInt, pin_map[i].x);
+            assert_eq!(0, pin_map[i].y);
+        }
+        // "\n" maps to end of first line
+        assert_eq!(node, pin_map[5].node);
+        // "world" (5 chars)
+        for i in 0..5 {
+            let idx = 6 + i;
+            assert_eq!(node, pin_map[idx].node);
+            assert_eq!(i as size::CellCountInt, pin_map[idx].x);
+            assert_eq!(1, pin_map[idx].y);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Screen plain with selection"
+    #[test]
+    fn screen_plain_with_selection() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"line1\r\nline2\r\nline3");
+        }
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let pages = unsafe { &(*t.screens.active).pages };
+        let tl = pages.pin(crate::point::Point::Active(coord(0, 1))).unwrap();
+        let br = pages.pin(crate::point::Point::Active(coord(4, 1))).unwrap();
+        let screen_ptr: *const Screen = t.screens.active;
+        let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::plain());
+        formatter.content = Content::Selection(Some(Selection::init(tl, br, false)));
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"line2");
+
+        // Verify pin map
+        assert_eq!(output.len(), pin_map.len());
+        let node = unsafe { (*t.screens.active).pages.pages.first };
+        // "line2" (5 chars) from row 1
+        for i in 0..5 {
+            assert_eq!(node, pin_map[i].node);
+            assert_eq!(i as size::CellCountInt, pin_map[i].x);
+            assert_eq!(1, pin_map[i].y);
+        }
+        t.deinit(Global);
+    }
+
+    // test "Screen vt with cursor position"
+    #[test]
+    fn screen_vt_with_cursor_position() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // Position cursor at a specific location
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello\r\nworld");
+        }
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let screen_ptr: *const Screen = t.screens.active;
+        let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::vt());
+        formatter.extra.cursor = true;
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.clone();
+
+        // Create a second terminal and apply the output
+        let mut t2 = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s2 = t2.vt_stream();
+            s2.next_slice(output.as_slice());
+        }
+
+        // Verify cursor positions match
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, unsafe {
+            (*t2.screens.active).cursor.x
+        });
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, unsafe {
+            (*t2.screens.active).cursor.y
+        });
+
+        // Verify pin map - the extras should be mapped to the last pin
+        assert_eq!(output.len(), pin_map.len());
+        let node = unsafe { (*t.screens.active).pages.pages.first };
+        let content_len = b"hello\r\nworld".len();
+        // Content bytes map to their positions
+        for i in 0..content_len {
+            assert_eq!(node, pin_map[i].node);
+        }
+        // Extra bytes (cursor position) map to last content pin
+        for i in content_len..output.len() {
+            assert_eq!(node, pin_map[i].node);
+        }
+        t.deinit(Global);
+        t2.deinit(Global);
+    }
+
+    // test "Screen vt with style"
+    #[test]
+    fn screen_vt_with_style() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // Set some style attributes
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[1;31mhello");
+        }
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let screen_ptr: *const Screen = t.screens.active;
+        let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::vt());
+        formatter.extra.style = true;
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.clone();
+
+        // Create a second terminal and apply the output
+        let mut t2 = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s2 = t2.vt_stream();
+            s2.next_slice(output.as_slice());
+        }
+
+        // Verify styles match
+        assert!(unsafe { (*t.screens.active).cursor.style }
+            .eql(&unsafe { (*t2.screens.active).cursor.style }));
+
+        // Verify pin map
+        assert_eq!(output.len(), pin_map.len());
+        let node = unsafe { (*t.screens.active).pages.pages.first };
+        for i in 0..output.len() {
+            assert_eq!(node, pin_map[i].node);
+        }
+        t.deinit(Global);
+        t2.deinit(Global);
+    }
+
+    // test "Screen vt with hyperlink"
+    #[test]
+    fn screen_vt_with_hyperlink() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // Set a hyperlink
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b]8;;http://example.com\x1b\\hello");
+        }
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let screen_ptr: *const Screen = t.screens.active;
+        let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::vt());
+        formatter.extra.hyperlink = true;
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.clone();
+
+        // Create a second terminal and apply the output
+        let mut t2 = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s2 = t2.vt_stream();
+            s2.next_slice(output.as_slice());
+        }
+
+        // Verify hyperlinks match
+        let has_link1 = unsafe { (*t.screens.active).cursor.hyperlink }.is_some();
+        let has_link2 = unsafe { (*t2.screens.active).cursor.hyperlink }.is_some();
+        assert_eq!(has_link1, has_link2);
+
+        if has_link1 {
+            let link1 = unsafe { &*(*t.screens.active).cursor.hyperlink.unwrap() };
+            let link2 = unsafe { &*(*t2.screens.active).cursor.hyperlink.unwrap() };
+            assert_eq!(link1.uri, link2.uri);
+        }
+
+        // Verify pin map
+        assert_eq!(output.len(), pin_map.len());
+        let node = unsafe { (*t.screens.active).pages.pages.first };
+        for i in 0..output.len() {
+            assert_eq!(node, pin_map[i].node);
+        }
+        t.deinit(Global);
+        t2.deinit(Global);
+    }
+
+    // test "Screen vt with protection"
+    #[test]
+    fn screen_vt_with_protection() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // Enable protection mode
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[1\"qhello");
+        }
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let screen_ptr: *const Screen = t.screens.active;
+        let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::vt());
+        formatter.extra.protection = true;
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.clone();
+
+        // Create a second terminal and apply the output
+        let mut t2 = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s2 = t2.vt_stream();
+            s2.next_slice(output.as_slice());
+        }
+
+        // Verify protection state matches
+        assert_eq!(unsafe { (*t.screens.active).cursor.protected }, unsafe {
+            (*t2.screens.active).cursor.protected
+        });
+
+        // Verify pin map
+        assert_eq!(output.len(), pin_map.len());
+        let node = unsafe { (*t.screens.active).pages.pages.first };
+        for i in 0..output.len() {
+            assert_eq!(node, pin_map[i].node);
+        }
+        t.deinit(Global);
+        t2.deinit(Global);
+    }
+
+    // test "Screen vt with kitty keyboard"
+    #[test]
+    fn screen_vt_with_kitty_keyboard() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // Set kitty keyboard flags (disambiguate + report_events = 3)
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[=3;1uhello");
+        }
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let screen_ptr: *const Screen = t.screens.active;
+        let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::vt());
+        formatter.extra.kitty_keyboard = true;
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.clone();
+
+        // Create a second terminal and apply the output
+        let mut t2 = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s2 = t2.vt_stream();
+            s2.next_slice(output.as_slice());
+        }
+
+        // Verify kitty keyboard state matches
+        let flags1 = unsafe { (*t.screens.active).kitty_keyboard.current() }.int();
+        let flags2 = unsafe { (*t2.screens.active).kitty_keyboard.current() }.int();
+        assert_eq!(flags1, flags2);
+
+        // Verify pin map
+        assert_eq!(output.len(), pin_map.len());
+        let node = unsafe { (*t.screens.active).pages.pages.first };
+        for i in 0..output.len() {
+            assert_eq!(node, pin_map[i].node);
+        }
+        t.deinit(Global);
+        t2.deinit(Global);
+    }
+
+    // test "Screen vt with charsets"
+    #[test]
+    fn screen_vt_with_charsets() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // Set G0 to DEC special and shift to G1
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b(0\x0ehello");
+        }
+        let mut pin_map: Vec<Pin> = Vec::new();
+        let screen_ptr: *const Screen = t.screens.active;
+        let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::vt());
+        formatter.extra.charsets = true;
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.clone();
+
+        // Create a second terminal and apply the output
+        let mut t2 = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s2 = t2.vt_stream();
+            s2.next_slice(output.as_slice());
+        }
+
+        // Verify charset state matches
+        assert_eq!(unsafe { (*t.screens.active).charset.gl }, unsafe {
+            (*t2.screens.active).charset.gl
+        });
+        assert_eq!(unsafe { (*t.screens.active).charset.gr }, unsafe {
+            (*t2.screens.active).charset.gr
+        });
+        assert_eq!(
+            unsafe {
+                (*t.screens.active)
+                    .charset
+                    .charsets
+                    .get(crate::charsets::Slots::G0)
+            },
+            unsafe {
+                (*t2.screens.active)
+                    .charset
+                    .charsets
+                    .get(crate::charsets::Slots::G0)
+            }
+        );
+
+        // Verify pin map
+        assert_eq!(output.len(), pin_map.len());
+        let node = unsafe { (*t.screens.active).pages.pages.first };
+        for i in 0..output.len() {
+            assert_eq!(node, pin_map[i].node);
+        }
+        t.deinit(Global);
+        t2.deinit(Global);
+    }
+
+    // test "Terminal vt with scrolling region"
+    #[test]
+    fn terminal_vt_with_scrolling_region() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // Set scrolling region: top=5, bottom=20
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[6;21rhello");
+        }
+        let t_ptr: *const Terminal = &t;
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::vt());
+        formatter.extra.scrolling_region = true;
+        formatter.format(&mut builder).unwrap();
+        let output = builder.clone();
+
+        // Create a second terminal and apply the output
+        let mut t2 = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s2 = t2.vt_stream();
+            s2.next_slice(output.as_slice());
+        }
+
+        // Verify scrolling regions match
+        assert_eq!(t.scrolling_region.top, t2.scrolling_region.top);
+        assert_eq!(t.scrolling_region.bottom, t2.scrolling_region.bottom);
+        assert_eq!(t.scrolling_region.left, t2.scrolling_region.left);
+        assert_eq!(t.scrolling_region.right, t2.scrolling_region.right);
+        t.deinit(Global);
+        t2.deinit(Global);
+    }
+
+    // test "Terminal vt with modes"
+    #[test]
+    fn terminal_vt_with_modes() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            // Enable some modes that differ from defaults
+            s.next_slice(b"\x1b[?2004h"); // Bracketed paste
+            s.next_slice(b"\x1b[?1000h"); // Mouse event normal
+            s.next_slice(b"\x1b[?7l"); // Disable wraparound (default is true)
+            s.next_slice(b"hello");
+        }
+        let t_ptr: *const Terminal = &t;
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::vt());
+        formatter.extra.modes = true;
+        formatter.format(&mut builder).unwrap();
+        let output = builder.clone();
+
+        // Create a second terminal and apply the output
+        let mut t2 = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s2 = t2.vt_stream();
+            s2.next_slice(output.as_slice());
+        }
+
+        // Verify modes match
+        assert_eq!(
+            t.modes.get(crate::modes::Mode::BracketedPaste),
+            t2.modes.get(crate::modes::Mode::BracketedPaste)
+        );
+        assert_eq!(
+            t.modes.get(crate::modes::Mode::MouseEventNormal),
+            t2.modes.get(crate::modes::Mode::MouseEventNormal)
+        );
+        assert_eq!(
+            t.modes.get(crate::modes::Mode::Wraparound),
+            t2.modes.get(crate::modes::Mode::Wraparound)
+        );
+        t.deinit(Global);
+        t2.deinit(Global);
+    }
+
+    // test "Terminal vt with tabstops"
+    #[test]
+    fn terminal_vt_with_tabstops() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            // Clear all tabs and set custom tabstops
+            s.next_slice(b"\x1b[3g"); // Clear all tabs
+            s.next_slice(b"\x1b[5G\x1bH"); // Set tab at column 5
+            s.next_slice(b"\x1b[15G\x1bH"); // Set tab at column 15
+            s.next_slice(b"\x1b[30G\x1bH"); // Set tab at column 30
+            s.next_slice(b"hello");
+        }
+        let t_ptr: *const Terminal = &t;
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::vt());
+        formatter.extra.tabstops = true;
+        formatter.format(&mut builder).unwrap();
+        let output = builder.clone();
+
+        // Create a second terminal and apply the output
+        let mut t2 = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s2 = t2.vt_stream();
+            s2.next_slice(output.as_slice());
+        }
+
+        // Verify tabstops match (columns are 0-indexed in the API)
+        assert_eq!(t.tabstops.get(4), t2.tabstops.get(4));
+        assert_eq!(t.tabstops.get(14), t2.tabstops.get(14));
+        assert_eq!(t.tabstops.get(29), t2.tabstops.get(29));
+        assert!(t2.tabstops.get(4)); // Column 5 (1-indexed)
+        assert!(t2.tabstops.get(14)); // Column 15 (1-indexed)
+        assert!(t2.tabstops.get(29)); // Column 30 (1-indexed)
+        assert!(!t2.tabstops.get(8)); // Not a tab
+        t.deinit(Global);
+        t2.deinit(Global);
+    }
+
+    // test "Terminal vt with keyboard modes"
+    #[test]
+    fn terminal_vt_with_keyboard_modes() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            // Set modify other keys mode 2
+            s.next_slice(b"\x1b[>4;2m");
+            s.next_slice(b"hello");
+        }
+        let t_ptr: *const Terminal = &t;
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::vt());
+        formatter.extra.keyboard = true;
+        formatter.format(&mut builder).unwrap();
+        let output = builder.clone();
+
+        // Create a second terminal and apply the output
+        let mut t2 = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s2 = t2.vt_stream();
+            s2.next_slice(output.as_slice());
+        }
+
+        // Verify keyboard mode matches
+        assert_eq!(t.flags.modify_other_keys_2, t2.flags.modify_other_keys_2);
+        assert!(t2.flags.modify_other_keys_2);
+        t.deinit(Global);
+        t2.deinit(Global);
+    }
+
+    // test "Terminal vt with pwd"
+    #[test]
+    fn terminal_vt_with_pwd() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // Set pwd using OSC 7
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b]7;file://host/home/user\x1b\\hello");
+        }
+        let t_ptr: *const Terminal = &t;
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::vt());
+        formatter.extra.pwd = true;
+        formatter.format(&mut builder).unwrap();
+        let output = builder.clone();
+
+        // Create a second terminal and apply the output
+        let mut t2 = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s2 = t2.vt_stream();
+            s2.next_slice(output.as_slice());
+        }
+
+        // Verify pwd matches
+        assert_eq!(t.pwd.as_slice(), t2.pwd.as_slice());
+        t.deinit(Global);
+        t2.deinit(Global);
+    }
+
+    // test "Page html with multiple styles"
+    #[test]
+    fn page_html_with_multiple_styles() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // Set bold, then italic, then reset
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[1mbold\x1b[3mitalic\x1b[0mnormal");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let formatter: PageFormatter = PageFormatter::init(page, Options::html());
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(
+            output,
+            concat!(
+                "<div style=\"font-family: monospace; white-space: pre;\">",
+                "<div style=\"display: inline;font-weight: bold;\">bold</div>",
+                "<div style=\"display: inline;font-weight: bold;font-style: italic;\">italic</div>",
+                "normal",
+                "</div>"
+            )
+            .as_bytes()
+        );
+        t.deinit(Global);
+    }
+
+    // test "Page html plain text"
+    #[test]
+    fn page_html_plain_text() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello, world");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let formatter: PageFormatter = PageFormatter::init(page, Options::html());
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // Plain text without styles should be wrapped in monospace div
+        assert_eq!(
+            output,
+            b"<div style=\"font-family: monospace; white-space: pre;\">hello, world</div>"
+        );
+        t.deinit(Global);
+    }
+
+    // test "Page html with colors"
+    #[test]
+    fn page_html_with_colors() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // Set red foreground, blue background
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[31;44mcolored");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let formatter: PageFormatter = PageFormatter::init(page, Options::html());
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(
+            output,
+            concat!(
+                "<div style=\"font-family: monospace; white-space: pre;\">",
+                "<div style=\"display: inline;color: var(--vt-palette-1);background-color: var(--vt-palette-4);\">colored</div>",
+                "</div>"
+            ).as_bytes()
+        );
+        t.deinit(Global);
+    }
+
+    // test "TerminalFormatter html with palette"
+    #[test]
+    fn terminalformatter_html_with_palette() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            // Modify some palette colors
+            s.next_slice(b"\x1b]4;0;rgb:12/34/56\x1b\\");
+            s.next_slice(b"\x1b]4;1;rgb:ab/cd/ef\x1b\\");
+            s.next_slice(b"\x1b]4;255;rgb:ff/00/ff\x1b\\");
+            s.next_slice(b"test");
+        }
+        let t_ptr: *const Terminal = &t;
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::html());
+        formatter.extra.palette = true;
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+
+        // Verify palette CSS variables are emitted
+        assert!(index_of(output, b"<style>:root{").is_some());
+        assert!(index_of(output, b"--vt-palette-0: #123456;").is_some());
+        assert!(index_of(output, b"--vt-palette-1: #abcdef;").is_some());
+        assert!(index_of(output, b"--vt-palette-255: #ff00ff;").is_some());
+        assert!(index_of(output, b"}</style>").is_some());
+        assert!(index_of(output, b"test").is_some());
+        t.deinit(Global);
+    }
+
+    // test "Page html with background and foreground colors"
+    #[test]
+    fn page_html_with_background_and_foreground_colors() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let formatter: PageFormatter = PageFormatter::init(
+            page,
+            Options {
+                emit: Format::Html,
+                background: Some(crate::color::RGB {
+                    r: 0x12,
+                    g: 0x34,
+                    b: 0x56,
+                }),
+                foreground: Some(crate::color::RGB {
+                    r: 0xab,
+                    g: 0xcd,
+                    b: 0xef,
+                }),
+                ..Options::html()
+            },
+        );
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(
+            output,
+            b"<div style=\"font-family: monospace; white-space: pre;background-color: #123456;color: #abcdef;\">hello</div>"
+        );
+        t.deinit(Global);
+    }
+
+    // test "Page html with escaping"
+    #[test]
+    fn page_html_with_escaping() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"<tag>&\"'text");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::html());
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(
+            output,
+            b"<div style=\"font-family: monospace; white-space: pre;\">&lt;tag&gt;&amp;&quot;&#39;text</div>"
+        );
+
+        // Verify point map length matches output
+        assert_eq!(output.len(), point_map.len());
+
+        // Opening wrapper div
+        let wrapper_start = "<div style=\"font-family: monospace; white-space: pre;\">";
+        let wrapper_start_len = wrapper_start.len();
+        for i in 0..wrapper_start_len {
+            assert_eq!(coord(0, 0), point_map[i]);
+        }
+
+        // Verify each character maps correctly, accounting for escaping
+        let offset = wrapper_start_len;
+        // < (4 bytes: &lt;) -> x=0
+        for i in 0..4 {
+            assert_eq!(coord(0, 0), point_map[offset + i]);
+        }
+        // t (1 byte) -> x=1
+        assert_eq!(coord(1, 0), point_map[offset + 4]);
+        // a (1 byte) -> x=2
+        assert_eq!(coord(2, 0), point_map[offset + 5]);
+        // g (1 byte) -> x=3
+        assert_eq!(coord(3, 0), point_map[offset + 6]);
+        // > (4 bytes: &gt;) -> x=4
+        for i in 0..4 {
+            assert_eq!(coord(4, 0), point_map[offset + 7 + i]);
+        }
+        // & (5 bytes: &amp;) -> x=5
+        for i in 0..5 {
+            assert_eq!(coord(5, 0), point_map[offset + 11 + i]);
+        }
+        // " (6 bytes: &quot;) -> x=6
+        for i in 0..6 {
+            assert_eq!(coord(6, 0), point_map[offset + 16 + i]);
+        }
+        // ' (5 bytes: &#39;) -> x=7
+        for i in 0..5 {
+            assert_eq!(coord(7, 0), point_map[offset + 22 + i]);
+        }
+        // t (1 byte) -> x=8
+        assert_eq!(coord(8, 0), point_map[offset + 27]);
+        // e (1 byte) -> x=9
+        assert_eq!(coord(9, 0), point_map[offset + 28]);
+        // x (1 byte) -> x=10
+        assert_eq!(coord(10, 0), point_map[offset + 29]);
+        // t (1 byte) -> x=11
+        assert_eq!(coord(11, 0), point_map[offset + 30]);
+        t.deinit(Global);
+    }
+
+    // test "Page html with unicode as numeric entities"
+    #[test]
+    fn page_html_with_unicode_as_numeric_entities() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // Box drawing characters that caused issue #9426
+        {
+            let mut s = t.vt_stream();
+            s.next_slice("╰─ ❯".as_bytes());
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let formatter: PageFormatter = PageFormatter::init(page, Options::html());
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // Expected: box drawing chars as numeric entities
+        // ╰ = U+2570 = 9584, ─ = U+2500 = 9472, ❯ = U+276F = 10095
+        assert_eq!(
+            output,
+            b"<div style=\"font-family: monospace; white-space: pre;\">&#9584;&#9472; &#10095;</div>"
+        );
+        t.deinit(Global);
+    }
+
+    // test "Page html ascii characters unchanged"
+    #[test]
+    fn page_html_ascii_characters_unchanged() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello world");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let formatter: PageFormatter = PageFormatter::init(page, Options::html());
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // ASCII should be emitted directly
+        assert_eq!(
+            output,
+            b"<div style=\"font-family: monospace; white-space: pre;\">hello world</div>"
+        );
+        t.deinit(Global);
+    }
+
+    // test "Page html mixed ascii and unicode"
+    #[test]
+    fn page_html_mixed_ascii_and_unicode() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice("test ╰─❯ ok".as_bytes());
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let formatter: PageFormatter = PageFormatter::init(page, Options::html());
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // Mix of ASCII and Unicode entities
+        assert_eq!(output, b"<div style=\"font-family: monospace; white-space: pre;\">test &#9584;&#9472;&#10095; ok</div>");
+        t.deinit(Global);
+    }
+
+    // test "Page VT with palette option emits RGB"
+    #[test]
+    fn page_vt_with_palette_option_emits_rgb() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            // Set a custom palette color and use it
+            s.next_slice(b"\x1b]4;1;rgb:ab/cd/ef\x1b\\");
+            s.next_slice(b"\x1b[31mred");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+
+        // Without palette option - should emit palette index
+        {
+            builder.clear();
+            let formatter: PageFormatter = PageFormatter::init(page, Options::vt());
+            formatter.format(&mut builder).unwrap();
+            let output = builder.as_slice();
+            assert_eq!(output, b"\x1b[0m\x1b[38;5;1mred\x1b[0m");
+        }
+
+        // With palette option - should emit RGB directly
+        {
+            builder.clear();
+            let mut o = Options::vt();
+            o.palette = Some(&t.colors.palette.current as *const crate::color::Palette);
+            let formatter: PageFormatter = PageFormatter::init(page, o);
+            formatter.format(&mut builder).unwrap();
+            let output = builder.as_slice();
+            assert_eq!(output, b"\x1b[0m\x1b[38;2;171;205;239mred\x1b[0m");
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page html with palette option emits RGB"
+    #[test]
+    fn page_html_with_palette_option_emits_rgb() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            // Set a custom palette color and use it
+            s.next_slice(b"\x1b]4;1;rgb:ab/cd/ef\x1b\\");
+            s.next_slice(b"\x1b[31mred");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+
+        // Without palette option - should emit CSS variable
+        {
+            builder.clear();
+            let formatter: PageFormatter = PageFormatter::init(page, Options::html());
+            formatter.format(&mut builder).unwrap();
+            let output = builder.as_slice();
+            assert_eq!(
+                output,
+                concat!(
+                    "<div style=\"font-family: monospace; white-space: pre;\">",
+                    "<div style=\"display: inline;color: var(--vt-palette-1);\">red</div>",
+                    "</div>"
+                )
+                .as_bytes()
+            );
+        }
+
+        // With palette option - should emit RGB directly
+        {
+            builder.clear();
+            let mut o = Options::html();
+            o.palette = Some(&t.colors.palette.current as *const crate::color::Palette);
+            let formatter: PageFormatter = PageFormatter::init(page, o);
+            formatter.format(&mut builder).unwrap();
+            let output = builder.as_slice();
+            assert_eq!(
+                output,
+                concat!(
+                    "<div style=\"font-family: monospace; white-space: pre;\">",
+                    "<div style=\"display: inline;color: rgb(171, 205, 239);\">red</div>",
+                    "</div>"
+                )
+                .as_bytes()
+            );
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page VT style reset properly closes styles"
+    #[test]
+    fn page_vt_style_reset_properly_closes_styles() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // Set bold, then reset with SGR 0
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[1mbold\x1b[0mnormal");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        builder.clear();
+        let formatter: PageFormatter = PageFormatter::init(page, Options::vt());
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // The reset should properly close the bold style
+        assert_eq!(output, b"\x1b[0m\x1b[1mbold\x1b[0mnormal");
+        t.deinit(Global);
+    }
+
+    // test "Page codepoint_map single replacement"
+    #[test]
+    fn page_codepoint_map_single_replacement() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello world");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        // Replace 'o' with 'x'
+        let map = vec![CodepointMap {
+            range: ['o' as u21, 'o' as u21],
+            replacement: Replacement::Codepoint('x' as u21),
+        }];
+        let mut o = Options::plain();
+        o.codepoint_map = Some(map);
+        let mut formatter: PageFormatter = PageFormatter::init(page, o);
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hellx wxrld");
+
+        // Verify point map - each output byte should map to original cell position
+        assert_eq!(output.len(), point_map.len());
+        // "hello world" -> "hellx wxrld"
+        // h e l l o   w o r l d
+        // 0 1 2 3 4 5 6 7 8 9 10
+        assert_eq!(coord(0, 0), point_map[0]); // h
+        assert_eq!(coord(1, 0), point_map[1]); // e
+        assert_eq!(coord(2, 0), point_map[2]); // l
+        assert_eq!(coord(3, 0), point_map[3]); // l
+        assert_eq!(coord(4, 0), point_map[4]); // x (was o)
+        assert_eq!(coord(5, 0), point_map[5]); // space
+        assert_eq!(coord(6, 0), point_map[6]); // w
+        assert_eq!(coord(7, 0), point_map[7]); // x (was o)
+        assert_eq!(coord(8, 0), point_map[8]); // r
+        assert_eq!(coord(9, 0), point_map[9]); // l
+        assert_eq!(coord(10, 0), point_map[10]); // d
+        t.deinit(Global);
+    }
+
+    // test "Page codepoint_map conflicting replacement prefers last"
+    #[test]
+    fn page_codepoint_map_conflicting_replacement_prefers_last() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        // Replace 'o' with 'x', then with 'y' - should prefer last
+        let map = vec![
+            CodepointMap {
+                range: ['o' as u21, 'o' as u21],
+                replacement: Replacement::Codepoint('x' as u21),
+            },
+            CodepointMap {
+                range: ['o' as u21, 'o' as u21],
+                replacement: Replacement::Codepoint('y' as u21),
+            },
+        ];
+        let mut o = Options::plain();
+        o.codepoint_map = Some(map);
+        let formatter: PageFormatter = PageFormatter::init(page, o);
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"helly");
+        t.deinit(Global);
+    }
+
+    // test "Page codepoint_map replace with string"
+    #[test]
+    fn page_codepoint_map_replace_with_string() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        // Replace 'o' with a multi-byte string
+        let map = vec![CodepointMap {
+            range: ['o' as u21, 'o' as u21],
+            replacement: Replacement::String(b"XYZ".to_vec()),
+        }];
+        let mut o = Options::plain();
+        o.codepoint_map = Some(map);
+        let mut formatter: PageFormatter = PageFormatter::init(page, o);
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hellXYZ");
+
+        // Verify point map - string replacements should all map to the original cell
+        assert_eq!(output.len(), point_map.len());
+        // "hello" -> "hellXYZ"
+        // h e l l o
+        // 0 1 2 3 4
+        assert_eq!(coord(0, 0), point_map[0]); // h
+        assert_eq!(coord(1, 0), point_map[1]); // e
+        assert_eq!(coord(2, 0), point_map[2]); // l
+        assert_eq!(coord(3, 0), point_map[3]); // l
+                                               // All bytes of the replacement string "XYZ" should point to position 4 (where 'o' was)
+        assert_eq!(coord(4, 0), point_map[4]); // X
+        assert_eq!(coord(4, 0), point_map[5]); // Y
+        assert_eq!(coord(4, 0), point_map[6]); // Z
+        t.deinit(Global);
+    }
+
+    // test "Page codepoint_map range replacement"
+    #[test]
+    fn page_codepoint_map_range_replacement() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"abcdefg");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        // Replace 'b' through 'e' with 'X'
+        let map = vec![CodepointMap {
+            range: ['b' as u21, 'e' as u21],
+            replacement: Replacement::Codepoint('X' as u21),
+        }];
+        let mut o = Options::plain();
+        o.codepoint_map = Some(map);
+        let formatter: PageFormatter = PageFormatter::init(page, o);
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"aXXXXfg");
+        t.deinit(Global);
+    }
+
+    // test "Page codepoint_map multiple ranges"
+    #[test]
+    fn page_codepoint_map_multiple_ranges() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello world");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        // Replace 'a'-'m' with 'A' and 'n'-'z' with 'Z'
+        let map = vec![
+            CodepointMap {
+                range: ['a' as u21, 'm' as u21],
+                replacement: Replacement::Codepoint('A' as u21),
+            },
+            CodepointMap {
+                range: ['n' as u21, 'z' as u21],
+                replacement: Replacement::Codepoint('Z' as u21),
+            },
+        ];
+        let mut o = Options::plain();
+        o.codepoint_map = Some(map);
+        let formatter: PageFormatter = PageFormatter::init(page, o);
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // h e l l o   w o r l d
+        // A A A A Z   Z Z Z A A
+        assert_eq!(output, b"AAAAZ ZZZAA");
+        t.deinit(Global);
+    }
+
+    // test "Page codepoint_map unicode replacement"
+    #[test]
+    fn page_codepoint_map_unicode_replacement() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice("hello ⚡ world".as_bytes());
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        // Replace lightning bolt with fire emoji
+        let map = vec![CodepointMap {
+            range: ['⚡' as u21, '⚡' as u21],
+            replacement: Replacement::String("🔥".as_bytes().to_vec()),
+        }];
+        let mut o = Options::plain();
+        o.codepoint_map = Some(map);
+        let mut formatter: PageFormatter = PageFormatter::init(page, o);
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, "hello 🔥 world".as_bytes());
+
+        // Verify point map
+        assert_eq!(output.len(), point_map.len());
+        // "hello ⚡ world"
+        // h e l l o   ⚡   w o r l  d
+        // 0 1 2 3 4 5 6   8 9 10 11 12
+        // Note: ⚡ is a wide character occupying cells 6-7
+        for i in 0..6 {
+            assert_eq!(coord(i as size::CellCountInt, 0), point_map[i]);
+        }
+        // 🔥 is 4 UTF-8 bytes, all should map to cell 6 (where ⚡ was)
+        let fire_start = 6; // "hello " is 6 bytes
+        for i in 0..4 {
+            assert_eq!(coord(6, 0), point_map[fire_start + i]);
+        }
+        // " world" follows
+        let world_start = fire_start + 4;
+        for i in 0..6 {
+            assert_eq!(
+                coord((8 + i) as size::CellCountInt, 0),
+                point_map[world_start + i]
+            );
+        }
+        t.deinit(Global);
+    }
+
+    // test "Page codepoint_map with styled formats"
+    #[test]
+    fn page_codepoint_map_with_styled_formats() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(10, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[31mred text\x1b[0m");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        // Replace 'e' with 'X' in styled text
+        let map = vec![CodepointMap {
+            range: ['e' as u21, 'e' as u21],
+            replacement: Replacement::Codepoint('X' as u21),
+        }];
+        let mut o = Options::vt();
+        o.codepoint_map = Some(map);
+        let formatter: PageFormatter = PageFormatter::init(page, o);
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        // Should preserve styles while replacing text
+        // "red text" becomes "rXd tXxt"
+        // VT format uses \x1b[38;5;1m for palette color 1
+        assert_eq!(output, b"\x1b[0m\x1b[38;5;1mrXd tXxt\x1b[0m");
+        t.deinit(Global);
+    }
+
+    // test "Page codepoint_map empty map"
+    #[test]
+    fn page_codepoint_map_empty_map() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello world");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        // Empty map should not change anything
+        let mut o = Options::plain();
+        o.codepoint_map = Some(Vec::new());
+        let formatter: PageFormatter = PageFormatter::init(page, o);
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(output, b"hello world");
+        t.deinit(Global);
+    }
+
+    // test "Page VT background color on trailing blank cells"
+    #[test]
+    fn page_vt_background_color_on_trailing_blank_cells() {
+        // This test reproduces a bug where trailing cells with background color
+        // but no text are emitted as plain spaces without SGR sequences.
+        // This causes TUIs like htop to lose background colors on rehydration.
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(20, 5)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            // Simulate a TUI row: "CPU:" with text, then trailing cells with red background
+            // to end of line (no text after the colored region).
+            // \x1b[41m sets red background, then EL fills rest of row with that bg.
+            s.next_slice(b"CPU:\x1b[41m\x1b[K");
+            // Reset colors and move to next line with different content
+            s.next_slice(b"\x1b[0m\r\nline2");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::vt());
+        formatter.opts.trim = false; // Don't trim so we can see the trailing behavior
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+
+        // The output should preserve the red background SGR for trailing cells on line 1.
+        // Bug: the first row outputs "CPU:\r\n" only - losing the background color fill.
+        // The red background should appear BEFORE the newline, not after.
+
+        // Find position of CRLF
+        let crlf_pos = match index_of(output, b"\r\n") {
+            Some(p) => p,
+            // No CRLF found, fail the test
+            None => panic!("TestUnexpectedResult"),
+        };
+
+        // Check that red background (48;5;1) appears BEFORE the newline (on line 1)
+        let line1 = &output[0..crlf_pos];
+        let has_red_bg_line1 =
+            index_of(line1, b"\x1b[41m").is_some() || index_of(line1, b"\x1b[48;5;1m").is_some();
+
+        // This should be true but currently fails due to the bug
+        assert!(has_red_bg_line1);
+        t.deinit(Global);
+    }
+
+    // test "Page HTML with hyperlinks"
+    #[test]
+    fn page_html_with_hyperlinks() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // Start a hyperlink, write some text, end it
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b]8;;https://example.com\x1b\\link text\x1b]8;;\x1b\\ normal");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let formatter: PageFormatter = PageFormatter::init(page, Options::html());
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(
+            output,
+            concat!(
+                "<div style=\"font-family: monospace; white-space: pre;\">",
+                "<a href=\"https://example.com\">link text</a> normal",
+                "</div>"
+            )
+            .as_bytes()
+        );
+        t.deinit(Global);
+    }
+
+    // test "Page HTML with multiple hyperlinks"
+    #[test]
+    fn page_html_with_multiple_hyperlinks() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            // Two different hyperlinks
+            s.next_slice(b"\x1b]8;;https://first.com\x1b\\first\x1b]8;;\x1b\\ ");
+            s.next_slice(b"\x1b]8;;https://second.com\x1b\\second\x1b]8;;\x1b\\");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let formatter: PageFormatter = PageFormatter::init(page, Options::html());
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(
+            output,
+            concat!(
+                "<div style=\"font-family: monospace; white-space: pre;\">",
+                "<a href=\"https://first.com\">first</a>",
+                " ",
+                "<a href=\"https://second.com\">second</a>",
+                "</div>"
+            )
+            .as_bytes()
+        );
+        t.deinit(Global);
+    }
+
+    // test "Page HTML with hyperlink escaping"
+    #[test]
+    fn page_html_with_hyperlink_escaping() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // URL with special characters that need escaping
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b]8;;https://example.com?a=1&b=2\x1b\\link\x1b]8;;\x1b\\");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let formatter: PageFormatter = PageFormatter::init(page, Options::html());
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(
+            output,
+            concat!(
+                "<div style=\"font-family: monospace; white-space: pre;\">",
+                "<a href=\"https://example.com?a=1&amp;b=2\">link</a>",
+                "</div>"
+            )
+            .as_bytes()
+        );
+        t.deinit(Global);
+    }
+
+    // test "Page HTML with styled hyperlink"
+    #[test]
+    fn page_html_with_styled_hyperlink() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // Bold hyperlink
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b]8;;https://example.com\x1b\\\x1b[1mbold link\x1b[0m\x1b]8;;\x1b\\");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let formatter: PageFormatter = PageFormatter::init(page, Options::html());
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(
+            output,
+            concat!(
+                "<div style=\"font-family: monospace; white-space: pre;\">",
+                "<div style=\"display: inline;font-weight: bold;\">",
+                "<a href=\"https://example.com\">bold link</div></a>",
+                "</div>"
+            )
+            .as_bytes()
+        );
+        t.deinit(Global);
+    }
+
+    // test "Page HTML hyperlink closes style before anchor"
+    #[test]
+    fn page_html_hyperlink_closes_style_before_anchor() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        // Styled hyperlink followed by plain text
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b]8;;https://example.com\x1b\\\x1b[1mbold\x1b[0m plain");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let formatter: PageFormatter = PageFormatter::init(page, Options::html());
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        assert_eq!(
+            output,
+            concat!(
+                "<div style=\"font-family: monospace; white-space: pre;\">",
+                "<div style=\"display: inline;font-weight: bold;\">",
+                "<a href=\"https://example.com\">bold</div> plain</a>",
+                "</div>"
+            )
+            .as_bytes()
+        );
+        t.deinit(Global);
+    }
+
+    // test "Page HTML hyperlink point map maps closing to previous cell"
+    #[test]
+    fn page_html_hyperlink_point_map_maps_closing_to_previous_cell() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\ normal");
+        }
+        let pages = unsafe { &(*t.screens.active).pages };
+        let page = unsafe { last_page(pages) };
+        let mut formatter: PageFormatter = PageFormatter::init(page, Options::html());
+        let mut point_map: Vec<Coordinate> = Vec::new();
+        formatter.point_map = Some(PointMap {
+            alloc: Global,
+            map: &mut point_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        let output = builder.as_slice();
+        let expected_output = concat!(
+            "<div style=\"font-family: monospace; white-space: pre;\">",
+            "<a href=\"https://example.com\">link</a> normal",
+            "</div>"
+        );
+        assert_eq!(output, expected_output.as_bytes());
+        assert_eq!(expected_output.len(), point_map.len());
+
+        // The </a> closing tag bytes should all map to the last cell of the link
+        let closing_idx = index_of(expected_output.as_bytes(), b"</a>").unwrap();
+        let expected_coord = point_map[closing_idx - 1];
+        for i in closing_idx..closing_idx + "</a>".len() {
+            assert_eq!(expected_coord, point_map[i]);
+        }
+        t.deinit(Global);
     }
 }

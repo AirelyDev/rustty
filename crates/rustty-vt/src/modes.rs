@@ -142,6 +142,13 @@ impl ModePacked {
         ModePacked::default()
     }
 
+    /// Get the value of a mode from this packed set. Mirrors the reference
+    /// `@field(packed, field.name)` access used by the formatter to read each
+    /// mode's default.
+    pub fn get_mode(&self, mode: Mode) -> bool {
+        self.get_bit(index_for_mode(mode))
+    }
+
     fn set_bit(&mut self, idx: usize, value: bool) {
         if value {
             self.0 |= 1u64 << idx;
@@ -221,6 +228,15 @@ pub enum Mode {
     GraphemeCluster = 2027,
     ReportColorScheme = 2031,
     InBandSizeReports = 2048,
+}
+
+impl Mode {
+    /// Iterate every mode in declaration order. Mirrors the reference
+    /// `@typeInfo(Mode).@"enum".fields` iteration used by the formatter to emit
+    /// all non-default modes.
+    pub fn all() -> impl Iterator<Item = Mode> {
+        MODE_BY_INDEX.iter().copied()
+    }
 }
 
 /// The tag type for our enum is a u16 but we use a packed struct
