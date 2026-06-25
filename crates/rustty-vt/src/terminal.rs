@@ -4034,7 +4034,8 @@ impl Terminal {
         alloc: Allocator,
         cmd: &mut kitty::graphics::Command,
     ) -> Option<kitty::graphics::Response> {
-        todo!()
+        // return kitty.graphics.execute(alloc, self, cmd);
+        kitty::graphics::execute(alloc, self, cmd)
     }
 
     /// Execute a Glyph Protocol APC command against this terminal's per-session
@@ -4054,13 +4055,55 @@ impl Terminal {
         alloc: Allocator,
         limit: usize,
     ) -> Result<(), OutOfMemory> {
-        todo!()
+        // if (comptime !build_options.kitty_graphics) return;
+        if !crate::options::KITTY_GRAPHICS {
+            return Ok(());
+        }
+        // var it = self.screens.all.iterator();
+        // while (it.next()) |entry| {
+        //     const screen: *Screen = entry.value.*;
+        //     try screen.kitty_images.setLimit(alloc, screen, limit);
+        // }
+        // PORT NOTE: `screen.kitty_images.setLimit(alloc, screen, limit)` borrows
+        // `screen.kitty_images` mutably while also handing `screen` itself to
+        // `set_limit`. As in `Screen::deinit`, we MOVE `kitty_images` out of the
+        // screen (leaving a default in its slot), run `set_limit` against the
+        // borrowed screen, then move the updated storage back. The screen pointers
+        // in `self.screens.all` are stable heap allocations.
+        for slot in self.screens.all.iter() {
+            if let Some(screen) = *slot {
+                // SAFETY: `screen` is a stable, initialized heap allocation owned
+                // by the screen set; we hold `&mut self` so no other alias exists.
+                let screen: &mut Screen = unsafe { &mut *screen };
+                let mut images = core::mem::take(&mut screen.kitty_images);
+                let res = images.set_limit(alloc, screen, limit);
+                screen.kitty_images = images;
+                res.map_err(|_| OutOfMemory)?;
+            }
+        }
+        Ok(())
     }
 
     /// Set the allowed medium types for Kitty graphics image loading
     /// across all screens.
     pub fn set_kitty_graphics_loading_limits(&mut self, limits: kitty::graphics_image::Limits) {
-        todo!()
+        // if (comptime !build_options.kitty_graphics) return;
+        if !crate::options::KITTY_GRAPHICS {
+            return;
+        }
+        // var it = self.screens.all.iterator();
+        // while (it.next()) |entry| {
+        //     const screen: *Screen = entry.value.*;
+        //     screen.kitty_images.image_limits = limits;
+        // }
+        for slot in self.screens.all.iter() {
+            if let Some(screen) = *slot {
+                // SAFETY: stable initialized heap screen; `&mut self` excludes
+                // other aliases.
+                let screen: &mut Screen = unsafe { &mut *screen };
+                screen.kitty_images.image_limits = limits;
+            }
+        }
     }
 
     /// Set a style attribute.

@@ -25,10 +25,6 @@ use super::graphics_render as render;
 // const command = @import("graphics_command.zig");
 use super::graphics_command as command;
 // const exec = @import("graphics_exec.zig");
-// PORT NOTE: DEFERRED to vt-12 (needs Screen/Terminal). `graphics_exec.zig`
-// (->Terminal) is a compiling stub; once ported it will re-export `execute`
-// below alongside the others.
-#[allow(unused_imports)]
 use super::graphics_exec as exec;
 // const image = @import("graphics_image.zig");
 use super::graphics_image as image;
@@ -55,9 +51,7 @@ pub use render::Placement as RenderPlacement;
 pub use command::Response;
 
 // pub const execute = exec.execute;
-// PORT NOTE: DEFERRED to vt-12 (needs Screen/Terminal). Re-export restored once
-// `graphics_exec::execute` is ported.
-// pub use exec::execute;
+pub use exec::execute;
 
 // test {
 //     @import("std").testing.refAllDecls(@This());
@@ -67,8 +61,7 @@ pub use command::Response;
 // analyzed. Rust type-checks every `pub use`/`pub mod` re-export unconditionally,
 // so the structural guarantee is automatic; we mirror it concretely by naming
 // each re-exported item below so a removed/renamed type surfaces as a test
-// failure rather than only a compile error. The one remaining DEFERRED re-export
-// (`execute`) is intentionally absent until `graphics_exec` is ported.
+// failure rather than only a compile error.
 #[cfg(test)]
 mod tests {
     #[test]
@@ -88,8 +81,14 @@ mod tests {
         // Reference the now-ported `ImageStorage` re-export so its symbol must
         // exist, mirroring `refAllDecls` over the `ImageStorage` member.
         let _ = core::any::type_name::<super::ImageStorage>();
-        // Touch the still-deferred `exec` module import so the aggregator's wiring
-        // (private `exec`) is referenced, matching the reference's structure.
-        let _ = core::any::type_name::<super::exec::Deferred>();
+        // Reference the now-ported `execute` re-export (from `graphics_exec`) so
+        // its symbol must exist with the expected shape, mirroring `refAllDecls`
+        // over the aggregator's `execute` member.
+        let _ = super::execute
+            as fn(
+                allocator_api2::alloc::Global,
+                &mut crate::terminal::Terminal,
+                &super::Command,
+            ) -> Option<super::Response>;
     }
 }

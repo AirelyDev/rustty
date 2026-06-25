@@ -28,13 +28,23 @@ From **vt-7 (kitty)** — these need `Screen`/`Terminal`/`ImageStorage`:
    the self-referential `&mut Screen` borrows are made sound via `mem::take`
    move-out/move-back (Miri-clean). Scoped graphics_storage.zig G3b → missing=0.
 
-3. **`kitty/graphics_exec.zig` (575 loc, 8 tests)** — full file. Needs `Terminal`.
-   Compiling stub at `kitty/graphics_exec.rs` with PORT NOTE.
+3. ~~**`kitty/graphics_exec.zig` (575 loc, 8 tests)** — full file. Needs `Terminal`.~~
+   **RESOLVED (vt-12c-kitty).** `execute` (+ `query`/`transmit`/`display`/`delete`/
+   `loadAndAddImage`/`encodeError`) is ported verbatim to `kitty/graphics_exec.rs`;
+   all **8 tests** are ported assertion-for-assertion and pass (no regression in the
+   1372 prior → 1380 total). `Terminal::kitty_graphics` forwards to `execute`, and
+   `set_kitty_graphics_size_limit`/`set_kitty_graphics_loading_limits` iterate
+   `screens.all` under the `crate::options::KITTY_GRAPHICS` gate (move-out/move-back
+   for the storage-borrows-screen aliasing). Scoped graphics_exec.zig G3b → missing=0.
+   Memory safety: the 2 data-less tests (`a=p` query/display) are Miri-clean; the 6
+   that transmit `;`-data cross the simdutf base64 C FFI (Miri can't execute foreign
+   functions — R6) and are covered by ASan (8/8 graphics_exec tests, 0 findings).
 
 4. **`kitty/graphics.rs` re-exports** — `ImageStorage` (from `graphics_storage`)
    **RESOLVED (vt-12c-kitty)**: `pub use storage::ImageStorage` restored + exercised
-   in the aggregator `ref_all_decls` test. `execute` (from `graphics_exec`) still
-   held back with PORT NOTE.
+   in the aggregator `ref_all_decls` test. `execute` (from `graphics_exec`)
+   **RESOLVED (vt-12c-kitty)**: `pub use exec::execute` restored + exercised in the
+   aggregator `ref_all_decls` test (typed `fn` reference).
 
 **vt-12 acceptance gain:** +~41 tests (19+8+14) and graphics_unicode G3b → 0 missing.
 
