@@ -124,22 +124,22 @@ From **vt-9 (stream)**:
 1. **`stream.rs` — `Stream::next_slice` SIMD fast path (`nextSliceCapped` + the
    `simd.vt.utf8DecodeUntilControlSeq` loop).** Reference:
    `ghostty/src/terminal/stream.zig:471-577` (`nextSlice` SIMD arm +
-   `nextSliceCapped`). This is a documented deferred seam gated on
-   `options::SIMD` (the reference's `comptime debug or !build_options.simd`):
-   `SIMD` defaults to `false` (`cfg!(feature = "simd")`), so the scalar fallback
-   — the reference's own non-SIMD arm — runs unconditionally and is fully ported
-   and exercised by all 38 stream tests. The SIMD arm is a `todo!()` documented
-   in-source at stream.rs:617-618 with a PORT NOTE at stream.rs:599-602. This is
-   NOT a comment/logic drop (R1): it lands with the `simd.vt` primitives in the
-   Dispatch/SIMD phase, at which point the `nextSliceCapped` body's inner
-   comments come with it.
+   `nextSliceCapped`). **RESOLVED (Stage A.1).** The `todo!()` SIMD arm has been
+   replaced with the faithful port of `nextSliceCapped` + `consumeAllEscapes` +
+   `consumeUntilGround` + the `nextSlice` SIMD branch, wired to
+   `rustty_simd::vt::utf8DecodeUntilControlSeq` (the now-ported `simd/vt.zig`
+   analogue). The seam remains gated on `options::SIMD` (the reference's
+   `comptime debug or !build_options.simd`): `SIMD` defaults to `false`
+   (`cfg!(feature = "simd")`), so the scalar fallback — the reference's own
+   non-SIMD arm — still runs unconditionally by default and the SIMD arm is
+   exercised under `--features simd`. All 38 stream tests pass in both modes.
+   The `cp_buf`/max-codepoints chunk-size consts and the `@setEvalBranchQuota`
+   test-comptime comments are restored verbatim. `initAlloc` was already ported
+   (stream.rs `init_alloc`) as part of closing the vt-9 comment-fidelity gap.
 
-   **Full deferred-SIMD surface** (the ~23 G3b "missing" on stream.zig all map
-   here, EXPECTED until the SIMD phase): `nextSliceCapped`, `consumeAllEscapes`,
-   `consumeUntilGround`, the `nextSlice` SIMD arm, and the `cp_buf`/max-codepoints
-   chunk-size consts + their `@setEvalBranchQuota` test-comptime comments.
-   `initAlloc` is NOT part of this seam — it was ported (stream.rs `init_alloc`)
-   as part of closing the vt-9 comment-fidelity gap.
+   **MIRI:** per `MIRI_EXCEPTIONS.md`, the SIMD arm calls `rustty-simd` C FFI
+   (utf8 SIMD) which Miri cannot execute, so SIMD-arm tests are ASan-covered
+   (R6 FFI→ASan); the scalar (default) tests remain Miri-clean.
 
 ## Deferred to rustty-vt-c (C ABI layer)
 

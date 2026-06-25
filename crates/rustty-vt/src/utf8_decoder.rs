@@ -56,7 +56,10 @@ pub struct UTF8Decoder {
     // of the DFA); the emitted codepoint values match the reference exactly.
     accumulator: u32,
     // The internal state of the DFA.
-    state: u8,
+    // PORT NOTE: `pub(crate)` so the stream SIMD fast path (`nextSliceCapped`)
+    // can read `self.utf8decoder.state` directly as the reference does — Zig
+    // struct fields are package-visible, and stream.rs lives in this crate.
+    pub(crate) state: u8,
 }
 
 impl UTF8Decoder {

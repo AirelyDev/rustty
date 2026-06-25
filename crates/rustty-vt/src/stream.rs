@@ -629,10 +629,6 @@ impl<'a, H: Handler> Stream<'a, H> {
 
     /// Process a string of characters.
     // pub inline fn nextSlice(self: *Self, input: []const u8) void { ... }
-    // PORT NOTE: the reference uses a SIMD fast path when `build_options.simd`
-    // and not in `debug`. The SIMD primitives (`simd.vt.utf8DecodeUntilControlSeq`)
-    // land in a later sub-batch; until then the scalar fallback (the reference's
-    // own `comptime debug or !build_options.simd` arm) is used unconditionally.
     pub fn next_slice(&mut self, input: &[u8]) {
         // Disable SIMD optimizations if build requests it or if our
         // manual debug mode is on.
@@ -647,8 +643,167 @@ impl<'a, H: Handler> Stream<'a, H> {
             return;
         }
 
-        // SIMD path: filled by a later sub-batch (nextSliceCapped + simd.vt).
-        todo!("vt SIMD nextSlice path (Dispatch/SIMD phase)")
+        // This is the maximum number of codepoints we can decode
+        // at one time for this function call. This is somewhat arbitrary
+        // so if someone can demonstrate a better number then we can switch.
+        // var cp_buf: [4096]u32 = undefined;
+        let mut cp_buf: [u32; 4096] = [0; 4096];
+
+        // Split the input into chunks that fit into cp_buf.
+        // var i: usize = 0;
+        let mut i: usize = 0;
+        // while (true) {
+        loop {
+            // const len = @min(cp_buf.len, input.len - i);
+            let len = core::cmp::min(cp_buf.len(), input.len() - i);
+            // self.nextSliceCapped(input[i .. i + len], &cp_buf);
+            self.next_slice_capped(&input[i..i + len], &mut cp_buf);
+            // i += len;
+            i += len;
+            // if (i >= input.len) break;
+            if i >= input.len() {
+                break;
+            }
+        }
+    }
+
+    // inline fn nextSliceCapped(
+    //     self: *Self,
+    //     input: []const u8,
+    //     cp_buf: []u32,
+    // ) void {
+    fn next_slice_capped(&mut self, input: &[u8], cp_buf: &mut [u32]) {
+        // assert(input.len <= cp_buf.len);
+        assert!(input.len() <= cp_buf.len());
+
+        // var offset: usize = 0;
+        let mut offset: usize = 0;
+
+        // If the scalar UTF-8 decoder was in the middle of processing
+        // a code sequence, we continue until it's not.
+        // while (self.utf8decoder.state != 0) {
+        while self.utf8decoder.state != 0 {
+            // if (offset >= input.len) return;
+            if offset >= input.len() {
+                return;
+            }
+            // self.nextUtf8(input[offset]);
+            self.next_utf8(input[offset]);
+            // offset += 1;
+            offset += 1;
+        }
+        // if (offset >= input.len) return;
+        if offset >= input.len() {
+            return;
+        }
+
+        // If we're not in the ground state then we process until
+        // we are. This can happen if the last chunk of input put us
+        // in the middle of a control sequence.
+        // offset += self.consumeUntilGround(input[offset..]);
+        offset += self.consume_until_ground(&input[offset..]);
+        // if (offset >= input.len) return;
+        if offset >= input.len() {
+            return;
+        }
+        // offset += self.consumeAllEscapes(input[offset..]);
+        offset += self.consume_all_escapes(&input[offset..]);
+
+        // If we're in the ground state then we can use SIMD to process
+        // input until we see an ESC (0x1B), since all other characters
+        // up to that point are just UTF-8.
+        // while (self.parser.state == .ground and offset < input.len) {
+        while self.parser.state == parser::State::Ground && offset < input.len() {
+            // const res = simd.vt.utf8DecodeUntilControlSeq(input[offset..], cp_buf);
+            let res = rustty_simd::vt::utf8DecodeUntilControlSeq(&input[offset..], cp_buf);
+            // for (cp_buf[0..res.decoded]) |cp| {
+            for &cp in &cp_buf[0..res.decoded] {
+                // if (cp <= 0xF) {
+                if cp <= 0xF {
+                    // self.execute(@intCast(cp));
+                    self.execute(cp as u8);
+                } else {
+                    // self.print(@intCast(cp));
+                    self.print(cp);
+                }
+            }
+            // Consume the bytes we just processed.
+            // offset += res.consumed;
+            offset += res.consumed;
+
+            // if (offset >= input.len) return;
+            if offset >= input.len() {
+                return;
+            }
+
+            // If our offset is NOT an escape then we must have a
+            // partial UTF-8 sequence. In that case, we pass it off
+            // to the scalar parser.
+            // if (input[offset] != 0x1B) {
+            if input[offset] != 0x1B {
+                // const rem = input[offset..];
+                let rem = &input[offset..];
+                // for (rem) |c| self.nextUtf8(c);
+                for &c in rem {
+                    self.next_utf8(c);
+                }
+                // return;
+                return;
+            }
+
+            // Process control sequences until we run out.
+            // offset += self.consumeAllEscapes(input[offset..]);
+            offset += self.consume_all_escapes(&input[offset..]);
+        }
+    }
+
+    /// Parses back-to-back escape sequences until none are left.
+    /// Returns the number of bytes consumed from the provided input.
+    ///
+    /// Expects input to start with 0x1B, use consumeUntilGround first
+    /// if the stream may be in the middle of an escape sequence.
+    // inline fn consumeAllEscapes(self: *Self, input: []const u8) usize { ... }
+    fn consume_all_escapes(&mut self, input: &[u8]) -> usize {
+        // var offset: usize = 0;
+        let mut offset: usize = 0;
+        // while (input[offset] == 0x1B) {
+        while input[offset] == 0x1B {
+            // self.parser.state = .escape;
+            self.parser.state = parser::State::Escape;
+            // self.parser.clear();
+            self.parser.clear();
+            // offset += 1;
+            offset += 1;
+            // offset += self.consumeUntilGround(input[offset..]);
+            offset += self.consume_until_ground(&input[offset..]);
+            // if (offset >= input.len) return input.len;
+            if offset >= input.len() {
+                return input.len();
+            }
+        }
+        // return offset;
+        offset
+    }
+
+    /// Parses escape sequences until the parser reaches the ground state.
+    /// Returns the number of bytes consumed from the provided input.
+    // inline fn consumeUntilGround(self: *Self, input: []const u8) usize { ... }
+    fn consume_until_ground(&mut self, input: &[u8]) -> usize {
+        // var offset: usize = 0;
+        let mut offset: usize = 0;
+        // while (self.parser.state != .ground) {
+        while self.parser.state != parser::State::Ground {
+            // if (offset >= input.len) return input.len;
+            if offset >= input.len() {
+                return input.len();
+            }
+            // self.nextNonUtf8(input[offset]);
+            self.next_non_utf8(input[offset]);
+            // offset += 1;
+            offset += 1;
+        }
+        // return offset;
+        offset
     }
 
     /// Like nextSlice but takes one byte and is necessarily a scalar
@@ -710,6 +865,9 @@ impl<'a, H: Handler> Stream<'a, H> {
     /// the decoder emits a 0x1B after rejecting an ill-formed sequence.
     // inline fn handleCodepoint(self: *Self, c: u21) void { ... }
     fn handle_codepoint(&mut self, c: u32) {
+        // We need to increase the eval branch limit because a lot of
+        // tests end up running almost completely at comptime due to
+        // a chain of inline functions.
         // @setEvalBranchQuota(100_000);
 
         // C0 control
