@@ -35,6 +35,7 @@ use std::os::raw::c_int;
 // plus the heavy modules ported later.
 pub mod allocator;
 pub mod build_info;
+pub mod cell;
 pub mod color;
 mod cwrap;
 pub mod focus;
@@ -43,7 +44,9 @@ pub mod modes;
 pub mod mouse_event;
 pub mod paste;
 pub mod result;
+pub mod row;
 pub mod size_report;
+pub mod style;
 pub mod sys;
 #[cfg(test)]
 mod test_util;
@@ -711,6 +714,129 @@ pub unsafe extern "C" fn rustty_mouse_event_get_position(
 ) -> mouse_event::Position {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { mouse_event::get_position(event) }
+}
+
+// ----- cell -----
+// PORT NOTE: the `cell_get` `intToEnum(CellData, ...)` runtime-safety guard lives
+// here on the raw `c_int` crossing the C boundary; an out-of-range value returns
+// `INVALID_VALUE` (mirroring the reference early return).
+
+// pub const cell_get = cell.get;  (ghostty_cell_get)
+/// C: rustty_cell_get
+///
+/// # Safety
+/// `out` must point to writable storage of the type required by `data`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_cell_get(
+    cell_: cell::CCell,
+    data: c_int,
+    out: *mut std::ffi::c_void,
+) -> c_int {
+    let Some(d) = cell_data_from_c_int(data) else {
+        return result::Result::InvalidValue.to_c_int();
+    };
+    // SAFETY: `out` validity is the caller's contract.
+    unsafe { cell::get(cell_, d, out) }.to_c_int()
+}
+
+// pub const cell_get_multi = cell.get_multi;  (ghostty_cell_get_multi)
+/// C: rustty_cell_get_multi
+///
+/// # Safety
+/// `keys`/`values`/`out_written` validity is the caller's contract.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_cell_get_multi(
+    cell_: cell::CCell,
+    count: usize,
+    keys: *const cell::CellData,
+    values: *mut *mut std::ffi::c_void,
+    out_written: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { cell::get_multi(cell_, count, keys, values, out_written) }.to_c_int()
+}
+
+// ----- row -----
+// pub const row_get = row.get;  (ghostty_row_get)
+/// C: rustty_row_get
+///
+/// # Safety
+/// `out` must point to writable storage of the type required by `data`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_row_get(
+    row_: row::CRow,
+    data: c_int,
+    out: *mut std::ffi::c_void,
+) -> c_int {
+    let Some(d) = row_data_from_c_int(data) else {
+        return result::Result::InvalidValue.to_c_int();
+    };
+    // SAFETY: `out` validity is the caller's contract.
+    unsafe { row::get(row_, d, out) }.to_c_int()
+}
+
+// pub const row_get_multi = row.get_multi;  (ghostty_row_get_multi)
+/// C: rustty_row_get_multi
+///
+/// # Safety
+/// `keys`/`values`/`out_written` validity is the caller's contract.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_row_get_multi(
+    row_: row::CRow,
+    count: usize,
+    keys: *const row::RowData,
+    values: *mut *mut std::ffi::c_void,
+    out_written: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { row::get_multi(row_, count, keys, values, out_written) }.to_c_int()
+}
+
+// ----- style -----
+// pub const style_default = style.default_style;  (ghostty_style_default)
+/// C: rustty_style_default
+///
+/// # Safety
+/// `result` must be a valid, writable pointer to a `style::Style`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_style_default(result: *mut style::Style) {
+    // SAFETY: `result` validity is the caller's contract.
+    unsafe { style::default_style(result) }
+}
+
+// pub const style_is_default = style.style_is_default;  (ghostty_style_is_default)
+/// C: rustty_style_is_default
+///
+/// # Safety
+/// `s` must be a valid, readable pointer to a `style::Style`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_style_is_default(s: *const style::Style) -> bool {
+    // SAFETY: `s` validity is the caller's contract.
+    unsafe { style::style_is_default(s) }
+}
+
+// PORT NOTE: range-checked `c_int -> enum` projections for the cell/row getters
+// (the `std.meta.intToEnum` guard). `CellData`/`RowData` are contiguous
+// `#[repr(C)]` enums; the range check IS `intToEnum`, after which a `transmute`
+// from the validated `c_int` is the enum.
+const CELL_DATA_COUNT: c_int = 12; // contiguous 0..=11
+fn cell_data_from_c_int(v: c_int) -> Option<cell::CellData> {
+    if (0..CELL_DATA_COUNT).contains(&v) {
+        // SAFETY: `v` is a valid `CellData` discriminant (range-checked above).
+        Some(unsafe { std::mem::transmute::<c_int, cell::CellData>(v) })
+    } else {
+        None
+    }
+}
+
+const ROW_DATA_COUNT: c_int = 9; // contiguous 0..=8
+fn row_data_from_c_int(v: c_int) -> Option<row::RowData> {
+    if (0..ROW_DATA_COUNT).contains(&v) {
+        // SAFETY: `v` is a valid `RowData` discriminant (range-checked above).
+        Some(unsafe { std::mem::transmute::<c_int, row::RowData>(v) })
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
