@@ -789,6 +789,23 @@ pub fn keys() -> KeyEntryArray {
     result
 }
 
+/// Looks up the entry slice for a given key, mirroring the reference's
+/// `function_keys.keys.get(keyval)` on the `std.EnumArray`.
+///
+/// PORT NOTE: the reference `keys` is an `EnumArray` whose `.get(keyval)` is an
+/// O(1) lookup returning the entry slice (an empty slice for keys with no
+/// entries). This helper reproduces that by scanning the runtime-built table;
+/// keys not present in the table map to an empty slice, exactly as the reference
+/// `EnumArray` does.
+pub fn keys_get(keyval: Key) -> Vec<Entry> {
+    for (k, entries) in keys() {
+        if k == keyval {
+            return entries;
+        }
+    }
+    Vec::new()
+}
+
 /// PORT NOTE: the reference uses Zig's `++` array concatenation on `[]const
 /// Entry`. This helper reproduces it by appending `b` onto `a`.
 fn concat(mut a: Vec<Entry>, b: Vec<Entry>) -> Vec<Entry> {
