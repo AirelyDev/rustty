@@ -307,7 +307,14 @@ pub struct Options {
 
     /// The total storage limit for Kitty images in bytes. Has no effect
     /// if kitty images are disabled at build-time.
-    // kitty_image_storage_limit: usize = switch (build_options.artifact) { ... }
+    // kitty_image_storage_limit: usize = switch (build_options.artifact) {
+    //     .ghostty => 320 * 1000 * 1000, // 320MB
+    //
+    //     // librustty we start with a much lower limit since this is an
+    //     // embedded library and we want to be more conservative with memory
+    //     // usage by default.
+    //     .lib => 10 * 1000 * 1000, // 10MB
+    // },
     pub kitty_image_storage_limit: usize,
 
     /// The limits for what medium types are allowed for Kitty image loading.
@@ -3801,6 +3808,14 @@ impl Terminal {
                 // `ImageStorage` is DEFERRED to vt-12 so we omit the
                 // `kitty_images.delete` call (matching `scroll_clear`/`clear_rows`
                 // which likewise defer the Kitty graphics seam).
+                // if (comptime build_options.kitty_graphics) {
+                //     // Clear all Kitty graphics state for this screen
+                //     self.screens.active.kitty_images.delete(
+                //         self.screens.active.alloc,
+                //         self,
+                //         .{ .all = true },
+                //     );
+                // }
             }
 
             csi::EraseDisplay::Complete => {
@@ -3877,6 +3892,14 @@ impl Terminal {
                 // `if (comptime build_options.kitty_graphics)`. Kitty graphics
                 // `ImageStorage` is DEFERRED to vt-12; omitted here (see the
                 // `scroll_complete` note above).
+                // if (comptime build_options.kitty_graphics) {
+                //     // Clear all Kitty graphics state for this screen
+                //     self.screens.active.kitty_images.delete(
+                //         self.screens.active.alloc,
+                //         self,
+                //         .{ .all = true },
+                //     );
+                // }
 
                 // Cleared screen dirty bit
                 self.flags.dirty.clear = true;
@@ -12632,6 +12655,12 @@ mod tests {
         t.deinit(Global);
     }
 
+    // Reproduces a crash found by AFL++ fuzzer (afl-out/stream/default/crashes/
+    // id:000007,sig:06,src:004522). The crash is a page integrity violation
+    // "spacer tail not following wide" triggered during scrollUp -> deleteLines
+    // -> clearCells. When deleteLines count >= scroll region height, all rows
+    // are cleared (no shifting), so rowWillBeShifted is never called and wide
+    // characters straddling the right margin boundary leave orphaned spacer_tails.
     // test "Terminal: deleteLines wide char at right margin with full clear"
     #[test]
     fn terminal_delete_lines_wide_char_at_right_margin_with_full_clear() {
@@ -16240,6 +16269,7 @@ mod tests {
         t.deinit(alloc);
     }
 
+    // Probably outdated, but dates back to the original terminal implementation.
     // test "Terminal: setCursorPos (original test)"
     #[test]
     fn terminal_set_cursor_pos_original_test() {

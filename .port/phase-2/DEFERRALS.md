@@ -203,3 +203,7 @@ which CONTINUE existing deferrals (no new capability is being dropped):
   C surfaces, and is deferred until that crate is carved. No VT behavior is lost
   (the plain enum is the source of truth; the C-ABI is a pure FFI projection).
   G3b for `ScrollViewport.C`/`.CValue`/`.cval` maps here and is EXPECTED-missing.
+  This also covers the `c_union = lib.TaggedUnion(...)` padding comments
+  ("Padding: largest variant is isize (8 bytes on 64-bit)." and
+  "Use [2]u64 (16 bytes) for future expansion."), which live on the deferred
+  C-ABI tagged-union surface and are therefore EXPECTED-missing in `terminal.rs`.
