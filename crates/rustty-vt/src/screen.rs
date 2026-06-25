@@ -1284,9 +1284,7 @@ impl Screen {
                     unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
                 let row = self.cursor.page_row;
                 let cells = unsafe { (*page).get_cells(row) };
-                self.clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
-                    &mut *cells
-                });
+                self.clear_cells(page, row, cells);
                 self.cursor_mark_dirty();
             } else {
                 // The call to `eraseRow` will move the tracked cursor pin up by one
@@ -1365,9 +1363,7 @@ impl Screen {
                     unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
                 let row = self.cursor.page_row;
                 let cells = unsafe { (*page).get_cells(row) };
-                self.clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
-                    &mut *cells
-                });
+                self.clear_cells(page, row, cells);
             }
         }
 
@@ -1550,9 +1546,7 @@ impl Screen {
         });
         let row = unsafe { cur_rows.add(pin_y) };
         let cells = unsafe { (*cur_page).get_cells(row) };
-        self.clear_cells(unsafe { &mut *cur_page }, unsafe { &mut *row }, unsafe {
-            &mut *cells
-        });
+        self.clear_cells(cur_page, row, cells);
 
         // Mark the whole page as dirty.
         //
@@ -1810,9 +1804,7 @@ impl Screen {
                 unsafe { core::ptr::addr_of_mut!((*(*self.cursor.page_pin).node).data) };
             let last = unsafe { (cells as *mut pagepkg::Cell).add(cols - 1) };
             let slice = core::ptr::slice_from_raw_parts_mut(last, 1);
-            self.clear_cells(unsafe { &mut *page }, unsafe { &mut *page_row }, unsafe {
-                &mut *slice
-            });
+            self.clear_cells(page, page_row, slice);
         }
     }
 
@@ -1909,18 +1901,12 @@ impl Screen {
 
                 // Clear all cells
                 if protected {
-                    self.clear_unprotected_cells(
-                        unsafe { &mut *page },
-                        unsafe { &mut *row },
-                        unsafe { &mut *cells },
-                    );
+                    self.clear_unprotected_cells(page, row, cells);
                     // We need to preserve other row attributes since we only
                     // cleared unprotected cells.
                     unsafe { (*row).set_cells(cells_offset) };
                 } else {
-                    self.clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
-                        &mut *cells
-                    });
+                    self.clear_cells(page, row, cells);
                     // row.* = .{ .cells = cells_offset };
                     // PORT NOTE: the reference resets the entire `Row` to a fresh
                     // value carrying only the `cells` offset (all other row flags
@@ -1942,10 +1928,26 @@ impl Screen {
     /// Clear the cells with the blank cell.
     ///
     /// This takes care to handle cleaning up graphemes and styles.
-    pub fn clear_cells(&mut self, page: &mut Page, row: &mut Row, cells: &mut [Cell]) {
+    ///
+    /// PORT NOTE (Stacked Borrows / Miri): the reference signature is
+    /// `clearCells(self, page: *Page, row: *Row, cells: []Cell)` — Zig pointers
+    /// and slices are UNPROTECTED. If we mirror it with `&mut Page`/`&mut Row`/
+    /// `&mut [Cell]` ARGS, those references are *strongly protected* for the
+    /// entire call; the trailing `assert_integrity()` then walks `self.pages`
+    /// and re-reads the SAME cell/page memory through a different tag, which
+    /// Miri (correctly) rejects as "would remove a strongly-protected tag" UB.
+    /// We therefore take RAW pointers (`*mut Page`, `*mut Row`, `*mut [Cell]`),
+    /// matching Zig's unprotected semantics, and reconstruct local `&mut`
+    /// references ONLY for the brief mutation scopes — never live across an
+    /// `assert_integrity()` call.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // reference takes `page: *Page, row: *Row, cells: []Cell`
+    pub fn clear_cells(&mut self, page: *mut Page, row: *mut Row, cells: *mut [Cell]) {
+        let cells_base = cells as *mut Cell;
+        let cells_len = cells.len();
+
         // This whole operation does unsafe things, so we just want to assert
         // the end state.
-        page.pause_integrity_checks(true);
+        unsafe { (*page).pause_integrity_checks(true) };
 
         // PORT NOTE: the reference uses a `defer` block to resume integrity
         // checks + assert at every exit; with a single exit path we run it at
@@ -1953,65 +1955,67 @@ impl Screen {
 
         if cfg!(debug_assertions) {
             // Our row and cells should be within the page.
-            let page_rows = unsafe { page.rows.ptr(page.memory_ptr()) };
-            debug_assert!(row as *mut Row as usize >= page_rows as usize);
+            let page_rows = unsafe { (*page).rows.ptr((*page).memory_ptr()) };
+            debug_assert!(row as usize >= page_rows as usize);
             debug_assert!(
-                row as *mut Row as usize
-                    <= unsafe { page_rows.add(page.size.rows as usize - 1) } as usize
+                row as usize <= unsafe { page_rows.add((*page).size.rows as usize - 1) } as usize
             );
 
-            let row_cells = page.get_cells(row);
+            let row_cells = unsafe { (*page).get_cells(row) };
             let row_cells_base = row_cells as *mut Cell;
             let row_cells_len = row_cells.len();
-            debug_assert!(cells.as_ptr() as usize >= row_cells_base as usize);
+            debug_assert!(cells_base as usize >= row_cells_base as usize);
             debug_assert!(
-                unsafe { cells.as_ptr().add(cells.len() - 1) } as usize
+                unsafe { cells_base.add(cells_len - 1) } as usize
                     <= unsafe { row_cells_base.add(row_cells_len - 1) } as usize
             );
         }
 
         // If we have managed memory (styles, graphemes, or hyperlinks)
         // in this row then we go cell by cell and clear them if present.
-        if row.grapheme() {
-            for cell in cells.iter_mut() {
-                if cell.has_grapheme() {
-                    page.clear_grapheme(cell);
+        if unsafe { (*row).grapheme() } {
+            for i in 0..cells_len {
+                let cell = unsafe { cells_base.add(i) };
+                if unsafe { (*cell).has_grapheme() } {
+                    unsafe { (*page).clear_grapheme(cell) };
                 }
             }
 
             // If we have no left/right scroll region we can be sure
             // that we've cleared all the graphemes, so we clear the
             // flag, otherwise we ask the page to update the flag.
-            if cells.len() == self.pages.cols as usize {
-                row.set_grapheme(false);
+            if cells_len == self.pages.cols as usize {
+                unsafe { (*row).set_grapheme(false) };
             } else {
-                page.update_row_grapheme_flag(row);
+                unsafe { (*page).update_row_grapheme_flag(row) };
             }
         }
 
-        if row.hyperlink() {
-            for cell in cells.iter_mut() {
-                if cell.hyperlink() {
-                    page.clear_hyperlink(cell);
+        if unsafe { (*row).hyperlink() } {
+            for i in 0..cells_len {
+                let cell = unsafe { cells_base.add(i) };
+                if unsafe { (*cell).hyperlink() } {
+                    unsafe { (*page).clear_hyperlink(cell) };
                 }
             }
 
             // If we have no left/right scroll region we can be sure
             // that we've cleared all the hyperlinks, so we clear the
             // flag, otherwise we ask the page to update the flag.
-            if cells.len() == self.pages.cols as usize {
-                row.set_hyperlink(false);
+            if cells_len == self.pages.cols as usize {
+                unsafe { (*row).set_hyperlink(false) };
             } else {
-                page.update_row_hyperlink_flag(row);
+                unsafe { (*page).update_row_hyperlink_flag(row) };
             }
         }
 
-        if row.styled() {
-            for cell in cells.iter() {
-                if cell.has_styling() {
+        if unsafe { (*row).styled() } {
+            for i in 0..cells_len {
+                let cell = unsafe { cells_base.add(i) };
+                if unsafe { (*cell).has_styling() } {
                     unsafe {
                         let base = (*page).memory_ptr();
-                        page.styles.release(base, cell.style_id());
+                        (*page).styles.release(base, (*cell).style_id());
                     }
                 }
             }
@@ -2019,10 +2023,10 @@ impl Screen {
             // If we have no left/right scroll region we can be sure
             // that we've cleared all the styles, so we clear the
             // flag, otherwise we ask the page to update the flag.
-            if cells.len() == self.pages.cols as usize {
-                row.set_styled(false);
+            if cells_len == self.pages.cols as usize {
+                unsafe { (*row).set_styled(false) };
             } else {
-                page.update_row_styled_flag(row);
+                unsafe { (*page).update_row_styled_flag(row) };
             }
         }
 
@@ -2032,36 +2036,54 @@ impl Screen {
         // logic is row-local and lands with the kitty co-port (vt-12).
 
         let blank = self.blank_cell();
-        cells.fill(blank);
+        // Reconstruct a local `&mut [Cell]` ONLY for the brief fill; it is
+        // dropped before any assert_integrity() below.
+        {
+            let cells_slice: &mut [Cell] =
+                unsafe { core::slice::from_raw_parts_mut(cells_base, cells_len) };
+            cells_slice.fill(blank);
+        }
 
         // defer { page.pauseIntegrityChecks(false); page.assertIntegrity();
         //   self.assertIntegrity(); }
-        page.pause_integrity_checks(false);
-        page.assert_integrity();
+        unsafe { (*page).pause_integrity_checks(false) };
+        unsafe { (*page).assert_integrity() };
         self.assert_integrity();
     }
 
     /// Clear cells but only if they are not protected.
-    pub fn clear_unprotected_cells(&mut self, page: &mut Page, row: &mut Row, cells: &mut [Cell]) {
+    ///
+    /// PORT NOTE (Stacked Borrows / Miri): like `clear_cells`, the reference
+    /// signature `clearUnprotectedCells(self, page: *Page, row: *Row,
+    /// cells: []Cell)` uses UNPROTECTED Zig pointers/slices. We take RAW
+    /// pointers and read each cell's `protected` flag through the raw pointer,
+    /// passing raw sub-slice pointers down to `clear_cells`.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // reference takes `page: *Page, row: *Row, cells: []Cell`
+    pub fn clear_unprotected_cells(&mut self, page: *mut Page, row: *mut Row, cells: *mut [Cell]) {
+        let cells_base = cells as *mut Cell;
+        let cells_len = cells.len();
+
         let mut x0: usize = 0;
         let mut x1: usize;
 
-        'clear: while x0 < cells.len() {
-            while cells[x0].protected() {
+        'clear: while x0 < cells_len {
+            while unsafe { (*cells_base.add(x0)).protected() } {
                 x0 += 1;
-                if x0 >= cells.len() {
+                if x0 >= cells_len {
                     break 'clear;
                 }
             }
             x1 = x0 + 1;
-            while x1 < cells.len() && !cells[x1].protected() {
+            while x1 < cells_len && !unsafe { (*cells_base.add(x1)).protected() } {
                 x1 += 1;
             }
-            self.clear_cells(page, row, &mut cells[x0..x1]);
+            let sub: *mut [Cell] =
+                core::ptr::slice_from_raw_parts_mut(unsafe { cells_base.add(x0) }, x1 - x0);
+            self.clear_cells(page, row, sub);
             x0 = x1;
         }
 
-        page.assert_integrity();
+        unsafe { (*page).assert_integrity() };
         self.assert_integrity();
     }
 
@@ -2140,11 +2162,7 @@ impl Screen {
                     unsafe { cells_base.add(cols as usize - 1) },
                     1,
                 );
-                self.clear_cells(
-                    unsafe { &mut *page },
-                    unsafe { &mut *cursor_page_row },
-                    unsafe { &mut *slice },
-                );
+                self.clear_cells(page, cursor_page_row, slice);
             }
 
             unsafe { (*page).pause_integrity_checks(false) };
@@ -2181,11 +2199,7 @@ impl Screen {
                             unsafe { p_cells_base.add(p_cols as usize - 1) },
                             1,
                         );
-                        self.clear_cells(
-                            unsafe { &mut *p_page },
-                            unsafe { &mut *p_rac.row },
-                            unsafe { &mut *slice },
-                        );
+                        self.clear_cells(p_page, p_rac.row, slice);
                     }
                 }
             }
@@ -2220,11 +2234,7 @@ impl Screen {
                         unsafe { cells_base.add(x as usize - 1) },
                         2,
                     );
-                    self.clear_cells(
-                        unsafe { &mut *page },
-                        unsafe { &mut *cursor_page_row },
-                        unsafe { &mut *slice },
-                    );
+                    self.clear_cells(page, cursor_page_row, slice);
                 }
             }
         }
@@ -2375,9 +2385,7 @@ impl Screen {
                         };
                         let row = self.cursor.page_row;
                         let cells = unsafe { (*page).get_cells(row) };
-                        self.clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
-                            &mut *cells
-                        });
+                        self.clear_cells(page, row, cells);
                     }
 
                     osc::semantic_prompt::Redraw::True => {
@@ -2406,9 +2414,7 @@ impl Screen {
                                 unsafe { core::ptr::addr_of_mut!((*pin.node).data) };
                             let row = pin.row_and_cell().row;
                             let cells = unsafe { (*page).get_cells(row) };
-                            self.clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
-                                &mut *cells
-                            });
+                            self.clear_cells(page, row, cells);
                         }
                     }
                 }

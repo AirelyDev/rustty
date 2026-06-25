@@ -1138,9 +1138,9 @@ impl Terminal {
                     };
                     let row = unsafe { (*active).cursor.page_row };
                     self.active_mut().clear_cells(
-                        unsafe { &mut *page },
-                        unsafe { &mut *row },
-                        unsafe { core::slice::from_raw_parts_mut(spacer_cell, 1) },
+                        page,
+                        row,
+                        core::ptr::slice_from_raw_parts_mut(spacer_cell, 1),
                     );
 
                     // If we're near the left edge, a wide char may have
@@ -1172,9 +1172,9 @@ impl Terminal {
                     };
                     let row = unsafe { (*active).cursor.page_row };
                     self.active_mut().clear_cells(
-                        unsafe { &mut *page },
-                        unsafe { &mut *row },
-                        unsafe { core::slice::from_raw_parts_mut(wide_cell, 1) },
+                        page,
+                        row,
+                        core::ptr::slice_from_raw_parts_mut(wide_cell, 1),
                     );
                     // If we're near the left edge, a wide char may have
                     // wrapped from the previous row, leaving a spacer_head
@@ -2179,10 +2179,7 @@ impl Terminal {
         // self.screens.active.clearCells(page, ..., x[0 .. rem - scroll_amount]);
         let row: *mut Row = unsafe { (*self.screens.active).cursor.page_row };
         let cells = core::ptr::slice_from_raw_parts_mut(x, (rem - scroll_amount) as usize);
-        self.active_mut()
-            .clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
-                &mut *cells
-            });
+        self.active_mut().clear_cells(page, row, cells);
 
         // Our row's soft-wrap is always reset.
         self.active_mut().cursor_reset_wrap();
@@ -2240,18 +2237,12 @@ impl Terminal {
         // are protected and go with the fast path. If the last protection
         // mode was not ISO we also always ignore protection attributes.
         if unsafe { (*self.screens.active).protected_mode } != ansi::ProtectedMode::Iso {
-            self.active_mut()
-                .clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
-                    &mut *cells_slice
-                });
+            self.active_mut().clear_cells(page, row, cells_slice);
             return;
         }
 
-        self.active_mut().clear_unprotected_cells(
-            unsafe { &mut *page },
-            unsafe { &mut *row },
-            unsafe { &mut *cells_slice },
-        );
+        self.active_mut()
+            .clear_unprotected_cells(page, row, cells_slice);
     }
 
     /// Erase the line.
@@ -2334,18 +2325,12 @@ impl Terminal {
         // If we're not respecting protected attributes, we can use a fast-path
         // to fill the entire line.
         if !protected {
-            self.active_mut()
-                .clear_cells(unsafe { &mut *page }, unsafe { &mut *row }, unsafe {
-                    &mut *cells_slice
-                });
+            self.active_mut().clear_cells(page, row, cells_slice);
             return;
         }
 
-        self.active_mut().clear_unprotected_cells(
-            unsafe { &mut *page },
-            unsafe { &mut *row },
-            unsafe { &mut *cells_slice },
-        );
+        self.active_mut()
+            .clear_unprotected_cells(page, row, cells_slice);
     }
 
     /// Erase the display.
