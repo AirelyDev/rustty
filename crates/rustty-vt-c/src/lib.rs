@@ -50,6 +50,7 @@ pub mod point;
 pub mod result;
 pub mod row;
 pub mod selection;
+pub mod sgr;
 pub mod size_report;
 pub mod style;
 pub mod sys;
@@ -843,6 +844,126 @@ fn row_data_from_c_int(v: c_int) -> Option<row::RowData> {
     } else {
         None
     }
+}
+
+// ----- sgr -----
+// pub const sgr_new = sgr.new;  (ghostty_sgr_new)
+/// C: rustty_sgr_new
+///
+/// # Safety
+/// `alloc`, if non-null, must point to a valid allocator; `result` must be a
+/// valid, writable pointer to a sgr-parser handle.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_sgr_new(
+    alloc: *const rustty_lib::allocator::Allocator,
+    result: *mut sgr::Parser,
+) -> c_int {
+    // SAFETY: `alloc`/`result` validity is the caller's contract.
+    unsafe { sgr::new(alloc.as_ref(), result) }.to_c_int()
+}
+
+// pub const sgr_free = sgr.free;  (ghostty_sgr_free)
+/// C: rustty_sgr_free
+///
+/// # Safety
+/// `parser`, if non-null, must be a handle returned by `rustty_sgr_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_sgr_free(parser: sgr::Parser) {
+    // SAFETY: `parser` validity is the caller's contract.
+    unsafe { sgr::free(parser) }
+}
+
+// pub const sgr_reset = sgr.reset;  (ghostty_sgr_reset)
+/// C: rustty_sgr_reset
+///
+/// # Safety
+/// `parser`, if non-null, must be a handle returned by `rustty_sgr_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_sgr_reset(parser: sgr::Parser) {
+    // SAFETY: `parser` validity is the caller's contract.
+    unsafe { sgr::reset(parser) }
+}
+
+// pub const sgr_set_params = sgr.setParams;  (ghostty_sgr_set_params)
+/// C: rustty_sgr_set_params
+///
+/// # Safety
+/// `parser`, if non-null, must be a handle returned by `rustty_sgr_new`;
+/// `params` must point to `len` readable `u16`; `seps`, if non-null, must point
+/// to `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_sgr_set_params(
+    parser: sgr::Parser,
+    params: *const u16,
+    seps: *const u8,
+    len: usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { sgr::set_params(parser, params, seps, len) }.to_c_int()
+}
+
+// pub const sgr_next = sgr.next;  (ghostty_sgr_next)
+/// C: rustty_sgr_next
+///
+/// # Safety
+/// `parser`, if non-null, must be a handle returned by `rustty_sgr_new`;
+/// `result` must be a valid, writable pointer to a `sgr::AttributeC`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_sgr_next(
+    parser: sgr::Parser,
+    result: *mut sgr::AttributeC,
+) -> bool {
+    // SAFETY: `parser`/`result` validity is the caller's contract.
+    unsafe { sgr::next(parser, result) }
+}
+
+// pub const sgr_unknown_full = sgr.unknown_full;  (ghostty_sgr_unknown_full)
+/// C: rustty_sgr_unknown_full
+///
+/// # Safety
+/// `ptr`, if non-null, must be a valid, writable pointer to a `*const u16`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_sgr_unknown_full(
+    unknown: sgr::UnknownC,
+    ptr: *mut *const u16,
+) -> usize {
+    // SAFETY: `ptr` validity is the caller's contract.
+    unsafe { sgr::unknown_full(unknown, ptr) }
+}
+
+// pub const sgr_unknown_partial = sgr.unknown_partial;  (ghostty_sgr_unknown_partial)
+/// C: rustty_sgr_unknown_partial
+///
+/// # Safety
+/// `ptr`, if non-null, must be a valid, writable pointer to a `*const u16`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_sgr_unknown_partial(
+    unknown: sgr::UnknownC,
+    ptr: *mut *const u16,
+) -> usize {
+    // SAFETY: `ptr` validity is the caller's contract.
+    unsafe { sgr::unknown_partial(unknown, ptr) }
+}
+
+// pub const sgr_attribute_tag = sgr.attribute_tag;  (ghostty_sgr_attribute_tag)
+/// C: rustty_sgr_attribute_tag
+#[no_mangle]
+pub extern "C" fn rustty_sgr_attribute_tag(attr: sgr::AttributeC) -> sgr::Tag {
+    sgr::attribute_tag(attr)
+}
+
+// pub const sgr_attribute_value = sgr.attribute_value;  (ghostty_sgr_attribute_value)
+/// C: rustty_sgr_attribute_value
+///
+/// # Safety
+/// `attr` must be a valid pointer to an `AttributeC`; the returned pointer
+/// aliases `attr.value` and is valid as long as `attr` is.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_sgr_attribute_value(
+    attr: *mut sgr::AttributeC,
+) -> *mut sgr::CValue {
+    // SAFETY: `attr` validity is the caller's contract.
+    unsafe { sgr::attribute_value(attr) }
 }
 
 #[cfg(test)]
