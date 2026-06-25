@@ -77,7 +77,11 @@ pub struct SlidingWindow {
     // PORT NOTE: `Allocator` is the ZST `allocator_api2::Global`; the ported
     // collections (`Vec`, ported `CircBuf`) carry their own allocator, so this
     // field is kept for API parity but is a unit.
-    alloc: Allocator,
+    // PORT NOTE: `pub(crate)` so the sibling search modules (active/pagelist/
+    // screen/viewport) can read `window.alloc`, `window.needle`, and
+    // `window.direction` as the reference does (`self.active.window.alloc`,
+    // `self.window.needle`, `self.window.direction`).
+    pub(crate) alloc: Allocator,
 
     /// The data buffer is a circular buffer of u8 that contains the
     /// encoded page text that we can use to search for the needle.
@@ -102,8 +106,9 @@ pub struct SlidingWindow {
     data_offset: usize,
 
     /// The needle we're searching for. Does own the memory.
-    // PORT NOTE: `[]const u8` -> owned `Vec<u8>`.
-    needle: Vec<u8>,
+    // PORT NOTE: `[]const u8` -> owned `Vec<u8>`. `pub(crate)` so sibling search
+    // modules can read `window.needle` / `window.needle.len()`.
+    pub(crate) needle: Vec<u8>,
 
     /// The search direction. If the direction is forward then pages should
     /// be appended in forward linked list order from the PageList. If the
@@ -115,7 +120,9 @@ pub struct SlidingWindow {
     /// trivial though and will let us do more complex optimizations in the
     /// future (e.g. starting from the viewport and doing a forward/reverse
     /// concurrently from that point).
-    direction: Direction,
+    // PORT NOTE: `pub(crate)` so sibling search modules can read
+    // `window.direction` (used in their `needle()` assertions).
+    pub(crate) direction: Direction,
 
     /// A buffer to store the overlap search data. This is used to search
     /// overlaps between pages where the match starts on one page and
