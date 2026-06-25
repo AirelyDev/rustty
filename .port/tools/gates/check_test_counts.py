@@ -19,6 +19,10 @@ import re, sys, glob, os
 GH = "/Users/gael/projects/ghostty/src/terminal"
 RS = "/Users/gael/projects/rustty/crates/rustty-vt/src"
 
+# rustty-font: GH base differs (src/font, not src/terminal).
+GHF = "/Users/gael/projects/ghostty/src/font"
+RSF = "/Users/gael/projects/rustty/crates/rustty-font/src"
+
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
@@ -62,6 +66,13 @@ MAP = {
     # (the control-mode multiplexer driving per-pane Terminals). This completes
     # Ghostty terminal/ in rustty-vt.
     "tmux":              ([f"{GH}/tmux/control.zig", f"{GH}/tmux/layout.zig", f"{GH}/tmux/output.zig", f"{GH}/tmux/viewer.zig"], [f"{RS}/tmux/control.rs", f"{RS}/tmux/layout.rs", f"{RS}/tmux/output.rs", f"{RS}/tmux/viewer.rs"], 0),
+    # Stage A.2 — rustty-font pure-parsing slice (GH base = src/font, not src/terminal).
+    # NOTE: zig_count() matches `test "name"`; sfnt.zig also has one unquoted
+    # `test FixedPoint {` (caught by Rust's 3rd #[test] — rust >= zig holds).
+    "font_glyf":         ([f"{GHF}/opentype/glyf.zig"], [f"{RSF}/opentype/glyf.rs"], 0),
+    "font_sfnt":         ([f"{GHF}/opentype/sfnt.zig"], [f"{RSF}/opentype/sfnt.rs"], 0),
+    "font_head":         ([f"{GHF}/opentype/head.zig"], [f"{RSF}/opentype/head.rs"], 0),
+    "font_metrics":      ([f"{GHF}/Metrics.zig"], [f"{RSF}/metrics.rs"], 0),
 }
 
 def expand(globs):
@@ -71,9 +82,29 @@ def expand(globs):
     return out
 
 def zig_count(files):
+    # Counts BEHAVIORAL Zig tests: every `test "..."` (quoted), PLUS named-unquoted
+    # `test Ident {` whose body is a real assertion (NOT the `_ = X;`/refAllDecls
+    # reify idiom). Anonymous `test {` are skipped (≈always refAllDecls; the rare
+    # behavioral one is covered by Rust's helper-test margin). One-time manual audit
+    # (2026-06) confirmed every behavioral named-unquoted test — modes.modeFromInt/
+    # ModeState, ScreenSet, paste.isSafe, encoding.isSafeUtf8 — is ported; the
+    # excluded ones are color.Special/Dynamic (refAllDecls) + stream.Action (C-ABI->vt-c).
     n = 0
     for f in files:
-        n += sum(1 for ln in open(f, errors="ignore") if re.match(r'\s*test "', ln))
+        lines = open(f, errors="ignore").readlines()
+        for i, ln in enumerate(lines):
+            if re.match(r'\s*test "', ln):
+                n += 1
+            elif re.match(r'\s*test [A-Za-z_][A-Za-z_0-9]* \{', ln):
+                body = ""
+                for j in range(i + 1, min(i + 6, len(lines))):
+                    s = lines[j].strip()
+                    if not s or s.startswith("//"):
+                        continue
+                    body = s
+                    break
+                if not (body.startswith("_ = ") or "refAllDecls" in body):
+                    n += 1
     return n
 
 def rust_count(files):
