@@ -2,7 +2,8 @@
 //!
 //! PORTS: ghostty src/terminal/tmux.zig
 //!
-//! PORT STATUS: stub
+//! PORT STATUS: partial (vt-16). `output` + `layout` parsers ported; `control`
+//! + `viewer` remain stubs.
 
 pub mod control;
 pub mod layout;
