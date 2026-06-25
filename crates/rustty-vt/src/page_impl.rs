@@ -195,8 +195,16 @@ impl Page {
     /// PORT NOTE: the reference field is `memory: []align(page_size_min) u8` (a
     /// slice). Offset-based accessors only need the base pointer; we expose the
     /// pointer directly (the length is tracked in `memory_len`).
+    //
+    // PORT NOTE (visibility): the reference `Page.memory` field is `pub`, and the
+    // C boundary (rustty-vt-c `grid_ref_hyperlink_uri`/`grid_ref_style`) resolves
+    // offset-based data (`hyperlink_set.get(memory, id)`, `entry.uri.slice(memory)`,
+    // `styles.get(memory, id)`) against it exactly as the reference does. This
+    // accessor is therefore `pub` (was `pub(crate)`) to project the reference's
+    // public `memory` base across the crate boundary — a non-fabricating seam (the
+    // base pointer is the reference's own public datum).
     #[inline]
-    pub(crate) fn memory_ptr(&self) -> *const u8 {
+    pub fn memory_ptr(&self) -> *const u8 {
         self.memory_ptr
     }
 

@@ -3,9 +3,11 @@
 //! PORTS: the C-ABI projection of ghostty `src/terminal/point.zig`'s
 //! `Point.C`/`Point.CValue`/`Point.cval` (the `lib.TaggedUnion` surface).
 //!
-//! PORT STATUS: SKELETON (mutual-atom Stage B v3). The hand-authored tagged
-//! union + its const size/align asserts are byte-exact; `from_c`/`cval` are
-//! SIGNATURES with `todo!()` bodies, filled in a later sub-batch.
+//! PORT STATUS: FILLED (mutual-atom Stage B v4). The hand-authored tagged
+//! union + its const size/align asserts are byte-exact; `from_c`/`cval` bodies
+//! are ported (the `lib.TaggedUnion` expansion). `point.zig`'s C surface has no
+//! `test {}` blocks of its own (the conversions are exercised by the
+//! grid_ref/selection tests).
 //!
 //! PORT NOTE (where this lives): `point.zig` itself is a pure-VT module ported in
 //! rustty-vt (`rustty_vt::point` — `Tag`, `Coordinate`, `Point`). Only the C-ABI
@@ -95,8 +97,24 @@ const _: () = assert!(size_of::<TagC>() == size_of::<c_int>());
 impl PointC {
     /// Convert a native `Point` into its C ABI tagged union (`Point.cval`).
     // pub const cval = c_union.cval;
-    pub fn cval(_point: rustty_vt::point::Point) -> PointC {
-        todo!("vt-c point PointC::cval")
+    //
+    // PORT NOTE: `lib.TaggedUnion(...).cval` builds the `C` struct from a native
+    // tagged-union value: it reads the active tag and copies the matching payload
+    // into the union's same-named member. The padding member is left as the
+    // active member's bytes (the rest is `undefined` in the reference). We mirror
+    // that by initializing the union through the tag's `Coordinate` member; the
+    // tail bytes of the `[2]u64` padding are unobserved (the C reader dispatches
+    // on `tag` and only reads the active member).
+    pub fn cval(point: rustty_vt::point::Point) -> PointC {
+        let tag = TagC::from_tag(point.tag());
+        let coord = point.coord();
+        let value = match tag {
+            TagC::Active => PointCValue { active: coord },
+            TagC::Viewport => PointCValue { viewport: coord },
+            TagC::Screen => PointCValue { screen: coord },
+            TagC::History => PointCValue { history: coord },
+        };
+        PointC { tag, value }
     }
 
     /// Convert this C ABI tagged union back into a native `Point`
@@ -104,6 +122,16 @@ impl PointC {
     // PORT NOTE: `point.Point.fromC(pt)` reads `pt.tag` and the matching
     // `pt.value.<tag>` payload, dispatching to `rustty_vt::point::Point::from_c`.
     pub fn from_c(self) -> rustty_vt::point::Point {
-        todo!("vt-c point PointC::from_c")
+        // PORT NOTE: read the union member selected by `tag`. Every member is a
+        // `Coordinate` at offset 0, so the read is the same bytes regardless of
+        // tag; the dispatch keeps the C-ABI contract explicit. SAFETY: the
+        // selected member is the one written by `cval`/the C caller per `tag`.
+        let value = match self.tag {
+            TagC::Active => unsafe { self.value.active },
+            TagC::Viewport => unsafe { self.value.viewport },
+            TagC::Screen => unsafe { self.value.screen },
+            TagC::History => unsafe { self.value.history },
+        };
+        rustty_vt::point::Point::from_c(self.tag.to_tag(), value)
     }
 }

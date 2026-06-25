@@ -767,13 +767,110 @@ pub enum Option_ {
     PwdChanged = 25,
 }
 
-// pub fn set(terminal_: Terminal, option: Option, value: ?*const anyopaque) ...
+// pub fn set(terminal_: Terminal, option: Option, value: ?*const anyopaque) ... {
+//     if (comptime std.debug.runtime_safety) { _ = intToEnum(Option, ...) catch { ... return .invalid_value; }; }
+//     const wrapper = terminal_ orelse return .invalid_value;
+//     return switch (option) {
+//         inline else => |comptime_option| setTyped(wrapper, comptime_option, @ptrCast(@alignCast(value))),
+//     };
+// }
+//
+// PORT NOTE: the `intToEnum(Option, ...)` runtime-safety guard on the raw `c_int`
+// crossing the C boundary lives in the lib.rs `extern "C"` wrapper (the cell/key
+// pattern); here `option` is already a valid `#[repr(C)] Option_`. The `inline
+// else => setTyped` comptime dispatch becomes a direct `set_typed` call.
+//
+// PARTIAL FILL: only the `.selection` arm of `set_typed` is ported in this
+// sub-batch (it is exercised by `selection.zig`'s `selection_format_alloc uses
+// active selection` test and depends only on already-filled APIs). Every other
+// option arm projects a still-deferred vt-c type or terminal seam and lands in
+// the get/set sub-batch; they remain `todo!("vt-c set <option>")`.
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle; `value`, if
 /// non-null, must point to storage of the type required by `option`
 /// (`Option_::in_type`).
-pub unsafe fn set(_terminal_: Terminal, _option: Option_, _value: *const c_void) -> Result {
-    todo!("vt-c set")
+pub unsafe fn set(terminal_: Terminal, option: Option_, value: *const c_void) -> Result {
+    // const wrapper = terminal_ orelse return .invalid_value;
+    if terminal_.is_null() {
+        return Result::InvalidValue;
+    }
+    // inline else => |comptime_option| setTyped(wrapper, comptime_option, @ptrCast(@alignCast(value)))
+    unsafe { set_typed(terminal_, option, value) }
+}
+
+// fn setTyped(wrapper: *TerminalWrapper, comptime option: Option, value: option.InType()) Result {
+//     switch (option) { ...; .selection => { ... }; ... }
+//     return .success;
+// }
+//
+// # Safety
+// `terminal_`, if non-null, is a live wrapper; `value` points at storage of the
+// type required by `option`.
+unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) -> Result {
+    match option {
+        // .selection => {
+        //     if (value) |ptr| {
+        //         const sel = ptr.toZig() orelse return .invalid_value;
+        //         wrapper.terminal.screens.active.select(sel) catch return .out_of_memory;
+        //     } else {
+        //         wrapper.terminal.screens.active.clearSelection();
+        //     }
+        // },
+        Option_::Selection => {
+            // SAFETY: `terminal_` is a live wrapper; reach the active screen via
+            // raw ptrs (no `&mut ZigTerminal` retag that would invalidate the
+            // stream handler's stored alias — the strongly-protected discipline).
+            let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
+            let active: *mut rustty_vt::screen::Screen = unsafe { (*t).screens.active };
+            // if (value) |ptr| { ... } else { ... }
+            let ptr = value as *const crate::selection::CSelection;
+            if !ptr.is_null() {
+                // const sel = ptr.toZig() orelse return .invalid_value;
+                let sel = match unsafe { (*ptr).to_zig() } {
+                    Some(s) => s,
+                    None => return Result::InvalidValue,
+                };
+                // wrapper.terminal.screens.active.select(sel) catch return .out_of_memory;
+                if unsafe { (*active).select(Some(sel)) }.is_err() {
+                    return Result::OutOfMemory;
+                }
+            } else {
+                // wrapper.terminal.screens.active.clearSelection();
+                unsafe { (*active).clear_selection() };
+            }
+        }
+
+        // PORT NOTE: every other arm projects a still-deferred vt-c type or
+        // terminal seam; they fill in the get/set sub-batch.
+        Option_::Userdata => todo!("vt-c set userdata"),
+        Option_::WritePty => todo!("vt-c set write_pty"),
+        Option_::Bell => todo!("vt-c set bell"),
+        Option_::Enquiry => todo!("vt-c set enquiry"),
+        Option_::Xtversion => todo!("vt-c set xtversion"),
+        Option_::TitleChanged => todo!("vt-c set title_changed"),
+        Option_::SizeCb => todo!("vt-c set size_cb"),
+        Option_::ColorScheme => todo!("vt-c set color_scheme"),
+        Option_::DeviceAttributes => todo!("vt-c set device_attributes"),
+        Option_::Title => todo!("vt-c set title"),
+        Option_::Pwd => todo!("vt-c set pwd"),
+        Option_::ColorForeground => todo!("vt-c set color_foreground"),
+        Option_::ColorBackground => todo!("vt-c set color_background"),
+        Option_::ColorCursor => todo!("vt-c set color_cursor"),
+        Option_::ColorPalette => todo!("vt-c set color_palette"),
+        Option_::KittyImageStorageLimit => todo!("vt-c set kitty_image_storage_limit"),
+        Option_::KittyImageMediumFile => todo!("vt-c set kitty_image_medium_file"),
+        Option_::KittyImageMediumTempFile => todo!("vt-c set kitty_image_medium_temp_file"),
+        Option_::KittyImageMediumSharedMem => todo!("vt-c set kitty_image_medium_shared_mem"),
+        Option_::ApcMaxBytes => todo!("vt-c set apc_max_bytes"),
+        Option_::ApcMaxBytesKitty => todo!("vt-c set apc_max_bytes_kitty"),
+        Option_::DefaultCursorStyle => todo!("vt-c set default_cursor_style"),
+        Option_::DefaultCursorBlink => todo!("vt-c set default_cursor_blink"),
+        Option_::GlyphProtocol => todo!("vt-c set glyph_protocol"),
+        Option_::PwdChanged => todo!("vt-c set pwd_changed"),
+    }
+
+    // return .success;
+    Result::Success
 }
 
 /// C: GhosttyTerminalCursorStyle
@@ -1291,38 +1388,168 @@ pub unsafe fn get_multi(
     Result::Success
 }
 
-// pub fn grid_ref(terminal_: Terminal, pt: point.Point.C, out_ref: ?*grid_ref_c.CGridRef) ...
+// pub fn grid_ref(terminal_: Terminal, pt: point.Point.C, out_ref: ?*grid_ref_c.CGridRef) ... {
+//     const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
+//     const zig_pt: point.Point = .fromC(pt);
+//     const p = t.screens.active.pages.pin(zig_pt) orelse return .invalid_value;
+//     if (out_ref) |out| out.* = grid_ref_c.CGridRef.fromPin(p);
+//     return .success;
+// }
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle; `out_ref`, if
 /// non-null, must be a valid writable pointer to a `CGridRef`.
-pub unsafe fn grid_ref(_terminal_: Terminal, _pt: PointC, _out_ref: *mut CGridRef) -> Result {
-    todo!("vt-c grid_ref")
+pub unsafe fn grid_ref(terminal_: Terminal, pt: PointC, out_ref: *mut CGridRef) -> Result {
+    // const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
+    if terminal_.is_null() {
+        return Result::InvalidValue;
+    }
+    // SAFETY: `terminal_` is a live wrapper; reads go through raw ptrs (never a
+    // `&mut ZigTerminal`/`&mut Screen` that would invalidate the stream handler's
+    // aliasing tag — the rust-mut-args-strongly-protected discipline).
+    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
+    let active: *mut rustty_vt::screen::Screen = unsafe { (*t).screens.active };
+    // const zig_pt: point.Point = .fromC(pt);
+    let zig_pt = pt.from_c();
+    // const p = t.screens.active.pages.pin(zig_pt) orelse return .invalid_value;
+    let p = match unsafe { (*active).pages.pin(zig_pt) } {
+        Some(p) => p,
+        None => return Result::InvalidValue,
+    };
+    // if (out_ref) |out| out.* = grid_ref_c.CGridRef.fromPin(p);
+    if !out_ref.is_null() {
+        // SAFETY: `out_ref` is a valid writable `CGridRef`.
+        unsafe { *out_ref = CGridRef::from_pin(p) };
+    }
+    // return .success;
+    Result::Success
 }
 
-// pub fn grid_ref_track(terminal_, pt: point.Point.C, out_ref: ?*grid_ref_tracked_c.CTrackedGridRef) ...
+// pub fn grid_ref_track(terminal_, pt: point.Point.C, out_ref: ?*grid_ref_tracked_c.CTrackedGridRef) ... {
+//     const wrapper = terminal_ orelse return .invalid_value;
+//     const out = out_ref orelse return .invalid_value;
+//     out.* = null;
+//     const t: *ZigTerminal = wrapper.terminal;
+//     const list = &t.screens.active.pages;
+//     const p = list.pin(.fromC(pt)) orelse return .invalid_value;
+//     const tracked_pin = list.trackPin(p) catch return .out_of_memory;
+//     const alloc = t.gpa();
+//     const ref = alloc.create(grid_ref_tracked_c.TrackedGridRef) catch { list.untrackPin(tracked_pin); return .out_of_memory; };
+//     ref.* = .{ .alloc, .terminal = wrapper, .screen_key = t.screens.active_key, .screen_generation = ..., .pin = tracked_pin };
+//     wrapper.tracked_grid_refs.putNoClobber(alloc, ref, {}) catch { list.untrackPin(tracked_pin); alloc.destroy(ref); return .out_of_memory; };
+//     out.* = ref;
+//     return .success;
+// }
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle; `out_ref`, if
 /// non-null, must be a valid writable pointer to a `CTrackedGridRef`.
 pub unsafe fn grid_ref_track(
-    _terminal_: Terminal,
-    _pt: PointC,
-    _out_ref: *mut CTrackedGridRef,
+    terminal_: Terminal,
+    pt: PointC,
+    out_ref: *mut CTrackedGridRef,
 ) -> Result {
-    todo!("vt-c grid_ref_track")
+    // const wrapper = terminal_ orelse return .invalid_value;
+    if terminal_.is_null() {
+        return Result::InvalidValue;
+    }
+    // const out = out_ref orelse return .invalid_value;
+    if out_ref.is_null() {
+        return Result::InvalidValue;
+    }
+    // out.* = null;
+    // SAFETY: `out_ref` is a non-null valid writable `CTrackedGridRef`.
+    unsafe { *out_ref = std::ptr::null_mut() };
+
+    // const t: *ZigTerminal = wrapper.terminal;
+    // SAFETY: `terminal_` is a live wrapper; raw-ptr reads only.
+    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
+    let active: *mut rustty_vt::screen::Screen = unsafe { (*t).screens.active };
+    // const list = &t.screens.active.pages;
+    let list: *mut rustty_vt::pagelist::PageList =
+        unsafe { core::ptr::addr_of_mut!((*active).pages) };
+    // const p = list.pin(.fromC(pt)) orelse return .invalid_value;
+    let p = match unsafe { (*list).pin(pt.from_c()) } {
+        Some(p) => p,
+        None => return Result::InvalidValue,
+    };
+    // const tracked_pin = list.trackPin(p) catch return .out_of_memory;
+    let tracked_pin = match unsafe { (*list).track_pin(p) } {
+        Ok(tp) => tp,
+        Err(_) => return Result::OutOfMemory,
+    };
+
+    // const alloc = t.gpa();
+    let alloc = unsafe { (*t).gpa() };
+    // const ref = alloc.create(grid_ref_tracked_c.TrackedGridRef) catch { list.untrackPin(tracked_pin); return .out_of_memory; };
+    // PORT NOTE: `alloc.create` is the per-terminal allocator; rustty heap-boxes
+    // the `TrackedGridRef` (the `gpa()` is `Global`). `Box::new` does not return a
+    // recoverable OOM (it aborts), so the `catch return .out_of_memory` arm is
+    // unreachable — matching the reference's only-on-OOM cleanup path.
+    let active_key = unsafe { (*t).screens.active_key };
+    let generation = unsafe { (*t).screens.generation(active_key) };
+    // ref.* = .{ .alloc, .terminal = wrapper, .screen_key, .screen_generation, .pin = tracked_pin };
+    let ref_ptr: *mut TrackedGridRef = Box::into_raw(Box::new(TrackedGridRef {
+        alloc,
+        terminal: terminal_,
+        screen_key: active_key,
+        screen_generation: generation,
+        pin: tracked_pin,
+    }));
+
+    // Store the tracked ref in the terminal so that when we free
+    // the terminal the tracked ref can be detached safely.
+    // wrapper.tracked_grid_refs.putNoClobber(alloc, ref, {}) catch { ... };
+    // PORT NOTE: `putNoClobber` asserts the key is absent (a fresh heap ptr is
+    // always unique); the rustty `HashSet::insert` returns `true` for new keys.
+    // SAFETY: `tracked_grid_refs` is a sibling field of the live wrapper.
+    unsafe { (*terminal_).tracked_grid_refs.insert(ref_ptr) };
+
+    // out.* = ref;
+    unsafe { *out_ref = ref_ptr };
+    // return .success;
+    Result::Success
 }
 
-// pub fn point_from_grid_ref(terminal_, ref: *const grid_ref_c.CGridRef, tag: point.Tag, out: ?*point.Coordinate) ...
+// pub fn point_from_grid_ref(terminal_, ref: *const grid_ref_c.CGridRef, tag: point.Tag, out: ?*point.Coordinate) ... {
+//     const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
+//     const p = ref.toPin() orelse return .invalid_value;
+//     const pt = t.screens.active.pages.pointFromPin(tag, p) orelse return .no_value;
+//     if (out) |o| o.* = pt.coord();
+//     return .success;
+// }
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle; `ref` must point to
 /// a valid `CGridRef`; `out`, if non-null, must be a valid writable pointer to a
 /// `Coordinate`.
 pub unsafe fn point_from_grid_ref(
-    _terminal_: Terminal,
-    _ref: *const CGridRef,
-    _tag: Tag,
-    _out: *mut Coordinate,
+    terminal_: Terminal,
+    ref_: *const CGridRef,
+    tag: Tag,
+    out: *mut Coordinate,
 ) -> Result {
-    todo!("vt-c point_from_grid_ref")
+    // const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
+    if terminal_.is_null() {
+        return Result::InvalidValue;
+    }
+    // SAFETY: `terminal_` is a live wrapper; raw-ptr reads only.
+    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
+    let active: *mut rustty_vt::screen::Screen = unsafe { (*t).screens.active };
+    // const p = ref.toPin() orelse return .invalid_value;
+    let p = match unsafe { (*ref_).to_pin() } {
+        Some(p) => p,
+        None => return Result::InvalidValue,
+    };
+    // const pt = t.screens.active.pages.pointFromPin(tag, p) orelse return .no_value;
+    let pt = match unsafe { (*active).pages.point_from_pin(tag, p) } {
+        Some(pt) => pt,
+        None => return Result::NoValue,
+    };
+    // if (out) |o| o.* = pt.coord();
+    if !out.is_null() {
+        // SAFETY: `out` is a valid writable `Coordinate`.
+        unsafe { *out = pt.coord() };
+    }
+    // return .success;
+    Result::Success
 }
 
 // pub fn free(terminal_: Terminal) ... {
