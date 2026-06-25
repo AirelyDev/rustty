@@ -698,7 +698,11 @@ impl Screen {
         // PORT NOTE: gated on `build_options.slow_runtime_safety`
         // (`crate::options::SLOW_RUNTIME_SAFETY`, i.e. debug builds). The Valgrind
         // short-circuit (`std.valgrind.runningOnValgrind() > 0`) has no Rust
-        // analogue here, so it is elided (we never run under Valgrind).
+        // analogue here, so it is elided (we never run under Valgrind). The
+        // reference's verbatim comments for that elided check are preserved here:
+        //   We don't run integrity checks on Valgrind because its soooooo slow,
+        //   Valgrind is our integrity checker, and we run these during unit
+        //   tests (non-Valgrind) anyways so we're verifying anyways.
         if crate::options::SLOW_RUNTIME_SAFETY {
             debug_assert!(self.cursor.x < self.pages.cols);
             debug_assert!(self.cursor.y < self.pages.rows);
@@ -10726,6 +10730,1437 @@ mod tests {
         // If this test passes without memory leaks (when run with testing.allocator),
         // it means the errdefer properly cleaned up map.string when toOwnedSlice failed.
 
+        s.deinit();
+    }
+
+    // PORT NOTE: these tests were DEFERRED from vt-11 (recorded in
+    // DEFERRALS.md) because their fixtures needed Selection / the dirty
+    // tracking / page-churn machinery that landed across later sub-batches.
+    // They are ported here (vt-12c-screen) assertion-for-assertion.
+
+    // test "Screen: scrolling"
+    #[test]
+    fn screen_scrolling() {
+        let mut s = mkscreen(10, 3, 0);
+        s.set_attribute(crate::sgr::Attribute::DirectColorBg(crate::color::RGB {
+            r: 155,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+
+        // Scroll down, should still be bottom
+        s.cursor_down_scroll().unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL");
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 2 }))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(pagepkg::CellRgb { r: 155, g: 0, b: 0 }, unsafe {
+                (*cell).content_color_rgb()
+            });
+        }
+
+        // Everything is dirty because we have no scrollback
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 0 })));
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 1 })));
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 2 })));
+
+        // Scrolling to the bottom does nothing
+        s.scroll(Scroll::Active);
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: scrolling with a single-row screen with scrollback"
+    #[test]
+    fn screen_scrolling_with_a_single_row_screen_with_scrollback() {
+        let mut s = mkscreen(10, 1, 1);
+        s.test_write_string(b"1ABCD").unwrap();
+
+        // Scroll down, should still be bottom
+        s.cursor_down_scroll().unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"");
+        }
+
+        // Active should be dirty
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 0 })));
+
+        // Scrollback also dirty because cursor moved from there
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Screen(point::Coordinate { x: 0, y: 0 })));
+
+        s.scroll(Scroll::DeltaRow(-1));
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: scroll down from 0"
+    #[test]
+    fn screen_scroll_down_from_0() {
+        let mut s = mkscreen(10, 3, 0);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+
+        // Scrolling up does nothing, but allows it
+        s.scroll(Scroll::DeltaRow(-1));
+        assert!(s.pages.viewport == pagelist::Viewport::Active);
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD\n2EFGH\n3IJKL");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: scrollback various cases"
+    #[test]
+    fn screen_scrollback_various_cases() {
+        let mut s = mkscreen(10, 3, 1);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+        s.cursor_down_scroll().unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL");
+        }
+
+        // Scrolling to the bottom
+        s.scroll(Scroll::Active);
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL");
+        }
+
+        // Scrolling back should make it visible again
+        s.scroll(Scroll::DeltaRow(-1));
+        assert!(s.pages.viewport != pagelist::Viewport::Active);
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD\n2EFGH\n3IJKL");
+        }
+
+        // Scrolling back again should do nothing
+        s.scroll(Scroll::DeltaRow(-1));
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD\n2EFGH\n3IJKL");
+        }
+
+        // Scrolling to the bottom
+        s.scroll(Scroll::Active);
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL");
+        }
+
+        // Scrolling forward with no grow should do nothing
+        s.scroll(Scroll::DeltaRow(1));
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL");
+        }
+
+        // Scrolling to the top should work
+        s.scroll(Scroll::Top);
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD\n2EFGH\n3IJKL");
+        }
+
+        // Should be able to easily clear active area only
+        s.clear_rows(act(), None, false);
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD");
+        }
+
+        // Scrolling to the bottom
+        s.scroll(Scroll::Active);
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: scrollback doesn't move viewport if not at bottom"
+    #[test]
+    fn screen_scrollback_doesnt_move_viewport_if_not_at_bottom() {
+        let mut s = mkscreen(10, 3, 3);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL\n4ABCD\n5EFGH")
+            .unwrap();
+
+        // First test: we scroll up by 1, so we're not at the bottom anymore.
+        s.scroll(Scroll::DeltaRow(-1));
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL\n4ABCD");
+        }
+
+        // Next, we scroll back down by 1, this grows the scrollback but we
+        // shouldn't move.
+        s.cursor_down_scroll().unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL\n4ABCD");
+        }
+
+        // Scroll again, this clears scrollback so we should move viewports
+        // but still see the same thing since our original view fits.
+        s.cursor_down_scroll().unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL\n4ABCD");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: scrolling when viewport is pruned"
+    #[test]
+    fn screen_scrolling_when_viewport_is_pruned() {
+        let mut s = mkscreen(215, 3, 1);
+
+        // Write some to create scrollback and move back into our scrollback.
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL\n").unwrap();
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+        s.scroll(Scroll::DeltaRow(-2));
+
+        // Our viewport is now somewhere pinned. Create so much scrollback
+        // that we prune it.
+        s.test_write_string(b"\n").unwrap();
+        for _ in 0..1000 {
+            s.test_write_string(b"1ABCD\n2EFGH\n3IJKL\n").unwrap();
+        }
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+
+        {
+            assert_eq!(
+                point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+                s.pages
+                    .point_from_pin(
+                        point::Tag::Screen,
+                        s.pages.get_top_left(point::Tag::Viewport)
+                    )
+                    .unwrap()
+            );
+        }
+        s.deinit();
+    }
+
+    // test "Screen: scroll above same page"
+    #[test]
+    fn screen_scroll_above_same_page() {
+        let mut s = mkscreen(10, 3, 10);
+        s.set_attribute(crate::sgr::Attribute::DirectColorBg(crate::color::RGB {
+            r: 155,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+        s.cursor_absolute(0, 1);
+        s.pages.clear_dirty();
+
+        // At this point:
+        //  +-------------+ ACTIVE
+        //   +----------+ : = PAGE 0
+        // 0 |1ABCD00000| | 0
+        // 1 |2EFGH00000| | 1
+        //   :^         : : = PIN 0
+        // 2 |3IJKL00000| | 2
+        //   +----------+ :
+        //  +-------------+
+
+        s.cursor_scroll_above().unwrap();
+
+        //   +----------+ = PAGE 0
+        // 0 |1ABCD00000|
+        //  +-------------+ ACTIVE
+        // 1 |2EFGH00000| | 0
+        // 2 |          | | 1
+        //   :^         : : = PIN 0
+        // 3 |3IJKL00000| | 2
+        //   +----------+ :
+        //  +-------------+
+
+        // try s.pages.diagram(std.io.getStdErr().writer());
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n\n3IJKL");
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(pagepkg::CellRgb { r: 155, g: 0, b: 0 }, unsafe {
+                (*cell).content_color_rgb()
+            });
+        }
+
+        // Page 0 row 1 (active row 0) is dirty because the cursor moved off of it.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 0 })));
+        // Page 0 row 2 (active row 1) is dirty because it was cleared.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 1 })));
+        // Page 0 row 3 (active row 2) is dirty because it's new.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 2 })));
+        s.deinit();
+    }
+
+    // test "Screen: scroll above same page but cursor on previous page"
+    #[test]
+    fn screen_scroll_above_same_page_but_cursor_on_previous_page() {
+        let mut s = mkscreen(10, 5, 10);
+
+        // We need to get the cursor to a new page
+        let first_page_size = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(true) };
+        for _ in 0..(first_page_size - 3) {
+            s.test_write_string(b"\n").unwrap();
+        }
+        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(false) };
+
+        s.set_attribute(crate::sgr::Attribute::DirectColorBg(crate::color::RGB {
+            r: 155,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        s.test_write_string(b"1A\n2B\n3C\n4D\n5E").unwrap();
+        s.cursor_absolute(0, 1);
+        s.pages.clear_dirty();
+
+        // Ensure we're still on the first page and have a second
+        assert!(std::ptr::eq(
+            unsafe { (*s.cursor.page_pin).node },
+            s.pages.pages.first
+        ));
+        assert!(!unsafe { (*s.pages.pages.first).next }.is_null());
+
+        // At this point:
+        //      +----------+ = PAGE 0
+        //  ... :          :
+        //     +-------------+ ACTIVE
+        // 4305 |1A00000000| | 0
+        // 4306 |2B00000000| | 1
+        //      :^         : : = PIN 0
+        // 4307 |3C00000000| | 2
+        //      +----------+ :
+        //      +----------+ : = PAGE 1
+        //    0 |4D00000000| | 3
+        //    1 |5E00000000| | 4
+        //      +----------+ :
+        //     +-------------+
+
+        s.cursor_scroll_above().unwrap();
+
+        //      +----------+ = PAGE 0
+        //  ... :          :
+        // 4305 |1A00000000|
+        //     +-------------+ ACTIVE
+        // 4306 |2B00000000| | 0
+        // 4307 |          | | 1
+        //      :^         : : = PIN 0
+        //      +----------+ :
+        //      +----------+ : = PAGE 1
+        //    0 |3C00000000| | 2
+        //    1 |4D00000000| | 3
+        //    2 |5E00000000| | 4
+        //      +----------+ :
+        //     +-------------+
+
+        // try s.pages.diagram(std.io.getStdErr().writer());
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2B\n\n3C\n4D\n5E");
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(pagepkg::CellRgb { r: 155, g: 0, b: 0 }, unsafe {
+                (*cell).content_color_rgb()
+            });
+        }
+
+        // Page 0's penultimate row is dirty because the cursor moved off of it.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 0 })));
+        // The rest of the rows are dirty because they've been modified or are new.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 1 })));
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 2 })));
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 3 })));
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 4 })));
+        s.deinit();
+    }
+
+    // test "Screen: scroll above same page but cursor on previous page last row"
+    #[test]
+    fn screen_scroll_above_same_page_but_cursor_on_previous_page_last_row() {
+        let mut s = mkscreen(10, 5, 10);
+
+        // We need to get the cursor to a new page
+        let first_page_size = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(true) };
+        for _ in 0..(first_page_size - 2) {
+            s.test_write_string(b"\n").unwrap();
+        }
+        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(false) };
+
+        s.set_attribute(crate::sgr::Attribute::DirectColorBg(crate::color::RGB {
+            r: 155,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        s.test_write_string(b"1A\n2B\n3C\n4D\n5E").unwrap();
+        s.cursor_absolute(0, 1);
+        s.pages.clear_dirty();
+
+        // Ensure we're still on the first page and have a second
+        assert!(std::ptr::eq(
+            unsafe { (*s.cursor.page_pin).node },
+            s.pages.pages.first
+        ));
+        assert!(!unsafe { (*s.pages.pages.first).next }.is_null());
+
+        // At this point:
+        //      +----------+ = PAGE 0
+        //  ... :          :
+        //     +-------------+ ACTIVE
+        // 4306 |1A00000000| | 0
+        // 4307 |2B00000000| | 1
+        //      :^         : : = PIN 0
+        //      +----------+ :
+        //      +----------+ : = PAGE 1
+        //    0 |3C00000000| | 2
+        //    1 |4D00000000| | 3
+        //    2 |5E00000000| | 4
+        //      +----------+ :
+        //     +-------------+
+
+        s.cursor_scroll_above().unwrap();
+
+        //      +----------+ = PAGE 0
+        //  ... :          :
+        // 4306 |1A00000000|
+        //     +-------------+ ACTIVE
+        // 4307 |2B00000000| | 0
+        //      +----------+ :
+        //      +----------+ : = PAGE 1
+        //    0 |          | | 1
+        //      :^         : : = PIN 0
+        //    1 |3C00000000| | 2
+        //    2 |4D00000000| | 3
+        //    3 |5E00000000| | 4
+        //      +----------+ :
+        //     +-------------+
+
+        // try s.pages.diagram(std.io.getStdErr().writer());
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2B\n\n3C\n4D\n5E");
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(pagepkg::CellRgb { r: 155, g: 0, b: 0 }, unsafe {
+                (*cell).content_color_rgb()
+            });
+        }
+
+        // Page 0's final row is dirty because the cursor moved off of it.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 0 })));
+        // Page 1's rows are all dirty because every row was moved.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 1 })));
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 2 })));
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 3 })));
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 4 })));
+
+        // Attempt to clear the style from the cursor and
+        // then assert the integrity of both of our pages.
+        //
+        // This catches a case of memory corruption where the cursor
+        // is moved between pages without accounting for style refs.
+        s.set_attribute(crate::sgr::Attribute::ResetBg).unwrap();
+        unsafe { (*s.pages.pages.first).data.assert_integrity() };
+        unsafe { (*s.pages.pages.last).data.assert_integrity() };
+        s.deinit();
+    }
+
+    // test "Screen: scroll above creates new page"
+    #[test]
+    fn screen_scroll_above_creates_new_page() {
+        let mut s = mkscreen(10, 3, 10);
+
+        // We need to get the cursor to a new page
+        let first_page_size = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(true) };
+        for _ in 0..(first_page_size - 3) {
+            s.test_write_string(b"\n").unwrap();
+        }
+        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(false) };
+
+        s.set_attribute(crate::sgr::Attribute::DirectColorBg(crate::color::RGB {
+            r: 155,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+        s.cursor_absolute(0, 1);
+        s.pages.clear_dirty();
+
+        // Ensure we're still on the first page
+        assert!(std::ptr::eq(
+            unsafe { (*s.cursor.page_pin).node },
+            s.pages.pages.first
+        ));
+
+        // At this point:
+        //      +----------+ = PAGE 0
+        //  ... :          :
+        //     +-------------+ ACTIVE
+        // 4305 |1ABCD00000| | 0
+        // 4306 |2EFGH00000| | 1
+        //      :^         : : = PIN 0
+        // 4307 |3IJKL00000| | 2
+        //      +----------+ :
+        //     +-------------+
+        s.cursor_scroll_above().unwrap();
+
+        //      +----------+ = PAGE 0
+        //  ... :          :
+        // 4305 |1ABCD00000|
+        //     +-------------+ ACTIVE
+        // 4306 |2EFGH00000| | 0
+        // 4307 |          | | 1
+        //      :^         : : = PIN 0
+        //      +----------+ :
+        //      +----------+ : = PAGE 1
+        //    0 |3IJKL00000| | 2
+        //      +----------+ :
+        //     +-------------+
+
+        // try s.pages.diagram(std.io.getStdErr().writer());
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n\n3IJKL");
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(pagepkg::CellRgb { r: 155, g: 0, b: 0 }, unsafe {
+                (*cell).content_color_rgb()
+            });
+        }
+
+        // Page 0's penultimate row is dirty because the cursor moved off of it.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 0 })));
+        // Page 0's final row is dirty because it was cleared.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 1 })));
+        // Page 1's row is dirty because it's new.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 2 })));
+        s.deinit();
+    }
+
+    // test "Screen: scroll above with cursor on non-final row"
+    #[test]
+    fn screen_scroll_above_with_cursor_on_non_final_row() {
+        let mut s = mkscreen(10, 4, 10);
+
+        // Get the cursor to be 2 rows above a new page
+        let first_page_size = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(true) };
+        for _ in 0..(first_page_size - 3) {
+            s.test_write_string(b"\n").unwrap();
+        }
+        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(false) };
+
+        // Write 3 lines of text, forcing the last line into the first
+        // row of a new page. Move our cursor onto the previous page.
+        s.set_attribute(crate::sgr::Attribute::DirectColorBg(crate::color::RGB {
+            r: 155,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        s.test_write_string(b"1AB\n2BC\n3DE\n4FG").unwrap();
+        s.cursor_absolute(0, 1);
+        s.pages.clear_dirty();
+
+        // Ensure we're still on the first page. So our cursor is on the first
+        // page but we have two pages of data.
+        assert!(std::ptr::eq(
+            unsafe { (*s.cursor.page_pin).node },
+            s.pages.pages.first
+        ));
+
+        //      +----------+ = PAGE 0
+        //  ... :          :
+        //     +-------------+ ACTIVE
+        // 4305 |1AB0000000| | 0
+        // 4306 |2BC0000000| | 1
+        //      :^         : : = PIN 0
+        // 4307 |3DE0000000| | 2
+        //      +----------+ :
+        //      +----------+ : = PAGE 1
+        //    0 |4FG0000000| | 3
+        //      +----------+ :
+        //     +-------------+
+        s.cursor_scroll_above().unwrap();
+
+        //     +----------+ = PAGE 0
+        //  ... :          :
+        // 4305 |1AB0000000|
+        //     +-------------+ ACTIVE
+        // 4306 |2BC0000000| | 0
+        // 4307 |          | | 1
+        //      :^         : : = PIN 0
+        //      +----------+ :
+        //      +----------+ : = PAGE 1
+        //    0 |3DE0000000| | 2
+        //    1 |4FG0000000| | 3
+        //      +----------+ :
+        //     +-------------+
+        // try s.pages.diagram(std.io.getStdErr().writer());
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2BC\n\n3DE\n4FG");
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(pagepkg::CellRgb { r: 155, g: 0, b: 0 }, unsafe {
+                (*cell).content_color_rgb()
+            });
+        }
+
+        // Page 0's penultimate row is dirty because the cursor moved off of it.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 0 })));
+        // Page 0's final row is dirty because it was cleared.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 1 })));
+        // Page 1's row is dirty because it's new.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 2 })));
+        s.deinit();
+    }
+
+    // test "Screen: scroll above no scrollback bottom of page"
+    #[test]
+    fn screen_scroll_above_no_scrollback_bottom_of_page() {
+        let mut s = mkscreen(10, 3, 0);
+
+        let first_page_size = unsafe { (*s.pages.pages.first).data.capacity.rows };
+        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(true) };
+        for _ in 0..(first_page_size - 3) {
+            s.test_write_string(b"\n").unwrap();
+        }
+        unsafe { (*s.pages.pages.first).data.pause_integrity_checks(false) };
+
+        s.set_attribute(crate::sgr::Attribute::DirectColorBg(crate::color::RGB {
+            r: 155,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+        s.cursor_absolute(0, 1);
+        s.pages.clear_dirty();
+
+        // At this point:
+        //  +-------------+ ACTIVE
+        //   +----------+ : = PAGE 0
+        // 0 |1ABCD00000| | 0
+        // 1 |2EFGH00000| | 1
+        //   :^         : : = PIN 0
+        // 2 |3IJKL00000| | 2
+        //   +----------+ :
+        //  +-------------+
+
+        s.cursor_scroll_above().unwrap();
+
+        //   +----------+ = PAGE 0
+        // 0 |1ABCD00000|
+        //  +-------------+ ACTIVE
+        // 1 |2EFGH00000| | 0
+        // 2 |          | | 1
+        //   :^         : : = PIN 0
+        // 3 |3IJKL00000| | 2
+        //   +----------+ :
+        //  +-------------+
+
+        //try s.pages.diagram(std.io.getStdErr().writer());
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n\n3IJKL");
+        }
+        {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(pagepkg::CellRgb { r: 155, g: 0, b: 0 }, unsafe {
+                (*cell).content_color_rgb()
+            });
+        }
+
+        // Page 0 row 1 (active row 0) is dirty because the cursor moved off of it.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 0 })));
+        // Page 0 row 2 (active row 1) is dirty because it was cleared.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 1 })));
+        // Page 0 row 3 (active row 2) is dirty because it is new.
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 2 })));
+        s.deinit();
+    }
+
+    // test "Screen: select replaces existing pins"
+    #[test]
+    fn screen_select_replaces_existing_pins() {
+        let mut s = mkscreen(10, 10, 0);
+        s.test_write_string(b"ABC  DEF\n 123\n456").unwrap();
+
+        let tracked = s.pages.count_tracked_pins();
+        s.select(Some(Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 3, y: 0 }))
+                .unwrap(),
+            false,
+        )))
+        .unwrap();
+        assert_eq!(tracked + 2, s.pages.count_tracked_pins());
+
+        // Replacing the selection must untrack the prior selection's pins
+        // rather than leak them.
+        s.select(Some(Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 2, y: 1 }))
+                .unwrap(),
+            false,
+        )))
+        .unwrap();
+        assert_eq!(tracked + 2, s.pages.count_tracked_pins());
+        s.deinit();
+    }
+
+    // test "Screen: hyperlink reuse"
+    #[test]
+    fn screen_hyperlink_reuse() {
+        let mut s = mkscreen(5, 5, 0);
+
+        assert!(s.cursor.hyperlink_id == 0);
+        {
+            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            assert_eq!(0usize, page.hyperlink_set.count());
+        }
+
+        // Use it for the first time
+        s.start_hyperlink(b"http://example.com", None).unwrap();
+        assert!(s.cursor.hyperlink_id != 0);
+        let id = s.cursor.hyperlink_id;
+
+        // Reuse the same hyperlink, expect we have the same ID
+        s.start_hyperlink(b"http://example.com", None).unwrap();
+        assert_eq!(id, s.cursor.hyperlink_id);
+        {
+            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            assert_eq!(1usize, page.hyperlink_set.count());
+        }
+
+        s.end_hyperlink();
+        assert!(s.cursor.hyperlink_id == 0);
+        {
+            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            assert_eq!(0usize, page.hyperlink_set.count());
+        }
+        s.deinit();
+    }
+
+    // test "Screen: hyperlink cursor state on resize"
+    #[test]
+    fn screen_hyperlink_cursor_state_on_resize() {
+        // This test depends on underlying PageList implementation so
+        // it may be invalid one day. It's here to document/verify the
+        // current behavior.
+
+        let mut s = mkscreen(5, 10, 0);
+
+        // Start a hyperlink
+        s.start_hyperlink(b"http://example.com", None).unwrap();
+        assert!(s.cursor.hyperlink_id != 0);
+        {
+            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            assert_eq!(1usize, page.hyperlink_set.count());
+        }
+
+        // Resize. Any column growth will trigger a page to be reallocated.
+        s.resize(Resize {
+            cols: 10,
+            rows: 10,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::False,
+        })
+        .unwrap();
+        assert!(s.cursor.hyperlink_id != 0);
+        {
+            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            assert_eq!(1usize, page.hyperlink_set.count());
+        }
+
+        s.end_hyperlink();
+        assert!(s.cursor.hyperlink_id == 0);
+        {
+            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            assert_eq!(0usize, page.hyperlink_set.count());
+        }
+        s.deinit();
+    }
+
+    // test "Screen: cursorSetHyperlink OOM + URI too large for string alloc"
+    #[test]
+    fn screen_cursor_set_hyperlink_oom_uri_too_large_for_string_alloc() {
+        let mut s = mkscreen(80, 24, 0);
+
+        // Start a hyperlink with a URI that just barely fits in the string alloc.
+        // This will ensure that additional string alloc space is needed for the
+        // redundant copy of the URI when the page is re-alloced.
+        let uri = vec![b'a'; pagepkg::std_capacity().string_bytes as usize - 8];
+        s.start_hyperlink(&uri, None).unwrap();
+
+        // Figure out how many cells should can have hyperlinks in this page,
+        // and write twice that number, to guarantee the capacity needs to be
+        // increased at some point.
+        let base_capacity = unsafe { (*(*s.cursor.page_pin).node).data.hyperlink_capacity() };
+        let base_string_bytes = unsafe { (*(*s.cursor.page_pin).node).data.capacity.string_bytes };
+        for _ in 0..(base_capacity * 2) {
+            s.cursor_set_hyperlink().unwrap();
+            if s.cursor.x >= s.pages.cols - 1 {
+                s.cursor_down_or_scroll().unwrap();
+                s.cursor_horizontal_absolute(0);
+            } else {
+                s.cursor_right(1);
+            }
+        }
+
+        // Make sure the capacity really did increase.
+        assert!(base_capacity < unsafe { (*(*s.cursor.page_pin).node).data.hyperlink_capacity() });
+        // And that our string_bytes increased as well.
+        assert!(
+            base_string_bytes < unsafe { (*(*s.cursor.page_pin).node).data.capacity.string_bytes }
+        );
+        s.deinit();
+    }
+
+    // test "Screen: increaseCapacity cursor style ref count preserved"
+    #[test]
+    fn screen_increase_capacity_cursor_style_ref_count_preserved() {
+        let mut s = mkscreen(5, 5, 0);
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.test_write_string(b"1ABCD").unwrap();
+
+        // We should have one page and it should be our cursor page
+        assert!(std::ptr::eq(s.pages.pages.first, s.pages.pages.last));
+        assert!(std::ptr::eq(s.pages.pages.first, unsafe {
+            (*s.cursor.page_pin).node
+        }));
+
+        let old_style = s.cursor.style;
+
+        {
+            let page = unsafe { &(*s.pages.pages.last).data };
+            // 5 chars + cursor = 6 refs
+            assert_eq!(6, unsafe {
+                let base = page.memory_ptr();
+                page.styles.ref_count(base, s.cursor.style_id)
+            });
+        }
+
+        // This forces the page to change via increaseCapacity.
+        let new_node = s
+            .increase_capacity(
+                unsafe { (*s.cursor.page_pin).node },
+                Some(pagelist::grow::IncreaseCapacity::GraphemeBytes),
+            )
+            .unwrap();
+
+        // Cursor's page_pin should now point to the new node
+        assert!(std::ptr::eq(unsafe { (*s.cursor.page_pin).node }, new_node));
+
+        // Verify cursor's page_cell and page_row are correctly reloaded from the pin
+        let page_rac = unsafe { (*s.cursor.page_pin).row_and_cell() };
+        assert!(std::ptr::eq(s.cursor.page_row, page_rac.row));
+        assert!(std::ptr::eq(s.cursor.page_cell, page_rac.cell));
+
+        // Style should be preserved
+        assert!(old_style.eql(&s.cursor.style));
+        assert!(s.cursor.style_id != style::DEFAULT_ID);
+
+        // After increaseCapacity, the 5 chars are cloned (5 refs) and
+        // the cursor's style is re-added (1 ref) = 6 total.
+        {
+            let page = unsafe { &(*s.pages.pages.last).data };
+            let ref_count = unsafe {
+                let base = page.memory_ptr();
+                page.styles.ref_count(base, s.cursor.style_id)
+            };
+            assert_eq!(6, ref_count);
+        }
+        s.deinit();
+    }
+
+    // test "Screen: increaseCapacity cursor hyperlink ref count preserved"
+    #[test]
+    fn screen_increase_capacity_cursor_hyperlink_ref_count_preserved() {
+        let mut s = mkscreen(5, 5, 0);
+        s.start_hyperlink(b"https://example.com/", None).unwrap();
+        s.test_write_string(b"1ABCD").unwrap();
+
+        // We should have one page and it should be our cursor page
+        assert!(std::ptr::eq(s.pages.pages.first, s.pages.pages.last));
+        assert!(std::ptr::eq(s.pages.pages.first, unsafe {
+            (*s.cursor.page_pin).node
+        }));
+
+        {
+            let page = unsafe { &(*s.pages.pages.last).data };
+            // Cursor has the hyperlink active = 1 count in hyperlink_set
+            assert_eq!(1usize, page.hyperlink_set.count());
+            assert!(s.cursor.hyperlink_id != 0);
+            assert!(s.cursor.hyperlink.is_some());
+        }
+
+        // This forces the page to change via increaseCapacity.
+        let _ = s
+            .increase_capacity(
+                unsafe { (*s.cursor.page_pin).node },
+                Some(pagelist::grow::IncreaseCapacity::GraphemeBytes),
+            )
+            .unwrap();
+
+        // Hyperlink should be preserved with correct URI
+        assert!(s.cursor.hyperlink.is_some());
+        assert!(s.cursor.hyperlink_id != 0);
+        assert_eq!(
+            b"https://example.com/".as_slice(),
+            unsafe { &(*s.cursor.hyperlink.unwrap()).uri }.as_slice()
+        );
+
+        // After increaseCapacity, the hyperlink is re-added to the new page.
+        {
+            let page = unsafe { &(*s.pages.pages.last).data };
+            assert_eq!(1usize, page.hyperlink_set.count());
+        }
+        s.deinit();
+    }
+
+    // test "Screen: increaseCapacity cursor with both style and hyperlink preserved"
+    #[test]
+    fn screen_increase_capacity_cursor_with_both_style_and_hyperlink_preserved() {
+        let mut s = mkscreen(5, 5, 0);
+
+        // Set both a non-default style AND an active hyperlink.
+        // Write one character first with bold to mark the row as styled,
+        // then start the hyperlink and write more characters.
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.start_hyperlink(b"https://example.com/", None).unwrap();
+        s.test_write_string(b"1ABCD").unwrap();
+
+        // We should have one page and it should be our cursor page
+        assert!(std::ptr::eq(s.pages.pages.first, s.pages.pages.last));
+        assert!(std::ptr::eq(s.pages.pages.first, unsafe {
+            (*s.cursor.page_pin).node
+        }));
+
+        let old_style = s.cursor.style;
+
+        {
+            let page = unsafe { &(*s.pages.pages.last).data };
+            // 5 chars + cursor = 6 refs for bold style
+            assert_eq!(6, unsafe {
+                let base = page.memory_ptr();
+                page.styles.ref_count(base, s.cursor.style_id)
+            });
+            // Cursor has the hyperlink active = 1 count in hyperlink_set
+            assert_eq!(1usize, page.hyperlink_set.count());
+            assert!(s.cursor.style_id != style::DEFAULT_ID);
+            assert!(s.cursor.hyperlink_id != 0);
+            assert!(s.cursor.hyperlink.is_some());
+        }
+
+        // This forces the page to change via increaseCapacity.
+        let _ = s
+            .increase_capacity(
+                unsafe { (*s.cursor.page_pin).node },
+                Some(pagelist::grow::IncreaseCapacity::GraphemeBytes),
+            )
+            .unwrap();
+
+        // Style should be preserved
+        assert!(old_style.eql(&s.cursor.style));
+        assert!(s.cursor.style_id != style::DEFAULT_ID);
+
+        // Hyperlink should be preserved with correct URI
+        assert!(s.cursor.hyperlink.is_some());
+        assert!(s.cursor.hyperlink_id != 0);
+        assert_eq!(
+            b"https://example.com/".as_slice(),
+            unsafe { &(*s.cursor.hyperlink.unwrap()).uri }.as_slice()
+        );
+
+        // After increaseCapacity, both style and hyperlink are re-added to the new page.
+        {
+            let page = unsafe { &(*s.pages.pages.last).data };
+            let ref_count = unsafe {
+                let base = page.memory_ptr();
+                page.styles.ref_count(base, s.cursor.style_id)
+            };
+            assert_eq!(6, ref_count);
+            assert_eq!(1usize, page.hyperlink_set.count());
+        }
+        s.deinit();
+    }
+
+    // test "Screen: increaseCapacity non-cursor page returns early"
+    #[test]
+    fn screen_increase_capacity_non_cursor_page_returns_early() {
+        // Test that calling increaseCapacity on a page that is NOT the cursor's
+        // page properly delegates to pages.increaseCapacity without doing the
+        // extra cursor accounting (style/hyperlink re-adding).
+        let mut s = mkscreen(80, 24, 10000);
+
+        // Set up a custom style and hyperlink on the cursor
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.start_hyperlink(b"https://example.com/", None).unwrap();
+        s.test_write_string(b"Hello").unwrap();
+
+        // Store cursor state before growing pages
+        let old_style = s.cursor.style;
+        let old_style_id = s.cursor.style_id;
+        let old_hyperlink = s.cursor.hyperlink;
+        let old_hyperlink_id = s.cursor.hyperlink_id;
+
+        // The cursor is on the first (and only) page
+        assert!(std::ptr::eq(s.pages.pages.first, s.pages.pages.last));
+        assert!(std::ptr::eq(
+            unsafe { (*s.cursor.page_pin).node },
+            s.pages.pages.first
+        ));
+
+        // Grow pages until we have multiple pages. The cursor's pin stays on
+        // the first page since we're just adding rows.
+        let first_page_node = s.pages.pages.first;
+        unsafe { (*first_page_node).data.pause_integrity_checks(true) };
+        let n_grow =
+            unsafe { (*first_page_node).data.capacity.rows - (*first_page_node).data.size.rows };
+        for _ in 0..n_grow {
+            let _ = s.pages.grow().unwrap();
+        }
+        unsafe { (*first_page_node).data.pause_integrity_checks(false) };
+        let _ = s.pages.grow().unwrap();
+
+        // Now we have two pages
+        assert!(!std::ptr::eq(s.pages.pages.first, s.pages.pages.last));
+        let second_page = s.pages.pages.last;
+
+        // Cursor should still be on the first page (where it was created)
+        assert!(std::ptr::eq(
+            unsafe { (*s.cursor.page_pin).node },
+            s.pages.pages.first
+        ));
+        assert!(!std::ptr::eq(
+            unsafe { (*s.cursor.page_pin).node },
+            second_page
+        ));
+
+        let second_page_styles_cap = unsafe { (*second_page).data.capacity.styles };
+        let cursor_page_styles_cap = unsafe { (*(*s.cursor.page_pin).node).data.capacity.styles };
+
+        // Call increaseCapacity on the second page (NOT the cursor's page)
+        let new_second_page = s
+            .increase_capacity(second_page, Some(pagelist::grow::IncreaseCapacity::Styles))
+            .unwrap();
+
+        // The second page should have increased capacity
+        assert_eq!(second_page_styles_cap * 2, unsafe {
+            (*new_second_page).data.capacity.styles
+        });
+
+        // The cursor's page (first page) should be unchanged
+        assert_eq!(cursor_page_styles_cap, unsafe {
+            (*(*s.cursor.page_pin).node).data.capacity.styles
+        });
+
+        // Cursor state should be completely unchanged since we didn't touch its page
+        assert!(old_style.eql(&s.cursor.style));
+        assert_eq!(old_style_id, s.cursor.style_id);
+        assert_eq!(old_hyperlink, s.cursor.hyperlink);
+        assert_eq!(old_hyperlink_id, s.cursor.hyperlink_id);
+
+        // Verify hyperlink is still valid
+        assert!(s.cursor.hyperlink.is_some());
+        assert_eq!(
+            b"https://example.com/".as_slice(),
+            unsafe { &(*s.cursor.hyperlink.unwrap()).uri }.as_slice()
+        );
+        s.deinit();
+    }
+
+    // test "Screen: cursorDown to page with insufficient capacity"
+    #[test]
+    fn screen_cursor_down_to_page_with_insufficient_capacity() {
+        // Regression test for https://github.com/ghostty-org/ghostty/issues/10282
+        //
+        // This test exposes a use-after-realloc bug in cursorDown (and similar
+        // cursor movement functions). The bug pattern:
+        //
+        // 1. cursorDown creates a by-value copy of the pin via page_pin.down(n)
+        // 2. cursorChangePin is called, which may trigger adjustCapacity
+        //    if the target page's style map is full
+        // 3. adjustCapacity frees the old page and creates a new one
+        // 4. The local pin copy still points to the freed page
+        // 5. rowAndCell() on the stale pin accesses freed memory
+
+        // Small screen to make page boundary crossing easy to set up
+        let mut s = mkscreen(10, 3, 1);
+
+        // Scroll down enough to create a second page
+        let start_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*s.pages.pages.last).data) };
+        let rem = unsafe { (*start_page).capacity.rows };
+        unsafe { (*start_page).pause_integrity_checks(true) };
+        for _ in 0..rem {
+            s.cursor_down_or_scroll().unwrap();
+        }
+        unsafe { (*start_page).pause_integrity_checks(false) };
+
+        // Cursor should now be on a new page
+        let new_page: *mut Page =
+            unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        assert!(!std::ptr::eq(start_page, new_page));
+
+        // Fill new_page's style map to capacity. When we move INTO this page
+        // with a style set, adjustCapacity will be triggered.
+        {
+            unsafe { (*new_page).pause_integrity_checks(true) };
+
+            let mut n: u32 = 1;
+            loop {
+                let st = style::Style {
+                    bg_color: style::Color::Rgb(crate::color::RGB {
+                        r: (n & 0xFF) as u8,
+                        g: ((n >> 8) & 0xFF) as u8,
+                        b: ((n >> 16) & 0xFF) as u8,
+                    }),
+                    fg_color: style::Color::None,
+                    underline_color: style::Color::None,
+                    flags: style::Flags::default(),
+                };
+                let res = unsafe {
+                    let base = (*new_page).memory_ptr();
+                    (*new_page).styles.add(base, st)
+                };
+                if res.is_ok() {
+                    n += 1;
+                } else {
+                    break;
+                }
+            }
+
+            unsafe { (*new_page).pause_integrity_checks(false) };
+            unsafe { (*new_page).assert_integrity() };
+        }
+
+        // Move cursor to start of active area and set a style
+        s.cursor_absolute(0, 0);
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        assert!(s.cursor.style.flags.bold);
+        assert!(s.cursor.style_id != style::DEFAULT_ID);
+
+        // Find the row just before the page boundary
+        let mut found = false;
+        for row in 0..(s.pages.rows - 1) {
+            s.cursor_absolute(0, row);
+            let cur_node = unsafe { (*s.cursor.page_pin).node };
+            if let Some(next_pin) = unsafe { (*s.cursor.page_pin).down(1) } {
+                if !std::ptr::eq(next_pin.node, cur_node) {
+                    // Cursor is at 'row', moving down crosses to new_page
+                    assert!(std::ptr::eq(
+                        unsafe { core::ptr::addr_of!((*next_pin.node).data) },
+                        new_page as *const Page
+                    ));
+
+                    // This cursorDown triggers the bug: the local page_pin copy
+                    // becomes stale after adjustCapacity, causing rowAndCell()
+                    // to access freed memory.
+                    s.cursor_down(1);
+
+                    // If the fix is applied, verify correct state
+                    assert!(s.cursor.y == row + 1);
+                    assert!(s.cursor.style.flags.bold);
+
+                    found = true;
+                    break;
+                }
+            }
+        }
+        // PORT NOTE: the reference's `else { try testing.expect(false); }` arm
+        // on the `for ... else` (the "Didn't find boundary" failure) is mirrored
+        // by this assert on the loop-completed-without-break flag.
+        if !found {
+            // Didn't find boundary
+            assert!(found);
+        }
+        s.deinit();
+    }
+
+    // test "Screen setAttribute increases capacity when style map is full"
+    #[test]
+    fn screen_set_attribute_increases_capacity_when_style_map_is_full() {
+        // Tests that setAttribute succeeds when the style map is full by
+        // increasing page capacity. When capacity is at max and increaseCapacity
+        // returns OutOfSpace, manualStyleUpdate will split the page instead.
+
+        // Use a small screen with multiple rows
+        let mut s = mkscreen(10, 5, 10);
+
+        // Write content to multiple rows
+        s.test_write_string(b"line1\nline2\nline3\nline4\nline5")
+            .unwrap();
+
+        // Get the page and fill its style map to capacity
+        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        let original_styles_capacity = unsafe { (*page).capacity.styles };
+
+        // Fill the style map to capacity using the StyleSet's layout capacity
+        // which accounts for the load factor
+        {
+            unsafe { (*page).pause_integrity_checks(true) };
+
+            let max_items = unsafe { (*page).styles.layout.cap };
+            let mut n: usize = 1;
+            while n < max_items {
+                let st = style::Style {
+                    bg_color: style::Color::Rgb(crate::color::RGB {
+                        r: (n & 0xFF) as u8,
+                        g: ((n >> 8) & 0xFF) as u8,
+                        b: ((n >> 16) & 0xFF) as u8,
+                    }),
+                    fg_color: style::Color::None,
+                    underline_color: style::Color::None,
+                    flags: style::Flags::default(),
+                };
+                let res = unsafe {
+                    let base = (*page).memory_ptr();
+                    (*page).styles.add(base, st)
+                };
+                if res.is_err() {
+                    break;
+                }
+                n += 1;
+            }
+
+            unsafe { (*page).pause_integrity_checks(false) };
+            unsafe { (*page).assert_integrity() };
+        }
+
+        // Now try to set a new unique attribute that would require a new style slot
+        // This should succeed by increasing capacity (or splitting if at max capacity)
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+
+        // The style should have been applied (bold flag set)
+        assert!(s.cursor.style.flags.bold);
+
+        // The cursor should have a valid non-default style_id
+        assert!(s.cursor.style_id != style::DEFAULT_ID);
+
+        // Either the capacity increased or the page was split/changed
+        let current_page: *mut Page =
+            unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        let capacity_increased =
+            unsafe { (*current_page).capacity.styles } > original_styles_capacity;
+        let page_changed = !std::ptr::eq(current_page, page);
+        assert!(capacity_increased || page_changed);
+        s.deinit();
+    }
+
+    // test "Screen setAttribute splits page on OutOfSpace at max styles"
+    #[test]
+    fn screen_set_attribute_splits_page_on_out_of_space_at_max_styles() {
+        let mut s = mkscreen(10, 10, 0);
+
+        // Write content to multiple rows so we have something to split
+        s.test_write_string(b"line1\nline2\nline3\nline4\nline5")
+            .unwrap();
+
+        // Remember the original node
+        let original_node = unsafe { (*s.cursor.page_pin).node };
+
+        // Increase the page's style capacity to max by repeatedly calling increaseCapacity
+        // Use Screen.increaseCapacity to properly maintain cursor state
+        let max_styles = size::CellCountInt::MAX;
+        while unsafe { (*(*s.cursor.page_pin).node).data.capacity.styles } < max_styles {
+            if s.increase_capacity(
+                unsafe { (*s.cursor.page_pin).node },
+                Some(pagelist::grow::IncreaseCapacity::Styles),
+            )
+            .is_err()
+            {
+                break;
+            }
+        }
+
+        // Get the page reference after increaseCapacity - cursor may have moved
+        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        assert_eq!(max_styles, unsafe { (*page).capacity.styles });
+
+        // Fill the style map to capacity using the StyleSet's layout capacity
+        // which accounts for the load factor
+        {
+            unsafe { (*page).pause_integrity_checks(true) };
+
+            let max_items = unsafe { (*page).styles.layout.cap };
+            let mut n: usize = 1;
+            while n < max_items {
+                let st = style::Style {
+                    bg_color: style::Color::Rgb(crate::color::RGB {
+                        r: (n & 0xFF) as u8,
+                        g: ((n >> 8) & 0xFF) as u8,
+                        b: ((n >> 16) & 0xFF) as u8,
+                    }),
+                    fg_color: style::Color::None,
+                    underline_color: style::Color::None,
+                    flags: style::Flags::default(),
+                };
+                let res = unsafe {
+                    let base = (*page).memory_ptr();
+                    (*page).styles.add(base, st)
+                };
+                if res.is_err() {
+                    break;
+                }
+                n += 1;
+            }
+
+            unsafe { (*page).pause_integrity_checks(false) };
+            unsafe { (*page).assert_integrity() };
+        }
+
+        // Track the node before setAttribute
+        let node_before_set = unsafe { (*s.cursor.page_pin).node };
+
+        // Now try to set a new unique attribute that would require a new style slot
+        // At max capacity, increaseCapacity will return OutOfSpace, triggering page split
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+
+        // The style should have been applied (bold flag set)
+        assert!(s.cursor.style.flags.bold);
+
+        // The cursor should have a valid non-default style_id
+        assert!(s.cursor.style_id != style::DEFAULT_ID);
+
+        // The page should have been split
+        let page_was_split = !std::ptr::eq(unsafe { (*s.cursor.page_pin).node }, node_before_set)
+            || !unsafe { (*node_before_set).next }.is_null()
+            || !unsafe { (*node_before_set).prev }.is_null()
+            || !std::ptr::eq(unsafe { (*s.cursor.page_pin).node }, original_node);
+        assert!(page_was_split);
         s.deinit();
     }
 }

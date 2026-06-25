@@ -74,42 +74,48 @@ scoped `formatter.zig` G3b → 0 missing.
 
 ## Deferred Screen.zig tests (not-yet-ported test bodies) — vt-11/vt-12 cluster
 
-From **vt-11 (Screen)** — 152 of 187 `Screen.zig` `test{}` blocks are ported; the
+~~From **vt-11 (Screen)** — 152 of 187 `Screen.zig` `test{}` blocks are ported; the
 remaining ~35 are scheduled, not dropped (R1). 23 of these are flagged by G3b as
-test-region "missing" (their inner comments come WITH the deferred test body).
-These are NOT kitty/TerminalFormatter tests; they are the
-`increaseCapacity`/`scroll-above`/`scrollback`/`hyperlink`/`setAttribute`-OOM edge
-tests whose production methods ARE ported but whose test fixtures/assertions land
-in a later Screen sub-batch (vt-11h)/vt-12. Each carries its inner comments, so its
-G3b "missing" inner comments are EXPECTED until the test is ported:
+test-region "missing"...~~ **RESOLVED (vt-12c-screen).** All 23 deferred
+`Screen.zig` test bodies below are ported as `#[test]`, assertion-for-assertion, in
+`crates/rustty-vt/src/screen.rs` (`mod tests`), each carrying its inner comments
+verbatim. The OOM/capacity edge tests drive `increaseCapacity`/`setAttribute`-split/
+`cursorSetHyperlink` via direct page-churn + style-map-fill fixtures (no tripwire
+needed — these exercise the real OutOfSpace path, not allocator fault-injection; the
+one tripwire-based alloc-failure test, `selectionString map allocation failure
+cleanup`, was already ported in vt-11d). The select-replaces-pins test uses
+`Selection`/`countTrackedPins`. 1394 → 1417 tests (no regression). Scoped
+`Screen.zig` G3b → **missing=0** (the prior residual). The 3 remaining production
+comments (the elided `std.valgrind.runningOnValgrind()` Valgrind-hook comments in
+`assertIntegrity`) are now preserved verbatim in the screen.rs PORT NOTE → G3b GREEN.
 
-- `Screen: cursorDown to page with insufficient capacity` (15)
-- `Screen setAttribute increases capacity when style map is full` (13)
-- `Screen: increaseCapacity non-cursor page returns early` (11)
-- `Screen: increaseCapacity cursor style ref count preserved` (6)
-- `Screen: increaseCapacity cursor with both style and hyperlink preserved` (5)
-- `Screen: increaseCapacity cursor hyperlink ref count preserved` (3)
-- `Screen setAttribute splits page on OutOfSpace at max styles` (6)
-- `Screen: cursorSetHyperlink OOM + URI too large for string alloc` (6)
-- `Screen: hyperlink cursor state on resize` (3)
-- `Screen: hyperlink reuse` (2)
-- `Screen: scrollback various cases` (5)
-- `Screen: scrollback doesn't move viewport if not at bottom` (4)
-- `Screen: scroll above same page but cursor on previous page last row` (5)
-- `Screen: scroll above same page` (4)
-- `Screen: scroll above with cursor on non-final row` (4)
-- `Screen: scroll above same page but cursor on previous page` (3)
-- `Screen: scroll above creates new page` (2)
-- `Screen: scroll above no scrollback bottom of page` (1)
-- `Screen: scroll down from 0` (1)
-- `Screen: scrolling` (3)
-- `Screen: scrolling when viewport is pruned` (2)
-- `Screen: scrolling with a single-row screen with scrollback` (1)
-- `Screen: select replaces existing pins` (1)
+- ~~`Screen: cursorDown to page with insufficient capacity` (15)~~ RESOLVED
+- ~~`Screen setAttribute increases capacity when style map is full` (13)~~ RESOLVED
+- ~~`Screen: increaseCapacity non-cursor page returns early` (11)~~ RESOLVED
+- ~~`Screen: increaseCapacity cursor style ref count preserved` (6)~~ RESOLVED
+- ~~`Screen: increaseCapacity cursor with both style and hyperlink preserved` (5)~~ RESOLVED
+- ~~`Screen: increaseCapacity cursor hyperlink ref count preserved` (3)~~ RESOLVED
+- ~~`Screen setAttribute splits page on OutOfSpace at max styles` (6)~~ RESOLVED
+- ~~`Screen: cursorSetHyperlink OOM + URI too large for string alloc` (6)~~ RESOLVED
+- ~~`Screen: hyperlink cursor state on resize` (3)~~ RESOLVED
+- ~~`Screen: hyperlink reuse` (2)~~ RESOLVED
+- ~~`Screen: scrollback various cases` (5)~~ RESOLVED
+- ~~`Screen: scrollback doesn't move viewport if not at bottom` (4)~~ RESOLVED
+- ~~`Screen: scroll above same page but cursor on previous page last row` (5)~~ RESOLVED
+- ~~`Screen: scroll above same page` (4)~~ RESOLVED
+- ~~`Screen: scroll above with cursor on non-final row` (4)~~ RESOLVED
+- ~~`Screen: scroll above same page but cursor on previous page` (3)~~ RESOLVED
+- ~~`Screen: scroll above creates new page` (2)~~ RESOLVED
+- ~~`Screen: scroll above no scrollback bottom of page` (1)~~ RESOLVED
+- ~~`Screen: scroll down from 0` (1)~~ RESOLVED
+- ~~`Screen: scrolling` (3)~~ RESOLVED
+- ~~`Screen: scrolling when viewport is pruned` (2)~~ RESOLVED
+- ~~`Screen: scrolling with a single-row screen with scrollback` (1)~~ RESOLVED
+- ~~`Screen: select replaces existing pins` (1)~~ RESOLVED
 
-**Acceptance gain:** porting these test bodies drives the Screen.zig test-region
-G3b "missing" to 0 (only the kitty-ImageStorage/Valgrind production deferrals above
-remain, EXPECTED until vt-12).
+**Acceptance gain (REALIZED):** porting these test bodies drove the Screen.zig
+test-region G3b "missing" to 0; with the Valgrind-hook comments now preserved
+verbatim, the full scoped Screen.zig G3b is GREEN (missing=0).
 
 ## Deferred to Dispatch/SIMD phase
 
