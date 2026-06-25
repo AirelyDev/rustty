@@ -131,11 +131,53 @@ if [ "$WITH_REFERENCE" = "1" ]; then
   fi
 fi
 
+# --- binding directed-edge assertion: rustty-font MUST NOT depend on rustty-vt ---
+# D1 (Option C, signed off): rustty-font is PURE and BELOW vt; apc/glyph in
+# rustty-vt deps rustty-font DIRECTLY. The reverse edge (font -> vt) would form
+# a cycle AND violate the layering contract, so we forbid it explicitly in EVERY
+# dependency table (prod, dev, build). Fail loudly if it is ever reintroduced.
 echo ""
-if [ "$RC" -eq 0 ]; then
+echo "--- layering assertion: rustty-font has NO rustty-vt edge (prod/dev/build) ---"
+FONT_TOML="$RUSTTY_ROOT/crates/rustty-font/Cargo.toml"
+EDGE_RC=0
+if [ ! -f "$FONT_TOML" ]; then
+  echo "BLOCKED: $FONT_TOML not found" >&2
+  EDGE_RC=2
+else
+  # match a dependency key `rustty-vt` (allow rustty_vt / quoting / whitespace),
+  # ignoring comment lines so the options.rs-style prose can mention it freely.
+  if "$PY" - "$FONT_TOML" <<'PYEOF'
+import re, sys
+path = sys.argv[1]
+bad = []
+with open(path, encoding="utf-8") as f:
+    for n, line in enumerate(f, 1):
+        s = line.split("#", 1)[0]  # drop trailing/whole-line comments
+        # a dependency declaration: `rustty-vt = ...` or `rustty_vt = ...`
+        if re.match(r'^\s*["\']?rustty[-_]vt["\']?\s*=', s):
+            bad.append((n, line.rstrip("\n")))
+if bad:
+    for n, l in bad:
+        print(f"  FORBIDDEN font->vt edge at line {n}: {l}", file=sys.stderr)
+    sys.exit(1)
+sys.exit(0)
+PYEOF
+  then
+    echo "  GREEN: rustty-font declares no rustty-vt dependency"
+  else
+    echo "RED: rustty-font declares a forbidden rustty-vt dependency (font is BELOW vt; D1)" >&2
+    EDGE_RC=1
+  fi
+fi
+
+echo ""
+if [ "$RC" -eq 0 ] && [ "$EDGE_RC" -eq 0 ]; then
   echo "GREEN: rustty crate graph is acyclic (G7)"
   exit 0
-else
+elif [ "$RC" -ne 0 ]; then
   echo "RED: rustty crate graph has a cross-crate cycle (G7)"
+  exit 1
+else
+  echo "RED: rustty-font->rustty-vt layering violation (G7)"
   exit 1
 fi

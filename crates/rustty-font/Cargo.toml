@@ -25,7 +25,6 @@ workspace = true
 doctest = false
 
 [dependencies]
-rustty-vt = { workspace = true }
 rustty-os = { workspace = true }
 rustty-datastruct = { workspace = true }
 rustty-util = { workspace = true }

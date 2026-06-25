@@ -444,7 +444,6 @@ dependencies = [
  "rustty-os",
  "rustty-render-types",
  "rustty-util",
- "rustty-vt",
 ]
 
 [[package]]
@@ -574,6 +573,7 @@ dependencies = [
  "allocator-api2",
  "libc",
  "rustty-datastruct",
+ "rustty-font",
  "rustty-lib",
  "rustty-os",
  "rustty-render-types",

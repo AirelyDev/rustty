@@ -35,6 +35,10 @@ imgui = []
 [dependencies]
 rustty-datastruct = { workspace = true }
 rustty-unicode = { workspace = true }
+# D1 (Option C): rustty-font is PURE and BELOW vt. apc/glyph deps the glyf
+# decoder DIRECTLY (mandatory decode, not a runtime hook). rustty-font must
+# NEVER gain a rustty-vt edge (prod or dev) — enforced by check_acyclic.sh.
+rustty-font = { workspace = true }
 rustty-simd = { workspace = true }
 rustty-os = { workspace = true }
 rustty-lib = { workspace = true }
