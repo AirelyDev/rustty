@@ -2546,6 +2546,11 @@ impl Terminal {
         }
     }
 
+    // TODO(qwerasd): `insertLines` and `deleteLines` are 99% identical,
+    // the majority of their logic can (and should) be abstracted in to
+    // a single shared helper function, probably on `Screen` not here.
+    // I'm just too lazy to do that rn :p
+
     /// Insert amount lines at the current cursor row. The contents of the line
     /// at the current cursor row and below (to the bottom-most line in the
     /// scrolling region) are shifted down by amount lines. The contents of the
