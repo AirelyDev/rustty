@@ -1909,12 +1909,225 @@ impl Terminal {
     /// some coherent state, since callers typically can't handle errors
     /// (since they're sending sequences via the pty).
     pub fn semantic_prompt(&mut self, cmd: osc::SemanticPrompt) -> Result<(), OutOfMemory> {
-        todo!()
+        use crate::osc::semantic_prompt::option;
+        use crate::osc::semantic_prompt::Action;
+        match cmd.action {
+            // try self.semanticPromptFreshLine();
+            Action::FreshLine => self.semantic_prompt_fresh_line()?,
+
+            Action::FreshLineNewPrompt => {
+                // "First do a fresh-line."
+                self.semantic_prompt_fresh_line()?;
+
+                // const screen: *Screen = self.screens.active;
+                let screen: *mut Screen = self.screens.active;
+
+                // "Subsequent text (until a OSC "133;B" or OSC "133;I" command)
+                // is a prompt string (as if followed by OSC 133;P;k=i\007)."
+                // screen.cursorSetSemanticContent(.{
+                //     .prompt = cmd.readOption(.prompt_kind) orelse .initial,
+                // });
+                unsafe {
+                    (*screen).cursor_set_semantic_content(
+                        crate::screen::SemanticContentArg::Prompt(
+                            cmd.read_option(option::PROMPT_KIND)
+                                .unwrap_or(osc::semantic_prompt::PromptKind::Initial),
+                        ),
+                    )
+                };
+
+                // This is a kitty-specific flag that notes that the shell
+                // is NOT capable of redraw. Redraw defaults to true so this
+                // usually just disables it, but either is possible.
+                // if (cmd.readOption(.redraw)) |v| {
+                //     self.flags.shell_redraws_prompt = v;
+                // }
+                if let Some(v) = cmd.read_option(option::REDRAW) {
+                    self.flags.shell_redraws_prompt = v;
+                }
+
+                // click: {
+                //     // Handle click_events as a priority over cl. click_events
+                //     // is another Kitty-specific extension that converts clicks
+                //     // within a prompt area to SGR mouse events and defers to the
+                //     // shell to handle them.
+                //     if (cmd.readOption(.click_events)) |v| {
+                //         screen.semantic_prompt.click = .{ .click_events = v };
+                //         break :click;
+                //     }
+                //
+                //     // If click_events was not set or disabled, fallback to `cl`.
+                //     if (cmd.readOption(.cl)) |v| {
+                //         screen.semantic_prompt.click = .{ .cl = v };
+                //     }
+                // }
+                #[allow(clippy::collapsible_else_if)]
+                if let Some(v) = cmd.read_option(option::CLICK_EVENTS) {
+                    unsafe {
+                        (*screen).semantic_prompt.click =
+                            crate::screen::SemanticClick::ClickEvents(v);
+                    }
+                } else {
+                    if let Some(v) = cmd.read_option(option::CL) {
+                        unsafe {
+                            (*screen).semantic_prompt.click = crate::screen::SemanticClick::Cl(v);
+                        }
+                    }
+                }
+
+                // The "aid" and "cl" options are also valid for this
+                // command but we don't yet handle these in any meaningful way.
+            }
+
+            Action::NewCommand => {
+                // Spec:
+                // Same as OSC "133;A" but may first implicitly terminate a
+                // previous command: if the options specify an aid and there
+                // is an active (open) command with matching aid, finish the
+                // innermost such command (as well as any other commands
+                // nested more deeply). If no aid is specified, treat as an
+                // aid whose value is the empty string.
+
+                // Ghostty:
+                // We don't currently do explicit command tracking in any way
+                // so there is no need to terminate prior commands. We just
+                // perform the `A` action.
+                // try self.semanticPrompt(.{
+                //     .action = .fresh_line_new_prompt,
+                //     .options_unvalidated = cmd.options_unvalidated,
+                // });
+                self.semantic_prompt(osc::SemanticPrompt {
+                    action: Action::FreshLineNewPrompt,
+                    options_unvalidated: cmd.options_unvalidated,
+                })?;
+            }
+
+            Action::PromptStart => {
+                // Explicit start of prompt. Optional after an A or N command.
+                // The k (kind) option specifies the type of prompt:
+                // regular primary prompt (k=i or default),
+                // right-side prompts (k=r), or prompts for continuation lines (k=c or k=s).
+                // self.screens.active.cursorSetSemanticContent(.{
+                //     .prompt = cmd.readOption(.prompt_kind) orelse .initial,
+                // });
+                let screen: *mut Screen = self.screens.active;
+                unsafe {
+                    (*screen).cursor_set_semantic_content(
+                        crate::screen::SemanticContentArg::Prompt(
+                            cmd.read_option(option::PROMPT_KIND)
+                                .unwrap_or(osc::semantic_prompt::PromptKind::Initial),
+                        ),
+                    )
+                };
+            }
+
+            Action::EndPromptStartInput => {
+                // End of prompt and start of user input, terminated by a OSC
+                // "133;C" or another prompt (OSC "133;P").
+                // self.screens.active.cursorSetSemanticContent(.{
+                //     .input = .clear_explicit,
+                // });
+                let screen: *mut Screen = self.screens.active;
+                unsafe {
+                    (*screen).cursor_set_semantic_content(crate::screen::SemanticContentArg::Input(
+                        crate::screen::SemanticContentInput::ClearExplicit,
+                    ))
+                };
+            }
+
+            Action::EndPromptStartInputTerminateEol => {
+                // End of prompt and start of user input, terminated by end-of-line.
+                // self.screens.active.cursorSetSemanticContent(.{
+                //     .input = .clear_eol,
+                // });
+                let screen: *mut Screen = self.screens.active;
+                unsafe {
+                    (*screen).cursor_set_semantic_content(crate::screen::SemanticContentArg::Input(
+                        crate::screen::SemanticContentInput::ClearEol,
+                    ))
+                };
+            }
+
+            Action::EndInputStartOutput => {
+                // "End of input, and start of output."
+                // self.screens.active.cursorSetSemanticContent(.output);
+                let screen: *mut Screen = self.screens.active;
+                unsafe {
+                    (*screen).cursor_set_semantic_content(crate::screen::SemanticContentArg::Output)
+                };
+
+                // If our current row is marked as a prompt and we're
+                // at column zero then we assume we're un-prompting. This
+                // is a heuristic to deal with fish, mostly. The issue that
+                // fish brings up is that it has no PS2 equivalent and its
+                // builtin OSC133 marking doesn't output continuation lines
+                // as k=s. So, we assume when we get a newline with a prompt
+                // cursor that the new line is also a prompt. But fish changes
+                // to output on the newline. So if we're at col 0 we just assume
+                // we're overwriting the prompt.
+                // if (self.screens.active.cursor.page_row.semantic_prompt != .none and
+                //     self.screens.active.cursor.x == 0)
+                // {
+                //     self.screens.active.cursor.page_row.semantic_prompt = .none;
+                // }
+                if unsafe { (*(*screen).cursor.page_row).semantic_prompt() }
+                    != pagepkg::SemanticPrompt::None
+                    && unsafe { (*screen).cursor.x } == 0
+                {
+                    unsafe {
+                        (*(*screen).cursor.page_row)
+                            .set_semantic_prompt(pagepkg::SemanticPrompt::None)
+                    };
+                }
+            }
+
+            Action::EndCommand => {
+                // From a terminal state perspective, this doesn't really do
+                // anything. Other terminals appear to do nothing here. I think
+                // its reasonable at this point to reset our semantic content
+                // state but the spec doesn't really say what to do.
+                // self.screens.active.cursorSetSemanticContent(.output);
+                let screen: *mut Screen = self.screens.active;
+                unsafe {
+                    (*screen).cursor_set_semantic_content(crate::screen::SemanticContentArg::Output)
+                };
+            }
+        }
+
+        Ok(())
     }
 
     // OSC 133;L
     fn semantic_prompt_fresh_line(&mut self) -> Result<(), OutOfMemory> {
-        todo!()
+        // const left_margin = if (self.screens.active.cursor.x < self.scrolling_region.left)
+        //     0
+        // else
+        //     self.scrolling_region.left;
+        let left_margin = if unsafe { (*self.screens.active).cursor.x } < self.scrolling_region.left
+        {
+            0
+        } else {
+            self.scrolling_region.left
+        };
+
+        // Spec: "If the cursor is the initial column (left, assuming
+        // left-to-right writing), do nothing" This specification is very under
+        // specified. We are taking the liberty to assume that in a left/right
+        // margin context, if the cursor is outside of the left margin, we treat
+        // it as being at the left margin for the purposes of this command.
+        // This is arbitrary. If someone has a better reasonable idea we can
+        // apply it.
+        // if (self.screens.active.cursor.x == left_margin) return;
+        if unsafe { (*self.screens.active).cursor.x } == left_margin {
+            return Ok(());
+        }
+
+        // self.carriageReturn();
+        self.carriage_return();
+        // try self.index();
+        self.index()?;
+
+        Ok(())
     }
 
     /// Returns true if the cursor is currently at a prompt. Another way to look
@@ -1923,7 +2136,29 @@ impl Terminal {
     ///
     /// If the shell integration doesn't exist, this will always return false.
     pub fn cursor_is_at_prompt(&mut self) -> bool {
-        todo!()
+        // If we're on the secondary screen, we're never at a prompt.
+        // if (self.screens.active_key == .alternate) return false;
+        if self.screens.active_key == crate::screen_set::Key::Alternate {
+            return false;
+        }
+
+        // If our page row is a prompt then we're always at a prompt
+        // const cursor: *const Screen.Cursor = &self.screens.active.cursor;
+        let cursor: *const crate::screen::Cursor = unsafe { &(*self.screens.active).cursor };
+        // if (cursor.page_row.semantic_prompt != .none) return true;
+        if unsafe { (*(*cursor).page_row).semantic_prompt() } != pagepkg::SemanticPrompt::None {
+            return true;
+        }
+
+        // Otherwise, determine our cursor state
+        // return switch (cursor.semantic_content) {
+        //     .input, .prompt => true,
+        //     .output => false,
+        // };
+        match unsafe { (*cursor).semantic_content } {
+            pagepkg::SemanticContent::Input | pagepkg::SemanticContent::Prompt => true,
+            pagepkg::SemanticContent::Output => false,
+        }
     }
 
     /// Horizontal tab moves the cursor to the next tabstop, clearing
@@ -4127,7 +4362,16 @@ impl Terminal {
 
     /// Set the pwd for the terminal.
     pub fn set_pwd(&mut self, pwd: &[u8]) -> Result<(), OutOfMemory> {
-        todo!()
+        // self.pwd.clearRetainingCapacity();
+        self.pwd.clear();
+        // if (pwd.len > 0) {
+        if !pwd.is_empty() {
+            // try self.pwd.appendSlice(self.gpa(), pwd);
+            self.pwd.extend_from_slice(pwd);
+            // try self.pwd.append(self.gpa(), 0);
+            self.pwd.push(0);
+        }
+        Ok(())
     }
 
     /// Returns the pwd for the terminal, if any. The memory is owned by the
@@ -4135,18 +4379,39 @@ impl Terminal {
     // pub fn getPwd(self: *const Terminal) ?[:0]const u8
     // PORT NOTE: Zig `[:0]const u8` -> `Option<&[u8]>` (NUL sentinel stripped).
     pub fn get_pwd(&self) -> Option<&[u8]> {
-        todo!()
+        // if (self.pwd.items.len == 0) return null;
+        if self.pwd.is_empty() {
+            return None;
+        }
+        // return self.pwd.items[0 .. self.pwd.items.len - 1 :0];
+        Some(&self.pwd[0..self.pwd.len() - 1])
     }
 
     /// Set the title for the terminal, as set by escape sequences (e.g. OSC 0/2).
     pub fn set_title(&mut self, t: &[u8]) -> Result<(), OutOfMemory> {
-        todo!()
+        // self.title.clearRetainingCapacity();
+        self.title.clear();
+        // if (t.len > 0) {
+        if !t.is_empty() {
+            // try self.title.appendSlice(self.gpa(), t);
+            self.title.extend_from_slice(t);
+            // try self.title.append(self.gpa(), 0);
+            self.title.push(0);
+        }
+        Ok(())
     }
 
     /// Returns the title for the terminal, if any. The memory is owned by the
     /// Terminal and is not copied. It is safe until a reset or setTitle.
+    // pub fn getTitle(self: *const Terminal) ?[:0]const u8
+    // PORT NOTE: Zig `[:0]const u8` -> `Option<&[u8]>` (NUL sentinel stripped).
     pub fn get_title(&self) -> Option<&[u8]> {
-        todo!()
+        // if (self.title.items.len == 0) return null;
+        if self.title.is_empty() {
+            return None;
+        }
+        // return self.title.items[0 .. self.title.items.len - 1 :0];
+        Some(&self.title[0..self.title.len() - 1])
     }
 
     /// Switch to the given screen type (alternate or primary).
@@ -9587,6 +9852,743 @@ mod tests {
             let str = t.plain_string(Global).unwrap();
             assert_eq!(str.as_slice(), "".as_bytes());
         }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: semantic prompt"
+    #[test]
+    fn terminal_semantic_prompt() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // Prompt
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::FreshLineNewPrompt,
+        ))
+        .unwrap();
+        for c in "hello".bytes() {
+            t.print(c as u32).unwrap();
+        }
+        assert_eq!(0usize, unsafe { (*t.screens.active).cursor.y } as usize);
+        assert_eq!(5usize, unsafe { (*t.screens.active).cursor.x } as usize);
+        {
+            let cx = unsafe { (*t.screens.active).cursor.x };
+            let cy = unsafe { (*t.screens.active).cursor.y } as u32;
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(screen_pt(cx - 1, cy))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(pagepkg::SemanticContent::Prompt, unsafe {
+                (*cell).semantic_content()
+            });
+
+            let row = list_cell.row;
+            assert_eq!(pagepkg::SemanticPrompt::Prompt, unsafe {
+                (*row).semantic_prompt()
+            });
+        }
+
+        // Start input but end it on EOL
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::EndPromptStartInputTerminateEol,
+        ))
+        .unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+
+        // Write some output
+        assert_eq!(1usize, unsafe { (*t.screens.active).cursor.y } as usize);
+        assert_eq!(0usize, unsafe { (*t.screens.active).cursor.x } as usize);
+        for c in "world".bytes() {
+            t.print(c as u32).unwrap();
+        }
+        {
+            let cx = unsafe { (*t.screens.active).cursor.x };
+            let cy = unsafe { (*t.screens.active).cursor.y } as u32;
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(screen_pt(cx - 1, cy))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(pagepkg::SemanticContent::Output, unsafe {
+                (*cell).semantic_content()
+            });
+
+            let row = list_cell.row;
+            assert_eq!(pagepkg::SemanticPrompt::None, unsafe {
+                (*row).semantic_prompt()
+            });
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: semantic prompt continuations"
+    #[test]
+    fn terminal_semantic_prompt_continuations() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // Prompt
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::FreshLineNewPrompt,
+        ))
+        .unwrap();
+        for c in "hello".bytes() {
+            t.print(c as u32).unwrap();
+        }
+        assert_eq!(0usize, unsafe { (*t.screens.active).cursor.y } as usize);
+        assert_eq!(5usize, unsafe { (*t.screens.active).cursor.x } as usize);
+        {
+            let cx = unsafe { (*t.screens.active).cursor.x };
+            let cy = unsafe { (*t.screens.active).cursor.y } as u32;
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(screen_pt(cx - 1, cy))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(pagepkg::SemanticContent::Prompt, unsafe {
+                (*cell).semantic_content()
+            });
+
+            let row = list_cell.row;
+            assert_eq!(pagepkg::SemanticPrompt::Prompt, unsafe {
+                (*row).semantic_prompt()
+            });
+        }
+
+        // Start input but end it on EOL
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.semantic_prompt(osc::SemanticPrompt {
+            action: osc::semantic_prompt::Action::PromptStart,
+            options_unvalidated: b"k=c".to_vec(),
+        })
+        .unwrap();
+
+        // Write some output
+        assert_eq!(1usize, unsafe { (*t.screens.active).cursor.y } as usize);
+        assert_eq!(0usize, unsafe { (*t.screens.active).cursor.x } as usize);
+        for c in "world".bytes() {
+            t.print(c as u32).unwrap();
+        }
+        {
+            let cx = unsafe { (*t.screens.active).cursor.x };
+            let cy = unsafe { (*t.screens.active).cursor.y } as u32;
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(screen_pt(cx - 1, cy))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(pagepkg::SemanticContent::Prompt, unsafe {
+                (*cell).semantic_content()
+            });
+
+            let row = list_cell.row;
+            assert_eq!(pagepkg::SemanticPrompt::PromptContinuation, unsafe {
+                (*row).semantic_prompt()
+            });
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: index in prompt mode marks new row as prompt continuation"
+    #[test]
+    fn terminal_index_in_prompt_mode_marks_new_row_as_prompt_continuation() {
+        // This tests the Fish shell workaround: when in prompt mode and we get
+        // a newline, assume the new row is a prompt continuation (since Fish
+        // doesn't emit OSC133 k=s markers for continuation lines).
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // Start a prompt
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::PromptStart,
+        ))
+        .unwrap();
+        for c in "hello".bytes() {
+            t.print(c as u32).unwrap();
+        }
+
+        // Verify first row is marked as prompt
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            assert_eq!(pagepkg::SemanticPrompt::Prompt, unsafe {
+                (*list_cell.row).semantic_prompt()
+            });
+        }
+
+        // Now do a linefeed while still in prompt mode
+        t.carriage_return();
+        t.linefeed().unwrap();
+
+        // The new row should automatically be marked as prompt continuation
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            assert_eq!(pagepkg::SemanticPrompt::PromptContinuation, unsafe {
+                (*list_cell.row).semantic_prompt()
+            });
+        }
+
+        // The cursor semantic content should still be prompt
+        assert_eq!(pagepkg::SemanticContent::Prompt, unsafe {
+            (*t.screens.active).cursor.semantic_content
+        });
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: index in input mode does not mark new row as prompt"
+    #[test]
+    fn terminal_index_in_input_mode_does_not_mark_new_row_as_prompt() {
+        // Input mode should NOT trigger prompt continuation on newline
+        // (only prompt mode does, not input mode)
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // Start a prompt then switch to input
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::PromptStart,
+        ))
+        .unwrap();
+        for c in "$ ".bytes() {
+            t.print(c as u32).unwrap();
+        }
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::EndPromptStartInput,
+        ))
+        .unwrap();
+        for c in "echo \\".bytes() {
+            t.print(c as u32).unwrap();
+        }
+
+        // Linefeed while in input mode
+        t.carriage_return();
+        t.linefeed().unwrap();
+
+        // The new row should be marked as prompt continuation
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            assert_eq!(pagepkg::SemanticPrompt::PromptContinuation, unsafe {
+                (*list_cell.row).semantic_prompt()
+            });
+        }
+
+        // Our cursor should still be in input
+        assert_eq!(pagepkg::SemanticContent::Input, unsafe {
+            (*t.screens.active).cursor.semantic_content
+        });
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: index in output mode does not mark new row as prompt"
+    #[test]
+    fn terminal_index_in_output_mode_does_not_mark_new_row_as_prompt() {
+        // Output mode should NOT trigger prompt continuation
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // Complete prompt cycle: prompt -> input -> output
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::PromptStart,
+        ))
+        .unwrap();
+        for c in "$ ".bytes() {
+            t.print(c as u32).unwrap();
+        }
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::EndPromptStartInput,
+        ))
+        .unwrap();
+        for c in "ls".bytes() {
+            t.print(c as u32).unwrap();
+        }
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::EndInputStartOutput,
+        ))
+        .unwrap();
+
+        // Linefeed while in output mode
+        t.carriage_return();
+        t.linefeed().unwrap();
+
+        // The new row should NOT be marked as a prompt
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            assert_eq!(pagepkg::SemanticPrompt::None, unsafe {
+                (*list_cell.row).semantic_prompt()
+            });
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: OSC133C at x=0 on prompt row clears prompt mark"
+    #[test]
+    fn terminal_osc133c_at_x0_on_prompt_row_clears_prompt_mark() {
+        // This tests the second Fish heuristic: when Fish emits a newline
+        // then immediately sends OSC133C (start output) at column 0, we
+        // should clear the prompt continuation mark we just set.
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // Start a prompt
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::PromptStart,
+        ))
+        .unwrap();
+        for c in "$ echo \\".bytes() {
+            t.print(c as u32).unwrap();
+        }
+
+        // Simulate Fish behavior: newline first (which marks next row as prompt)
+        t.carriage_return();
+        t.linefeed().unwrap();
+
+        // Verify the new row is marked as prompt continuation
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            assert_eq!(pagepkg::SemanticPrompt::PromptContinuation, unsafe {
+                (*list_cell.row).semantic_prompt()
+            });
+        }
+
+        // Now Fish sends OSC133C at column 0 (cursor is still at x=0)
+        assert_eq!(0usize, unsafe { (*t.screens.active).cursor.x } as usize);
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::EndInputStartOutput,
+        ))
+        .unwrap();
+
+        // The prompt continuation should be cleared
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            assert_eq!(pagepkg::SemanticPrompt::None, unsafe {
+                (*list_cell.row).semantic_prompt()
+            });
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: OSC133C at x>0 on prompt row does not clear prompt mark"
+    #[test]
+    fn terminal_osc133c_at_xgt0_on_prompt_row_does_not_clear_prompt_mark() {
+        // If we're not at column 0, we shouldn't clear the prompt mark
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // Start a prompt on a row
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::PromptStart,
+        ))
+        .unwrap();
+        for c in "$ ".bytes() {
+            t.print(c as u32).unwrap();
+        }
+
+        // Move to a new line and mark it as prompt continuation manually
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.semantic_prompt(osc::SemanticPrompt {
+            action: osc::semantic_prompt::Action::PromptStart,
+            options_unvalidated: b"k=c".to_vec(),
+        })
+        .unwrap();
+        for c in "> ".bytes() {
+            t.print(c as u32).unwrap();
+        }
+
+        // Verify the row is marked as prompt continuation
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            assert_eq!(pagepkg::SemanticPrompt::PromptContinuation, unsafe {
+                (*list_cell.row).semantic_prompt()
+            });
+        }
+
+        // Now send OSC133C but cursor is NOT at column 0
+        assert!(unsafe { (*t.screens.active).cursor.x } > 0);
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::EndInputStartOutput,
+        ))
+        .unwrap();
+
+        // The prompt continuation should NOT be cleared (we're not at x=0)
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            assert_eq!(pagepkg::SemanticPrompt::PromptContinuation, unsafe {
+                (*list_cell.row).semantic_prompt()
+            });
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: multiple newlines in prompt mode marks all rows"
+    #[test]
+    fn terminal_multiple_newlines_in_prompt_mode_marks_all_rows() {
+        // Multiple newlines should each mark their row as prompt continuation
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // Start a prompt
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::PromptStart,
+        ))
+        .unwrap();
+        for c in "line1".bytes() {
+            t.print(c as u32).unwrap();
+        }
+
+        // Multiple newlines
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "line2".bytes() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "line3".bytes() {
+            t.print(c as u32).unwrap();
+        }
+
+        // First row should be prompt
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            assert_eq!(pagepkg::SemanticPrompt::Prompt, unsafe {
+                (*list_cell.row).semantic_prompt()
+            });
+        }
+
+        // Second and third rows should be prompt continuation
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            assert_eq!(pagepkg::SemanticPrompt::PromptContinuation, unsafe {
+                (*list_cell.row).semantic_prompt()
+            });
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 2)).unwrap();
+            assert_eq!(pagepkg::SemanticPrompt::PromptContinuation, unsafe {
+                (*list_cell.row).semantic_prompt()
+            });
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: OSC133A click_events=1 sets click to click_events"
+    #[test]
+    fn terminal_osc133a_click_events_1_sets_click_to_click_events() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // Verify default state is none
+        assert_eq!(crate::screen::SemanticClick::None, unsafe {
+            (*t.screens.active).semantic_prompt.click
+        });
+
+        // OSC 133;A with click_events=1
+        t.semantic_prompt(osc::SemanticPrompt {
+            action: osc::semantic_prompt::Action::FreshLineNewPrompt,
+            options_unvalidated: b"click_events=1".to_vec(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            crate::screen::SemanticClick::ClickEvents(osc::semantic_prompt::ClickEvents::Absolute),
+            unsafe { (*t.screens.active).semantic_prompt.click }
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: OSC133A click_events=2 sets click to click_events (relative)"
+    #[test]
+    fn terminal_osc133a_click_events_2_sets_click_to_click_events_relative() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // Verify default state is none
+        assert_eq!(crate::screen::SemanticClick::None, unsafe {
+            (*t.screens.active).semantic_prompt.click
+        });
+
+        // OSC 133;A with click_events=2
+        t.semantic_prompt(osc::SemanticPrompt {
+            action: osc::semantic_prompt::Action::FreshLineNewPrompt,
+            options_unvalidated: b"click_events=2".to_vec(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            crate::screen::SemanticClick::ClickEvents(osc::semantic_prompt::ClickEvents::Relative),
+            unsafe { (*t.screens.active).semantic_prompt.click }
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: OSC133A click_events=0 does not set click_events"
+    #[test]
+    fn terminal_osc133a_click_events_0_does_not_set_click_events() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // OSC 133;A with click_events=0
+        t.semantic_prompt(osc::SemanticPrompt {
+            action: osc::semantic_prompt::Action::FreshLineNewPrompt,
+            options_unvalidated: b"click_events=0".to_vec(),
+        })
+        .unwrap();
+
+        // Should remain none since click_events=0 doesn't activate anything
+        assert_eq!(crate::screen::SemanticClick::None, unsafe {
+            (*t.screens.active).semantic_prompt.click
+        });
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: OSC133A cl option sets click to cl value"
+    #[test]
+    fn terminal_osc133a_cl_option_sets_click_to_cl_value() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // OSC 133;A with cl=m (multiple)
+        t.semantic_prompt(osc::SemanticPrompt {
+            action: osc::semantic_prompt::Action::FreshLineNewPrompt,
+            options_unvalidated: b"cl=m".to_vec(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            crate::screen::SemanticClick::Cl(osc::semantic_prompt::Click::Multiple),
+            unsafe { (*t.screens.active).semantic_prompt.click }
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: OSC133A cl=line sets click to line"
+    #[test]
+    fn terminal_osc133a_cl_line_sets_click_to_line() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        t.semantic_prompt(osc::SemanticPrompt {
+            action: osc::semantic_prompt::Action::FreshLineNewPrompt,
+            options_unvalidated: b"cl=line".to_vec(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            crate::screen::SemanticClick::Cl(osc::semantic_prompt::Click::Line),
+            unsafe { (*t.screens.active).semantic_prompt.click }
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: OSC133A click_events=1 takes priority over cl"
+    #[test]
+    fn terminal_osc133a_click_events_1_takes_priority_over_cl() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // OSC 133;A with both click_events=1 and cl=m
+        t.semantic_prompt(osc::SemanticPrompt {
+            action: osc::semantic_prompt::Action::FreshLineNewPrompt,
+            options_unvalidated: b"click_events=1;cl=m".to_vec(),
+        })
+        .unwrap();
+
+        // click_events should take priority
+        assert_eq!(
+            crate::screen::SemanticClick::ClickEvents(osc::semantic_prompt::ClickEvents::Absolute),
+            unsafe { (*t.screens.active).semantic_prompt.click }
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: OSC133A click_events=0 falls back to cl"
+    #[test]
+    fn terminal_osc133a_click_events_0_falls_back_to_cl() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // OSC 133;A with click_events=0 and cl=v
+        t.semantic_prompt(osc::SemanticPrompt {
+            action: osc::semantic_prompt::Action::FreshLineNewPrompt,
+            options_unvalidated: b"click_events=0;cl=v".to_vec(),
+        })
+        .unwrap();
+
+        // Should fall back to cl since click_events is disabled
+        assert_eq!(
+            crate::screen::SemanticClick::Cl(osc::semantic_prompt::Click::ConservativeVertical),
+            unsafe { (*t.screens.active).semantic_prompt.click }
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: OSC133A no click options leaves click as none"
+    #[test]
+    fn terminal_osc133a_no_click_options_leaves_click_as_none() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // OSC 133;A with no click-related options
+        t.semantic_prompt(osc::SemanticPrompt {
+            action: osc::semantic_prompt::Action::FreshLineNewPrompt,
+            options_unvalidated: b"aid=123".to_vec(),
+        })
+        .unwrap();
+
+        assert_eq!(crate::screen::SemanticClick::None, unsafe {
+            (*t.screens.active).semantic_prompt.click
+        });
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: cursorIsAtPrompt"
+    #[test]
+    fn terminal_cursor_is_at_prompt() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+        assert!(!t.cursor_is_at_prompt());
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::PromptStart,
+        ))
+        .unwrap();
+        assert!(t.cursor_is_at_prompt());
+        for c in "$ ".bytes() {
+            t.print(c as u32).unwrap();
+        }
+
+        // Input is also a prompt
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::EndPromptStartInput,
+        ))
+        .unwrap();
+        assert!(t.cursor_is_at_prompt());
+        for c in "ls".bytes() {
+            t.print(c as u32).unwrap();
+        }
+
+        // But once we say we're starting output, we're not a prompt
+        // (cursor is not at x=0, so the Fish heuristic doesn't trigger)
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::EndInputStartOutput,
+        ))
+        .unwrap();
+        // Still a prompt because this line has a prompt
+        assert!(t.cursor_is_at_prompt());
+        t.linefeed().unwrap();
+        assert!(!t.cursor_is_at_prompt());
+
+        // Until we know we're at a prompt again
+        t.linefeed().unwrap();
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::PromptStart,
+        ))
+        .unwrap();
+        assert!(t.cursor_is_at_prompt());
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: cursorIsAtPrompt alternate screen"
+    #[test]
+    fn terminal_cursor_is_at_prompt_alternate_screen() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(3, 2)).unwrap();
+
+        assert!(!t.cursor_is_at_prompt());
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::PromptStart,
+        ))
+        .unwrap();
+        assert!(t.cursor_is_at_prompt());
+
+        // Secondary screen is never a prompt
+        t.switch_screen_mode(SwitchScreenMode::M1049, true).unwrap();
+        assert!(!t.cursor_is_at_prompt());
+        t.semantic_prompt(osc::SemanticPrompt::init(
+            osc::semantic_prompt::Action::PromptStart,
+        ))
+        .unwrap();
+        assert!(!t.cursor_is_at_prompt());
+
+        t.deinit(alloc);
+    }
+
+    // PORT NOTE: pwd/title round-trip tests. The reference `Terminal.zig` has no
+    // dedicated tests for setPwd/getPwd/setTitle/getTitle, so these exercise the
+    // ported `Vec<u8>` + trailing-0 sentinel contract (getters return the
+    // NUL-stripped byte slice or None) with independent expected values.
+    #[test]
+    fn terminal_set_get_pwd() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // Empty by default.
+        assert!(t.get_pwd().is_none());
+
+        // Set a pwd and read it back NUL-stripped.
+        t.set_pwd(b"/home/user").unwrap();
+        assert_eq!(Some(b"/home/user".as_slice()), t.get_pwd());
+        // The backing buffer carries a trailing NUL sentinel.
+        assert_eq!(b"/home/user\x00".as_slice(), t.pwd.as_slice());
+
+        // Setting again clears the prior value first.
+        t.set_pwd(b"/tmp").unwrap();
+        assert_eq!(Some(b"/tmp".as_slice()), t.get_pwd());
+
+        // Setting empty clears it back to None (no sentinel appended).
+        t.set_pwd(b"").unwrap();
+        assert!(t.get_pwd().is_none());
+        assert!(t.pwd.is_empty());
+
+        t.deinit(alloc);
+    }
+
+    #[test]
+    fn terminal_set_get_title() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        // Empty by default.
+        assert!(t.get_title().is_none());
+
+        // Set a title and read it back NUL-stripped.
+        t.set_title(b"hello world").unwrap();
+        assert_eq!(Some(b"hello world".as_slice()), t.get_title());
+        // The backing buffer carries a trailing NUL sentinel.
+        assert_eq!(b"hello world\x00".as_slice(), t.title.as_slice());
+
+        // Setting again clears the prior value first.
+        t.set_title(b"x").unwrap();
+        assert_eq!(Some(b"x".as_slice()), t.get_title());
+
+        // Setting empty clears it back to None (no sentinel appended).
+        t.set_title(b"").unwrap();
+        assert!(t.get_title().is_none());
+        assert!(t.title.is_empty());
 
         t.deinit(alloc);
     }
