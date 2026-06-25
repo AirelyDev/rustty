@@ -23,6 +23,10 @@ RS = "/Users/gael/projects/rustty/crates/rustty-vt/src"
 GHF = "/Users/gael/projects/ghostty/src/font"
 RSF = "/Users/gael/projects/rustty/crates/rustty-font/src"
 
+# rustty-args: GH base differs (src/cli, not src/terminal). Stage C.
+GHC = "/Users/gael/projects/ghostty/src/cli"
+RSA = "/Users/gael/projects/rustty/crates/rustty-args/src"
+
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
@@ -35,7 +39,10 @@ MAP = {
     "screen_set":      ([f"{GH}/ScreenSet.zig"], [f"{RS}/screen_set.rs"], 0),
     "formatter":       ([f"{GH}/formatter.zig"], [f"{RS}/formatter.rs"], 0),
     "terminal":        ([f"{GH}/Terminal.zig"], [f"{RS}/terminal.rs"], 0),
-    "stream_terminal": ([f"{GH}/stream_terminal.zig"], [f"{RS}/stream_terminal.rs"], 4),  # apc/glyph/kitty-APC arms font-blocked
+    "stream_terminal": ([f"{GH}/stream_terminal.zig"], [f"{RS}/stream_terminal.rs"], 0),  # apc now wired (font-decode mandatory, Stage A)
+    # Stage A — apc multiplexer + glyph subprotocol (apc.zig + apc/glyph/{request,Glossary,execute,response}.zig).
+    # Lives in rustty-vt and deps rustty-font DIRECTLY (glyf-decode mandatory, NOT a runtime hook).
+    "apc":             ([f"{GH}/apc.zig", f"{GH}/apc/glyph/request.zig", f"{GH}/apc/glyph/Glossary.zig", f"{GH}/apc/glyph/execute.zig", f"{GH}/apc/glyph/response.zig"], [f"{RS}/apc/**/*.rs"], 0),
     "osc":             ([f"{GH}/osc.zig", f"{GH}/osc/encoding.zig", f"{GH}/osc/parsers.zig"] + glob.glob(f"{GH}/osc/parsers/*.zig"), [f"{RS}/osc/**/*.rs"], 0),
     "parser":          ([f"{GH}/Parser.zig", f"{GH}/parse_table.zig"], [f"{RS}/parser.rs", f"{RS}/parse_table.rs"], 0),
     "stream":          ([f"{GH}/stream.zig"], [f"{RS}/stream.rs"], 0),
@@ -73,6 +80,12 @@ MAP = {
     "font_sfnt":         ([f"{GHF}/opentype/sfnt.zig"], [f"{RSF}/opentype/sfnt.rs"], 0),
     "font_head":         ([f"{GHF}/opentype/head.zig"], [f"{RSF}/opentype/head.rs"], 0),
     "font_metrics":      ([f"{GHF}/Metrics.zig"], [f"{RSF}/metrics.rs"], 0),
+    # Stage C — rustty-args CLI arg parser (GH base = src/cli, not src/terminal).
+    # args.zig (36t) tests live in src/args/tests.rs (module include from args.rs).
+    # diagnostics.zig has 0 tests (ported as a sibling required by args.zig).
+    "args":              ([f"{GHC}/args.zig"], [f"{RSA}/args.rs", f"{RSA}/args/tests.rs"], 0),
+    "comma_splitter":    ([f"{GHC}/CommaSplitter.zig"], [f"{RSA}/comma_splitter.rs"], 0),
+    "cli_diagnostics":   ([f"{GHC}/diagnostics.zig"], [f"{RSA}/diagnostics.rs"], 0),
 }
 
 def expand(globs):
