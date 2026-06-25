@@ -10789,6 +10789,56 @@ mod tests {
         s.deinit();
     }
 
+    // test "Screen: scrolling with a single-row screen no scrollback"
+    #[test]
+    fn screen_scrolling_with_a_single_row_screen_no_scrollback() {
+        let mut s = mkscreen(10, 1, 0);
+        s.test_write_string(b"1ABCD").unwrap();
+
+        // Scroll down, should still be bottom
+        s.cursor_down_scroll().unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"");
+        }
+
+        // Screen should be dirty
+        assert!(s
+            .pages
+            .is_dirty(point::Point::Active(point::Coordinate { x: 0, y: 0 })));
+        s.deinit();
+    }
+
+    // test "Screen: scrolling across pages preserves style"
+    #[test]
+    fn screen_scrolling_across_pages_preserves_style() {
+        let mut s = mkscreen(10, 3, 1);
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+        let start_page: *mut Page = unsafe { core::ptr::addr_of_mut!((*s.pages.pages.last).data) };
+
+        // Scroll down enough to go to another page
+        let rem = unsafe { (*start_page).capacity.rows - (*start_page).size.rows + 1 };
+        unsafe { (*start_page).pause_integrity_checks(true) };
+        for _ in 0..rem {
+            s.cursor_down_or_scroll().unwrap();
+        }
+        unsafe { (*start_page).pause_integrity_checks(false) };
+
+        // We need our page to change for this test o make sense. If this
+        // assertion fails then the bug is in the test: we should be scrolling
+        // above enough for a new page to show up.
+        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*s.pages.pages.last).data) };
+        assert!(!std::ptr::eq(start_page, page));
+
+        let styleval = unsafe {
+            let base = (*page).memory_ptr();
+            &*(*page).styles.get(base, s.cursor.style_id)
+        };
+        assert!(styleval.flags.bold);
+        s.deinit();
+    }
+
     // test "Screen: scrolling with a single-row screen with scrollback"
     #[test]
     fn screen_scrolling_with_a_single_row_screen_with_scrollback() {
@@ -10908,6 +10958,43 @@ mod tests {
         s.deinit();
     }
 
+    // test "Screen: scrollback with multi-row delta"
+    #[test]
+    fn screen_scrollback_with_multi_row_delta() {
+        let mut s = mkscreen(10, 3, 3);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL\n4ABCD\n5EFGH\n6IJKL")
+            .unwrap();
+
+        // Scroll to top
+        s.scroll(Scroll::Top);
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD\n2EFGH\n3IJKL");
+        }
+
+        // Scroll down multiple
+        s.scroll(Scroll::DeltaRow(5));
+        assert!(s.pages.viewport == pagelist::Viewport::Active);
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"4ABCD\n5EFGH\n6IJKL");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: scrollback empty"
+    #[test]
+    fn screen_scrollback_empty() {
+        let mut s = mkscreen(10, 3, 50);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+        s.scroll(Scroll::DeltaRow(1));
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD\n2EFGH\n3IJKL");
+        }
+        s.deinit();
+    }
+
     // test "Screen: scrollback doesn't move viewport if not at bottom"
     #[test]
     fn screen_scrollback_doesnt_move_viewport_if_not_at_bottom() {
@@ -10968,6 +11055,237 @@ mod tests {
                     )
                     .unwrap()
             );
+        }
+        s.deinit();
+    }
+
+    // test "Screen: scrolling moves selection"
+    #[test]
+    fn screen_scrolling_moves_selection() {
+        let mut s = mkscreen(5, 3, 1);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+
+        // Select a single line
+        s.select(Some(Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 1 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate {
+                    x: s.pages.cols - 1,
+                    y: 1,
+                }))
+                .unwrap(),
+            false,
+        )))
+        .unwrap();
+
+        // Scroll down, should still be bottom
+        s.cursor_down_scroll().unwrap();
+
+        // Our selection should've moved up
+        {
+            let sel = s.selection.unwrap();
+            assert_eq!(
+                point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+                s.pages
+                    .point_from_pin(point::Tag::Active, sel.start())
+                    .unwrap()
+            );
+            assert_eq!(
+                point::Point::Active(point::Coordinate {
+                    x: s.pages.cols - 1,
+                    y: 0,
+                }),
+                s.pages
+                    .point_from_pin(point::Tag::Active, sel.end())
+                    .unwrap()
+            );
+        }
+
+        {
+            // Test our contents rotated
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL");
+        }
+
+        // Scrolling to the bottom does nothing
+        s.scroll(Scroll::Active);
+
+        // Our selection should've stayed the same
+        {
+            let sel = s.selection.unwrap();
+            assert_eq!(
+                point::Point::Active(point::Coordinate { x: 0, y: 0 }),
+                s.pages
+                    .point_from_pin(point::Tag::Active, sel.start())
+                    .unwrap()
+            );
+            assert_eq!(
+                point::Point::Active(point::Coordinate {
+                    x: s.pages.cols - 1,
+                    y: 0,
+                }),
+                s.pages
+                    .point_from_pin(point::Tag::Active, sel.end())
+                    .unwrap()
+            );
+        }
+
+        {
+            // Test our contents rotated
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL");
+        }
+
+        // Scroll up again
+        s.cursor_down_scroll().unwrap();
+
+        {
+            // Test our contents rotated
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"3IJKL");
+        }
+
+        // Our selection should be null because it left the screen.
+        {
+            let sel = s.selection.unwrap();
+            assert!(s
+                .pages
+                .point_from_pin(point::Tag::Active, sel.start())
+                .is_none());
+            assert!(s
+                .pages
+                .point_from_pin(point::Tag::Active, sel.end())
+                .is_none());
+        }
+        s.deinit();
+    }
+
+    // test "Screen: scrolling moves viewport"
+    #[test]
+    fn screen_scrolling_moves_viewport() {
+        let mut s = mkscreen(10, 3, 1);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL\n").unwrap();
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+        s.scroll(Scroll::DeltaRow(-2));
+
+        {
+            // Test our contents rotated
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2EFGH\n3IJKL\n1ABCD");
+        }
+
+        {
+            assert_eq!(
+                point::Point::Screen(point::Coordinate { x: 0, y: 1 }),
+                s.pages
+                    .point_from_pin(
+                        point::Tag::Screen,
+                        s.pages.get_top_left(point::Tag::Viewport)
+                    )
+                    .unwrap()
+            );
+        }
+        s.deinit();
+    }
+
+    // test "Screen: scroll and clear full screen"
+    #[test]
+    fn screen_scroll_and_clear_full_screen() {
+        let mut s = mkscreen(10, 3, 5);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD\n2EFGH\n3IJKL");
+        }
+
+        s.scroll_clear().unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"");
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"1ABCD\n2EFGH\n3IJKL");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: scroll and clear partial screen"
+    #[test]
+    fn screen_scroll_and_clear_partial_screen() {
+        let mut s = mkscreen(10, 3, 5);
+        s.test_write_string(b"1ABCD\n2EFGH").unwrap();
+
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1ABCD\n2EFGH");
+        }
+
+        s.scroll_clear().unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"");
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"1ABCD\n2EFGH");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: scroll and clear empty screen"
+    #[test]
+    fn screen_scroll_and_clear_empty_screen() {
+        let mut s = mkscreen(10, 3, 5);
+        s.scroll_clear().unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"");
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: scroll and clear ignore blank lines"
+    #[test]
+    fn screen_scroll_and_clear_ignore_blank_lines() {
+        let mut s = mkscreen(10, 3, 10);
+        s.test_write_string(b"1ABCD\n2EFGH").unwrap();
+        s.scroll_clear().unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"");
+        }
+
+        // Move back to top-left
+        s.cursor_absolute(0, 0);
+
+        // Write and clear
+        s.test_write_string(b"3ABCD\n").unwrap();
+        {
+            let contents = dump(&s, act());
+            assert_eq!(contents, b"3ABCD");
+        }
+
+        s.scroll_clear().unwrap();
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"");
+        }
+
+        // Move back to top-left
+        s.cursor_absolute(0, 0);
+        s.test_write_string(b"X").unwrap();
+
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"1ABCD\n2EFGH\n3ABCD\nX");
         }
         s.deinit();
     }
@@ -11506,6 +11824,30 @@ mod tests {
         s.deinit();
     }
 
+    // test "Screen: select untracked"
+    #[test]
+    fn screen_select_untracked() {
+        let mut s = mkscreen(10, 10, 0);
+        s.test_write_string(b"ABC  DEF\n 123\n456").unwrap();
+
+        assert!(s.selection.is_none());
+        let tracked = s.pages.count_tracked_pins();
+        s.select(Some(Selection::init(
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+                .unwrap(),
+            s.pages
+                .pin(point::Point::Active(point::Coordinate { x: 3, y: 0 }))
+                .unwrap(),
+            false,
+        )))
+        .unwrap();
+        assert_eq!(tracked + 2, s.pages.count_tracked_pins());
+        s.select(None).unwrap();
+        assert_eq!(tracked, s.pages.count_tracked_pins());
+        s.deinit();
+    }
+
     // test "Screen: select replaces existing pins"
     #[test]
     fn screen_select_replaces_existing_pins() {
@@ -11538,6 +11880,32 @@ mod tests {
         )))
         .unwrap();
         assert_eq!(tracked + 2, s.pages.count_tracked_pins());
+        s.deinit();
+    }
+
+    // test "Screen: hyperlink start/end"
+    #[test]
+    fn screen_hyperlink_start_end() {
+        let mut s = mkscreen(5, 5, 0);
+        assert!(s.cursor.hyperlink_id == 0);
+        {
+            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            assert_eq!(0usize, page.hyperlink_set.count());
+        }
+
+        s.start_hyperlink(b"http://example.com", None).unwrap();
+        assert!(s.cursor.hyperlink_id != 0);
+        {
+            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            assert_eq!(1usize, page.hyperlink_set.count());
+        }
+
+        s.end_hyperlink();
+        assert!(s.cursor.hyperlink_id == 0);
+        {
+            let page = unsafe { &(*(*s.cursor.page_pin).node).data };
+            assert_eq!(0usize, page.hyperlink_set.count());
+        }
         s.deinit();
     }
 
