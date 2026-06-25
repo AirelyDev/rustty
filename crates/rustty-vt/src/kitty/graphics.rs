@@ -36,7 +36,6 @@ use super::graphics_image as image;
 // PORT NOTE: DEFERRED to vt-12 (needs Screen/Terminal). `graphics_storage.zig`
 // (->Screen) is a compiling stub; once ported it will re-export `ImageStorage`
 // below alongside the others.
-#[allow(unused_imports)]
 use super::graphics_storage as storage;
 // pub const unicode = @import("graphics_unicode.zig");
 pub use super::graphics_unicode as unicode;
@@ -49,9 +48,7 @@ pub use image::Image;
 // pub const LoadingImage = image.LoadingImage;
 pub use image::LoadingImage;
 // pub const ImageStorage = storage.ImageStorage;
-// PORT NOTE: DEFERRED to vt-12 (needs Screen/Terminal). Re-export restored once
-// `graphics_storage::ImageStorage` is ported.
-// pub use storage::ImageStorage;
+pub use storage::ImageStorage;
 // pub const RenderPlacement = render.Placement;
 pub use render::Placement as RenderPlacement;
 // pub const Response = command.Response;
@@ -70,8 +67,8 @@ pub use command::Response;
 // analyzed. Rust type-checks every `pub use`/`pub mod` re-export unconditionally,
 // so the structural guarantee is automatic; we mirror it concretely by naming
 // each re-exported item below so a removed/renamed type surfaces as a test
-// failure rather than only a compile error. The two DEFERRED re-exports
-// (`ImageStorage`, `execute`) are intentionally absent until vt-12.
+// failure rather than only a compile error. The one remaining DEFERRED re-export
+// (`execute`) is intentionally absent until `graphics_exec` is ported.
 #[cfg(test)]
 mod tests {
     #[test]
@@ -88,9 +85,11 @@ mod tests {
         let _ = core::mem::size_of::<super::Command>();
         let _ = core::mem::size_of::<super::Response>();
         let _ = core::any::type_name::<super::LoadingImage>();
-        // Touch the deferred-module imports so the aggregator's wiring (private
-        // `exec`/`storage`) is referenced, matching the reference's structure.
+        // Reference the now-ported `ImageStorage` re-export so its symbol must
+        // exist, mirroring `refAllDecls` over the `ImageStorage` member.
+        let _ = core::any::type_name::<super::ImageStorage>();
+        // Touch the still-deferred `exec` module import so the aggregator's wiring
+        // (private `exec`) is referenced, matching the reference's structure.
         let _ = core::any::type_name::<super::exec::Deferred>();
-        let _ = core::any::type_name::<super::storage::Deferred>();
     }
 }

@@ -123,11 +123,13 @@ pub struct Screen {
     /// Kitty graphics protocol state.
     // PORT NOTE: the reference type is
     //   `if (build_options.kitty_graphics) kitty.graphics.ImageStorage else struct {}`.
-    // `kitty.graphics.ImageStorage` is DEFERRED to vt-12 (it operates over
-    // `Screen`/`Terminal`), so the field uses the deferred
-    // `kitty::graphics_storage::Deferred` placeholder. The real `ImageStorage`
-    // is wired in once `graphics_storage` is ported (vt-12).
-    pub kitty_images: kitty::graphics_storage::Deferred,
+    // `kitty.graphics.ImageStorage` operates over `Screen`/`Terminal`. The
+    // `kitty_graphics` gate is `crate::options::KITTY_GRAPHICS` (always true off
+    // wasm-freestanding, matching the reference); the field is always the real
+    // `ImageStorage` here and the gate is enforced at the dispatch call sites
+    // (see the `KITTY_GRAPHICS` guards below), mirroring the "empty struct when
+    // disabled" behavior at usage.
+    pub kitty_images: kitty::graphics_storage::ImageStorage,
 
     /// Semantic prompt (OSC133) state.
     pub semantic_prompt: SemanticPrompt,
@@ -607,7 +609,7 @@ impl Screen {
         // const page_rac = page_pin.rowAndCell();
         let page_rac = unsafe { (*page_pin).row_and_cell() };
 
-        let result: Screen = Screen {
+        let mut result: Screen = Screen {
             alloc,
             pages,
             no_scrollback: opts.max_scrollback == 0,
@@ -633,27 +635,56 @@ impl Screen {
             charset: CharsetState::default(),
             protected_mode: ansi::ProtectedMode::Off,
             kitty_keyboard: kitty::KeyFlagStack::default(),
-            // PORT NOTE: the reference here calls
-            //   result.kitty_images.setLimit(alloc, &result, opts.kitty_image_storage_limit)
-            //   result.kitty_images.image_limits = opts.kitty_image_loading_limits;
-            // inside `if (comptime build_options.kitty_graphics)`. The kitty
-            // graphics `ImageStorage` is DEFERRED to vt-12 (the field is the
-            // `graphics_storage::Deferred` placeholder), so the limit/init wiring
-            // lands with it. The placeholder is constructed trivially here.
-            kitty_images: kitty::graphics_storage::Deferred,
+            // The kitty graphics storage starts empty; the limit/loading-limits
+            // are initialized below (see the `KITTY_GRAPHICS` block) just as the
+            // reference does after building `result`.
+            kitty_images: kitty::graphics_storage::ImageStorage::default(),
             semantic_prompt: SemanticPrompt::DISABLED,
             dirty: Dirty::default(),
         };
+
+        // if (comptime build_options.kitty_graphics) {
+        if crate::options::KITTY_GRAPHICS {
+            // This can't fail because the storage is always empty at this point
+            // and the only fail-able case is that we have to evict images.
+            // result.kitty_images.setLimit(alloc, &result, opts.kitty_image_storage_limit) catch unreachable;
+            // PORT NOTE: `setLimit` takes `&mut self` (the `kitty_images` field)
+            // and `s: &mut Screen` (which here is `&result` itself). Borrowing
+            // `result.kitty_images` as the receiver while also handing
+            // `&mut result` to the same call aliases (Stacked-Borrows UB). We
+            // instead MOVE `kitty_images` out of `result` (leaving a default
+            // placeholder), invoke the method on the owned storage with a clean
+            // `&mut result`, then move it back — sound and observably identical
+            // (`setLimit` only reads/mutates the storage + `s.pages`, disjoint
+            // from the now-empty `kitty_images` slot).
+            let mut images = core::mem::take(&mut result.kitty_images);
+            images
+                .set_limit(alloc, &mut result, opts.kitty_image_storage_limit)
+                .expect("storage is empty so setLimit cannot evict/fail");
+            // result.kitty_images.image_limits = opts.kitty_image_loading_limits;
+            images.image_limits = opts.kitty_image_loading_limits;
+            result.kitty_images = images;
+        }
 
         Ok(result)
     }
 
     pub fn deinit(&mut self) {
-        // PORT NOTE: the reference here calls
-        //   self.kitty_images.deinit(self.alloc, self);
-        // inside `if (comptime build_options.kitty_graphics)`. The kitty graphics
-        // `ImageStorage.deinit` is DEFERRED to vt-12 (the field is the
-        // `graphics_storage::Deferred` placeholder).
+        // if (comptime build_options.kitty_graphics) {
+        //     self.kitty_images.deinit(self.alloc, self);
+        // }
+        // PORT NOTE: `deinit` takes `&mut self` (the `kitty_images` field) and
+        // `s: &mut Screen` (`self`). Borrowing `self.kitty_images` as the receiver
+        // while also passing `self` aliases (Stacked-Borrows UB), so we MOVE the
+        // storage out (leaving a default placeholder), `deinit` it against a clean
+        // `&mut *self`, and drop it. `deinit` only touches `s.pages` (via
+        // `untrackPin` inside `clearPlacements`), disjoint from the now-empty
+        // `kitty_images` slot. `self.alloc` is `Copy`.
+        if crate::options::KITTY_GRAPHICS {
+            let alloc = self.alloc;
+            let mut images = core::mem::take(&mut self.kitty_images);
+            images.deinit(alloc, self);
+        }
         self.cursor.deinit(self.alloc);
         self.pages.deinit();
     }
@@ -729,13 +760,26 @@ impl Screen {
             page_cell: cursor_rac.cell,
         };
 
-        // PORT NOTE: the reference here resets kitty graphics storage inside
-        //   if (comptime build_options.kitty_graphics) {
-        //       self.kitty_images.deinit(self.alloc, self);
-        //       self.kitty_images = .{ .dirty = true };
-        //   }
-        // The kitty graphics `ImageStorage` is DEFERRED to vt-12 (the field is the
-        // `graphics_storage::Deferred` placeholder), so this lands with it.
+        // if (comptime build_options.kitty_graphics) {
+        //     // Reset kitty graphics storage
+        //     self.kitty_images.deinit(self.alloc, self);
+        //     self.kitty_images = .{ .dirty = true };
+        // }
+        // PORT NOTE: the self-referential `&mut Screen` borrow (`deinit` takes both
+        // `&mut self.kitty_images` and `self`) is avoided by MOVING the storage out
+        // (default placeholder) and `deinit`-ing it against a clean `&mut *self`;
+        // `deinit` only touches `s.pages`, disjoint from the empty slot. The
+        // `.{ .dirty = true }` reset is the `ImageStorage` default with `dirty` on.
+        if crate::options::KITTY_GRAPHICS {
+            // Reset kitty graphics storage
+            let alloc = self.alloc;
+            let mut images = core::mem::take(&mut self.kitty_images);
+            images.deinit(alloc, self);
+            self.kitty_images = kitty::graphics_storage::ImageStorage {
+                dirty: true,
+                ..kitty::graphics_storage::ImageStorage::default()
+            };
+        }
 
         // Reset our basic state
         self.saved_cursor = None;
@@ -979,7 +1023,7 @@ impl Screen {
             charset: CharsetState::default(),
             protected_mode: ansi::ProtectedMode::Off,
             kitty_keyboard: kitty::KeyFlagStack::default(),
-            kitty_images: kitty::graphics_storage::Deferred,
+            kitty_images: kitty::graphics_storage::ImageStorage::default(),
             semantic_prompt: SemanticPrompt::DISABLED,
         };
         result.assert_integrity();
@@ -1269,10 +1313,14 @@ impl Screen {
     pub fn cursor_down_scroll(&mut self) -> Result<(), OutOfMemory> {
         debug_assert!(self.cursor.y == self.pages.rows - 1);
 
-        // PORT NOTE: the reference here sets `self.kitty_images.dirty = true`
-        // inside `if (comptime build_options.kitty_graphics)`. Kitty graphics
-        // `ImageStorage` is DEFERRED to vt-12 (the field is the
-        // `graphics_storage::Deferred` placeholder).
+        // if (comptime build_options.kitty_graphics) {
+        //     // Scrolling dirties the images because it updates their placements pins.
+        //     self.kitty_images.dirty = true;
+        // }
+        if crate::options::KITTY_GRAPHICS {
+            // Scrolling dirties the images because it updates their placements pins.
+            self.kitty_images.dirty = true;
+        }
 
         // If we have no scrollback, then we shift all our rows instead.
         if self.no_scrollback {
@@ -1810,10 +1858,18 @@ impl Screen {
 
     /// Scroll the viewport of the terminal grid.
     pub fn scroll(&mut self, behavior: Scroll) {
-        // PORT NOTE: the reference here sets `self.kitty_images.dirty = true`
-        // inside `if (comptime build_options.kitty_graphics)`. Kitty graphics
-        // `ImageStorage` is DEFERRED to vt-12 (the field is the
-        // `graphics_storage::Deferred` placeholder).
+        // if (comptime build_options.kitty_graphics) {
+        //     // No matter what, scrolling marks our image state as dirty since
+        //     // it could move placements. If there are no placements or no images
+        //     // this is still a very cheap operation.
+        //     self.kitty_images.dirty = true;
+        // }
+        if crate::options::KITTY_GRAPHICS {
+            // No matter what, scrolling marks our image state as dirty since
+            // it could move placements. If there are no placements or no images
+            // this is still a very cheap operation.
+            self.kitty_images.dirty = true;
+        }
 
         match behavior {
             Scroll::Active => self.pages.scroll(pagelist::scroll::Scroll::Active),
@@ -1833,10 +1889,18 @@ impl Screen {
         self.pages.scroll_clear()?;
         self.cursor_reload();
 
-        // PORT NOTE: the reference here sets `self.kitty_images.dirty = true`
-        // inside `if (comptime build_options.kitty_graphics)`. Kitty graphics
-        // `ImageStorage` is DEFERRED to vt-12 (the field is the
-        // `graphics_storage::Deferred` placeholder).
+        // if (comptime build_options.kitty_graphics) {
+        //     // No matter what, scrolling marks our image state as dirty since
+        //     // it could move placements. If there are no placements or no images
+        //     // this is still a very cheap operation.
+        //     self.kitty_images.dirty = true;
+        // }
+        if crate::options::KITTY_GRAPHICS {
+            // No matter what, scrolling marks our image state as dirty since
+            // it could move placements. If there are no placements or no images
+            // this is still a very cheap operation.
+            self.kitty_images.dirty = true;
+        }
 
         self.assert_integrity();
         Ok(())
@@ -2271,10 +2335,14 @@ impl Screen {
     }
 
     fn resize_inner(&mut self, opts: Resize) -> Result<(), OutOfMemory> {
-        // PORT NOTE: the reference here sets `self.kitty_images.dirty = true`
-        // inside `if (comptime build_options.kitty_graphics)`. Kitty graphics
-        // `ImageStorage` is DEFERRED to vt-12 (the field is the
-        // `graphics_storage::Deferred` placeholder).
+        // if (comptime build_options.kitty_graphics) {
+        //     // No matter what we mark our image state as dirty
+        //     self.kitty_images.dirty = true;
+        // }
+        if crate::options::KITTY_GRAPHICS {
+            // No matter what we mark our image state as dirty
+            self.kitty_images.dirty = true;
+        }
 
         // Release the cursor style while resizing just
         // in case the cursor ends up on a different page.

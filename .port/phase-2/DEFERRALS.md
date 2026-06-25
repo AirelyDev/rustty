@@ -18,14 +18,23 @@ From **vt-7 (kitty)** — these need `Screen`/`Terminal`/`ImageStorage`:
    - **14 deferred tests** (graphics_unicode.rs:448-452): 11 placement-iterator
      (`unicode placement: …`) + 3 render (`unicode render placement: dog …`).
 
-2. **`kitty/graphics_storage.zig` (1364 loc, 19 tests)** — full file. Needs `Screen`.
-   Compiling stub at `kitty/graphics_storage.rs` with PORT NOTE.
+2. ~~**`kitty/graphics_storage.zig` (1364 loc, 19 tests)** — full file. Needs `Screen`.~~
+   **RESOLVED (vt-12c-kitty).** `ImageStorage` (+ `Placement`/`PlacementKey`/
+   `Location`/`pixelSize`/`gridSize`/`rect`/`delete`/eviction) is fully ported in
+   `kitty/graphics_storage.rs`; all **19 tests** are ported assertion-for-assertion
+   and pass (no regression in the 1353 prior). `Screen.kitty_images` is wired to the
+   real `ImageStorage` (init `setLimit`/`image_limits`, deinit, reset, and the 4
+   `dirty=true` scroll/resize hooks) under the `crate::options::KITTY_GRAPHICS` gate;
+   the self-referential `&mut Screen` borrows are made sound via `mem::take`
+   move-out/move-back (Miri-clean). Scoped graphics_storage.zig G3b → missing=0.
 
 3. **`kitty/graphics_exec.zig` (575 loc, 8 tests)** — full file. Needs `Terminal`.
    Compiling stub at `kitty/graphics_exec.rs` with PORT NOTE.
 
-4. **`kitty/graphics.rs` re-exports** — `ImageStorage` (from `graphics_storage`) +
-   `execute` (from `graphics_exec`) held back with PORT NOTE.
+4. **`kitty/graphics.rs` re-exports** — `ImageStorage` (from `graphics_storage`)
+   **RESOLVED (vt-12c-kitty)**: `pub use storage::ImageStorage` restored + exercised
+   in the aggregator `ref_all_decls` test. `execute` (from `graphics_exec`) still
+   held back with PORT NOTE.
 
 **vt-12 acceptance gain:** +~41 tests (19+8+14) and graphics_unicode G3b → 0 missing.
 
