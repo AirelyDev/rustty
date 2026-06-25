@@ -57,10 +57,11 @@ MAP = {
     # vt-15 search/ (gated)
     "search":            ([f"{GH}/search/Thread.zig", f"{GH}/search/active.zig", f"{GH}/search/pagelist.zig", f"{GH}/search/screen.zig", f"{GH}/search/sliding_window.zig", f"{GH}/search/viewport.zig"], [f"{RS}/search/*.rs"], 0),
     # vt-16 tmux/ (control mode; oniguruma-gated control tests counted via static
-    # #[test] text). `viewer.zig` (9 tests) is a separate vt-16 step still stubbed,
-    # so it is excluded here until ported (adding it now would falsely flag the
-    # ported control/layout/output slice as RED).
-    "tmux":              ([f"{GH}/tmux/control.zig", f"{GH}/tmux/layout.zig", f"{GH}/tmux/output.zig"], [f"{RS}/tmux/control.rs", f"{RS}/tmux/layout.rs", f"{RS}/tmux/output.rs"], 0),
+    # #[test] text — the gate matches `#[test]` source lines regardless of cfg).
+    # All four tmux modules are ported: control + layout + output parsers + viewer
+    # (the control-mode multiplexer driving per-pane Terminals). This completes
+    # Ghostty terminal/ in rustty-vt.
+    "tmux":              ([f"{GH}/tmux/control.zig", f"{GH}/tmux/layout.zig", f"{GH}/tmux/output.zig", f"{GH}/tmux/viewer.zig"], [f"{RS}/tmux/control.rs", f"{RS}/tmux/layout.rs", f"{RS}/tmux/output.rs", f"{RS}/tmux/viewer.rs"], 0),
 }
 
 def expand(globs):
