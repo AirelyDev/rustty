@@ -5004,6 +5004,70 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "Terminal: keypad sequence VS15"
+    #[test]
+    fn terminal_keypad_sequence_vs15() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        // This is: "#︎" (number sign with text presentation selector)
+        t.print(0x23).unwrap(); // # Number sign (valid base)
+        t.print(0xFE0E).unwrap(); // VS15 (text presentation selector)
+
+        // VS15 should combine with the base character into a single grapheme cluster,
+        // taking 1 cell (narrow character).
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 1);
+
+        // Row should be dirty
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        // The base emoji should be in cell 0 with the skin tone as a grapheme
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x23);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Narrow);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: keypad sequence VS16"
+    #[test]
+    fn terminal_keypad_sequence_vs16() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        // This is: "#️" (number sign with emoji presentation selector)
+        t.print(0x23).unwrap(); // # Number sign (valid base)
+        t.print(0xFE0F).unwrap(); // VS16 (emoji presentation selector)
+
+        // VS16 should combine with the base character into a single grapheme cluster,
+        // taking 2 cells (wide character).
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+
+        // Row should be dirty
+        assert!(t.is_dirty(screen_pt(0, 0)));
+
+        // The base emoji should be in cell 0 with the skin tone as a grapheme
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 0x23);
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(unsafe { (*cell).wide() }, pagepkg::Wide::Wide);
+        }
+
+        t.deinit(Global);
+    }
+
     // test "Terminal: print invalid VS15 following emoji is wide"
     #[test]
     fn terminal_print_invalid_vs15_following_emoji_is_wide() {
@@ -7407,6 +7471,35 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "Terminal: tabClear single"
+    #[test]
+    fn terminal_tab_clear_single() {
+        let mut t = Terminal::init(Global, opts(30, 5)).unwrap();
+
+        t.horizontal_tab();
+        t.tab_clear(csi::TabClear::Current);
+        assert!(!t.is_dirty(active_pt(0, 0)));
+        t.set_cursor_pos(1, 1);
+        t.horizontal_tab();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 16);
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: tabClear all"
+    #[test]
+    fn terminal_tab_clear_all() {
+        let mut t = Terminal::init(Global, opts(30, 5)).unwrap();
+
+        t.tab_clear(csi::TabClear::All);
+        assert!(!t.is_dirty(active_pt(0, 0)));
+        t.set_cursor_pos(1, 1);
+        t.horizontal_tab();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 29);
+
+        t.deinit(Global);
+    }
+
     // test "Terminal: cursorPos resets wrap"
     #[test]
     fn terminal_cursor_pos_resets_wrap() {
@@ -7523,6 +7616,45 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "Terminal: cursorUp below top scroll margin"
+    #[test]
+    fn terminal_cursor_up_below_top_scroll_margin() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(2, 4);
+        t.set_cursor_pos(3, 1);
+        t.print('A' as u32).unwrap();
+        t.cursor_up(5);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n X\nA".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorUp above top scroll margin"
+    #[test]
+    fn terminal_cursor_up_above_top_scroll_margin() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(3, 5);
+        t.set_cursor_pos(3, 1);
+        t.print('A' as u32).unwrap();
+        t.set_cursor_pos(2, 1);
+        t.cursor_up(10);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "X\n\nA".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
     // test "Terminal: cursorUp resets wrap"
     #[test]
     fn terminal_cursor_up_resets_wrap() {
@@ -7544,8 +7676,24 @@ mod tests {
         t.deinit(Global);
     }
 
-    // PORT NOTE (vt-12b-2 deferral): test "Terminal: cursorLeft no wrap" calls
-    // `linefeed()` (→ `index()`, still `todo!()`); deferred to vt-12b-3b.
+    // test "Terminal: cursorLeft no wrap"
+    #[test]
+    fn terminal_cursor_left_no_wrap() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('B' as u32).unwrap();
+        t.cursor_left(10);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A\nB".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
 
     // test "Terminal: cursorLeft unsets pending wrap state"
     #[test]
@@ -7637,16 +7785,184 @@ mod tests {
         t.deinit(Global);
     }
 
-    // PORT NOTE (vt-12b-2 deferral): the following five `cursorLeft` reverse-wrap
-    // tests each reach `index()` (via printing past the edge, which calls
-    // `print_wrap()` → `index()`, or via `linefeed()`), which is still `todo!()`
-    // until vt-12b-3b. They are deferred there with the other `index()`/scroll
-    // tests:
-    //   test "Terminal: cursorLeft reverse wrap"
-    //   test "Terminal: cursorLeft reverse wrap with no soft wrap"
-    //   test "Terminal: cursorLeft extended reverse wrap"
-    //   test "Terminal: cursorLeft extended reverse wrap bottom wraparound"
-    //   test "Terminal: cursorLeft extended reverse wrap is priority if both set"
+    // test "Terminal: cursorLeft reverse wrap"
+    #[test]
+    fn terminal_cursor_left_reverse_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::Wraparound, true);
+        t.modes.set(modespkg::Mode::ReverseWrap, true);
+
+        for c in "ABCDE1".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.cursor_left(2);
+        t.print('X' as u32).unwrap();
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABCDX\n1".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorLeft reverse wrap with no soft wrap"
+    #[test]
+    fn terminal_cursor_left_reverse_wrap_with_no_soft_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::Wraparound, true);
+        t.modes.set(modespkg::Mode::ReverseWrap, true);
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('1' as u32).unwrap();
+        t.cursor_left(2);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABCDE\nX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorLeft reverse wrap before left margin"
+    #[test]
+    fn terminal_cursor_left_reverse_wrap_before_left_margin() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::Wraparound, true);
+        t.modes.set(modespkg::Mode::ReverseWrap, true);
+        t.set_top_and_bottom_margin(3, 0);
+        t.cursor_left(1);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n\nX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorLeft extended reverse wrap"
+    #[test]
+    fn terminal_cursor_left_extended_reverse_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::Wraparound, true);
+        t.modes.set(modespkg::Mode::ReverseWrapExtended, true);
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('1' as u32).unwrap();
+        t.cursor_left(2);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABCDX\n1".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorLeft extended reverse wrap bottom wraparound"
+    #[test]
+    fn terminal_cursor_left_extended_reverse_wrap_bottom_wraparound() {
+        let mut t = Terminal::init(Global, opts(5, 3)).unwrap();
+
+        t.modes.set(modespkg::Mode::Wraparound, true);
+        t.modes.set(modespkg::Mode::ReverseWrapExtended, true);
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('1' as u32).unwrap();
+        t.cursor_left(1 + t.cols as usize + 1);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABCDE\n1\n    X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorLeft extended reverse wrap is priority if both set"
+    #[test]
+    fn terminal_cursor_left_extended_reverse_wrap_is_priority_if_both_set() {
+        let mut t = Terminal::init(Global, opts(5, 3)).unwrap();
+
+        t.modes.set(modespkg::Mode::Wraparound, true);
+        t.modes.set(modespkg::Mode::ReverseWrap, true);
+        t.modes.set(modespkg::Mode::ReverseWrapExtended, true);
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('1' as u32).unwrap();
+        t.cursor_left(1 + t.cols as usize + 1);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABCDE\n1\n    X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorLeft extended reverse wrap above top scroll region"
+    #[test]
+    fn terminal_cursor_left_extended_reverse_wrap_above_top_scroll_region() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::Wraparound, true);
+        t.modes.set(modespkg::Mode::ReverseWrapExtended, true);
+
+        t.set_top_and_bottom_margin(3, 0);
+        t.set_cursor_pos(2, 1);
+        t.cursor_left(1000);
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorLeft reverse wrap on first row"
+    #[test]
+    fn terminal_cursor_left_reverse_wrap_on_first_row() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::Wraparound, true);
+        t.modes.set(modespkg::Mode::ReverseWrap, true);
+
+        t.set_top_and_bottom_margin(3, 0);
+        t.set_cursor_pos(1, 2);
+        t.cursor_left(1000);
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+
+        t.deinit(Global);
+    }
 
     // test "Terminal: cursorDown basic"
     #[test]
@@ -7660,6 +7976,43 @@ mod tests {
         {
             let str = t.plain_string(Global).unwrap();
             assert_eq!(str.as_slice(), "A\n\n\n\n X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorDown above bottom scroll margin"
+    #[test]
+    fn terminal_cursor_down_above_bottom_scroll_margin() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(1, 3);
+        t.print('A' as u32).unwrap();
+        t.cursor_down(10);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A\n\n X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorDown below bottom scroll margin"
+    #[test]
+    fn terminal_cursor_down_below_bottom_scroll_margin() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(1, 3);
+        t.print('A' as u32).unwrap();
+        t.set_cursor_pos(4, 1);
+        t.cursor_down(10);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A\n\n\n\nX".as_bytes());
         }
 
         t.deinit(Global);
@@ -7758,6 +8111,26 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "Terminal: saveCursor"
+    #[test]
+    fn terminal_save_cursor() {
+        let mut t = Terminal::init(Global, opts(3, 3)).unwrap();
+
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        unsafe { (*t.screens.active).charset.gr = charsets::Slots::G3 };
+        t.modes.set(modespkg::Mode::Origin, true);
+        t.save_cursor();
+        unsafe { (*t.screens.active).charset.gr = charsets::Slots::G0 };
+        t.set_attribute(sgr::Attribute::Unset).unwrap();
+        t.modes.set(modespkg::Mode::Origin, false);
+        t.restore_cursor();
+        assert!(unsafe { (*t.screens.active).cursor.style.flags.bold });
+        assert!(unsafe { (*t.screens.active).charset.gr } == charsets::Slots::G3);
+        assert!(t.modes.get(modespkg::Mode::Origin));
+
+        t.deinit(Global);
+    }
+
     // test "Terminal: saveCursor position"
     #[test]
     fn terminal_save_cursor_position() {
@@ -7779,9 +8152,166 @@ mod tests {
         t.deinit(Global);
     }
 
-    // PORT NOTE (vt-12b-2 deferral): test "Terminal: saveCursor pending wrap
-    // state" restores a pending-wrap cursor then prints, which soft-wraps via
-    // `print_wrap()` → `index()` (still `todo!()`); deferred to vt-12b-3b.
+    // test "Terminal: saveCursor pending wrap state"
+    #[test]
+    fn terminal_save_cursor_pending_wrap_state() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_cursor_pos(1, 5);
+        t.print('A' as u32).unwrap();
+        t.save_cursor();
+        t.set_cursor_pos(1, 1);
+        t.print('B' as u32).unwrap();
+        t.restore_cursor();
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "B   A\nX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: saveCursor origin mode"
+    #[test]
+    fn terminal_save_cursor_origin_mode() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::Origin, true);
+        t.save_cursor();
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(3, 5);
+        t.set_top_and_bottom_margin(2, 4);
+        t.restore_cursor();
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: saveCursor protected pen"
+    #[test]
+    fn terminal_save_cursor_protected_pen() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Iso);
+        assert!(unsafe { (*t.screens.active).cursor.protected });
+        t.set_cursor_pos(1, 10);
+        t.save_cursor();
+        t.set_protected_mode(ansi::ProtectedMode::Off);
+        assert!(!unsafe { (*t.screens.active).cursor.protected });
+        t.restore_cursor();
+        assert!(unsafe { (*t.screens.active).cursor.protected });
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: saveCursor doesn't modify hyperlink state"
+    #[test]
+    fn terminal_save_cursor_doesn_t_modify_hyperlink_state() {
+        let mut t = Terminal::init(Global, opts(3, 3)).unwrap();
+
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+        let id = unsafe { (*t.screens.active).cursor.hyperlink_id };
+        t.save_cursor();
+        assert_eq!(id, unsafe { (*t.screens.active).cursor.hyperlink_id });
+        t.restore_cursor();
+        assert_eq!(id, unsafe { (*t.screens.active).cursor.hyperlink_id });
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: restoreCursor uses default style on OutOfSpace"
+    #[test]
+    fn terminal_restore_cursor_uses_default_style_on_out_of_space() {
+        // Tests that restoreCursor falls back to default style when
+        // manualStyleUpdate fails with OutOfSpace (can't split a 1-row page
+        // and styles are at max capacity).
+
+        // Use a single row so the page can't be split
+        let mut t = Terminal::init(Global, opts(10, 1)).unwrap();
+
+        // Set a style and save the cursor
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        t.save_cursor();
+
+        // Clear the style
+        t.set_attribute(sgr::Attribute::Unset).unwrap();
+        assert!(!unsafe { (*t.screens.active).cursor.style.flags.bold });
+
+        // Fill the style map to max capacity
+        let max_styles = size::CellCountInt::MAX;
+        loop {
+            let node = unsafe { (*(*t.screens.active).cursor.page_pin).node };
+            if unsafe { (*node).data.capacity.styles } >= max_styles {
+                break;
+            }
+            if t.active_mut()
+                .increase_capacity(node, Some(pagelist::grow::IncreaseCapacity::Styles))
+                .is_err()
+            {
+                break;
+            }
+        }
+
+        let page: *mut pagepkg::Page =
+            unsafe { core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data) };
+        assert_eq!(unsafe { (*page).capacity.styles }, max_styles);
+
+        // Fill all style slots using the StyleSet's layout capacity which accounts
+        // for the load factor. The capacity in the layout is the actual max number
+        // of items that can be stored.
+        {
+            unsafe { (*page).pause_integrity_checks(true) };
+
+            let max_items = unsafe { (*page).styles.layout.cap };
+            let mut n: usize = 1;
+            while n < max_items {
+                let base = unsafe { (*page).memory_ptr() };
+                if unsafe {
+                    (*page).styles.add(
+                        base,
+                        style::Style {
+                            bg_color: style::Color::Rgb(color::RGB {
+                                r: (n & 0xFF) as u8,
+                                g: ((n >> 8) & 0xFF) as u8,
+                                b: ((n >> 16) & 0xFF) as u8,
+                            }),
+                            ..Default::default()
+                        },
+                    )
+                }
+                .is_err()
+                {
+                    break;
+                }
+                n += 1;
+            }
+
+            unsafe { (*page).assert_integrity() };
+            unsafe { (*page).pause_integrity_checks(false) };
+        }
+
+        // Restore cursor - should fall back to default style since page
+        // can't be split (1 row) and styles are at max capacity
+        t.restore_cursor();
+
+        // The style should be reset to default because OutOfSpace occurred
+        assert!(!unsafe { (*t.screens.active).cursor.style.flags.bold });
+        assert_eq!(
+            unsafe { (*t.screens.active).cursor.style_id },
+            style::DEFAULT_ID
+        );
+
+        t.deinit(Global);
+    }
 
     // === vt-12b-3a: erase methods ===========================================
     //
