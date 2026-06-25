@@ -152,3 +152,30 @@ RESOLUTION (deferred): port rustty-font's `glyf`/`Glyph` first, then port apc ei
 vt that font fills (the plan's "sys-style hook"). `apc/glyph/response` (12 tests,
 leaf, no font) could go early if needed. Terminal (vt-12) must stub its apc usage
 until this lands.
+
+## Deferred: vt-12a Terminal/stream_terminal stubs (font-block continuation + C-ABI)
+
+The vt-12a struct-first skeleton (`terminal.rs` <- `Terminal.zig`,
+`stream_terminal.rs` <- `stream_terminal.zig`) lands with these stubs, all of
+which CONTINUE existing deferrals (no new capability is being dropped):
+
+- **apc_handler ZST** (`stream_terminal::ApcHandler`): the reference
+  `apc.Handler` is a no-op ZST here; `deinit` (and the future `start`/`feed`/
+  `end`) are stubbed under the apc-cluster deferral above. The `apc_start`/
+  `apc_put`/`apc_end` trait arms and `apcEnd` dispatch are `todo!()` and remain
+  no-op once vt-12b-7 fills them, until rustty-font unblocks apc.
+- **GlyphGlossary / GlyphRequest / GlyphResponse ZSTs** (`terminal.rs`): the
+  reference `glyph.Glossary` / `glyph.Request` / `glyph.Response` are ZST stubs;
+  `Terminal::glyph_protocol` is `todo!()` and will be a no-op stub in vt-12b
+  (`glyph.execute` is font-blocked). Reactivated with the apc cluster.
+- **kitty graphics**: `Terminal::kitty_graphics` forwards to `Screen.kitty_images`
+  (a deferred `ImageStorage` stub); reactivated in vt-12c-kitty (graphics_exec
+  needs Terminal✓ which now exists). Feature-gated, no new deferral.
+- **ScrollViewport C-ABI → rustty-vt-c** (NEW deferral): the reference
+  `ScrollViewport = union(Tag)` carries a `lib.TaggedUnion` C-ABI surface
+  (`C` / `CValue` / `cval`). In pure-VT the port is a plain Rust enum
+  (`Top` / `Bottom` / `Delta(isize)`); the C-ABI tagged-union representation is
+  hoisted into the `rustty-vt-c` crate alongside the other `lib.TaggedUnion`
+  C surfaces, and is deferred until that crate is carved. No VT behavior is lost
+  (the plain enum is the source of truth; the C-ABI is a pure FFI projection).
+  G3b for `ScrollViewport.C`/`.CValue`/`.cval` maps here and is EXPECTED-missing.
