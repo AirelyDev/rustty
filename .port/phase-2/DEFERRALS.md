@@ -207,3 +207,38 @@ which CONTINUE existing deferrals (no new capability is being dropped):
   ("Padding: largest variant is isize (8 bytes on 64-bit)." and
   "Use [2]u64 (16 bytes) for future expansion."), which live on the deferred
   C-ABI tagged-union surface and are therefore EXPECTED-missing in `terminal.rs`.
+
+## Deferred from vt-14 (input leaves + key)
+
+The vt-14 input leaf slice (`input/{mouse,paste,key,function_keys}.rs` +
+`input/key_mods.rs`) lands with these deferrals, all apprt/config-layer seams
+(no VT behavior is dropped):
+
+- **`Key::imgui_key` — dcimgui (cimgui) binding (apprt GUI-glue, R3).** The
+  reference `key.zig` `imguiKey` maps a `Key` to a `cimgui.c.ImGuiKey_*`
+  constant via `@import("dcimgui")`. dcimgui is an apprt-layer GUI binding, not
+  a VT dependency. In the port it is gated behind the off-by-default `imgui`
+  cargo feature (added to `rustty-vt/Cargo.toml`); the `imgui_key` body is a
+  `unimplemented!()` placeholder and the full reference mapping is preserved
+  verbatim as a comment for the future apprt port. **Target: apprt layer.** No
+  `imguiKey`-specific `test{}` exists in the reference, so there is no skipped
+  test (the SkipZigTest mirror pattern is N/A here).
+- **`input/key_mods.rs` is a PARTIAL port.** Only the `Mods` packed struct and
+  the VT-relevant methods used by `key.zig` / `function_keys.zig`
+  (`int`/`empty`/`equal`/`keys`/`binding`/`unset`/`without_locks`/`ctrl_or_super`
+  + `from_int`/`Side`/`Keys`/`SIDE_MASK` + the bit-layout `test{}`) are ported.
+  The reference `key_mods.zig` additionally defines `Mod` + its `alias` table,
+  `Mods.translation` (needs `config.OptionAsAlt`), and the `RemapSet` type with
+  its `parseCLI`/`parse`/`finalize`/`clone`/`equal`/`formatEntry`/`apply`/`Mask`
+  machinery — all of which depend on the apprt-layer `config.zig` (`OptionAsAlt`,
+  the config `formatter`) which is NOT yet ported. Those declarations, plus the
+  full `RemapSet` `test{}` suite (~28 tests) and the `translation
+  macos-option-as-alt` test, are DEFERRED with the config/apprt seam. **Target:
+  whenever `config.OptionAsAlt` + config `formatter` land (config/apprt cluster).**
+  G3b for `key_mods.zig`'s RemapSet/translation/alias comments maps to this
+  deferral and is EXPECTED-missing until then.
+- **`function_keys` `keys` test — `termio.Message.WriteReq.Small.Max`.** The
+  reference test reads the termio small-message capacity (`MessageData(u8, 38)`
+  ⇒ `38`); termio is an apprt/termio-layer module the reference explicitly keeps
+  out of libghostty-vt. The ported test inlines the constant `38` (documented as
+  the reference value) so it runs in-crate; no termio dependency is introduced.

@@ -26,6 +26,11 @@ workspace = true
 oniguruma = []
 # Whether to build SIMD-accelerated code paths (reference `simd`). Off by default.
 simd = []
+# Whether the apprt-layer `dcimgui` (cimgui) binding is available. Gates
+# `input::key::Key::imgui_key` (the Key->cimgui-constant mapping), an apprt-layer
+# GUI-glue dependency (R3) DEFERRED to apprt — see DEFERRALS.md. Off by default so
+# the VT crate has no GUI dependency.
+imgui = []
 
 [dependencies]
 rustty-datastruct = { workspace = true }
