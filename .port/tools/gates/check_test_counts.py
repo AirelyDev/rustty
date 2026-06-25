@@ -26,6 +26,7 @@ MAP = {
     "screen":          ([f"{GH}/Screen.zig"], [f"{RS}/screen.rs"], 0),
     "selection":       ([f"{GH}/Selection.zig"], [f"{RS}/selection.rs"], 0),
     "selection_gesture":([f"{GH}/SelectionGesture.zig"], [f"{RS}/selection_gesture.rs"], 0),
+    "render":          ([f"{GH}/render.zig"], [f"{RS}/render.rs"], 0),
     "string_map":      ([f"{GH}/StringMap.zig"], [f"{RS}/string_map.rs"], 0),
     "screen_set":      ([f"{GH}/ScreenSet.zig"], [f"{RS}/screen_set.rs"], 0),
     "formatter":       ([f"{GH}/formatter.zig"], [f"{RS}/formatter.rs"], 0),
@@ -45,6 +46,16 @@ MAP = {
     "mouse":           ([f"{GH}/mouse.zig"], [f"{RS}/mouse.rs"], 0),
     "tabstops":        ([f"{GH}/Tabstops.zig"], [f"{RS}/tabstops.rs"], 0),
     "utf8_decoder":    ([f"{GH}/UTF8Decoder.zig"], [f"{RS}/UTF8Decoder.zig" if False else f"{RS}/utf8_decoder.rs"], 0),
+    # vt-14 input slice (src/input/, pulled into vt)
+    "input_mouse":       (["/Users/gael/projects/ghostty/src/input/mouse.zig"], [f"{RS}/input/mouse.rs"], 0),
+    "input_paste":       (["/Users/gael/projects/ghostty/src/input/paste.zig"], [f"{RS}/input/paste.rs"], 0),
+    "input_key":         (["/Users/gael/projects/ghostty/src/input/key.zig"], [f"{RS}/input/key.rs"], 0),
+    "input_mouse_encode":(["/Users/gael/projects/ghostty/src/input/mouse_encode.zig"], [f"{RS}/input/mouse_encode.rs"], 0),
+    "input_key_encode":  (["/Users/gael/projects/ghostty/src/input/key_encode.zig"], [f"{RS}/input/key_encode.rs"], 0),
+    "input_function_keys":(["/Users/gael/projects/ghostty/src/input/function_keys.zig"], [f"{RS}/input/function_keys.rs"], 0),
+    "input_key_mods":    (["/Users/gael/projects/ghostty/src/input/key_mods.zig"], [f"{RS}/input/key_mods.rs"], 23),  # 23 RemapSet/translation tests -> config/apprt-seam deferred
+    # vt-15 search/ (gated)
+    "search":            ([f"{GH}/search/Thread.zig", f"{GH}/search/active.zig", f"{GH}/search/pagelist.zig", f"{GH}/search/screen.zig", f"{GH}/search/sliding_window.zig", f"{GH}/search/viewport.zig"], [f"{RS}/search/*.rs"], 0),
 }
 
 def expand(globs):
