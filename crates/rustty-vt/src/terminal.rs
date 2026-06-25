@@ -11009,6 +11009,1224 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "Terminal: insertLines colors with bg color"
+    #[test]
+    fn terminal_insert_lines_colors_with_bg_color() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_cursor_pos(2, 2);
+
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.insert_lines(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\n\nDEF\nGHI".as_bytes());
+        }
+
+        for x in 0..t.cols {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(x, 1)).unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(
+                pagepkg::CellRgb {
+                    r: 0xFF,
+                    g: 0,
+                    b: 0,
+                },
+                unsafe { (*cell).content_color_rgb() }
+            );
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertLines handles style refs"
+    #[test]
+    fn terminal_insert_lines_handles_style_refs() {
+        let mut t = Terminal::init(Global, opts(5, 3)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+
+        // For the line being deleted, create a refcounted style
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_attribute(sgr::Attribute::Unset).unwrap();
+
+        // verify we have styles in our style map
+        let page =
+            unsafe { core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data) };
+        assert_eq!(1usize, unsafe { (*page).styles.count() });
+
+        t.set_cursor_pos(2, 2);
+        t.insert_lines(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\n\nDEF".as_bytes());
+        }
+
+        // verify we have no styles in our style map
+        assert_eq!(0usize, unsafe { (*page).styles.count() });
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertLines across page boundary marks all shifted rows dirty"
+    #[test]
+    fn terminal_insert_lines_across_page_boundary_marks_all_shifted_rows_dirty() {
+        let mut t = Terminal::init(Global, opts_sb(10, 5, 1024)).unwrap();
+
+        let first_page = t.active_mut().pages.pages.first;
+        let first_page_nrows = unsafe { (*first_page).data.capacity.rows };
+
+        // Fill up the first page minus 3 rows
+        for _ in 0..(first_page_nrows - 3) {
+            t.linefeed().unwrap();
+        }
+
+        // Add content that will cross a page boundary
+        t.print_string("1AAAA".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("2BBBB".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("3CCCC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("4DDDD".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("5EEEE".as_bytes()).unwrap();
+
+        // Verify we now have a second page
+        assert!(!unsafe { (*first_page).next }.is_null());
+
+        t.set_cursor_pos(1, 1);
+        t.clear_dirty();
+        t.insert_lines(1);
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(t.is_dirty(active_pt(0, 3)));
+        assert!(t.is_dirty(active_pt(0, 4)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n1AAAA\n2BBBB\n3CCCC\n4DDDD".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertLines (legacy test)"
+    #[test]
+    fn terminal_insert_lines_legacy_test() {
+        let mut t = Terminal::init(Global, opts(2, 5)).unwrap();
+
+        // Initial value
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('B' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('C' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('D' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('E' as u32).unwrap();
+
+        // Move to row 2
+        t.set_cursor_pos(2, 1);
+
+        // Insert two lines
+        t.insert_lines(2);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A\n\n\nB\nC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertLines multi-codepoint graphemes"
+    #[test]
+    fn terminal_insert_lines_multi_codepoint_graphemes() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        // Disable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+
+        // This is: 👨‍👩‍👧 (which may or may not render correctly)
+        t.print(0x1F468).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F469).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F467).unwrap();
+
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_cursor_pos(2, 2);
+        t.insert_lines(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(
+                str.as_slice(),
+                "ABC\n\n👨\u{200D}👩\u{200D}👧\nGHI".as_bytes()
+            );
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines colors with bg color"
+    #[test]
+    fn terminal_delete_lines_colors_with_bg_color() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI".as_bytes()).unwrap();
+        t.set_cursor_pos(2, 2);
+
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.delete_lines(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\nGHI".as_bytes());
+        }
+
+        for x in 0..t.cols {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(x, 4)).unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(
+                pagepkg::CellRgb {
+                    r: 0xFF,
+                    g: 0,
+                    b: 0,
+                },
+                unsafe { (*cell).content_color_rgb() }
+            );
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines across page boundary marks all shifted rows dirty"
+    #[test]
+    fn terminal_delete_lines_across_page_boundary_marks_all_shifted_rows_dirty() {
+        let mut t = Terminal::init(Global, opts_sb(10, 5, 1024)).unwrap();
+
+        let first_page = t.active_mut().pages.pages.first;
+        let first_page_nrows = unsafe { (*first_page).data.capacity.rows };
+
+        // Fill up the first page minus 3 rows
+        for _ in 0..(first_page_nrows - 3) {
+            t.linefeed().unwrap();
+        }
+
+        // Add content that will cross a page boundary
+        t.print_string("1AAAA".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("2BBBB".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("3CCCC".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("4DDDD".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("5EEEE".as_bytes()).unwrap();
+
+        // Verify we now have a second page
+        assert!(!unsafe { (*first_page).next }.is_null());
+
+        t.set_cursor_pos(1, 1);
+        t.clear_dirty();
+        t.delete_lines(1);
+
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(t.is_dirty(active_pt(0, 2)));
+        assert!(t.is_dirty(active_pt(0, 3)));
+        assert!(t.is_dirty(active_pt(0, 4)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "2BBBB\n3CCCC\n4DDDD\n5EEEE".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines (legacy)"
+    #[test]
+    fn terminal_delete_lines_legacy() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Initial value
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('B' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('C' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('D' as u32).unwrap();
+
+        t.cursor_up(2);
+        t.delete_lines(1);
+
+        t.print('E' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+
+        // We should be
+        assert_eq!(0usize, unsafe { (*t.screens.active).cursor.x } as usize);
+        assert_eq!(2usize, unsafe { (*t.screens.active).cursor.y } as usize);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A\nE\nD".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines with scroll region, cursor outside of region"
+    #[test]
+    fn terminal_delete_lines_with_scroll_region_cursor_outside_of_region() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Initial value
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('B' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('C' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print('D' as u32).unwrap();
+
+        t.set_top_and_bottom_margin(1, 3);
+        t.set_cursor_pos(4, 1);
+
+        t.clear_dirty();
+        t.delete_lines(1);
+
+        for y in 0..4 {
+            assert!(!t.is_dirty(active_pt(0, y)));
+        }
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A\nB\nC\nD".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines resets pending wrap"
+    #[test]
+    fn terminal_delete_lines_resets_pending_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.delete_lines(1);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print('B' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "B".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines resets wrap"
+    #[test]
+    fn terminal_delete_lines_resets_wrap() {
+        let mut t = Terminal::init(Global, opts(3, 3)).unwrap();
+
+        t.print('1' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "ABCDEF".chars() {
+            t.print(c as u32).unwrap();
+        }
+
+        t.set_top_and_bottom_margin(1, 2);
+        t.set_cursor_pos(1, 1);
+        t.delete_lines(1);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "XBC\n\nDEF".as_bytes());
+        }
+
+        for y in 0..t.rows {
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(active_pt(0, y as u32))
+                .unwrap();
+            let row = list_cell.row;
+            assert!(!unsafe { (*row).wrap() });
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines left/right scroll region"
+    #[test]
+    fn terminal_delete_lines_left_right_scroll_region() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.print_string("ABC123".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF456".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI789".as_bytes()).unwrap();
+        t.scrolling_region.left = 1;
+        t.scrolling_region.right = 3;
+        t.set_cursor_pos(2, 2);
+
+        t.clear_dirty();
+        t.delete_lines(1);
+
+        assert!(!t.is_dirty(active_pt(0, 0)));
+        for y in 1..3 {
+            assert!(t.is_dirty(active_pt(0, y)));
+        }
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC123\nDHI756\nG   89".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines left/right scroll region from top"
+    #[test]
+    fn terminal_delete_lines_left_right_scroll_region_from_top() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.print_string("ABC123".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF456".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI789".as_bytes()).unwrap();
+        t.scrolling_region.left = 1;
+        t.scrolling_region.right = 3;
+        t.set_cursor_pos(1, 2);
+
+        t.clear_dirty();
+        t.delete_lines(1);
+
+        for y in 0..3 {
+            assert!(t.is_dirty(active_pt(0, y)));
+        }
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AEF423\nDHI756\nG   89".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines left/right scroll region high count"
+    #[test]
+    fn terminal_delete_lines_left_right_scroll_region_high_count() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.print_string("ABC123".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DEF456".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GHI789".as_bytes()).unwrap();
+        t.scrolling_region.left = 1;
+        t.scrolling_region.right = 3;
+        t.set_cursor_pos(2, 2);
+
+        t.clear_dirty();
+        t.delete_lines(100);
+
+        assert!(!t.is_dirty(active_pt(0, 0)));
+        for y in 1..3 {
+            assert!(t.is_dirty(active_pt(0, y)));
+        }
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC123\nD   56\nG   89".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines wide character spacer head"
+    #[test]
+    fn terminal_delete_lines_wide_character_spacer_head() {
+        let mut t = Terminal::init(Global, opts(5, 3)).unwrap();
+
+        // Initial value
+        // +-----+
+        // |AAAAA| < Wrapped
+        // |BBBB*| < Wrapped     (continued)
+        // |WWCCC| < Non-wrapped (continued)
+        // +-----+
+        // where * represents a spacer head cell
+        // and WW is the wide character.
+        t.print_string("AAAAABBBB\u{1F600}CCC".as_bytes()).unwrap();
+
+        // Delete the top line
+        // +-----+
+        // |BBBB | < Non-wrapped
+        // |WWCCC| < Non-wrapped
+        // |     | < Non-wrapped
+        // +-----+
+        // This should convert the spacer head to
+        // a regular empty cell, and un-set wrap.
+        t.set_cursor_pos(1, 1);
+        t.delete_lines(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            let unwrapped_str = t.plain_string_unwrapped(Global).unwrap();
+            assert_eq!(str.as_slice(), "BBBB\n\u{1F600}CCC".as_bytes());
+            assert_eq!(unwrapped_str.as_slice(), "BBBB\n\u{1F600}CCC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines wide character spacer head left scroll margin"
+    #[test]
+    fn terminal_delete_lines_wide_character_spacer_head_left_scroll_margin() {
+        let mut t = Terminal::init(Global, opts(5, 3)).unwrap();
+
+        // Initial value
+        // +-----+
+        // |AAAAA| < Wrapped
+        // |BBBB*| < Wrapped     (continued)
+        // |WWCCC| < Non-wrapped (continued)
+        // +-----+
+        // where * represents a spacer head cell
+        // and WW is the wide character.
+        t.print_string("AAAAABBBB\u{1F600}CCC".as_bytes()).unwrap();
+
+        t.scrolling_region.left = 2;
+
+        // Delete the top line
+        //    ###  <- scrolling region
+        // +-----+
+        // |AABB | < Wrapped
+        // |BBCCC| < Wrapped     (continued)
+        // |WW   | < Non-wrapped (continued)
+        // +-----+
+        // This should convert the spacer head to
+        // a regular empty cell, but due to the
+        // left scrolling margin, wrap state should
+        // remain.
+        t.set_cursor_pos(1, 3);
+        t.delete_lines(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            let unwrapped_str = t.plain_string_unwrapped(Global).unwrap();
+            assert_eq!(str.as_slice(), "AABB\nBBCCC\n\u{1F600}".as_bytes());
+            assert_eq!(unwrapped_str.as_slice(), "AABB BBCCC\u{1F600}".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines wide character spacer head right scroll margin"
+    #[test]
+    fn terminal_delete_lines_wide_character_spacer_head_right_scroll_margin() {
+        let mut t = Terminal::init(Global, opts(5, 3)).unwrap();
+
+        // Initial value
+        // +-----+
+        // |AAAAA| < Wrapped
+        // |BBBB*| < Wrapped     (continued)
+        // |WWCCC| < Non-wrapped (continued)
+        // +-----+
+        // where * represents a spacer head cell
+        // and WW is the wide character.
+        t.print_string("AAAAABBBB\u{1F600}CCC".as_bytes()).unwrap();
+
+        t.scrolling_region.right = 3;
+
+        // Delete the top line
+        //  ####   <- scrolling region
+        // +-----+
+        // |BBBBA| < Wrapped
+        // |WWCC | < Wrapped     (continued)
+        // |    C| < Non-wrapped (continued)
+        // +-----+
+        // This should convert the spacer head to
+        // a regular empty cell, but due to the
+        // right scrolling margin, wrap state should
+        // remain.
+        t.set_cursor_pos(1, 1);
+        t.delete_lines(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            let unwrapped_str = t.plain_string_unwrapped(Global).unwrap();
+            assert_eq!(str.as_slice(), "BBBBA\n\u{1F600}CC\n    C".as_bytes());
+            assert_eq!(
+                unwrapped_str.as_slice(),
+                "BBBBA\u{1F600}CC     C".as_bytes()
+            );
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines wide character spacer head left and right scroll margin"
+    #[test]
+    fn terminal_delete_lines_wide_character_spacer_head_left_and_right_scroll_margin() {
+        let mut t = Terminal::init(Global, opts(5, 3)).unwrap();
+
+        // Initial value
+        // +-----+
+        // |AAAAA| < Wrapped
+        // |BBBB*| < Wrapped     (continued)
+        // |WWCCC| < Non-wrapped (continued)
+        // +-----+
+        // where * represents a spacer head cell
+        // and WW is the wide character.
+        t.print_string("AAAAABBBB\u{1F600}CCC".as_bytes()).unwrap();
+
+        t.scrolling_region.right = 3;
+        t.scrolling_region.left = 2;
+
+        // Delete the top line
+        //    ##   <- scrolling region
+        // +-----+
+        // |AABBA| < Wrapped
+        // |BBCC*| < Wrapped     (continued)
+        // |WW  C| < Non-wrapped (continued)
+        // +-----+
+        // Because there is both a left scrolling
+        // margin > 1 and a right scrolling margin
+        // the spacer head should remain, and the
+        // wrap state should be untouched.
+        t.set_cursor_pos(1, 3);
+        t.delete_lines(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            let unwrapped_str = t.plain_string_unwrapped(Global).unwrap();
+            assert_eq!(str.as_slice(), "AABBA\nBBCC\n\u{1F600}  C".as_bytes());
+            assert_eq!(unwrapped_str.as_slice(), "AABBABBCC\u{1F600}  C".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines wide character spacer head left (< 2) and right scroll margin"
+    #[test]
+    fn terminal_delete_lines_wide_character_spacer_head_left_2_and_right_scroll_margin() {
+        let mut t = Terminal::init(Global, opts(5, 3)).unwrap();
+
+        // Initial value
+        // +-----+
+        // |AAAAA| < Wrapped
+        // |BBBB*| < Wrapped     (continued)
+        // |WWCCC| < Non-wrapped (continued)
+        // +-----+
+        // where * represents a spacer head cell
+        // and WW is the wide character.
+        t.print_string("AAAAABBBB\u{1F600}CCC".as_bytes()).unwrap();
+
+        t.scrolling_region.right = 3;
+        t.scrolling_region.left = 1;
+
+        // Delete the top line
+        //   ###   <- scrolling region
+        // +-----+
+        // |ABBBA| < Wrapped
+        // |B CC | < Wrapped     (continued)
+        // |    C| < Non-wrapped (continued)
+        // +-----+
+        // Because the left margin is 1, the wide
+        // char is split, and therefore removed,
+        // along with the spacer head - however,
+        // wrap state should be untouched.
+        t.set_cursor_pos(1, 2);
+        t.delete_lines(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            let unwrapped_str = t.plain_string_unwrapped(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABBBA\nB CC\n    C".as_bytes());
+            assert_eq!(unwrapped_str.as_slice(), "ABBBAB CC     C".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines wide characters split by left/right scroll region boundaries"
+    #[test]
+    fn terminal_delete_lines_wide_characters_split_by_left_right_scroll_region_boundaries() {
+        let mut t = Terminal::init(Global, opts(5, 2)).unwrap();
+
+        // Initial value
+        // +-----+
+        // |AAAAA|
+        // |WWBWW|
+        // +-----+
+        // where WW represents a wide character
+        t.print_string("AAAAA\n\u{1F600}B\u{1F600}".as_bytes())
+            .unwrap();
+
+        t.scrolling_region.right = 3;
+        t.scrolling_region.left = 1;
+
+        // Delete the top line
+        //   ###   <- scrolling region
+        // +-----+
+        // |A B A|
+        // |     |
+        // +-----+
+        // The two wide chars, because they're
+        // split by the edge of the scrolling
+        // region, get removed.
+        t.set_cursor_pos(1, 2);
+        t.delete_lines(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A B A".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines zero"
+    #[test]
+    fn terminal_delete_lines_zero() {
+        let mut t = Terminal::init(Global, opts(2, 5)).unwrap();
+
+        // This should do nothing
+        t.set_cursor_pos(1, 1);
+        t.delete_lines(0);
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines wide char at right margin with full clear"
+    #[test]
+    fn terminal_delete_lines_wide_char_at_right_margin_with_full_clear() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        // Place a wide character at col 39 (1-indexed) on several rows.
+        // The wide cell lands at col 38 (0-indexed) with spacer_tail at col 39.
+        t.set_cursor_pos(10, 39);
+        t.print(0x4E2D).unwrap(); // '中'
+
+        // Set left/right scroll margins so scrolling_region.right = 38.
+        // clearCells will clear cells[4..39], which includes the wide cell
+        // at col 38 but NOT the spacer_tail at col 39.
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(5, 39);
+
+        // scrollUp with count >= region height causes deleteLines to clear
+        // ALL rows without any shifting, so rowWillBeShifted is never called
+        // and the orphaned spacer_tail at col 39 triggers a page integrity
+        // violation in clearCells.
+        t.scroll_up(t.rows as usize).unwrap();
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks preserves background sgr"
+    #[test]
+    fn terminal_insert_blanks_preserves_background_sgr() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 1);
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.insert_blanks(2);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  ABC".as_bytes());
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(
+                pagepkg::CellRgb {
+                    r: 0xFF,
+                    g: 0,
+                    b: 0,
+                },
+                unsafe { (*cell).content_color_rgb() }
+            );
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks left/right scroll region large count"
+    #[test]
+    fn terminal_insert_blanks_left_right_scroll_region_large_count() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.modes.set(modespkg::Mode::Origin, true);
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(3, 5);
+        t.set_cursor_pos(1, 1);
+        t.clear_dirty();
+        t.insert_blanks(140);
+        assert!(t.is_dirty(active_pt(0, 0)));
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks deleting graphemes"
+    #[test]
+    fn terminal_insert_blanks_deleting_graphemes() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        // Disable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        t.print_string("ABC".as_bytes()).unwrap();
+
+        // This is: 👨‍👩‍👧 (which may or may not render correctly)
+        t.print(0x1F468).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F469).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F467).unwrap();
+
+        // We should have one cell with graphemes
+        let page =
+            unsafe { core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data) };
+        assert_eq!(1usize, unsafe { (*page).grapheme_count() });
+
+        t.set_cursor_pos(1, 1);
+        t.clear_dirty();
+        t.insert_blanks(4);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "    A".as_bytes());
+        }
+
+        // We should have no graphemes
+        assert_eq!(0usize, unsafe { (*page).grapheme_count() });
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks shift graphemes"
+    #[test]
+    fn terminal_insert_blanks_shift_graphemes() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        // Enable grapheme clustering
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        t.print_string("A".as_bytes()).unwrap();
+
+        // This is: 👨‍👩‍👧 (which may or may not render correctly)
+        t.print(0x1F468).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F469).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x1F467).unwrap();
+
+        // We should have one cell with graphemes
+        let page =
+            unsafe { core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data) };
+        assert_eq!(1usize, unsafe { (*page).grapheme_count() });
+
+        t.set_cursor_pos(1, 1);
+        t.clear_dirty();
+        t.insert_blanks(1);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), " A👨\u{200D}👩\u{200D}👧".as_bytes());
+        }
+
+        // We should have no graphemes
+        assert_eq!(1usize, unsafe { (*page).grapheme_count() });
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks split multi-cell character from tail"
+    #[test]
+    fn terminal_insert_blanks_split_multi_cell_character_from_tail() {
+        let mut t = Terminal::init(Global, opts(5, 10)).unwrap();
+
+        t.print_string("橋123".as_bytes()).unwrap();
+        t.set_cursor_pos(1, 2);
+        t.insert_blanks(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "   12".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks shifts hyperlinks"
+    #[test]
+    fn terminal_insert_blanks_shifts_hyperlinks() {
+        // osc "8;;http://example.com"
+        // printf "link"
+        // printf "\r"
+        // csi "3@"
+        // echo
+        //
+        // link should be preserved, blanks should not be linked
+
+        let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.set_cursor_pos(1, 1);
+        t.insert_blanks(2);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  ABC".as_bytes());
+        }
+
+        // Verify all our cells have a hyperlink
+        for x in 2..5 {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(x, 0)).unwrap();
+            let row = list_cell.row;
+            assert!(unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) }.unwrap();
+            assert_eq!(id, 1 as crate::hyperlink::Id);
+        }
+        for x in 0..2 {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(x, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert!(!unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) };
+            assert!(id.is_none());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks pushes hyperlink off end completely"
+    #[test]
+    fn terminal_insert_blanks_pushes_hyperlink_off_end_completely() {
+        let mut t = Terminal::init(Global, opts(3, 2)).unwrap();
+
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+        t.print_string("ABC".as_bytes()).unwrap();
+        t.set_cursor_pos(1, 1);
+        t.insert_blanks(3);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "".as_bytes());
+        }
+
+        for x in 0..3 {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(x, 0)).unwrap();
+            let row = list_cell.row;
+            assert!(!unsafe { (*row).hyperlink() });
+            let cell = list_cell.cell;
+            assert!(!unsafe { (*cell).hyperlink() });
+            let id = unsafe { (*list_cell.node).data.lookup_hyperlink(cell) };
+            assert!(id.is_none());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks wide char straddling right margin"
+    #[test]
+    fn terminal_insert_blanks_wide_char_straddling_right_margin() {
+        // Crash found by AFL++ fuzzer.
+        //
+        // When a wide character straddles the right scroll margin (head at the
+        // margin, spacer_tail just beyond it), insertBlanks shifts the wide head
+        // away via swapCells but leaves the orphaned spacer_tail in place,
+        // causing a page integrity violation.
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        // Fill row: A B C D 橋 _ _ _ _ _
+        // Positions: 0 1 2 3 4W 5T 6 7 8 9
+        t.set_cursor_pos(1, 1);
+        for c in "ABCD".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.print('橋' as u32).unwrap(); // wide char: head at 4, spacer_tail at 5
+
+        // Set right margin so the wide head is AT the boundary and the
+        // spacer_tail is just outside it.
+        t.scrolling_region.right = 4;
+
+        // Position cursor at x=2 (1-indexed col 3) and insert one blank.
+        // This triggers the swap loop which displaces the wide head at
+        // position 4 without clearing the spacer_tail at position 5.
+        t.set_cursor_pos(1, 3);
+        t.insert_blanks(1);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AB CD".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertBlanks wide char spacer_tail orphaned beyond right margin"
+    #[test]
+    fn terminal_insert_blanks_wide_char_spacer_tail_orphaned_beyond_right_margin() {
+        // Regression test for AFL++ crash.
+        //
+        // When insertBlanks clears the entire region from cursor to the right
+        // margin (scroll_amount == 0), a wide character whose head is AT the
+        // right margin gets cleared but its spacer_tail just beyond the margin
+        // is left behind, causing a page integrity violation:
+        //   "spacer tail not following wide"
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        // Fill cols 0–9 with wide chars: 中中中中中
+        // Positions: 0W 1T 2W 3T 4W 5T 6W 7T 8W 9T
+        for _ in 0..5 {
+            t.print(0x4E2D).unwrap();
+        }
+
+        // Set left/right margins so that the last wide char (cols 8–9)
+        // straddles the boundary: head at col 8 (inside), tail at col 9 (outside).
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(1, 9); // 1-indexed: left=0, right=8
+
+        // Cursor is now at (0, 0) after DECSLRM.  Print a narrow char to
+        // advance cursor to col 1.
+        t.print('a' as u32).unwrap();
+
+        // ICH 8: insert 8 blanks at cursor x=1.
+        // rem = right(8) - x(1) + 1 = 8, adjusted_count = 8, scroll_amount = 0.
+        // The code clears cols 1–8 without noticing the spacer_tail at col 9.
+        t.insert_blanks(8);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "a".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insert mode with space"
+    #[test]
+    fn terminal_insert_mode_with_space() {
+        let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+
+        for c in "hello".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 2);
+        t.modes.set(modespkg::Mode::Insert, true);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "hXello".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insert mode doesn't wrap pushed characters"
+    #[test]
+    fn terminal_insert_mode_doesn_t_wrap_pushed_characters() {
+        let mut t = Terminal::init(Global, opts(5, 2)).unwrap();
+
+        for c in "hello".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 2);
+        t.modes.set(modespkg::Mode::Insert, true);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "hXell".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insert mode does nothing at the end of the line"
+    #[test]
+    fn terminal_insert_mode_does_nothing_at_the_end_of_the_line() {
+        let mut t = Terminal::init(Global, opts(5, 2)).unwrap();
+
+        for c in "hello".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.modes.set(modespkg::Mode::Insert, true);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "hello\nX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insert mode with wide characters"
+    #[test]
+    fn terminal_insert_mode_with_wide_characters() {
+        let mut t = Terminal::init(Global, opts(5, 2)).unwrap();
+
+        for c in "hello".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 2);
+        t.modes.set(modespkg::Mode::Insert, true);
+        t.print('😀' as u32).unwrap(); // 0x1F600
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "h😀el".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insert mode with wide characters at end"
+    #[test]
+    fn terminal_insert_mode_with_wide_characters_at_end() {
+        let mut t = Terminal::init(Global, opts(5, 2)).unwrap();
+
+        for c in "well".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.modes.set(modespkg::Mode::Insert, true);
+        t.print('😀' as u32).unwrap(); // 0x1F600
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "well\n😀".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insert mode pushing off wide character"
+    #[test]
+    fn terminal_insert_mode_pushing_off_wide_character() {
+        let mut t = Terminal::init(Global, opts(5, 2)).unwrap();
+
+        for c in "123".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.print('😀' as u32).unwrap(); // 0x1F600
+        t.modes.set(modespkg::Mode::Insert, true);
+        t.set_cursor_pos(1, 1);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "X123".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
     // PORT NOTE: NOT a port of a reference `test {}` block. This is the
     // page-pool tracking-allocator gate for this batch's page-touching methods
     // (scroll_up/scroll_down/insert_lines/delete_lines, which delegate row
