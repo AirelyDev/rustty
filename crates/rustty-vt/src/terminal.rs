@@ -1874,7 +1874,25 @@ impl Terminal {
 
     /// Set the character protection mode for the terminal.
     pub fn set_protected_mode(&mut self, mode: ansi::ProtectedMode) {
-        todo!()
+        match mode {
+            ansi::ProtectedMode::Off => {
+                self.active_mut().cursor.protected = false;
+
+                // screen.protected_mode is NEVER reset to ".off" because
+                // logic such as eraseChars depends on knowing what the
+                // _most recent_ mode was.
+            }
+
+            ansi::ProtectedMode::Iso => {
+                self.active_mut().cursor.protected = true;
+                self.active_mut().protected_mode = ansi::ProtectedMode::Iso;
+            }
+
+            ansi::ProtectedMode::Dec => {
+                self.active_mut().cursor.protected = true;
+                self.active_mut().protected_mode = ansi::ProtectedMode::Dec;
+            }
+        }
     }
 
     /// Perform a semantic prompt command.
@@ -3804,7 +3822,14 @@ impl Terminal {
 
     /// Set a style attribute.
     pub fn set_attribute(&mut self, attr: sgr::Attribute) -> Result<(), OutOfMemory> {
-        todo!()
+        // try self.screens.active.setAttribute(attr);
+        // PORT NOTE: `Screen::set_attribute` returns the reference
+        // `PageList.IncreaseCapacityError`; the reference `setAttribute` returns
+        // `!void` inferred from that single call, and the only failure mode that
+        // can propagate here is allocation failure, so it maps to `OutOfMemory`.
+        self.active_mut()
+            .set_attribute(attr)
+            .map_err(|_| OutOfMemory)
     }
 
     /// Print the active attributes as a string. This is used to respond to DECRQSS
@@ -3813,7 +3838,128 @@ impl Terminal {
     /// Boolean attributes are printed first, followed by foreground color, then
     /// background color. Each attribute is separated by a semicolon.
     pub fn print_attributes<'a>(&mut self, buf: &'a mut [u8]) -> Result<&'a [u8], OutOfMemory> {
-        todo!()
+        // var stream = std.io.fixedBufferStream(buf);
+        // const writer = stream.writer();
+        // PORT NOTE: the reference uses `std.io.fixedBufferStream`, whose writer
+        // returns `error.NoSpaceLeft` on overflow. We mirror that exactly: `pos`
+        // tracks the bytes written and any write past the buffer end is the
+        // `NoSpaceLeft` error, which is the only error this `![]const u8` can
+        // produce and so maps to `OutOfMemory`.
+        let mut pos: usize = 0;
+        // `writeByte`: write a single byte, NoSpaceLeft if it doesn't fit.
+        macro_rules! write_byte {
+            ($b:expr) => {{
+                if pos >= buf.len() {
+                    return Err(OutOfMemory);
+                }
+                buf[pos] = $b;
+                pos += 1;
+            }};
+        }
+        // `writer.print(fmt, args)`: format into a scratch buffer then copy. The
+        // reference formats directly into the stream; copying the formatted bytes
+        // is byte-for-byte equivalent and keeps the same NoSpaceLeft semantics.
+        macro_rules! write_print {
+            ($($arg:tt)*) => {{
+                let s = format!($($arg)*);
+                if pos + s.len() > buf.len() {
+                    return Err(OutOfMemory);
+                }
+                buf[pos..pos + s.len()].copy_from_slice(s.as_bytes());
+                pos += s.len();
+            }};
+        }
+
+        // The SGR response always starts with a 0. See https://vt100.net/docs/vt510-rm/DECRPSS
+        // try writer.writeByte('0');
+        write_byte!(b'0');
+
+        // const pen = self.screens.active.cursor.style;
+        let pen = self.active_mut().cursor.style;
+        // var attrs: [8]u8 = @splat(0);
+        let mut attrs: [u8; 8] = [0; 8];
+        // var i: usize = 0;
+        let mut i: usize = 0;
+
+        if pen.flags.bold {
+            attrs[i] = b'1';
+            i += 1;
+        }
+
+        if pen.flags.faint {
+            attrs[i] = b'2';
+            i += 1;
+        }
+
+        if pen.flags.italic {
+            attrs[i] = b'3';
+            i += 1;
+        }
+
+        if pen.flags.underline != sgr::Underline::None {
+            attrs[i] = b'4';
+            i += 1;
+        }
+
+        if pen.flags.blink {
+            attrs[i] = b'5';
+            i += 1;
+        }
+
+        if pen.flags.inverse {
+            attrs[i] = b'7';
+            i += 1;
+        }
+
+        if pen.flags.invisible {
+            attrs[i] = b'8';
+            i += 1;
+        }
+
+        if pen.flags.strikethrough {
+            attrs[i] = b'9';
+            i += 1;
+        }
+
+        // for (attrs[0..i]) |c| {
+        //     try writer.print(";{c}", .{c});
+        // }
+        for &c in &attrs[0..i] {
+            write_print!(";{}", c as char);
+        }
+
+        // switch (pen.fg_color) {
+        match pen.fg_color {
+            style::Color::None => {}
+            style::Color::Palette(idx) => {
+                if idx >= 16 {
+                    write_print!(";38:5:{}", idx)
+                } else if idx >= 8 {
+                    write_print!(";9{}", idx - 8)
+                } else {
+                    write_print!(";3{}", idx)
+                }
+            }
+            style::Color::Rgb(rgb) => write_print!(";38:2::{}:{}:{}", rgb.r, rgb.g, rgb.b),
+        }
+
+        // switch (pen.bg_color) {
+        match pen.bg_color {
+            style::Color::None => {}
+            style::Color::Palette(idx) => {
+                if idx >= 16 {
+                    write_print!(";48:5:{}", idx)
+                } else if idx >= 8 {
+                    write_print!(";10{}", idx - 8)
+                } else {
+                    write_print!(";4{}", idx)
+                }
+            }
+            style::Color::Rgb(rgb) => write_print!(";48:2::{}:{}:{}", rgb.r, rgb.g, rgb.b),
+        }
+
+        // return stream.getWritten();
+        Ok(&buf[..pos])
     }
 
     /// DECCOLM changes the terminal width between 80 and 132 columns. This
@@ -5161,7 +5307,8 @@ mod tests {
     // PORT NOTE (vt-12b-3a deferral): tests "Terminal: eraseChars preserves
     // background sgr", "eraseChars handles refcounted styles", and the
     // "eraseChars protected attributes *" group drive `set_attribute` /
-    // `set_protected_mode` (still `todo!()`); deferred to vt-12b-3b.
+    // `set_protected_mode`; now ported in vt-12b-4 (see the SGR/protected
+    // section at the end of this module).
 
     // test "Terminal: eraseChars wide char boundary conditions"
     #[test]
@@ -5382,8 +5529,8 @@ mod tests {
     }
 
     // PORT NOTE (vt-12b-3a deferral): test "Terminal: deleteChars preserves
-    // background sgr" drives `set_attribute` (still `todo!()`); deferred to
-    // vt-12b-3b.
+    // background sgr" drives `set_attribute`; now ported in vt-12b-4 (see the
+    // SGR/protected section at the end of this module).
 
     // test "Terminal: deleteChars outside scroll region"
     #[test]
@@ -5640,8 +5787,8 @@ mod tests {
 
     // PORT NOTE (vt-12b-3a deferral): tests "Terminal: eraseLine right preserves
     // background sgr" and the "eraseLine right protected *" group drive
-    // `set_attribute` / `set_protected_mode` (still `todo!()`); deferred to
-    // vt-12b-3b.
+    // `set_attribute` / `set_protected_mode`; now ported in vt-12b-4 (see the
+    // SGR/protected section at the end of this module).
 
     // test "Terminal: eraseLine right wide character"
     #[test]
@@ -5739,16 +5886,15 @@ mod tests {
 
     // PORT NOTE (vt-12b-3a deferral): the "Terminal: eraseLine left protected
     // *", "eraseLine complete *", "eraseLine left preserves background sgr"
-    // groups drive `set_attribute` / `set_protected_mode` (still `todo!()`);
-    // deferred to vt-12b-3b.
+    // groups drive `set_attribute` / `set_protected_mode`; now ported in
+    // vt-12b-4 (see the SGR/protected section at the end of this module).
 
     // PORT NOTE (vt-12b-3a deferral): the "Terminal: eraseDisplay *" tests that
-    // drive `set_attribute` / `set_protected_mode` (SGR/protected variants)
-    // remain deferred — those methods are still `todo!()`. The non-SGR
-    // eraseDisplay tests (`simple erase below/above`, `below/above split
-    // multi-cell`, `scroll complete`) are now portable (`index()`/`linefeed()`
-    // exist) but are tracked with the broader eraseDisplay group and ported in
-    // a follow-up to keep this batch focused on scroll/lines/margins.
+    // drive `set_attribute` / `set_protected_mode` (SGR/protected variants), plus
+    // the non-SGR eraseDisplay tests (`simple erase above`, `below/above split
+    // multi-cell`, `scroll complete`) tracked with that broader group, are now
+    // ported in vt-12b-4 (see the SGR/protected section at the end of this
+    // module).
 
     // ===================================================================
     // vt-12b-3b: scroll / lines / margins tests (+ deferred linefeed tests)
@@ -6938,5 +7084,1222 @@ mod tests {
         }
         // After deinit every page allocated during this scope must be returned.
         scope.assert_returned_to_baseline();
+    }
+
+    // ===================================================================
+    // vt-12b-4: SGR (setAttribute / printAttributes) + protected-mode tests
+    // (the groups deferred from vt-12b-3a/3b that drive `set_attribute` /
+    //  `set_protected_mode`, plus the eraseDisplay group now unblocked).
+    // ===================================================================
+
+    // test "Terminal: bold style"
+    #[test]
+    fn terminal_bold_style() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        t.print('A' as u32).unwrap();
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(unsafe { (*cell).content_codepoint() }, 'A' as u21);
+            assert!(unsafe { (*cell).style_id() } != 0);
+            let page = unsafe {
+                core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data)
+            };
+            assert!(
+                unsafe {
+                    (*page)
+                        .styles
+                        .ref_count((*page).memory_ptr(), (*t.screens.active).cursor.style_id)
+                } > 1
+            );
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseChars preserves background sgr"
+    #[test]
+    fn terminal_erase_chars_preserves_background_sgr() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 1);
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.erase_chars(2);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  C".as_bytes());
+            {
+                let list_cell = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap();
+                let cell = list_cell.cell;
+                assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+                assert_eq!(
+                    pagepkg::CellRgb {
+                        r: 0xFF,
+                        g: 0,
+                        b: 0,
+                    },
+                    unsafe { (*cell).content_color_rgb() }
+                );
+            }
+            {
+                let list_cell = t.active_mut().pages.get_cell(active_pt(1, 0)).unwrap();
+                let cell = list_cell.cell;
+                assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+                assert_eq!(
+                    pagepkg::CellRgb {
+                        r: 0xFF,
+                        g: 0,
+                        b: 0,
+                    },
+                    unsafe { (*cell).content_color_rgb() }
+                );
+            }
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseChars handles refcounted styles"
+    #[test]
+    fn terminal_erase_chars_handles_refcounted_styles() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        t.print('A' as u32).unwrap();
+        t.print('B' as u32).unwrap();
+        t.set_attribute(sgr::Attribute::Unset).unwrap();
+        t.print('C' as u32).unwrap();
+
+        // verify we have styles in our style map
+        let page =
+            unsafe { core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data) };
+        assert_eq!(1usize, unsafe { (*page).styles.count() });
+
+        t.set_cursor_pos(1, 1);
+        t.erase_chars(2);
+
+        // verify we have no styles in our style map
+        assert_eq!(0usize, unsafe { (*page).styles.count() });
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseChars protected attributes respected with iso"
+    #[test]
+    fn terminal_erase_chars_protected_attributes_respected_with_iso() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Iso);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 1);
+        t.erase_chars(2);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseChars protected attributes ignored with dec most recent"
+    #[test]
+    fn terminal_erase_chars_protected_attributes_ignored_with_dec_most_recent() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Iso);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        t.set_protected_mode(ansi::ProtectedMode::Off);
+        t.set_cursor_pos(1, 1);
+        t.erase_chars(2);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  C".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseChars protected attributes ignored with dec set"
+    #[test]
+    fn terminal_erase_chars_protected_attributes_ignored_with_dec_set() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 1);
+        t.erase_chars(2);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  C".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteChars preserves background sgr"
+    #[test]
+    fn terminal_delete_chars_preserves_background_sgr() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        for c in "ABC123".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 3);
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.delete_chars(2);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AB23".as_bytes());
+        }
+        for x in t.cols - 2..t.cols {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(x, 0)).unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(
+                pagepkg::CellRgb {
+                    r: 0xFF,
+                    g: 0,
+                    b: 0,
+                },
+                unsafe { (*cell).content_color_rgb() }
+            );
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine right preserves background sgr"
+    #[test]
+    fn terminal_erase_line_right_preserves_background_sgr() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 2);
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.erase_line(csi::EraseLine::Right, false);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A".as_bytes());
+            for x in 1..5 {
+                let list_cell = t.active_mut().pages.get_cell(active_pt(x, 0)).unwrap();
+                let cell = list_cell.cell;
+                assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+                assert_eq!(
+                    pagepkg::CellRgb {
+                        r: 0xFF,
+                        g: 0,
+                        b: 0,
+                    },
+                    unsafe { (*cell).content_color_rgb() }
+                );
+            }
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine right protected attributes respected with iso"
+    #[test]
+    fn terminal_erase_line_right_protected_attributes_respected_with_iso() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Iso);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 1);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Right, false);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine right protected attributes ignored with dec most recent"
+    #[test]
+    fn terminal_erase_line_right_protected_attributes_ignored_with_dec_most_recent() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Iso);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        t.set_protected_mode(ansi::ProtectedMode::Off);
+        t.set_cursor_pos(1, 2);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Right, false);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine right protected attributes ignored with dec set"
+    #[test]
+    fn terminal_erase_line_right_protected_attributes_ignored_with_dec_set() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 2);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Right, false);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine right protected requested"
+    #[test]
+    fn terminal_erase_line_right_protected_requested() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        for c in "12345678".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos((unsafe { (*t.screens.active).cursor.y } as usize) + 1, 6);
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        t.print('X' as u32).unwrap();
+        t.set_cursor_pos((unsafe { (*t.screens.active).cursor.y } as usize) + 1, 4);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Right, true);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "123  X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine left preserves background sgr"
+    #[test]
+    fn terminal_erase_line_left_preserves_background_sgr() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 2);
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.erase_line(csi::EraseLine::Left, false);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  CDE".as_bytes());
+            for x in 0..2 {
+                let list_cell = t.active_mut().pages.get_cell(active_pt(x, 0)).unwrap();
+                let cell = list_cell.cell;
+                assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+                assert_eq!(
+                    pagepkg::CellRgb {
+                        r: 0xFF,
+                        g: 0,
+                        b: 0,
+                    },
+                    unsafe { (*cell).content_color_rgb() }
+                );
+            }
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine left protected attributes respected with iso"
+    #[test]
+    fn terminal_erase_line_left_protected_attributes_respected_with_iso() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Iso);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 1);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Left, false);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine left protected attributes ignored with dec most recent"
+    #[test]
+    fn terminal_erase_line_left_protected_attributes_ignored_with_dec_most_recent() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Iso);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        t.set_protected_mode(ansi::ProtectedMode::Off);
+        t.set_cursor_pos(1, 2);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Left, false);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  C".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine left protected attributes ignored with dec set"
+    #[test]
+    fn terminal_erase_line_left_protected_attributes_ignored_with_dec_set() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 2);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Left, false);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  C".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine left protected requested"
+    #[test]
+    fn terminal_erase_line_left_protected_requested() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        for c in "123456789".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos((unsafe { (*t.screens.active).cursor.y } as usize) + 1, 6);
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        t.print('X' as u32).unwrap();
+        t.set_cursor_pos((unsafe { (*t.screens.active).cursor.y } as usize) + 1, 8);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Left, true);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "     X  9".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine complete preserves background sgr"
+    #[test]
+    fn terminal_erase_line_complete_preserves_background_sgr() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 2);
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.erase_line(csi::EraseLine::Complete, false);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "".as_bytes());
+            for x in 0..5 {
+                let list_cell = t.active_mut().pages.get_cell(active_pt(x, 0)).unwrap();
+                let cell = list_cell.cell;
+                assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+                assert_eq!(
+                    pagepkg::CellRgb {
+                        r: 0xFF,
+                        g: 0,
+                        b: 0,
+                    },
+                    unsafe { (*cell).content_color_rgb() }
+                );
+            }
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine complete protected attributes respected with iso"
+    #[test]
+    fn terminal_erase_line_complete_protected_attributes_respected_with_iso() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Iso);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 1);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Complete, false);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine complete protected attributes ignored with dec most recent"
+    #[test]
+    fn terminal_erase_line_complete_protected_attributes_ignored_with_dec_most_recent() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Iso);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        t.set_protected_mode(ansi::ProtectedMode::Off);
+        t.set_cursor_pos(1, 2);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Complete, false);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine complete protected attributes ignored with dec set"
+    #[test]
+    fn terminal_erase_line_complete_protected_attributes_ignored_with_dec_set() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 2);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Complete, false);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseLine complete protected requested"
+    #[test]
+    fn terminal_erase_line_complete_protected_requested() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        for c in "123456789".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos((unsafe { (*t.screens.active).cursor.y } as usize) + 1, 6);
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        t.print('X' as u32).unwrap();
+        t.set_cursor_pos((unsafe { (*t.screens.active).cursor.y } as usize) + 1, 8);
+        t.clear_dirty();
+        t.erase_line(csi::EraseLine::Complete, true);
+        assert!(t.is_dirty(active_pt(0, 0)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "     X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: printAttributes"
+    #[test]
+    fn terminal_print_attributes() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        let mut storage: [u8; 64] = [0; 64];
+
+        {
+            t.set_attribute(sgr::Attribute::DirectColorFg(color::RGB {
+                r: 1,
+                g: 2,
+                b: 3,
+            }))
+            .unwrap();
+            let buf = t.print_attributes(&mut storage).unwrap();
+            assert_eq!(buf, "0;38:2::1:2:3".as_bytes());
+            t.set_attribute(sgr::Attribute::Unset).unwrap();
+        }
+
+        {
+            t.set_attribute(sgr::Attribute::Bold).unwrap();
+            t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+                r: 1,
+                g: 2,
+                b: 3,
+            }))
+            .unwrap();
+            let buf = t.print_attributes(&mut storage).unwrap();
+            assert_eq!(buf, "0;1;48:2::1:2:3".as_bytes());
+            t.set_attribute(sgr::Attribute::Unset).unwrap();
+        }
+
+        {
+            t.set_attribute(sgr::Attribute::Bold).unwrap();
+            t.set_attribute(sgr::Attribute::Faint).unwrap();
+            t.set_attribute(sgr::Attribute::Italic).unwrap();
+            t.set_attribute(sgr::Attribute::Underline(sgr::Underline::Single))
+                .unwrap();
+            t.set_attribute(sgr::Attribute::Blink).unwrap();
+            t.set_attribute(sgr::Attribute::Inverse).unwrap();
+            t.set_attribute(sgr::Attribute::Invisible).unwrap();
+            t.set_attribute(sgr::Attribute::Strikethrough).unwrap();
+            t.set_attribute(sgr::Attribute::DirectColorFg(color::RGB {
+                r: 100,
+                g: 200,
+                b: 255,
+            }))
+            .unwrap();
+            t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+                r: 101,
+                g: 102,
+                b: 103,
+            }))
+            .unwrap();
+            let buf = t.print_attributes(&mut storage).unwrap();
+            assert_eq!(
+                buf,
+                "0;1;2;3;4;5;7;8;9;38:2::100:200:255;48:2::101:102:103".as_bytes()
+            );
+            t.set_attribute(sgr::Attribute::Unset).unwrap();
+        }
+
+        {
+            t.set_attribute(sgr::Attribute::Underline(sgr::Underline::Single))
+                .unwrap();
+            let buf = t.print_attributes(&mut storage).unwrap();
+            assert_eq!(buf, "0;4".as_bytes());
+            t.set_attribute(sgr::Attribute::Unset).unwrap();
+        }
+
+        {
+            let buf = t.print_attributes(&mut storage).unwrap();
+            assert_eq!(buf, "0".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay erase below preserves SGR bg"
+    #[test]
+    fn terminal_erase_display_erase_below_preserves_sgr_bg() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "DEF".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "GHI".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(2, 2);
+
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.erase_display(csi::EraseDisplay::Below, false);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\nD".as_bytes());
+            for x in 1..5 {
+                let list_cell = t.active_mut().pages.get_cell(active_pt(x, 1)).unwrap();
+                let cell = list_cell.cell;
+                assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+                assert_eq!(
+                    pagepkg::CellRgb {
+                        r: 0xFF,
+                        g: 0,
+                        b: 0,
+                    },
+                    unsafe { (*cell).content_color_rgb() }
+                );
+            }
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay below split multi-cell"
+    #[test]
+    fn terminal_erase_display_below_split_multi_cell() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("AB橋C".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DE橋F".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GH橋I".as_bytes()).unwrap();
+        t.set_cursor_pos(2, 4);
+        t.erase_display(csi::EraseDisplay::Below, false);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AB橋C\nDE".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay below protected attributes respected with iso"
+    #[test]
+    fn terminal_erase_display_below_protected_attributes_respected_with_iso() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Iso);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "DEF".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "GHI".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(2, 2);
+        t.erase_display(csi::EraseDisplay::Below, false);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\nDEF\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay below protected attributes ignored with dec most recent"
+    #[test]
+    fn terminal_erase_display_below_protected_attributes_ignored_with_dec_most_recent() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Iso);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "DEF".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "GHI".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        t.set_protected_mode(ansi::ProtectedMode::Off);
+        t.set_cursor_pos(2, 2);
+        t.erase_display(csi::EraseDisplay::Below, false);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\nD".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay below protected attributes ignored with dec set"
+    #[test]
+    fn terminal_erase_display_below_protected_attributes_ignored_with_dec_set() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "DEF".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "GHI".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(2, 2);
+        t.erase_display(csi::EraseDisplay::Below, false);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\nD".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay below protected attributes respected with force"
+    #[test]
+    fn terminal_erase_display_below_protected_attributes_respected_with_force() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "DEF".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "GHI".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(2, 2);
+        t.erase_display(csi::EraseDisplay::Below, true);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\nDEF\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay simple erase above"
+    #[test]
+    fn terminal_erase_display_simple_erase_above() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "DEF".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "GHI".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(2, 2);
+
+        t.clear_dirty();
+        t.erase_display(csi::EraseDisplay::Above, false);
+        assert!(t.is_dirty(active_pt(0, 0)));
+        assert!(t.is_dirty(active_pt(0, 1)));
+        assert!(!t.is_dirty(active_pt(0, 2)));
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n  F\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay erase above preserves SGR bg"
+    #[test]
+    fn terminal_erase_display_erase_above_preserves_sgr_bg() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "DEF".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "GHI".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(2, 2);
+
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.erase_display(csi::EraseDisplay::Above, false);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n  F\nGHI".as_bytes());
+            for x in 0..2 {
+                let list_cell = t.active_mut().pages.get_cell(active_pt(x, 1)).unwrap();
+                let cell = list_cell.cell;
+                assert!(unsafe { (*cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+                assert_eq!(
+                    pagepkg::CellRgb {
+                        r: 0xFF,
+                        g: 0,
+                        b: 0,
+                    },
+                    unsafe { (*cell).content_color_rgb() }
+                );
+            }
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay above split multi-cell"
+    #[test]
+    fn terminal_erase_display_above_split_multi_cell() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print_string("AB橋C".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("DE橋F".as_bytes()).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.print_string("GH橋I".as_bytes()).unwrap();
+        t.set_cursor_pos(2, 3);
+        t.erase_display(csi::EraseDisplay::Above, false);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n    F\nGH橋I".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay above protected attributes respected with iso"
+    #[test]
+    fn terminal_erase_display_above_protected_attributes_respected_with_iso() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Iso);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "DEF".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "GHI".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(2, 2);
+        t.erase_display(csi::EraseDisplay::Above, false);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\nDEF\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay above protected attributes ignored with dec most recent"
+    #[test]
+    fn terminal_erase_display_above_protected_attributes_ignored_with_dec_most_recent() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Iso);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "DEF".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "GHI".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        t.set_protected_mode(ansi::ProtectedMode::Off);
+        t.set_cursor_pos(2, 2);
+        t.erase_display(csi::EraseDisplay::Above, false);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n  F\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay above protected attributes ignored with dec set"
+    #[test]
+    fn terminal_erase_display_above_protected_attributes_ignored_with_dec_set() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "DEF".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "GHI".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(2, 2);
+        t.erase_display(csi::EraseDisplay::Above, false);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n  F\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay above protected attributes respected with force"
+    #[test]
+    fn terminal_erase_display_above_protected_attributes_respected_with_force() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        for c in "ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "DEF".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "GHI".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(2, 2);
+        t.erase_display(csi::EraseDisplay::Above, true);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABC\nDEF\nGHI".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay protected complete"
+    #[test]
+    fn terminal_erase_display_protected_complete() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "123456789".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos((unsafe { (*t.screens.active).cursor.y } as usize) + 1, 6);
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        t.print('X' as u32).unwrap();
+        t.set_cursor_pos((unsafe { (*t.screens.active).cursor.y } as usize) + 1, 4);
+
+        t.clear_dirty();
+        t.erase_display(csi::EraseDisplay::Complete, true);
+        for y in 0..t.rows {
+            assert!(t.is_dirty(active_pt(0, y as u32)));
+        }
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n     X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay protected below"
+    #[test]
+    fn terminal_erase_display_protected_below() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "123456789".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos((unsafe { (*t.screens.active).cursor.y } as usize) + 1, 6);
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        t.print('X' as u32).unwrap();
+        t.set_cursor_pos((unsafe { (*t.screens.active).cursor.y } as usize) + 1, 4);
+        t.erase_display(csi::EraseDisplay::Below, true);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A\n123  X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay scroll complete"
+    #[test]
+    fn terminal_erase_display_scroll_complete() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        t.erase_display(csi::EraseDisplay::ScrollComplete, false);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay protected above"
+    #[test]
+    fn terminal_erase_display_protected_above() {
+        let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.carriage_return();
+        t.linefeed().unwrap();
+        for c in "123456789".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos((unsafe { (*t.screens.active).cursor.y } as usize) + 1, 6);
+        t.set_protected_mode(ansi::ProtectedMode::Dec);
+        t.print('X' as u32).unwrap();
+        t.set_cursor_pos((unsafe { (*t.screens.active).cursor.y } as usize) + 1, 8);
+        t.erase_display(csi::EraseDisplay::Above, true);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n     X  9".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay complete preserves cursor"
+    #[test]
+    fn terminal_erase_display_complete_preserves_cursor() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        // Set our cursur
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        t.print_string("AAAA".as_bytes()).unwrap();
+        assert!(unsafe { (*t.screens.active).cursor.style_id } != style::DEFAULT_ID);
+
+        // Erasing the display may detect that our style is no longer in use
+        // and prune our style, which we don't want because its still our
+        // active cursor.
+        t.erase_display(csi::EraseDisplay::Complete, false);
+        assert!(unsafe { (*t.screens.active).cursor.style_id } != style::DEFAULT_ID);
+
+        t.deinit(Global);
     }
 }
