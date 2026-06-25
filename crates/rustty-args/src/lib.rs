@@ -3,7 +3,9 @@
 //! PORTS: ghostty src/cli/args.zig, cli/diagnostics.zig, cli/CommaSplitter.zig — CLI arg parsing
 //! base extracted below config and cli (break #7, breaks config<->cli).
 //!
-//! PORT STATUS: stub
-//!
-//! Scaffold only — no real logic yet (R1: every line/comment/test{} ported as
-//! the crate is carved, leaves-first, under the acyclicity gate per R4).
+//! PORT STATUS: ported (Stage C). args.zig (36t) + CommaSplitter.zig (28t) +
+//! diagnostics.zig (0t, required by args.zig) ported assertion-for-assertion.
+
+pub mod args;
+pub mod comma_splitter;
+pub mod diagnostics;
