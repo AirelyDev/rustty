@@ -8,15 +8,17 @@ target workflow consumes this file. Nothing here is "dropped" (R1); it is schedu
 
 From **vt-7 (kitty)** — these need `Screen`/`Terminal`/`ImageStorage`:
 
-1. **`kitty/graphics_unicode.rs` — `render_placement()` + `grid()` methods.**
-   Production logic + the iterator are ported; these two methods are deferred (need
-   `ImageStorage` from `graphics_storage` + `Image`). Reference:
-   `ghostty/src/terminal/kitty/graphics_unicode.zig`. Carries **58 inner comments**
-   (the coordinate-space / scaled-rect / grid-fit logic) that G3b reports MISSING
-   on `graphics_unicode` until done — EXPECTED until vt-12. Signatures documented
-   in-source at graphics_unicode.rs:170-179.
-   - **14 deferred tests** (graphics_unicode.rs:448-452): 11 placement-iterator
-     (`unicode placement: …`) + 3 render (`unicode render placement: dog …`).
+1. ~~**`kitty/graphics_unicode.rs` — `render_placement()` + `grid()` methods.**~~
+   **RESOLVED (vt-12c-kitty).** `render_placement` (coordinate-space / scaled-rect /
+   aspect-fit logic) + `grid` (placement lookup by id, else first virtual placement;
+   image-size fallback; `CellCountInt` bounds check) are ported verbatim to
+   `kitty/graphics_unicode.rs` from `ghostty/src/terminal/kitty/graphics_unicode.zig`,
+   carrying all **58 inner comments**. Scoped graphics_unicode.zig G3b → missing=0.
+   - **14 ported tests**: 11 placement-iterator (`unicode placement: …`) + 3 render
+     (`unicode render placement: dog 4x2 / 2x2 with blank cells / 1x1`), all
+     assertion-for-assertion and passing (1380 → 1394 total, no regression).
+   - Memory safety: `unicode_placement_single_row_col` + `unicode_render_placement_dog_1x1`
+     are Miri-clean (UB=0) in isolation; all 14 pass under ASan.
 
 2. ~~**`kitty/graphics_storage.zig` (1364 loc, 19 tests)** — full file. Needs `Screen`.~~
    **RESOLVED (vt-12c-kitty).** `ImageStorage` (+ `Placement`/`PlacementKey`/
