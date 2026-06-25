@@ -124,6 +124,14 @@ impl GlyphGlossary {
         // deinit` calls this, so it must be a (no-op) body rather than `todo!()`.
         let _ = alloc;
     }
+
+    // pub fn clearAndFree(self: *Glossary, alloc: Allocator) void
+    pub fn clear_and_free(&mut self, alloc: Allocator) {
+        // PORT NOTE (vt-12a deferral): same ZST/no-op stub as `deinit` — the
+        // Glyph Protocol `Glossary` holds no allocated state, so clearing and
+        // freeing is a no-op. `Terminal::full_reset` calls this.
+        let _ = alloc;
+    }
 }
 
 /// `glyph.Request` — Glyph Protocol request (font-blocked ZST stub; see
@@ -3970,7 +3978,48 @@ impl Terminal {
     /// with the window. This will fix the grid at either 80 or 132 columns.
     /// The rows will continue to be variable.
     pub fn deccolm(&mut self, alloc: Allocator, mode: DeccolmMode) -> Result<(), OutOfMemory> {
-        todo!()
+        // If DEC mode 40 isn't enabled, then this is ignored. We also make
+        // sure that we don't have deccolm set because we want to fully ignore
+        // set mode.
+        // if (!self.modes.get(.enable_mode_3)) {
+        //     self.modes.set(.@"132_column", false);
+        //     return;
+        // }
+        if !self.modes.get(modespkg::Mode::EnableMode3) {
+            self.modes.set(modespkg::Mode::Column132, false);
+            return Ok(());
+        }
+
+        // Enable it
+        // self.modes.set(.@"132_column", mode == .@"132_cols");
+        self.modes
+            .set(modespkg::Mode::Column132, mode == DeccolmMode::Cols132);
+
+        // Resize to the requested size
+        // try self.resize(
+        //     alloc,
+        //     switch (mode) {
+        //         .@"132_cols" => 132,
+        //         .@"80_cols" => 80,
+        //     },
+        //     self.rows,
+        // );
+        self.resize(
+            alloc,
+            match mode {
+                DeccolmMode::Cols132 => 132,
+                DeccolmMode::Cols80 => 80,
+            },
+            self.rows,
+        )?;
+
+        // Erase our display and move our cursor.
+        // self.eraseDisplay(.complete, false);
+        // self.setCursorPos(1, 1);
+        self.erase_display(csi::EraseDisplay::Complete, false);
+        self.set_cursor_pos(1, 1);
+
+        Ok(())
     }
 
     /// Resize the underlying terminal.
@@ -3980,7 +4029,100 @@ impl Terminal {
         cols: size::CellCountInt,
         rows: size::CellCountInt,
     ) -> Result<(), OutOfMemory> {
-        todo!()
+        // If our cols/rows didn't change then we're done
+        // if (self.cols == cols and self.rows == rows) return;
+        if self.cols == cols && self.rows == rows {
+            return Ok(());
+        }
+
+        // Resize our tabstops
+        // if (self.cols != cols) {
+        //     self.tabstops.deinit(alloc);
+        //     self.tabstops = try .init(alloc, cols, 8);
+        // }
+        if self.cols != cols {
+            // PORT NOTE: `Tabstops::deinit` consumes `self` by value (mirrors
+            // the reference `self.tabstops.deinit(alloc)`); we take the field
+            // out via `core::mem::take` (leaving an empty default) to call it,
+            // then overwrite with the freshly initialized tabstops.
+            core::mem::take(&mut self.tabstops).deinit(alloc);
+            // PORT NOTE: `Tabstops::init`'s allocation-failure type is its own
+            // `OutOfMemory`; both map to the reference `Allocator.Error`. We
+            // normalize to `pagelist::OutOfMemory` (this crate's canonical OOM)
+            // to match the `resize` signature.
+            self.tabstops = match Tabstops::init(alloc, cols as usize, 8) {
+                Ok(t) => t,
+                Err(_e) => return Err(OutOfMemory),
+            };
+        }
+
+        // Resize primary screen, which supports reflow
+        // const primary = self.screens.get(.primary).?;
+        // try primary.resize(.{
+        //     .cols = cols,
+        //     .rows = rows,
+        //     .reflow = self.modes.get(.wraparound),
+        //     .prompt_redraw = self.flags.shell_redraws_prompt,
+        // });
+        let reflow = self.modes.get(modespkg::Mode::Wraparound);
+        let prompt_redraw = self.flags.shell_redraws_prompt;
+        let primary: *mut Screen = self.screens.get(crate::screen_set::Key::Primary).unwrap();
+        // SAFETY: `primary` is a stable heap pointer owned by `self.screens`;
+        // `resize` takes `&mut Screen` and does not mutate `self.screens`.
+        unsafe {
+            (*primary).resize(crate::screen::Resize {
+                cols,
+                rows,
+                reflow,
+                prompt_redraw,
+            })?;
+        }
+
+        // Alternate screen, if it exists, doesn't reflow
+        // if (self.screens.get(.alternate)) |alt| try alt.resize(.{
+        //     .cols = cols,
+        //     .rows = rows,
+        //     .reflow = false,
+        // });
+        if let Some(alt) = self.screens.get(crate::screen_set::Key::Alternate) {
+            // SAFETY: `alt` is a stable heap pointer owned by `self.screens`.
+            unsafe {
+                (*alt).resize(crate::screen::Resize {
+                    cols,
+                    rows,
+                    reflow: false,
+                    // PORT NOTE: the reference omits `prompt_redraw` here, so it
+                    // takes the `Resize` struct field default of `.true`.
+                    prompt_redraw: osc::semantic_prompt::Redraw::True,
+                })?;
+            }
+        }
+
+        // Whenever we resize we just mark it as a screen clear
+        // self.flags.dirty.clear = true;
+        self.flags.dirty.clear = true;
+
+        // Set our size
+        // self.cols = cols;
+        // self.rows = rows;
+        self.cols = cols;
+        self.rows = rows;
+
+        // Reset the scrolling region
+        // self.scrolling_region = .{
+        //     .top = 0,
+        //     .bottom = rows - 1,
+        //     .left = 0,
+        //     .right = cols - 1,
+        // };
+        self.scrolling_region = ScrollingRegion {
+            top: 0,
+            bottom: rows - 1,
+            left: 0,
+            right: cols - 1,
+        };
+
+        Ok(())
     }
 
     /// Set the pwd for the terminal.
@@ -4026,7 +4168,113 @@ impl Terminal {
         &mut self,
         key: crate::screen_set::Key,
     ) -> Result<Option<*mut Screen>, OutOfMemory> {
-        todo!()
+        // If we're already on the requested screen we do nothing.
+        // if (self.screens.active_key == key) return null;
+        if self.screens.active_key == key {
+            return Ok(None);
+        }
+        // const old = self.screens.active;
+        let old: *mut Screen = self.screens.active;
+
+        // We always end hyperlink state when switching screens.
+        // We need to do this on the original screen.
+        // old.endHyperlink();
+        // SAFETY: `old` is a stable heap pointer owned by `self.screens`;
+        // `end_hyperlink` takes `&mut Screen` and does not mutate `self.screens`.
+        unsafe { (*old).end_hyperlink() };
+
+        // Switch the screens/
+        // const new = self.screens.get(key) orelse new: {
+        //     const primary = self.screens.get(.primary).?;
+        //     break :new try self.screens.getInit(
+        //         old.alloc,
+        //         key,
+        //         .{ ... },
+        //     );
+        // };
+        let new: *mut Screen = match self.screens.get(key) {
+            Some(s) => s,
+            None => {
+                let primary: *mut Screen =
+                    self.screens.get(crate::screen_set::Key::Primary).unwrap();
+                // SAFETY: `old`/`primary` are stable heap pointers owned by
+                // `self.screens`; we only read `old.alloc` and
+                // `primary.pages.explicit_max_size`.
+                let old_alloc = unsafe { (*old).alloc };
+                let primary_max = unsafe { (*primary).pages.explicit_max_size };
+                self.screens.get_init(
+                    old_alloc,
+                    key,
+                    crate::screen::Options {
+                        cols: self.cols,
+                        rows: self.rows,
+                        // .max_scrollback = switch (key) {
+                        //     .primary => primary.pages.explicit_max_size,
+                        //     .alternate => 0,
+                        // },
+                        max_scrollback: match key {
+                            crate::screen_set::Key::Primary => primary_max,
+                            crate::screen_set::Key::Alternate => 0,
+                        },
+
+                        // Inherit our Kitty image settings from the primary
+                        // screen if we have to initialize.
+                        // .kitty_image_storage_limit = if (comptime build_options.kitty_graphics)
+                        //     primary.kitty_images.total_limit
+                        // else
+                        //     0,
+                        // .kitty_image_loading_limits = if (comptime build_options.kitty_graphics)
+                        //     primary.kitty_images.image_limits
+                        // else {},
+                        // PORT NOTE (vt-12 deferral): Kitty graphics
+                        // `ImageStorage` is deferred (build_options.kitty_graphics
+                        // is the disabled case), so these take the disabled-branch
+                        // values: `0` and the empty/void limits. The reference's
+                        // `else {}` is the `void` field; the rustty `Options` field
+                        // is always `Limits`, so we use `DIRECT` (all-false, the
+                        // empty representation) to stand in for the unused `void`.
+                        kitty_image_storage_limit: 0,
+                        kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+                    },
+                )?
+            }
+        };
+
+        // The new screen should not have any hyperlinks set
+        // assert(new.cursor.hyperlink_id == 0);
+        // SAFETY: `new` is a stable heap pointer owned by `self.screens`.
+        debug_assert!(unsafe { (*new).cursor.hyperlink_id } == 0);
+
+        // Bring our charset state with us
+        // new.charset = old.charset;
+        // SAFETY: `old`/`new` are distinct stable heap pointers owned by
+        // `self.screens` (the early return above guarantees `key != active_key`,
+        // and `new` is either a different initialized screen or freshly created).
+        unsafe { (*new).charset = (*old).charset.clone() };
+
+        // Clear our selection
+        // new.clearSelection();
+        unsafe { (*new).clear_selection() };
+
+        // if (comptime build_options.kitty_graphics) {
+        //     // Mark kitty images as dirty so they redraw. Without this set
+        //     // the images will remain where they were (the dirty bit on
+        //     // the screen only tracks the terminal grid, not the images).
+        //     new.kitty_images.dirty = true;
+        // }
+        // PORT NOTE (vt-12 deferral): Kitty graphics is the disabled case, so
+        // the `kitty_images.dirty = true` set is omitted.
+
+        // Mark our terminal as dirty to redraw the grid.
+        // self.flags.dirty.clear = true;
+        self.flags.dirty.clear = true;
+
+        // Finalize the switch
+        // self.screens.switchTo(key);
+        self.screens.switch_to(key);
+
+        // return old;
+        Ok(Some(old))
     }
 
     /// Switch screen via a mode switch (e.g. mode 47, 1047, 1049).
@@ -4043,7 +4291,126 @@ impl Terminal {
         mode: SwitchScreenMode,
         enabled: bool,
     ) -> Result<(), OutOfMemory> {
-        todo!()
+        // The behavior in this function is completely based on reading
+        // the xterm source, specifically "charproc.c" for
+        // `srm_ALTBUF`, `srm_OPT_ALTBUF`, and `srm_OPT_ALTBUF_CURSOR`.
+        // We shouldn't touch anything in here without adding a unit
+        // test AND verifying the behavior with xterm.
+
+        // switch (mode) {
+        //     .@"47" => {},
+        //     .@"1047" => if (!enabled and self.screens.active_key == .alternate) {
+        //         self.eraseDisplay(.complete, false);
+        //     },
+        //     .@"1049" => if (enabled) self.saveCursor(),
+        // }
+        match mode {
+            SwitchScreenMode::M47 => {}
+
+            // If we're disabling 1047 and we're on alt screen then
+            // we clear the screen.
+            SwitchScreenMode::M1047 => {
+                if !enabled && self.screens.active_key == crate::screen_set::Key::Alternate {
+                    self.erase_display(csi::EraseDisplay::Complete, false);
+                }
+            }
+
+            // 1049 unconditionally saves the cursor on enabling, even
+            // if we're already on the alternate screen.
+            SwitchScreenMode::M1049 => {
+                if enabled {
+                    self.save_cursor();
+                }
+            }
+        }
+
+        // Switch screens first to whatever we're going to.
+        // const to: ScreenSet.Key = if (enabled) .alternate else .primary;
+        // const old_ = try self.switchScreen(to);
+        let to: crate::screen_set::Key = if enabled {
+            crate::screen_set::Key::Alternate
+        } else {
+            crate::screen_set::Key::Primary
+        };
+        let old_: Option<*mut Screen> = self.switch_screen(to)?;
+
+        match mode {
+            // For these modes, we need to copy the cursor. We only copy
+            // the cursor if the screen actually changed, otherwise the
+            // cursor is already copied. The cursor is copied regardless
+            // of destination screen.
+            // .@"47", .@"1047" => if (old_) |old| {
+            //     self.screens.active.cursorCopy(old.cursor, .{ .hyperlink = false }) catch |err| {
+            //         log.warn("cursor copy failed entering alt screen err={}", .{err});
+            //     };
+            // },
+            SwitchScreenMode::M47 | SwitchScreenMode::M1047 => {
+                if let Some(old) = old_ {
+                    // SAFETY: `old` and `self.screens.active` are stable heap
+                    // pointers owned by `self.screens`; `cursorCopy` takes
+                    // `&mut Screen` and `old.cursor` is a `Copy` value.
+                    let old_cursor = unsafe { (*old).cursor };
+                    let active: *mut Screen = self.screens.active;
+                    if let Err(_err) = unsafe {
+                        (*active).cursor_copy(
+                            old_cursor,
+                            crate::screen::CursorCopyOptions { hyperlink: false },
+                        )
+                    } {
+                        // log.warn("cursor copy failed entering alt screen err={}", .{err});
+                        // PORT NOTE: this crate has no logging facility (all
+                        // `std.log` calls are preserved as comments); on the
+                        // copy-failure path we just continue, matching the
+                        // reference `catch` that only logs and proceeds.
+                    }
+                }
+            }
+
+            // Mode 1049 restores cursor on the primary screen when
+            // we disable it.
+            // .@"1049" => if (enabled) {
+            //     assert(self.screens.active_key == .alternate);
+            //     self.eraseDisplay(.complete, false);
+            //     if (old_) |old| {
+            //         self.screens.active.cursorCopy(old.cursor, .{ .hyperlink = false }) catch |err| {
+            //             log.warn("cursor copy failed entering alt screen err={}", .{err});
+            //         };
+            //     }
+            // } else {
+            //     assert(self.screens.active_key == .primary);
+            //     self.restoreCursor();
+            // },
+            SwitchScreenMode::M1049 => {
+                if enabled {
+                    debug_assert!(self.screens.active_key == crate::screen_set::Key::Alternate);
+                    self.erase_display(csi::EraseDisplay::Complete, false);
+
+                    // When we enter alt screen with 1049, we always copy the
+                    // cursor from the primary screen (if we weren't already
+                    // on it).
+                    if let Some(old) = old_ {
+                        // SAFETY: see the M47/M1047 arm above.
+                        let old_cursor = unsafe { (*old).cursor };
+                        let active: *mut Screen = self.screens.active;
+                        if let Err(_err) = unsafe {
+                            (*active).cursor_copy(
+                                old_cursor,
+                                crate::screen::CursorCopyOptions { hyperlink: false },
+                            )
+                        } {
+                            // log.warn("cursor copy failed entering alt screen err={}", .{err});
+                            // PORT NOTE: see the M47/M1047 arm above; no logging
+                            // facility, so the copy-failure path just continues.
+                        }
+                    }
+                } else {
+                    debug_assert!(self.screens.active_key == crate::screen_set::Key::Primary);
+                    self.restore_cursor();
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Return the current string value of the terminal. Newlines are
@@ -4071,7 +4438,60 @@ impl Terminal {
     /// this will reuse the existing memory. In the latter case, memory may
     /// be wasted (since its unused) but it isn't leaked.
     pub fn full_reset(&mut self) {
-        todo!()
+        // Ensure we're back on primary screen
+        // self.screens.switchTo(.primary);
+        // self.screens.remove(self.screens.active.alloc, .alternate);
+        self.screens.switch_to(crate::screen_set::Key::Primary);
+        // SAFETY: `self.screens.active` is now the primary screen (a stable heap
+        // pointer owned by `self.screens`); we read only its `alloc`. `remove`
+        // mutates `self.screens.all[alternate]`, which is a distinct entry from
+        // the active (primary) screen, so the read isn't invalidated.
+        let alloc = unsafe { (*self.screens.active).alloc };
+        self.screens
+            .remove(alloc, crate::screen_set::Key::Alternate);
+
+        // Reset our screens
+        // self.screens.active.reset();
+        // SAFETY: `self.screens.active` is the primary screen; `reset` takes
+        // `&mut Screen` and does not mutate `self.screens`.
+        unsafe { (*self.screens.active).reset() };
+
+        // Rest our basic state
+        // self.modes.reset();
+        // self.flags = .{};
+        // self.tabstops.reset(TABSTOP_INTERVAL);
+        // self.previous_char = null;
+        // self.pwd.clearRetainingCapacity();
+        // self.title.clearRetainingCapacity();
+        // self.glyph_glossary.clearAndFree(self.gpa());
+        // self.status_display = .main;
+        self.modes.reset();
+        self.flags = Flags::default();
+        self.tabstops.reset(TABSTOP_INTERVAL as usize);
+        self.previous_char = None;
+        // PORT NOTE: `std.ArrayList.clearRetainingCapacity` keeps the allocation
+        // and sets len to 0; `Vec::clear` is the faithful equivalent.
+        self.pwd.clear();
+        self.title.clear();
+        let gpa = self.gpa();
+        self.glyph_glossary.clear_and_free(gpa);
+        self.status_display = ansi::StatusDisplay::Main;
+        // self.scrolling_region = .{
+        //     .top = 0,
+        //     .bottom = self.rows - 1,
+        //     .left = 0,
+        //     .right = self.cols - 1,
+        // };
+        self.scrolling_region = ScrollingRegion {
+            top: 0,
+            bottom: self.rows - 1,
+            left: 0,
+            right: self.cols - 1,
+        };
+
+        // Always mark dirty so we redraw everything
+        // self.flags.dirty.clear = true;
+        self.flags.dirty.clear = true;
     }
 
     /// Returns true if the point is dirty, used for testing.
@@ -7086,6 +7506,52 @@ mod tests {
         scope.assert_returned_to_baseline();
     }
 
+    // PORT NOTE: NOT a port of a reference `test {}` block. This is the
+    // page-pool tracking-allocator gate for this batch's `resize` method, which
+    // delegates the active-screen resize (reflow) to `Screen::resize` ->
+    // `pagelist` (page split/merge + scrollback trimming). Under `cfg(test)` the
+    // page pool's backing allocator records into the global `page_tracking`
+    // tracker; this test drives resize grow + shrink churn (with reflow) and
+    // asserts every page allocated during the scope is returned after `deinit`
+    // (no page leak across the resize page-churn path).
+    #[test]
+    fn terminal_pagepool_no_leak_resize_grow() {
+        let scope = crate::pagelist::page_tracking::PageLeakScope::new();
+        {
+            let alloc = Global;
+            let mut t = Terminal::init(alloc, opts(20, 5)).unwrap();
+
+            // Enable wraparound so resize reflows soft-wrapped content (driving
+            // page split/merge through the reflow path).
+            t.modes.set(modespkg::Mode::Wraparound, true);
+
+            // Fill enough wrapped content to force several pages of churn.
+            for i in 0..400u32 {
+                let line = format!("row{i:04}-padding-text-to-wrap");
+                t.print_string(line.as_bytes()).unwrap();
+                t.carriage_return();
+                t.linefeed().unwrap();
+            }
+
+            // Grow then shrink columns repeatedly to drive reflow page churn.
+            for _ in 0..10 {
+                t.resize(alloc, 60, 5).unwrap();
+                t.resize(alloc, 8, 5).unwrap();
+                t.resize(alloc, 20, 5).unwrap();
+            }
+
+            // We should have produced real page churn.
+            assert!(
+                scope.delta_allocs() > 0,
+                "expected resize reflow churn to allocate at least one new page"
+            );
+
+            t.deinit(alloc);
+        }
+        // After deinit every page allocated during this scope must be returned.
+        scope.assert_returned_to_baseline();
+    }
+
     // ===================================================================
     // vt-12b-4: SGR (setAttribute / printAttributes) + protected-mode tests
     // (the groups deferred from vt-12b-3a/3b that drive `set_attribute` /
@@ -8301,5 +8767,827 @@ mod tests {
         assert!(unsafe { (*t.screens.active).cursor.style_id } != style::DEFAULT_ID);
 
         t.deinit(Global);
+    }
+
+    // ===================================================================
+    // vt-12b-5: Terminal modes/resize/switch tests (deccolm / resize /
+    // switchScreen / switchScreenMode / fullReset), now unblocked.
+    // ===================================================================
+
+    // test "Terminal: saveCursor resize"
+    #[test]
+    fn terminal_save_cursor_resize() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
+
+        t.set_cursor_pos(1, 10);
+        t.save_cursor();
+        t.resize(alloc, 5, 5).unwrap();
+        t.restore_cursor();
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "    X".as_bytes());
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: fullReset with a non-empty pen"
+    #[test]
+    fn terminal_full_reset_with_a_non_empty_pen() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        t.set_attribute(sgr::Attribute::DirectColorFg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0x7F,
+        }))
+        .unwrap();
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0x7F,
+        }))
+        .unwrap();
+        unsafe { (*t.screens.active).cursor.semantic_content = pagepkg::SemanticContent::Input };
+        t.full_reset();
+
+        {
+            let cursor_x = unsafe { (*t.screens.active).cursor.x };
+            let cursor_y = unsafe { (*t.screens.active).cursor.y };
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(active_pt(cursor_x, cursor_y as u32))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).style_id() } == 0);
+        }
+
+        assert_eq!(0 as style::Id, unsafe {
+            (*t.screens.active).cursor.style_id
+        });
+        assert_eq!(pagepkg::SemanticContent::Output, unsafe {
+            (*t.screens.active).cursor.semantic_content
+        });
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: fullReset hyperlink"
+    #[test]
+    fn terminal_full_reset_hyperlink() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        t.active_mut()
+            .start_hyperlink("http://example.com".as_bytes(), None)
+            .unwrap();
+        t.full_reset();
+        assert_eq!(0, unsafe { (*t.screens.active).cursor.hyperlink_id });
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: fullReset with a non-empty saved cursor"
+    #[test]
+    fn terminal_full_reset_with_a_non_empty_saved_cursor() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        t.set_attribute(sgr::Attribute::DirectColorFg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0x7F,
+        }))
+        .unwrap();
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0x7F,
+        }))
+        .unwrap();
+        t.save_cursor();
+        t.full_reset();
+
+        {
+            let cursor_x = unsafe { (*t.screens.active).cursor.x };
+            let cursor_y = unsafe { (*t.screens.active).cursor.y };
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(active_pt(cursor_x, cursor_y as u32))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert!(unsafe { (*cell).style_id() } == 0);
+        }
+
+        assert_eq!(0 as style::Id, unsafe {
+            (*t.screens.active).cursor.style_id
+        });
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: fullReset origin mode"
+    #[test]
+    fn terminal_full_reset_origin_mode() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.set_cursor_pos(3, 5);
+        t.modes.set(modespkg::Mode::Origin, true);
+        t.full_reset();
+
+        // Origin mode should be reset and the cursor should be moved
+        assert_eq!(0_usize, unsafe { (*t.screens.active).cursor.y } as usize);
+        assert_eq!(0_usize, unsafe { (*t.screens.active).cursor.x } as usize);
+        assert!(!t.modes.get(modespkg::Mode::Origin));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: fullReset status display"
+    #[test]
+    fn terminal_full_reset_status_display() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.status_display = ansi::StatusDisplay::StatusLine;
+        t.full_reset();
+        assert!(t.status_display == ansi::StatusDisplay::Main);
+
+        t.deinit(Global);
+    }
+
+    // https://github.com/mitchellh/ghostty/issues/1607
+    // test "Terminal: fullReset clears alt screen kitty keyboard state"
+    #[test]
+    fn terminal_full_reset_clears_alt_screen_kitty_keyboard_state() {
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.switch_screen_mode(SwitchScreenMode::M1049, true).unwrap();
+        unsafe {
+            (*t.screens.active).kitty_keyboard.push(kitty::key::Flags {
+                disambiguate: true,
+                report_events: false,
+                report_alternates: true,
+                report_all: true,
+                report_associated: true,
+            });
+        }
+        t.switch_screen_mode(SwitchScreenMode::M1049, false)
+            .unwrap();
+
+        t.full_reset();
+        assert!(t.screens.get(crate::screen_set::Key::Alternate).is_none());
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: fullReset default modes"
+    #[test]
+    fn terminal_full_reset_default_modes() {
+        // PORT NOTE: the reference `init(alloc, .{ .cols, .rows, .default_modes =
+        // .{ .grapheme_cluster = true } })`. Our `opts` helper supplies the field
+        // defaults, so we override `default_modes` after building it. The packed
+        // bit-set helpers are private, so we build the `ModePacked` value via the
+        // public `ModeState::set` and take its `values` (faithfully producing
+        // `.{ .grapheme_cluster = true }`).
+        let mut o = opts(10, 10);
+        let mut ms = modespkg::ModeState::default();
+        ms.set(modespkg::Mode::GraphemeCluster, true);
+        o.default_modes = ms.values;
+        let mut t = Terminal::init(Global, o).unwrap();
+        assert!(t.modes.get(modespkg::Mode::GraphemeCluster));
+        t.full_reset();
+        assert!(t.modes.get(modespkg::Mode::GraphemeCluster));
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: fullReset tracked pins"
+    #[test]
+    fn terminal_full_reset_tracked_pins() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // Create a tracked pin
+        let cursor_pin = unsafe { *(*t.screens.active).cursor.page_pin };
+        let p = t.active_mut().pages.track_pin(cursor_pin).unwrap();
+        t.full_reset();
+        assert!(t.active_mut().pages.pin_is_valid(unsafe { *p }));
+
+        t.deinit(Global);
+    }
+
+    // https://github.com/mitchellh/ghostty/issues/272
+    // This is also tested in depth in screen resize tests but I want to keep
+    // this test around to ensure we don't regress at multiple layers.
+    // test "Terminal: resize less cols with wide char then print"
+    #[test]
+    fn terminal_resize_less_cols_with_wide_char_then_print() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        t.print('x' as u32).unwrap();
+        t.print('😀' as u32).unwrap(); // 0x1F600
+        t.resize(alloc, 2, 3).unwrap();
+        t.set_cursor_pos(1, 2);
+        t.print('😀' as u32).unwrap(); // 0x1F600
+
+        t.deinit(alloc);
+    }
+
+    // https://github.com/mitchellh/ghostty/issues/723
+    // This was found via fuzzing so its highly specific.
+    // test "Terminal: resize with left and right margin set"
+    #[test]
+    fn terminal_resize_with_left_and_right_margin_set() {
+        let alloc = Global;
+        let cols: size::CellCountInt = 70;
+        let rows: size::CellCountInt = 23;
+        let mut t = Terminal::init(alloc, opts(cols, rows)).unwrap();
+
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.print('0' as u32).unwrap();
+        t.modes.set(modespkg::Mode::EnableMode3, true);
+        t.resize(alloc, cols, rows).unwrap();
+        t.set_left_and_right_margin(2, 0);
+        t.print_repeat(1850).unwrap();
+        let _ = t.modes.restore(modespkg::Mode::EnableMode3);
+        t.resize(alloc, cols, rows).unwrap();
+
+        t.deinit(alloc);
+    }
+
+    // https://github.com/mitchellh/ghostty/issues/1343
+    // test "Terminal: resize with wraparound off"
+    #[test]
+    fn terminal_resize_with_wraparound_off() {
+        let alloc = Global;
+        let cols: size::CellCountInt = 4;
+        let rows: size::CellCountInt = 2;
+        let mut t = Terminal::init(alloc, opts(cols, rows)).unwrap();
+
+        t.modes.set(modespkg::Mode::Wraparound, false);
+        t.print('0' as u32).unwrap();
+        t.print('1' as u32).unwrap();
+        t.print('2' as u32).unwrap();
+        t.print('3' as u32).unwrap();
+        let new_cols: size::CellCountInt = 2;
+        t.resize(alloc, new_cols, rows).unwrap();
+
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(str.as_slice(), "01".as_bytes());
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize with wraparound on"
+    #[test]
+    fn terminal_resize_with_wraparound_on() {
+        let alloc = Global;
+        let cols: size::CellCountInt = 4;
+        let rows: size::CellCountInt = 2;
+        let mut t = Terminal::init(alloc, opts(cols, rows)).unwrap();
+
+        t.modes.set(modespkg::Mode::Wraparound, true);
+        t.print('0' as u32).unwrap();
+        t.print('1' as u32).unwrap();
+        t.print('2' as u32).unwrap();
+        t.print('3' as u32).unwrap();
+        let new_cols: size::CellCountInt = 2;
+        t.resize(alloc, new_cols, rows).unwrap();
+
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(str.as_slice(), "01\n23".as_bytes());
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize with high unique style per cell"
+    #[test]
+    fn terminal_resize_with_high_unique_style_per_cell() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(30, 30)).unwrap();
+
+        for y in 0..t.rows {
+            for x in 0..t.cols {
+                t.set_cursor_pos(y as usize, x as usize);
+                t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+                    r: x as u8,
+                    g: y as u8,
+                    b: 0,
+                }))
+                .unwrap();
+                t.print('x' as u32).unwrap();
+            }
+        }
+
+        t.resize(alloc, 60, 30).unwrap();
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize with high unique style per cell with wrapping"
+    #[test]
+    fn terminal_resize_with_high_unique_style_per_cell_with_wrapping() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(30, 30)).unwrap();
+
+        let cell_count: u16 = (t.rows as u32 * t.cols as u32) as u16;
+        for i in 0..cell_count {
+            let r: u8 = (i >> 8) as u8;
+            let g: u8 = (i & 0xFF) as u8;
+
+            t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB { r, g, b: 0 }))
+                .unwrap();
+            t.print('x' as u32).unwrap();
+        }
+
+        t.resize(alloc, 60, 30).unwrap();
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize with reflow and saved cursor"
+    #[test]
+    fn terminal_resize_with_reflow_and_saved_cursor() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(2, 3)).unwrap();
+        t.print_string("1A2B".as_bytes()).unwrap();
+        t.set_cursor_pos(2, 2);
+        {
+            let cursor_x = unsafe { (*t.screens.active).cursor.x };
+            let cursor_y = unsafe { (*t.screens.active).cursor.y };
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(active_pt(cursor_x, cursor_y as u32))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert_eq!('B' as u32, unsafe { (*cell).content_codepoint() } as u32);
+        }
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "1A\n2B".as_bytes());
+        }
+
+        t.save_cursor();
+        t.resize(alloc, 5, 3).unwrap();
+        t.restore_cursor();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "1A2B".as_bytes());
+        }
+
+        // Verify our cursor is still in the same place
+        {
+            let cursor_x = unsafe { (*t.screens.active).cursor.x };
+            let cursor_y = unsafe { (*t.screens.active).cursor.y };
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(active_pt(cursor_x, cursor_y as u32))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert_eq!('B' as u32, unsafe { (*cell).content_codepoint() } as u32);
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: resize with reflow and saved cursor pending wrap"
+    #[test]
+    fn terminal_resize_with_reflow_and_saved_cursor_pending_wrap() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(2, 3)).unwrap();
+        t.print_string("1A2B".as_bytes()).unwrap();
+        {
+            let cursor_x = unsafe { (*t.screens.active).cursor.x };
+            let cursor_y = unsafe { (*t.screens.active).cursor.y };
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(active_pt(cursor_x, cursor_y as u32))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert_eq!('B' as u32, unsafe { (*cell).content_codepoint() } as u32);
+        }
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "1A\n2B".as_bytes());
+        }
+
+        t.save_cursor();
+        t.resize(alloc, 5, 3).unwrap();
+        t.restore_cursor();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "1A2B".as_bytes());
+        }
+
+        // Pending wrap should be reset
+        t.print('X' as u32).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "1A2BX".as_bytes());
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: DECCOLM without DEC mode 40"
+    #[test]
+    fn terminal_deccolm_without_dec_mode_40() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::Column132, true);
+        t.deccolm(alloc, DeccolmMode::Cols132).unwrap();
+        assert_eq!(5_usize, t.cols as usize);
+        assert_eq!(5_usize, t.rows as usize);
+        assert!(!t.modes.get(modespkg::Mode::Column132));
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: DECCOLM unset"
+    #[test]
+    fn terminal_deccolm_unset() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::EnableMode3, true);
+        t.deccolm(alloc, DeccolmMode::Cols80).unwrap();
+        assert_eq!(80_usize, t.cols as usize);
+        assert_eq!(5_usize, t.rows as usize);
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: DECCOLM resets pending wrap"
+    #[test]
+    fn terminal_deccolm_resets_pending_wrap() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        t.modes.set(modespkg::Mode::EnableMode3, true);
+        t.deccolm(alloc, DeccolmMode::Cols80).unwrap();
+        assert_eq!(80_usize, t.cols as usize);
+        assert_eq!(5_usize, t.rows as usize);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: DECCOLM preserves SGR bg"
+    #[test]
+    fn terminal_deccolm_preserves_sgr_bg() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        t.set_attribute(sgr::Attribute::DirectColorBg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        }))
+        .unwrap();
+        t.modes.set(modespkg::Mode::EnableMode3, true);
+        t.deccolm(alloc, DeccolmMode::Cols80).unwrap();
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap();
+            assert!(unsafe { (*list_cell.cell).content_tag() } == pagepkg::ContentTag::BgColorRgb);
+            assert_eq!(
+                pagepkg::CellRgb {
+                    r: 0xFF,
+                    g: 0,
+                    b: 0,
+                },
+                unsafe { (*list_cell.cell).content_color_rgb() }
+            );
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: DECCOLM resets scroll region"
+    #[test]
+    fn terminal_deccolm_resets_scroll_region() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_top_and_bottom_margin(2, 3);
+        t.set_left_and_right_margin(3, 5);
+
+        t.modes.set(modespkg::Mode::EnableMode3, true);
+        t.deccolm(alloc, DeccolmMode::Cols80).unwrap();
+
+        assert!(t.modes.get(modespkg::Mode::EnableLeftAndRightMargin));
+        assert_eq!(0_usize, t.scrolling_region.top as usize);
+        assert_eq!(4_usize, t.scrolling_region.bottom as usize);
+        assert_eq!(0_usize, t.scrolling_region.left as usize);
+        assert_eq!(79_usize, t.scrolling_region.right as usize);
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: mode 47 alt screen plain"
+    #[test]
+    fn terminal_mode_47_alt_screen_plain() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        // Print on primary screen
+        t.print_string("1A".as_bytes()).unwrap();
+
+        // Go to alt screen with mode 47
+        t.switch_screen_mode(SwitchScreenMode::M47, true).unwrap();
+        assert_eq!(crate::screen_set::Key::Alternate, t.screens.active_key);
+
+        // Screen should be empty
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "".as_bytes());
+        }
+
+        // Print on alt screen. This should be off center because
+        // we copy the cursor over from the primary screen
+        t.print_string("2B".as_bytes()).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  2B".as_bytes());
+        }
+
+        // Go back to primary
+        t.switch_screen_mode(SwitchScreenMode::M47, false).unwrap();
+        assert_eq!(crate::screen_set::Key::Primary, t.screens.active_key);
+
+        // Primary screen should still have the original content
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "1A".as_bytes());
+        }
+
+        // Go back to alt screen with mode 47
+        t.switch_screen_mode(SwitchScreenMode::M47, true).unwrap();
+        assert_eq!(crate::screen_set::Key::Alternate, t.screens.active_key);
+
+        // Screen should retain content
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  2B".as_bytes());
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: mode 47 copies cursor both directions"
+    #[test]
+    fn terminal_mode_47_copies_cursor_both_directions() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        // Color our cursor red
+        t.set_attribute(sgr::Attribute::DirectColorFg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0x7F,
+        }))
+        .unwrap();
+
+        // Go to alt screen with mode 47
+        t.switch_screen_mode(SwitchScreenMode::M47, true).unwrap();
+        assert_eq!(crate::screen_set::Key::Alternate, t.screens.active_key);
+
+        // Verify that our style is set
+        {
+            assert!(unsafe { (*t.screens.active).cursor.style_id } != style::DEFAULT_ID);
+            let page = unsafe {
+                core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data)
+            };
+            assert_eq!(1_usize, unsafe { (*page).styles.count() });
+            assert!(
+                unsafe {
+                    (*page)
+                        .styles
+                        .ref_count((*page).memory_ptr(), (*t.screens.active).cursor.style_id)
+                } > 0
+            );
+        }
+
+        // Set a new style
+        t.set_attribute(sgr::Attribute::DirectColorFg(color::RGB {
+            r: 0,
+            g: 0xFF,
+            b: 0,
+        }))
+        .unwrap();
+
+        // Go back to primary
+        t.switch_screen_mode(SwitchScreenMode::M47, false).unwrap();
+        assert_eq!(crate::screen_set::Key::Primary, t.screens.active_key);
+
+        // Verify that our style is still set
+        {
+            assert!(unsafe { (*t.screens.active).cursor.style_id } != style::DEFAULT_ID);
+            let page = unsafe {
+                core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data)
+            };
+            assert_eq!(1_usize, unsafe { (*page).styles.count() });
+            assert!(
+                unsafe {
+                    (*page)
+                        .styles
+                        .ref_count((*page).memory_ptr(), (*t.screens.active).cursor.style_id)
+                } > 0
+            );
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: mode 1047 alt screen plain"
+    #[test]
+    fn terminal_mode_1047_alt_screen_plain() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        // Print on primary screen
+        t.print_string("1A".as_bytes()).unwrap();
+
+        // Go to alt screen with mode 47
+        t.switch_screen_mode(SwitchScreenMode::M1047, true).unwrap();
+        assert_eq!(crate::screen_set::Key::Alternate, t.screens.active_key);
+
+        // Screen should be empty
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "".as_bytes());
+        }
+
+        // Print on alt screen. This should be off center because
+        // we copy the cursor over from the primary screen
+        t.print_string("2B".as_bytes()).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  2B".as_bytes());
+        }
+
+        // Go back to primary
+        t.switch_screen_mode(SwitchScreenMode::M1047, false)
+            .unwrap();
+        assert_eq!(crate::screen_set::Key::Primary, t.screens.active_key);
+
+        // Primary screen should still have the original content
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "1A".as_bytes());
+        }
+
+        // Go back to alt screen with mode 1047
+        t.switch_screen_mode(SwitchScreenMode::M1047, true).unwrap();
+        assert_eq!(crate::screen_set::Key::Alternate, t.screens.active_key);
+
+        // Screen should be empty
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "".as_bytes());
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: mode 1047 copies cursor both directions"
+    #[test]
+    fn terminal_mode_1047_copies_cursor_both_directions() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        // Color our cursor red
+        t.set_attribute(sgr::Attribute::DirectColorFg(color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0x7F,
+        }))
+        .unwrap();
+
+        // Go to alt screen with mode 47
+        t.switch_screen_mode(SwitchScreenMode::M1047, true).unwrap();
+        assert_eq!(crate::screen_set::Key::Alternate, t.screens.active_key);
+
+        // Verify that our style is set
+        {
+            assert!(unsafe { (*t.screens.active).cursor.style_id } != style::DEFAULT_ID);
+            let page = unsafe {
+                core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data)
+            };
+            assert_eq!(1_usize, unsafe { (*page).styles.count() });
+            assert!(
+                unsafe {
+                    (*page)
+                        .styles
+                        .ref_count((*page).memory_ptr(), (*t.screens.active).cursor.style_id)
+                } > 0
+            );
+        }
+
+        // Set a new style
+        t.set_attribute(sgr::Attribute::DirectColorFg(color::RGB {
+            r: 0,
+            g: 0xFF,
+            b: 0,
+        }))
+        .unwrap();
+
+        // Go back to primary
+        t.switch_screen_mode(SwitchScreenMode::M1047, false)
+            .unwrap();
+        assert_eq!(crate::screen_set::Key::Primary, t.screens.active_key);
+
+        // Verify that our style is still set
+        {
+            assert!(unsafe { (*t.screens.active).cursor.style_id } != style::DEFAULT_ID);
+            let page = unsafe {
+                core::ptr::addr_of_mut!((*(*(*t.screens.active).cursor.page_pin).node).data)
+            };
+            assert_eq!(1_usize, unsafe { (*page).styles.count() });
+            assert!(
+                unsafe {
+                    (*page)
+                        .styles
+                        .ref_count((*page).memory_ptr(), (*t.screens.active).cursor.style_id)
+                } > 0
+            );
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "Terminal: mode 1049 alt screen plain"
+    #[test]
+    fn terminal_mode_1049_alt_screen_plain() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        // Print on primary screen
+        t.print_string("1A".as_bytes()).unwrap();
+
+        // Go to alt screen with mode 47
+        t.switch_screen_mode(SwitchScreenMode::M1049, true).unwrap();
+        assert_eq!(crate::screen_set::Key::Alternate, t.screens.active_key);
+
+        // Screen should be empty
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "".as_bytes());
+        }
+
+        // Print on alt screen. This should be off center because
+        // we copy the cursor over from the primary screen
+        t.print_string("2B".as_bytes()).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  2B".as_bytes());
+        }
+
+        // Go back to primary
+        t.switch_screen_mode(SwitchScreenMode::M1049, false)
+            .unwrap();
+        assert_eq!(crate::screen_set::Key::Primary, t.screens.active_key);
+
+        // Primary screen should still have the original content
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "1A".as_bytes());
+        }
+
+        // Write, our cursor should be restored back.
+        t.print_string("C".as_bytes()).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "1AC".as_bytes());
+        }
+
+        // Go back to alt screen with mode 1049
+        t.switch_screen_mode(SwitchScreenMode::M1049, true).unwrap();
+        assert_eq!(crate::screen_set::Key::Alternate, t.screens.active_key);
+
+        // Screen should be empty
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "".as_bytes());
+        }
+
+        t.deinit(alloc);
     }
 }
