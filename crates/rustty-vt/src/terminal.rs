@@ -227,9 +227,19 @@ pub struct Colors {
 }
 
 impl Colors {
-    // pub const default: Colors = .{ ... };
+    // pub const default: Colors = .{
+    //     .background = .unset,
+    //     .foreground = .unset,
+    //     .cursor = .unset,
+    //     .palette = .default,
+    // };
     pub fn default() -> Colors {
-        todo!()
+        Colors {
+            background: DynamicRGB::UNSET,
+            foreground: DynamicRGB::UNSET,
+            cursor: DynamicRGB::UNSET,
+            palette: DynamicPalette::default_palette(),
+        }
     }
 }
 
@@ -1318,7 +1328,8 @@ impl Terminal {
 
     /// Set the charset into the given slot.
     pub fn configure_charset(&mut self, slot: charsets::Slots, set: charsets::Charset) {
-        todo!()
+        // self.screens.active.charset.charsets.set(slot, set);
+        self.active_mut().charset.charsets.set(slot, set);
     }
 
     /// Invoke the charset in slot into the active slot. If single is true,
@@ -1329,36 +1340,113 @@ impl Terminal {
         slot: charsets::Slots,
         single: bool,
     ) {
-        todo!()
+        if single {
+            assert!(active == charsets::ActiveSlot::GL);
+            self.active_mut().charset.single_shift = Some(slot);
+            return;
+        }
+
+        match active {
+            charsets::ActiveSlot::GL => self.active_mut().charset.gl = slot,
+            charsets::ActiveSlot::GR => self.active_mut().charset.gr = slot,
+        }
     }
 
     /// Carriage return moves the cursor to the first column.
     pub fn carriage_return(&mut self) {
-        todo!()
+        // Always reset pending wrap state
+        // self.screens.active.cursor.pending_wrap = false;
+        unsafe { (*self.screens.active).cursor.pending_wrap = false };
+
+        // In origin mode we always move to the left margin
+        // self.screens.active.cursorHorizontalAbsolute(if (self.modes.get(.origin))
+        //     self.scrolling_region.left
+        // else if (self.screens.active.cursor.x >= self.scrolling_region.left)
+        //     self.scrolling_region.left
+        // else
+        //     0);
+        // PORT NOTE: the reference's first two branches both evaluate to
+        // `scrolling_region.left`; this is intentional verbatim structure (origin
+        // mode vs. cursor-at-or-right-of-left-margin are distinct conditions that
+        // happen to share a result), so we silence `if_same_then_else`.
+        #[allow(clippy::if_same_then_else)]
+        let x = if self.modes.get(modespkg::Mode::Origin) {
+            self.scrolling_region.left
+        } else if unsafe { (*self.screens.active).cursor.x } >= self.scrolling_region.left {
+            self.scrolling_region.left
+        } else {
+            0
+        };
+        self.active_mut().cursor_horizontal_absolute(x);
     }
 
     /// Linefeed moves the cursor to the next line.
     pub fn linefeed(&mut self) -> Result<(), OutOfMemory> {
-        todo!()
+        // try self.index();
+        // if (self.modes.get(.linefeed)) self.carriageReturn();
+        self.index()?;
+        if self.modes.get(modespkg::Mode::Linefeed) {
+            self.carriage_return();
+        }
+        Ok(())
     }
 
     /// Backspace moves the cursor back a column (but not less than 0).
     pub fn backspace(&mut self) {
-        todo!()
+        // self.cursorLeft(1);
+        self.cursor_left(1);
     }
 
     /// Move the cursor up amount lines. If amount is greater than the maximum
     /// move distance then it is internally adjusted to the maximum. If amount is
     /// 0, adjust it to 1.
     pub fn cursor_up(&mut self, count_req: usize) {
-        todo!()
+        // Always resets pending wrap
+        // self.screens.active.cursor.pending_wrap = false;
+        unsafe { (*self.screens.active).cursor.pending_wrap = false };
+
+        // The maximum amount the cursor can move up depends on scrolling regions
+        // const max = if (self.screens.active.cursor.y >= self.scrolling_region.top)
+        //     self.screens.active.cursor.y - self.scrolling_region.top
+        // else
+        //     self.screens.active.cursor.y;
+        let cursor_y = unsafe { (*self.screens.active).cursor.y };
+        let max: usize = if cursor_y >= self.scrolling_region.top {
+            (cursor_y - self.scrolling_region.top) as usize
+        } else {
+            cursor_y as usize
+        };
+        // const count = @min(max, @max(count_req, 1));
+        let count = core::cmp::min(max, core::cmp::max(count_req, 1));
+
+        // We can safely intCast below because of the min/max clamping we did above.
+        // self.screens.active.cursorUp(@intCast(count));
+        self.active_mut().cursor_up(count as size::CellCountInt);
     }
 
     /// Move the cursor down amount lines. If amount is greater than the maximum
     /// move distance then it is internally adjusted to the maximum. This sequence
     /// will not scroll the screen or scroll region. If amount is 0, adjust it to 1.
     pub fn cursor_down(&mut self, count_req: usize) {
-        todo!()
+        // Always resets pending wrap
+        // self.screens.active.cursor.pending_wrap = false;
+        unsafe { (*self.screens.active).cursor.pending_wrap = false };
+
+        // The max the cursor can move to depends where the cursor currently is
+        // const max = if (self.screens.active.cursor.y <= self.scrolling_region.bottom)
+        //     self.scrolling_region.bottom - self.screens.active.cursor.y
+        // else
+        //     self.rows - self.screens.active.cursor.y - 1;
+        let cursor_y = unsafe { (*self.screens.active).cursor.y };
+        let max: usize = if cursor_y <= self.scrolling_region.bottom {
+            (self.scrolling_region.bottom - cursor_y) as usize
+        } else {
+            (self.rows - cursor_y - 1) as usize
+        };
+        // const count = @min(max, @max(count_req, 1));
+        let count = core::cmp::min(max, core::cmp::max(count_req, 1));
+        // self.screens.active.cursorDown(@intCast(count));
+        self.active_mut().cursor_down(count as size::CellCountInt);
     }
 
     /// Move the cursor right amount columns. If amount is greater than the
@@ -1366,12 +1454,196 @@ impl Terminal {
     /// This sequence will not scroll the screen or scroll region. If amount is
     /// 0, adjust it to 1.
     pub fn cursor_right(&mut self, count_req: usize) {
-        todo!()
+        // Always resets pending wrap
+        // self.screens.active.cursor.pending_wrap = false;
+        unsafe { (*self.screens.active).cursor.pending_wrap = false };
+
+        // The max the cursor can move to depends where the cursor currently is
+        // const max = if (self.screens.active.cursor.x <= self.scrolling_region.right)
+        //     self.scrolling_region.right - self.screens.active.cursor.x
+        // else
+        //     self.cols - self.screens.active.cursor.x - 1;
+        let cursor_x = unsafe { (*self.screens.active).cursor.x };
+        let max: usize = if cursor_x <= self.scrolling_region.right {
+            (self.scrolling_region.right - cursor_x) as usize
+        } else {
+            (self.cols - cursor_x - 1) as usize
+        };
+        // const count = @min(max, @max(count_req, 1));
+        let count = core::cmp::min(max, core::cmp::max(count_req, 1));
+        // self.screens.active.cursorRight(@intCast(count));
+        self.active_mut().cursor_right(count as size::CellCountInt);
     }
 
     /// Move the cursor to the left amount cells. If amount is 0, adjust it to 1.
     pub fn cursor_left(&mut self, count_req: usize) {
-        todo!()
+        // Wrapping behavior depends on various terminal modes
+        // const WrapMode = enum { none, reverse, reverse_extended };
+        enum WrapMode {
+            None,
+            Reverse,
+            ReverseExtended,
+        }
+        // const wrap_mode: WrapMode = wrap_mode: {
+        //     if (!self.modes.get(.wraparound)) break :wrap_mode .none;
+        //     if (self.modes.get(.reverse_wrap_extended)) break :wrap_mode .reverse_extended;
+        //     if (self.modes.get(.reverse_wrap)) break :wrap_mode .reverse;
+        //     break :wrap_mode .none;
+        // };
+        let wrap_mode: WrapMode = 'wrap_mode: {
+            if !self.modes.get(modespkg::Mode::Wraparound) {
+                break 'wrap_mode WrapMode::None;
+            }
+            if self.modes.get(modespkg::Mode::ReverseWrapExtended) {
+                break 'wrap_mode WrapMode::ReverseExtended;
+            }
+            if self.modes.get(modespkg::Mode::ReverseWrap) {
+                break 'wrap_mode WrapMode::Reverse;
+            }
+            WrapMode::None
+        };
+
+        // var count = @max(count_req, 1);
+        let mut count: usize = core::cmp::max(count_req, 1);
+
+        // If we are in no wrap mode, then we move the cursor left and exit
+        // since this is the fastest and most typical path.
+        if matches!(wrap_mode, WrapMode::None) {
+            // self.screens.active.cursorLeft(@min(count, self.screens.active.cursor.x));
+            let cursor_x = unsafe { (*self.screens.active).cursor.x };
+            self.active_mut()
+                .cursor_left(core::cmp::min(count, cursor_x as usize) as size::CellCountInt);
+            // self.screens.active.cursor.pending_wrap = false;
+            unsafe { (*self.screens.active).cursor.pending_wrap = false };
+            return;
+        }
+
+        // If we have a pending wrap state and we are in either reverse wrap
+        // modes then we decrement the amount we move by one to match xterm.
+        // if (self.screens.active.cursor.pending_wrap) {
+        //     count -= 1;
+        //     self.screens.active.cursor.pending_wrap = false;
+        // }
+        if unsafe { (*self.screens.active).cursor.pending_wrap } {
+            count -= 1;
+            unsafe { (*self.screens.active).cursor.pending_wrap = false };
+        }
+
+        // The margins we can move to.
+        // const top = self.scrolling_region.top;
+        // const bottom = self.scrolling_region.bottom;
+        // const right_margin = self.scrolling_region.right;
+        // const left_margin = if (self.screens.active.cursor.x < self.scrolling_region.left)
+        //     0
+        // else
+        //     self.scrolling_region.left;
+        let top = self.scrolling_region.top;
+        let bottom = self.scrolling_region.bottom;
+        let right_margin = self.scrolling_region.right;
+        let left_margin = if unsafe { (*self.screens.active).cursor.x } < self.scrolling_region.left
+        {
+            0
+        } else {
+            self.scrolling_region.left
+        };
+
+        // Handle some edge cases when our cursor is already on the left margin.
+        // if (self.screens.active.cursor.x == left_margin) {
+        if unsafe { (*self.screens.active).cursor.x } == left_margin {
+            match wrap_mode {
+                // In reverse mode, if we're already before the top margin
+                // then we just set our cursor to the top-left and we're done.
+                // .reverse => if (self.screens.active.cursor.y <= top) {
+                //     self.screens.active.cursorAbsolute(left_margin, top);
+                //     return;
+                // },
+                WrapMode::Reverse => {
+                    if unsafe { (*self.screens.active).cursor.y } <= top {
+                        self.active_mut().cursor_absolute(left_margin, top);
+                        return;
+                    }
+                }
+
+                // Handled in while loop
+                WrapMode::ReverseExtended => {}
+
+                // Handled above
+                WrapMode::None => unreachable!(),
+            }
+        }
+
+        // while (true) {
+        loop {
+            // We can move at most to the left margin.
+            // const max = self.screens.active.cursor.x - left_margin;
+            let max = unsafe { (*self.screens.active).cursor.x } - left_margin;
+
+            // We want to move at most the number of columns we have left
+            // or our remaining count. Do the move.
+            // const amount = @min(max, count);
+            // count -= amount;
+            // self.screens.active.cursorLeft(amount);
+            let amount = core::cmp::min(max as usize, count);
+            count -= amount;
+            self.active_mut().cursor_left(amount as size::CellCountInt);
+
+            // If we have no more to move, then we're done.
+            // if (count == 0) break;
+            if count == 0 {
+                break;
+            }
+
+            // If we are at the top, then we are done.
+            // if (self.screens.active.cursor.y == top) {
+            //     if (wrap_mode != .reverse_extended) break;
+            //     self.screens.active.cursorAbsolute(right_margin, bottom);
+            //     count -= 1;
+            //     continue;
+            // }
+            if unsafe { (*self.screens.active).cursor.y } == top {
+                if !matches!(wrap_mode, WrapMode::ReverseExtended) {
+                    break;
+                }
+
+                self.active_mut().cursor_absolute(right_margin, bottom);
+                count -= 1;
+                continue;
+            }
+
+            // UNDEFINED TERMINAL BEHAVIOR. This situation is not handled in xterm
+            // and currently results in a crash in xterm. Given no other known
+            // terminal [to me] implements XTREVWRAP2, I decided to just mimic
+            // the behavior of xterm up and not including the crash by wrapping
+            // up to the (0, 0) and stopping there. My reasoning is that for an
+            // appropriately sized value of "count" this is the behavior that xterm
+            // would have. This is unit tested.
+            // if (self.screens.active.cursor.y == 0) {
+            //     assert(self.screens.active.cursor.x == left_margin);
+            //     break;
+            // }
+            if unsafe { (*self.screens.active).cursor.y } == 0 {
+                assert!(unsafe { (*self.screens.active).cursor.x } == left_margin);
+                break;
+            }
+
+            // If our previous line is not wrapped then we are done.
+            // if (wrap_mode != .reverse_extended) {
+            //     const prev_row = self.screens.active.cursorRowUp(1);
+            //     if (!prev_row.wrap) break;
+            // }
+            if !matches!(wrap_mode, WrapMode::ReverseExtended) {
+                let prev_row = self.active_mut().cursor_row_up(1);
+                if !unsafe { (*prev_row).wrap() } {
+                    break;
+                }
+            }
+
+            // self.screens.active.cursorAbsolute(right_margin, self.screens.active.cursor.y - 1);
+            // count -= 1;
+            let new_y = unsafe { (*self.screens.active).cursor.y } - 1;
+            self.active_mut().cursor_absolute(right_margin, new_y);
+            count -= 1;
+        }
     }
 
     /// Save cursor position and further state.
@@ -1380,7 +1652,27 @@ impl Terminal {
     /// is kept per screen (main / alternative). If for the current screen state
     /// was already saved it is overwritten.
     pub fn save_cursor(&mut self) {
-        todo!()
+        // self.screens.active.saved_cursor = .{
+        //     .x = self.screens.active.cursor.x,
+        //     .y = self.screens.active.cursor.y,
+        //     .style = self.screens.active.cursor.style,
+        //     .protected = self.screens.active.cursor.protected,
+        //     .pending_wrap = self.screens.active.cursor.pending_wrap,
+        //     .origin = self.modes.get(.origin),
+        //     .charset = self.screens.active.charset,
+        // };
+        let origin = self.modes.get(modespkg::Mode::Origin);
+        let active: *mut Screen = self.screens.active;
+        let saved = crate::screen::SavedCursor {
+            x: unsafe { (*active).cursor.x },
+            y: unsafe { (*active).cursor.y },
+            style: unsafe { (*active).cursor.style },
+            protected: unsafe { (*active).cursor.protected },
+            pending_wrap: unsafe { (*active).cursor.pending_wrap },
+            origin,
+            charset: unsafe { (*active).charset.clone() },
+        };
+        self.active_mut().saved_cursor = Some(saved);
     }
 
     /// Restore cursor position and other state.
@@ -1388,7 +1680,85 @@ impl Terminal {
     /// The primary and alternate screen have distinct save state.
     /// If no save was done before values are reset to their initial values.
     pub fn restore_cursor(&mut self) {
-        todo!()
+        // const saved: Screen.SavedCursor = self.screens.active.saved_cursor orelse .{
+        //     .x = 0,
+        //     .y = 0,
+        //     .style = .{},
+        //     .protected = false,
+        //     .pending_wrap = false,
+        //     .origin = false,
+        //     .charset = .{},
+        // };
+        // PORT NOTE: `SavedCursor` is a Zig value struct copied by `orelse`; in
+        // Rust it is not `Copy` (it holds a `CharsetState`/`CharsetArray`). We
+        // borrow the saved state (or a fresh default), then clone the `charset`
+        // only where the reference reads `saved.charset` below.
+        let default_saved;
+        let saved: &crate::screen::SavedCursor =
+            match unsafe { &(*self.screens.active).saved_cursor } {
+                Some(s) => s,
+                None => {
+                    default_saved = crate::screen::SavedCursor {
+                        x: 0,
+                        y: 0,
+                        style: style::Style::default(),
+                        protected: false,
+                        pending_wrap: false,
+                        origin: false,
+                        charset: crate::screen::CharsetState::default(),
+                    };
+                    &default_saved
+                }
+            };
+        // Copy out the scalar saved fields up front so we don't hold the borrow
+        // of `self.screens.active.saved_cursor` across the `&mut self` calls.
+        let saved_style = saved.style;
+        let saved_charset = saved.charset.clone();
+        let saved_origin = saved.origin;
+        let saved_pending_wrap = saved.pending_wrap;
+        let saved_protected = saved.protected;
+        let saved_x = saved.x;
+        let saved_y = saved.y;
+
+        // Set the style first because it can fail
+        // self.screens.active.cursor.style = saved.style;
+        // self.screens.active.manualStyleUpdate() catch |err| {
+        //     log.warn("restoreCursor error updating style err={}", .{err});
+        //     const screen: *Screen = self.screens.active;
+        //     screen.cursor.style = .{};
+        //     self.screens.active.manualStyleUpdate() catch unreachable;
+        // };
+        unsafe { (*self.screens.active).cursor.style = saved_style };
+        if let Err(_err) = self.active_mut().manual_style_update() {
+            // Regardless of the error here, we revert back to an unstyled
+            // cursor. It is more important that the restore succeeds in
+            // other attributes because terminals have no way to communicate
+            // failure back.
+            // log.warn("restoreCursor error updating style err={}", .{err});
+            let screen: *mut Screen = self.screens.active;
+            unsafe { (*screen).cursor.style = style::Style::default() };
+            self.active_mut().manual_style_update().unwrap();
+        }
+
+        // self.screens.active.charset = saved.charset;
+        // self.modes.set(.origin, saved.origin);
+        // self.screens.active.cursor.pending_wrap = saved.pending_wrap;
+        // self.screens.active.cursor.protected = saved.protected;
+        unsafe { (*self.screens.active).charset = saved_charset };
+        self.modes.set(modespkg::Mode::Origin, saved_origin);
+        unsafe { (*self.screens.active).cursor.pending_wrap = saved_pending_wrap };
+        unsafe { (*self.screens.active).cursor.protected = saved_protected };
+        // self.screens.active.cursorAbsolute(
+        //     @min(saved.x, self.cols - 1),
+        //     @min(saved.y, self.rows - 1),
+        // );
+        let x = core::cmp::min(saved_x, self.cols - 1);
+        let y = core::cmp::min(saved_y, self.rows - 1);
+        self.active_mut().cursor_absolute(x, y);
+
+        // Ensure our screen is consistent
+        // self.screens.active.assertIntegrity();
+        self.active_mut().assert_integrity();
     }
 
     /// Set the character protection mode for the terminal.
@@ -1422,28 +1792,85 @@ impl Terminal {
     /// Horizontal tab moves the cursor to the next tabstop, clearing
     /// the screen to the left the tabstop.
     pub fn horizontal_tab(&mut self) {
-        todo!()
+        // while (self.screens.active.cursor.x < self.scrolling_region.right) {
+        while unsafe { (*self.screens.active).cursor.x } < self.scrolling_region.right {
+            // Move the cursor right
+            // self.screens.active.cursorRight(1);
+            self.active_mut().cursor_right(1);
+
+            // If the last cursor position was a tabstop we return. We do
+            // "last cursor position" because we want a space to be written
+            // at the tabstop unless we're at the end (the while condition).
+            // if (self.tabstops.get(self.screens.active.cursor.x)) return;
+            if self
+                .tabstops
+                .get(unsafe { (*self.screens.active).cursor.x } as usize)
+            {
+                return;
+            }
+        }
     }
 
     // Same as horizontalTab but moves to the previous tabstop instead of the next.
     pub fn horizontal_tab_back(&mut self) {
-        todo!()
+        // With origin mode enabled, our leftmost limit is the left margin.
+        // const left_limit = if (self.modes.get(.origin)) self.scrolling_region.left else 0;
+        let left_limit = if self.modes.get(modespkg::Mode::Origin) {
+            self.scrolling_region.left
+        } else {
+            0
+        };
+
+        // while (true) {
+        loop {
+            // If we're already at the edge of the screen, then we're done.
+            // if (self.screens.active.cursor.x <= left_limit) return;
+            if unsafe { (*self.screens.active).cursor.x } <= left_limit {
+                return;
+            }
+
+            // Move the cursor left
+            // self.screens.active.cursorLeft(1);
+            // if (self.tabstops.get(self.screens.active.cursor.x)) return;
+            self.active_mut().cursor_left(1);
+            if self
+                .tabstops
+                .get(unsafe { (*self.screens.active).cursor.x } as usize)
+            {
+                return;
+            }
+        }
     }
 
     /// Clear tab stops.
     pub fn tab_clear(&mut self, cmd: csi::TabClear) {
-        todo!()
+        // switch (cmd) {
+        //     .current => self.tabstops.unset(self.screens.active.cursor.x),
+        //     .all => self.tabstops.reset(0),
+        //     else => log.warn("invalid or unknown tab clear setting: {}", .{cmd}),
+        // }
+        match cmd {
+            csi::TabClear::Current => self
+                .tabstops
+                .unset(unsafe { (*self.screens.active).cursor.x } as usize),
+            csi::TabClear::All => self.tabstops.reset(0),
+            // log.warn("invalid or unknown tab clear setting: {}", .{cmd}),
+            csi::TabClear::Other(_) => {}
+        }
     }
 
     /// Set a tab stop on the current cursor.
     /// TODO: test
     pub fn tab_set(&mut self) {
-        todo!()
+        // self.tabstops.set(self.screens.active.cursor.x);
+        self.tabstops
+            .set(unsafe { (*self.screens.active).cursor.x } as usize);
     }
 
     /// TODO: test
     pub fn tab_reset(&mut self) {
-        todo!()
+        // self.tabstops.reset(TABSTOP_INTERVAL);
+        self.tabstops.reset(TABSTOP_INTERVAL as usize);
     }
 
     /// Move the cursor to the next line in the scrolling region, possibly scrolling.
@@ -1485,7 +1912,96 @@ impl Terminal {
     /// greater than the bottom-most row it is adjusted to the bottom-most
     /// row.
     pub fn set_cursor_pos(&mut self, row_req: usize, col_req: usize) {
-        todo!()
+        // If cursor origin mode is set the cursor row will be moved relative to
+        // the top margin row and adjusted to be above or at bottom-most row in
+        // the current scroll region.
+        //
+        // If origin mode is set and left and right margin mode is set the cursor
+        // will be moved relative to the left margin column and adjusted to be on
+        // or left of the right margin column.
+        // const params: struct {
+        //     x_offset: size.CellCountInt = 0,
+        //     y_offset: size.CellCountInt = 0,
+        //     x_max: size.CellCountInt,
+        //     y_max: size.CellCountInt,
+        // } = if (self.modes.get(.origin)) .{
+        //     .x_offset = self.scrolling_region.left,
+        //     .y_offset = self.scrolling_region.top,
+        //     .x_max = self.scrolling_region.right + 1, // We need this 1-indexed
+        //     .y_max = self.scrolling_region.bottom + 1, // We need this 1-indexed
+        // } else .{
+        //     .x_max = self.cols,
+        //     .y_max = self.rows,
+        // };
+        struct Params {
+            x_offset: size::CellCountInt,
+            y_offset: size::CellCountInt,
+            x_max: size::CellCountInt,
+            y_max: size::CellCountInt,
+        }
+        let params: Params = if self.modes.get(modespkg::Mode::Origin) {
+            Params {
+                x_offset: self.scrolling_region.left,
+                y_offset: self.scrolling_region.top,
+                x_max: self.scrolling_region.right + 1, // We need this 1-indexed
+                y_max: self.scrolling_region.bottom + 1, // We need this 1-indexed
+            }
+        } else {
+            Params {
+                x_offset: 0,
+                y_offset: 0,
+                x_max: self.cols,
+                y_max: self.rows,
+            }
+        };
+
+        // Unset pending wrap state
+        // self.screens.active.cursor.pending_wrap = false;
+        unsafe { (*self.screens.active).cursor.pending_wrap = false };
+
+        // Calculate our new x/y
+        // const row = if (row_req == 0) 1 else row_req;
+        // const col = if (col_req == 0) 1 else col_req;
+        // const x = @min(params.x_max, col + params.x_offset) -| 1;
+        // const y = @min(params.y_max, row + params.y_offset) -| 1;
+        let row = if row_req == 0 { 1 } else { row_req };
+        let col = if col_req == 0 { 1 } else { col_req };
+        // PORT NOTE: `col + params.x_offset` is `usize + CellCountInt`; we widen
+        // the offset to usize for the add, then `@min` with `x_max` (also widened)
+        // keeps the result within `CellCountInt` range before the saturating `-| 1`.
+        let x: size::CellCountInt =
+            (core::cmp::min(params.x_max as usize, col + params.x_offset as usize)
+                as size::CellCountInt)
+                .saturating_sub(1);
+        let y: size::CellCountInt =
+            (core::cmp::min(params.y_max as usize, row + params.y_offset as usize)
+                as size::CellCountInt)
+                .saturating_sub(1);
+
+        // If the y is unchanged then this is fast pointer math
+        // if (y == self.screens.active.cursor.y) {
+        //     if (x > self.screens.active.cursor.x) {
+        //         self.screens.active.cursorRight(x - self.screens.active.cursor.x);
+        //     } else {
+        //         self.screens.active.cursorLeft(self.screens.active.cursor.x - x);
+        //     }
+        //     return;
+        // }
+        if y == unsafe { (*self.screens.active).cursor.y } {
+            let cursor_x = unsafe { (*self.screens.active).cursor.x };
+            if x > cursor_x {
+                self.active_mut().cursor_right(x - cursor_x);
+            } else {
+                self.active_mut().cursor_left(cursor_x - x);
+            }
+
+            return;
+        }
+
+        // If everything changed we do an absolute change which is slightly slower
+        // self.screens.active.cursorAbsolute(x, y);
+        self.active_mut().cursor_absolute(x, y);
+        // log.info("set cursor position: col={} row={}", .{ self.screens.active.cursor.x, self.screens.active.cursor.y });
     }
 
     /// Set Top and Bottom Margins If bottom is not specified, 0 or bigger than
@@ -2268,4 +2784,615 @@ mod tests {
 
         t.deinit(Global);
     }
+
+    // test "Terminal: print invoke charset single"
+    #[test]
+    fn terminal_print_invoke_charset_single() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        t.configure_charset(charsets::Slots::G1, charsets::Charset::DecSpecial);
+
+        // Basic grid writing
+        t.print('`' as u32).unwrap();
+        t.invoke_charset(charsets::ActiveSlot::GL, charsets::Slots::G1, true);
+        t.print('`' as u32).unwrap();
+        t.print('`' as u32).unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "`◆`".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // PORT NOTE (vt-12b-2 deferral): test "Terminal: linefeed mode automatic
+    // carriage return" calls `linefeed()`, which dispatches to `index()` —
+    // still `todo!()` until vt-12b-3b. Deferred there with the other
+    // `index()`/scroll-dependent tests.
+
+    // test "Terminal: carriage return unsets pending wrap"
+    #[test]
+    fn terminal_carriage_return_unsets_pending_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 80)).unwrap();
+
+        // Basic grid writing
+        for c in "hello".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.carriage_return();
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: carriage return origin mode moves to left margin"
+    #[test]
+    fn terminal_carriage_return_origin_mode_moves_to_left_margin() {
+        let mut t = Terminal::init(Global, opts(5, 80)).unwrap();
+
+        t.modes.set(modespkg::Mode::Origin, true);
+        unsafe { (*t.screens.active).cursor.x = 0 };
+        t.scrolling_region.left = 2;
+        t.carriage_return();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: carriage return left of left margin moves to zero"
+    #[test]
+    fn terminal_carriage_return_left_of_left_margin_moves_to_zero() {
+        let mut t = Terminal::init(Global, opts(5, 80)).unwrap();
+
+        unsafe { (*t.screens.active).cursor.x = 1 };
+        t.scrolling_region.left = 2;
+        t.carriage_return();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: carriage return right of left margin moves to left margin"
+    #[test]
+    fn terminal_carriage_return_right_of_left_margin_moves_to_left_margin() {
+        let mut t = Terminal::init(Global, opts(5, 80)).unwrap();
+
+        unsafe { (*t.screens.active).cursor.x = 3 };
+        t.scrolling_region.left = 2;
+        t.carriage_return();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 2);
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: backspace"
+    #[test]
+    fn terminal_backspace() {
+        let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
+
+        // BS
+        for c in "hello".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.backspace();
+        t.print('y' as u32).unwrap();
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 5);
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "helly".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: horizontal tabs"
+    #[test]
+    fn terminal_horizontal_tabs() {
+        let mut t = Terminal::init(Global, opts(20, 5)).unwrap();
+
+        // HT
+        t.print('1' as u32).unwrap();
+        t.horizontal_tab();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 8);
+
+        // HT
+        t.horizontal_tab();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 16);
+
+        // HT at the end
+        t.horizontal_tab();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 19);
+        t.horizontal_tab();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 19);
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: horizontal tabs starting on tabstop"
+    #[test]
+    fn terminal_horizontal_tabs_starting_on_tabstop() {
+        let mut t = Terminal::init(Global, opts(20, 5)).unwrap();
+
+        let cursor_y = unsafe { (*t.screens.active).cursor.y } as usize;
+        t.set_cursor_pos(cursor_y, 9);
+        t.print('X' as u32).unwrap();
+        let cursor_y = unsafe { (*t.screens.active).cursor.y } as usize;
+        t.set_cursor_pos(cursor_y, 9);
+        t.horizontal_tab();
+        t.print('A' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "        X       A".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: horizontal tabs with right margin"
+    #[test]
+    fn terminal_horizontal_tabs_with_right_margin() {
+        let mut t = Terminal::init(Global, opts(20, 5)).unwrap();
+
+        t.scrolling_region.left = 2;
+        t.scrolling_region.right = 5;
+        let cursor_y = unsafe { (*t.screens.active).cursor.y } as usize;
+        t.set_cursor_pos(cursor_y, 1);
+        t.print('X' as u32).unwrap();
+        t.horizontal_tab();
+        t.print('A' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "X    A".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: horizontal tabs back"
+    #[test]
+    fn terminal_horizontal_tabs_back() {
+        let mut t = Terminal::init(Global, opts(20, 5)).unwrap();
+
+        // Edge of screen
+        let cursor_y = unsafe { (*t.screens.active).cursor.y } as usize;
+        t.set_cursor_pos(cursor_y, 20);
+
+        // HT
+        t.horizontal_tab_back();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 16);
+
+        // HT
+        t.horizontal_tab_back();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 8);
+
+        // HT
+        t.horizontal_tab_back();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+        t.horizontal_tab_back();
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: horizontal tabs back starting on tabstop"
+    #[test]
+    fn terminal_horizontal_tabs_back_starting_on_tabstop() {
+        let mut t = Terminal::init(Global, opts(20, 5)).unwrap();
+
+        let cursor_y = unsafe { (*t.screens.active).cursor.y } as usize;
+        t.set_cursor_pos(cursor_y, 9);
+        t.print('X' as u32).unwrap();
+        let cursor_y = unsafe { (*t.screens.active).cursor.y } as usize;
+        t.set_cursor_pos(cursor_y, 9);
+        t.horizontal_tab_back();
+        t.print('A' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A       X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: horizontal tabs with left margin in origin mode"
+    #[test]
+    fn terminal_horizontal_tabs_with_left_margin_in_origin_mode() {
+        let mut t = Terminal::init(Global, opts(20, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::Origin, true);
+        t.scrolling_region.left = 2;
+        t.scrolling_region.right = 5;
+        t.set_cursor_pos(1, 2);
+        t.print('X' as u32).unwrap();
+        t.horizontal_tab_back();
+        t.print('A' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  AX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorPos resets wrap"
+    #[test]
+    fn terminal_cursor_pos_resets_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.set_cursor_pos(1, 1);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "XBCDE".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorPos off the screen"
+    #[test]
+    fn terminal_cursor_pos_off_the_screen() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_cursor_pos(500, 500);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n\n\n\n    X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorPos relative to origin"
+    #[test]
+    fn terminal_cursor_pos_relative_to_origin() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.scrolling_region.top = 2;
+        t.scrolling_region.bottom = 3;
+        t.modes.set(modespkg::Mode::Origin, true);
+        t.set_cursor_pos(1, 1);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n\nX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorPos relative to origin with left/right"
+    #[test]
+    fn terminal_cursor_pos_relative_to_origin_with_left_right() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.scrolling_region.top = 2;
+        t.scrolling_region.bottom = 3;
+        t.scrolling_region.left = 2;
+        t.scrolling_region.right = 4;
+        t.modes.set(modespkg::Mode::Origin, true);
+        t.set_cursor_pos(1, 1);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n\n  X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorPos limits with full scroll region"
+    #[test]
+    fn terminal_cursor_pos_limits_with_full_scroll_region() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.scrolling_region.top = 2;
+        t.scrolling_region.bottom = 3;
+        t.scrolling_region.left = 2;
+        t.scrolling_region.right = 4;
+        t.modes.set(modespkg::Mode::Origin, true);
+        t.set_cursor_pos(500, 500);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "\n\n\n    X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorUp basic"
+    #[test]
+    fn terminal_cursor_up_basic() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.set_cursor_pos(3, 1);
+        t.print('A' as u32).unwrap();
+        t.cursor_up(10);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), " X\n\nA".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorUp resets wrap"
+    #[test]
+    fn terminal_cursor_up_resets_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.cursor_up(1);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABCDX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // PORT NOTE (vt-12b-2 deferral): test "Terminal: cursorLeft no wrap" calls
+    // `linefeed()` (→ `index()`, still `todo!()`); deferred to vt-12b-3b.
+
+    // test "Terminal: cursorLeft unsets pending wrap state"
+    #[test]
+    fn terminal_cursor_left_unsets_pending_wrap_state() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.cursor_left(1);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABCXE".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorLeft unsets pending wrap state with longer jump"
+    #[test]
+    fn terminal_cursor_left_unsets_pending_wrap_state_with_longer_jump() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.cursor_left(3);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "AXCDE".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorLeft reverse wrap with pending wrap state"
+    #[test]
+    fn terminal_cursor_left_reverse_wrap_with_pending_wrap_state() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::Wraparound, true);
+        t.modes.set(modespkg::Mode::ReverseWrap, true);
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.cursor_left(1);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABCDX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorLeft reverse wrap extended with pending wrap state"
+    #[test]
+    fn terminal_cursor_left_reverse_wrap_extended_with_pending_wrap_state() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::Wraparound, true);
+        t.modes.set(modespkg::Mode::ReverseWrapExtended, true);
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.cursor_left(1);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABCDX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // PORT NOTE (vt-12b-2 deferral): the following five `cursorLeft` reverse-wrap
+    // tests each reach `index()` (via printing past the edge, which calls
+    // `print_wrap()` → `index()`, or via `linefeed()`), which is still `todo!()`
+    // until vt-12b-3b. They are deferred there with the other `index()`/scroll
+    // tests:
+    //   test "Terminal: cursorLeft reverse wrap"
+    //   test "Terminal: cursorLeft reverse wrap with no soft wrap"
+    //   test "Terminal: cursorLeft extended reverse wrap"
+    //   test "Terminal: cursorLeft extended reverse wrap bottom wraparound"
+    //   test "Terminal: cursorLeft extended reverse wrap is priority if both set"
+
+    // test "Terminal: cursorDown basic"
+    #[test]
+    fn terminal_cursor_down_basic() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.print('A' as u32).unwrap();
+        t.cursor_down(10);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "A\n\n\n\n X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorDown resets wrap"
+    #[test]
+    fn terminal_cursor_down_resets_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.cursor_down(1);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABCDE\n    X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorRight resets wrap"
+    #[test]
+    fn terminal_cursor_right_resets_wrap() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "ABCDE".chars() {
+            t.print(c as u32).unwrap();
+        }
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.cursor_right(1);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "ABCDX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorRight to the edge of screen"
+    #[test]
+    fn terminal_cursor_right_to_the_edge_of_screen() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.cursor_right(100);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "    X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorRight left of right margin"
+    #[test]
+    fn terminal_cursor_right_left_of_right_margin() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.scrolling_region.right = 2;
+        t.cursor_right(100);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: cursorRight right of right margin"
+    #[test]
+    fn terminal_cursor_right_right_of_right_margin() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.scrolling_region.right = 2;
+        t.set_cursor_pos(1, 4);
+        t.cursor_right(100);
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "    X".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: saveCursor position"
+    #[test]
+    fn terminal_save_cursor_position() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.set_cursor_pos(1, 5);
+        t.print('A' as u32).unwrap();
+        t.save_cursor();
+        t.set_cursor_pos(1, 1);
+        t.print('B' as u32).unwrap();
+        t.restore_cursor();
+        t.print('X' as u32).unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "B   AX".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // PORT NOTE (vt-12b-2 deferral): test "Terminal: saveCursor pending wrap
+    // state" restores a pending-wrap cursor then prints, which soft-wraps via
+    // `print_wrap()` → `index()` (still `todo!()`); deferred to vt-12b-3b.
 }
