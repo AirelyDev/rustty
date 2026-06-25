@@ -2,13 +2,18 @@
 //!
 //! PORTS: ghostty src/terminal/c/terminal.zig
 //!
-//! PORT STATUS: SKELETON (mutual-atom Stage B v3). Every `#[repr(C)]` extern
-//! struct/enum, the hand-authored `ScrollViewport` `[2]u64` tagged union, the
-//! `Effects` raw-ptr trampoline state (C fn-ptr typedefs + `CDeviceAttributes`),
-//! and every C API function are laid down here. Function bodies are
-//! `todo!("vt-c <name>")`; the trampolines, `setTyped`/`getTyped`, the
-//! `TerminalWrapper`/`Effects` private helpers, and ALL `test {}` blocks fill in
-//! a later sub-batch. This is the root of the irreducible mutual cluster
+//! PORT STATUS: IN PROGRESS (mutual-atom Stage B v4 — D3 SEAM landed). The D3
+//! trampoline seam + `ZigTerminal` lifecycle machinery are filled: `zig_terminal`,
+//! `new`/`new_`/`free` (Box-based lifecycle), `vt_write`, `resize`, `reset`,
+//! `mode_get`/`mode_set`, `scroll_viewport` (the `ScrollViewport` `[2]u64` union
+//! dispatch), `get`/`get_multi`/`get_typed` (the non-deferred-type arms), and the
+//! 9 `Effects` trampolines (each recovers the owning `TerminalWrapper` from the
+//! stream handler via the exposed-provenance `container_of` and calls the C
+//! fn-ptr). STILL DEFERRED to the later get/set + grid_ref sub-batches:
+//! `set`/`setTyped`, the deferred-type `get_typed` arms (`color.*`/`cursor_style`/
+//! `title`/`pwd`/kitty image+graphics/`selection`), and
+//! `grid_ref`/`grid_ref_track`/`point_from_grid_ref` — those remain
+//! `todo!("vt-c <name>")`. This is the root of the irreducible mutual cluster
 //! (terminal<->grid_ref<->grid_ref_tracked<->selection).
 
 // const std = @import("std");
@@ -46,6 +51,7 @@ use crate::point::PointC;
 use crate::result::Result;
 use rustty_lib::allocator::Allocator as CAllocator;
 use rustty_lib::String as LibString;
+use rustty_vt::device_attributes;
 use rustty_vt::device_status;
 use rustty_vt::modes;
 use rustty_vt::pagelist::grow::ScrollbarC;
@@ -53,27 +59,37 @@ use rustty_vt::point::{Coordinate, Tag};
 use rustty_vt::screen_set::Key as ScreenSetKey;
 use rustty_vt::size;
 use rustty_vt::size_report;
-use rustty_vt::stream_terminal::Stream;
-use rustty_vt::terminal::Terminal as ZigTerminal;
+use rustty_vt::stream_terminal::{Handler, Stream};
+use rustty_vt::terminal::{Colors, Terminal as ZigTerminal};
+use rustty_vt::terminal::{Options as ZigTerminalOptions, ScrollViewport as ZigScrollViewport};
 use std::collections::HashSet;
 use std::ffi::c_void;
-use std::mem::{align_of, size_of};
+use std::mem::{align_of, offset_of, size_of};
 use std::os::raw::c_int;
 
 // const log = std.log.scoped(.terminal_c);
+
+// PORT NOTE (D3, Rust-only glue): the reference threads the C allocator into the
+// OSC parser via `Stream.initAlloc(alloc, ...)`. rustty's OSC parser wants a
+// `ZigAllocatorRef`, and the wrapper's `Stream<'static>` requires a `'static`
+// backing allocator (the same constraint `Terminal::vt_stream` resolves by
+// backing the parser with a process-static global zig allocator). We mirror that
+// choice here so dynamic OSC payloads (e.g. OSC 52 clipboard) can grow.
+static GLOBAL_ZIG_ALLOCATOR_FOR_OSC: rustty_lib::allocator::GlobalZigAllocator =
+    rustty_lib::allocator::GlobalZigAllocator;
 
 /// Wrapper around ZigTerminal that tracks additional state for C API usage,
 /// such as the persistent VT stream needed to handle escape sequences split
 /// across multiple vt_write calls.
 // PORT NOTE (internal, NOT C-ABI): `terminal: *ZigTerminal` is the raw owning
-// back-pointer to the heap `ZigTerminal`. `stream: Stream` is the persistent VT
-// stream whose handler aliases that terminal; in rustty `Stream<'a>` carries a
-// lifetime tied to the terminal borrow, so the field is self-referential. The
-// `'static` here is a SKELETON placeholder — `new`/`free` are `todo!()` so the
-// wrapper is never actually constructed yet; the fill sub-batch resolves the
-// self-referential storage (raw-ptr handler aliasing) before any body lands.
-// `tracked_grid_refs` is the set of live `*TrackedGridRef` so `free` can detach
-// them safely (Zig `AutoArrayHashMapUnmanaged(*TrackedGridRef, void)`).
+// back-pointer to the heap `ZigTerminal` (`Box::into_raw`'d in `new_`). `stream:
+// Stream<'static>` is the persistent VT stream whose handler aliases that
+// terminal; the self-referential aliasing is resolved by storing the terminal as
+// a raw pointer (the handler holds `*mut Terminal`) and exposing the wrapper's
+// provenance so the always-installed effect trampolines can recover it (see
+// `wrapper_from_handler`). `tracked_grid_refs` is the set of live
+// `*TrackedGridRef` so `free` can detach them safely (Zig
+// `AutoArrayHashMapUnmanaged(*TrackedGridRef, void)`).
 pub struct TerminalWrapper {
     pub terminal: *mut ZigTerminal,
     pub stream: Stream<'static>,
@@ -104,6 +120,29 @@ pub struct Effects {
     /// the trampoline converts C feature codes into this buffer and returns a
     /// slice pointing into it, kept valid past the trampoline return.
     pub da_features_buf: [rustty_vt::device_attributes::Feature; 64],
+}
+
+// PORT NOTE: the reference `Effects` defaults every callback to `null`, the
+// `userdata` to `null`, and `da_features_buf` to `undefined` (it is always
+// overwritten before being read). `TerminalWrapper { effects: Effects = .{} }`
+// relies on those defaults; this is the parity analog (`undefined` -> an
+// arbitrary `Feature` placeholder, never observed).
+impl Default for Effects {
+    fn default() -> Effects {
+        Effects {
+            userdata: std::ptr::null_mut(),
+            write_pty: None,
+            bell: None,
+            color_scheme: None,
+            device_attributes_cb: None,
+            enquiry: None,
+            xtversion: None,
+            title_changed: None,
+            pwd_changed: None,
+            size_cb: None,
+            da_features_buf: [rustty_vt::device_attributes::Feature::AnsiColor; 64],
+        }
+    }
 }
 
 /// C function pointer type for the write_pty callback.
@@ -194,54 +233,302 @@ pub struct CDeviceAttributesTertiary {
     pub unit_id: u32,
 }
 
-// PORT NOTE: the trampolines are installed on the stream handler by `new` and
-// invoked by the VT stream; in this skeleton they are only referenced from the
-// (deferred) `new` body, so they read as dead code until the fill sub-batch.
-#[allow(dead_code)]
+// PORT NOTE (D3 container_of recovery): the reference trampolines recover the
+// owning `*TerminalWrapper` from the `*Handler` via two nested
+// `@fieldParentPtr`s: `Handler -> Stream` (the handler is `stream.handler`) and
+// `Stream -> TerminalWrapper` (the stream is `wrapper.stream`). rustty collapses
+// this into a single byte-offset subtraction off the `&mut Handler` address.
+// The offset is the SUM of the two field offsets (`TerminalWrapper.stream` and
+// `Stream.handler`) — the cross-crate, generic `Stream<'static>` makes a single
+// nested `offset_of!(TerminalWrapper, stream.handler)` path fragile, so we sum
+// the two leaf offsets (each is a plain in-crate field access).
+//
+// SB SOUNDNESS: the recovered `*mut TerminalWrapper` is used ONLY to read its
+// SIBLING fields (`effects`, `terminal`) through the raw pointer; we never form
+// an overlapping `&mut TerminalWrapper` while the caller's `&mut Handler` is
+// still live (the `Handler` lives INSIDE the wrapper, so a `&mut TerminalWrapper`
+// would alias it). All sibling reads go through raw pointer projection.
+//
+// PROVENANCE: a pointer derived (by offset subtraction) from the caller's
+// `&mut Handler` would, under Stacked Borrows, only carry provenance over the
+// Handler's bytes — reading the SIBLING `effects`/`terminal` through it is UB.
+// `new_` therefore `expose_provenance()`s the whole `TerminalWrapper` allocation
+// once; here we recover the wrapper by computing its ADDRESS (pure integer math
+// off the handler address — no pointer provenance involved) and reconstituting a
+// pointer over the exposed allocation via `with_exposed_provenance_mut`. This is
+// the same exposed-provenance bridge `hyperlink.rs` uses for its stored page
+// pointers, and it gives the recovered pointer whole-allocation provenance so the
+// sibling reads are SB-sound.
+#[inline]
+fn wrapper_from_handler(handler: *mut Handler<'static>) -> *mut TerminalWrapper {
+    // const stream_ptr: *Stream = @fieldParentPtr("handler", handler);
+    // const wrapper: *TerminalWrapper = @fieldParentPtr("stream", stream_ptr);
+    let off = offset_of!(TerminalWrapper, stream) + offset_of!(Stream<'static>, handler);
+    // Compute the wrapper base ADDRESS from the handler address (integer math
+    // only), then reconstitute a pointer over the exposed wrapper allocation.
+    let wrapper_addr = (handler as *mut u8).addr() - off;
+    std::ptr::with_exposed_provenance_mut::<TerminalWrapper>(wrapper_addr)
+}
+
 impl Effects {
-    // fn writePtyTrampoline(handler: *Handler, data: [:0]const u8) void { ... }
-    pub(crate) fn write_pty_trampoline() {
-        todo!("vt-c Effects::write_pty_trampoline")
+    // fn writePtyTrampoline(handler: *Handler, data: [:0]const u8) void {
+    //     const stream_ptr: *Stream = @fieldParentPtr("handler", handler);
+    //     const wrapper: *TerminalWrapper = @fieldParentPtr("stream", stream_ptr);
+    //     const func = wrapper.effects.write_pty orelse return;
+    //     func(@ptrCast(wrapper), wrapper.effects.userdata, data.ptr, data.len);
+    // }
+    pub(crate) fn write_pty_trampoline(handler: &mut Handler<'static>, data: &[u8]) {
+        let wrapper = wrapper_from_handler(handler);
+        // SAFETY: `wrapper` is the live owning `TerminalWrapper`; we read its
+        // `effects` sibling (not the `&mut Handler` we were handed) via raw ptr.
+        let func = match unsafe { (*wrapper).effects.write_pty } {
+            Some(f) => f,
+            None => return,
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+        func(wrapper, userdata, data.as_ptr(), data.len());
     }
 
-    // fn bellTrampoline(handler: *Handler) void { ... }
-    pub(crate) fn bell_trampoline() {
-        todo!("vt-c Effects::bell_trampoline")
+    // fn bellTrampoline(handler: *Handler) void {
+    //     ... const func = wrapper.effects.bell orelse return;
+    //     func(@ptrCast(wrapper), wrapper.effects.userdata);
+    // }
+    pub(crate) fn bell_trampoline(handler: &mut Handler<'static>) {
+        let wrapper = wrapper_from_handler(handler);
+        let func = match unsafe { (*wrapper).effects.bell } {
+            Some(f) => f,
+            None => return,
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+        func(wrapper, userdata);
     }
 
-    // fn colorSchemeTrampoline(handler: *Handler) ?device_status.ColorScheme { ... }
-    pub(crate) fn color_scheme_trampoline() {
-        todo!("vt-c Effects::color_scheme_trampoline")
+    // fn colorSchemeTrampoline(handler: *Handler) ?device_status.ColorScheme {
+    //     ... const func = wrapper.effects.color_scheme orelse return null;
+    //     var scheme: device_status.ColorScheme = undefined;
+    //     if (func(@ptrCast(wrapper), wrapper.effects.userdata, &scheme)) return scheme;
+    //     return null;
+    // }
+    pub(crate) fn color_scheme_trampoline(
+        handler: &mut Handler<'static>,
+    ) -> Option<device_status::ColorScheme> {
+        let wrapper = wrapper_from_handler(handler);
+        let func = unsafe { (*wrapper).effects.color_scheme }?;
+        let userdata = unsafe { (*wrapper).effects.userdata };
+        // var scheme: device_status.ColorScheme = undefined;
+        let mut scheme = core::mem::MaybeUninit::<device_status::ColorScheme>::uninit();
+        if func(wrapper, userdata, scheme.as_mut_ptr()) {
+            return Some(unsafe { scheme.assume_init() });
+        }
+        None
     }
 
-    // fn deviceAttributesTrampoline(handler: *Handler) device_attributes.Attributes { ... }
-    pub(crate) fn device_attributes_trampoline() {
-        todo!("vt-c Effects::device_attributes_trampoline")
+    // fn deviceAttributesTrampoline(handler: *Handler) device_attributes.Attributes {
+    //     ... const func = wrapper.effects.device_attributes_cb orelse return .{};
+    //     var c_attrs: CDeviceAttributes = undefined;
+    //     if (!func(@ptrCast(wrapper), wrapper.effects.userdata, &c_attrs)) return .{};
+    //     const n: usize = @min(c_attrs.primary.num_features, 64);
+    //     for (0..n) |i| wrapper.effects.da_features_buf[i] = @enumFromInt(c_attrs.primary.features[i]);
+    //     return .{ .primary = ..., .secondary = ..., .tertiary = ... };
+    // }
+    pub(crate) fn device_attributes_trampoline(
+        handler: &mut Handler<'static>,
+    ) -> device_attributes::Attributes {
+        let wrapper = wrapper_from_handler(handler);
+        let func = match unsafe { (*wrapper).effects.device_attributes_cb } {
+            Some(f) => f,
+            None => return device_attributes::Attributes::default(),
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+
+        // Get our attributes from the callback.
+        // var c_attrs: CDeviceAttributes = undefined;
+        let mut c_attrs = core::mem::MaybeUninit::<CDeviceAttributes>::uninit();
+        if !func(wrapper, userdata, c_attrs.as_mut_ptr()) {
+            return device_attributes::Attributes::default();
+        }
+        let c_attrs = unsafe { c_attrs.assume_init() };
+
+        // Note below we use a lot of enumFromInt but its always safe
+        // because all our types are non-exhaustive enums.
+
+        // const n: usize = @min(c_attrs.primary.num_features, 64);
+        let n: usize = core::cmp::min(c_attrs.primary.num_features, 64);
+        // for (0..n) |i| wrapper.effects.da_features_buf[i] = @enumFromInt(c_attrs.primary.features[i]);
+        for i in 0..n {
+            // SAFETY: `da_features_buf` is a sibling field of the recovered
+            // wrapper; mutate it via the raw ptr (never via the live
+            // `&mut Handler`).
+            unsafe {
+                (*wrapper).effects.da_features_buf[i] =
+                    feature_from_int(c_attrs.primary.features[i]);
+            }
+        }
+
+        // PORT NOTE: the reference returns `features = da_features_buf[0..n]`, a
+        // slice into the wrapper's long-lived scratch buffer. The Rust
+        // `Primary.features` field is `&'static [Feature]`; the buffer lives as
+        // long as the heap `TerminalWrapper`, and `reportDeviceAttributes` reads
+        // the slice immediately (before any re-entrant call), so promoting the
+        // borrow to `'static` here is sound (matches the reference's reliance on
+        // the buffer outliving the trampoline return).
+        let features: &'static [device_attributes::Feature] =
+            unsafe { core::slice::from_raw_parts((*wrapper).effects.da_features_buf.as_ptr(), n) };
+
+        device_attributes::Attributes {
+            primary: device_attributes::Primary {
+                conformance_level: conformance_level_from_int(c_attrs.primary.conformance_level),
+                features,
+            },
+            secondary: device_attributes::Secondary {
+                device_type: device_type_from_int(c_attrs.secondary.device_type),
+                firmware_version: c_attrs.secondary.firmware_version,
+                rom_cartridge: c_attrs.secondary.rom_cartridge,
+            },
+            tertiary: device_attributes::Tertiary {
+                unit_id: c_attrs.tertiary.unit_id,
+            },
+        }
     }
 
-    // fn enquiryTrampoline(handler: *Handler) []const u8 { ... }
-    pub(crate) fn enquiry_trampoline() {
-        todo!("vt-c Effects::enquiry_trampoline")
+    // fn enquiryTrampoline(handler: *Handler) []const u8 {
+    //     ... const func = wrapper.effects.enquiry orelse return "";
+    //     const result = func(@ptrCast(wrapper), wrapper.effects.userdata);
+    //     if (result.len == 0) return "";
+    //     return result.ptr[0..result.len];
+    // }
+    pub(crate) fn enquiry_trampoline(handler: &mut Handler<'static>) -> &'static [u8] {
+        let wrapper = wrapper_from_handler(handler);
+        let func = match unsafe { (*wrapper).effects.enquiry } {
+            Some(f) => f,
+            None => return b"",
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+        let result = func(wrapper, userdata);
+        if result.len == 0 {
+            return b"";
+        }
+        // return result.ptr[0..result.len];
+        // SAFETY: the callback contract is that `result.ptr[0..result.len]` is
+        // valid for the lifetime of the call; the response is read immediately
+        // by `reportEnquiry` before any re-entrant call.
+        unsafe { core::slice::from_raw_parts(result.ptr, result.len) }
     }
 
-    // fn xtversionTrampoline(handler: *Handler) []const u8 { ... }
-    pub(crate) fn xtversion_trampoline() {
-        todo!("vt-c Effects::xtversion_trampoline")
+    // fn xtversionTrampoline(handler: *Handler) []const u8 { ... identical shape ... }
+    pub(crate) fn xtversion_trampoline(handler: &mut Handler<'static>) -> &'static [u8] {
+        let wrapper = wrapper_from_handler(handler);
+        let func = match unsafe { (*wrapper).effects.xtversion } {
+            Some(f) => f,
+            None => return b"",
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+        let result = func(wrapper, userdata);
+        if result.len == 0 {
+            return b"";
+        }
+        unsafe { core::slice::from_raw_parts(result.ptr, result.len) }
     }
 
     // fn titleChangedTrampoline(handler: *Handler) void { ... }
-    pub(crate) fn title_changed_trampoline() {
-        todo!("vt-c Effects::title_changed_trampoline")
+    pub(crate) fn title_changed_trampoline(handler: &mut Handler<'static>) {
+        let wrapper = wrapper_from_handler(handler);
+        let func = match unsafe { (*wrapper).effects.title_changed } {
+            Some(f) => f,
+            None => return,
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+        func(wrapper, userdata);
     }
 
     // fn pwdChangedTrampoline(handler: *Handler) void { ... }
-    pub(crate) fn pwd_changed_trampoline() {
-        todo!("vt-c Effects::pwd_changed_trampoline")
+    pub(crate) fn pwd_changed_trampoline(handler: &mut Handler<'static>) {
+        let wrapper = wrapper_from_handler(handler);
+        let func = match unsafe { (*wrapper).effects.pwd_changed } {
+            Some(f) => f,
+            None => return,
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+        func(wrapper, userdata);
     }
 
-    // fn sizeTrampoline(handler: *Handler) ?size_report.Size { ... }
-    pub(crate) fn size_trampoline() {
-        todo!("vt-c Effects::size_trampoline")
+    // fn sizeTrampoline(handler: *Handler) ?size_report.Size {
+    //     ... const func = wrapper.effects.size_cb orelse return null;
+    //     var s: size_report.Size = undefined;
+    //     if (func(@ptrCast(wrapper), wrapper.effects.userdata, &s)) return s;
+    //     return null;
+    // }
+    pub(crate) fn size_trampoline(handler: &mut Handler<'static>) -> Option<size_report::Size> {
+        let wrapper = wrapper_from_handler(handler);
+        let func = unsafe { (*wrapper).effects.size_cb }?;
+        let userdata = unsafe { (*wrapper).effects.userdata };
+        let mut s = core::mem::MaybeUninit::<size_report::Size>::uninit();
+        if func(wrapper, userdata, s.as_mut_ptr()) {
+            return Some(unsafe { s.assume_init() });
+        }
+        None
+    }
+}
+
+// PORT NOTE: the reference uses `@enumFromInt` on the DA enums (always safe
+// because they are non-exhaustive). rustty's ported enums carry an explicit
+// catch-all variant (`Other(u16)`), so these helpers reproduce `@enumFromInt`:
+// known codes map to their named variant, every other value rides the catch-all.
+// They are NOT a rustty-vt change (R3) — purely the vt-c-local int->enum bridge.
+fn feature_from_int(v: u16) -> device_attributes::Feature {
+    use device_attributes::Feature;
+    match v {
+        1 => Feature::Columns132,
+        2 => Feature::Printer,
+        3 => Feature::Regis,
+        4 => Feature::Sixel,
+        6 => Feature::SelectiveErase,
+        8 => Feature::UserDefinedKeys,
+        9 => Feature::NationalReplacement,
+        15 => Feature::TechnicalCharacters,
+        16 => Feature::Locator,
+        17 => Feature::TerminalState,
+        18 => Feature::Windowing,
+        21 => Feature::HorizontalScrolling,
+        22 => Feature::AnsiColor,
+        28 => Feature::RectangularEditing,
+        29 => Feature::AnsiTextLocator,
+        52 => Feature::Clipboard,
+        other => Feature::Other(other),
+    }
+}
+
+fn conformance_level_from_int(v: u16) -> device_attributes::ConformanceLevel {
+    use device_attributes::ConformanceLevel;
+    match v {
+        1 => ConformanceLevel::VT100,
+        4 => ConformanceLevel::VT132,
+        6 => ConformanceLevel::VT102,
+        7 => ConformanceLevel::VT131,
+        12 => ConformanceLevel::VT125,
+        62 => ConformanceLevel::Level2,
+        63 => ConformanceLevel::Level3,
+        64 => ConformanceLevel::Level4,
+        65 => ConformanceLevel::Level5,
+        other => ConformanceLevel::Other(other),
+    }
+}
+
+fn device_type_from_int(v: u16) -> device_attributes::DeviceType {
+    use device_attributes::DeviceType;
+    match v {
+        0 => DeviceType::VT100,
+        1 => DeviceType::VT220,
+        2 => DeviceType::VT240,
+        18 => DeviceType::VT330,
+        19 => DeviceType::VT340,
+        24 => DeviceType::VT320,
+        32 => DeviceType::VT382,
+        41 => DeviceType::VT420,
+        61 => DeviceType::VT510,
+        64 => DeviceType::VT520,
+        65 => DeviceType::VT525,
+        other => DeviceType::Other(other),
     }
 }
 
@@ -250,11 +537,17 @@ impl Effects {
 // PORT NOTE: nullable opaque handle; raw `*mut TerminalWrapper` (null == none).
 pub type Terminal = *mut TerminalWrapper;
 
-// pub fn zigTerminal(terminal_: Terminal) ?*ZigTerminal { ... }
+// pub fn zigTerminal(terminal_: Terminal) ?*ZigTerminal {
+//     return (terminal_ orelse return null).terminal;
+// }
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle.
-pub unsafe fn zig_terminal(_terminal_: Terminal) -> *mut ZigTerminal {
-    todo!("vt-c zig_terminal")
+pub unsafe fn zig_terminal(terminal_: Terminal) -> *mut ZigTerminal {
+    if terminal_.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: `terminal_` is a live `new`-returned wrapper (caller contract).
+    unsafe { (*terminal_).terminal }
 }
 
 /// C: GhosttyTerminalOptions
@@ -269,20 +562,176 @@ pub struct Options {
 
 // const NewError = error{ InvalidValue, OutOfMemory };
 
-// pub fn new(alloc_: ?*const CAllocator, result: *Terminal, opts: Options) ...
+// PORT NOTE (D3, internal): error analog of the reference `NewError`. The
+// reference `new` calls `new_` and maps the error to a `Result`; we inline that
+// mapping here (Rust has no `errdefer`, so the cleanup is hand-unwound).
+enum NewError {
+    InvalidValue,
+    OutOfMemory,
+}
+
+// pub fn new(alloc_: ?*const CAllocator, result: *Terminal, opts: Options) ... {
+//     result.* = new_(alloc_, opts) catch |err| {
+//         result.* = null;
+//         return switch (err) {
+//             error.InvalidValue => .invalid_value,
+//             error.OutOfMemory => .out_of_memory,
+//         };
+//     };
+//     return .success;
+// }
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid `CAllocator`; `result` must be a
 /// valid writable pointer to a `Terminal`.
-pub unsafe fn new(_alloc_: *const CAllocator, _result: *mut Terminal, _opts: Options) -> Result {
-    todo!("vt-c new")
+pub unsafe fn new(alloc_: *const CAllocator, result: *mut Terminal, opts: Options) -> Result {
+    // SAFETY: `alloc_` validity and `result` writability are caller contracts.
+    let alloc_ref = unsafe { alloc_.as_ref() };
+    match new_(alloc_ref, opts) {
+        Ok(wrapper) => {
+            unsafe { *result = wrapper };
+            Result::Success
+        }
+        Err(err) => {
+            unsafe { *result = std::ptr::null_mut() };
+            match err {
+                NewError::InvalidValue => Result::InvalidValue,
+                NewError::OutOfMemory => Result::OutOfMemory,
+            }
+        }
+    }
 }
 
-// pub fn vt_write(terminal_: Terminal, ptr: [*]const u8, len: usize) ...
+// fn new_(alloc_: ?*const CAllocator, opts: Options) NewError!*TerminalWrapper {
+//     if (opts.cols == 0 or opts.rows == 0) return error.InvalidValue;
+//     const alloc = lib.alloc.default(alloc_);
+//     const t = alloc.create(ZigTerminal) catch return error.OutOfMemory;
+//     errdefer alloc.destroy(t);
+//     const wrapper = alloc.create(TerminalWrapper) catch return error.OutOfMemory;
+//     errdefer alloc.destroy(wrapper);
+//     t.* = try .init(alloc, .{ .cols, .rows, .max_scrollback });
+//     errdefer t.deinit(alloc);
+//     t.flags.shell_redraws_prompt = .false;
+//     var handler: Stream.Handler = t.vtHandler();
+//     handler.effects = .{ .write_pty = &Effects.writePtyTrampoline, ... };
+//     wrapper.* = .{ .terminal = t, .stream = .initAlloc(alloc, handler) };
+//     return wrapper;
+// }
+//
+// PORT NOTE (D3 lifecycle): the reference allocates `t` and `wrapper` via the C
+// allocator. rustty's `ZigTerminal` is allocated/freed exclusively through its
+// own `Allocator` (`allocator_api2::alloc::Global`; the C `alloc_` only selects
+// the rustty-lib resolution and never drives `ZigTerminal`'s internal pools), so
+// the wrapper and terminal storage are `Box::into_raw`'d on the Rust global heap
+// per the signed-off D3 storage plan. The two `errdefer`s become explicit hand
+// unwinds (Box drops + `deinit`) on each fallible step.
+fn new_(alloc_: Option<&CAllocator>, opts: Options) -> std::result::Result<Terminal, NewError> {
+    // if (opts.cols == 0 or opts.rows == 0) return error.InvalidValue;
+    if opts.cols == 0 || opts.rows == 0 {
+        return Err(NewError::InvalidValue);
+    }
+
+    // const alloc = lib.alloc.default(alloc_);
+    // PORT NOTE: resolved for parity with the reference (selects the global
+    // default when null); `ZigTerminal` itself uses `Global`, so this is unused
+    // beyond validating the C allocator handle.
+    let _alloc = rustty_lib::allocator::default(alloc_);
+    let gpa = allocator_api2::alloc::Global;
+
+    // const t = alloc.create(ZigTerminal) catch return error.OutOfMemory;
+    // errdefer alloc.destroy(t);
+    // t.* = try .init(alloc, .{ ... });
+    // errdefer t.deinit(alloc);
+    let mut terminal = match ZigTerminal::init(
+        gpa,
+        ZigTerminalOptions {
+            cols: opts.cols,
+            rows: opts.rows,
+            max_scrollback: opts.max_scrollback,
+            // PORT NOTE: the reference relies on the `Options` field defaults for
+            // the remaining fields. rustty-vt has no `Default` for `Options`; we
+            // replicate the (ghostty-artifact) defaults that rustty-vt's source
+            // of truth produces.
+            colors: Colors::default(),
+            default_modes: rustty_vt::modes::ModePacked::default(),
+            kitty_image_storage_limit: 320 * 1000 * 1000,
+            kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
+        },
+    ) {
+        Ok(t) => t,
+        Err(_oom) => return Err(NewError::OutOfMemory),
+    };
+
+    // libghostty-vt embedders don't necessarily install Ghostty's shell
+    // integration, so don't assume OSC 133 prompts can be redrawn on resize.
+    // Shells can still opt in with OSC 133;A;redraw=1.
+    // t.flags.shell_redraws_prompt = .false;
+    terminal.flags.shell_redraws_prompt = rustty_vt::osc::semantic_prompt::Redraw::False;
+
+    // const t = ...; — move the terminal to the heap so the wrapper's stream
+    // handler can alias a stable address.
+    let terminal_ptr: *mut ZigTerminal = Box::into_raw(Box::new(terminal));
+
+    // Setup our stream with trampolines always installed so that
+    // setting C callbacks at any time takes effect immediately.
+    // var handler: Stream.Handler = t.vtHandler();
+    // SAFETY: `terminal_ptr` is a freshly-boxed, uniquely-owned `ZigTerminal`;
+    // `vt_handler` only reads `&mut *terminal_ptr` to capture its address into
+    // the returned `Handler` (no aliasing handler exists yet).
+    let mut handler: Handler<'static> = unsafe { (*terminal_ptr).vt_handler() };
+
+    // handler.effects = .{ .write_pty = &Effects.writePtyTrampoline, ... };
+    handler.effects = rustty_vt::stream_terminal::Effects {
+        write_pty: Some(Effects::write_pty_trampoline),
+        bell: Some(Effects::bell_trampoline),
+        color_scheme: Some(Effects::color_scheme_trampoline),
+        device_attributes: Some(Effects::device_attributes_trampoline),
+        enquiry: Some(Effects::enquiry_trampoline),
+        xtversion: Some(Effects::xtversion_trampoline),
+        title_changed: Some(Effects::title_changed_trampoline),
+        pwd_changed: Some(Effects::pwd_changed_trampoline),
+        size: Some(Effects::size_trampoline),
+    };
+
+    // wrapper.* = .{ .terminal = t, .stream = .initAlloc(alloc, handler) };
+    // PORT NOTE: the reference threads the C allocator into the OSC parser; we
+    // back it with the process-static global zig allocator (the same choice
+    // `Terminal::vt_stream` makes), which supports dynamic OSC growth.
+    let wrapper = TerminalWrapper {
+        terminal: terminal_ptr,
+        stream: Stream::init_alloc(
+            rustty_lib::allocator::ZigAllocatorRef::new(&GLOBAL_ZIG_ALLOCATOR_FOR_OSC),
+            handler,
+        ),
+        effects: Effects::default(),
+        tracked_grid_refs: HashSet::new(),
+    };
+
+    // return wrapper;
+    let wrapper_ptr = Box::into_raw(Box::new(wrapper));
+    // PROVENANCE: expose the whole wrapper allocation so the effect trampolines
+    // can recover it (siblings of the stream handler) via
+    // `with_exposed_provenance_mut` — see `wrapper_from_handler`.
+    let _ = (wrapper_ptr as *const u8).expose_provenance();
+    Ok(wrapper_ptr)
+}
+
+// pub fn vt_write(terminal_: Terminal, ptr: [*]const u8, len: usize) ... {
+//     const wrapper = terminal_ orelse return;
+//     wrapper.stream.nextSlice(ptr[0..len]);
+// }
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle; `ptr` must point to
 /// `len` readable bytes.
-pub unsafe fn vt_write(_terminal_: Terminal, _ptr: *const u8, _len: usize) {
-    todo!("vt-c vt_write")
+pub unsafe fn vt_write(terminal_: Terminal, ptr: *const u8, len: usize) {
+    // const wrapper = terminal_ orelse return;
+    if terminal_.is_null() {
+        return;
+    }
+    // wrapper.stream.nextSlice(ptr[0..len]);
+    // SAFETY: `terminal_` is a live wrapper; `ptr[0..len]` is readable (caller
+    // contract). The stream's handler aliases this wrapper's terminal.
+    let input = unsafe { core::slice::from_raw_parts(ptr, len) };
+    unsafe { (*terminal_).stream.next_slice(input) };
 }
 
 /// C: GhosttyTerminalOption
@@ -394,50 +843,204 @@ const _: () = assert!(size_of::<ScrollViewportCValue>() == size_of::<[u64; 2]>()
 const _: () = assert!(align_of::<ScrollViewportCValue>() == 8);
 const _: () = assert!(size_of::<ScrollViewportTag>() == size_of::<c_int>());
 
-// pub fn scroll_viewport(terminal_: Terminal, behavior: ScrollViewport) ...
+// pub fn scroll_viewport(terminal_: Terminal, behavior: ScrollViewport) ... {
+//     const t: *ZigTerminal = (terminal_ orelse return).terminal;
+//     t.scrollViewport(switch (behavior.tag) {
+//         .top => .top,
+//         .bottom => .bottom,
+//         .delta => .{ .delta = behavior.value.delta },
+//     });
+// }
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle.
-pub unsafe fn scroll_viewport(_terminal_: Terminal, _behavior: ScrollViewport) {
-    todo!("vt-c scroll_viewport")
+pub unsafe fn scroll_viewport(terminal_: Terminal, behavior: ScrollViewport) {
+    if terminal_.is_null() {
+        return;
+    }
+    // SAFETY: `terminal_` is a live wrapper; `terminal` is its owned heap
+    // terminal.
+    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
+    let zig_behavior = match behavior.tag {
+        ScrollViewportTag::Top => ZigScrollViewport::Top,
+        ScrollViewportTag::Bottom => ZigScrollViewport::Bottom,
+        // SAFETY: the `delta` tag selects the `delta` union member (C ABI
+        // contract mirrored from the reference `behavior.value.delta`).
+        ScrollViewportTag::Delta => ZigScrollViewport::Delta(unsafe { behavior.value.delta }),
+    };
+    unsafe { (*t).scroll_viewport(zig_behavior) };
 }
 
-// pub fn resize(terminal_, cols, rows, cell_width_px, cell_height_px) ...
+// pub fn resize(terminal_, cols, rows, cell_width_px, cell_height_px) ... {
+//     const wrapper = terminal_ orelse return .invalid_value;
+//     const t = wrapper.terminal;
+//     if (cols == 0 or rows == 0) return .invalid_value;
+//     t.resize(t.gpa(), cols, rows) catch return .out_of_memory;
+//     t.width_px = std.math.mul(u32, cols, cell_width_px) catch std.math.maxInt(u32);
+//     t.height_px = std.math.mul(u32, rows, cell_height_px) catch std.math.maxInt(u32);
+//     t.modes.set(.synchronized_output, false);
+//     if (t.modes.get(.in_band_size_reports)) in_band: {
+//         const func = wrapper.effects.write_pty orelse break :in_band;
+//         var buf: [1024]u8 = undefined;
+//         var writer: std.Io.Writer = .fixed(&buf);
+//         size_report.encode(&writer, .mode_2048, .{ .rows, .columns, .cell_width, .cell_height }) catch break :in_band;
+//         const data = writer.buffered();
+//         func(@ptrCast(wrapper), wrapper.effects.userdata, data.ptr, data.len);
+//     }
+//     return .success;
+// }
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle.
 pub unsafe fn resize(
-    _terminal_: Terminal,
-    _cols: size::CellCountInt,
-    _rows: size::CellCountInt,
-    _cell_width_px: u32,
-    _cell_height_px: u32,
+    terminal_: Terminal,
+    cols: size::CellCountInt,
+    rows: size::CellCountInt,
+    cell_width_px: u32,
+    cell_height_px: u32,
 ) -> Result {
-    todo!("vt-c resize")
+    // const wrapper = terminal_ orelse return .invalid_value;
+    if terminal_.is_null() {
+        return Result::InvalidValue;
+    }
+    // const t = wrapper.terminal;
+    // SAFETY: `terminal_` is a live wrapper.
+    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
+
+    // if (cols == 0 or rows == 0) return .invalid_value;
+    if cols == 0 || rows == 0 {
+        return Result::InvalidValue;
+    }
+
+    // t.resize(t.gpa(), cols, rows) catch return .out_of_memory;
+    // SAFETY: short-lived deref; no overlapping `&mut ZigTerminal` is held.
+    let gpa = unsafe { (*t).gpa() };
+    if unsafe { (*t).resize(gpa, cols, rows) }.is_err() {
+        return Result::OutOfMemory;
+    }
+
+    // Update pixel sizes
+    // t.width_px = std.math.mul(u32, cols, cell_width_px) catch std.math.maxInt(u32);
+    // t.height_px = std.math.mul(u32, rows, cell_height_px) catch std.math.maxInt(u32);
+    // PORT NOTE: `std.math.mul(...) catch maxInt(u32)` is saturate-on-overflow.
+    unsafe {
+        (*t).width_px = (cols as u32).saturating_mul(cell_width_px);
+        (*t).height_px = (rows as u32).saturating_mul(cell_height_px);
+    }
+
+    // Disable synchronized output mode so that we show changes
+    // immediately for a resize. This is allowed by the spec.
+    // t.modes.set(.synchronized_output, false);
+    unsafe { (*t).modes.set(modes::Mode::SynchronizedOutput, false) };
+
+    // If we have in-band size reporting enabled, send a report.
+    // if (t.modes.get(.in_band_size_reports)) in_band: {
+    if unsafe { (*t).modes.get(modes::Mode::InBandSizeReports) } {
+        // const func = wrapper.effects.write_pty orelse break :in_band;
+        // SAFETY: `effects` is a sibling field of the live wrapper.
+        if let Some(func) = unsafe { (*terminal_).effects.write_pty } {
+            // var buf: [1024]u8 = undefined; var writer = .fixed(&buf);
+            // size_report.encode(&writer, .mode_2048, .{...}) catch break :in_band;
+            // PORT NOTE: the reference encodes into a fixed `[1024]u8`. rustty's
+            // `size_report::encode` writes via `core::fmt::Write`; we accumulate
+            // into a `String` (ASCII only) and hand its bytes to the callback,
+            // matching `report_device_attributes`. An encode failure is the
+            // `catch break :in_band` early-out.
+            let mut buf = String::new();
+            let encode_ok = size_report::encode(
+                &mut buf,
+                size_report::Style::Mode2048,
+                size_report::Size {
+                    rows,
+                    columns: cols,
+                    cell_width: cell_width_px,
+                    cell_height: cell_height_px,
+                },
+            )
+            .is_ok();
+            if encode_ok {
+                // const data = writer.buffered();
+                // func(@ptrCast(wrapper), wrapper.effects.userdata, data.ptr, data.len);
+                let data = buf.as_bytes();
+                let userdata = unsafe { (*terminal_).effects.userdata };
+                func(terminal_, userdata, data.as_ptr(), data.len());
+            }
+        }
+    }
+
+    // return .success;
+    Result::Success
 }
 
-// pub fn reset(terminal_: Terminal) ...
+// pub fn reset(terminal_: Terminal) ... {
+//     const t: *ZigTerminal = (terminal_ orelse return).terminal;
+//     t.fullReset();
+// }
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle.
-pub unsafe fn reset(_terminal_: Terminal) {
-    todo!("vt-c reset")
+pub unsafe fn reset(terminal_: Terminal) {
+    if terminal_.is_null() {
+        return;
+    }
+    // SAFETY: `terminal_` is a live wrapper.
+    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
+    unsafe { (*t).full_reset() };
 }
 
-// pub fn mode_get(terminal_, tag: modes.ModeTag.Backing, out_value: *bool) ...
+// pub fn mode_get(terminal_, tag: modes.ModeTag.Backing, out_value: *bool) ... {
+//     const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
+//     const mode_tag: modes.ModeTag = @bitCast(tag);
+//     const mode = modes.modeFromInt(mode_tag.value, mode_tag.ansi) orelse return .invalid_value;
+//     out_value.* = t.modes.get(mode);
+//     return .success;
+// }
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle; `out_value` must be
 /// a valid writable pointer to a `bool`.
 pub unsafe fn mode_get(
-    _terminal_: Terminal,
-    _tag: modes::ModeTagBacking,
-    _out_value: *mut bool,
+    terminal_: Terminal,
+    tag: modes::ModeTagBacking,
+    out_value: *mut bool,
 ) -> Result {
-    todo!("vt-c mode_get")
+    if terminal_.is_null() {
+        return Result::InvalidValue;
+    }
+    // SAFETY: `terminal_` is a live wrapper.
+    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
+    // const mode_tag: modes.ModeTag = @bitCast(tag);
+    let mode_tag = modes::ModeTag::from_backing(tag);
+    // const mode = modes.modeFromInt(mode_tag.value, mode_tag.ansi) orelse return .invalid_value;
+    let mode = match modes::mode_from_int(mode_tag.value, mode_tag.ansi) {
+        Some(m) => m,
+        None => return Result::InvalidValue,
+    };
+    // out_value.* = t.modes.get(mode);
+    // SAFETY: `out_value` is a valid writable bool pointer (caller contract).
+    unsafe { *out_value = (*t).modes.get(mode) };
+    Result::Success
 }
 
-// pub fn mode_set(terminal_, tag: modes.ModeTag.Backing, value: bool) ...
+// pub fn mode_set(terminal_, tag: modes.ModeTag.Backing, value: bool) ... {
+//     const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
+//     const mode_tag: modes.ModeTag = @bitCast(tag);
+//     const mode = modes.modeFromInt(mode_tag.value, mode_tag.ansi) orelse return .invalid_value;
+//     t.modes.set(mode, value);
+//     return .success;
+// }
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle.
-pub unsafe fn mode_set(_terminal_: Terminal, _tag: modes::ModeTagBacking, _value: bool) -> Result {
-    todo!("vt-c mode_set")
+pub unsafe fn mode_set(terminal_: Terminal, tag: modes::ModeTagBacking, value: bool) -> Result {
+    if terminal_.is_null() {
+        return Result::InvalidValue;
+    }
+    // SAFETY: `terminal_` is a live wrapper.
+    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
+    let mode_tag = modes::ModeTag::from_backing(tag);
+    let mode = match modes::mode_from_int(mode_tag.value, mode_tag.ansi) {
+        Some(m) => m,
+        None => return Result::InvalidValue,
+    };
+    // t.modes.set(mode, value);
+    unsafe { (*t).modes.set(mode, value) };
+    Result::Success
 }
 
 /// C: GhosttyKittyGraphics
@@ -492,27 +1095,200 @@ pub enum TerminalData {
     ViewportActive = 32,
 }
 
-// pub fn get(terminal_: Terminal, data: TerminalData, out: ?*anyopaque) ...
+// pub fn get(terminal_: Terminal, data: TerminalData, out: ?*anyopaque) ... {
+//     if (comptime std.debug.runtime_safety) {
+//         _ = std.meta.intToEnum(TerminalData, @intFromEnum(data)) catch { ... return .invalid_value; };
+//     }
+//     return switch (data) {
+//         .invalid => .invalid_value,
+//         inline else => |comptime_data| getTyped(terminal_, comptime_data, @ptrCast(@alignCast(out))),
+//     };
+// }
+//
+// PORT NOTE: the reference `intToEnum` runtime-safety guard lives on the raw
+// `c_int` crossing the C boundary (the `extern "C"` wrapper in lib.rs); a valid
+// `TerminalData` here cannot be out of range. The `inline else => getTyped`
+// comptime dispatch becomes a direct `get_typed` call (the typed `out` cast is
+// performed per-arm inside `get_typed`).
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle; `out`, if non-null,
 /// must point to storage of the type required by `data` (`TerminalData::out_type`).
-pub unsafe fn get(_terminal_: Terminal, _data: TerminalData, _out: *mut c_void) -> Result {
-    todo!("vt-c get")
+pub unsafe fn get(terminal_: Terminal, data: TerminalData, out: *mut c_void) -> Result {
+    // .invalid => .invalid_value,
+    if matches!(data, TerminalData::Invalid) {
+        return Result::InvalidValue;
+    }
+    // inline else => |comptime_data| getTyped(terminal_, comptime_data, @ptrCast(@alignCast(out)))
+    unsafe { get_typed(terminal_, data, out) }
 }
 
-// pub fn get_multi(terminal_, count, keys: ?[*]const TerminalData, values: ?[*]?*anyopaque, out_written: ?*usize) ...
+// fn getTyped(terminal_: Terminal, comptime data: TerminalData, out: *data.OutType()) Result {
+//     const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
+//     switch (data) { ... }
+//     return .success;
+// }
+//
+// PORT NOTE: the reference is a `comptime`-monomorphized switch whose `out` is
+// typed per arm (`*data.OutType()`). rustty erases `out` to `*mut c_void` and
+// casts to the arm's concrete pointer type before the write. Arms whose
+// `OutType` projects a still-deferred vt-c type (`color.RGB.C`/`PaletteC`,
+// `style_c.Style`, `selection_c.CSelection`, kitty image/graphics) land in the
+// later get/set sub-batch; they remain `todo!()` here.
+//
+// # Safety
+// `terminal_`, if non-null, is a live wrapper; `out` points at storage of the
+// type required by `data`.
+unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -> Result {
+    // const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
+    if terminal_.is_null() {
+        return Result::InvalidValue;
+    }
+    // PORT NOTE (SOUNDNESS): the reference reads through `*ZigTerminal` and its
+    // `screens.active: *Screen`. We mirror that with RAW pointers and never form
+    // a `&mut ZigTerminal`/`&mut Screen`: the stream handler aliases this same
+    // terminal via a stored raw pointer (created in `vt_handler`), and a Unique
+    // (`&mut`) retag over the terminal would invalidate that aliasing tag and
+    // make the next `vt_write` UB (the rust-mut-args-strongly-protected rule).
+    // All reads here are shared (`&`/scalar) through the raw ptr; the active
+    // screen is reached via the raw `screens.active` pointer.
+    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
+    let active: *mut rustty_vt::screen::Screen = unsafe { (*t).screens.active };
+
+    match data {
+        // .invalid => return .invalid_value,
+        TerminalData::Invalid => return Result::InvalidValue,
+        // .cols => out.* = t.cols,
+        TerminalData::Cols => unsafe { *(out as *mut size::CellCountInt) = (*t).cols },
+        // .rows => out.* = t.rows,
+        TerminalData::Rows => unsafe { *(out as *mut size::CellCountInt) = (*t).rows },
+        // .cursor_x => out.* = t.screens.active.cursor.x,
+        TerminalData::CursorX => unsafe { *(out as *mut size::CellCountInt) = (*active).cursor.x },
+        // .cursor_y => out.* = t.screens.active.cursor.y,
+        TerminalData::CursorY => unsafe { *(out as *mut size::CellCountInt) = (*active).cursor.y },
+        // .cursor_pending_wrap => out.* = t.screens.active.cursor.pending_wrap,
+        TerminalData::CursorPendingWrap => unsafe {
+            *(out as *mut bool) = (*active).cursor.pending_wrap
+        },
+        // .active_screen => out.* = t.screens.active_key,
+        TerminalData::ActiveScreen => unsafe {
+            *(out as *mut TerminalScreen) = (*t).screens.active_key
+        },
+        // .cursor_visible => out.* = t.modes.get(.cursor_visible),
+        TerminalData::CursorVisible => unsafe {
+            *(out as *mut bool) = (*t).modes.get(modes::Mode::CursorVisible)
+        },
+        // .kitty_keyboard_flags => out.* = @as(u8, t.screens.active.kitty_keyboard.current().int()),
+        TerminalData::KittyKeyboardFlags => unsafe {
+            *(out as *mut u8) = (*active).kitty_keyboard.current().int()
+        },
+        // .mouse_tracking => out.* = t.modes.get(.mouse_event_x10) or ... or any,
+        TerminalData::MouseTracking => unsafe {
+            *(out as *mut bool) = (*t).modes.get(modes::Mode::MouseEventX10)
+                || (*t).modes.get(modes::Mode::MouseEventNormal)
+                || (*t).modes.get(modes::Mode::MouseEventButton)
+                || (*t).modes.get(modes::Mode::MouseEventAny)
+        },
+        // .total_rows => out.* = t.screens.active.pages.total_rows,
+        TerminalData::TotalRows => unsafe { *(out as *mut usize) = (*active).pages.total_rows },
+        // .scrollback_rows => out.* = t.screens.active.pages.total_rows - t.rows,
+        TerminalData::ScrollbackRows => {
+            let total = unsafe { (*active).pages.total_rows };
+            let rows = unsafe { (*t).rows } as usize;
+            unsafe { *(out as *mut usize) = total - rows };
+        }
+        // .width_px => out.* = t.width_px,
+        TerminalData::WidthPx => unsafe { *(out as *mut u32) = (*t).width_px },
+        // .height_px => out.* = t.height_px,
+        TerminalData::HeightPx => unsafe { *(out as *mut u32) = (*t).height_px },
+        // .viewport_active => out.* = t.screens.active.pages.viewport == .active,
+        TerminalData::ViewportActive => unsafe {
+            *(out as *mut bool) = matches!(
+                (*active).pages.viewport,
+                rustty_vt::pagelist::Viewport::Active
+            )
+        },
+
+        // PORT NOTE: the following arms project still-deferred vt-c types
+        // (`scrollbar`/`cursor_style`/`title`/`pwd`/`color_*`/kitty image+graphics/
+        // `selection`); they fill in the get/set sub-batch.
+        TerminalData::Scrollbar => todo!("vt-c getTyped scrollbar"),
+        TerminalData::CursorStyle => todo!("vt-c getTyped cursor_style"),
+        TerminalData::Title => todo!("vt-c getTyped title"),
+        TerminalData::Pwd => todo!("vt-c getTyped pwd"),
+        TerminalData::ColorForeground => todo!("vt-c getTyped color_foreground"),
+        TerminalData::ColorBackground => todo!("vt-c getTyped color_background"),
+        TerminalData::ColorCursor => todo!("vt-c getTyped color_cursor"),
+        TerminalData::ColorPalette => todo!("vt-c getTyped color_palette"),
+        TerminalData::ColorForegroundDefault => todo!("vt-c getTyped color_foreground_default"),
+        TerminalData::ColorBackgroundDefault => todo!("vt-c getTyped color_background_default"),
+        TerminalData::ColorCursorDefault => todo!("vt-c getTyped color_cursor_default"),
+        TerminalData::ColorPaletteDefault => todo!("vt-c getTyped color_palette_default"),
+        TerminalData::KittyImageStorageLimit => todo!("vt-c getTyped kitty_image_storage_limit"),
+        TerminalData::KittyImageMediumFile => todo!("vt-c getTyped kitty_image_medium_file"),
+        TerminalData::KittyImageMediumTempFile => {
+            todo!("vt-c getTyped kitty_image_medium_temp_file")
+        }
+        TerminalData::KittyImageMediumSharedMem => {
+            todo!("vt-c getTyped kitty_image_medium_shared_mem")
+        }
+        TerminalData::KittyGraphics => todo!("vt-c getTyped kitty_graphics"),
+        TerminalData::Selection => todo!("vt-c getTyped selection"),
+    }
+
+    Result::Success
+}
+
+// pub fn get_multi(terminal_, count, keys, values, out_written) ... {
+//     const k = keys orelse return .invalid_value;
+//     const v = values orelse return .invalid_value;
+//     for (0..count) |i| {
+//         const result = get(terminal_, k[i], v[i]);
+//         if (result != .success) { if (out_written) |w| w.* = i; return result; }
+//     }
+//     if (out_written) |w| w.* = count;
+//     return .success;
+// }
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle; `keys`/`values`, if
 /// non-null, must point to `count` valid elements; `out_written`, if non-null,
 /// must be a valid writable pointer.
 pub unsafe fn get_multi(
-    _terminal_: Terminal,
-    _count: usize,
-    _keys: *const TerminalData,
-    _values: *mut *mut c_void,
-    _out_written: *mut usize,
+    terminal_: Terminal,
+    count: usize,
+    keys: *const TerminalData,
+    values: *mut *mut c_void,
+    out_written: *mut usize,
 ) -> Result {
-    todo!("vt-c get_multi")
+    // const k = keys orelse return .invalid_value;
+    if keys.is_null() {
+        return Result::InvalidValue;
+    }
+    // const v = values orelse return .invalid_value;
+    if values.is_null() {
+        return Result::InvalidValue;
+    }
+
+    // for (0..count) |i| {
+    for i in 0..count {
+        // const result = get(terminal_, k[i], v[i]);
+        // SAFETY: `keys`/`values` point at `count` valid elements (caller
+        // contract).
+        let key = unsafe { *keys.add(i) };
+        let value = unsafe { *values.add(i) };
+        let result = unsafe { get(terminal_, key, value) };
+        // if (result != .success) { if (out_written) |w| w.* = i; return result; }
+        if result != Result::Success {
+            if !out_written.is_null() {
+                unsafe { *out_written = i };
+            }
+            return result;
+        }
+    }
+    // if (out_written) |w| w.* = count;
+    if !out_written.is_null() {
+        unsafe { *out_written = count };
+    }
+    Result::Success
 }
 
 // pub fn grid_ref(terminal_: Terminal, pt: point.Point.C, out_ref: ?*grid_ref_c.CGridRef) ...
@@ -549,12 +1325,62 @@ pub unsafe fn point_from_grid_ref(
     todo!("vt-c point_from_grid_ref")
 }
 
-// pub fn free(terminal_: Terminal) ...
+// pub fn free(terminal_: Terminal) ... {
+//     const wrapper = terminal_ orelse return;
+//     const t = wrapper.terminal;
+//     const alloc = t.gpa();
+//     for (wrapper.tracked_grid_refs.keys()) |ref| ref.terminal = null;
+//     wrapper.tracked_grid_refs.deinit(alloc);
+//     wrapper.stream.deinit();
+//     t.deinit(alloc);
+//     alloc.destroy(t);
+//     alloc.destroy(wrapper);
+// }
+//
+// PORT NOTE (D3 lifecycle): the reference frees `t` and `wrapper` via the C
+// allocator (`alloc.destroy`). rustty allocated both via `Box::into_raw` on the
+// Rust global heap (see `new_`), so we reclaim them with `Box::from_raw`. The
+// terminal is freed AFTER the stream (the stream's handler aliases it), matching
+// the reference order (`t.deinit` + `destroy(t)` after `stream.deinit`).
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle previously returned
 /// by `new` and not yet freed.
-pub unsafe fn free(_terminal_: Terminal) {
-    todo!("vt-c free")
+pub unsafe fn free(terminal_: Terminal) {
+    // const wrapper = terminal_ orelse return;
+    if terminal_.is_null() {
+        return;
+    }
+    // const wrapper = ...; reclaim the heap wrapper.
+    // SAFETY: `terminal_` is a `new`-returned wrapper pointer, not yet freed
+    // (caller contract).
+    let mut wrapper: Box<TerminalWrapper> = unsafe { Box::from_raw(terminal_) };
+
+    // const t = wrapper.terminal;
+    let t: *mut ZigTerminal = wrapper.terminal;
+    // const alloc = t.gpa();
+    // SAFETY: `t` is the wrapper's live, owned terminal.
+    let alloc = unsafe { (*t).gpa() };
+
+    // for (wrapper.tracked_grid_refs.keys()) |ref| ref.terminal = null;
+    for &ref_ in wrapper.tracked_grid_refs.iter() {
+        // SAFETY: each tracked-ref pointer was inserted by `grid_ref_track` and
+        // is still live (it back-references this wrapper); detach it so a later
+        // tracked-ref free does not dereference the freed terminal.
+        unsafe { (*ref_).terminal = std::ptr::null_mut() };
+    }
+    // wrapper.tracked_grid_refs.deinit(alloc); — the HashSet frees on drop.
+    wrapper.tracked_grid_refs.clear();
+
+    // wrapper.stream.deinit();
+    wrapper.stream.deinit();
+
+    // t.deinit(alloc);
+    unsafe { (*t).deinit(alloc) };
+    // alloc.destroy(t); — reclaim the heap terminal AFTER the stream's handler
+    // (which aliased it) is torn down.
+    // SAFETY: `t` was `Box::into_raw`'d in `new_` and is now uniquely owned.
+    drop(unsafe { Box::from_raw(t) });
+    // alloc.destroy(wrapper); — `wrapper` (the Box) drops at end of scope.
 }
 
 // PORT NOTE: `TerminalData` aliases `color.PaletteC` / `color.RGB.C` /
@@ -563,3 +1389,777 @@ pub unsafe fn free(_terminal_: Terminal) {
 // resolved by the fill sub-batch's `setTyped`/`getTyped` bodies (and
 // `color::PaletteC` itself is a DEFERRED vt-c projection per the recon); they
 // are intentionally NOT imported in this types+signatures skeleton.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_util::with_test_allocator;
+
+    // PORT NOTE: the reference passes `&lib.alloc.test_allocator` to `new`.
+    // rustty has no global test allocator (leaks are caught by Miri); the parity
+    // analog is `with_test_allocator`, a C `Allocator` backed by the process
+    // global. The reference `t.?.terminal.plainString(testing.allocator)` becomes
+    // `(*(*t).terminal).plain_string(Global)`; the returned `Vec<u8>` frees on
+    // drop (the reference's `testing.allocator.free(str)`).
+
+    fn new_t(
+        alloc: &CAllocator,
+        cols: size::CellCountInt,
+        rows: size::CellCountInt,
+        sb: usize,
+    ) -> Terminal {
+        let mut t: Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            new(
+                alloc as *const CAllocator,
+                &mut t,
+                Options {
+                    cols,
+                    rows,
+                    max_scrollback: sb,
+                },
+            )
+        });
+        t
+    }
+
+    fn plain_string(t: Terminal) -> Vec<u8> {
+        // SAFETY: `t` is a live terminal from `new_t`.
+        let zt = unsafe { &mut *(*t).terminal };
+        zt.plain_string(allocator_api2::alloc::Global).unwrap()
+    }
+
+    // test "new/free"
+    #[test]
+    fn new_free() {
+        with_test_allocator(|alloc| {
+            // var t: Terminal = null;
+            let mut t: Terminal = std::ptr::null_mut();
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ .cols=80, .rows=24, .max_scrollback=10_000 }));
+            assert_eq!(Result::Success, unsafe {
+                new(
+                    alloc as *const CAllocator,
+                    &mut t,
+                    Options {
+                        cols: 80,
+                        rows: 24,
+                        max_scrollback: 10_000,
+                    },
+                )
+            });
+            // try testing.expect(t != null);
+            assert!(!t.is_null());
+            // free(t);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "new invalid value"
+    #[test]
+    fn new_invalid_value() {
+        with_test_allocator(|alloc| {
+            let mut t: Terminal = std::ptr::null_mut();
+            // cols == 0
+            assert_eq!(Result::InvalidValue, unsafe {
+                new(
+                    alloc as *const CAllocator,
+                    &mut t,
+                    Options {
+                        cols: 0,
+                        rows: 24,
+                        max_scrollback: 10_000,
+                    },
+                )
+            });
+            assert!(t.is_null());
+
+            // rows == 0
+            assert_eq!(Result::InvalidValue, unsafe {
+                new(
+                    alloc as *const CAllocator,
+                    &mut t,
+                    Options {
+                        cols: 80,
+                        rows: 0,
+                        max_scrollback: 10_000,
+                    },
+                )
+            });
+            assert!(t.is_null());
+        });
+    }
+
+    // test "free null"
+    #[test]
+    fn free_null() {
+        unsafe { free(std::ptr::null_mut()) };
+    }
+
+    // test "scroll_viewport"
+    #[test]
+    fn scroll_viewport_test() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 5, 2, 10_000);
+
+            let mut viewport_active: bool = false;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ViewportActive,
+                    &mut viewport_active as *mut bool as *mut c_void,
+                )
+            });
+            assert!(viewport_active);
+
+            // Write "hello" on the first line
+            unsafe { vt_write(t, b"hello".as_ptr(), 5) };
+
+            // Push "hello" into scrollback with 3 newlines (index = ESC D)
+            unsafe { vt_write(t, b"\x1bD\x1bD\x1bD".as_ptr(), 6) };
+            // Viewport should be empty now since hello scrolled off
+            assert_eq!(b"", plain_string(t).as_slice());
+
+            // Scroll to top: "hello" should be visible again
+            unsafe {
+                scroll_viewport(
+                    t,
+                    ScrollViewportC {
+                        tag: ScrollViewportTag::Top,
+                        value: ScrollViewportCValue { _padding: [0; 2] },
+                    },
+                )
+            };
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ViewportActive,
+                    &mut viewport_active as *mut bool as *mut c_void,
+                )
+            });
+            assert!(!viewport_active);
+            assert_eq!(b"hello", plain_string(t).as_slice());
+
+            // Scroll to bottom: viewport should be empty again
+            unsafe {
+                scroll_viewport(
+                    t,
+                    ScrollViewportC {
+                        tag: ScrollViewportTag::Bottom,
+                        value: ScrollViewportCValue { _padding: [0; 2] },
+                    },
+                )
+            };
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ViewportActive,
+                    &mut viewport_active as *mut bool as *mut c_void,
+                )
+            });
+            assert!(viewport_active);
+            assert_eq!(b"", plain_string(t).as_slice());
+
+            // Scroll up by delta to bring "hello" back into view
+            unsafe {
+                scroll_viewport(
+                    t,
+                    ScrollViewportC {
+                        tag: ScrollViewportTag::Delta,
+                        value: ScrollViewportCValue { delta: -3 },
+                    },
+                )
+            };
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ViewportActive,
+                    &mut viewport_active as *mut bool as *mut c_void,
+                )
+            });
+            assert!(!viewport_active);
+            assert_eq!(b"hello", plain_string(t).as_slice());
+
+            unsafe { free(t) };
+        });
+    }
+
+    // test "scroll_viewport null"
+    #[test]
+    fn scroll_viewport_null() {
+        unsafe {
+            scroll_viewport(
+                std::ptr::null_mut(),
+                ScrollViewportC {
+                    tag: ScrollViewportTag::Top,
+                    value: ScrollViewportCValue { _padding: [0; 2] },
+                },
+            )
+        };
+    }
+
+    // test "reset"
+    #[test]
+    fn reset_test() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 10_000);
+
+            unsafe { vt_write(t, b"Hello".as_ptr(), 5) };
+            unsafe { reset(t) };
+
+            assert_eq!(b"", plain_string(t).as_slice());
+            unsafe { free(t) };
+        });
+    }
+
+    // test "reset null"
+    #[test]
+    fn reset_null() {
+        unsafe { reset(std::ptr::null_mut()) };
+    }
+
+    // test "resize"
+    #[test]
+    fn resize_test() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 10_000);
+
+            assert_eq!(Result::Success, unsafe { resize(t, 40, 12, 9, 18) });
+            assert_eq!(40, unsafe { (*(*t).terminal).cols });
+            assert_eq!(12, unsafe { (*(*t).terminal).rows });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "resize null"
+    #[test]
+    fn resize_null() {
+        assert_eq!(Result::InvalidValue, unsafe {
+            resize(std::ptr::null_mut(), 80, 24, 9, 18)
+        });
+    }
+
+    // test "resize invalid value"
+    #[test]
+    fn resize_invalid_value() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 10_000);
+
+            assert_eq!(Result::InvalidValue, unsafe { resize(t, 0, 24, 9, 18) });
+            assert_eq!(Result::InvalidValue, unsafe { resize(t, 80, 0, 9, 18) });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "resize shrinks both axes with cursor at bottom"
+    #[test]
+    fn resize_shrinks_both_axes_with_cursor_at_bottom() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            // CSI 24;1H -> park the cursor on the bottom row (1-based).
+            let mv = b"\x1b[24;1H";
+            unsafe { vt_write(t, mv.as_ptr(), mv.len()) };
+
+            // Shrink both axes; pre-resize cursor.y sits past the new bottom row.
+            assert_eq!(Result::Success, unsafe { resize(t, 79, 23, 8, 16) });
+            assert_eq!(79, unsafe { (*(*t).terminal).cols });
+            assert_eq!(23, unsafe { (*(*t).terminal).rows });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "mode_get and mode_set"
+    #[test]
+    fn mode_get_and_mode_set() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let mut value: bool = false;
+
+            // DEC mode 25 (cursor_visible) defaults to true
+            let cursor_visible = modes::ModeTag {
+                value: 25,
+                ansi: false,
+            }
+            .to_backing();
+            assert_eq!(Result::Success, unsafe {
+                mode_get(t, cursor_visible, &mut value)
+            });
+            assert!(value);
+
+            // Set it to false
+            assert_eq!(Result::Success, unsafe {
+                mode_set(t, cursor_visible, false)
+            });
+            assert_eq!(Result::Success, unsafe {
+                mode_get(t, cursor_visible, &mut value)
+            });
+            assert!(!value);
+
+            // ANSI mode 4 (insert) defaults to false
+            let insert = modes::ModeTag {
+                value: 4,
+                ansi: true,
+            }
+            .to_backing();
+            assert_eq!(Result::Success, unsafe { mode_get(t, insert, &mut value) });
+            assert!(!value);
+
+            assert_eq!(Result::Success, unsafe { mode_set(t, insert, true) });
+            assert_eq!(Result::Success, unsafe { mode_get(t, insert, &mut value) });
+            assert!(value);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "mode_get null"
+    #[test]
+    fn mode_get_null() {
+        let mut value: bool = false;
+        let tag = modes::ModeTag {
+            value: 25,
+            ansi: false,
+        }
+        .to_backing();
+        assert_eq!(Result::InvalidValue, unsafe {
+            mode_get(std::ptr::null_mut(), tag, &mut value)
+        });
+    }
+
+    // test "mode_set null"
+    #[test]
+    fn mode_set_null() {
+        let tag = modes::ModeTag {
+            value: 25,
+            ansi: false,
+        }
+        .to_backing();
+        assert_eq!(Result::InvalidValue, unsafe {
+            mode_set(std::ptr::null_mut(), tag, true)
+        });
+    }
+
+    // test "mode_get unknown mode"
+    #[test]
+    fn mode_get_unknown_mode() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let mut value: bool = false;
+            let unknown = modes::ModeTag {
+                value: 9999,
+                ansi: false,
+            }
+            .to_backing();
+            assert_eq!(Result::InvalidValue, unsafe {
+                mode_get(t, unknown, &mut value)
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "mode_set unknown mode"
+    #[test]
+    fn mode_set_unknown_mode() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let unknown = modes::ModeTag {
+                value: 9999,
+                ansi: false,
+            }
+            .to_backing();
+            assert_eq!(Result::InvalidValue, unsafe { mode_set(t, unknown, true) });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "vt_write"
+    #[test]
+    fn vt_write_test() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 10_000);
+
+            unsafe { vt_write(t, b"Hello".as_ptr(), 5) };
+
+            assert_eq!(b"Hello", plain_string(t).as_slice());
+            unsafe { free(t) };
+        });
+    }
+
+    // test "vt_write split escape sequence"
+    #[test]
+    fn vt_write_split_escape_sequence() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 10_000);
+
+            // Split ESC from the rest of the CSI sequence.
+            unsafe { vt_write(t, b"Hello \x1b".as_ptr(), 7) };
+            unsafe { vt_write(t, b"[1mBold\x1b[0m".as_ptr(), 10) };
+
+            // If the escape sequence leaked, we'd see "[1mBold" as literal text.
+            assert_eq!(b"Hello Bold", plain_string(t).as_slice());
+            unsafe { free(t) };
+        });
+    }
+
+    // test "vt_write split combining mark after base at right edge"
+    #[test]
+    fn vt_write_split_combining_mark_after_base_at_right_edge() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 2, 2, 0);
+
+            // Put "å" in the final column, then send its combining low line in a
+            // separate write so the mark arrives while the cursor has a pending wrap.
+            unsafe { vt_write(t, "xå".as_bytes().as_ptr(), 3) };
+            unsafe { vt_write(t, b"\xcc\xb2".as_ptr(), 2) };
+
+            assert_eq!("xå̲".as_bytes(), plain_string(t).as_slice());
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get cols and rows"
+    #[test]
+    fn get_cols_and_rows() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let mut cols: size::CellCountInt = 0;
+            let mut rows: size::CellCountInt = 0;
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::Cols, &mut cols as *mut _ as *mut c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::Rows, &mut rows as *mut _ as *mut c_void)
+            });
+            assert_eq!(80, cols);
+            assert_eq!(24, rows);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get cursor position"
+    #[test]
+    fn get_cursor_position() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            unsafe { vt_write(t, b"Hello".as_ptr(), 5) };
+
+            let mut x: size::CellCountInt = 0;
+            let mut y: size::CellCountInt = 0;
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::CursorX, &mut x as *mut _ as *mut c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::CursorY, &mut y as *mut _ as *mut c_void)
+            });
+            assert_eq!(5, x);
+            assert_eq!(0, y);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get null"
+    #[test]
+    fn get_null() {
+        let mut cols: size::CellCountInt = 0;
+        assert_eq!(Result::InvalidValue, unsafe {
+            get(
+                std::ptr::null_mut(),
+                TerminalData::Cols,
+                &mut cols as *mut _ as *mut c_void,
+            )
+        });
+    }
+
+    // test "get cursor_visible"
+    #[test]
+    fn get_cursor_visible() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let mut visible: bool = false;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::CursorVisible,
+                    &mut visible as *mut bool as *mut c_void,
+                )
+            });
+            assert!(visible);
+
+            // DEC mode 25 controls cursor visibility
+            let cursor_visible_mode = modes::ModeTag {
+                value: 25,
+                ansi: false,
+            }
+            .to_backing();
+            assert_eq!(Result::Success, unsafe {
+                mode_set(t, cursor_visible_mode, false)
+            });
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::CursorVisible,
+                    &mut visible as *mut bool as *mut c_void,
+                )
+            });
+            assert!(!visible);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get active_screen"
+    #[test]
+    fn get_active_screen() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let mut screen: TerminalScreen = TerminalScreen::Primary;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ActiveScreen,
+                    &mut screen as *mut TerminalScreen as *mut c_void,
+                )
+            });
+            assert_eq!(TerminalScreen::Primary, screen);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get kitty_keyboard_flags"
+    #[test]
+    fn get_kitty_keyboard_flags() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let mut flags: u8 = 0;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::KittyKeyboardFlags,
+                    &mut flags as *mut u8 as *mut c_void,
+                )
+            });
+            assert_eq!(0, flags);
+
+            // Push kitty flags via VT sequence: CSI > 3 u (push disambiguate | report_events)
+            unsafe { vt_write(t, b"\x1b[>3u".as_ptr(), 5) };
+
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::KittyKeyboardFlags,
+                    &mut flags as *mut u8 as *mut c_void,
+                )
+            });
+            assert_eq!(3, flags);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get mouse_tracking"
+    #[test]
+    fn get_mouse_tracking() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let mut tracking: bool = false;
+            let get_tracking = |t: Terminal, tracking: &mut bool| unsafe {
+                get(
+                    t,
+                    TerminalData::MouseTracking,
+                    tracking as *mut bool as *mut c_void,
+                )
+            };
+            assert_eq!(Result::Success, get_tracking(t, &mut tracking));
+            assert!(!tracking);
+
+            // Enable X10 mouse (DEC mode 9)
+            let x10_mode = modes::ModeTag {
+                value: 9,
+                ansi: false,
+            }
+            .to_backing();
+            assert_eq!(Result::Success, unsafe { mode_set(t, x10_mode, true) });
+            assert_eq!(Result::Success, get_tracking(t, &mut tracking));
+            assert!(tracking);
+
+            // Disable X10, enable normal mouse (DEC mode 1000)
+            assert_eq!(Result::Success, unsafe { mode_set(t, x10_mode, false) });
+            let normal_mode = modes::ModeTag {
+                value: 1000,
+                ansi: false,
+            }
+            .to_backing();
+            assert_eq!(Result::Success, unsafe { mode_set(t, normal_mode, true) });
+            assert_eq!(Result::Success, get_tracking(t, &mut tracking));
+            assert!(tracking);
+
+            // Disable normal, enable button mouse (DEC mode 1002)
+            assert_eq!(Result::Success, unsafe { mode_set(t, normal_mode, false) });
+            let button_mode = modes::ModeTag {
+                value: 1002,
+                ansi: false,
+            }
+            .to_backing();
+            assert_eq!(Result::Success, unsafe { mode_set(t, button_mode, true) });
+            assert_eq!(Result::Success, get_tracking(t, &mut tracking));
+            assert!(tracking);
+
+            // Disable button, enable any mouse (DEC mode 1003)
+            assert_eq!(Result::Success, unsafe { mode_set(t, button_mode, false) });
+            let any_mode = modes::ModeTag {
+                value: 1003,
+                ansi: false,
+            }
+            .to_backing();
+            assert_eq!(Result::Success, unsafe { mode_set(t, any_mode, true) });
+            assert_eq!(Result::Success, get_tracking(t, &mut tracking));
+            assert!(tracking);
+
+            // Disable all - should be false again
+            assert_eq!(Result::Success, unsafe { mode_set(t, any_mode, false) });
+            assert_eq!(Result::Success, get_tracking(t, &mut tracking));
+            assert!(!tracking);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get total_rows"
+    #[test]
+    fn get_total_rows() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 10_000);
+
+            let mut total: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::TotalRows,
+                    &mut total as *mut usize as *mut c_void,
+                )
+            });
+            assert!(total >= 24);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get scrollback_rows"
+    #[test]
+    fn get_scrollback_rows() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 3, 10_000);
+
+            let mut scrollback: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ScrollbackRows,
+                    &mut scrollback as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(0usize, scrollback);
+
+            // Write enough lines to push content into scrollback
+            unsafe {
+                vt_write(
+                    t,
+                    b"line1\r\nline2\r\nline3\r\nline4\r\nline5\r\n".as_ptr(),
+                    34,
+                )
+            };
+
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ScrollbackRows,
+                    &mut scrollback as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(2usize, scrollback);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get invalid"
+    #[test]
+    fn get_invalid() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            assert_eq!(Result::InvalidValue, unsafe {
+                get(t, TerminalData::Invalid, std::ptr::null_mut())
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get_multi null keys returns invalid_value"
+    #[test]
+    fn get_multi_null_keys_returns_invalid_value() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let mut cols: size::CellCountInt = 0;
+            let mut values: [*mut c_void; 1] = [&mut cols as *mut _ as *mut c_void];
+            assert_eq!(Result::InvalidValue, unsafe {
+                get_multi(
+                    t,
+                    1,
+                    std::ptr::null(),
+                    values.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                )
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // PORT NOTE (D3 SEAM soundness probe, Rust-only addition): the reference
+    // exercises the effect trampolines through the C `set` API (a later
+    // sub-batch). To validate the `container_of` recovery (`wrapper_from_handler`)
+    // in THIS sub-batch, we install a C `write_pty` callback by writing the vt-c
+    // `effects.write_pty` field directly (the same field `setTyped(.write_pty)`
+    // will write), then drive a VT query (DSR operating status `CSI 5 n`) that
+    // round-trips through the always-installed trampoline and unconditionally
+    // writes `"\x1b[0n"` back. This is the Miri soundness gate for the raw-ptr
+    // sibling recovery off the `&mut Handler`.
+    static mut WRITE_PTY_CAPTURE: Vec<u8> = Vec::new();
+
+    extern "C" fn capture_write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+        let data = unsafe { core::slice::from_raw_parts(ptr, len) };
+        unsafe {
+            #[allow(static_mut_refs)]
+            WRITE_PTY_CAPTURE.extend_from_slice(data);
+        }
+    }
+
+    #[test]
+    fn write_pty_trampoline_round_trip() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe {
+                #[allow(static_mut_refs)]
+                WRITE_PTY_CAPTURE.clear();
+            }
+
+            // Install the C callback directly on the vt-c effects (the field the
+            // C `set(.write_pty)` will populate).
+            unsafe { (*t).effects.write_pty = Some(capture_write_pty) };
+
+            // DSR operating status "CSI 5 n" writes "\x1b[0n" via write_pty.
+            unsafe { vt_write(t, b"\x1b[5n".as_ptr(), 4) };
+
+            let captured = unsafe {
+                #[allow(static_mut_refs)]
+                WRITE_PTY_CAPTURE.clone()
+            };
+            assert_eq!(b"\x1b[0n", captured.as_slice());
+            unsafe { free(t) };
+        });
+    }
+}
