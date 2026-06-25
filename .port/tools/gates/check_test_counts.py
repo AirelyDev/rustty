@@ -25,6 +25,7 @@ MAP = {
     "page":            ([f"{GH}/page.zig"], [f"{RS}/page_impl.rs", f"{RS}/page_tests.rs", f"{RS}/page.rs"], 0),
     "screen":          ([f"{GH}/Screen.zig"], [f"{RS}/screen.rs"], 0),
     "selection":       ([f"{GH}/Selection.zig"], [f"{RS}/selection.rs"], 0),
+    "selection_gesture":([f"{GH}/SelectionGesture.zig"], [f"{RS}/selection_gesture.rs"], 0),
     "string_map":      ([f"{GH}/StringMap.zig"], [f"{RS}/string_map.rs"], 0),
     "screen_set":      ([f"{GH}/ScreenSet.zig"], [f"{RS}/screen_set.rs"], 0),
     "formatter":       ([f"{GH}/formatter.zig"], [f"{RS}/formatter.rs"], 0),
