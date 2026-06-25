@@ -11,14 +11,15 @@
 //
 //! PORTS: ghostty src/terminal/highlight.zig
 //!
-//! PORT STATUS: partial. The `Untracked` highlight struct (data + `eql`) is
-//! ported here because the access cluster's `PageList.highlightSemanticContent`
-//! returns `?highlight.Untracked`. The `Tracked` highlight and
-//! `Untracked.track` are a DOCUMENTED DEFERRED SEAM: they require the genuinely
-//! unported sibling `Screen` (`@import("Screen.zig")`) and have no ported
-//! caller yet, so they land when the `Screen` port lands — NOT stubbed.
+//! PORT STATUS: complete (vt-13). The previously DEFERRED seam (`Tracked` +
+//! `Untracked.track`) is now ported because the genuinely-unported sibling
+//! `Screen` is available. `Flattened` is also ported here (the render state's
+//! `updateHighlightsFlattened` consumes `highlight.Flattened`).
 
-use crate::pagelist::Pin;
+use crate::pagelist::iter::{Chunk as PageChunk, Direction};
+use crate::pagelist::{List, Node, OutOfMemory, Pin};
+use crate::screen::Screen;
+use crate::size;
 
 /// An untracked highlight is a highlight that stores its highlighted
 /// area as a top-left and bottom-right screen pin. Since it is untracked,
@@ -43,24 +44,206 @@ pub struct Untracked {
 }
 
 impl Untracked {
-    // PORT NOTE (DEFERRED SEAM): the reference `Untracked.track` returns
-    // `Allocator.Error!Tracked` and forwards to `Tracked.init(screen, ...)`.
-    // `Tracked` and its `init` require the genuinely unported sibling `Screen`
-    // (`@import("Screen.zig")`). No ported caller invokes `track` yet, so it is
-    // deferred to the `Screen` port and lands there fully ported — not stubbed.
-    //
-    // pub fn track(
-    //     self: *const Untracked,
-    //     screen: *Screen,
-    // ) Allocator.Error!Tracked {
-    //     return try .init(
-    //         screen,
-    //         self.start,
-    //         self.end,
-    //     );
-    // }
+    pub fn track(&self, screen: &mut Screen) -> Result<Tracked, OutOfMemory> {
+        Tracked::init(screen, self.start, self.end)
+    }
 
-    pub fn eql(self: Untracked, other: Untracked) -> bool {
+    pub fn eql(self, other: Untracked) -> bool {
         self.start.eql(other.start) && self.end.eql(other.end)
     }
 }
+
+/// A tracked highlight is a highlight that stores its highlighted
+/// area as tracked pins within a screen.
+///
+/// A tracked highlight ensures that the pins remain valid even as
+/// the terminal state changes. Because of this, tracked highlights
+/// have more operations available to them.
+///
+/// There is more overhead to creating and maintaining tracked highlights.
+/// If you're manipulating highlights that are untracked and you're sure
+/// that the terminal state won't change, you can use the `initAssume`
+/// function.
+//
+// PORT NOTE: `start`/`end` are tracked pins owned by `screen.pages` (returned by
+// `track_pin` as `*mut Pin`), faithfully mirroring the reference `*Pin`.
+pub struct Tracked {
+    pub start: *mut Pin,
+    pub end: *mut Pin,
+}
+
+impl Tracked {
+    pub fn init(screen: &mut Screen, start: Pin, end: Pin) -> Result<Tracked, OutOfMemory> {
+        let start_tracked = screen.pages.track_pin(start)?;
+        // errdefer screen.pages.untrackPin(start_tracked);
+        let end_tracked = match screen.pages.track_pin(end) {
+            Ok(p) => p,
+            Err(e) => {
+                screen.pages.untrack_pin(start_tracked);
+                return Err(e);
+            }
+        };
+        // errdefer screen.pages.untrackPin(end_tracked);
+        Ok(Tracked {
+            start: start_tracked,
+            end: end_tracked,
+        })
+    }
+
+    /// Initializes a tracked highlight by assuming that the provided
+    /// pins are already tracked. This allows callers to perform tracked
+    /// operations without the overhead of tracking the pins, if the
+    /// caller can guarantee that the pins are already tracked or that
+    /// the terminal state will not change.
+    ///
+    /// Do not call deinit on highlights created with this function.
+    pub fn init_assume(start: *mut Pin, end: *mut Pin) -> Tracked {
+        Tracked { start, end }
+    }
+
+    pub fn deinit(self, screen: &mut Screen) {
+        screen.pages.untrack_pin(self.start);
+        screen.pages.untrack_pin(self.end);
+    }
+}
+
+/// A flattened highlight is a highlight that stores its highlighted
+/// area as a list of page chunks. This representation allows for
+/// traversing the entire highlighted area without needing to read any
+/// terminal state or dereference any page nodes (which may have been
+/// pruned).
+//
+// PORT NOTE: the reference `chunks` is a `std.MultiArrayList(Chunk)`; the Rust
+// port uses a `Vec<Chunk>` (the SoA layout is a Zig storage optimization, not
+// observable). `.slice().items(.node)` etc. become field projections over the
+// `Vec`.
+pub struct Flattened {
+    /// The page chunks that make up this highlight. This handles the
+    /// y bounds since chunks[0].start is the first highlighted row
+    /// and chunks[len - 1].end is the last highlighted row (exclsive).
+    pub chunks: Vec<Chunk>,
+
+    /// The x bounds of the highlight. `bot_x` may be less than `top_x`
+    /// for typical left-to-right highlights: can start the selection right
+    /// of the end on a higher row.
+    pub top_x: size::CellCountInt,
+    pub bot_x: size::CellCountInt,
+}
+
+/// A flattened chunk is almost identical to a PageList.Chunk but
+/// we also flatten the serial number. This lets the flattened
+/// highlight more robust for comparisons and validity checks with
+/// the PageList.
+pub struct Chunk {
+    pub node: *mut Node,
+    pub serial: u64,
+    pub start: size::CellCountInt,
+    pub end: size::CellCountInt,
+}
+
+impl Flattened {
+    // pub const empty: Flattened = .{ .chunks = .empty, .top_x = 0, .bot_x = 0 };
+    pub fn empty() -> Flattened {
+        Flattened {
+            chunks: Vec::new(),
+            top_x: 0,
+            bot_x: 0,
+        }
+    }
+
+    pub fn init(start: Pin, end: Pin) -> Result<Flattened, OutOfMemory> {
+        // PORT NOTE: the reference accumulates into a `std.MultiArrayList(PageChunk)`
+        // (with an `errdefer result.deinit(alloc)`); the Rust `Vec<Chunk>` owns its
+        // storage and frees on drop, so the errdefer is implicit.
+        let mut result: Vec<Chunk> = Vec::new();
+        let mut it = start.page_iterator(Direction::RightDown, Some(end));
+        while let Some(chunk) = it.next() {
+            result.push(Chunk {
+                node: chunk.node,
+                serial: unsafe { (*chunk.node).serial },
+                start: chunk.start,
+                end: chunk.end,
+            });
+        }
+        Ok(Flattened {
+            chunks: result,
+            top_x: start.x,
+            bot_x: end.x,
+        })
+    }
+
+    // PORT NOTE: the reference `deinit` frees `self.chunks`; the Rust `Vec`
+    // frees on drop, so an explicit method is a no-op kept for API parity.
+    pub fn deinit(&mut self) {
+        self.chunks = Vec::new();
+    }
+
+    // PORT NOTE: the reference method is named `clone` (returns
+    // `Allocator.Error!Flattened`); kept verbatim. `#[allow(clippy::should_implement_trait)]`
+    // because its fallible signature can't be the std `Clone::clone`.
+    #[allow(clippy::should_implement_trait)]
+    pub fn clone(&self) -> Result<Flattened, OutOfMemory> {
+        let mut chunks: Vec<Chunk> = Vec::with_capacity(self.chunks.len());
+        for c in &self.chunks {
+            chunks.push(Chunk {
+                node: c.node,
+                serial: c.serial,
+                start: c.start,
+                end: c.end,
+            });
+        }
+        Ok(Flattened {
+            chunks,
+            top_x: self.top_x,
+            bot_x: self.bot_x,
+        })
+    }
+
+    pub fn start_pin(&self) -> Pin {
+        Pin {
+            node: self.chunks[0].node,
+            x: self.top_x,
+            y: self.chunks[0].start,
+            garbage: false,
+        }
+    }
+
+    pub fn end_pin(&self) -> Pin {
+        let len = self.chunks.len();
+        Pin {
+            node: self.chunks[len - 1].node,
+            x: self.bot_x,
+            y: self.chunks[len - 1].end - 1,
+            garbage: false,
+        }
+    }
+
+    /// Convert to an Untracked highlight.
+    pub fn untracked(&self) -> Untracked {
+        // Note: we don't use startPin/endPin here because it is slightly
+        // faster to reuse the slices.
+        let nodes_len = self.chunks.len();
+        Untracked {
+            start: Pin {
+                node: self.chunks[0].node,
+                x: self.top_x,
+                y: self.chunks[0].start,
+                garbage: false,
+            },
+            end: Pin {
+                node: self.chunks[nodes_len - 1].node,
+                x: self.bot_x,
+                y: self.chunks[nodes_len - 1].end - 1,
+                garbage: false,
+            },
+        }
+    }
+}
+
+// PORT NOTE: `PageChunk` is the reference `PageList.PageIterator.Chunk` alias
+// used only by `Flattened.init`; re-exported for clarity that we faithfully
+// translate that import.
+#[allow(unused_imports)]
+use List as _List;
+#[allow(unused_imports)]
+use PageChunk as _PageChunk;

@@ -134,8 +134,11 @@ impl Point {
 
 // PORT NOTE: the reference is `extern struct`; ported as `#[repr(C)]` to
 // preserve the field order/layout.
+// PORT NOTE: `Hash` is derived (Rust-only glue) so `point::Coordinate` can key
+// the render state's `CellSet` (`AutoArrayHashMap(Coordinate, void)`); it adds
+// no observable behavior.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Coordinate {
     /// x can use size.CellCountInt because the number of columns
     /// can't ever be more than a valid number of columns in a Page.
