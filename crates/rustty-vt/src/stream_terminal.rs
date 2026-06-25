@@ -10,15 +10,15 @@
 //! fills the RESPONSE/QUERY arms (device_attributes/device_status/report_*/
 //! request_mode*/send_mode_report/query_kitty_keyboard/enquiry/xtversion/
 //! size_report/window_title/report_pwd) — they encode a VT response and write it
-//! via the Effects `write_pty` callback. APC end + kitty/glyph stay stubbed
-//! (font-blocked, deferred past vt-12; see DEFERRALS.md).
+//! via the Effects `write_pty` callback. Stage A.3 wires the real `apc::Handler`:
+//! `apcStart`/`apcPut`/`apcEnd` drive it and `apcEnd` dispatches the kitty
+//! graphics + Glyph Protocol responses (the apc cluster is unblocked).
 
 // PORT NOTE (vt-12b-7b): the RESPONSE/QUERY arms are now filled, so the
 // `clippy::todo` allow is dropped. `dead_code`/`unused_variables` are retained:
-// the reference's no-op arms (`.title_push`/`.title_pop`/`.dcs_*`/`.apc_put`/
+// the reference's no-op arms (`.title_push`/`.title_pop`/`.dcs_*`/
 // `.show_desktop_notification`/...) carry value params they ignore, and the
-// APC-stub fields/`vt_raw` argument remain unread until the deferred protocols
-// reactivate.
+// `vt_raw` argument remains unread.
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
@@ -66,20 +66,11 @@ pub type Stream<'a> = stream::Stream<'a, Handler<'a>>;
 
 /// The APC command handler maintains the APC state.
 ///
-/// PORT NOTE (vt-12a deferral): APC (and the kitty-graphics/Glyph protocols it
-/// drives) is font-blocked and remains deferred past vt-12 (see DEFERRALS.md).
-/// The reference `apc.Handler` is a ZST/no-op stub here; `start`/`feed`/`end`/
-/// `deinit` are no-ops until the protocol is reactivated.
-#[derive(Debug, Default)]
-pub struct ApcHandler;
-
-impl ApcHandler {
-    // pub fn deinit(self: *Handler) void
-    //
-    // PORT NOTE (vt-12b-7a): APC is font-blocked and deferred past vt-12
-    // (DEFERRALS.md); the handler is a ZST/no-op stub, so `deinit` does nothing.
-    pub fn deinit(&mut self) {}
-}
+/// PORT NOTE (Stage A.3 — apc complete): the apc cluster is unblocked
+/// (rustty-font landed); this is now the real `apc::Handler`, not a ZST stub.
+/// `ApcHandler` is a type alias so the field type and `apc.Handler` call sites
+/// (`start`/`feed`/`end`/`deinit`) map directly onto the ported handler.
+pub type ApcHandler = crate::apc::Handler;
 
 /// A stream handler that updates terminal state. By default, it is
 /// readonly in the sense that it only updates terminal state and ignores
@@ -212,7 +203,8 @@ impl<'a> Handler<'a> {
         Handler {
             terminal,
             effects: Effects::READONLY,
-            apc_handler: ApcHandler,
+            // apc_handler: .{} (the reference field default)
+            apc_handler: ApcHandler::default(),
             default_cursor: true,
             default_cursor_style: CursorStyle::Block,
             default_cursor_blink: false,
@@ -1112,13 +1104,120 @@ impl<'a> Handler<'a> {
         self.write_pty(resp.as_bytes());
     }
 
-    // fn apcEnd(self: *Handler) void
-    //
-    // PORT NOTE (vt-12b-7a): APC (kitty-graphics/glyph) is font-blocked and
-    // deferred past vt-12 (DEFERRALS.md); `apc_handler` is a ZST/no-op stub so
-    // `end()` yields nothing and there is no command to dispatch. The reference
-    // body's kitty/glyph response encoding is reactivated in 12c-kitty.
-    fn apc_end(&mut self) {}
+    // fn apcEnd(self: *Handler) void {
+    //     const alloc = self.terminal.gpa();
+    //     var cmd = self.apc_handler.end() orelse return;
+    //     defer cmd.deinit(alloc);
+    //     switch (cmd) { ... };
+    // }
+    // PORT NOTE (Stage A.3 — apc complete): the apc cluster is unblocked. The
+    // reference `end()` takes no allocator; the Rust `apc::Handler::end` threads
+    // `alloc` for call-site fidelity (kitty `complete` consumes it in the
+    // reference). The `defer cmd.deinit(alloc)` is reproduced by an explicit
+    // `cmd.deinit(alloc)` at every exit path (both arms own their data via `Vec`s
+    // and free on drop, so it is a no-op fidelity hook). The reference buffers the
+    // response then appends a `\0` and writes `final[0..final.len-1 :0]` (a Zig
+    // sentinel slice); our `write_pty` takes a bare `&[u8]`, so we write the
+    // encoded bytes directly with no sentinel byte.
+    fn apc_end(&mut self) {
+        let alloc = self.term().gpa();
+        let Some(mut cmd) = self.apc_handler.end(alloc) else {
+            return;
+        };
+
+        match &mut cmd {
+            // .kitty => |*kitty_cmd| if (comptime build_options.kitty_graphics) {
+            crate::apc::Command::Kitty(kitty_cmd) => {
+                if crate::options::KITTY_GRAPHICS {
+                    // if (self.terminal.kittyGraphics(alloc, kitty_cmd)) |resp| resp: {
+                    if let Some(resp) = self.term().kitty_graphics(alloc, kitty_cmd) {
+                        'resp: {
+                            // Don't waste time encoding if we can't write responses
+                            // anyways.
+                            // if (self.effects.write_pty == null) break :resp;
+                            if self.effects.write_pty.is_none() {
+                                break 'resp;
+                            }
+
+                            // Encode and write the response if we have one.
+                            // var buf: [1024]u8 = undefined;
+                            // var writer: std.Io.Writer = .fixed(&buf);
+                            // resp.encode(&writer) catch return;
+                            // writer.writeByte(0) catch return;
+                            // const final = writer.buffered();
+                            // if (final.len > 3) self.writePty(final[0 .. final.len - 1 :0]);
+                            // PORT NOTE: the reference encodes into a fixed `[1024]u8`
+                            // and only writes when `final.len > 3` (i.e. more than the
+                            // bare `\x1b_\x1b\\` framing plus the appended `\0`). With
+                            // no sentinel byte the guard is `final.len > 2` on the
+                            // encoded bytes — but the kitty `Response::encode` only
+                            // emits when there is a real payload, so we keep the
+                            // reference's `> 3` semantics by comparing the encoded
+                            // length plus the (omitted) sentinel byte.
+                            let mut buf: Vec<u8> = Vec::new();
+                            // PORT NOTE: the reference `resp.encode(...) catch
+                            // return` (and the glyph arm's `formatWire ... catch
+                            // return`) bail without the `defer cmd.deinit` having
+                            // run yet — but `cmd` is `var ...defer deinit` so it
+                            // still deinits on the deferred path. Here `cmd` drops
+                            // at scope end (freeing its data), so the bare `return`
+                            // reproduces the reference cleanup without re-borrowing
+                            // `cmd` while `kitty_cmd`/`glyph_req` is live.
+                            if resp.encode(&mut buf).is_err() {
+                                return;
+                            }
+                            let final_ = buf;
+                            if final_.len() + 1 > 3 {
+                                self.write_pty(&final_);
+                            }
+                        }
+                    }
+                } else {
+                    unreachable!();
+                }
+            }
+
+            // .glyph => |*glyph_req| {
+            crate::apc::Command::Glyph(glyph_req) => {
+                // const resp = self.terminal.glyphProtocol(alloc, glyph_req);
+                let resp = self.term().glyph_protocol(alloc, glyph_req);
+                // if (resp) |r| resp_block: {
+                if let Some(r) = resp {
+                    'resp_block: {
+                        // Don't waste time encoding if we can't write responses
+                        // anyways.
+                        // if (self.effects.write_pty == null) break :resp_block;
+                        if self.effects.write_pty.is_none() {
+                            break 'resp_block;
+                        }
+
+                        // Glyph responses are short and bounded by the protocol
+                        // fields we emit, so this matches the Kitty response
+                        // buffer size above with ample headroom.
+                        // var buf: [apc.glyph.Response.max_wire_bytes]u8 = undefined;
+                        // var writer: std.Io.Writer = .fixed(&buf);
+                        // r.formatWire(&writer) catch return;
+                        // writer.writeByte(0) catch return;
+                        // const final = writer.buffered();
+                        // self.writePty(final[0 .. final.len - 1 :0]);
+                        // PORT NOTE: `formatWire` writes to a `std.Io.Writer` over a
+                        // fixed `[max_wire_bytes]u8`; the Rust `format_wire` writes to
+                        // a `String` (the bounded wire payload is ASCII). We then
+                        // write the UTF-8 bytes directly (no sentinel `\0`).
+                        let mut buf = String::new();
+                        // PORT NOTE: see the kitty-arm note above — bare `return`
+                        // (cmd drops/frees) reproduces the reference `catch return`.
+                        if r.format_wire(&mut buf).is_err() {
+                            return;
+                        }
+                        self.write_pty(buf.as_bytes());
+                    }
+                }
+            }
+        }
+
+        cmd.deinit(alloc);
+    }
 }
 
 // impl stream::Handler for Handler ------------------------------------------
@@ -1623,12 +1722,15 @@ impl<'a> stream::Handler for Handler<'a> {
     fn dcs_unhook(&mut self) {}
 
     // .apc_start => self.apc_handler.start(),
-    // PORT NOTE (vt-12b-7a): apc_handler is a ZST/no-op stub (font-blocked,
-    // deferred past vt-12); `start`/`feed`/`end` do nothing.
-    fn apc_start(&mut self) {}
+    fn apc_start(&mut self) {
+        self.apc_handler.start();
+    }
 
     // .apc_put => self.apc_handler.feed(self.terminal.gpa(), value),
-    fn apc_put(&mut self, code: u8) {}
+    fn apc_put(&mut self, code: u8) {
+        let gpa = self.term().gpa();
+        self.apc_handler.feed(gpa, code);
+    }
 
     // .apc_end => self.apcEnd(),
     fn apc_end(&mut self) {
@@ -2463,6 +2565,73 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "full reset"
+    #[test]
+    fn full_reset() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        {
+            let mut s = t.vt_stream();
+            // Make some changes
+            s.next_slice(b"Hello");
+            s.next_slice(b"\x1B[10;20H");
+            s.next_slice(b"\x1B[5;20r"); // Set scroll region
+            s.next_slice(b"\x1B[?7l"); // Disable wraparound
+            s.next_slice(b"\x1B_25a1;r;cp=e0a0;AAAAAAAAAAAAAA==\x1B\\");
+        }
+        // try testing.expect(t.glyph_glossary.contains(0xE0A0));
+        assert!(t.glyph_glossary.contains(0xE0A0));
+
+        {
+            let mut s = t.vt_stream();
+            // Full reset
+            s.next_slice(b"\x1Bc");
+        }
+
+        // Verify reset state
+        assert_eq!(0usize, t.active_mut().cursor.x as usize);
+        assert_eq!(0usize, t.active_mut().cursor.y as usize);
+        assert_eq!(0usize, t.scrolling_region.top as usize);
+        assert_eq!(23usize, t.scrolling_region.bottom as usize);
+        assert!(t.modes.get(modespkg::Mode::Wraparound));
+        // try testing.expect(!t.glyph_glossary.contains(0xE0A0));
+        assert!(!t.glyph_glossary.contains(0xE0A0));
+
+        t.deinit(Global);
+    }
+
+    // test "glyph protocol APC with write_pty callback"
+    #[test]
+    fn glyph_protocol_apc_with_write_pty_callback() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        // handler.effects.write_pty = &S.writePty;
+        s.handler.effects.write_pty = Some(cap_write_pty);
+
+        // s.nextSlice("\x1B_25a1;s\x1B\\");
+        s.next_slice(b"\x1B_25a1;s\x1B\\");
+        // try testing.expectEqualStrings("\x1B_25a1;s;fmt=glyf\x1B\\", S.last_response.?);
+        assert_eq!(
+            cap_take().unwrap().as_slice(),
+            b"\x1B_25a1;s;fmt=glyf\x1B\\"
+        );
+
+        // s.nextSlice("\x1B_25a1;r;cp=e0a0;AAAAAAAAAAAAAA==\x1B\\");
+        s.next_slice(b"\x1B_25a1;r;cp=e0a0;AAAAAAAAAAAAAA==\x1B\\");
+        // try testing.expectEqualStrings("\x1B_25a1;r;cp=e0a0;status=0\x1B\\", S.last_response.?);
+        assert_eq!(
+            cap_take().unwrap().as_slice(),
+            b"\x1B_25a1;r;cp=e0a0;status=0\x1B\\"
+        );
+        // try testing.expect(t.glyph_glossary.contains(0xE0A0));
+        drop(s);
+        assert!(t.glyph_glossary.contains(0xE0A0));
+
+        t.deinit(Global);
+    }
+
     // test "ignores query actions"
     //
     // PORT NOTE (vt-12b-7b): reactivated now that the RESPONSE/QUERY arms are
@@ -3228,6 +3397,60 @@ mod tests {
         assert_eq!(cap_take().unwrap().as_slice(), b"\x1b[>41;100;0c");
 
         drop(s);
+        t.deinit(Global);
+    }
+
+    // test "kitty graphics APC response"
+    #[test]
+    fn kitty_graphics_apc_response() {
+        // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
+        if !crate::options::KITTY_GRAPHICS {
+            return;
+        }
+
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        // handler.effects.write_pty = &S.writePty;
+        s.handler.effects.write_pty = Some(cap_write_pty);
+
+        // Send a kitty graphics transmit command with image id 1
+        s.next_slice(b"\x1b_Ga=t,t=d,f=24,i=1,s=1,v=2,c=10,r=1;////////\x1b\\");
+
+        // Should have written a response back
+        // try testing.expectEqualStrings("\x1b_Gi=1;OK\x1b\\", S.written.?);
+        drop(s);
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1b_Gi=1;OK\x1b\\");
+
+        t.deinit(Global);
+    }
+
+    // test "kitty graphics via APC"
+    #[test]
+    fn kitty_graphics_via_apc() {
+        // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
+        if !crate::options::KITTY_GRAPHICS {
+            return;
+        }
+
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        {
+            let mut s = t.vt_stream();
+            // Send a kitty graphics transmit command via APC:
+            // ESC _ G <payload> ESC \
+            // a=t,t=d,f=24,i=1,s=1,v=2,c=10,r=1;//////// (1x2 RGB direct)
+            s.next_slice(b"\x1b_Ga=t,t=d,f=24,i=1,s=1,v=2,c=10,r=1;////////\x1b\\");
+        }
+
+        // const storage = &t.screens.active.kitty_images;
+        // const img = storage.imageById(1).?;
+        // try testing.expectEqual(.rgb, img.format);
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let img = storage.image_by_id(1).unwrap();
+        assert_eq!(kitty::graphics_command::Format::Rgb, img.format);
+
         t.deinit(Global);
     }
 }

@@ -58,6 +58,8 @@
 // throughout this crate (matching Screen/ScreenSet); fallible (`!`) returns
 // become `Result<_, OutOfMemory>`.
 use crate::ansi;
+// const glyph = @import("apc/glyph.zig");
+use crate::apc::glyph;
 use crate::charsets;
 use crate::csi;
 use crate::kitty;
@@ -103,46 +105,12 @@ static GLOBAL_ZIG_ALLOCATOR: rustty_lib::allocator::GlobalZigAllocator =
 /// Default tabstop interval
 const TABSTOP_INTERVAL: u16 = 8;
 
-/// Per-session Glyph Protocol registrations.
-///
-/// PORT NOTE (vt-12a deferral): the Glyph Protocol is font-blocked and remains
-/// deferred past vt-12 (see DEFERRALS.md). `apc/glyph.zig`'s `Glossary` is a
-/// ZST/no-op stub here; the `glyphProtocol` request/response types
-/// (`glyph.Request`/`glyph.Response`) are likewise ZST stubs until reactivated.
-#[derive(Debug, Default)]
-pub struct GlyphGlossary;
-
-impl GlyphGlossary {
-    /// `.empty` — an empty glossary.
-    pub const EMPTY: GlyphGlossary = GlyphGlossary;
-
-    // pub fn deinit(self: *Glossary, alloc: Allocator) void
-    pub fn deinit(&mut self, alloc: Allocator) {
-        // PORT NOTE (vt-12a deferral): the Glyph Protocol is font-blocked and
-        // `apc/glyph.zig`'s `Glossary` is a ZST/no-op stub here (see the struct
-        // doc). It holds no allocated state, so `deinit` is a no-op. `Terminal::
-        // deinit` calls this, so it must be a (no-op) body rather than `todo!()`.
-        let _ = alloc;
-    }
-
-    // pub fn clearAndFree(self: *Glossary, alloc: Allocator) void
-    pub fn clear_and_free(&mut self, alloc: Allocator) {
-        // PORT NOTE (vt-12a deferral): same ZST/no-op stub as `deinit` — the
-        // Glyph Protocol `Glossary` holds no allocated state, so clearing and
-        // freeing is a no-op. `Terminal::full_reset` calls this.
-        let _ = alloc;
-    }
-}
-
-/// `glyph.Request` — Glyph Protocol request (font-blocked ZST stub; see
-/// `GlyphGlossary`).
-#[derive(Debug)]
-pub struct GlyphRequest;
-
-/// `glyph.Response` — Glyph Protocol response (font-blocked ZST stub; see
-/// `GlyphGlossary`).
-#[derive(Debug)]
-pub struct GlyphResponse;
+// PORT NOTE (Stage A.3 — apc complete): the apc cluster is unblocked (rustty-font
+// landed); `apc/glyph`'s `Glossary` / `Request` / `Response` are the real ported
+// types, no longer ZST stubs. The previous `GlyphGlossary` / `GlyphRequest` /
+// `GlyphResponse` stand-ins are dropped in favour of the real `glyph::Glossary`
+// (`glyph_glossary` field), `glyph::Request` (`glyph_protocol` arg) and
+// `glyph::Response` (`glyph_protocol` return).
 
 /// The most recently set mouse shift capture state.
 ///
@@ -440,7 +408,8 @@ pub struct Terminal {
     pub mouse_shape: mouse::Shape,
 
     /// Per-session Glyph Protocol registrations.
-    pub glyph_glossary: GlyphGlossary,
+    // glyph_glossary: glyph.Glossary = .empty,
+    pub glyph_glossary: glyph::Glossary,
 
     /// These are just a packed set of flags we may set on the terminal.
     pub flags: Flags,
@@ -615,7 +584,7 @@ impl Terminal {
                 ..modespkg::ModeState::default()
             },
             mouse_shape: mouse::Shape::Text,
-            glyph_glossary: GlyphGlossary::EMPTY,
+            glyph_glossary: glyph::Glossary::empty(),
             flags: Flags::default(),
         })
     }
@@ -632,7 +601,10 @@ impl Terminal {
         // clear+shrink to mirror the reference freeing the ArrayList storage.
         self.pwd = Vec::new();
         self.title = Vec::new();
-        self.glyph_glossary.deinit(alloc);
+        // self.glyph_glossary.deinit(alloc);
+        // PORT NOTE: the real `glyph::Glossary::deinit` drops the alloc param (its
+        // entries free on drop); the reference passes `alloc`.
+        self.glyph_glossary.deinit();
         // self.* = undefined;
     }
 
@@ -4064,12 +4036,32 @@ impl Terminal {
     /// Execute a Glyph Protocol APC command against this terminal's per-session
     /// glossary. The returned response, if any, should be sent back to the pty as
     /// a complete APC sequence via `Response.formatWire`.
+    // pub fn glyphProtocol(self: *Terminal, alloc: Allocator,
+    //     req: *const glyph.Request) ?glyph.Response {
+    //     const resp = glyph.execute(alloc, &self.glyph_glossary, req);
+    //     switch (req.*) {
+    //         .register, .clear => self.flags.dirty.glyph_glossary = true,
+    //         .support, .query => {},
+    //     }
+    //     return resp;
+    // }
+    // PORT NOTE: the real `glyph::execute` drops the alloc param (entries own
+    // their decoded outlines as `Vec`s); the reference threads `alloc`. `alloc`
+    // is retained on the signature for call-site fidelity.
     pub fn glyph_protocol(
         &mut self,
         alloc: Allocator,
-        req: &GlyphRequest,
-    ) -> Option<GlyphResponse> {
-        todo!()
+        req: &glyph::Request,
+    ) -> Option<glyph::Response> {
+        let _ = alloc;
+        let resp = glyph::execute(&mut self.glyph_glossary, req);
+        match req {
+            glyph::Request::Register(_) | glyph::Request::Clear(_) => {
+                self.flags.dirty.glyph_glossary = true;
+            }
+            glyph::Request::Support | glyph::Request::Query(_) => {}
+        }
+        resp
     }
 
     /// Set the storage size limit for Kitty graphics across all screens.
@@ -4804,8 +4796,9 @@ impl Terminal {
         // and sets len to 0; `Vec::clear` is the faithful equivalent.
         self.pwd.clear();
         self.title.clear();
-        let gpa = self.gpa();
-        self.glyph_glossary.clear_and_free(gpa);
+        // PORT NOTE: the real `glyph::Glossary::clear_and_free` drops the alloc
+        // param (the reference passes `self.gpa()`); entries free on drop.
+        self.glyph_glossary.clear_and_free();
         self.status_display = ansi::StatusDisplay::Main;
         // self.scrolling_region = .{
         //     .top = 0,
@@ -14669,6 +14662,69 @@ mod tests {
         assert!(t.active_mut().pages.pin_is_valid(unsafe { *p }));
 
         t.deinit(Global);
+    }
+
+    // test "Terminal: glyph APC stores session glossary entries"
+    #[test]
+    fn terminal_glyph_apc_stores_session_glossary_entries() {
+        use crate::apc::glyph::response::{Coverage, Response, ResponseQuery, ResponseRegister};
+
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(80, 24)).unwrap();
+
+        // var register_parser = glyph.CommandParser.init(alloc, 1024 * 1024);
+        // defer register_parser.deinit();
+        let mut register_parser = glyph::CommandParser::init(1024 * 1024);
+        // for ("r;cp=e0a0;AAAAAAAAAAAAAA==") |byte| try register_parser.feed(byte);
+        for byte in *b"r;cp=e0a0;AAAAAAAAAAAAAA==" {
+            register_parser.feed(byte).unwrap();
+        }
+        // var register_req = try register_parser.complete(alloc);
+        // defer register_req.deinit(alloc);
+        let register_req = register_parser.complete().unwrap();
+
+        // try testing.expectEqual(glyph.Response{ .register = .{ .cp = 0xE0A0 } },
+        //     t.glyphProtocol(alloc, &register_req).?);
+        assert_eq!(
+            Response::Register(ResponseRegister::new(0xE0A0)),
+            t.glyph_protocol(alloc, &register_req).unwrap()
+        );
+        // try testing.expect(t.glyph_glossary.contains(0xE0A0));
+        assert!(t.glyph_glossary.contains(0xE0A0));
+        // try testing.expect(t.flags.dirty.glyph_glossary);
+        assert!(t.flags.dirty.glyph_glossary);
+
+        // var query_parser = glyph.CommandParser.init(alloc, 1024 * 1024);
+        // defer query_parser.deinit();
+        let mut query_parser = glyph::CommandParser::init(1024 * 1024);
+        // for ("q;cp=e0a0") |byte| try query_parser.feed(byte);
+        for byte in *b"q;cp=e0a0" {
+            query_parser.feed(byte).unwrap();
+        }
+        // var query_req = try query_parser.complete(alloc);
+        // defer query_req.deinit(alloc);
+        let query_req = query_parser.complete().unwrap();
+
+        // try testing.expectEqual(glyph.Response{ .query = .{
+        //     .cp = 0xE0A0, .status = .{ .glossary = true } } },
+        //     t.glyphProtocol(alloc, &query_req).?);
+        assert_eq!(
+            Response::Query(ResponseQuery {
+                cp: 0xE0A0,
+                status: Coverage {
+                    glossary: true,
+                    ..Coverage::default()
+                },
+            }),
+            t.glyph_protocol(alloc, &query_req).unwrap()
+        );
+
+        // t.fullReset();
+        t.full_reset();
+        // try testing.expect(!t.glyph_glossary.contains(0xE0A0));
+        assert!(!t.glyph_glossary.contains(0xE0A0));
+
+        t.deinit(alloc);
     }
 
     // https://github.com/mitchellh/ghostty/issues/272

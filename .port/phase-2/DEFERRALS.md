@@ -164,18 +164,19 @@ pure-VT `rustty-vt` crate:
 A sub-batch's verify MUST treat G3b "missing" that maps to an entry here as
 EXPECTED (not RED), and MUST NOT add new deferrals without recording them here.
 
-## Deferred: apc cluster (font-blocked) — revisit after rustty-font
+## ~~Deferred: apc cluster (font-blocked)~~ — RESOLVED (Stage A.3)
 
-`apc.zig` + `apc/glyph/{request,Glossary,execute,glyph}` (67 tests) need
-`font/opentype/glyf` (`Glyf` parser, 44 refs in request.zig) + `font/Glyph` +
-`datastruct/circ_buf` (the last is ported: rustty-datastruct/circ_buf.rs). BLOCKER:
-**rustty-font is a stub AND already depends on rustty-vt**, so a direct `vt→font`
-dep would create a crate cycle, and the glyf-decode tests need a real decoder.
-RESOLUTION (deferred): port rustty-font's `glyf`/`Glyph` first, then port apc either
-(a) in a crate layered above both vt+font, or (b) via a `GlyfDecoder` trait seam in
-vt that font fills (the plan's "sys-style hook"). `apc/glyph/response` (12 tests,
-leaf, no font) could go early if needed. Terminal (vt-12) must stub its apc usage
-until this lands.
+**RESOLVED (Stage A.3 — apc complete).** `apc.zig` + `apc/glyph/{request,
+Glossary,execute,response}` are fully ported and gate-green. The D1 layering
+(Option C, signed off) made `rustty-font` PURE & BELOW `rustty-vt`, so `rustty-vt`
+deps `rustty-font` DIRECTLY (no crate cycle, no decoder trait seam): glyf-decode
+is mandatory via `rustty_font::{opentype::glyf::Glyf, glyph::*}`. `apc.zig` (the
+14-test `Handler` multiplexing kitty graphics + glyph) lands at
+`crates/rustty-vt/src/apc/mod.rs` (all 14 tests pass, Miri-clean on 2, scoped G3b
+missing=0). The glyph submodules (request 19t / Glossary 9t / execute 12t /
+response 12t) were ported earlier; `apc/glyph/mod.rs` now carries the verbatim
+`glyph.zig` header + re-exports. The original font-block BLOCKER (rustty-font was a
+stub depending on rustty-vt) was dissolved by D1.
 
 ## Deferred: vt-12a Terminal/stream_terminal stubs (font-block continuation + C-ABI)
 
@@ -183,15 +184,18 @@ The vt-12a struct-first skeleton (`terminal.rs` <- `Terminal.zig`,
 `stream_terminal.rs` <- `stream_terminal.zig`) lands with these stubs, all of
 which CONTINUE existing deferrals (no new capability is being dropped):
 
-- **apc_handler ZST** (`stream_terminal::ApcHandler`): the reference
-  `apc.Handler` is a no-op ZST here; `deinit` (and the future `start`/`feed`/
-  `end`) are stubbed under the apc-cluster deferral above. The `apc_start`/
-  `apc_put`/`apc_end` trait arms and `apcEnd` dispatch are `todo!()` and remain
-  no-op once vt-12b-7 fills them, until rustty-font unblocks apc.
-- **GlyphGlossary / GlyphRequest / GlyphResponse ZSTs** (`terminal.rs`): the
-  reference `glyph.Glossary` / `glyph.Request` / `glyph.Response` are ZST stubs;
-  `Terminal::glyph_protocol` is `todo!()` and will be a no-op stub in vt-12b
-  (`glyph.execute` is font-blocked). Reactivated with the apc cluster.
+- ~~**apc_handler ZST** (`stream_terminal::ApcHandler`)~~ **RESOLVED (Stage A.3).**
+  `ApcHandler` is now a type alias for the real `apc::Handler`. The `apc_start`/
+  `apc_put`/`apc_end` trait arms drive `start`/`feed`/`end`, and `apcEnd`
+  dispatches the kitty graphics + glyph responses via `write_pty`. The previously
+  apc-gated stream_terminal tests are un-deferred and ported: `full reset`,
+  `glyph protocol APC with write_pty callback`, `kitty graphics APC response`,
+  `kitty graphics via APC` (all pass). **stream_terminal apc_deferred → 0.**
+- ~~**GlyphGlossary / GlyphRequest / GlyphResponse ZSTs** (`terminal.rs`)~~
+  **RESOLVED (Stage A.3).** The ZST stand-ins are dropped; the field is the real
+  `glyph::Glossary` and `Terminal::glyph_protocol` runs `glyph::execute` and sets
+  `flags.dirty.glyph_glossary`. The `Terminal: glyph APC stores session glossary
+  entries` test is ported and passes.
 - **kitty graphics**: `Terminal::kitty_graphics` forwards to `Screen.kitty_images`
   (a deferred `ImageStorage` stub); reactivated in vt-12c-kitty (graphics_exec
   needs Terminal✓ which now exists). Feature-gated, no new deferral.
