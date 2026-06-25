@@ -15,6 +15,15 @@ authors.workspace = true
 [lints]
 workspace = true
 
+# PORT NOTE: doc comments in this crate are verbatim ports of the reference Zig
+# doc comments (R1), including indented spec prose and ASCII tables (e.g. the
+# `glyf` `SimpleFlags` flag-relationship table, the `head` flag bit list). rustdoc
+# would misinterpret those indented blocks as runnable code examples. This crate
+# defines no intended doc examples — all tests live in `#[test]` blocks — so
+# doctests are disabled rather than altering the faithful comment text.
+[lib]
+doctest = false
+
 [dependencies]
 rustty-vt = { workspace = true }
 rustty-os = { workspace = true }
