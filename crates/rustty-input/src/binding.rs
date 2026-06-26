@@ -3986,7 +3986,13 @@ impl RewindBuffer {
             end: 0,
         }
     }
-    fn write_all(&mut self, bytes: &[u8]) -> Result<(), ()> {
+    // PORT NOTE: the `()` error models the reference's fixed-`std.Io.Writer`
+    // overflow (`error.OutOfMemory`); for this growable buffer the write never
+    // fails, so the unit error is never produced. The `result_unit_err` lint is
+    // allowed for that fidelity (the signature mirrors the reference's fallible
+    // buffer write, kept for the call-site shape in `format_entries`).
+    #[allow(clippy::result_unit_err)]
+    pub fn write_all(&mut self, bytes: &[u8]) -> Result<(), ()> {
         // Mirrors writing into a fixed buffer at the `end` cursor, overwriting.
         if self.buf.len() < self.end {
             self.buf.resize(self.end, 0);
@@ -4009,7 +4015,15 @@ impl Default for RewindBuffer {
 
 // Helpers to write a Trigger/Action through the RewindBuffer (the reference uses
 // `{f}` format of the trigger/action). They reuse the `Writer` impl below.
-fn write_trigger_to_buffer(t: &Trigger, buffer: &mut RewindBuffer) -> Result<(), ()> {
+//
+// PORT NOTE: `pub` so the `Keybinds.formatEntryDocs` value type (rustty-config)
+// can write the leading `{f}` trigger (and table-name prefix) into the shared
+// `RewindBuffer` before delegating to `Value::format_entries`, exactly as the
+// reference does (`writer.print("{f}", .{k})` / `"{s}/{f}"`).
+// PORT NOTE: `()` error mirrors the fixed-buffer write error (never produced for
+// the growable buffer); `result_unit_err` allowed for that fidelity.
+#[allow(clippy::result_unit_err)]
+pub fn write_trigger_to_buffer(t: &Trigger, buffer: &mut RewindBuffer) -> Result<(), ()> {
     let mut w = RewindWriter { inner: buffer };
     t.format(&mut w)
 }
@@ -4121,6 +4135,26 @@ impl Set {
     // that did `.?.value_ptr.*` use `get_value`.
     pub fn get_index(&self, t: Trigger) -> Option<usize> {
         self.bindings.get_index(&t)
+    }
+
+    /// `self.bindings.count()` — the number of bindings in this set.
+    //
+    // PORT NOTE: the reference reaches into `self.set.bindings.count()` directly
+    // (the field is `pub`). `bindings` is private here, so this accessor mirrors
+    // it for the `Keybinds` value type and tests.
+    pub fn bindings_count(&self) -> usize {
+        self.bindings.count()
+    }
+
+    /// `self.bindings.iterator()` — iterate `(trigger, value)` entries in
+    /// insertion order.
+    //
+    // PORT NOTE: the reference iterates `self.set.bindings.iterator()` yielding
+    // `entry.key_ptr.* / entry.value_ptr.*`. `bindings` is private here, so this
+    // accessor exposes the same insertion-ordered view for `Keybinds.equalSet`
+    // and `Keybinds.formatEntryDocs`.
+    pub fn iter_bindings(&self) -> impl Iterator<Item = (&Trigger, &Value)> {
+        self.bindings.entries.iter().map(|(k, _, v)| (k, v))
     }
 
     /// `get(t).?.value_ptr.*` — the value for a trigger.

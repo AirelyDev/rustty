@@ -29,3 +29,47 @@ pub mod keycodes;
 pub mod keymap_darwin;
 pub mod keymap_noop;
 pub mod link;
+
+// PORT NOTE: `input.zig:18` — `pub const ctrlOrSuper = key.ctrlOrSuper;`. The
+// `input.zig`/`key.zig` files are not yet carved into this crate; this single
+// re-exported public decl (the `Mods`-valued `ctrlOrSuper`, key.zig:862) is the
+// only piece the `config.Keybinds` value type needs, so it is ported here at the
+// input-package public surface ahead of the full `key.zig` carve. `Mods` is the
+// `rustty-vt` `key_mods.Mods` (the same type `input.Mods` aliases).
+use rustty_vt::input::key_mods::Mods;
+
+/// This sets either "ctrl" or "super" to true (but not both)
+/// on mods depending on if the build target is Mac or not. On
+/// Mac, we default to super (i.e. super+c for copy) and on
+/// non-Mac we default to ctrl (i.e. ctrl+c for copy).
+// pub fn ctrlOrSuper(mods: Mods) Mods {
+pub fn ctrl_or_super(mods: Mods) -> Mods {
+    // var copy = mods;
+    let mut copy = mods;
+    // if (comptime builtin.target.os.tag.isDarwin()) {
+    if cfg!(target_vendor = "apple") {
+        // copy.super = true;
+        copy.super_ = true;
+    } else {
+        // copy.ctrl = true;
+        copy.ctrl = true;
+    }
+
+    // return copy;
+    copy
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // test "ctrlOrSuper"
+    #[test]
+    fn ctrl_or_super_test() {
+        // var m: Mods = ctrlOrSuper(.{});
+        let m: Mods = ctrl_or_super(Mods::default());
+
+        // try testing.expect(m.ctrlOrSuper());
+        assert!(m.ctrl_or_super());
+    }
+}

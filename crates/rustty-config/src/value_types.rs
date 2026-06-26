@@ -2218,7 +2218,12 @@ impl FormatEntry for RepeatableFontVariation {
 /// PORTS: `Keybinds` (Config.zig:6415). The big keybind set wrapping
 /// `inputpkg.Binding.Set`. Skeleton with the field set + method sigs.
 // pub const Keybinds = struct { set, tables, chain_target: union(enum) {...} };
-#[derive(Debug, Clone, Default)]
+//
+// PORT NOTE: no `#[derive(Clone)]` — the reference's deep copy is the explicit
+// `clone` method (`clone_in`, via `Set::clone_set` + the table map's deep clone);
+// a derived shallow `Clone` would be wrong (and the ordered-map's deep clone is an
+// inherent `clone()`, not the `Clone` trait). `Default` gives the `.{}` zero value.
+#[derive(Default)]
 pub struct Keybinds {
     // set: inputpkg.Binding.Set = .{},
     pub set: rustty_input::binding::Set,
@@ -2226,7 +2231,15 @@ pub struct Keybinds {
     /// Defined key tables. The default key table is always the root "set",
     /// which allows all table names to be available without reservation.
     // tables: std.StringArrayHashMapUnmanaged(inputpkg.Binding.Set) = .empty,
-    pub tables: std::collections::HashMap<Vec<u8>, rustty_input::binding::Set>,
+    //
+    // PORT NOTE: `StringArrayHashMapUnmanaged` is an insertion-ordered string map.
+    // Its rustty analogue is `AutoArrayHashMapUnmanaged<Vec<u8>, Set>` (the same
+    // ordered map `RepeatableStringMap` uses), so `clone`/`equal`/`formatEntryDocs`
+    // iterate tables in insertion order exactly as the reference does.
+    pub tables: rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged<
+        Vec<u8>,
+        rustty_input::binding::Set,
+    >,
 
     /// The most recent binding target for `chain=` additions.
     ///
@@ -2244,45 +2257,1884 @@ pub enum KeybindsChainTarget {
     Table(Vec<u8>),
 }
 
-// PORT NOTE (DEFERRED SEAM, this sub-batch): `Keybinds` is the single largest
-// Config value-type. Its `init` reproduces the entire default keybind set
-// (hundreds of `set.put`/`putFlags` calls with the full physical/unicode/mods
-// trigger matrix) and its `parseCLI` drives the cross-table `chain=`/table-name
-// state machine over `inputpkg.Binding.Set`. This is its own fill sub-batch (the
-// skeleton flags it separately at Config.zig:6415); it is deferred here so the
-// self-contained value-types in this sub-batch land under a scoped gate first.
-// The method bodies below preserve the reference signatures; each is a clearly
-// surfaced deferral (NOT a stub-to-pass: no Keybinds value-type test is claimed
-// green by this sub-batch).
+/// PORTS: the inferred error set of `Keybinds.parseCLI` — the reference returns
+/// `error.ValueRequired`, `error.InvalidFormat`, plus the errors of
+/// `Binding.Set.parseAndPut` (`Allocator.Error || error{InvalidFormat,
+/// InvalidAction}`) and `Keybinds.init` (`Allocator.Error`). `Allocator.Error`
+/// (`OutOfMemory`) aborts in the Rust port (no recoverable allocation failure),
+/// and `parseAndPut`'s `InvalidAction` is also surfaced verbatim. The ported
+/// tests assert the *specific* error (`error.InvalidFormat`), so this dedicated
+/// type carries that variant rather than collapsing into `args::Error`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeybindsParseError {
+    // error.ValueRequired
+    ValueRequired,
+    // error.InvalidFormat
+    InvalidFormat,
+    // error.InvalidAction (from Binding.Set.parseAndPut)
+    InvalidAction,
+}
+
+// PORT NOTE: `Binding.Set.parseAndPut` returns `ParseAndPutError {InvalidFormat,
+// InvalidAction}`. The reference `try`s it inside `parseCLI`, so each variant
+// propagates into `parseCLI`'s error union; this mapping reproduces that.
+impl From<rustty_input::binding::ParseAndPutError> for KeybindsParseError {
+    fn from(e: rustty_input::binding::ParseAndPutError) -> KeybindsParseError {
+        match e {
+            rustty_input::binding::ParseAndPutError::InvalidFormat => {
+                KeybindsParseError::InvalidFormat
+            }
+            rustty_input::binding::ParseAndPutError::InvalidAction => {
+                KeybindsParseError::InvalidAction
+            }
+        }
+    }
+}
+
 impl Keybinds {
     // pub fn init(self: *Keybinds, alloc: Allocator) !void
     pub fn init(&mut self) {
-        unimplemented!("Keybinds.init — deferred to the Keybinds fill sub-batch")
+        use rustty_input::binding::{Action, Flags, Trigger, TriggerKey};
+        use rustty_input::ctrl_or_super;
+        use rustty_vt::input::key::Key;
+        use rustty_vt::input::key_mods::Mods;
+
+        // PORT NOTE: `inputpkg.ctrlOrSuper(m)` — re-exported at the input package
+        // surface (lib.rs). `inputpkg.Mods` is `rustty_vt::input::key_mods::Mods`.
+        // Triggers are built with `Trigger { key, mods }`; `.key = .{ .unicode = c }`
+        // -> `TriggerKey::Unicode(c as u21)` and `.key = .{ .physical = .x }` ->
+        // `TriggerKey::Physical(Key::X)`. `performable = true` -> `Flags { performable:
+        // true, ..Default }`. The `builtin.target.os.tag.isDarwin()` comptime/runtime
+        // checks map to `cfg!(target_vendor = "apple")` (same observable behavior).
+
+        // Helper to build a unicode trigger.
+        fn uni(c: char, mods: Mods) -> Trigger {
+            Trigger {
+                key: TriggerKey::Unicode(c as u32),
+                mods,
+            }
+        }
+        // Helper to build a physical trigger.
+        fn phys(k: Key, mods: Mods) -> Trigger {
+            Trigger {
+                key: TriggerKey::Physical(k),
+                mods,
+            }
+        }
+        // .{ .performable = true }
+        let performable = Flags {
+            performable: true,
+            ..Flags::default()
+        };
+
+        // We don't clear the memory because it's in the arena and unlikely
+        // to be free-able anyways (since arenas can only clear the last
+        // allocated value). This isn't a memory leak because the arena
+        // will be freed when the config is freed.
+        // self.set = .{};
+        self.set = rustty_input::binding::Set::default();
+        // self.tables = .empty;
+        self.tables = rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged::new();
+        // self.chain_target = .root;
+        self.chain_target = KeybindsChainTarget::Root;
+
+        // keybinds for opening and reloading config
+        self.set.put(
+            uni(
+                ',',
+                ctrl_or_super(Mods {
+                    shift: true,
+                    ..Mods::default()
+                }),
+            ),
+            Action::ReloadConfig,
+        );
+        self.set
+            .put(uni(',', ctrl_or_super(Mods::default())), Action::OpenConfig);
+
+        {
+            self.set.put(
+                phys(Key::Copy, Mods::default()),
+                Action::CopyToClipboard(rustty_input::binding::CopyToClipboard::Mixed),
+            );
+            self.set.put(
+                phys(Key::Paste, Mods::default()),
+                Action::PasteFromClipboard,
+            );
+
+            // On non-MacOS desktop envs (Windows, KDE, Gnome, Xfce), ctrl+insert is an
+            // alt keybinding for Copy and shift+ins is an alt keybinding for Paste
+            //
+            // The order of these blocks is important. The *last* added keybind for a given action is
+            // what will display in the menu. We want the more typical keybinds after this block to be
+            // the standard
+            if !cfg!(target_vendor = "apple") {
+                self.set.put(
+                    phys(
+                        Key::Insert,
+                        Mods {
+                            ctrl: true,
+                            ..Mods::default()
+                        },
+                    ),
+                    Action::CopyToClipboard(rustty_input::binding::CopyToClipboard::Mixed),
+                );
+                self.set.put(
+                    phys(
+                        Key::Insert,
+                        Mods {
+                            shift: true,
+                            ..Mods::default()
+                        },
+                    ),
+                    Action::PasteFromClipboard,
+                );
+            }
+
+            // On macOS we default to super but Linux ctrl+shift since
+            // ctrl+c is to kill the process.
+            let mods: Mods = if cfg!(target_vendor = "apple") {
+                Mods {
+                    super_: true,
+                    ..Mods::default()
+                }
+            } else {
+                Mods {
+                    ctrl: true,
+                    shift: true,
+                    ..Mods::default()
+                }
+            };
+
+            self.set.put_flags(
+                uni('c', mods),
+                Action::CopyToClipboard(rustty_input::binding::CopyToClipboard::Mixed),
+                performable,
+            );
+            self.set
+                .put_flags(uni('v', mods), Action::PasteFromClipboard, performable);
+        }
+
+        // Increase font size mapping for keyboards with dedicated plus keys (like german)
+        // Note: this order matters below because the C API will only return
+        // the last keybinding for a given action. The macOS app uses this to
+        // set the expected keybind for the menu.
+        self.set.put(
+            uni('=', ctrl_or_super(Mods::default())),
+            Action::IncreaseFontSize(1.0),
+        );
+        self.set.put(
+            uni('+', ctrl_or_super(Mods::default())),
+            Action::IncreaseFontSize(1.0),
+        );
+
+        self.set.put(
+            uni('-', ctrl_or_super(Mods::default())),
+            Action::DecreaseFontSize(1.0),
+        );
+        self.set.put(
+            uni('0', ctrl_or_super(Mods::default())),
+            Action::ResetFontSize,
+        );
+
+        self.set.put(
+            uni(
+                'j',
+                Mods {
+                    shift: true,
+                    ctrl: true,
+                    super_: true,
+                    ..Mods::default()
+                },
+            ),
+            Action::WriteScreenFile(rustty_input::binding::WriteScreen::COPY),
+        );
+
+        self.set.put(
+            uni(
+                'j',
+                ctrl_or_super(Mods {
+                    shift: true,
+                    ..Mods::default()
+                }),
+            ),
+            Action::WriteScreenFile(rustty_input::binding::WriteScreen::PASTE),
+        );
+
+        self.set.put(
+            uni(
+                'j',
+                ctrl_or_super(Mods {
+                    shift: true,
+                    alt: true,
+                    ..Mods::default()
+                }),
+            ),
+            Action::WriteScreenFile(rustty_input::binding::WriteScreen::OPEN),
+        );
+
+        // Expand Selection
+        self.set.put_flags(
+            phys(
+                Key::ArrowLeft,
+                Mods {
+                    shift: true,
+                    ..Mods::default()
+                },
+            ),
+            Action::AdjustSelection(rustty_input::binding::AdjustSelection::Left),
+            performable,
+        );
+        self.set.put_flags(
+            phys(
+                Key::ArrowRight,
+                Mods {
+                    shift: true,
+                    ..Mods::default()
+                },
+            ),
+            Action::AdjustSelection(rustty_input::binding::AdjustSelection::Right),
+            performable,
+        );
+        self.set.put_flags(
+            phys(
+                Key::ArrowUp,
+                Mods {
+                    shift: true,
+                    ..Mods::default()
+                },
+            ),
+            Action::AdjustSelection(rustty_input::binding::AdjustSelection::Up),
+            performable,
+        );
+        self.set.put_flags(
+            phys(
+                Key::ArrowDown,
+                Mods {
+                    shift: true,
+                    ..Mods::default()
+                },
+            ),
+            Action::AdjustSelection(rustty_input::binding::AdjustSelection::Down),
+            performable,
+        );
+        self.set.put_flags(
+            phys(
+                Key::PageUp,
+                Mods {
+                    shift: true,
+                    ..Mods::default()
+                },
+            ),
+            Action::AdjustSelection(rustty_input::binding::AdjustSelection::PageUp),
+            performable,
+        );
+        self.set.put_flags(
+            phys(
+                Key::PageDown,
+                Mods {
+                    shift: true,
+                    ..Mods::default()
+                },
+            ),
+            Action::AdjustSelection(rustty_input::binding::AdjustSelection::PageDown),
+            performable,
+        );
+        self.set.put_flags(
+            phys(
+                Key::Home,
+                Mods {
+                    shift: true,
+                    ..Mods::default()
+                },
+            ),
+            Action::AdjustSelection(rustty_input::binding::AdjustSelection::Home),
+            performable,
+        );
+        self.set.put_flags(
+            phys(
+                Key::End,
+                Mods {
+                    shift: true,
+                    ..Mods::default()
+                },
+            ),
+            Action::AdjustSelection(rustty_input::binding::AdjustSelection::End),
+            performable,
+        );
+
+        // Tabs common to all platforms
+        self.set.put(
+            phys(
+                Key::Tab,
+                Mods {
+                    ctrl: true,
+                    shift: true,
+                    ..Mods::default()
+                },
+            ),
+            Action::PreviousTab,
+        );
+        self.set.put(
+            phys(
+                Key::Tab,
+                Mods {
+                    ctrl: true,
+                    ..Mods::default()
+                },
+            ),
+            Action::NextTab,
+        );
+
+        // Windowing
+        if !cfg!(target_vendor = "apple") {
+            self.set.put(
+                uni(
+                    'n',
+                    Mods {
+                        ctrl: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::NewWindow,
+            );
+            self.set.put(
+                uni(
+                    'w',
+                    Mods {
+                        ctrl: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::CloseSurface,
+            );
+            self.set.put(
+                uni(
+                    'q',
+                    Mods {
+                        ctrl: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::Quit,
+            );
+            self.set.put(
+                phys(
+                    Key::F4,
+                    Mods {
+                        alt: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::CloseWindow,
+            );
+            self.set.put(
+                uni(
+                    't',
+                    Mods {
+                        ctrl: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::NewTab,
+            );
+            self.set.put(
+                uni(
+                    'w',
+                    Mods {
+                        ctrl: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::CloseTab(rustty_input::binding::CloseTabMode::This),
+            );
+            self.set.put_flags(
+                phys(
+                    Key::ArrowLeft,
+                    Mods {
+                        ctrl: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::PreviousTab,
+                performable,
+            );
+            self.set.put_flags(
+                phys(
+                    Key::ArrowRight,
+                    Mods {
+                        ctrl: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::NextTab,
+                performable,
+            );
+            self.set.put_flags(
+                phys(
+                    Key::PageUp,
+                    Mods {
+                        ctrl: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::PreviousTab,
+                performable,
+            );
+            self.set.put_flags(
+                phys(
+                    Key::PageDown,
+                    Mods {
+                        ctrl: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::NextTab,
+                performable,
+            );
+            self.set.put(
+                uni(
+                    'o',
+                    Mods {
+                        ctrl: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::NewSplit(rustty_input::binding::SplitDirection::Right),
+            );
+            self.set.put(
+                uni(
+                    'e',
+                    Mods {
+                        ctrl: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::NewSplit(rustty_input::binding::SplitDirection::Down),
+            );
+            self.set.put_flags(
+                uni(
+                    '[',
+                    Mods {
+                        ctrl: true,
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::GotoSplit(rustty_input::binding::SplitFocusDirection::Previous),
+                performable,
+            );
+            self.set.put_flags(
+                uni(
+                    ']',
+                    Mods {
+                        ctrl: true,
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::GotoSplit(rustty_input::binding::SplitFocusDirection::Next),
+                performable,
+            );
+            self.set.put_flags(
+                phys(
+                    Key::ArrowUp,
+                    Mods {
+                        ctrl: true,
+                        alt: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::GotoSplit(rustty_input::binding::SplitFocusDirection::Up),
+                performable,
+            );
+            self.set.put_flags(
+                phys(
+                    Key::ArrowDown,
+                    Mods {
+                        ctrl: true,
+                        alt: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::GotoSplit(rustty_input::binding::SplitFocusDirection::Down),
+                performable,
+            );
+            self.set.put_flags(
+                phys(
+                    Key::ArrowLeft,
+                    Mods {
+                        ctrl: true,
+                        alt: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::GotoSplit(rustty_input::binding::SplitFocusDirection::Left),
+                performable,
+            );
+            self.set.put_flags(
+                phys(
+                    Key::ArrowRight,
+                    Mods {
+                        ctrl: true,
+                        alt: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::GotoSplit(rustty_input::binding::SplitFocusDirection::Right),
+                performable,
+            );
+
+            // Resizing splits
+            self.set.put_flags(
+                phys(
+                    Key::ArrowUp,
+                    Mods {
+                        super_: true,
+                        ctrl: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ResizeSplit(rustty_input::binding::SplitResizeParameter(
+                    rustty_input::binding::SplitResizeDirection::Up,
+                    10,
+                )),
+                performable,
+            );
+            self.set.put_flags(
+                phys(
+                    Key::ArrowDown,
+                    Mods {
+                        super_: true,
+                        ctrl: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ResizeSplit(rustty_input::binding::SplitResizeParameter(
+                    rustty_input::binding::SplitResizeDirection::Down,
+                    10,
+                )),
+                performable,
+            );
+            self.set.put_flags(
+                phys(
+                    Key::ArrowLeft,
+                    Mods {
+                        super_: true,
+                        ctrl: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ResizeSplit(rustty_input::binding::SplitResizeParameter(
+                    rustty_input::binding::SplitResizeDirection::Left,
+                    10,
+                )),
+                performable,
+            );
+            self.set.put_flags(
+                phys(
+                    Key::ArrowRight,
+                    Mods {
+                        super_: true,
+                        ctrl: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ResizeSplit(rustty_input::binding::SplitResizeParameter(
+                    rustty_input::binding::SplitResizeDirection::Right,
+                    10,
+                )),
+                performable,
+            );
+
+            // Viewport scrolling
+            self.set.put(
+                phys(
+                    Key::Home,
+                    Mods {
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ScrollToTop,
+            );
+            self.set.put(
+                phys(
+                    Key::End,
+                    Mods {
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ScrollToBottom,
+            );
+            self.set.put(
+                phys(
+                    Key::PageUp,
+                    Mods {
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ScrollPageUp,
+            );
+            self.set.put(
+                phys(
+                    Key::PageDown,
+                    Mods {
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ScrollPageDown,
+            );
+
+            // Semantic prompts
+            self.set.put(
+                phys(
+                    Key::ArrowUp,
+                    Mods {
+                        shift: true,
+                        ctrl: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::JumpToPrompt(-1),
+            );
+            self.set.put(
+                phys(
+                    Key::ArrowDown,
+                    Mods {
+                        shift: true,
+                        ctrl: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::JumpToPrompt(1),
+            );
+
+            // Move tab
+            self.set.put_flags(
+                phys(
+                    Key::PageUp,
+                    Mods {
+                        shift: true,
+                        ctrl: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::MoveTab(-1),
+                performable,
+            );
+            self.set.put_flags(
+                phys(
+                    Key::PageDown,
+                    Mods {
+                        shift: true,
+                        ctrl: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::MoveTab(1),
+                performable,
+            );
+
+            // Search
+            self.set.put_flags(
+                uni(
+                    'f',
+                    Mods {
+                        ctrl: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::StartSearch,
+                performable,
+            );
+            self.set.put_flags(
+                phys(Key::Escape, Mods::default()),
+                Action::EndSearch,
+                performable,
+            );
+
+            // Inspector, matching Chromium
+            self.set.put(
+                uni(
+                    'i',
+                    Mods {
+                        shift: true,
+                        ctrl: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::Inspector(rustty_input::binding::InspectorMode::Toggle),
+            );
+
+            // Terminal
+            self.set.put(
+                uni(
+                    'a',
+                    Mods {
+                        shift: true,
+                        ctrl: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::SelectAll,
+            );
+
+            // Selection clipboard paste
+            self.set.put(
+                phys(
+                    Key::Insert,
+                    Mods {
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::PasteFromSelection,
+            );
+        }
+        {
+            // On macOS we default to super but everywhere else
+            // is alt.
+            let mods: Mods = if cfg!(target_vendor = "apple") {
+                Mods {
+                    super_: true,
+                    ..Mods::default()
+                }
+            } else {
+                Mods {
+                    alt: true,
+                    ..Mods::default()
+                }
+            };
+
+            // Cmd/Alt+N for goto tab N
+            // const start: u21 = '1';
+            // const end: u21 = '8';
+            // comptime var i: u21 = start; inline while (i <= end) : (i += 1) { ... }
+            //
+            // PORT NOTE: the reference uses `@field(inputpkg.Key,
+            // comptimePrint("digit_{u}", .{i}))` to look up the physical key. Here
+            // we enumerate the (char, physical-digit-key) pairs '1'..='8' directly,
+            // preserving the same iteration order (and thus the same
+            // last-binding-wins behavior).
+            let start: u21 = '1' as u32;
+            for (i, digit_key) in [
+                ('1', Key::Digit1),
+                ('2', Key::Digit2),
+                ('3', Key::Digit3),
+                ('4', Key::Digit4),
+                ('5', Key::Digit5),
+                ('6', Key::Digit6),
+                ('7', Key::Digit7),
+                ('8', Key::Digit8),
+            ] {
+                let icp: u21 = i as u32;
+                // We register BOTH the physical `digit_N` key and the unicode
+                // `N` key. This allows most keyboard layouts to work with
+                // this shortcut. Namely, AZERTY doesn't produce unicode `N`
+                // for their digit keys (they're on shifted keys on the same
+                // physical keys).
+
+                self.set.put_flags(
+                    phys(digit_key, mods),
+                    Action::GotoTab(((icp - start) + 1) as usize),
+                    Flags {
+                        // On macOS we keep this not performable so that the
+                        // keyboard shortcuts in tabs work. In the future the
+                        // correct fix is to fix the reverse mapping lookup
+                        // to allow us to lookup performable keybinds
+                        // conditionally.
+                        performable: !cfg!(target_vendor = "apple"),
+                        ..Flags::default()
+                    },
+                );
+
+                // Important: this must be the LAST binding set so that the
+                // libghostty trigger API returns this one for the action,
+                // so that things like the macOS tab bar key equivalent label
+                // work properly.
+                self.set.put_flags(
+                    uni(i, mods),
+                    Action::GotoTab(((icp - start) + 1) as usize),
+                    Flags {
+                        performable: !cfg!(target_vendor = "apple"),
+                        ..Flags::default()
+                    },
+                );
+            }
+            self.set.put_flags(
+                uni('9', mods),
+                Action::LastTab,
+                Flags {
+                    // See comment above with the numeric goto_tab
+                    performable: !cfg!(target_vendor = "apple"),
+                    ..Flags::default()
+                },
+            );
+        }
+
+        // Toggle fullscreen
+        self.set.put(
+            phys(Key::Enter, ctrl_or_super(Mods::default())),
+            Action::ToggleFullscreen,
+        );
+
+        // Toggle zoom a split
+        self.set.put(
+            phys(
+                Key::Enter,
+                ctrl_or_super(Mods {
+                    shift: true,
+                    ..Mods::default()
+                }),
+            ),
+            Action::ToggleSplitZoom,
+        );
+
+        // Toggle command palette, matches VSCode
+        self.set.put(
+            uni(
+                'p',
+                ctrl_or_super(Mods {
+                    shift: true,
+                    ..Mods::default()
+                }),
+            ),
+            Action::ToggleCommandPalette,
+        );
+
+        // Mac-specific keyboard bindings.
+        if cfg!(target_vendor = "apple") {
+            self.set.put(
+                uni(
+                    'q',
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::Quit,
+            );
+            self.set.put_flags(
+                uni(
+                    'k',
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ClearScreen,
+                performable,
+            );
+            self.set.put(
+                uni(
+                    'a',
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::SelectAll,
+            );
+
+            // Undo/redo
+            self.set.put_flags(
+                uni(
+                    't',
+                    Mods {
+                        super_: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::Undo,
+                performable,
+            );
+            self.set.put_flags(
+                uni(
+                    'z',
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::Undo,
+                performable,
+            );
+            self.set.put_flags(
+                uni(
+                    'z',
+                    Mods {
+                        super_: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::Redo,
+                performable,
+            );
+
+            // Viewport scrolling
+            self.set.put(
+                phys(
+                    Key::Home,
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ScrollToTop,
+            );
+            self.set.put(
+                phys(
+                    Key::End,
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ScrollToBottom,
+            );
+            self.set.put(
+                phys(
+                    Key::PageUp,
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ScrollPageUp,
+            );
+            self.set.put(
+                phys(
+                    Key::PageDown,
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ScrollPageDown,
+            );
+            self.set.put_flags(
+                uni(
+                    'j',
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ScrollToSelection,
+                performable,
+            );
+
+            // Semantic prompts
+            self.set.put(
+                phys(
+                    Key::ArrowUp,
+                    Mods {
+                        super_: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::JumpToPrompt(-1),
+            );
+            self.set.put(
+                phys(
+                    Key::ArrowDown,
+                    Mods {
+                        super_: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::JumpToPrompt(1),
+            );
+
+            // Mac windowing
+            self.set.put(
+                uni(
+                    'n',
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::NewWindow,
+            );
+            self.set.put(
+                uni(
+                    'w',
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::CloseSurface,
+            );
+            self.set.put(
+                uni(
+                    'w',
+                    Mods {
+                        super_: true,
+                        alt: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::CloseTab(rustty_input::binding::CloseTabMode::This),
+            );
+            self.set.put(
+                uni(
+                    'w',
+                    Mods {
+                        super_: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::CloseWindow,
+            );
+            self.set.put(
+                uni(
+                    'w',
+                    Mods {
+                        super_: true,
+                        shift: true,
+                        alt: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::CloseAllWindows,
+            );
+            self.set.put(
+                uni(
+                    't',
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::NewTab,
+            );
+            self.set.put(
+                uni(
+                    '[',
+                    Mods {
+                        super_: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::PreviousTab,
+            );
+            self.set.put(
+                uni(
+                    ']',
+                    Mods {
+                        super_: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::NextTab,
+            );
+            self.set.put(
+                uni(
+                    'd',
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::NewSplit(rustty_input::binding::SplitDirection::Right),
+            );
+            self.set.put(
+                uni(
+                    'd',
+                    Mods {
+                        super_: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::NewSplit(rustty_input::binding::SplitDirection::Down),
+            );
+            self.set.put(
+                uni(
+                    '[',
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::GotoSplit(rustty_input::binding::SplitFocusDirection::Previous),
+            );
+            self.set.put(
+                uni(
+                    ']',
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::GotoSplit(rustty_input::binding::SplitFocusDirection::Next),
+            );
+            self.set.put(
+                phys(
+                    Key::ArrowUp,
+                    Mods {
+                        super_: true,
+                        alt: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::GotoSplit(rustty_input::binding::SplitFocusDirection::Up),
+            );
+            self.set.put(
+                phys(
+                    Key::ArrowDown,
+                    Mods {
+                        super_: true,
+                        alt: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::GotoSplit(rustty_input::binding::SplitFocusDirection::Down),
+            );
+            self.set.put(
+                phys(
+                    Key::ArrowLeft,
+                    Mods {
+                        super_: true,
+                        alt: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::GotoSplit(rustty_input::binding::SplitFocusDirection::Left),
+            );
+            self.set.put(
+                phys(
+                    Key::ArrowRight,
+                    Mods {
+                        super_: true,
+                        alt: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::GotoSplit(rustty_input::binding::SplitFocusDirection::Right),
+            );
+            self.set.put(
+                phys(
+                    Key::ArrowUp,
+                    Mods {
+                        super_: true,
+                        ctrl: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ResizeSplit(rustty_input::binding::SplitResizeParameter(
+                    rustty_input::binding::SplitResizeDirection::Up,
+                    10,
+                )),
+            );
+            self.set.put(
+                phys(
+                    Key::ArrowDown,
+                    Mods {
+                        super_: true,
+                        ctrl: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ResizeSplit(rustty_input::binding::SplitResizeParameter(
+                    rustty_input::binding::SplitResizeDirection::Down,
+                    10,
+                )),
+            );
+            self.set.put(
+                phys(
+                    Key::ArrowLeft,
+                    Mods {
+                        super_: true,
+                        ctrl: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ResizeSplit(rustty_input::binding::SplitResizeParameter(
+                    rustty_input::binding::SplitResizeDirection::Left,
+                    10,
+                )),
+            );
+            self.set.put(
+                phys(
+                    Key::ArrowRight,
+                    Mods {
+                        super_: true,
+                        ctrl: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ResizeSplit(rustty_input::binding::SplitResizeParameter(
+                    rustty_input::binding::SplitResizeDirection::Right,
+                    10,
+                )),
+            );
+            self.set.put(
+                uni(
+                    '=',
+                    Mods {
+                        super_: true,
+                        ctrl: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::EqualizeSplits,
+            );
+
+            // Jump to prompt, matches Terminal.app
+            self.set.put(
+                phys(
+                    Key::ArrowUp,
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::JumpToPrompt(-1),
+            );
+            self.set.put(
+                phys(
+                    Key::ArrowDown,
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::JumpToPrompt(1),
+            );
+
+            // Search
+            self.set.put_flags(
+                uni(
+                    'f',
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::StartSearch,
+                performable,
+            );
+            self.set.put_flags(
+                uni(
+                    'e',
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::SearchSelection,
+                performable,
+            );
+            self.set.put_flags(
+                uni(
+                    'f',
+                    Mods {
+                        super_: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::EndSearch,
+                performable,
+            );
+            self.set.put_flags(
+                phys(Key::Escape, Mods::default()),
+                Action::EndSearch,
+                performable,
+            );
+            self.set.put_flags(
+                uni(
+                    'g',
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::NavigateSearch(rustty_input::binding::NavigateSearch::Next),
+                performable,
+            );
+            self.set.put_flags(
+                uni(
+                    'g',
+                    Mods {
+                        super_: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::NavigateSearch(rustty_input::binding::NavigateSearch::Previous),
+                performable,
+            );
+
+            // Inspector, matching Chromium
+            self.set.put(
+                uni(
+                    'i',
+                    Mods {
+                        alt: true,
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::Inspector(rustty_input::binding::InspectorMode::Toggle),
+            );
+
+            // Alternate keybind, common to Mac programs
+            self.set.put(
+                uni(
+                    'f',
+                    Mods {
+                        super_: true,
+                        ctrl: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::ToggleFullscreen,
+            );
+
+            // Selection clipboard paste, matches Terminal.app
+            self.set.put(
+                uni(
+                    'v',
+                    Mods {
+                        super_: true,
+                        shift: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::PasteFromSelection,
+            );
+
+            // "Natural text editing" keybinds. This forces these keys to go back
+            // to legacy encoding (not fixterms). It seems macOS users more than
+            // others are used to these keys so we set them as defaults. If
+            // people want to get back to the fixterm encoding they can set
+            // the keybinds to `unbind`.
+            self.set.put(
+                phys(
+                    Key::ArrowRight,
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::Text(b"\\x05".to_vec()),
+            );
+            self.set.put(
+                phys(
+                    Key::ArrowLeft,
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::Text(b"\\x01".to_vec()),
+            );
+            self.set.put(
+                phys(
+                    Key::Backspace,
+                    Mods {
+                        super_: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::Text(b"\\x15".to_vec()),
+            );
+            self.set.put(
+                phys(
+                    Key::ArrowLeft,
+                    Mods {
+                        alt: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::Esc(b"b".to_vec()),
+            );
+            self.set.put(
+                phys(
+                    Key::ArrowRight,
+                    Mods {
+                        alt: true,
+                        ..Mods::default()
+                    },
+                ),
+                Action::Esc(b"f".to_vec()),
+            );
+        }
     }
 
     // pub fn parseCLI(self: *Keybinds, alloc: Allocator, input: ?[]const u8) !void
-    pub fn parse_cli(&mut self, _input: Option<&[u8]>) -> Result<(), ParseError> {
-        unimplemented!("Keybinds.parseCLI — deferred to the Keybinds fill sub-batch")
+    pub fn parse_cli(&mut self, input: Option<&[u8]>) -> Result<(), KeybindsParseError> {
+        // var copy: ?[]u8 = null;
+        // const value = value: {
+        //     const value = input orelse return error.ValueRequired;
+        //
+        //     // If we don't have a colon, use the value as-is, no copy
+        //     if (std.mem.indexOf(u8, value, ":") == null)
+        //         break :value value;
+        //
+        //     // If we have a colon, we copy the whole value for now. We could
+        //     // do this more efficiently later if we wanted to.
+        //     const buf = try alloc.alloc(u8, value.len);
+        //     copy = buf;
+        //
+        //     @memcpy(buf, value);
+        //     break :value buf;
+        // };
+        // errdefer if (copy) |v| alloc.free(v);
+        //
+        // PORT NOTE: the reference conditionally copies `value` into the arena when
+        // it contains a colon (so the parsed binding can reference arena-stable
+        // bytes). In the Rust port the parse APIs take `&[u8]` and copy any bytes
+        // they retain (owned `Vec<u8>` payloads), so no pre-copy / `errdefer free`
+        // is needed; we operate on the borrowed `value` directly.
+        let value = match input {
+            // const value = input orelse return error.ValueRequired;
+            None => return Err(KeybindsParseError::ValueRequired),
+            Some(v) => v,
+        };
+
+        // Check for special values
+        if value.is_empty() {
+            // log.info("config has 'keybind =', using default keybinds", .{});
+            self.init();
+            return Ok(());
+        }
+
+        if value == b"clear" {
+            // We don't clear the memory because its in the arena and unlikely
+            // to be free-able anyways (since arenas can only clear the last
+            // allocated value). This isn't a memory leak because the arena
+            // will be freed when the config is freed.
+            // log.info("config has 'keybind = clear', all keybinds cleared", .{});
+            self.set = rustty_input::binding::Set::default();
+            self.tables = rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged::new();
+            self.chain_target = KeybindsChainTarget::Root;
+            return Ok(());
+        }
+
+        // Check for table syntax: "name/" or "name/binding"
+        // We look for '/' only before the first '=' to avoid matching
+        // action arguments like "foo=text:/hello".
+        // const eq_idx = std.mem.indexOfScalar(u8, value, '=') orelse value.len;
+        let eq_idx = value.iter().position(|&c| c == b'=').unwrap_or(value.len());
+        // if (std.mem.indexOfScalar(u8, value[0..eq_idx], '/')) |slash_idx| table: {
+        if let Some(slash_idx) = value[0..eq_idx].iter().position(|&c| c == b'/') {
+            'table: {
+                let table_name = &value[0..slash_idx];
+
+                // Length zero is valid, so you can set `/=action` for the slash key
+                if table_name.is_empty() {
+                    break 'table;
+                }
+
+                // Ignore '+', '>' because they can be part of sequences and
+                // triggers. This lets things like `ctrl+/=action` work.
+                if table_name.iter().any(|&c| c == b'+' || c == b'>') {
+                    break 'table;
+                }
+
+                let binding = &value[slash_idx + 1..];
+
+                // Get or create the table
+                // const gop = try self.tables.getOrPut(alloc, table_name);
+                let gop = self
+                    .tables
+                    .get_or_put_with(table_name.to_vec(), rustty_input::binding::Set::default);
+                if !gop.found_existing {
+                    // We need to copy our table name into the arena
+                    // for valid lookups later.
+                    // gop.key_ptr.* = try alloc.dupe(u8, table_name);
+                    // gop.value_ptr.* = .{};
+                    //
+                    // PORT NOTE: the key (`Vec<u8>`) is already owned by the map
+                    // (`get_or_put_with` took an owned copy), so the `dupe` is
+                    // implicit; the value was initialized to an empty `Set`.
+                }
+
+                // If there's no binding after the slash, this is a table
+                // definition/clear command
+                if binding.is_empty() {
+                    // log.debug("config has 'keybind = {s}/', table cleared", .{table_name});
+                    // gop.value_ptr.* = .{};
+                    *self.tables.value_at_mut(gop.index) = rustty_input::binding::Set::default();
+                    self.chain_target = KeybindsChainTarget::Root;
+                    return Ok(());
+                }
+
+                // Chains are only allowed at the root level. Their target is
+                // tracked globally by parse order in `self.chain_target`.
+                if binding.starts_with(b"chain=") {
+                    return Err(KeybindsParseError::InvalidFormat);
+                }
+
+                // Parse and add the binding to the table
+                // try gop.value_ptr.parseAndPut(alloc, binding);
+                self.tables.value_at_mut(gop.index).parse_and_put(binding)?;
+                // self.chain_target = .{ .table = gop.key_ptr.* };
+                self.chain_target =
+                    KeybindsChainTarget::Table(self.tables.entry_at(gop.index).unwrap().0.clone());
+                return Ok(());
+            }
+        }
+
+        if value.starts_with(b"chain=") {
+            match &self.chain_target {
+                // .root => try self.set.parseAndPut(alloc, value),
+                KeybindsChainTarget::Root => self.set.parse_and_put(value)?,
+                // .table => |table_name| { ... }
+                KeybindsChainTarget::Table(table_name) => {
+                    // const table = self.tables.getPtr(table_name) orelse { ... };
+                    let table_name = table_name.clone();
+                    match self.tables.get_ptr(&table_name) {
+                        None => {
+                            self.chain_target = KeybindsChainTarget::Root;
+                            return Err(KeybindsParseError::InvalidFormat);
+                        }
+                        Some(table) => table.parse_and_put(value)?,
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        // Parse into default set
+        // try self.set.parseAndPut(alloc, value);
+        self.set.parse_and_put(value)?;
+        self.chain_target = KeybindsChainTarget::Root;
+        Ok(())
     }
 
+    /// Deep copy of the struct. Required by Config.
     // pub fn clone(self: *const Keybinds, alloc: Allocator) Allocator.Error!Keybinds
     pub fn clone_in(&self) -> Keybinds {
-        unimplemented!("Keybinds.clone — deferred to the Keybinds fill sub-batch")
+        // var tables: std.StringArrayHashMapUnmanaged(inputpkg.Binding.Set) = .empty;
+        // try tables.ensureTotalCapacity(alloc, @intCast(self.tables.count()));
+        let mut tables: rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged<
+            Vec<u8>,
+            rustty_input::binding::Set,
+        > = rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged::new();
+        // var it = self.tables.iterator();
+        // while (it.next()) |entry| {
+        for (key, value) in self.tables.iter() {
+            // const key = try alloc.dupe(u8, entry.key_ptr.*);
+            // tables.putAssumeCapacity(key, try entry.value_ptr.clone(alloc));
+            tables.put(key.clone(), value.clone_set());
+        }
+
+        // return .{ .set = try self.set.clone(alloc), .tables = tables };
+        //
+        // PORT NOTE: the reference's returned struct leaves `chain_target` at its
+        // default `.root` (it is not a copied field); the Rust `..Default::default()`
+        // does the same.
+        Keybinds {
+            set: self.set.clone_set(),
+            tables,
+            ..Keybinds::default()
+        }
     }
 
+    /// Compare if two of our value are requal. Required by Config.
     // pub fn equal(self: Keybinds, other: Keybinds) bool
-    pub fn equal(&self, _other: &Keybinds) -> bool {
-        unimplemented!("Keybinds.equal — deferred to the Keybinds fill sub-batch")
+    pub fn equal(&self, other: &Keybinds) -> bool {
+        // if (!equalSet(&self.set, &other.set)) return false;
+        if !Keybinds::equal_set(&self.set, &other.set) {
+            return false;
+        }
+
+        // Compare tables
+        // if (self.tables.count() != other.tables.count()) return false;
+        if self.tables.count() != other.tables.count() {
+            return false;
+        }
+
+        // var it = self.tables.iterator();
+        // while (it.next()) |entry| {
+        for (key, value) in self.tables.iter() {
+            // const other_set = other.tables.get(entry.key_ptr.*) orelse return false;
+            let other_set = match other.tables.get(key) {
+                Some(s) => s,
+                None => return false,
+            };
+            // if (!equalSet(entry.value_ptr, &other_set)) return false;
+            if !Keybinds::equal_set(value, other_set) {
+                return false;
+            }
+        }
+
+        true
     }
 
-    // pub fn formatEntryDocs(self: Keybinds, formatter, docs: bool) !void
-    pub fn format_entry_docs(&self, _docs: bool) {
-        unimplemented!("Keybinds.formatEntryDocs — deferred to the Keybinds fill sub-batch")
+    // fn equalSet(self: *const inputpkg.Binding.Set, other: *const inputpkg.Binding.Set) bool
+    fn equal_set(self_: &rustty_input::binding::Set, other: &rustty_input::binding::Set) -> bool {
+        use rustty_input::binding::Value;
+
+        // Two keybinds are considered equal if their primary bindings
+        // are the same. We don't compare reverse mappings and such.
+        // const self_map = &self.bindings;
+        // const other_map = &other.bindings;
+
+        // If the count of mappings isn't identical they can't be equal
+        // if (self_map.count() != other_map.count()) return false;
+        if self_.bindings_count() != other.bindings_count() {
+            return false;
+        }
+
+        // var it = self_map.iterator();
+        // while (it.next()) |self_entry| {
+        for (self_key, self_value) in self_.iter_bindings() {
+            // If the trigger isn't in the other map, they can't be equal
+            // const other_entry = other_map.getEntry(self_entry.key_ptr.*) orelse return false;
+            let other_value = match other.get_value(*self_key) {
+                Some(v) => v,
+                None => return false,
+            };
+
+            // If the entry types are different, they can't be equal
+            // if (std.meta.activeTag(self_entry.value_ptr.*) !=
+            //     std.meta.activeTag(other_entry.value_ptr.*)) return false;
+            if std::mem::discriminant(self_value) != std::mem::discriminant(other_value) {
+                return false;
+            }
+
+            match (self_value, other_value) {
+                // They're equal if both leader sets are equal.
+                // .leader => if (!equalSet(self_entry.value_ptr.*.leader,
+                //                          other_entry.value_ptr.*.leader)) return false,
+                (Value::Leader(self_leader), Value::Leader(other_leader)) => {
+                    if !Keybinds::equal_set(self_leader, other_leader) {
+                        return false;
+                    }
+                }
+
+                // Actions are compared by field directly
+                // .leaf => { const self_leaf = ...; const other_leaf = ...;
+                //     if (!deepEqual(Set.Leaf, self_leaf, other_leaf)) return false; },
+                //
+                // PORT NOTE: `deepEqual(Set.Leaf, ...)` deep-compares both fields of
+                // the leaf (`action` and `flags`). `Action::equal` is the action
+                // deep-compare; `Flags` is a copy type compared by `==`.
+                (Value::Leaf(self_leaf), Value::Leaf(other_leaf)) => {
+                    if !(self_leaf.action.equal(&other_leaf.action)
+                        && self_leaf.flags == other_leaf.flags)
+                    {
+                        return false;
+                    }
+                }
+
+                // .leaf_chained => { ... }
+                (Value::LeafChained(self_chain), Value::LeafChained(other_chain)) => {
+                    // if (self_chain.flags != other_chain.flags) return false;
+                    if self_chain.flags != other_chain.flags {
+                        return false;
+                    }
+                    // if (self_chain.actions.items.len != other_chain.actions.items.len) return false;
+                    if self_chain.actions.len() != other_chain.actions.len() {
+                        return false;
+                    }
+                    // for (self_chain.actions.items, other_chain.actions.items) |a1, a2| {
+                    //     if (!deepEqual(Action, a1, a2)) return false; }
+                    for (a1, a2) in self_chain.actions.iter().zip(other_chain.actions.iter()) {
+                        if !a1.equal(a2) {
+                            return false;
+                        }
+                    }
+                }
+
+                // The active tags matched above, so any remaining pairing is
+                // impossible; preserved as the exhaustive match arm.
+                _ => unreachable!(),
+            }
+        }
+
+        true
     }
 
+    /// Like formatEntry but has an option to include docs.
+    // pub fn formatEntryDocs(self: Keybinds, formatter: formatterpkg.EntryFormatter, docs: bool) !void
+    //
+    // PORT NOTE: the reference threads `formatterpkg.EntryFormatter` and writes a
+    // top-level `{f}` trigger prefix into a fixed buffer before delegating to
+    // `v.formatEntries(&writer, formatter)`. The Rust `EntryFormatter` + the
+    // `Binding.Set` value's `format_entries(&mut RewindBuffer, formatter)` provide
+    // exactly these pieces; the trigger/table-name prefix is written into the
+    // shared `RewindBuffer` via the public `write_trigger_to_buffer`/`write_all`
+    // helpers. The `docs` branch's `help_strings.KeybindAction` lookup is the
+    // build-generated help artifact (a documented deferred seam, modeled by
+    // `helpgen_actions::HelpStrings`); `NoHelpStrings` reproduces the
+    // no-`@hasDecl` path exactly, which is the only path the ported tests exercise
+    // (they all call `formatEntry`, i.e. `docs = false`).
+    pub fn format_entry_docs<W: Writer>(
+        &self,
+        formatter: &mut rustty_cfg_fmt::EntryFormatter<W>,
+        docs: bool,
+    ) -> Result<(), W::Error> {
+        use rustty_input::binding::{write_trigger_to_buffer, RewindBuffer};
+        use rustty_input::helpgen_actions::{HelpStrings, NoHelpStrings};
+
+        // if (self.set.bindings.count() == 0 and self.tables.count() == 0) {
+        //     try formatter.formatEntry(void, {});
+        //     return;
+        // }
+        if self.set.bindings_count() == 0 && self.tables.count() == 0 {
+            // try formatter.formatEntry(void, {});
+            return format_entry_void(formatter.name, formatter.writer);
+        }
+
+        // var buf: [1024]u8 = undefined;
+        //
+        // PORT NOTE: the reference's fixed 1024-byte stack buffer is the growable
+        // `RewindBuffer` (its `format_entries` callers rewind via the `end` cursor).
+        let help_strings = NoHelpStrings;
+
+        // Format root set bindings
+        // var iter = self.set.bindings.iterator();
+        // while (iter.next()) |next| {
+        for (k, v) in self.set.iter_bindings() {
+            // const k = next.key_ptr.*;
+            // const v = next.value_ptr.*;
+            if docs {
+                // try formatter.writer.writeAll("\n");
+                formatter.writer.write_all(b"\n")?;
+                // const name = @tagName(v);
+                let name = v_tag_name(v);
+                // inline for (@typeInfo(help_strings.KeybindAction).@"struct".decls) |decl| {
+                //     if (std.mem.eql(u8, decl.name, name)) { ... break; } }
+                for decl_name in rustty_input::binding::Action::FIELD_NAMES {
+                    if decl_name.as_bytes() == name && help_strings.has_decl(decl_name) {
+                        // const help = @field(help_strings.KeybindAction, decl.name);
+                        let help = help_strings.field(decl_name);
+                        // try formatter.writer.writeAll("# " ++ decl.name ++ "\n");
+                        formatter.writer.write_all(b"# ")?;
+                        formatter.writer.write_all(decl_name.as_bytes())?;
+                        formatter.writer.write_all(b"\n")?;
+                        // var lines = std.mem.splitScalar(u8, help, '\n');
+                        // while (lines.next()) |line| { ... }
+                        for line in help.split(|&c| c == b'\n') {
+                            // try formatter.writer.writeAll("#   ");
+                            formatter.writer.write_all(b"#   ")?;
+                            // try formatter.writer.writeAll(line);
+                            formatter.writer.write_all(line)?;
+                            // try formatter.writer.writeAll("\n");
+                            formatter.writer.write_all(b"\n")?;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // var writer: std.Io.Writer = .fixed(&buf);
+            // writer.print("{f}", .{k}) catch return error.OutOfMemory;
+            let mut writer = RewindBuffer::new();
+            write_trigger_to_buffer(k, &mut writer).map_err(|_| ()).ok();
+            // try v.formatEntries(&writer, formatter);
+            format_entries_into(v, &mut writer, formatter)?;
+        }
+
+        // Format table bindings
+        // var table_iter = self.tables.iterator();
+        // while (table_iter.next()) |table_entry| {
+        for (table_name, table_set) in self.tables.iter() {
+            // const table_name = table_entry.key_ptr.*;
+            // const table_set = table_entry.value_ptr.*;
+
+            // var binding_iter = table_set.bindings.iterator();
+            // while (binding_iter.next()) |next| {
+            for (k, v) in table_set.iter_bindings() {
+                // const k = next.key_ptr.*;
+                // const v = next.value_ptr.*;
+
+                // var writer: std.Io.Writer = .fixed(&buf);
+                // writer.print("{s}/{f}", .{ table_name, k }) catch return error.OutOfMemory;
+                let mut writer = RewindBuffer::new();
+                writer.write_all(table_name).ok();
+                writer.write_all(b"/").ok();
+                write_trigger_to_buffer(k, &mut writer).ok();
+                // try v.formatEntries(&writer, formatter);
+                format_entries_into(v, &mut writer, formatter)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Used by Formatter
     // pub fn formatEntry(self: Keybinds, formatter: formatterpkg.EntryFormatter) !void
-    pub fn format_entry(&self) {
-        unimplemented!("Keybinds.formatEntry — deferred to the Keybinds fill sub-batch")
+    pub fn format_entry<W: Writer>(
+        &self,
+        formatter: &mut rustty_cfg_fmt::EntryFormatter<W>,
+    ) -> Result<(), W::Error> {
+        // try self.formatEntryDocs(formatter, false);
+        self.format_entry_docs(formatter, false)
+    }
+}
+
+// PORT NOTE: `@tagName(v)` where `v` is the leaf/leaf_chained `Action`. The docs
+// branch only formats single-action leaves' tag names; for leader / chained
+// entries the reference would print the (single) action tag of the value, but the
+// docs branch is only reached for non-empty sets and uses the value's tag. Here
+// we expose the action tag of a leaf value (the only kind whose `@tagName` the
+// reference's docs path meaningfully matches against `help_strings` decls).
+fn v_tag_name(v: &rustty_input::binding::Value) -> &[u8] {
+    use rustty_input::binding::Value;
+    match v {
+        Value::Leaf(leaf) => leaf.action.tag_name().as_bytes(),
+        Value::LeafChained(chain) => chain
+            .actions
+            .first()
+            .map(|a| a.tag_name().as_bytes())
+            .unwrap_or(b""),
+        // A leader's value is a sub-set; it has no single action tag.
+        Value::Leader(_) => b"",
+    }
+}
+
+// PORT NOTE: adapter for `v.formatEntries(&writer, formatter)` — the reference
+// passes the fixed writer + formatter and bubbles `error.OutOfMemory`/writer
+// errors. The Rust `Value::format_entries` returns `FormatEntriesError<W::Error>`;
+// the `OutOfMemory` arm cannot occur for the growable `RewindBuffer`, so it is
+// mapped through (unreachable in practice) and the writer error is surfaced.
+fn format_entries_into<W: Writer>(
+    v: &rustty_input::binding::Value,
+    buffer: &mut rustty_input::binding::RewindBuffer,
+    formatter: &mut rustty_cfg_fmt::EntryFormatter<W>,
+) -> Result<(), W::Error> {
+    use rustty_input::binding::FormatEntriesError;
+    match v.format_entries(buffer, formatter) {
+        Ok(()) => Ok(()),
+        Err(FormatEntriesError::Writer(e)) => Err(e),
+        // The growable RewindBuffer never overflows, so OutOfMemory is unreachable.
+        Err(FormatEntriesError::OutOfMemory) => unreachable!(
+            "RewindBuffer is growable; the reference's fixed-buffer OutOfMemory cannot occur"
+        ),
     }
 }
 
@@ -5714,5 +7566,644 @@ mod tests {
             Some(i) => &buf[..i],
             None => buf,
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Keybinds (Config.zig:6415)
+    //
+    // PORT NOTE: the reference tests use an `ArenaAllocator` threaded through
+    // `parseCLI`/`clone`. The Rust APIs are allocator-free (owned values), so the
+    // arena setup/teardown collapses to nothing; the assertions are reproduced
+    // verbatim. `formatterpkg.entryFormatter("a", &buf.writer)` -> `entry_formatter`
+    // over an `AllocatingWriter`; `buf.written()` -> `buf.written()`.
+    // -----------------------------------------------------------------------
+
+    // test "parseCLI"
+    #[test]
+    fn keybinds_parse_cli() {
+        let mut set: Keybinds = Keybinds::default();
+        // try set.parseCLI(alloc, "shift+a=copy_to_clipboard");
+        set.parse_cli(Some(b"shift+a=copy_to_clipboard")).unwrap();
+        // try set.parseCLI(alloc, "shift+a=csi:hello");
+        set.parse_cli(Some(b"shift+a=csi:hello")).unwrap();
+    }
+
+    // test "formatConfig single"
+    #[test]
+    fn keybinds_format_config_single() {
+        let mut buf = AllocatingWriter::init();
+
+        let mut list: Keybinds = Keybinds::default();
+        // try list.parseCLI(alloc, "shift+a=csi:hello");
+        list.parse_cli(Some(b"shift+a=csi:hello")).unwrap();
+        // try list.formatEntry(formatterpkg.entryFormatter("a", &buf.writer));
+        let mut f = entry_formatter(b"a", &mut buf);
+        list.format_entry(&mut f).unwrap();
+        // try std.testing.expectEqualSlices(u8, "a = shift+a=csi:hello\n", buf.written());
+        assert_eq!(b"a = shift+a=csi:hello\n".as_slice(), buf.written());
+    }
+
+    // Regression test for https://github.com/ghostty-org/ghostty/issues/2734
+    // test "formatConfig multiple items"
+    #[test]
+    fn keybinds_format_config_multiple_items() {
+        let mut buf = AllocatingWriter::init();
+
+        let mut list: Keybinds = Keybinds::default();
+        // try list.parseCLI(alloc, "ctrl+z>1=goto_tab:1");
+        list.parse_cli(Some(b"ctrl+z>1=goto_tab:1")).unwrap();
+        // try list.parseCLI(alloc, "ctrl+z>2=goto_tab:2");
+        list.parse_cli(Some(b"ctrl+z>2=goto_tab:2")).unwrap();
+        // try list.formatEntry(formatterpkg.entryFormatter("keybind", &buf.writer));
+        let mut f = entry_formatter(b"keybind", &mut buf);
+        list.format_entry(&mut f).unwrap();
+
+        // Note they turn into translated keys because they match
+        // their ASCII mapping.
+        let want = concat!(
+            "keybind = ctrl+z>1=goto_tab:1\n",
+            "keybind = ctrl+z>2=goto_tab:2\n",
+        );
+        // try std.testing.expectEqualStrings(want, buf.written());
+        assert_eq!(want.as_bytes(), buf.written());
+    }
+
+    // test "formatConfig multiple items nested"
+    #[test]
+    fn keybinds_format_config_multiple_items_nested() {
+        let mut buf = AllocatingWriter::init();
+
+        let mut list: Keybinds = Keybinds::default();
+        // try list.parseCLI(alloc, "ctrl+a>ctrl+b>n=new_window");
+        list.parse_cli(Some(b"ctrl+a>ctrl+b>n=new_window")).unwrap();
+        // try list.parseCLI(alloc, "ctrl+a>ctrl+b>w=close_window");
+        list.parse_cli(Some(b"ctrl+a>ctrl+b>w=close_window"))
+            .unwrap();
+        // try list.parseCLI(alloc, "ctrl+a>ctrl+c>t=new_tab");
+        list.parse_cli(Some(b"ctrl+a>ctrl+c>t=new_tab")).unwrap();
+        // try list.parseCLI(alloc, "ctrl+b>ctrl+d>a=previous_tab");
+        list.parse_cli(Some(b"ctrl+b>ctrl+d>a=previous_tab"))
+            .unwrap();
+        // try list.formatEntry(formatterpkg.entryFormatter("a", &buf.writer));
+        let mut f = entry_formatter(b"a", &mut buf);
+        list.format_entry(&mut f).unwrap();
+
+        // NB: This does not currently retain the order of the keybinds.
+        let want = concat!(
+            "a = ctrl+a>ctrl+b>n=new_window\n",
+            "a = ctrl+a>ctrl+b>w=close_window\n",
+            "a = ctrl+a>ctrl+c>t=new_tab\n",
+            "a = ctrl+b>ctrl+d>a=previous_tab\n",
+        );
+        // try std.testing.expectEqualStrings(want, buf.written());
+        assert_eq!(want.as_bytes(), buf.written());
+    }
+
+    // test "parseCLI table definition"
+    #[test]
+    fn keybinds_parse_cli_table_definition() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        // Define a table by adding a binding to it
+        // try keybinds.parseCLI(alloc, "foo/shift+a=copy_to_clipboard");
+        keybinds
+            .parse_cli(Some(b"foo/shift+a=copy_to_clipboard"))
+            .unwrap();
+        // try testing.expectEqual(1, keybinds.tables.count());
+        assert_eq!(1, keybinds.tables.count());
+        // try testing.expect(keybinds.tables.contains("foo"));
+        assert!(keybinds.tables.contains(&b"foo".to_vec()));
+
+        // const table = keybinds.tables.get("foo").?;
+        let table = keybinds.tables.get(&b"foo".to_vec()).unwrap();
+        // try testing.expectEqual(1, table.bindings.count());
+        assert_eq!(1, table.bindings_count());
+    }
+
+    // test "parseCLI table clear"
+    #[test]
+    fn keybinds_parse_cli_table_clear() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        // Add a binding to a table
+        keybinds
+            .parse_cli(Some(b"foo/shift+a=copy_to_clipboard"))
+            .unwrap();
+        // try testing.expectEqual(1, keybinds.tables.get("foo").?.bindings.count());
+        assert_eq!(
+            1,
+            keybinds
+                .tables
+                .get(&b"foo".to_vec())
+                .unwrap()
+                .bindings_count()
+        );
+
+        // Clear the table with "foo/"
+        keybinds.parse_cli(Some(b"foo/")).unwrap();
+        // try testing.expectEqual(0, keybinds.tables.get("foo").?.bindings.count());
+        assert_eq!(
+            0,
+            keybinds
+                .tables
+                .get(&b"foo".to_vec())
+                .unwrap()
+                .bindings_count()
+        );
+    }
+
+    // test "parseCLI table multiple bindings"
+    #[test]
+    fn keybinds_parse_cli_table_multiple_bindings() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        keybinds
+            .parse_cli(Some(b"foo/shift+a=copy_to_clipboard"))
+            .unwrap();
+        keybinds
+            .parse_cli(Some(b"foo/shift+b=paste_from_clipboard"))
+            .unwrap();
+        keybinds
+            .parse_cli(Some(b"bar/ctrl+c=close_window"))
+            .unwrap();
+
+        // try testing.expectEqual(2, keybinds.tables.count());
+        assert_eq!(2, keybinds.tables.count());
+        // try testing.expectEqual(2, keybinds.tables.get("foo").?.bindings.count());
+        assert_eq!(
+            2,
+            keybinds
+                .tables
+                .get(&b"foo".to_vec())
+                .unwrap()
+                .bindings_count()
+        );
+        // try testing.expectEqual(1, keybinds.tables.get("bar").?.bindings.count());
+        assert_eq!(
+            1,
+            keybinds
+                .tables
+                .get(&b"bar".to_vec())
+                .unwrap()
+                .bindings_count()
+        );
+    }
+
+    // test "parseCLI table does not affect root set"
+    #[test]
+    fn keybinds_parse_cli_table_does_not_affect_root_set() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        keybinds
+            .parse_cli(Some(b"shift+a=copy_to_clipboard"))
+            .unwrap();
+        keybinds
+            .parse_cli(Some(b"foo/shift+b=paste_from_clipboard"))
+            .unwrap();
+
+        // Root set should have the first binding
+        // try testing.expectEqual(1, keybinds.set.bindings.count());
+        assert_eq!(1, keybinds.set.bindings_count());
+        // Table should have the second binding
+        // try testing.expectEqual(1, keybinds.tables.get("foo").?.bindings.count());
+        assert_eq!(
+            1,
+            keybinds
+                .tables
+                .get(&b"foo".to_vec())
+                .unwrap()
+                .bindings_count()
+        );
+    }
+
+    // test "parseCLI table empty name is invalid"
+    #[test]
+    fn keybinds_parse_cli_table_empty_name_is_invalid() {
+        let mut keybinds: Keybinds = Keybinds::default();
+        // try testing.expectError(error.InvalidFormat, keybinds.parseCLI(alloc, "/shift+a=copy_to_clipboard"));
+        assert_eq!(
+            Err(KeybindsParseError::InvalidFormat),
+            keybinds.parse_cli(Some(b"/shift+a=copy_to_clipboard")),
+        );
+    }
+
+    // test "parseCLI table with key sequence"
+    #[test]
+    fn keybinds_parse_cli_table_with_key_sequence() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        // Key sequences should work within tables
+        keybinds
+            .parse_cli(Some(b"foo/ctrl+a>ctrl+b=new_window"))
+            .unwrap();
+
+        // const table = keybinds.tables.get("foo").?;
+        let table = keybinds.tables.get(&b"foo".to_vec()).unwrap();
+        // try testing.expectEqual(1, table.bindings.count());
+        assert_eq!(1, table.bindings_count());
+    }
+
+    // test "parseCLI slash in action argument is not a table"
+    #[test]
+    fn keybinds_parse_cli_slash_in_action_argument_is_not_a_table() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        // A slash after the = should not be interpreted as a table delimiter
+        keybinds.parse_cli(Some(b"ctrl+a=text:/hello")).unwrap();
+
+        // Should be in root set, not a table
+        assert_eq!(1, keybinds.set.bindings_count());
+        assert_eq!(0, keybinds.tables.count());
+    }
+
+    // test "parseCLI slash as key with modifier is not a table"
+    #[test]
+    fn keybinds_parse_cli_slash_as_key_with_modifier_is_not_a_table() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        // ctrl+/ should be parsed as a keybind with '/' as the key, not a table
+        keybinds.parse_cli(Some(b"ctrl+/=text:foo")).unwrap();
+
+        // Should be in root set, not a table
+        assert_eq!(1, keybinds.set.bindings_count());
+        assert_eq!(0, keybinds.tables.count());
+    }
+
+    // test "parseCLI shift+slash as key is not a table"
+    #[test]
+    fn keybinds_parse_cli_shift_slash_as_key_is_not_a_table() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        // shift+/ should be parsed as a keybind, not a table
+        keybinds.parse_cli(Some(b"shift+/=ignore")).unwrap();
+
+        // Should be in root set, not a table
+        assert_eq!(1, keybinds.set.bindings_count());
+        assert_eq!(0, keybinds.tables.count());
+    }
+
+    // test "parseCLI bare slash as key is not a table"
+    #[test]
+    fn keybinds_parse_cli_bare_slash_as_key_is_not_a_table() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        // Bare / as a key should work (empty table name is rejected)
+        keybinds.parse_cli(Some(b"/=text:foo")).unwrap();
+
+        // Should be in root set, not a table
+        assert_eq!(1, keybinds.set.bindings_count());
+        assert_eq!(0, keybinds.tables.count());
+    }
+
+    // test "parseCLI slash in key sequence is not a table"
+    #[test]
+    fn keybinds_parse_cli_slash_in_key_sequence_is_not_a_table() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        // Key sequence ending with / should work
+        keybinds
+            .parse_cli(Some(b"ctrl+a>ctrl+/=new_window"))
+            .unwrap();
+
+        // Should be in root set, not a table
+        assert_eq!(1, keybinds.set.bindings_count());
+        assert_eq!(0, keybinds.tables.count());
+    }
+
+    // test "parseCLI table with slash in binding"
+    #[test]
+    fn keybinds_parse_cli_table_with_slash_in_binding() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        // Table with a binding that uses / as the key
+        keybinds.parse_cli(Some(b"mytable//=text:foo")).unwrap();
+
+        // Should be in the table
+        assert_eq!(0, keybinds.set.bindings_count());
+        assert_eq!(1, keybinds.tables.count());
+        assert!(keybinds.tables.contains(&b"mytable".to_vec()));
+        assert_eq!(
+            1,
+            keybinds
+                .tables
+                .get(&b"mytable".to_vec())
+                .unwrap()
+                .bindings_count()
+        );
+    }
+
+    // test "parseCLI table with sequence containing slash"
+    #[test]
+    fn keybinds_parse_cli_table_with_sequence_containing_slash() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        // Table with a key sequence that ends with /
+        keybinds.parse_cli(Some(b"mytable/a>/=new_window")).unwrap();
+
+        // Should be in the table
+        assert_eq!(0, keybinds.set.bindings_count());
+        assert_eq!(1, keybinds.tables.count());
+        assert!(keybinds.tables.contains(&b"mytable".to_vec()));
+    }
+
+    // test "parseCLI chain without prior parsed binding is invalid"
+    #[test]
+    fn keybinds_parse_cli_chain_without_prior_parsed_binding_is_invalid() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        assert_eq!(
+            Err(KeybindsParseError::InvalidFormat),
+            keybinds.parse_cli(Some(b"chain=new_tab")),
+        );
+    }
+
+    // test "parseCLI table chain syntax is invalid"
+    #[test]
+    fn keybinds_parse_cli_table_chain_syntax_is_invalid() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        keybinds.parse_cli(Some(b"foo/a=text:hello")).unwrap();
+        assert_eq!(
+            Err(KeybindsParseError::InvalidFormat),
+            keybinds.parse_cli(Some(b"foo/chain=deactivate_key_table")),
+        );
+    }
+
+    // test "parseCLI chain applies to most recent table binding"
+    #[test]
+    fn keybinds_parse_cli_chain_applies_to_most_recent_table_binding() {
+        use rustty_input::binding::{Action, Trigger, TriggerKey, Value};
+        use rustty_vt::input::key_mods::Mods;
+
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        keybinds
+            .parse_cli(Some(b"ctrl+n=activate_key_table:foo"))
+            .unwrap();
+        keybinds.parse_cli(Some(b"foo/a=text:hello")).unwrap();
+        keybinds
+            .parse_cli(Some(b"chain=deactivate_key_table"))
+            .unwrap();
+
+        // const root_entry = keybinds.set.get(.{ .mods = .{ .ctrl = true },
+        //     .key = .{ .unicode = 'n' } }).?.value_ptr.*;
+        let root_entry = keybinds
+            .set
+            .get_value(Trigger {
+                mods: Mods {
+                    ctrl: true,
+                    ..Mods::default()
+                },
+                key: TriggerKey::Unicode('n' as u32),
+            })
+            .unwrap();
+        // try testing.expect(root_entry == .leaf);
+        // try testing.expect(root_entry.leaf.action == .activate_key_table);
+        match root_entry {
+            Value::Leaf(leaf) => {
+                assert!(matches!(leaf.action, Action::ActivateKeyTable(_)));
+            }
+            _ => panic!("expected leaf"),
+        }
+
+        // const foo_entry = keybinds.tables.get("foo").?.get(.{
+        //     .key = .{ .unicode = 'a' } }).?.value_ptr.*;
+        let foo_entry = keybinds
+            .tables
+            .get(&b"foo".to_vec())
+            .unwrap()
+            .get_value(Trigger {
+                key: TriggerKey::Unicode('a' as u32),
+                ..Trigger::default()
+            })
+            .unwrap();
+        // try testing.expect(foo_entry == .leaf_chained);
+        match foo_entry {
+            Value::LeafChained(chain) => {
+                // try testing.expectEqual(@as(usize, 2), foo_entry.leaf_chained.actions.items.len);
+                assert_eq!(2usize, chain.actions.len());
+                // try testing.expect(foo_entry.leaf_chained.actions.items[0] == .text);
+                assert!(matches!(chain.actions[0], Action::Text(_)));
+                // try testing.expect(foo_entry.leaf_chained.actions.items[1] == .deactivate_key_table);
+                assert!(matches!(chain.actions[1], Action::DeactivateKeyTable));
+            }
+            _ => panic!("expected leaf_chained"),
+        }
+    }
+
+    // test "clone with tables"
+    #[test]
+    fn keybinds_clone_with_tables() {
+        let mut keybinds: Keybinds = Keybinds::default();
+        keybinds
+            .parse_cli(Some(b"shift+a=copy_to_clipboard"))
+            .unwrap();
+        keybinds
+            .parse_cli(Some(b"foo/shift+b=paste_from_clipboard"))
+            .unwrap();
+        keybinds
+            .parse_cli(Some(b"bar/ctrl+c=close_window"))
+            .unwrap();
+
+        // const cloned = try keybinds.clone(alloc);
+        let cloned = keybinds.clone_in();
+
+        // Verify the clone has the same structure
+        // try testing.expectEqual(keybinds.set.bindings.count(), cloned.set.bindings.count());
+        assert_eq!(keybinds.set.bindings_count(), cloned.set.bindings_count());
+        // try testing.expectEqual(keybinds.tables.count(), cloned.tables.count());
+        assert_eq!(keybinds.tables.count(), cloned.tables.count());
+        // try testing.expectEqual(keybinds.tables.get("foo").?.bindings.count(),
+        //     cloned.tables.get("foo").?.bindings.count());
+        assert_eq!(
+            keybinds
+                .tables
+                .get(&b"foo".to_vec())
+                .unwrap()
+                .bindings_count(),
+            cloned
+                .tables
+                .get(&b"foo".to_vec())
+                .unwrap()
+                .bindings_count(),
+        );
+        // try testing.expectEqual(keybinds.tables.get("bar").?.bindings.count(),
+        //     cloned.tables.get("bar").?.bindings.count());
+        assert_eq!(
+            keybinds
+                .tables
+                .get(&b"bar".to_vec())
+                .unwrap()
+                .bindings_count(),
+            cloned
+                .tables
+                .get(&b"bar".to_vec())
+                .unwrap()
+                .bindings_count(),
+        );
+    }
+
+    // test "equal with tables"
+    #[test]
+    fn keybinds_equal_with_tables() {
+        let mut keybinds1: Keybinds = Keybinds::default();
+        keybinds1
+            .parse_cli(Some(b"foo/shift+a=copy_to_clipboard"))
+            .unwrap();
+
+        let mut keybinds2: Keybinds = Keybinds::default();
+        keybinds2
+            .parse_cli(Some(b"foo/shift+a=copy_to_clipboard"))
+            .unwrap();
+
+        // try testing.expect(keybinds1.equal(keybinds2));
+        assert!(keybinds1.equal(&keybinds2));
+    }
+
+    // test "equal with tables different table count"
+    #[test]
+    fn keybinds_equal_with_tables_different_table_count() {
+        let mut keybinds1: Keybinds = Keybinds::default();
+        keybinds1
+            .parse_cli(Some(b"foo/shift+a=copy_to_clipboard"))
+            .unwrap();
+
+        let mut keybinds2: Keybinds = Keybinds::default();
+        keybinds2
+            .parse_cli(Some(b"foo/shift+a=copy_to_clipboard"))
+            .unwrap();
+        keybinds2
+            .parse_cli(Some(b"bar/shift+b=paste_from_clipboard"))
+            .unwrap();
+
+        // try testing.expect(!keybinds1.equal(keybinds2));
+        assert!(!keybinds1.equal(&keybinds2));
+    }
+
+    // test "equal with tables different table names"
+    #[test]
+    fn keybinds_equal_with_tables_different_table_names() {
+        let mut keybinds1: Keybinds = Keybinds::default();
+        keybinds1
+            .parse_cli(Some(b"foo/shift+a=copy_to_clipboard"))
+            .unwrap();
+
+        let mut keybinds2: Keybinds = Keybinds::default();
+        keybinds2
+            .parse_cli(Some(b"bar/shift+a=copy_to_clipboard"))
+            .unwrap();
+
+        // try testing.expect(!keybinds1.equal(keybinds2));
+        assert!(!keybinds1.equal(&keybinds2));
+    }
+
+    // test "equal with tables different bindings"
+    #[test]
+    fn keybinds_equal_with_tables_different_bindings() {
+        let mut keybinds1: Keybinds = Keybinds::default();
+        keybinds1
+            .parse_cli(Some(b"foo/shift+a=copy_to_clipboard"))
+            .unwrap();
+
+        let mut keybinds2: Keybinds = Keybinds::default();
+        keybinds2
+            .parse_cli(Some(b"foo/shift+b=paste_from_clipboard"))
+            .unwrap();
+
+        // try testing.expect(!keybinds1.equal(keybinds2));
+        assert!(!keybinds1.equal(&keybinds2));
+    }
+
+    // test "formatEntry with tables"
+    #[test]
+    fn keybinds_format_entry_with_tables() {
+        let mut buf = AllocatingWriter::init();
+
+        let mut keybinds: Keybinds = Keybinds::default();
+        keybinds.parse_cli(Some(b"foo/shift+a=csi:hello")).unwrap();
+        let mut f = entry_formatter(b"keybind", &mut buf);
+        keybinds.format_entry(&mut f).unwrap();
+
+        // try testing.expectEqualStrings("keybind = foo/shift+a=csi:hello\n", buf.written());
+        assert_eq!(
+            b"keybind = foo/shift+a=csi:hello\n".as_slice(),
+            buf.written()
+        );
+    }
+
+    // test "formatEntry with tables and root set"
+    #[test]
+    fn keybinds_format_entry_with_tables_and_root_set() {
+        let mut buf = AllocatingWriter::init();
+
+        let mut keybinds: Keybinds = Keybinds::default();
+        keybinds.parse_cli(Some(b"shift+b=csi:world")).unwrap();
+        keybinds.parse_cli(Some(b"foo/shift+a=csi:hello")).unwrap();
+        let mut f = entry_formatter(b"keybind", &mut buf);
+        keybinds.format_entry(&mut f).unwrap();
+
+        // const output = buf.written();
+        let output = buf.written();
+        // try testing.expect(std.mem.indexOf(u8, output, "keybind = shift+b=csi:world\n") != null);
+        assert!(find_sub(output, b"keybind = shift+b=csi:world\n").is_some());
+        // try testing.expect(std.mem.indexOf(u8, output, "keybind = foo/shift+a=csi:hello\n") != null);
+        assert!(find_sub(output, b"keybind = foo/shift+a=csi:hello\n").is_some());
+    }
+
+    // test "parseCLI clear clears tables"
+    #[test]
+    fn keybinds_parse_cli_clear_clears_tables() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        // Add bindings to root set and tables
+        keybinds
+            .parse_cli(Some(b"shift+a=copy_to_clipboard"))
+            .unwrap();
+        keybinds
+            .parse_cli(Some(b"foo/shift+b=paste_from_clipboard"))
+            .unwrap();
+        keybinds
+            .parse_cli(Some(b"bar/ctrl+c=close_window"))
+            .unwrap();
+
+        assert_eq!(1, keybinds.set.bindings_count());
+        assert_eq!(2, keybinds.tables.count());
+
+        // Clear all keybinds
+        keybinds.parse_cli(Some(b"clear")).unwrap();
+
+        // Both root set and tables should be cleared
+        assert_eq!(0, keybinds.set.bindings_count());
+        assert_eq!(0, keybinds.tables.count());
+    }
+
+    // test "parseCLI reset clears tables"
+    #[test]
+    fn keybinds_parse_cli_reset_clears_tables() {
+        let mut keybinds: Keybinds = Keybinds::default();
+
+        // Add bindings to tables
+        keybinds
+            .parse_cli(Some(b"foo/shift+a=copy_to_clipboard"))
+            .unwrap();
+        keybinds
+            .parse_cli(Some(b"bar/shift+b=paste_from_clipboard"))
+            .unwrap();
+
+        assert_eq!(2, keybinds.tables.count());
+
+        // Reset to defaults (empty value)
+        keybinds.parse_cli(Some(b"")).unwrap();
+
+        // Tables should be cleared, root set has defaults
+        assert_eq!(0, keybinds.tables.count());
+        // try testing.expect(keybinds.set.bindings.count() > 0);
+        assert!(keybinds.set.bindings_count() > 0);
+    }
+
+    // PORT NOTE: `std.mem.indexOf(u8, haystack, needle)` — first index of `needle`
+    // in `haystack` (or `null`).
+    fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack.windows(needle.len()).position(|w| w == needle)
     }
 }
