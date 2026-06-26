@@ -2791,15 +2791,14 @@ pub struct RepeatableCommandC {
     pub len: usize,
 }
 
-// PORT NOTE (DEFERRED SEAM, R4): `RepeatableCommand.parseCLI` calls
+// PORT NOTE (R4 SEAM, RESOLVED): `RepeatableCommand.parseCLI` calls
 // `cli.args.parseAutoStruct(inputpkg.Command, ...)`, i.e. it needs the *external*
 // `rustty_input::command::Command` type to implement the `rustty_args::AutoStruct`
 // trait. Both types are foreign to this crate, so the orphan rule forbids the impl
-// here; it belongs in rustty-input (alongside `Command`). `init`/`cval` likewise
-// consume `inputpkg.command.defaults`/`defaultsC` + `Command.cval(alloc)`. These
-// command-coupled bodies are deferred until that `Command: AutoStruct` impl lands;
-// `clone`/`equal` (which only use `Command.clone`/`Command.equal`, both ported)
-// are filled. Deferrals are clearly surfaced (NOT stubs-to-pass).
+// here; it lives in rustty-input (alongside `Command`, in command.rs). With that
+// impl landed, `init`/`parseCLI`/`formatEntry` are filled here: they consume
+// `inputpkg.command.defaults`/`defaultsC`, `Command.cval`, and `Command.format`
+// (all ported). `clone`/`equal`/`cval` were already filled.
 impl RepeatableCommand {
     // pub fn cval(self: *const Self) C
     pub fn cval(&self) -> RepeatableCommandC {
@@ -2811,17 +2810,79 @@ impl RepeatableCommand {
     }
 
     // pub fn init(self: *Self, alloc: Allocator) !void
+    //
+    // PORT NOTE: the reference `!void` return is the `Allocator.Error` (OOM) from
+    // the two `appendSlice`s; the Rust port aborts on allocation failure (no
+    // recoverable OOM), so `init` is infallible here. `errdefer { deinit; deinit }`
+    // has no analog (owned `Vec`s free on drop).
     pub fn init(&mut self) {
-        unimplemented!(
-            "RepeatableCommand.init — deferred until Command: AutoStruct lands in rustty-input"
-        )
+        // self.value = .empty;
+        // self.value_c = .empty;
+        self.value = Vec::new();
+        self.value_c = Vec::new();
+        // try self.value.appendSlice(alloc, inputpkg.command.defaults);
+        self.value
+            .extend_from_slice(&rustty_input::command::defaults());
+        // try self.value_c.appendSlice(alloc, inputpkg.command.defaultsC);
+        self.value_c
+            .extend_from_slice(&rustty_input::command::defaults_c());
     }
 
     // pub fn parseCLI(self: *Self, alloc: Allocator, input_: ?[]const u8) !void
-    pub fn parse_cli(&mut self, _input: Option<&[u8]>) -> Result<(), ParseError> {
-        unimplemented!(
-            "RepeatableCommand.parseCLI — deferred until Command: AutoStruct lands in rustty-input"
-        )
+    pub fn parse_cli(&mut self, input_: Option<&[u8]>) -> Result<(), ParseError> {
+        // Unset or empty input clears the list
+        // const input = input_ orelse "";
+        let input = input_.unwrap_or(b"");
+        // if (input.len == 0) {
+        if input.is_empty() {
+            // log.info("config has 'command-palette-entry =', using default entries", .{});
+            // try self.init(alloc);
+            self.init();
+            // return;
+            return Ok(());
+        }
+
+        // if (std.mem.eql(u8, input, "clear")) {
+        if input == b"clear" {
+            // log.info("config has 'command-palette-entry = clear', all command entries cleared", .{});
+            // self.value.clearRetainingCapacity();
+            self.value.clear();
+            // self.value_c.clearRetainingCapacity();
+            self.value_c.clear();
+            // return;
+            return Ok(());
+        }
+
+        // Reserve space in our lists
+        // try self.value.ensureUnusedCapacity(alloc, 1);
+        self.value.reserve(1);
+        // try self.value_c.ensureUnusedCapacity(alloc, 1);
+        self.value_c.reserve(1);
+
+        // const cmd = try cli.args.parseAutoStruct(inputpkg.Command, alloc, input, null);
+        //
+        // PORT NOTE: `parseAutoStruct(Command, ...)` is `parse_auto_struct` over the
+        // `AutoStruct for Command` impl (in rustty-input). The result is built into a
+        // fresh `Command`; `parse_auto_struct` fills set fields, applies the
+        // `description = ""` default, and errors on an unset required field.
+        let mut cmd = rustty_input::command::Command {
+            action: rustty_input::binding::Action::Ignore,
+            title: Vec::new(),
+            description: Vec::new(),
+        };
+        parse_auto_struct(&mut cmd, input)?;
+        // const cmd_c = try cmd.cval(alloc);
+        //
+        // PORT NOTE: `cmd.cval(alloc)` is `!C` (the OOM path); the Rust `cval`
+        // returns `Result<C, ()>` carrying that fallible signature. `catch return
+        // error.OutOfMemory` -> map the unit error into the parse error set.
+        let cmd_c = cmd.cval().map_err(|()| Error::InvalidValue)?;
+        // self.value.appendAssumeCapacity(cmd);
+        self.value.push(cmd);
+        // self.value_c.appendAssumeCapacity(cmd_c);
+        self.value_c.push(cmd_c);
+
+        Ok(())
     }
 
     /// Deep copy of the struct. Required by Config.
@@ -2854,10 +2915,62 @@ impl RepeatableCommand {
     }
 
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void
-    pub fn format_entry(&self) {
-        unimplemented!(
-            "RepeatableCommand.formatEntry — deferred until Command: AutoStruct lands in rustty-input"
-        )
+    //
+    // PORT NOTE: the reference builds each entry's bytes into a 4096-byte fixed
+    // buffer (`std.Io.Writer.fixed`), then hands `writer.buffered()` to
+    // `formatter.formatEntry([]const u8, ...)`. The Rust port accumulates each
+    // entry into an owned `Vec<u8>` (no fixed cap; the observable bytes are
+    // identical) and emits it via `format_entry_string`. `std.zig.fmtString` ->
+    // `zig_string_escape`; `{f}` on the action -> `Command.action.format`.
+    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        // if (self.value.items.len == 0) {
+        if self.value.is_empty() {
+            // try formatter.formatEntry(void, {});
+            // return;
+            return format_entry_void(name, writer);
+        }
+
+        // for (self.value.items) |item| {
+        for item in self.value.iter() {
+            // var buf: [4096]u8 = undefined;
+            // var writer: std.Io.Writer = .fixed(&buf);
+            let mut buf: Vec<u8> = Vec::new();
+
+            // writer.print("title:\"{f}\"", .{std.zig.fmtString(item.title)}) catch return error.OutOfMemory;
+            buf.extend_from_slice(b"title:\"");
+            rustty_args::args::zig_string_escape(&mut buf, &item.title);
+            buf.push(b'"');
+
+            // if (item.description.len > 0) {
+            if !item.description.is_empty() {
+                // writer.print(",description:\"{f}\"", .{std.zig.fmtString(item.description)}) catch return error.OutOfMemory;
+                buf.extend_from_slice(b",description:\"");
+                rustty_args::args::zig_string_escape(&mut buf, &item.description);
+                buf.push(b'"');
+            }
+
+            // writer.print(",action:\"{f}\"", .{item.action}) catch return error.OutOfMemory;
+            buf.extend_from_slice(b",action:\"");
+            // PORT NOTE: `{f}` on the action -> `Action::format` into a buffer; it is
+            // Infallible (never errors), matching the reference's never-failing path.
+            {
+                let mut action_buf = rustty_cfg_fmt::AllocatingWriter::init();
+                let _ = item.action.format(&mut action_buf);
+                buf.extend_from_slice(action_buf.written());
+            }
+            buf.push(b'"');
+
+            // try formatter.formatEntry([]const u8, writer.buffered());
+            format_entry_string(name, &buf, writer)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl FormatEntry for RepeatableCommand {
+    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        RepeatableCommand::format_entry(self, name, writer)
     }
 }
 
@@ -3867,9 +3980,10 @@ impl FormatEntry for WindowPadding {
 // inside each value type's struct; here they are collected in one module and
 // named with the reference test's slug, prefixed by the type, to disambiguate.
 //
-// DEFERRED (not ported in this sub-batch): the `Keybinds`,
-// `RepeatableCodepointMap`, and `RepeatableCommand` value-type tests, whose
-// impls are deferred DI/infra seams (see the PORT NOTEs on those types).
+// DEFERRED (not ported in this sub-batch): the `Keybinds` and
+// `RepeatableCodepointMap` value-type tests, whose impls are deferred DI/infra
+// seams (see the PORT NOTEs on those types). `RepeatableCommand`'s tests ARE
+// ported below (the `Command: AutoStruct` seam is now resolved).
 // ===========================================================================
 #[cfg(test)]
 mod tests {
@@ -5359,5 +5473,246 @@ mod tests {
             Err(Error::InvalidValue),
             WindowPadding::parse_cli(Some(b"a"))
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // RepeatableCommand
+    //
+    // PORT NOTE: the reference threads an `ArenaAllocator` through `parseCLI`;
+    // the Rust port owns its data (no allocator), so the arena setup/teardown
+    // has no analog. `inputpkg.Binding.Action` -> `rustty_input::binding::Action`;
+    // `inputpkg.command.defaults` -> `rustty_input::command::defaults()`.
+    // -----------------------------------------------------------------------
+    use rustty_input::binding::Action;
+
+    // test "RepeatableCommand parseCLI"
+    // PORT NOTE: `set_font_size:3.14` is the reference test's literal input; the
+    // `3.14` expected value is the parsed result, not an approximation of PI — the
+    // `approx_constant` lint is allowed for this faithful expected value.
+    #[allow(clippy::approx_constant)]
+    #[test]
+    fn repeatable_command_parse_cli() {
+        let mut list = RepeatableCommand::default();
+        // try list.parseCLI(alloc, "title:Foo,action:ignore");
+        list.parse_cli(Some(b"title:Foo,action:ignore")).unwrap();
+        // try list.parseCLI(alloc, "title:Bar,description:bobr,action:text:ale bydle");
+        list.parse_cli(Some(b"title:Bar,description:bobr,action:text:ale bydle"))
+            .unwrap();
+        // try list.parseCLI(alloc, "title:Quux,description:boo,action:increase_font_size:2.5");
+        list.parse_cli(Some(
+            b"title:Quux,description:boo,action:increase_font_size:2.5",
+        ))
+        .unwrap();
+        // try list.parseCLI(alloc, "title:Baz,description:Raspberry Pie,action:set_font_size:3.14");
+        list.parse_cli(Some(
+            b"title:Baz,description:Raspberry Pie,action:set_font_size:3.14",
+        ))
+        .unwrap();
+
+        // try testing.expectEqual(@as(usize, 4), list.value.items.len);
+        assert_eq!(4usize, list.value.len());
+
+        // try testing.expectEqual(inputpkg.Binding.Action.ignore, list.value.items[0].action);
+        assert_eq!(Action::Ignore, list.value[0].action);
+        // try testing.expectEqualStrings("Foo", list.value.items[0].title);
+        assert_eq!(b"Foo".as_slice(), list.value[0].title.as_slice());
+
+        // try testing.expect(list.value.items[1].action == .text);
+        // try testing.expectEqualStrings("ale bydle", list.value.items[1].action.text);
+        assert_eq!(Action::Text(b"ale bydle".to_vec()), list.value[1].action);
+        // try testing.expectEqualStrings("Bar", list.value.items[1].title);
+        assert_eq!(b"Bar".as_slice(), list.value[1].title.as_slice());
+        // try testing.expectEqualStrings("bobr", list.value.items[1].description);
+        assert_eq!(b"bobr".as_slice(), list.value[1].description.as_slice());
+
+        // try testing.expectEqual(inputpkg.Binding.Action{ .increase_font_size = 2.5 }, list.value.items[2].action);
+        assert_eq!(Action::IncreaseFontSize(2.5), list.value[2].action);
+        // try testing.expectEqualStrings("Quux", list.value.items[2].title);
+        assert_eq!(b"Quux".as_slice(), list.value[2].title.as_slice());
+        // try testing.expectEqualStrings("boo", list.value.items[2].description);
+        assert_eq!(b"boo".as_slice(), list.value[2].description.as_slice());
+
+        // try testing.expectEqual(inputpkg.Binding.Action{ .set_font_size = 3.14 }, list.value.items[3].action);
+        assert_eq!(Action::SetFontSize(3.14), list.value[3].action);
+        // try testing.expectEqualStrings("Baz", list.value.items[3].title);
+        assert_eq!(b"Baz".as_slice(), list.value[3].title.as_slice());
+        // try testing.expectEqualStrings("Raspberry Pie", list.value.items[3].description);
+        assert_eq!(
+            b"Raspberry Pie".as_slice(),
+            list.value[3].description.as_slice()
+        );
+
+        // try list.parseCLI(alloc, "clear");
+        list.parse_cli(Some(b"clear")).unwrap();
+        // try testing.expectEqual(@as(usize, 0), list.value.items.len);
+        assert_eq!(0usize, list.value.len());
+
+        // try list.parseCLI(alloc, "");
+        list.parse_cli(Some(b"")).unwrap();
+        // try testing.expectEqual(inputpkg.command.defaults.len, list.value.items.len);
+        assert_eq!(rustty_input::command::defaults().len(), list.value.len());
+    }
+
+    // test "RepeatableCommand formatConfig empty"
+    #[test]
+    fn repeatable_command_format_config_empty() {
+        let mut buf = AllocatingWriter::init();
+        let list = RepeatableCommand::default();
+        // try list.formatEntry(formatterpkg.entryFormatter("a", &buf.writer));
+        list.format_entry(b"a", &mut buf).unwrap();
+        // try std.testing.expectEqualSlices(u8, "a = \n", buf.written());
+        assert_eq!(b"a = \n".as_slice(), buf.written());
+    }
+
+    // test "RepeatableCommand formatConfig single item"
+    #[test]
+    fn repeatable_command_format_config_single_item() {
+        let mut buf = AllocatingWriter::init();
+        let mut list = RepeatableCommand::default();
+        // try list.parseCLI(alloc, "title:Bobr, action:text:Bober");
+        list.parse_cli(Some(b"title:Bobr, action:text:Bober"))
+            .unwrap();
+        list.format_entry(b"a", &mut buf).unwrap();
+        // try std.testing.expectEqualSlices(u8, "a = title:\"Bobr\",action:\"text:Bober\"\n", buf.written());
+        assert_eq!(
+            b"a = title:\"Bobr\",action:\"text:Bober\"\n".as_slice(),
+            buf.written()
+        );
+    }
+
+    // test "RepeatableCommand formatConfig multiple items"
+    #[test]
+    fn repeatable_command_format_config_multiple_items() {
+        let mut buf = AllocatingWriter::init();
+        let mut list = RepeatableCommand::default();
+        // try list.parseCLI(alloc, "title:Bobr, action:text:kurwa");
+        list.parse_cli(Some(b"title:Bobr, action:text:kurwa"))
+            .unwrap();
+        // try list.parseCLI(alloc, "title:Ja,   description: pierdole,  action:text:jakie bydle");
+        list.parse_cli(Some(
+            b"title:Ja,   description: pierdole,  action:text:jakie bydle",
+        ))
+        .unwrap();
+        list.format_entry(b"a", &mut buf).unwrap();
+        // try std.testing.expectEqualSlices(u8, "a = title:\"Bobr\",action:\"text:kurwa\"\na = title:\"Ja\",description:\"pierdole\",action:\"text:jakie bydle\"\n", buf.written());
+        assert_eq!(
+            b"a = title:\"Bobr\",action:\"text:kurwa\"\na = title:\"Ja\",description:\"pierdole\",action:\"text:jakie bydle\"\n".as_slice(),
+            buf.written()
+        );
+    }
+
+    // test "RepeatableCommand parseCLI commas"
+    #[test]
+    fn repeatable_command_parse_cli_commas() {
+        {
+            let mut list = RepeatableCommand::default();
+            // try list.parseCLI(alloc, "title:\"Bo,br\",action:\"text:kur,wa\"");
+            list.parse_cli(Some(b"title:\"Bo,br\",action:\"text:kur,wa\""))
+                .unwrap();
+            // try testing.expectEqual(@as(usize, 1), list.value.items.len);
+            assert_eq!(1usize, list.value.len());
+
+            // const item = list.value.items[0];
+            let item = &list.value[0];
+            // try testing.expectEqualStrings("Bo,br", item.title);
+            assert_eq!(b"Bo,br".as_slice(), item.title.as_slice());
+            // try testing.expectEqualStrings("", item.description);
+            assert_eq!(b"".as_slice(), item.description.as_slice());
+            // try testing.expect(item.action == .text);
+            // try testing.expectEqualStrings("kur,wa", item.action.text);
+            assert_eq!(Action::Text(b"kur,wa".to_vec()), item.action);
+        }
+        {
+            let mut list = RepeatableCommand::default();
+            // try list.parseCLI(alloc, "title:\"Bo,br\",description:\"abc,def\",action:text:kurwa");
+            list.parse_cli(Some(
+                b"title:\"Bo,br\",description:\"abc,def\",action:text:kurwa",
+            ))
+            .unwrap();
+            // try testing.expectEqual(@as(usize, 1), list.value.items.len);
+            assert_eq!(1usize, list.value.len());
+
+            // const item = list.value.items[0];
+            let item = &list.value[0];
+            // try testing.expectEqualStrings("Bo,br", item.title);
+            assert_eq!(b"Bo,br".as_slice(), item.title.as_slice());
+            // try testing.expectEqualStrings("abc,def", item.description);
+            assert_eq!(b"abc,def".as_slice(), item.description.as_slice());
+            // try testing.expect(item.action == .text);
+            // try testing.expectEqualStrings("kurwa", item.action.text);
+            assert_eq!(Action::Text(b"kurwa".to_vec()), item.action);
+        }
+    }
+
+    // test "RepeatableCommand cval"
+    #[test]
+    fn repeatable_command_cval() {
+        let mut list = RepeatableCommand::default();
+        // try list.parseCLI(alloc, "title:Foo,action:ignore");
+        list.parse_cli(Some(b"title:Foo,action:ignore")).unwrap();
+        // try list.parseCLI(alloc, "title:Bar,description:bobr,action:text:ale bydle");
+        list.parse_cli(Some(b"title:Bar,description:bobr,action:text:ale bydle"))
+            .unwrap();
+
+        // try testing.expectEqual(@as(usize, 2), list.value.items.len);
+        assert_eq!(2usize, list.value.len());
+        // try testing.expectEqual(@as(usize, 2), list.value_c.items.len);
+        assert_eq!(2usize, list.value_c.len());
+
+        // const cv = list.cval();
+        let cv = list.cval();
+        // try testing.expectEqual(@as(usize, 2), cv.len);
+        assert_eq!(2usize, cv.len);
+
+        // PORT NOTE: `cv.commands` is `*const Command.C`; view the `len` entries as
+        // a slice. `std.mem.sliceTo(_, 0)` strips the NUL terminator the `C` fields
+        // carry — `cstr_to_slice` does the same.
+        let commands: &[rustty_input::command::C] =
+            unsafe { std::slice::from_raw_parts(cv.commands, cv.len) };
+
+        // First entry
+        // try testing.expectEqualStrings("Foo", std.mem.sliceTo(cv.commands[0].title, 0));
+        assert_eq!(b"Foo".as_slice(), slice_to_nul(&commands[0].title));
+        // try testing.expectEqualStrings("ignore", std.mem.sliceTo(cv.commands[0].action_key, 0));
+        assert_eq!(b"ignore".as_slice(), slice_to_nul(&commands[0].action_key));
+        // try testing.expectEqualStrings("ignore", std.mem.sliceTo(cv.commands[0].action, 0));
+        assert_eq!(b"ignore".as_slice(), slice_to_nul(&commands[0].action));
+
+        // Second entry
+        // try testing.expectEqualStrings("Bar", std.mem.sliceTo(cv.commands[1].title, 0));
+        assert_eq!(b"Bar".as_slice(), slice_to_nul(&commands[1].title));
+        // try testing.expectEqualStrings("bobr", std.mem.sliceTo(cv.commands[1].description, 0));
+        assert_eq!(b"bobr".as_slice(), slice_to_nul(&commands[1].description));
+        // try testing.expectEqualStrings("text", std.mem.sliceTo(cv.commands[1].action_key, 0));
+        assert_eq!(b"text".as_slice(), slice_to_nul(&commands[1].action_key));
+        // try testing.expectEqualStrings("text:ale bydle", std.mem.sliceTo(cv.commands[1].action, 0));
+        assert_eq!(
+            b"text:ale bydle".as_slice(),
+            slice_to_nul(&commands[1].action)
+        );
+    }
+
+    // test "RepeatableCommand cval cleared"
+    #[test]
+    fn repeatable_command_cval_cleared() {
+        let mut list = RepeatableCommand::default();
+        // try list.parseCLI(alloc, "title:Foo,action:ignore");
+        list.parse_cli(Some(b"title:Foo,action:ignore")).unwrap();
+        // try testing.expectEqual(@as(usize, 1), list.cval().len);
+        assert_eq!(1usize, list.cval().len);
+
+        // try list.parseCLI(alloc, "clear");
+        list.parse_cli(Some(b"clear")).unwrap();
+        // try testing.expectEqual(@as(usize, 0), list.cval().len);
+        assert_eq!(0usize, list.cval().len);
+    }
+
+    // PORT NOTE: `std.mem.sliceTo(buf, 0)` — the bytes up to (excluding) the first
+    // NUL terminator the `Command.C` fields carry.
+    fn slice_to_nul(buf: &[u8]) -> &[u8] {
+        match buf.iter().position(|&b| b == 0) {
+            Some(i) => &buf[..i],
+            None => buf,
+        }
     }
 }

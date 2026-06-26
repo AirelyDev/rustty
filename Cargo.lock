@@ -465,6 +465,7 @@ version = "0.1.0"
 name = "rustty-input"
 version = "0.1.0"
 dependencies = [
+ "rustty-args",
  "rustty-cfg-fmt",
  "rustty-datastruct",
  "rustty-render-types",

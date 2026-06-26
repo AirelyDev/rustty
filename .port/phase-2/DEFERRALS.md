@@ -280,3 +280,44 @@ scoped G3b missing=0). One test is deferred:
   `oniguruma-sys` lands. The `regex` string-assembly logic itself has no
   oniguruma dependency and is ported normally (`url::regex()` builds the
   byte-for-byte-identical pattern). **Target: when oniguruma-sys is carved.**
+
+## Config C2 seams (Config.zig value-type DI seams)
+
+The three Config.zig value-type dependency seams were resolved/scheduled as
+follows (R4 — break crate cycles with minimal glue, never weaken):
+
+- ~~**`RepeatableCommand` (Config.zig:8685) — `Command: cli.args.AutoStruct`
+  seam.**~~ **RESOLVED.** `RepeatableCommand.parseCLI` calls
+  `cli.args.parseAutoStruct(inputpkg.Command, ...)`, which needs the *external*
+  `rustty_input::command::Command` to implement `rustty_args::args::AutoStruct`.
+  Both types are foreign to `rustty-config`, so the orphan rule forces the impl
+  into `rustty-input` (alongside `Command`, in `command.rs`). That impl + the
+  `parseTaggedUnion(Action)` path it needs (a new `pub(crate)`
+  `Action::parse_auto_tagged_union` in `binding.rs`, with faithful `AutoStruct`
+  impls for the `CursorKey`/`WriteScreen`/`SplitResizeParameter` struct payloads)
+  are now ported; `rustty-input` deps `rustty-args` (acyclic — `rustty-args` has
+  no `rustty-input` dep). `RepeatableCommand.{init,parseCLI,formatEntry}` are
+  filled in `rustty-config` (consuming `command::{defaults,defaults_c}`,
+  `Command.cval`, `Command.format`); `std.zig.fmtString` was ported as
+  `rustty_args::args::zig_string_escape`. All **7 reference `RepeatableCommand`
+  `test{}` blocks** are ported assertion-for-assertion and pass (parseCLI,
+  formatConfig empty/single/multiple, parseCLI commas, cval, cval cleared).
+
+- **`RepeatableCodepointMap` (Config.zig) — font-blocked (UNRESOLVED, scheduled).**
+  `RepeatableCodepointMap` wraps `fontpkg.CodepointMap` (`font/CodepointMap.zig`),
+  which is **not yet ported** in `rustty-font` (modeled here as the `CodepointMap`
+  unit-struct placeholder). Its `parseCLI`/`clone`/`equal`/`formatEntry` all
+  operate on that font map's `add`/`list`/`descriptor` API, so the font-map-coupled
+  bodies stay `unimplemented!()` (clearly surfaced, NOT a stub-to-pass) with a
+  verbatim PORT NOTE. The shared `UnicodeRangeParser` IS ported (module-scope,
+  consumed by `RepeatableClipboardCodepointMap`). Its `parseCLI` `test{}` blocks
+  are likewise deferred. **Target: when `font/CodepointMap.zig` lands in
+  rustty-font.** (Analogous to the apc font-block pattern.)
+
+- **`theme.zig` `.resources` arm — `internal_os.ResourcesDir`: dependency is REAL.**
+  Confirmed for the Machinery phase: `rustty_os::{resourcesDir, ResourcesDir}`
+  (`crates/rustty-os/src/resourcesdir.rs`) is a fully-ported, real implementation
+  (env-var `RUSTTY_RESOURCES_DIR` lookup + exe-dir sentinel climb across
+  macOS/Linux/BSD + the debug/release ordering), NOT a stub. So when `theme.zig`
+  is ported in the Machinery phase, its `.resources` arm has a real `ResourcesDir`
+  to build on — **no `.resources` deferral is needed.**

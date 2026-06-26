@@ -1512,3 +1512,22 @@ fn _location_key_touch() -> LocationKey {
 fn _diagnostic_touch() -> Diagnostic {
     Diagnostic::default()
 }
+
+// PORT NOTE: not an args.zig `test {}` — a focused port-helper check for
+// `zig_string_escape` (the `std.zig.fmtString`/`stringEscape` port used by
+// config's `RepeatableCommand.formatEntry`). Mirrors the std `test fmtString`:
+//   try std.testing.expectFmt("\\x0f", "{f}", .{fmtString("\x0f")});
+//   try std.testing.expectFmt(
+//       \\" \\ hi \x07 \x11 \" derp '"
+//   , "\"{f}\"", .{fmtString(" \\ hi \x07 \x11 \" derp '")});
+#[test]
+fn zig_string_escape_port_helper() {
+    let mut out = Vec::new();
+    zig_string_escape(&mut out, b"\x0f");
+    assert_eq!(out, b"\\x0f");
+
+    let mut out = Vec::new();
+    zig_string_escape(&mut out, b" \\ hi \x07 \x11 \" derp '");
+    // The format string wraps with quotes; the escaped body is:
+    assert_eq!(out, b" \\\\ hi \\x07 \\x11 \\\" derp '");
+}

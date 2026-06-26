@@ -17,6 +17,12 @@ workspace = true
 
 [dependencies]
 rustty-vt = { workspace = true }
+# config's `RepeatableCommand.parseCLI` calls `cli.args.parseAutoStruct(Command, ...)`;
+# the `AutoStruct` impl for `Command` lives here (orphan rule — `Command` is ours),
+# so the CLI-args reflection traits/helpers (`AutoStruct`, `parse_auto_struct`,
+# `parse_field_*`, `split_tagged_union`) are needed. rustty-args has NO dep on
+# rustty-input, so this edge is acyclic.
+rustty-args = { workspace = true }
 rustty-datastruct = { workspace = true }
 rustty-util = { workspace = true }
 rustty-cfg-fmt = { workspace = true }

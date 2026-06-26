@@ -1189,6 +1189,59 @@ pub fn zig_string_literal_parse_write(out: &mut Vec<u8>, bytes: &[u8]) -> ParseW
     ParseWriteResult::Success
 }
 
+/// `std.zig.fmtString(bytes)` / `std.zig.stringEscape` — print `bytes` as the
+/// escaped contents of a double-quoted Zig string (the inverse of
+/// `zig_string_literal_parse_write`). The caller supplies the surrounding quotes
+/// (the reference's format string `"\"{f}\""`).
+//
+// PORT NOTE: faithful port of `std.zig.stringEscape`:
+//
+//     for (bytes) |byte| switch (byte) {
+//         '\n' => try w.writeAll("\\n"),
+//         '\r' => try w.writeAll("\\r"),
+//         '\t' => try w.writeAll("\\t"),
+//         '\\' => try w.writeAll("\\\\"),
+//         '"' => try w.writeAll("\\\""),
+//         '\'' => try w.writeByte('\''),
+//         ' ', '!', '#'...'&', '('...'[', ']'...'~' => try w.writeByte(byte),
+//         else => { try w.writeAll("\\x"); try w.printInt(byte, 16, .lower, .{ .width = 2, .fill = '0' }); },
+//     };
+//
+// The printable ranges are the ASCII printables EXCEPT `"` (escaped above) and
+// `\` (escaped above); `'` is emitted bare. Everything else becomes `\xNN` (lower
+// hex, zero-padded to width 2).
+pub fn zig_string_escape(out: &mut Vec<u8>, bytes: &[u8]) {
+    for &byte in bytes {
+        match byte {
+            b'\n' => out.extend_from_slice(b"\\n"),
+            b'\r' => out.extend_from_slice(b"\\r"),
+            b'\t' => out.extend_from_slice(b"\\t"),
+            b'\\' => out.extend_from_slice(b"\\\\"),
+            b'"' => out.extend_from_slice(b"\\\""),
+            b'\'' => out.push(b'\''),
+            // ' ', '!', '#'...'&', '('...'[', ']'...'~'
+            b' ' | b'!' | b'#'..=b'&' | b'('..=b'[' | b']'..=b'~' => out.push(byte),
+            // else =>
+            _ => {
+                out.extend_from_slice(b"\\x");
+                // printInt(byte, 16, .lower, .{ .width = 2, .fill = '0' })
+                let hi = byte >> 4;
+                let lo = byte & 0xf;
+                out.push(hex_lower_digit(hi));
+                out.push(hex_lower_digit(lo));
+            }
+        }
+    }
+}
+
+// `printInt(_, 16, .lower, ...)` digit — lowercase hex nibble.
+fn hex_lower_digit(n: u8) -> u8 {
+    match n {
+        0..=9 => b'0' + n,
+        _ => b'a' + (n - 10),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Iterators
 // ---------------------------------------------------------------------------

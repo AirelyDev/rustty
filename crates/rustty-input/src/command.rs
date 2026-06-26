@@ -163,6 +163,60 @@ impl Command {
     }
 }
 
+// PORT NOTE: `cli.args.parseAutoStruct(inputpkg.Command, alloc, input, null)`
+// (called by `config.RepeatableCommand.parseCLI`) reflects over `Command`'s
+// fields. This impl provides that reflection (the orphan rule requires it to live
+// here, with `Command`). The field order matches the reference struct declaration
+// (`action`, `title`, `description`); `parseAutoStruct` tracks "set" fields and
+// fills defaults / errors on unset-required ones via `apply_default`:
+//   - `action: Action`            — required (no default), parsed via the
+//                                    `parseTaggedUnion(Action)` path.
+//   - `title: [:0]const u8`       — required (no default), `[:0]const u8` arm.
+//   - `description: [:0]const u8 = ""` — defaults to the empty slice.
+impl rustty_args::args::AutoStruct for Command {
+    fn field_names() -> &'static [&'static [u8]] {
+        &[b"action", b"title", b"description"]
+    }
+    fn set_field(
+        &mut self,
+        key: &[u8],
+        value: Option<&[u8]>,
+    ) -> Result<(), rustty_args::args::ParseError> {
+        use rustty_args::args::{parse_field_sentinel_string, Error};
+        match key {
+            // .@"union" => parseTaggedUnion(Action, ...)
+            b"action" => {
+                self.action = Action::parse_auto_tagged_union(value.ok_or(Error::ValueRequired)?)?;
+                Ok(())
+            }
+            // [:0]const u8 arm
+            b"title" => {
+                self.title = parse_field_sentinel_string(value)?;
+                Ok(())
+            }
+            b"description" => {
+                self.description = parse_field_sentinel_string(value)?;
+                Ok(())
+            }
+            _ => Err(Error::InvalidField),
+        }
+    }
+    fn apply_default(&mut self, i: usize) -> Result<(), rustty_args::args::ParseError> {
+        match i {
+            // action: Action — required (no default).
+            0 => Err(rustty_args::args::Error::InvalidValue),
+            // title: [:0]const u8 — required (no default).
+            1 => Err(rustty_args::args::Error::InvalidValue),
+            // description: [:0]const u8 = "" — defaults to the empty slice.
+            2 => {
+                self.description = Vec::new();
+                Ok(())
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
 // PORT NOTE: `[:0]const u8` / `[*:0]const u8` — produce a NUL-terminated owned
 // copy of the given bytes.
 fn cstr(bytes: &[u8]) -> Vec<u8> {

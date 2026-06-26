@@ -1534,6 +1534,341 @@ impl Action {
     ];
 }
 
+// PORT NOTE: `cli.args.parseTaggedUnion(Action, alloc, v)` — used by
+// `config.RepeatableCommand.parseCLI` (via `parseAutoStruct(inputpkg.Command, ...)`)
+// to parse the `action:<tag>:<value>` field of a command-palette entry. This is a
+// DISTINCT code path from `Action.parse` (the keybind-trigger parser): here the
+// reference synthesizes, per matched union variant, a one-field struct and runs
+// `parseIntoField` on it, so the per-variant payload dispatch is the generic
+// `parseIntoField` field-type "magic" (string/int/float/enum/struct), NOT the
+// keybind `parseParameter` logic. The transcribed reference body:
+//
+//     const info = @typeInfo(T).@"union";
+//     assert(@typeInfo(info.tag_type.?) == .@"enum");
+//
+//     // Get the union tag that is being set. We support values with no colon
+//     // if the value is void so its not an error to have no colon.
+//     const colon_idx = mem.indexOf(u8, v, ":") orelse v.len;
+//     const tag_str = std.mem.trim(u8, v[0..colon_idx], whitespace);
+//     const value = if (colon_idx < v.len) v[colon_idx + 1 ..] else "";
+//
+//     // Find the field in the union that matches the tag.
+//     inline for (info.fields) |field| {
+//         if (mem.eql(u8, field.name, tag_str)) {
+//             // Special case void types where we don't need a value.
+//             if (field.type == void) {
+//                 if (value.len > 0) return error.InvalidValue;
+//                 return @unionInit(T, field.name, {});
+//             }
+//             // ... synthesize a one-field struct and parseIntoField it ...
+//             try parseIntoField(Target, alloc, &t, field.name, value);
+//             return @unionInit(T, field.name, @field(t, field.name));
+//         }
+//     }
+//     return error.InvalidValue;
+//
+// `split_tagged_union` provides the exact colon/whitespace split. Each arm below
+// performs the `parseIntoField` field-type dispatch for that variant's payload
+// (the `[]const u8`/`[:0]const u8` arms copy the value; ints/floats parse; enums
+// `stringToEnum`; structs `parseStruct` -> `parseAutoStruct`). Void variants
+// require an empty value. An unknown tag is `error.InvalidValue`.
+impl Action {
+    pub(crate) fn parse_auto_tagged_union(
+        v: &[u8],
+    ) -> Result<Action, rustty_args::args::ParseError> {
+        use rustty_args::args::{
+            parse_auto_struct, parse_field_enum, parse_field_float, parse_field_int,
+            parse_field_string, split_tagged_union, Error,
+        };
+
+        // const colon_idx = ...; const tag_str = ...; const value = ...;
+        let (tag, value) = split_tagged_union(v);
+
+        // PORT NOTE: helper for the `field.type == void` arm — `if (value.len > 0)
+        // return error.InvalidValue;` then `return @unionInit(T, field.name, {})`.
+        macro_rules! void_arm {
+            ($variant:expr) => {{
+                if !value.is_empty() {
+                    return Err(Error::InvalidValue);
+                }
+                return Ok($variant);
+            }};
+        }
+
+        match tag {
+            // void variants
+            b"ignore" => void_arm!(Action::Ignore),
+            b"unbind" => void_arm!(Action::Unbind),
+            b"reset" => void_arm!(Action::Reset),
+            b"paste_from_clipboard" => void_arm!(Action::PasteFromClipboard),
+            b"paste_from_selection" => void_arm!(Action::PasteFromSelection),
+            b"copy_url_to_clipboard" => void_arm!(Action::CopyUrlToClipboard),
+            b"copy_title_to_clipboard" => void_arm!(Action::CopyTitleToClipboard),
+            b"reset_font_size" => void_arm!(Action::ResetFontSize),
+            b"search_selection" => void_arm!(Action::SearchSelection),
+            b"start_search" => void_arm!(Action::StartSearch),
+            b"end_search" => void_arm!(Action::EndSearch),
+            b"clear_screen" => void_arm!(Action::ClearScreen),
+            b"select_all" => void_arm!(Action::SelectAll),
+            b"scroll_to_top" => void_arm!(Action::ScrollToTop),
+            b"scroll_to_bottom" => void_arm!(Action::ScrollToBottom),
+            b"scroll_to_selection" => void_arm!(Action::ScrollToSelection),
+            b"scroll_page_up" => void_arm!(Action::ScrollPageUp),
+            b"scroll_page_down" => void_arm!(Action::ScrollPageDown),
+            b"new_window" => void_arm!(Action::NewWindow),
+            b"new_tab" => void_arm!(Action::NewTab),
+            b"previous_tab" => void_arm!(Action::PreviousTab),
+            b"next_tab" => void_arm!(Action::NextTab),
+            b"last_tab" => void_arm!(Action::LastTab),
+            b"toggle_tab_overview" => void_arm!(Action::ToggleTabOverview),
+            b"prompt_surface_title" => void_arm!(Action::PromptSurfaceTitle),
+            b"prompt_tab_title" => void_arm!(Action::PromptTabTitle),
+            b"toggle_split_zoom" => void_arm!(Action::ToggleSplitZoom),
+            b"toggle_readonly" => void_arm!(Action::ToggleReadonly),
+            b"equalize_splits" => void_arm!(Action::EqualizeSplits),
+            b"reset_window_size" => void_arm!(Action::ResetWindowSize),
+            b"show_gtk_inspector" => void_arm!(Action::ShowGtkInspector),
+            b"show_on_screen_keyboard" => void_arm!(Action::ShowOnScreenKeyboard),
+            b"open_config" => void_arm!(Action::OpenConfig),
+            b"reload_config" => void_arm!(Action::ReloadConfig),
+            b"close_surface" => void_arm!(Action::CloseSurface),
+            b"close_window" => void_arm!(Action::CloseWindow),
+            b"close_all_windows" => void_arm!(Action::CloseAllWindows),
+            b"toggle_maximize" => void_arm!(Action::ToggleMaximize),
+            b"toggle_fullscreen" => void_arm!(Action::ToggleFullscreen),
+            b"toggle_window_decorations" => void_arm!(Action::ToggleWindowDecorations),
+            b"toggle_window_float_on_top" => void_arm!(Action::ToggleWindowFloatOnTop),
+            b"toggle_secure_input" => void_arm!(Action::ToggleSecureInput),
+            b"toggle_mouse_reporting" => void_arm!(Action::ToggleMouseReporting),
+            b"toggle_command_palette" => void_arm!(Action::ToggleCommandPalette),
+            b"toggle_quick_terminal" => void_arm!(Action::ToggleQuickTerminal),
+            b"toggle_visibility" => void_arm!(Action::ToggleVisibility),
+            b"toggle_background_opacity" => void_arm!(Action::ToggleBackgroundOpacity),
+            b"check_for_updates" => void_arm!(Action::CheckForUpdates),
+            b"undo" => void_arm!(Action::Undo),
+            b"redo" => void_arm!(Action::Redo),
+            b"end_key_sequence" => void_arm!(Action::EndKeySequence),
+            b"deactivate_key_table" => void_arm!(Action::DeactivateKeyTable),
+            b"deactivate_all_key_tables" => void_arm!(Action::DeactivateAllKeyTables),
+            b"quit" => void_arm!(Action::Quit),
+
+            // []const u8 variants (parseIntoField `[]const u8` arm)
+            b"csi" => Ok(Action::Csi(parse_field_string(Some(value))?)),
+            b"esc" => Ok(Action::Esc(parse_field_string(Some(value))?)),
+            b"text" => Ok(Action::Text(parse_field_string(Some(value))?)),
+            b"search" => Ok(Action::Search(parse_field_string(Some(value))?)),
+            b"set_surface_title" => Ok(Action::SetSurfaceTitle(parse_field_string(Some(value))?)),
+            b"set_tab_title" => Ok(Action::SetTabTitle(parse_field_string(Some(value))?)),
+            b"activate_key_table" => Ok(Action::ActivateKeyTable(parse_field_string(Some(value))?)),
+            b"activate_key_table_once" => Ok(Action::ActivateKeyTableOnce(parse_field_string(
+                Some(value),
+            )?)),
+
+            // f32 variants (parseIntoField float arm)
+            b"increase_font_size" => Ok(Action::IncreaseFontSize(parse_field_float::<f32>(Some(
+                value,
+            ))?)),
+            b"decrease_font_size" => Ok(Action::DecreaseFontSize(parse_field_float::<f32>(Some(
+                value,
+            ))?)),
+            b"set_font_size" => Ok(Action::SetFontSize(parse_field_float::<f32>(Some(value))?)),
+            b"scroll_page_fractional" => Ok(Action::ScrollPageFractional(
+                parse_field_float::<f32>(Some(value))?,
+            )),
+
+            // integer variants (parseIntoField int arm)
+            b"scroll_to_row" => Ok(Action::ScrollToRow(parse_field_int::<usize>(Some(value))?)),
+            b"scroll_page_lines" => Ok(Action::ScrollPageLines(parse_field_int::<i16>(Some(
+                value,
+            ))?)),
+            b"jump_to_prompt" => Ok(Action::JumpToPrompt(parse_field_int::<i16>(Some(value))?)),
+            b"goto_tab" => Ok(Action::GotoTab(parse_field_int::<usize>(Some(value))?)),
+            b"move_tab" => Ok(Action::MoveTab(parse_field_int::<isize>(Some(value))?)),
+
+            // enum variants (parseIntoField `.@"enum"` arm -> stringToEnum)
+            b"copy_to_clipboard" => Ok(Action::CopyToClipboard(parse_field_enum(
+                Some(value),
+                CopyToClipboard::string_to_enum,
+            )?)),
+            b"navigate_search" => Ok(Action::NavigateSearch(parse_field_enum(
+                Some(value),
+                NavigateSearch::string_to_enum,
+            )?)),
+            b"adjust_selection" => Ok(Action::AdjustSelection(parse_field_enum(
+                Some(value),
+                AdjustSelection::string_to_enum,
+            )?)),
+            b"new_split" => Ok(Action::NewSplit(parse_field_enum(
+                Some(value),
+                SplitDirection::string_to_enum,
+            )?)),
+            b"goto_split" => Ok(Action::GotoSplit(parse_field_enum(
+                Some(value),
+                SplitFocusDirection::string_to_enum,
+            )?)),
+            b"goto_window" => Ok(Action::GotoWindow(parse_field_enum(
+                Some(value),
+                GotoWindow::string_to_enum,
+            )?)),
+            b"inspector" => Ok(Action::Inspector(parse_field_enum(
+                Some(value),
+                InspectorMode::string_to_enum,
+            )?)),
+            b"close_tab" => Ok(Action::CloseTab(parse_field_enum(
+                Some(value),
+                CloseTabMode::string_to_enum,
+            )?)),
+            b"crash" => Ok(Action::Crash(parse_field_enum(
+                Some(value),
+                CrashThread::string_to_enum,
+            )?)),
+
+            // struct variants (parseIntoField `.@"struct"` arm -> parseStruct ->
+            // parseAutoStruct). NOTE: this is the `parseAutoStruct` field-by-field
+            // path, NOT each type's custom `parse`/`parseParameter`; e.g.
+            // `resize_split:up,10` is parsed as `parseAutoStruct(SplitResizeParameter,
+            // "up,10")` (which expects `field:value` entries), exactly as the
+            // reference does in the command-palette path.
+            b"cursor_key" => {
+                let mut t = CursorKey {
+                    normal: Vec::new(),
+                    application: Vec::new(),
+                };
+                parse_auto_struct(&mut t, value)?;
+                Ok(Action::CursorKey(t))
+            }
+            b"write_scrollback_file" => {
+                let mut t = WriteScreen {
+                    action: WriteScreenAction::Copy,
+                    emit: WriteScreenFormat::Plain,
+                };
+                parse_auto_struct(&mut t, value)?;
+                Ok(Action::WriteScrollbackFile(t))
+            }
+            b"write_screen_file" => {
+                let mut t = WriteScreen {
+                    action: WriteScreenAction::Copy,
+                    emit: WriteScreenFormat::Plain,
+                };
+                parse_auto_struct(&mut t, value)?;
+                Ok(Action::WriteScreenFile(t))
+            }
+            b"write_selection_file" => {
+                let mut t = WriteScreen {
+                    action: WriteScreenAction::Copy,
+                    emit: WriteScreenFormat::Plain,
+                };
+                parse_auto_struct(&mut t, value)?;
+                Ok(Action::WriteSelectionFile(t))
+            }
+            b"resize_split" => {
+                let mut t = SplitResizeParameter(SplitResizeDirection::Up, 0);
+                parse_auto_struct(&mut t, value)?;
+                Ok(Action::ResizeSplit(t))
+            }
+
+            // return error.InvalidValue (unknown tag)
+            _ => Err(Error::InvalidValue),
+        }
+    }
+}
+
+// PORT NOTE: `cursor_key`'s payload `CursorKey = struct { normal: []const u8,
+// application: []const u8 }`. In the `parseAutoStruct` path each field is a
+// `[]const u8` (required, no default), parsed by `parse_field_string`.
+impl rustty_args::args::AutoStruct for CursorKey {
+    fn field_names() -> &'static [&'static [u8]] {
+        &[b"normal", b"application"]
+    }
+    fn set_field(
+        &mut self,
+        key: &[u8],
+        value: Option<&[u8]>,
+    ) -> Result<(), rustty_args::args::ParseError> {
+        use rustty_args::args::{parse_field_string, Error};
+        match key {
+            b"normal" => {
+                self.normal = parse_field_string(value)?;
+                Ok(())
+            }
+            b"application" => {
+                self.application = parse_field_string(value)?;
+                Ok(())
+            }
+            _ => Err(Error::InvalidField),
+        }
+    }
+    fn apply_default(&mut self, _i: usize) -> Result<(), rustty_args::args::ParseError> {
+        // Both fields are required (no default) -> error.InvalidValue.
+        Err(rustty_args::args::Error::InvalidValue)
+    }
+}
+
+// PORT NOTE: `write_*_file`'s payload `WriteScreen = struct { action:
+// WriteScreen.Action, emit: WriteScreen.Format }`. Both fields are enums and are
+// required (the `copy`/`paste`/`open` decls are named CONSTANTS, not field
+// defaults), so the `parseAutoStruct` path needs both `action:` and `emit:`
+// entries; a missing one is `error.InvalidValue`.
+impl rustty_args::args::AutoStruct for WriteScreen {
+    fn field_names() -> &'static [&'static [u8]] {
+        &[b"action", b"emit"]
+    }
+    fn set_field(
+        &mut self,
+        key: &[u8],
+        value: Option<&[u8]>,
+    ) -> Result<(), rustty_args::args::ParseError> {
+        use rustty_args::args::{parse_field_enum, Error};
+        match key {
+            b"action" => {
+                self.action = parse_field_enum(value, WriteScreenAction::string_to_enum)?;
+                Ok(())
+            }
+            b"emit" => {
+                self.emit = parse_field_enum(value, WriteScreenFormat::string_to_enum)?;
+                Ok(())
+            }
+            _ => Err(Error::InvalidField),
+        }
+    }
+    fn apply_default(&mut self, _i: usize) -> Result<(), rustty_args::args::ParseError> {
+        Err(rustty_args::args::Error::InvalidValue)
+    }
+}
+
+// PORT NOTE: `resize_split`'s payload `SplitResizeParameter = struct {
+// SplitResizeDirection, u16 }` — a TUPLE struct, so its `parseAutoStruct` field
+// names are the tuple positions `"0"`/`"1"` (Zig's reflected field names for a
+// tuple). Field 0 is the enum, field 1 the `u16`; both required. (This differs
+// from the keybind `parse_resize_split`, which splits on a comma and uses a custom
+// per-position parse — the command-palette path uses `parseAutoStruct` instead.)
+impl rustty_args::args::AutoStruct for SplitResizeParameter {
+    fn field_names() -> &'static [&'static [u8]] {
+        &[b"0", b"1"]
+    }
+    fn set_field(
+        &mut self,
+        key: &[u8],
+        value: Option<&[u8]>,
+    ) -> Result<(), rustty_args::args::ParseError> {
+        use rustty_args::args::{parse_field_enum, parse_field_int, Error};
+        match key {
+            b"0" => {
+                self.0 = parse_field_enum(value, SplitResizeDirection::string_to_enum)?;
+                Ok(())
+            }
+            b"1" => {
+                self.1 = parse_field_int::<u16>(value)?;
+                Ok(())
+            }
+            _ => Err(Error::InvalidField),
+        }
+    }
+    fn apply_default(&mut self, _i: usize) -> Result<(), rustty_args::args::ParseError> {
+        Err(rustty_args::args::Error::InvalidValue)
+    }
+}
+
 // PORT NOTE: the reference's `parseEnum`/`parseInt`/`parseFloat`/`parseParameter`
 // are comptime-generic helpers reflecting over `field.type`. Rust has no comptime
 // type reflection, so the per-arm dispatch of `parse` (below) calls the concrete
