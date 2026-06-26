@@ -24,8 +24,19 @@ workspace = true
 [lib]
 doctest = false
 
+[features]
+# The wasm C-ABI/JS-canvas surface (Atlas.zig's `Wasm` struct, config/Wasm.zig,
+# the vt wasm exports) is feature-gated OFF by default and never compiled into
+# the desktop font cluster. Pure rustty-font has no os/wasm or zig-js infra, so
+# the reference `Wasm` struct is recorded as a verbatim commented reference in
+# `atlas.rs`; the gate exists so the `cfg(feature = "wasm")` is never "unexpected".
+wasm = []
+
 [dependencies]
 rustty-os = { workspace = true }
 rustty-datastruct = { workspace = true }
 rustty-util = { workspace = true }
 rustty-render-types = { workspace = true }
+# Stable polyfill of `core::alloc::Allocator` — the faithful Rust map of Zig's
+# `std.mem.Allocator` threaded through Atlas/CodepointMap (`Global` == `std.alloc`).
+allocator-api2 = { workspace = true }

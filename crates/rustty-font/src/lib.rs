@@ -11,9 +11,12 @@
 //! OpenType slice (`opentype::{sfnt, head, glyf}`), `embedded` (test font
 //! fixtures), the `terminal_options` `artifact` seam (`options`), `metrics`
 //! (font Metrics + Modifier + Key), `glyph` (Glyph + Size + RenderOptions +
-//! Constraint), and the generated `nerd_font_attributes` codepoint→Constraint
-//! table.
+//! Constraint), the generated `nerd_font_attributes` codepoint→Constraint
+//! table, `atlas` (texture-atlas rect packing), and `codepoint_map`
+//! (codepoint→descriptor map, discovery descriptor seamed thin).
 
+pub mod atlas;
+pub mod codepoint_map;
 pub mod embedded;
 pub mod glyph;
 pub mod metrics;
