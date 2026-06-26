@@ -42,7 +42,9 @@ pub struct Handler {
     // always full here (every protocol has a value), so each slot is a bare
     // `usize` rather than an `Option<usize>`; the reference `.get(p) orelse
     // defaultMaxBytes(p)` is therefore exact.
-    max_bytes: [usize; Protocol::COUNT],
+    // PORT NOTE: `pub` to mirror the reference (a public struct field accessed
+    // directly by the C wrapper, e.g. `apc_handler.max_bytes`).
+    pub max_bytes: [usize; Protocol::COUNT],
 
     /// Protocols recognized by this APC handler. When a protocol is absent,
     /// matching APC sequences are ignored so callers see the same behavior as
@@ -50,7 +52,9 @@ pub struct Handler {
     // enabled: std.EnumSet(Protocol) = .initFull(),
     // PORT NOTE: `std.EnumSet(Protocol)` ports to a per-key `[bool; COUNT]`
     // presence array indexed by `Protocol as usize`; `.initFull()` is all-true.
-    enabled: [bool; Protocol::COUNT],
+    // `pub` to mirror the reference (a public struct field; the C wrapper's tests
+    // read `apc_handler.enabled.contains(.glyph)`).
+    pub enabled: [bool; Protocol::COUNT],
 }
 
 impl Default for Handler {

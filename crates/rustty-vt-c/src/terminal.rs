@@ -116,9 +116,11 @@ pub struct Effects {
     pub pwd_changed: Option<PwdChangedFn>,
     pub size_cb: Option<SizeFn>,
 
-    /// Scratch buffer for DA1 feature codes. See the reference doc comment:
-    /// the trampoline converts C feature codes into this buffer and returns a
-    /// slice pointing into it, kept valid past the trampoline return.
+    /// Scratch buffer for DA1 feature codes. The device attributes
+    /// trampoline converts C feature codes into this buffer and returns
+    /// a slice pointing into it. Storing it here ensures the slice
+    /// remains valid after the trampoline returns, since the caller
+    /// (`reportDeviceAttributes`) reads it before any re-entrant call.
     pub da_features_buf: [rustty_vt::device_attributes::Feature; 64],
 }
 
@@ -765,6 +767,40 @@ pub enum Option_ {
     DefaultCursorBlink = 23,
     GlyphProtocol = 24,
     PwdChanged = 25,
+    // /// Input type expected for setting the option.
+    // pub fn InType(comptime self: Option) type {
+    //     return switch (self) {
+    //         .userdata => ?*const anyopaque,
+    //         .write_pty => ?Effects.WritePtyFn,
+    //         .bell => ?Effects.BellFn,
+    //         .color_scheme => ?Effects.ColorSchemeFn,
+    //         .device_attributes => ?Effects.DeviceAttributesFn,
+    //         .enquiry => ?Effects.EnquiryFn,
+    //         .xtversion => ?Effects.XtversionFn,
+    //         .title_changed => ?Effects.TitleChangedFn,
+    //         .pwd_changed => ?Effects.PwdChangedFn,
+    //         .size_cb => ?Effects.SizeFn,
+    //         .title, .pwd => ?*const lib.String,
+    //         .color_foreground, .color_background, .color_cursor => ?*const color.RGB.C,
+    //         .color_palette => ?*const color.PaletteC,
+    //         .kitty_image_storage_limit => ?*const u64,
+    //         .kitty_image_medium_file,
+    //         .kitty_image_medium_temp_file,
+    //         .kitty_image_medium_shared_mem,
+    //         .glyph_protocol,
+    //         => ?*const bool,
+    //         .apc_max_bytes, .apc_max_bytes_kitty => ?*const usize,
+    //         .selection => ?*const selection_c.CSelection,
+    //         .default_cursor_style => ?*const TerminalCursorStyle,
+    //         .default_cursor_blink => ?*const bool,
+    //     };
+    // }
+    //
+    // PORT NOTE: `InType` is a comptime type-returning fn (the input type expected
+    // for setting each option). rustty erases `value` to `*const c_void` at the FFI
+    // boundary and reads it back as the per-arm type inside `set_typed`, so this
+    // comptime projection has no Rust analog; it is preserved verbatim as the
+    // reference contract for each arm's expected pointee type.
 }
 
 // pub fn set(terminal_: Terminal, option: Option, value: ?*const anyopaque) ... {
@@ -807,7 +843,302 @@ pub unsafe fn set(terminal_: Terminal, option: Option_, value: *const c_void) ->
 // `terminal_`, if non-null, is a live wrapper; `value` points at storage of the
 // type required by `option`.
 unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) -> Result {
+    // PORT NOTE (SOUNDNESS): the reference is `setTyped(wrapper, ...)`, mutating
+    // the public fields `wrapper.effects`, `wrapper.terminal.*`, and
+    // `wrapper.stream.handler.*`. rustty reaches each through RAW pointers off
+    // `terminal_` (the `*mut TerminalWrapper`) and forms a `&mut` only to the
+    // disjoint sub-field it writes — never an overlapping `&mut TerminalWrapper`
+    // or `&mut ZigTerminal` that would invalidate the stream handler's stored
+    // alias of the terminal (the rust-mut-args-strongly-protected discipline).
+    // `value`, for callback-fn arms, IS the C function pointer (the reference's
+    // `?Effects.WritePtyFn` etc.); for data arms it points at the typed value.
+    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
+
     match option {
+        // .userdata => wrapper.effects.userdata = @constCast(value),
+        Option_::Userdata => unsafe {
+            (*terminal_).effects.userdata = value as *mut c_void;
+        },
+        // .write_pty => wrapper.effects.write_pty = value,
+        Option_::WritePty => unsafe {
+            (*terminal_).effects.write_pty =
+                std::mem::transmute::<*const c_void, Option<WritePtyFn>>(value);
+        },
+        // .bell => wrapper.effects.bell = value,
+        Option_::Bell => unsafe {
+            (*terminal_).effects.bell = std::mem::transmute::<*const c_void, Option<BellFn>>(value);
+        },
+        // .color_scheme => wrapper.effects.color_scheme = value,
+        Option_::ColorScheme => unsafe {
+            (*terminal_).effects.color_scheme =
+                std::mem::transmute::<*const c_void, Option<ColorSchemeFn>>(value);
+        },
+        // .device_attributes => wrapper.effects.device_attributes_cb = value,
+        Option_::DeviceAttributes => unsafe {
+            (*terminal_).effects.device_attributes_cb =
+                std::mem::transmute::<*const c_void, Option<DeviceAttributesFn>>(value);
+        },
+        // .enquiry => wrapper.effects.enquiry = value,
+        Option_::Enquiry => unsafe {
+            (*terminal_).effects.enquiry =
+                std::mem::transmute::<*const c_void, Option<EnquiryFn>>(value);
+        },
+        // .xtversion => wrapper.effects.xtversion = value,
+        Option_::Xtversion => unsafe {
+            (*terminal_).effects.xtversion =
+                std::mem::transmute::<*const c_void, Option<XtversionFn>>(value);
+        },
+        // .title_changed => wrapper.effects.title_changed = value,
+        Option_::TitleChanged => unsafe {
+            (*terminal_).effects.title_changed =
+                std::mem::transmute::<*const c_void, Option<TitleChangedFn>>(value);
+        },
+        // .pwd_changed => wrapper.effects.pwd_changed = value,
+        Option_::PwdChanged => unsafe {
+            (*terminal_).effects.pwd_changed =
+                std::mem::transmute::<*const c_void, Option<PwdChangedFn>>(value);
+        },
+        // .size_cb => wrapper.effects.size_cb = value,
+        Option_::SizeCb => unsafe {
+            (*terminal_).effects.size_cb =
+                std::mem::transmute::<*const c_void, Option<SizeFn>>(value);
+        },
+
+        // .title => {
+        //     const str = if (value) |v| v.ptr[0..v.len] else "";
+        //     wrapper.terminal.setTitle(str) catch return .out_of_memory;
+        // },
+        Option_::Title => {
+            // const str = if (value) |v| v.ptr[0..v.len] else "";
+            let ptr = value as *const LibString;
+            let str_: &[u8] = if !ptr.is_null() {
+                let s = unsafe { *ptr };
+                unsafe { core::slice::from_raw_parts(s.ptr, s.len) }
+            } else {
+                b""
+            };
+            // wrapper.terminal.setTitle(str) catch return .out_of_memory;
+            // SAFETY: write the `title` sub-field of the terminal via the raw ptr;
+            // `set_title` takes `&mut Terminal` over a region disjoint from the
+            // stream handler's alias usage (no concurrent `vt_write` is live).
+            if unsafe { (*t).set_title(str_) }.is_err() {
+                return Result::OutOfMemory;
+            }
+        }
+        // .pwd => {
+        //     const str = if (value) |v| v.ptr[0..v.len] else "";
+        //     wrapper.terminal.setPwd(str) catch return .out_of_memory;
+        // },
+        Option_::Pwd => {
+            let ptr = value as *const LibString;
+            let str_: &[u8] = if !ptr.is_null() {
+                let s = unsafe { *ptr };
+                unsafe { core::slice::from_raw_parts(s.ptr, s.len) }
+            } else {
+                b""
+            };
+            if unsafe { (*t).set_pwd(str_) }.is_err() {
+                return Result::OutOfMemory;
+            }
+        }
+
+        // .color_foreground => {
+        //     wrapper.terminal.colors.foreground.default = if (value) |v| .fromC(v.*) else null;
+        //     wrapper.terminal.flags.dirty.palette = true;
+        // },
+        Option_::ColorForeground => unsafe {
+            let ptr = value as *const crate::color::RgbC;
+            (*t).colors.foreground.default = if !ptr.is_null() { Some(*ptr) } else { None };
+            (*t).flags.dirty.palette = true;
+        },
+        // .color_background => { ... },
+        Option_::ColorBackground => unsafe {
+            let ptr = value as *const crate::color::RgbC;
+            (*t).colors.background.default = if !ptr.is_null() { Some(*ptr) } else { None };
+            (*t).flags.dirty.palette = true;
+        },
+        // .color_cursor => { ... },
+        Option_::ColorCursor => unsafe {
+            let ptr = value as *const crate::color::RgbC;
+            (*t).colors.cursor.default = if !ptr.is_null() { Some(*ptr) } else { None };
+            (*t).flags.dirty.palette = true;
+        },
+        // .color_palette => {
+        //     wrapper.terminal.colors.palette.changeDefault(
+        //         if (value) |v| color.paletteZval(v) else color.default,
+        //     );
+        //     wrapper.terminal.flags.dirty.palette = true;
+        // },
+        Option_::ColorPalette => unsafe {
+            let ptr = value as *const crate::color::PaletteC;
+            let def = if !ptr.is_null() {
+                crate::color::palette_zval(ptr)
+            } else {
+                rustty_vt::color::DEFAULT
+            };
+            (*t).colors.palette.change_default(def);
+            (*t).flags.dirty.palette = true;
+        },
+
+        // .kitty_image_storage_limit => {
+        //     if (comptime !build_options.kitty_graphics) return .success;
+        //     const limit: usize = if (value) |v| @intCast(v.*) else 0;
+        //     var it = wrapper.terminal.screens.all.iterator();
+        //     while (it.next()) |entry| {
+        //         const screen = entry.value.*;
+        //         screen.kitty_images.setLimit(screen.alloc, screen, limit) catch return .out_of_memory;
+        //     }
+        // },
+        Option_::KittyImageStorageLimit => {
+            // if (comptime !build_options.kitty_graphics) return .success;
+            if !rustty_vt::options::KITTY_GRAPHICS {
+                return Result::Success;
+            }
+            // const limit: usize = if (value) |v| @intCast(v.*) else 0;
+            let ptr = value as *const u64;
+            let limit: usize = if !ptr.is_null() {
+                unsafe { *ptr as usize }
+            } else {
+                0
+            };
+            // var it = wrapper.terminal.screens.all.iterator();
+            // while (it.next()) |entry| { const screen = entry.value.*; ... }
+            for slot in unsafe { (*t).screens.all.iter() } {
+                if let Some(screen) = *slot {
+                    // PORT NOTE: `setLimit(&mut self, alloc, s: &mut Screen, limit)`
+                    // aliases `screen.kitty_images` (the receiver) with `screen`
+                    // (the `s` arg). Mirror `ScreenSet::init`: MOVE `kitty_images`
+                    // out, run `set_limit` against the now-disjoint `&mut Screen`,
+                    // then move it back.
+                    let alloc = unsafe { (*screen).alloc };
+                    let mut images = core::mem::take(unsafe { &mut (*screen).kitty_images });
+                    let res = images.set_limit(alloc, unsafe { &mut *screen }, limit);
+                    unsafe { (*screen).kitty_images = images };
+                    if res.is_err() {
+                        return Result::OutOfMemory;
+                    }
+                }
+            }
+        }
+        // .kitty_image_medium_file,
+        // .kitty_image_medium_temp_file,
+        // .kitty_image_medium_shared_mem,
+        // => {
+        //     if (comptime !build_options.kitty_graphics) return .success;
+        //     const val = (value orelse return .success).*;
+        //     var it = wrapper.terminal.screens.all.iterator();
+        //     while (it.next()) |entry| {
+        //         const screen = entry.value.*;
+        //         switch (option) {
+        //             .kitty_image_medium_file => screen.kitty_images.image_limits.file = val,
+        //             .kitty_image_medium_temp_file => screen.kitty_images.image_limits.temporary_file = val,
+        //             .kitty_image_medium_shared_mem => screen.kitty_images.image_limits.shared_memory = val,
+        //             else => unreachable,
+        //         }
+        //     }
+        // },
+        Option_::KittyImageMediumFile
+        | Option_::KittyImageMediumTempFile
+        | Option_::KittyImageMediumSharedMem => {
+            if !rustty_vt::options::KITTY_GRAPHICS {
+                return Result::Success;
+            }
+            // const val = (value orelse return .success).*;
+            let ptr = value as *const bool;
+            if ptr.is_null() {
+                return Result::Success;
+            }
+            let val = unsafe { *ptr };
+            for slot in unsafe { (*t).screens.all.iter() } {
+                if let Some(screen) = *slot {
+                    let limits = unsafe { &mut (*screen).kitty_images.image_limits };
+                    match option {
+                        Option_::KittyImageMediumFile => limits.file = val,
+                        Option_::KittyImageMediumTempFile => limits.temporary_file = val,
+                        Option_::KittyImageMediumSharedMem => limits.shared_memory = val,
+                        _ => unreachable!(),
+                    }
+                }
+            }
+        }
+
+        // .apc_max_bytes => {
+        //     wrapper.stream.handler.apc_handler.max_bytes = if (value) |ptr|
+        //         .initFull(ptr.*)
+        //     else
+        //         .{};
+        // },
+        Option_::ApcMaxBytes => {
+            // PORT NOTE: the reference `EnumMap` ports to the always-full
+            // `[usize; Protocol::COUNT]` array (apc.rs). `.initFull(ptr.*)` sets
+            // every protocol to the value; the `else .{}` branch (an EnumMap with
+            // no entries) is, under the always-full port, the field's struct
+            // default — `default_max_bytes` per protocol.
+            let handler = unsafe { &mut (*terminal_).stream.handler };
+            let ptr = value as *const usize;
+            if !ptr.is_null() {
+                let v = unsafe { *ptr };
+                handler.apc_handler.max_bytes = [v; rustty_vt::apc::Protocol::COUNT];
+            } else {
+                handler.apc_handler.max_bytes = [
+                    rustty_vt::apc::Protocol::default_max_bytes(rustty_vt::apc::Protocol::Kitty),
+                    rustty_vt::apc::Protocol::default_max_bytes(rustty_vt::apc::Protocol::Glyph),
+                ];
+            }
+        }
+        // .apc_max_bytes_kitty => {
+        //     if (value) |ptr| {
+        //         wrapper.stream.handler.apc_handler.max_bytes.put(.kitty, ptr.*);
+        //     } else {
+        //         wrapper.stream.handler.apc_handler.max_bytes.remove(.kitty);
+        //     }
+        // },
+        Option_::ApcMaxBytesKitty => {
+            // PORT NOTE: `.put(.kitty, v)` sets the kitty slot. `.remove(.kitty)`
+            // removes the entry so the later `.get(.kitty) orelse
+            // defaultMaxBytes(.kitty)` falls back to the default; under the
+            // always-full array port that is exactly resetting the slot to
+            // `defaultMaxBytes(.kitty)`.
+            let handler = unsafe { &mut (*terminal_).stream.handler };
+            let ptr = value as *const usize;
+            let kitty = rustty_vt::apc::Protocol::Kitty as usize;
+            if !ptr.is_null() {
+                handler.apc_handler.max_bytes[kitty] = unsafe { *ptr };
+            } else {
+                handler.apc_handler.max_bytes[kitty] =
+                    rustty_vt::apc::Protocol::default_max_bytes(rustty_vt::apc::Protocol::Kitty);
+            }
+        }
+
+        // .glyph_protocol => {
+        //     const enabled = (value orelse return .success).*;
+        //     wrapper.stream.handler.apc_handler.enable(.glyph, enabled);
+        //     if (!enabled) wrapper.terminal.glyph_glossary.clearAndFree(wrapper.terminal.gpa());
+        // },
+        Option_::GlyphProtocol => {
+            // const enabled = (value orelse return .success).*;
+            let ptr = value as *const bool;
+            if ptr.is_null() {
+                return Result::Success;
+            }
+            let enabled = unsafe { *ptr };
+            // wrapper.stream.handler.apc_handler.enable(.glyph, enabled);
+            unsafe {
+                (*terminal_)
+                    .stream
+                    .handler
+                    .apc_handler
+                    .enable(rustty_vt::apc::Protocol::Glyph, enabled)
+            };
+            // if (!enabled) wrapper.terminal.glyph_glossary.clearAndFree(wrapper.terminal.gpa());
+            if !enabled {
+                // PORT NOTE: rustty's `Glossary::clear_and_free` carries its own
+                // allocator (the `gpa()` thread is internal); the reference passes
+                // `wrapper.terminal.gpa()` explicitly.
+                unsafe { (*t).glyph_glossary.clear_and_free() };
+            }
+        }
+
         // .selection => {
         //     if (value) |ptr| {
         //         const sel = ptr.toZig() orelse return .invalid_value;
@@ -817,10 +1148,6 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
         //     }
         // },
         Option_::Selection => {
-            // SAFETY: `terminal_` is a live wrapper; reach the active screen via
-            // raw ptrs (no `&mut ZigTerminal` retag that would invalidate the
-            // stream handler's stored alias — the strongly-protected discipline).
-            let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
             let active: *mut rustty_vt::screen::Screen = unsafe { (*t).screens.active };
             // if (value) |ptr| { ... } else { ... }
             let ptr = value as *const crate::selection::CSelection;
@@ -840,33 +1167,55 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             }
         }
 
-        // PORT NOTE: every other arm projects a still-deferred vt-c type or
-        // terminal seam; they fill in the get/set sub-batch.
-        Option_::Userdata => todo!("vt-c set userdata"),
-        Option_::WritePty => todo!("vt-c set write_pty"),
-        Option_::Bell => todo!("vt-c set bell"),
-        Option_::Enquiry => todo!("vt-c set enquiry"),
-        Option_::Xtversion => todo!("vt-c set xtversion"),
-        Option_::TitleChanged => todo!("vt-c set title_changed"),
-        Option_::SizeCb => todo!("vt-c set size_cb"),
-        Option_::ColorScheme => todo!("vt-c set color_scheme"),
-        Option_::DeviceAttributes => todo!("vt-c set device_attributes"),
-        Option_::Title => todo!("vt-c set title"),
-        Option_::Pwd => todo!("vt-c set pwd"),
-        Option_::ColorForeground => todo!("vt-c set color_foreground"),
-        Option_::ColorBackground => todo!("vt-c set color_background"),
-        Option_::ColorCursor => todo!("vt-c set color_cursor"),
-        Option_::ColorPalette => todo!("vt-c set color_palette"),
-        Option_::KittyImageStorageLimit => todo!("vt-c set kitty_image_storage_limit"),
-        Option_::KittyImageMediumFile => todo!("vt-c set kitty_image_medium_file"),
-        Option_::KittyImageMediumTempFile => todo!("vt-c set kitty_image_medium_temp_file"),
-        Option_::KittyImageMediumSharedMem => todo!("vt-c set kitty_image_medium_shared_mem"),
-        Option_::ApcMaxBytes => todo!("vt-c set apc_max_bytes"),
-        Option_::ApcMaxBytesKitty => todo!("vt-c set apc_max_bytes_kitty"),
-        Option_::DefaultCursorStyle => todo!("vt-c set default_cursor_style"),
-        Option_::DefaultCursorBlink => todo!("vt-c set default_cursor_blink"),
-        Option_::GlyphProtocol => todo!("vt-c set glyph_protocol"),
-        Option_::PwdChanged => todo!("vt-c set pwd_changed"),
+        // .default_cursor_style => {
+        //     const style = (if (value) |ptr| ptr.* else TerminalCursorStyle.block).toZig() orelse return .invalid_value;
+        //     wrapper.stream.handler.default_cursor_style = style;
+        //     if (wrapper.stream.handler.default_cursor) {
+        //         wrapper.terminal.screens.active.cursor.cursor_style = style;
+        //     }
+        // },
+        Option_::DefaultCursorStyle => {
+            // const style = (if (value) |ptr| ptr.* else .block).toZig() orelse return .invalid_value;
+            let ptr = value as *const TerminalCursorStyle;
+            let c_style = if !ptr.is_null() {
+                unsafe { *ptr }
+            } else {
+                TerminalCursorStyle::Block
+            };
+            let style = match c_style.to_zig() {
+                Some(s) => s,
+                None => return Result::InvalidValue,
+            };
+            // wrapper.stream.handler.default_cursor_style = style;
+            unsafe { (*terminal_).stream.handler.default_cursor_style = style };
+            // if (wrapper.stream.handler.default_cursor) { ... }
+            if unsafe { (*terminal_).stream.handler.default_cursor } {
+                let active: *mut rustty_vt::screen::Screen = unsafe { (*t).screens.active };
+                unsafe { (*active).cursor.cursor_style = style };
+            }
+        }
+        // .default_cursor_blink => {
+        //     const blink = if (value) |ptr| ptr.* else false;
+        //     wrapper.stream.handler.default_cursor_blink = blink;
+        //     if (wrapper.stream.handler.default_cursor) {
+        //         wrapper.terminal.modes.set(.cursor_blinking, blink);
+        //     }
+        // },
+        Option_::DefaultCursorBlink => {
+            // const blink = if (value) |ptr| ptr.* else false;
+            let ptr = value as *const bool;
+            let blink = if !ptr.is_null() {
+                unsafe { *ptr }
+            } else {
+                false
+            };
+            // wrapper.stream.handler.default_cursor_blink = blink;
+            unsafe { (*terminal_).stream.handler.default_cursor_blink = blink };
+            // if (wrapper.stream.handler.default_cursor) { ... }
+            if unsafe { (*terminal_).stream.handler.default_cursor } {
+                unsafe { (*t).modes.set(modes::Mode::CursorBlinking, blink) };
+            }
+        }
     }
 
     // return .success;
@@ -882,6 +1231,35 @@ pub enum TerminalCursorStyle {
     Block = 1,
     Underline = 2,
     BlockHollow = 3,
+}
+
+impl TerminalCursorStyle {
+    // fn toZig(self: TerminalCursorStyle) ?Screen.CursorStyle {
+    //     return switch (self) {
+    //         .bar => .bar,
+    //         .block => .block,
+    //         .underline => .underline,
+    //         .block_hollow => .block_hollow,
+    //         _ => null,
+    //     };
+    // }
+    // PORT NOTE: the reference enum is non-exhaustive (`_`), mapping any unknown
+    // discriminant to `null`. The Rust `#[repr(C)]` enum carries only the four
+    // named variants; an out-of-range C value is already rejected at the
+    // `*ptr` read (it would be an invalid enum value), so the four-arm match is
+    // exhaustive and the reference `_ => null` arm is structurally unreachable.
+    fn to_zig(self) -> Option<rustty_vt::screen::CursorStyle> {
+        match self {
+            // .bar => .bar,
+            TerminalCursorStyle::Bar => Some(rustty_vt::screen::CursorStyle::Bar),
+            // .block => .block,
+            TerminalCursorStyle::Block => Some(rustty_vt::screen::CursorStyle::Block),
+            // .underline => .underline,
+            TerminalCursorStyle::Underline => Some(rustty_vt::screen::CursorStyle::Underline),
+            // .block_hollow => .block_hollow,
+            TerminalCursorStyle::BlockHollow => Some(rustty_vt::screen::CursorStyle::BlockHollow),
+        }
+    }
 }
 
 /// C: GhosttyDeviceAttributes
@@ -1190,6 +1568,42 @@ pub enum TerminalData {
     KittyGraphics = 30,
     Selection = 31,
     ViewportActive = 32,
+    // /// Output type expected for querying the data of the given kind.
+    // pub fn OutType(comptime self: TerminalData) type {
+    //     return switch (self) {
+    //         .invalid => void,
+    //         .cols, .rows, .cursor_x, .cursor_y => size.CellCountInt,
+    //         .cursor_pending_wrap, .cursor_visible, .mouse_tracking, .viewport_active => bool,
+    //         .active_screen => TerminalScreen,
+    //         .kitty_keyboard_flags => u8,
+    //         .scrollbar => TerminalScrollbar,
+    //         .cursor_style => style_c.Style,
+    //         .title, .pwd => lib.String,
+    //         .total_rows, .scrollback_rows => usize,
+    //         .width_px, .height_px => u32,
+    //         .color_foreground,
+    //         .color_background,
+    //         .color_cursor,
+    //         .color_foreground_default,
+    //         .color_background_default,
+    //         .color_cursor_default,
+    //         => color.RGB.C,
+    //         .color_palette, .color_palette_default => color.PaletteC,
+    //         .kitty_image_storage_limit => u64,
+    //         .kitty_image_medium_file,
+    //         .kitty_image_medium_temp_file,
+    //         .kitty_image_medium_shared_mem,
+    //         => bool,
+    //         .kitty_graphics => KittyGraphics,
+    //         .selection => selection_c.CSelection,
+    //     };
+    // }
+    //
+    // PORT NOTE: `OutType` is a comptime type-returning fn (the output type expected
+    // for querying each data kind). rustty erases `out` to `*mut c_void` at the FFI
+    // boundary and writes it back as the per-arm type inside `get_typed`, so this
+    // comptime projection has no Rust analog; it is preserved verbatim as the
+    // reference contract for each arm's expected pointee type.
 }
 
 // pub fn get(terminal_: Terminal, data: TerminalData, out: ?*anyopaque) ... {
@@ -1305,31 +1719,161 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
             )
         },
 
-        // PORT NOTE: the following arms project still-deferred vt-c types
-        // (`scrollbar`/`cursor_style`/`title`/`pwd`/`color_*`/kitty image+graphics/
-        // `selection`); they fill in the get/set sub-batch.
-        TerminalData::Scrollbar => todo!("vt-c getTyped scrollbar"),
-        TerminalData::CursorStyle => todo!("vt-c getTyped cursor_style"),
-        TerminalData::Title => todo!("vt-c getTyped title"),
-        TerminalData::Pwd => todo!("vt-c getTyped pwd"),
-        TerminalData::ColorForeground => todo!("vt-c getTyped color_foreground"),
-        TerminalData::ColorBackground => todo!("vt-c getTyped color_background"),
-        TerminalData::ColorCursor => todo!("vt-c getTyped color_cursor"),
-        TerminalData::ColorPalette => todo!("vt-c getTyped color_palette"),
-        TerminalData::ColorForegroundDefault => todo!("vt-c getTyped color_foreground_default"),
-        TerminalData::ColorBackgroundDefault => todo!("vt-c getTyped color_background_default"),
-        TerminalData::ColorCursorDefault => todo!("vt-c getTyped color_cursor_default"),
-        TerminalData::ColorPaletteDefault => todo!("vt-c getTyped color_palette_default"),
-        TerminalData::KittyImageStorageLimit => todo!("vt-c getTyped kitty_image_storage_limit"),
-        TerminalData::KittyImageMediumFile => todo!("vt-c getTyped kitty_image_medium_file"),
+        // .scrollbar => out.* = t.screens.active.pages.scrollbar().cval(),
+        TerminalData::Scrollbar => unsafe {
+            *(out as *mut TerminalScrollbar) = (*active).pages.scrollbar().cval()
+        },
+        // .cursor_style => out.* = .fromStyle(t.screens.active.cursor.style),
+        TerminalData::CursorStyle => unsafe {
+            *(out as *mut crate::style::Style) =
+                crate::style::Style::from_style((*active).cursor.style)
+        },
+        // .title => {
+        //     const title = t.getTitle() orelse "";
+        //     out.* = .{ .ptr = title.ptr, .len = title.len };
+        // },
+        TerminalData::Title => {
+            // SAFETY: shared read of the terminal's title via the raw ptr (no
+            // `&mut` retag of the handler-aliased terminal).
+            let title = unsafe { (*t).get_title() }.unwrap_or(b"");
+            unsafe { *(out as *mut LibString) = LibString::init(title) };
+        }
+        // .pwd => {
+        //     const pwd = t.getPwd() orelse "";
+        //     out.* = .{ .ptr = pwd.ptr, .len = pwd.len };
+        // },
+        TerminalData::Pwd => {
+            let pwd = unsafe { (*t).get_pwd() }.unwrap_or(b"");
+            unsafe { *(out as *mut LibString) = LibString::init(pwd) };
+        }
+        // .color_foreground => out.* = (t.colors.foreground.get() orelse return .no_value).cval(),
+        TerminalData::ColorForeground => {
+            let rgb = match unsafe { (*t).colors.foreground.get() } {
+                Some(c) => c,
+                None => return Result::NoValue,
+            };
+            unsafe { *(out as *mut crate::color::RgbC) = rgb };
+        }
+        // .color_background => out.* = (t.colors.background.get() orelse return .no_value).cval(),
+        TerminalData::ColorBackground => {
+            let rgb = match unsafe { (*t).colors.background.get() } {
+                Some(c) => c,
+                None => return Result::NoValue,
+            };
+            unsafe { *(out as *mut crate::color::RgbC) = rgb };
+        }
+        // .color_cursor => out.* = (t.colors.cursor.get() orelse return .no_value).cval(),
+        TerminalData::ColorCursor => {
+            let rgb = match unsafe { (*t).colors.cursor.get() } {
+                Some(c) => c,
+                None => return Result::NoValue,
+            };
+            unsafe { *(out as *mut crate::color::RgbC) = rgb };
+        }
+        // .color_foreground_default => out.* = (t.colors.foreground.default orelse return .no_value).cval(),
+        TerminalData::ColorForegroundDefault => {
+            let rgb = match unsafe { (*t).colors.foreground.default } {
+                Some(c) => c,
+                None => return Result::NoValue,
+            };
+            unsafe { *(out as *mut crate::color::RgbC) = rgb };
+        }
+        // .color_background_default => out.* = (t.colors.background.default orelse return .no_value).cval(),
+        TerminalData::ColorBackgroundDefault => {
+            let rgb = match unsafe { (*t).colors.background.default } {
+                Some(c) => c,
+                None => return Result::NoValue,
+            };
+            unsafe { *(out as *mut crate::color::RgbC) = rgb };
+        }
+        // .color_cursor_default => out.* = (t.colors.cursor.default orelse return .no_value).cval(),
+        TerminalData::ColorCursorDefault => {
+            let rgb = match unsafe { (*t).colors.cursor.default } {
+                Some(c) => c,
+                None => return Result::NoValue,
+            };
+            unsafe { *(out as *mut crate::color::RgbC) = rgb };
+        }
+        // .color_palette => out.* = color.paletteCval(&t.colors.palette.current),
+        TerminalData::ColorPalette => unsafe {
+            *(out as *mut crate::color::PaletteC) =
+                crate::color::palette_cval(&(*t).colors.palette.current)
+        },
+        // .color_palette_default => out.* = color.paletteCval(&t.colors.palette.original),
+        TerminalData::ColorPaletteDefault => unsafe {
+            *(out as *mut crate::color::PaletteC) =
+                crate::color::palette_cval(&(*t).colors.palette.original)
+        },
+        // .kitty_image_storage_limit => {
+        //     if (comptime !build_options.kitty_graphics) return .no_value;
+        //     out.* = @intCast(t.screens.active.kitty_images.total_limit);
+        // },
+        TerminalData::KittyImageStorageLimit => {
+            if !rustty_vt::options::KITTY_GRAPHICS {
+                return Result::NoValue;
+            }
+            unsafe { *(out as *mut u64) = (*active).kitty_images.total_limit as u64 };
+        }
+        // .kitty_image_medium_file => {
+        //     if (comptime !build_options.kitty_graphics) return .no_value;
+        //     out.* = t.screens.active.kitty_images.image_limits.file;
+        // },
+        TerminalData::KittyImageMediumFile => {
+            if !rustty_vt::options::KITTY_GRAPHICS {
+                return Result::NoValue;
+            }
+            unsafe { *(out as *mut bool) = (*active).kitty_images.image_limits.file };
+        }
+        // .kitty_image_medium_temp_file => {
+        //     if (comptime !build_options.kitty_graphics) return .no_value;
+        //     out.* = t.screens.active.kitty_images.image_limits.temporary_file;
+        // },
         TerminalData::KittyImageMediumTempFile => {
-            todo!("vt-c getTyped kitty_image_medium_temp_file")
+            if !rustty_vt::options::KITTY_GRAPHICS {
+                return Result::NoValue;
+            }
+            unsafe { *(out as *mut bool) = (*active).kitty_images.image_limits.temporary_file };
         }
+        // .kitty_image_medium_shared_mem => {
+        //     if (comptime !build_options.kitty_graphics) return .no_value;
+        //     out.* = t.screens.active.kitty_images.image_limits.shared_memory;
+        // },
         TerminalData::KittyImageMediumSharedMem => {
-            todo!("vt-c getTyped kitty_image_medium_shared_mem")
+            if !rustty_vt::options::KITTY_GRAPHICS {
+                return Result::NoValue;
+            }
+            unsafe { *(out as *mut bool) = (*active).kitty_images.image_limits.shared_memory };
         }
-        TerminalData::KittyGraphics => todo!("vt-c getTyped kitty_graphics"),
-        TerminalData::Selection => todo!("vt-c getTyped selection"),
+        // .kitty_graphics => {
+        //     if (comptime !build_options.kitty_graphics) return .no_value;
+        //     out.* = &t.screens.active.kitty_images;
+        // },
+        TerminalData::KittyGraphics => {
+            if !rustty_vt::options::KITTY_GRAPHICS {
+                return Result::NoValue;
+            }
+            // out.* = &t.screens.active.kitty_images;
+            // PORT NOTE: `KittyGraphics` is the opaque `*mut c_void` handle (see
+            // kitty_graphics.rs); hand out the address of the active screen's
+            // `kitty_images` storage.
+            unsafe {
+                *(out as *mut crate::kitty_graphics::KittyGraphics) =
+                    core::ptr::addr_of_mut!((*active).kitty_images) as *mut c_void
+            };
+        }
+        // .selection => out.* = selection_c.CSelection.fromZig(
+        //     t.screens.active.selection orelse return .no_value,
+        // ),
+        TerminalData::Selection => {
+            let sel = match unsafe { (*active).selection } {
+                Some(s) => s,
+                None => return Result::NoValue,
+            };
+            unsafe {
+                *(out as *mut crate::selection::CSelection) =
+                    crate::selection::CSelection::from_zig(sel)
+            };
+        }
     }
 
     Result::Success
@@ -1888,6 +2432,7 @@ mod tests {
             unsafe { vt_write(t, mv.as_ptr(), mv.len()) };
 
             // Shrink both axes; pre-resize cursor.y sits past the new bottom row.
+            // Previously this underflowed in PageList.resizeCols.
             assert_eq!(Result::Success, unsafe { resize(t, 79, 23, 8, 16) });
             assert_eq!(79, unsafe { (*(*t).terminal).cols });
             assert_eq!(23, unsafe { (*(*t).terminal).rows });
@@ -2020,6 +2565,8 @@ mod tests {
         with_test_allocator(|alloc| {
             let t = new_t(alloc, 80, 24, 10_000);
 
+            // Write "Hello" in bold by splitting the CSI bold sequence across two writes.
+            // ESC [ 1 m  = bold on, ESC [ 0 m = reset
             // Split ESC from the rest of the CSI sequence.
             unsafe { vt_write(t, b"Hello \x1b".as_ptr(), 7) };
             unsafe { vt_write(t, b"[1mBold\x1b[0m".as_ptr(), 10) };
@@ -2386,6 +2933,2204 @@ mod tests {
                 WRITE_PTY_CAPTURE.clone()
             };
             assert_eq!(b"\x1b[0n", captured.as_slice());
+            unsafe { free(t) };
+        });
+    }
+
+    // PORT NOTE (test helpers): the reference builds `point.Point.C` literals
+    // inline (`.{ .tag = .active, .value = .{ .active = .{ .x, .y } } }`). rustty's
+    // `PointC` is a hand-authored tagged union; these helpers construct it for the
+    // active/viewport/screen tags used by the ported tests.
+    fn pt_active(x: size::CellCountInt, y: u32) -> PointC {
+        PointC {
+            tag: crate::point::TagC::Active,
+            value: crate::point::PointCValue {
+                active: Coordinate { x, y },
+            },
+        }
+    }
+    fn pt_viewport(x: size::CellCountInt, y: u32) -> PointC {
+        PointC {
+            tag: crate::point::TagC::Viewport,
+            value: crate::point::PointCValue {
+                viewport: Coordinate { x, y },
+            },
+        }
+    }
+    fn pt_screen(x: size::CellCountInt, y: u32) -> PointC {
+        PointC {
+            tag: crate::point::TagC::Screen,
+            value: crate::point::PointCValue {
+                screen: Coordinate { x, y },
+            },
+        }
+    }
+
+    // Convenience: write a byte slice through `vt_write`.
+    fn vtw(t: Terminal, bytes: &[u8]) {
+        unsafe { vt_write(t, bytes.as_ptr(), bytes.len()) };
+    }
+
+    // test "set default cursor style and blink"
+    #[test]
+    fn set_default_cursor_style_and_blink() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            // var default_style: TerminalCursorStyle = .bar;
+            let mut default_style = TerminalCursorStyle::Bar;
+            // var default_blink = true;
+            let mut default_blink = true;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::DefaultCursorStyle,
+                    &mut default_style as *mut _ as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::DefaultCursorBlink,
+                    &mut default_blink as *mut _ as *const c_void,
+                )
+            });
+
+            // Setting defaults applies them immediately while the cursor is still default.
+            assert_eq!(rustty_vt::screen::CursorStyle::Bar, unsafe {
+                (*(*(*t).terminal).screens.active).cursor.cursor_style
+            });
+            assert!(unsafe { (*(*t).terminal).modes.get(modes::Mode::CursorBlinking) });
+
+            // An explicit DECSCUSR style overrides the configured defaults.
+            vtw(t, b"\x1b[2 q");
+            assert_eq!(rustty_vt::screen::CursorStyle::Block, unsafe {
+                (*(*(*t).terminal).screens.active).cursor.cursor_style
+            });
+            assert!(!unsafe { (*(*t).terminal).modes.get(modes::Mode::CursorBlinking) });
+
+            // Changing defaults does not override an explicit cursor style.
+            default_style = TerminalCursorStyle::Underline;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::DefaultCursorStyle,
+                    &mut default_style as *mut _ as *const c_void,
+                )
+            });
+            assert_eq!(rustty_vt::screen::CursorStyle::Block, unsafe {
+                (*(*(*t).terminal).screens.active).cursor.cursor_style
+            });
+            assert!(!unsafe { (*(*t).terminal).modes.get(modes::Mode::CursorBlinking) });
+
+            // DECSCUSR reset restores the configured default style and blink.
+            vtw(t, b"\x1b[0 q");
+            assert_eq!(rustty_vt::screen::CursorStyle::Underline, unsafe {
+                (*(*(*t).terminal).screens.active).cursor.cursor_style
+            });
+            assert!(unsafe { (*(*t).terminal).modes.get(modes::Mode::CursorBlinking) });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set and get selection"
+    #[test]
+    fn set_and_get_selection() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            vtw(t, b"Hello");
+
+            // var start_ref: grid_ref_c.CGridRef = .{};
+            let mut start_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(0, 0), &mut start_ref)
+            });
+
+            let mut end_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(4, 0), &mut end_ref)
+            });
+
+            let mut out = crate::selection::CSelection::default();
+            assert_eq!(Result::NoValue, unsafe {
+                get(
+                    t,
+                    TerminalData::Selection,
+                    &mut out as *mut _ as *mut c_void,
+                )
+            });
+
+            let sel = crate::selection::CSelection {
+                start: start_ref,
+                end: end_ref,
+                rectangle: true,
+                ..crate::selection::CSelection::default()
+            };
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::Selection, &sel as *const _ as *const c_void)
+            });
+            assert!(unsafe {
+                (*(*(*t).terminal).screens.active)
+                    .selection
+                    .unwrap()
+                    .tracked()
+            });
+
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::Selection,
+                    &mut out as *mut _ as *mut c_void,
+                )
+            });
+            assert!(out.start.to_pin().unwrap().eql(start_ref.to_pin().unwrap()));
+            assert!(out.end.to_pin().unwrap().eql(end_ref.to_pin().unwrap()));
+            assert!(out.rectangle);
+
+            // set(t, .selection, null)
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::Selection, std::ptr::null())
+            });
+            assert!(unsafe { (*(*(*t).terminal).screens.active).selection.is_none() });
+            assert_eq!(Result::NoValue, unsafe {
+                get(
+                    t,
+                    TerminalData::Selection,
+                    &mut out as *mut _ as *mut c_void,
+                )
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "selection derivation helpers"
+    #[test]
+    fn selection_derivation_helpers() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            vtw(t, b"  Hello  \r\nWorld");
+
+            let mut out = crate::selection::CSelection::default();
+
+            let mut word_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(3, 0), &mut word_ref)
+            });
+
+            let mut empty_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(20, 0), &mut empty_ref)
+            });
+
+            let mut line_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(0, 0), &mut line_ref)
+            });
+
+            let mut word_opts = crate::selection::SelectWordOptions {
+                size: size_of::<crate::selection::SelectWordOptions>(),
+                ref_: word_ref,
+                boundary_codepoints: std::ptr::null(),
+                boundary_codepoints_len: 0,
+            };
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::word(t, &word_opts, &mut out)
+            });
+            assert_eq!(2u16, out.start.to_pin().unwrap().x);
+            assert_eq!(6u16, out.end.to_pin().unwrap().x);
+
+            word_opts.ref_ = empty_ref;
+            assert_eq!(Result::NoValue, unsafe {
+                crate::selection::word(t, &word_opts, &mut out)
+            });
+
+            let mut between_start_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(20, 1), &mut between_start_ref)
+            });
+
+            let mut between_end_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(0, 1), &mut between_end_ref)
+            });
+
+            let word_between_opts = crate::selection::SelectWordBetweenOptions {
+                size: size_of::<crate::selection::SelectWordBetweenOptions>(),
+                start: between_start_ref,
+                end: between_end_ref,
+                boundary_codepoints: std::ptr::null(),
+                boundary_codepoints_len: 0,
+            };
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::word_between(t, &word_between_opts, &mut out)
+            });
+            assert_eq!(0u16, out.start.to_pin().unwrap().x);
+            assert_eq!(1u16, out.start.to_pin().unwrap().y);
+            assert_eq!(4u16, out.end.to_pin().unwrap().x);
+            assert_eq!(1u16, out.end.to_pin().unwrap().y);
+
+            let mut line_opts = crate::selection::SelectLineOptions {
+                size: size_of::<crate::selection::SelectLineOptions>(),
+                ref_: line_ref,
+                whitespace: std::ptr::null(),
+                whitespace_len: 0,
+                semantic_prompt_boundary: false,
+            };
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::line(t, &line_opts, &mut out)
+            });
+            assert_eq!(2u16, out.start.to_pin().unwrap().x);
+            assert_eq!(6u16, out.end.to_pin().unwrap().x);
+
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::all(t, &mut out)
+            });
+            assert_eq!(2u16, out.start.to_pin().unwrap().x);
+            assert_eq!(0u16, out.start.to_pin().unwrap().y);
+            assert_eq!(4u16, out.end.to_pin().unwrap().x);
+            assert_eq!(1u16, out.end.to_pin().unwrap().y);
+
+            assert_eq!(Result::NoValue, unsafe {
+                crate::selection::output(t, line_ref, &mut out)
+            });
+
+            line_opts.size = size_of::<usize>() - 1;
+            assert_eq!(Result::InvalidValue, unsafe {
+                crate::selection::line(t, &line_opts, &mut out)
+            });
+            assert_eq!(Result::InvalidValue, unsafe {
+                crate::selection::word(t, std::ptr::null(), &mut out)
+            });
+            assert_eq!(Result::InvalidValue, unsafe {
+                crate::selection::word(t, &word_opts, std::ptr::null_mut())
+            });
+            assert_eq!(Result::InvalidValue, unsafe {
+                crate::selection::word_between(t, std::ptr::null(), &mut out)
+            });
+            assert_eq!(Result::InvalidValue, unsafe {
+                crate::selection::word_between(t, &word_between_opts, std::ptr::null_mut())
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "selection_adjust mutates snapshot end"
+    #[test]
+    fn selection_adjust_mutates_snapshot_end() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            vtw(t, b"Hello");
+
+            let mut start_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(0, 0), &mut start_ref)
+            });
+
+            let mut end_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(1, 0), &mut end_ref)
+            });
+
+            let mut sel = crate::selection::CSelection {
+                start: start_ref,
+                end: end_ref,
+                ..crate::selection::CSelection::default()
+            };
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::adjust(t, &mut sel, crate::selection::Adjustment::Right)
+            });
+            assert_eq!(0u16, sel.start.to_pin().unwrap().x);
+            assert_eq!(2u16, sel.end.to_pin().unwrap().x);
+
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::adjust(t, &mut sel, crate::selection::Adjustment::Left)
+            });
+            assert_eq!(0u16, sel.start.to_pin().unwrap().x);
+            assert_eq!(1u16, sel.end.to_pin().unwrap().x);
+
+            sel = crate::selection::CSelection {
+                start: end_ref,
+                end: start_ref,
+                ..crate::selection::CSelection::default()
+            };
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::adjust(t, &mut sel, crate::selection::Adjustment::Right)
+            });
+            assert_eq!(1u16, sel.start.to_pin().unwrap().x);
+            assert_eq!(1u16, sel.end.to_pin().unwrap().x);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "selection_order and selection_ordered"
+    #[test]
+    fn selection_order_and_selection_ordered() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            vtw(t, b"Hello\r\nWorld");
+
+            let mut start_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(3, 0), &mut start_ref)
+            });
+
+            let mut end_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(1, 1), &mut end_ref)
+            });
+
+            let sel = crate::selection::CSelection {
+                start: start_ref,
+                end: end_ref,
+                rectangle: true,
+                ..crate::selection::CSelection::default()
+            };
+
+            let mut order = crate::selection::Order::Forward;
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::order(t, &sel, &mut order)
+            });
+            assert_eq!(crate::selection::Order::MirroredForward, order);
+
+            let mut out = crate::selection::CSelection::default();
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::ordered(t, &sel, crate::selection::Order::Forward, &mut out)
+            });
+            assert_eq!(1u16, out.start.to_pin().unwrap().x);
+            assert_eq!(0u16, out.start.to_pin().unwrap().y);
+            assert_eq!(3u16, out.end.to_pin().unwrap().x);
+            assert_eq!(1u16, out.end.to_pin().unwrap().y);
+            assert!(out.rectangle);
+
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::ordered(t, &sel, crate::selection::Order::Reverse, &mut out)
+            });
+            assert_eq!(3u16, out.start.to_pin().unwrap().x);
+            assert_eq!(1u16, out.start.to_pin().unwrap().y);
+            assert_eq!(1u16, out.end.to_pin().unwrap().x);
+            assert_eq!(0u16, out.end.to_pin().unwrap().y);
+            assert!(out.rectangle);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "selection_contains"
+    #[test]
+    fn selection_contains_test() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            vtw(t, b"Hello\r\nWorld");
+
+            let mut start_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(3, 0), &mut start_ref)
+            });
+
+            let mut end_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(1, 1), &mut end_ref)
+            });
+
+            let linear = crate::selection::CSelection {
+                start: start_ref,
+                end: end_ref,
+                ..crate::selection::CSelection::default()
+            };
+
+            let mut contains = false;
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::contains(t, &linear, pt_active(4, 0), &mut contains)
+            });
+            assert!(contains);
+
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::contains(t, &linear, pt_active(2, 0), &mut contains)
+            });
+            assert!(!contains);
+
+            let rectangle = crate::selection::CSelection {
+                start: start_ref,
+                end: end_ref,
+                rectangle: true,
+                ..crate::selection::CSelection::default()
+            };
+
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::contains(t, &rectangle, pt_active(2, 0), &mut contains)
+            });
+            assert!(contains);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "selection_equal"
+    #[test]
+    fn selection_equal_test() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            let other_t = new_t(alloc, 80, 24, 0);
+
+            vtw(t, b"Hello");
+            vtw(other_t, b"Hello");
+
+            let mut start_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(0, 0), &mut start_ref)
+            });
+
+            let mut end_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(1, 0), &mut end_ref)
+            });
+
+            let mut other_end_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(2, 0), &mut other_end_ref)
+            });
+
+            let mut cross_terminal_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(other_t, pt_active(1, 0), &mut cross_terminal_ref)
+            });
+
+            let sel = crate::selection::CSelection {
+                start: start_ref,
+                end: end_ref,
+                ..crate::selection::CSelection::default()
+            };
+            let equal_sel = crate::selection::CSelection {
+                start: start_ref,
+                end: end_ref,
+                ..crate::selection::CSelection::default()
+            };
+            let different_endpoint = crate::selection::CSelection {
+                start: start_ref,
+                end: other_end_ref,
+                ..crate::selection::CSelection::default()
+            };
+            let different_rectangle = crate::selection::CSelection {
+                start: start_ref,
+                end: end_ref,
+                rectangle: true,
+                ..crate::selection::CSelection::default()
+            };
+            let cross_terminal = crate::selection::CSelection {
+                start: start_ref,
+                end: cross_terminal_ref,
+                ..crate::selection::CSelection::default()
+            };
+
+            let mut equal = false;
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::equal(t, &sel, &equal_sel, &mut equal)
+            });
+            assert!(equal);
+
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::equal(t, &sel, &different_endpoint, &mut equal)
+            });
+            assert!(!equal);
+
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::equal(t, &sel, &different_rectangle, &mut equal)
+            });
+            assert!(!equal);
+
+            assert_eq!(Result::Success, unsafe {
+                crate::selection::equal(t, &sel, &cross_terminal, &mut equal)
+            });
+            assert!(!equal);
+            assert_eq!(Result::InvalidValue, unsafe {
+                crate::selection::equal(t, &sel, &equal_sel, std::ptr::null_mut())
+            });
+            unsafe { free(t) };
+            unsafe { free(other_t) };
+        });
+    }
+
+    // test "selection_order invalid values"
+    #[test]
+    fn selection_order_invalid_values() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let mut order = crate::selection::Order::Forward;
+            assert_eq!(Result::InvalidValue, unsafe {
+                crate::selection::order(std::ptr::null_mut(), std::ptr::null(), &mut order)
+            });
+            assert_eq!(Result::InvalidValue, unsafe {
+                crate::selection::order(t, std::ptr::null(), &mut order)
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "grid_ref"
+    #[test]
+    fn grid_ref_test() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            vtw(t, b"Hello");
+
+            let mut out_ref = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(0, 0), &mut out_ref)
+            });
+
+            // Extract cell from grid ref and verify it contains 'H'
+            let mut out_cell: crate::cell::CCell = 0;
+            assert_eq!(Result::Success, unsafe {
+                crate::grid_ref::grid_ref_cell(&out_ref, &mut out_cell)
+            });
+
+            let mut cp: u32 = 0;
+            assert_eq!(Result::Success, unsafe {
+                crate::cell::get(
+                    out_cell,
+                    crate::cell::CellData::Codepoint,
+                    &mut cp as *mut _ as *mut c_void,
+                )
+            });
+            assert_eq!(b'H' as u32, cp);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "grid_ref null terminal"
+    #[test]
+    fn grid_ref_null_terminal() {
+        let mut out_ref = CGridRef::default();
+        assert_eq!(Result::InvalidValue, unsafe {
+            grid_ref(std::ptr::null_mut(), pt_active(0, 0), &mut out_ref)
+        });
+    }
+
+    // test "point_from_grid_ref roundtrip active"
+    #[test]
+    fn point_from_grid_ref_roundtrip_active() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 10_000);
+
+            vtw(t, b"Hello");
+
+            // Get a grid ref at (2, 0) in active coords
+            let mut ref_ = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_active(2, 0), &mut ref_)
+            });
+
+            // Convert back to active coords
+            let mut coord = Coordinate { x: 0, y: 0 };
+            assert_eq!(Result::Success, unsafe {
+                point_from_grid_ref(t, &ref_, Tag::Active, &mut coord)
+            });
+            assert_eq!(2 as size::CellCountInt, coord.x);
+            assert_eq!(0u32, coord.y);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "point_from_grid_ref roundtrip viewport"
+    #[test]
+    fn point_from_grid_ref_roundtrip_viewport() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 10_000);
+
+            vtw(t, b"Hello");
+
+            let mut ref_ = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_viewport(0, 0), &mut ref_)
+            });
+
+            let mut coord = Coordinate { x: 0, y: 0 };
+            assert_eq!(Result::Success, unsafe {
+                point_from_grid_ref(t, &ref_, Tag::Viewport, &mut coord)
+            });
+            assert_eq!(0 as size::CellCountInt, coord.x);
+            assert_eq!(0u32, coord.y);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "point_from_grid_ref history ref to active returns no_value"
+    #[test]
+    fn point_from_grid_ref_history_ref_to_active_returns_no_value() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 4, 10_000);
+
+            // Write enough lines to push content into scrollback
+            for _ in 0..10 {
+                vtw(t, b"line\n");
+            }
+
+            // Get a ref to the first line (now in scrollback)
+            let mut ref_ = CGridRef::default();
+            assert_eq!(Result::Success, unsafe {
+                grid_ref(t, pt_screen(0, 0), &mut ref_)
+            });
+
+            // Should succeed for screen coords
+            let mut coord = Coordinate { x: 0, y: 0 };
+            assert_eq!(Result::Success, unsafe {
+                point_from_grid_ref(t, &ref_, Tag::Screen, &mut coord)
+            });
+            assert_eq!(0u32, coord.y);
+
+            // Should fail for active coords (it's in scrollback)
+            assert_eq!(Result::NoValue, unsafe {
+                point_from_grid_ref(t, &ref_, Tag::Active, &mut coord)
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "point_from_grid_ref null terminal"
+    #[test]
+    fn point_from_grid_ref_null_terminal() {
+        let ref_ = CGridRef::default();
+        assert_eq!(Result::InvalidValue, unsafe {
+            point_from_grid_ref(
+                std::ptr::null_mut(),
+                &ref_,
+                Tag::Active,
+                std::ptr::null_mut(),
+            )
+        });
+    }
+
+    // test "point_from_grid_ref null node"
+    #[test]
+    fn point_from_grid_ref_null_node() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let ref_ = CGridRef::default();
+            assert_eq!(Result::InvalidValue, unsafe {
+                point_from_grid_ref(t, &ref_, Tag::Active, std::ptr::null_mut())
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // PORT NOTE (callback test scaffolding): the reference declares a per-test
+    // `const S = struct { var last_data: ?[]u8 = ...; fn writePty(...) {...} }`
+    // capturing into file-local `var`s with `testing.allocator.dupe`. The rustty
+    // analog is a per-test module-scope `static mut` plus an `extern "C" fn`; the
+    // capture buffer is an owned `Vec<u8>` (freed on test exit). `#[allow(
+    // static_mut_refs)]` mirrors the existing trampoline probe above. Each test's
+    // statics are isolated to its own `mod`-like block so the parallel test runner
+    // never aliases them.
+
+    // test "set write_pty callback"
+    #[test]
+    fn set_write_pty_callback() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        static mut LAST_USERDATA: *mut c_void = std::ptr::null_mut();
+        extern "C" fn write_pty(_t: Terminal, ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe {
+                LAST_DATA = Some(data);
+                LAST_USERDATA = ud;
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe {
+                LAST_DATA = None;
+                LAST_USERDATA = std::ptr::null_mut();
+            }
+
+            // Set userdata and write_pty callback
+            let mut sentinel: u8 = 42;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::Userdata,
+                    &mut sentinel as *mut u8 as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+
+            // DECRQM for wraparound mode (mode 7, set by default) should trigger write_pty
+            vtw(t, b"\x1B[?7$p");
+            assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_some());
+            assert_eq!(
+                b"\x1B[?7;1$y".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
+            assert_eq!(&mut sentinel as *mut u8 as *mut c_void, unsafe {
+                LAST_USERDATA
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set write_pty without callback ignores queries"
+    #[test]
+    fn set_write_pty_without_callback_ignores_queries() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            // Without setting a callback, DECRQM should be silently ignored (no crash)
+            vtw(t, b"\x1B[?7$p");
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set write_pty null clears callback"
+    #[test]
+    fn set_write_pty_null_clears_callback() {
+        static mut CALLED: bool = false;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, _ptr: *const u8, _len: usize) {
+            unsafe { CALLED = true };
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe { CALLED = false };
+
+            // Set then clear the callback
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, std::ptr::null())
+            });
+
+            vtw(t, b"\x1B[?7$p");
+            assert!(!unsafe { CALLED });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set bell callback"
+    #[test]
+    fn set_bell_callback() {
+        static mut BELL_COUNT: usize = 0;
+        static mut LAST_USERDATA: *mut c_void = std::ptr::null_mut();
+        extern "C" fn bell(_t: Terminal, ud: *mut c_void) {
+            unsafe {
+                BELL_COUNT += 1;
+                LAST_USERDATA = ud;
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe {
+                BELL_COUNT = 0;
+                LAST_USERDATA = std::ptr::null_mut();
+            }
+
+            // Set userdata and bell callback
+            let mut sentinel: u8 = 99;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::Userdata,
+                    &mut sentinel as *mut u8 as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::Bell, bell as *const c_void)
+            });
+
+            // Single BEL
+            vtw(t, b"\x07");
+            assert_eq!(1usize, unsafe { BELL_COUNT });
+            assert_eq!(&mut sentinel as *mut u8 as *mut c_void, unsafe {
+                LAST_USERDATA
+            });
+
+            // Multiple BELs
+            vtw(t, b"\x07\x07");
+            assert_eq!(3usize, unsafe { BELL_COUNT });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "bell without callback is silent"
+    #[test]
+    fn bell_without_callback_is_silent() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            // BEL without a callback should not crash
+            vtw(t, b"\x07");
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set enquiry callback"
+    #[test]
+    fn set_enquiry_callback() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe { LAST_DATA = Some(data) };
+        }
+        const RESPONSE: &[u8] = b"OK";
+        extern "C" fn enquiry(_t: Terminal, _ud: *mut c_void) -> LibString {
+            LibString {
+                ptr: RESPONSE.as_ptr(),
+                len: RESPONSE.len(),
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe { LAST_DATA = None };
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::Enquiry, enquiry as *const c_void)
+            });
+
+            // ENQ (0x05) should trigger the enquiry callback and write response via write_pty
+            vtw(t, b"\x05");
+            assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_some());
+            assert_eq!(
+                b"OK".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
+            unsafe { free(t) };
+        });
+    }
+
+    // test "enquiry without callback is silent"
+    #[test]
+    fn enquiry_without_callback_is_silent() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            // ENQ without a callback should not crash
+            vtw(t, b"\x05");
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set xtversion callback"
+    #[test]
+    fn set_xtversion_callback() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe { LAST_DATA = Some(data) };
+        }
+        const VERSION: &[u8] = b"myterm 1.0";
+        extern "C" fn xtversion(_t: Terminal, _ud: *mut c_void) -> LibString {
+            LibString {
+                ptr: VERSION.as_ptr(),
+                len: VERSION.len(),
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe { LAST_DATA = None };
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::Xtversion, xtversion as *const c_void)
+            });
+
+            // XTVERSION: CSI > q
+            vtw(t, b"\x1B[>q");
+            assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_some());
+            // Response should be DCS >| version ST
+            assert_eq!(
+                b"\x1BP>|myterm 1.0\x1B\\".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
+            unsafe { free(t) };
+        });
+    }
+
+    // test "xtversion without callback reports default"
+    #[test]
+    fn xtversion_without_callback_reports_default() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe { LAST_DATA = Some(data) };
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe { LAST_DATA = None };
+
+            // Set write_pty but not xtversion — should get default "libghostty"
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+
+            vtw(t, b"\x1B[>q");
+            assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_some());
+            // PORT NOTE: the reference default version string is "libghostty";
+            // rustty retargets it to "librustty" (the rename rule, see
+            // `report_xtversion`), so the INDEPENDENT expected value is "librustty".
+            assert_eq!(
+                b"\x1BP>|librustty\x1B\\".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set title_changed callback"
+    #[test]
+    fn set_title_changed_callback() {
+        static mut TITLE_COUNT: usize = 0;
+        static mut LAST_USERDATA: *mut c_void = std::ptr::null_mut();
+        extern "C" fn title_changed(_t: Terminal, ud: *mut c_void) {
+            unsafe {
+                TITLE_COUNT += 1;
+                LAST_USERDATA = ud;
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe {
+                TITLE_COUNT = 0;
+                LAST_USERDATA = std::ptr::null_mut();
+            }
+
+            let mut sentinel: u8 = 77;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::Userdata,
+                    &mut sentinel as *mut u8 as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::TitleChanged, title_changed as *const c_void)
+            });
+
+            // OSC 2 ; title ST — set window title
+            vtw(t, b"\x1B]2;Hello\x1B\\");
+            assert_eq!(1usize, unsafe { TITLE_COUNT });
+            assert_eq!(&mut sentinel as *mut u8 as *mut c_void, unsafe {
+                LAST_USERDATA
+            });
+
+            // Another title change
+            vtw(t, b"\x1B]2;World\x1B\\");
+            assert_eq!(2usize, unsafe { TITLE_COUNT });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "title_changed without callback is silent"
+    #[test]
+    fn title_changed_without_callback_is_silent() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            // OSC 2 without a callback should not crash
+            vtw(t, b"\x1B]2;Hello\x1B\\");
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set pwd_changed callback"
+    #[test]
+    fn set_pwd_changed_callback() {
+        static mut PWD_COUNT: usize = 0;
+        static mut LAST_USERDATA: *mut c_void = std::ptr::null_mut();
+        extern "C" fn pwd_changed(_t: Terminal, ud: *mut c_void) {
+            unsafe {
+                PWD_COUNT += 1;
+                LAST_USERDATA = ud;
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe {
+                PWD_COUNT = 0;
+                LAST_USERDATA = std::ptr::null_mut();
+            }
+
+            let mut sentinel: u8 = 88;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::Userdata,
+                    &mut sentinel as *mut u8 as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::PwdChanged, pwd_changed as *const c_void)
+            });
+
+            // OSC 7 ; file:///tmp ST — report pwd
+            vtw(t, b"\x1B]7;file:///tmp\x1B\\");
+            assert_eq!(1usize, unsafe { PWD_COUNT });
+            assert_eq!(&mut sentinel as *mut u8 as *mut c_void, unsafe {
+                LAST_USERDATA
+            });
+            assert_eq!(b"file:///tmp".as_slice(), unsafe {
+                (*zig_terminal(t)).get_pwd().unwrap()
+            });
+
+            // Another pwd change
+            vtw(t, b"\x1B]7;file:///home/user\x1B\\");
+            assert_eq!(2usize, unsafe { PWD_COUNT });
+            assert_eq!(b"file:///home/user".as_slice(), unsafe {
+                (*zig_terminal(t)).get_pwd().unwrap()
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "pwd_changed without callback is silent"
+    #[test]
+    fn pwd_changed_without_callback_is_silent() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            // OSC 7 without a callback should not crash, but should still set the pwd
+            vtw(t, b"\x1B]7;file:///tmp\x1B\\");
+            assert_eq!(b"file:///tmp".as_slice(), unsafe {
+                (*zig_terminal(t)).get_pwd().unwrap()
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set size callback"
+    #[test]
+    fn set_size_callback() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe { LAST_DATA = Some(data) };
+        }
+        extern "C" fn size_cb(
+            _t: Terminal,
+            _ud: *mut c_void,
+            out_size: *mut size_report::Size,
+        ) -> bool {
+            unsafe {
+                *out_size = size_report::Size {
+                    rows: 24,
+                    columns: 80,
+                    cell_width: 8,
+                    cell_height: 16,
+                };
+            }
+            true
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe { LAST_DATA = None };
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::SizeCb, size_cb as *const c_void)
+            });
+
+            // CSI 18 t — report text area size in characters
+            vtw(t, b"\x1B[18t");
+            assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_some());
+            assert_eq!(
+                b"\x1b[8;24;80t".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
+            unsafe { free(t) };
+        });
+    }
+
+    // test "size without callback is silent"
+    #[test]
+    fn size_without_callback_is_silent() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            // CSI 18 t without a size callback should not crash
+            vtw(t, b"\x1B[18t");
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set device_attributes callback primary"
+    #[test]
+    fn set_device_attributes_callback_primary() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe { LAST_DATA = Some(data) };
+        }
+        extern "C" fn da(_t: Terminal, _ud: *mut c_void, out: *mut CDeviceAttributes) -> bool {
+            let mut features = [0u16; 64];
+            features[0] = 22;
+            features[1] = 52;
+            unsafe {
+                *out = CDeviceAttributes {
+                    primary: CDeviceAttributesPrimary {
+                        conformance_level: 64,
+                        features,
+                        num_features: 2,
+                    },
+                    secondary: CDeviceAttributesSecondary {
+                        device_type: 1,
+                        firmware_version: 10,
+                        rom_cartridge: 0,
+                    },
+                    tertiary: CDeviceAttributesTertiary { unit_id: 0 },
+                };
+            }
+            true
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe { LAST_DATA = None };
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::DeviceAttributes, da as *const c_void)
+            });
+
+            // CSI c — primary DA
+            vtw(t, b"\x1B[c");
+            assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_some());
+            assert_eq!(
+                b"\x1b[?64;22;52c".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set device_attributes callback secondary"
+    #[test]
+    fn set_device_attributes_callback_secondary() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe { LAST_DATA = Some(data) };
+        }
+        extern "C" fn da(_t: Terminal, _ud: *mut c_void, out: *mut CDeviceAttributes) -> bool {
+            let mut features = [0u16; 64];
+            features[0] = 22;
+            unsafe {
+                *out = CDeviceAttributes {
+                    primary: CDeviceAttributesPrimary {
+                        conformance_level: 62,
+                        features,
+                        num_features: 1,
+                    },
+                    secondary: CDeviceAttributesSecondary {
+                        device_type: 1,
+                        firmware_version: 10,
+                        rom_cartridge: 0,
+                    },
+                    tertiary: CDeviceAttributesTertiary { unit_id: 0 },
+                };
+            }
+            true
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe { LAST_DATA = None };
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::DeviceAttributes, da as *const c_void)
+            });
+
+            // CSI > c — secondary DA
+            vtw(t, b"\x1B[>c");
+            assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_some());
+            assert_eq!(
+                b"\x1b[>1;10;0c".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set device_attributes callback tertiary"
+    #[test]
+    fn set_device_attributes_callback_tertiary() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe { LAST_DATA = Some(data) };
+        }
+        extern "C" fn da(_t: Terminal, _ud: *mut c_void, out: *mut CDeviceAttributes) -> bool {
+            unsafe {
+                *out = CDeviceAttributes {
+                    primary: CDeviceAttributesPrimary {
+                        conformance_level: 62,
+                        features: [0u16; 64],
+                        num_features: 0,
+                    },
+                    secondary: CDeviceAttributesSecondary {
+                        device_type: 1,
+                        firmware_version: 0,
+                        rom_cartridge: 0,
+                    },
+                    tertiary: CDeviceAttributesTertiary {
+                        unit_id: 0xAABBCCDD,
+                    },
+                };
+            }
+            true
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe { LAST_DATA = None };
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::DeviceAttributes, da as *const c_void)
+            });
+
+            // CSI = c — tertiary DA
+            vtw(t, b"\x1B[=c");
+            assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_some());
+            assert_eq!(
+                b"\x1bP!|AABBCCDD\x1b\\".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
+            unsafe { free(t) };
+        });
+    }
+
+    // test "device_attributes without callback uses default"
+    #[test]
+    fn device_attributes_without_callback_uses_default() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe { LAST_DATA = Some(data) };
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe { LAST_DATA = None };
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+
+            // Without setting a device_attributes callback, DA1 should return the default
+            vtw(t, b"\x1B[c");
+            assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_some());
+            assert_eq!(
+                b"\x1b[?62;22c".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
+            unsafe { free(t) };
+        });
+    }
+
+    // test "device_attributes callback returns false uses default"
+    #[test]
+    fn device_attributes_callback_returns_false_uses_default() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe { LAST_DATA = Some(data) };
+        }
+        extern "C" fn da(_t: Terminal, _ud: *mut c_void, _out: *mut CDeviceAttributes) -> bool {
+            false
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe { LAST_DATA = None };
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::DeviceAttributes, da as *const c_void)
+            });
+
+            // Callback returns false, should use default response
+            vtw(t, b"\x1B[c");
+            assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_some());
+            assert_eq!(
+                b"\x1b[?62;22c".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set and get title"
+    #[test]
+    fn set_and_get_title() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            // No title set yet — should return empty string
+            let mut title = LibString {
+                ptr: std::ptr::null(),
+                len: 0,
+            };
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::Title, &mut title as *mut _ as *mut c_void)
+            });
+            assert_eq!(0usize, title.len);
+
+            // Set title via option
+            let hello = LibString {
+                ptr: b"Hello".as_ptr(),
+                len: 5,
+            };
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::Title, &hello as *const _ as *const c_void)
+            });
+
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::Title, &mut title as *mut _ as *mut c_void)
+            });
+            assert_eq!(b"Hello".as_slice(), unsafe {
+                core::slice::from_raw_parts(title.ptr, title.len)
+            });
+
+            // Overwrite title
+            let world = LibString {
+                ptr: b"World".as_ptr(),
+                len: 5,
+            };
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::Title, &world as *const _ as *const c_void)
+            });
+
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::Title, &mut title as *mut _ as *mut c_void)
+            });
+            assert_eq!(b"World".as_slice(), unsafe {
+                core::slice::from_raw_parts(title.ptr, title.len)
+            });
+
+            // Clear title with NULL
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::Title, std::ptr::null())
+            });
+
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::Title, &mut title as *mut _ as *mut c_void)
+            });
+            assert_eq!(0usize, title.len);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set and get pwd"
+    #[test]
+    fn set_and_get_pwd() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            // No pwd set yet — should return empty string
+            let mut pwd = LibString {
+                ptr: std::ptr::null(),
+                len: 0,
+            };
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::Pwd, &mut pwd as *mut _ as *mut c_void)
+            });
+            assert_eq!(0usize, pwd.len);
+
+            // Set pwd via option
+            let home = LibString {
+                ptr: b"/home/user".as_ptr(),
+                len: 10,
+            };
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::Pwd, &home as *const _ as *const c_void)
+            });
+
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::Pwd, &mut pwd as *mut _ as *mut c_void)
+            });
+            assert_eq!(b"/home/user".as_slice(), unsafe {
+                core::slice::from_raw_parts(pwd.ptr, pwd.len)
+            });
+
+            // Clear pwd with NULL
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::Pwd, std::ptr::null())
+            });
+
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::Pwd, &mut pwd as *mut _ as *mut c_void)
+            });
+            assert_eq!(0usize, pwd.len);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get title set via vt_write"
+    #[test]
+    fn get_title_set_via_vt_write() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            // Set title via OSC 2
+            vtw(t, b"\x1B]2;VT Title\x1B\\");
+
+            let mut title = LibString {
+                ptr: std::ptr::null(),
+                len: 0,
+            };
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::Title, &mut title as *mut _ as *mut c_void)
+            });
+            assert_eq!(b"VT Title".as_slice(), unsafe {
+                core::slice::from_raw_parts(title.ptr, title.len)
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "resize updates pixel dimensions"
+    #[test]
+    fn resize_updates_pixel_dimensions() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            assert_eq!(Result::Success, unsafe { resize(t, 100, 40, 9, 18) });
+
+            let zt = unsafe { (*t).terminal };
+            assert_eq!(100u32 * 9, unsafe { (*zt).width_px });
+            assert_eq!(40u32 * 18, unsafe { (*zt).height_px });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "resize pixel overflow saturates"
+    #[test]
+    fn resize_pixel_overflow_saturates() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            assert_eq!(Result::Success, unsafe {
+                resize(t, 100, 40, u32::MAX, u32::MAX)
+            });
+
+            let zt = unsafe { (*t).terminal };
+            assert_eq!(u32::MAX, unsafe { (*zt).width_px });
+            assert_eq!(u32::MAX, unsafe { (*zt).height_px });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "resize disables synchronized output"
+    #[test]
+    fn resize_disables_synchronized_output() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let zt = unsafe { (*t).terminal };
+            unsafe { (*zt).modes.set(modes::Mode::SynchronizedOutput, true) };
+
+            assert_eq!(Result::Success, unsafe { resize(t, 100, 40, 9, 18) });
+            assert!(!unsafe { (*zt).modes.get(modes::Mode::SynchronizedOutput) });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "resize sends in-band size report"
+    #[test]
+    fn resize_sends_in_band_size_report() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe { LAST_DATA = Some(data) };
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe { LAST_DATA = None };
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+
+            // Enable in-band size reports (mode 2048)
+            unsafe {
+                (*(*t).terminal)
+                    .modes
+                    .set(modes::Mode::InBandSizeReports, true)
+            };
+
+            assert_eq!(Result::Success, unsafe { resize(t, 100, 40, 9, 18) });
+
+            // Expected: \x1B[48;rows;cols;height_px;width_pxt
+            // height_px = 40*18 = 720, width_px = 100*9 = 900
+            assert!(unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }.is_some());
+            assert_eq!(
+                b"\x1B[48;40;100;720;900t".as_slice(),
+                unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+                    .unwrap()
+                    .as_slice()
+            );
+            unsafe { free(t) };
+        });
+    }
+
+    // test "resize no size report without mode 2048"
+    #[test]
+    fn resize_no_size_report_without_mode_2048() {
+        static mut CALLED: bool = false;
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, _ptr: *const u8, _len: usize) {
+            unsafe { CALLED = true };
+        }
+
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            unsafe { CALLED = false };
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+
+            // in_band_size_reports is off by default
+            assert_eq!(Result::Success, unsafe { resize(t, 100, 40, 9, 18) });
+            assert!(!unsafe { CALLED });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "resize in-band report without write_pty callback"
+    #[test]
+    fn resize_in_band_report_without_write_pty_callback() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            // Enable mode 2048 but don't set a write_pty callback — should not crash
+            unsafe {
+                (*(*t).terminal)
+                    .modes
+                    .set(modes::Mode::InBandSizeReports, true)
+            };
+            assert_eq!(Result::Success, unsafe { resize(t, 100, 40, 9, 18) });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "resize null terminal"
+    #[test]
+    fn resize_null_terminal() {
+        assert_eq!(Result::InvalidValue, unsafe {
+            resize(std::ptr::null_mut(), 100, 40, 9, 18)
+        });
+    }
+
+    // test "resize zero cols"
+    #[test]
+    fn resize_zero_cols() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::InvalidValue, unsafe { resize(t, 0, 40, 9, 18) });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "resize zero rows"
+    #[test]
+    fn resize_zero_rows() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::InvalidValue, unsafe { resize(t, 100, 0, 9, 18) });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "grid_ref out of bounds"
+    #[test]
+    fn grid_ref_out_of_bounds() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let mut out_ref = CGridRef::default();
+            assert_eq!(Result::InvalidValue, unsafe {
+                grid_ref(t, pt_active(100, 0), &mut out_ref)
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set and get color_foreground"
+    #[test]
+    fn set_and_get_color_foreground() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            // Initially unset
+            let mut rgb = crate::color::RgbC { r: 0, g: 0, b: 0 };
+            assert_eq!(Result::NoValue, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorForeground,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+
+            // Set a value
+            let fg = crate::color::RgbC {
+                r: 0xAA,
+                g: 0xBB,
+                b: 0xCC,
+            };
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ColorForeground,
+                    &fg as *const _ as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorForeground,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+            assert_eq!(fg, rgb);
+
+            // Clear with null
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ColorForeground, std::ptr::null())
+            });
+            assert_eq!(Result::NoValue, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorForeground,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set and get color_background"
+    #[test]
+    fn set_and_get_color_background() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let mut rgb = crate::color::RgbC { r: 0, g: 0, b: 0 };
+            assert_eq!(Result::NoValue, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorBackground,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+
+            let bg = crate::color::RgbC {
+                r: 0x11,
+                g: 0x22,
+                b: 0x33,
+            };
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ColorBackground,
+                    &bg as *const _ as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorBackground,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+            assert_eq!(bg, rgb);
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ColorBackground, std::ptr::null())
+            });
+            assert_eq!(Result::NoValue, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorBackground,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set and get color_cursor"
+    #[test]
+    fn set_and_get_color_cursor() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let mut rgb = crate::color::RgbC { r: 0, g: 0, b: 0 };
+            assert_eq!(Result::NoValue, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorCursor,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+
+            let cur = crate::color::RgbC {
+                r: 0xFF,
+                g: 0x00,
+                b: 0x88,
+            };
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ColorCursor, &cur as *const _ as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorCursor,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+            assert_eq!(cur, rgb);
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ColorCursor, std::ptr::null())
+            });
+            assert_eq!(Result::NoValue, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorCursor,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set and get color_palette"
+    #[test]
+    fn set_and_get_color_palette() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            // Get default palette
+            let mut palette: crate::color::PaletteC =
+                [crate::color::RgbC { r: 0, g: 0, b: 0 }; 256];
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorPalette,
+                    palette.as_mut_ptr() as *mut c_void,
+                )
+            });
+            assert_eq!(rustty_vt::color::DEFAULT[0], palette[0]);
+
+            // Set custom palette
+            let mut custom: crate::color::PaletteC =
+                unsafe { crate::color::palette_cval(&rustty_vt::color::DEFAULT) };
+            custom[0] = crate::color::RgbC {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56,
+            };
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ColorPalette, custom.as_ptr() as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorPalette,
+                    palette.as_mut_ptr() as *mut c_void,
+                )
+            });
+            assert_eq!(custom[0], palette[0]);
+
+            // Reset with null restores default
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ColorPalette, std::ptr::null())
+            });
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorPalette,
+                    palette.as_mut_ptr() as *mut c_void,
+                )
+            });
+            assert_eq!(rustty_vt::color::DEFAULT[0], palette[0]);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get color default vs effective with override"
+    #[test]
+    fn get_color_default_vs_effective_with_override() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let zt = unsafe { (*t).terminal };
+            let mut rgb = crate::color::RgbC { r: 0, g: 0, b: 0 };
+
+            // Set defaults
+            let fg = crate::color::RgbC {
+                r: 0xAA,
+                g: 0xBB,
+                b: 0xCC,
+            };
+            let bg = crate::color::RgbC {
+                r: 0x11,
+                g: 0x22,
+                b: 0x33,
+            };
+            let cur = crate::color::RgbC {
+                r: 0xFF,
+                g: 0x00,
+                b: 0x88,
+            };
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ColorForeground,
+                    &fg as *const _ as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ColorBackground,
+                    &bg as *const _ as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ColorCursor, &cur as *const _ as *const c_void)
+            });
+
+            // Simulate OSC overrides
+            let override_ = crate::color::RgbC {
+                r: 0x00,
+                g: 0x00,
+                b: 0x00,
+            };
+            unsafe {
+                (*zt).colors.foreground.override_ = Some(override_);
+                (*zt).colors.background.override_ = Some(override_);
+                (*zt).colors.cursor.override_ = Some(override_);
+            }
+
+            // Effective returns override
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorForeground,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+            assert_eq!(override_, rgb);
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorBackground,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+            assert_eq!(override_, rgb);
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorCursor,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+            assert_eq!(override_, rgb);
+
+            // Default returns original
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorForegroundDefault,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+            assert_eq!(fg, rgb);
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorBackgroundDefault,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+            assert_eq!(bg, rgb);
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorCursorDefault,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+            assert_eq!(cur, rgb);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get color default returns no_value when unset"
+    #[test]
+    fn get_color_default_returns_no_value_when_unset() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let mut rgb = crate::color::RgbC { r: 0, g: 0, b: 0 };
+            assert_eq!(Result::NoValue, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorForegroundDefault,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+            assert_eq!(Result::NoValue, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorBackgroundDefault,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+            assert_eq!(Result::NoValue, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorCursorDefault,
+                    &mut rgb as *mut _ as *mut c_void,
+                )
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get color_palette_default vs current"
+    #[test]
+    fn get_color_palette_default_vs_current() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let zt = unsafe { (*t).terminal };
+
+            // Set a custom default palette
+            let mut custom: crate::color::PaletteC =
+                unsafe { crate::color::palette_cval(&rustty_vt::color::DEFAULT) };
+            custom[0] = crate::color::RgbC {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56,
+            };
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ColorPalette, custom.as_ptr() as *const c_void)
+            });
+
+            // Simulate OSC override on index 0
+            unsafe {
+                (*zt).colors.palette.set(
+                    0,
+                    crate::color::RgbC {
+                        r: 0xFF,
+                        g: 0xFF,
+                        b: 0xFF,
+                    },
+                )
+            };
+
+            // Current palette returns the override
+            let mut palette: crate::color::PaletteC =
+                [crate::color::RgbC { r: 0, g: 0, b: 0 }; 256];
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorPalette,
+                    palette.as_mut_ptr() as *mut c_void,
+                )
+            });
+            assert_eq!(
+                crate::color::RgbC {
+                    r: 0xFF,
+                    g: 0xFF,
+                    b: 0xFF
+                },
+                palette[0]
+            );
+
+            // Default palette returns the original
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ColorPaletteDefault,
+                    palette.as_mut_ptr() as *mut c_void,
+                )
+            });
+            assert_eq!(custom[0], palette[0]);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set color sets dirty flag"
+    #[test]
+    fn set_color_sets_dirty_flag() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let zt = unsafe { (*t).terminal };
+            unsafe { (*zt).flags.dirty.palette = false };
+
+            let fg = crate::color::RgbC {
+                r: 0xFF,
+                g: 0xFF,
+                b: 0xFF,
+            };
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ColorForeground,
+                    &fg as *const _ as *const c_void,
+                )
+            });
+            assert!(unsafe { (*zt).flags.dirty.palette });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set glyph protocol disables APC handling and clears glossary"
+    #[test]
+    fn set_glyph_protocol_disables_apc_handling_and_clears_glossary() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let register = b"\x1B_25a1;r;cp=e0a0;AAAAAAAAAAAAAA==\x1B\\";
+            vtw(t, register);
+            assert!(unsafe { (*(*t).terminal).glyph_glossary.contains(0xE0A0) });
+
+            let disabled = false;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::GlyphProtocol,
+                    &disabled as *const _ as *const c_void,
+                )
+            });
+            assert!(
+                !unsafe { (*t).stream.handler.apc_handler.enabled }
+                    [rustty_vt::apc::Protocol::Glyph as usize]
+            );
+            assert!(!unsafe { (*(*t).terminal).glyph_glossary.contains(0xE0A0) });
+
+            vtw(t, register);
+            assert!(!unsafe { (*(*t).terminal).glyph_glossary.contains(0xE0A0) });
+
+            let enabled = true;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::GlyphProtocol,
+                    &enabled as *const _ as *const c_void,
+                )
+            });
+            vtw(t, register);
+            assert!(unsafe { (*(*t).terminal).glyph_glossary.contains(0xE0A0) });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get_multi success"
+    #[test]
+    fn get_multi_success() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let mut cols: u16 = 0;
+            let mut rows: u16 = 0;
+            let mut written: usize = 0;
+
+            let keys = [TerminalData::Cols, TerminalData::Rows];
+            let mut values: [*mut c_void; 2] = [
+                &mut cols as *mut _ as *mut c_void,
+                &mut rows as *mut _ as *mut c_void,
+            ];
+            assert_eq!(Result::Success, unsafe {
+                get_multi(
+                    t,
+                    keys.len(),
+                    keys.as_ptr(),
+                    values.as_mut_ptr(),
+                    &mut written,
+                )
+            });
+            assert_eq!(keys.len(), written);
+            assert_eq!(80, cols);
+            assert_eq!(24, rows);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get_multi error sets out_written"
+    #[test]
+    fn get_multi_error_sets_out_written() {
+        with_test_allocator(|alloc| {
+            let t = new_t(alloc, 80, 24, 0);
+
+            let mut cols: u16 = 0;
+            let mut written: usize = 99;
+
+            let keys = [TerminalData::Cols, TerminalData::Invalid];
+            let mut values: [*mut c_void; 2] = [
+                &mut cols as *mut _ as *mut c_void,
+                &mut cols as *mut _ as *mut c_void,
+            ];
+            assert_eq!(Result::InvalidValue, unsafe {
+                get_multi(
+                    t,
+                    keys.len(),
+                    keys.as_ptr(),
+                    values.as_mut_ptr(),
+                    &mut written,
+                )
+            });
+            assert_eq!(1, written);
+            assert_eq!(80, cols);
             unsafe { free(t) };
         });
     }
