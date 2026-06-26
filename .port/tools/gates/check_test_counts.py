@@ -121,6 +121,19 @@ MAP = {
     "font_sfnt":         ([f"{GHF}/opentype/sfnt.zig"], [f"{RSF}/opentype/sfnt.rs"], 0),
     "font_head":         ([f"{GHF}/opentype/head.zig"], [f"{RSF}/opentype/head.rs"], 0),
     "font_metrics":      ([f"{GHF}/Metrics.zig"], [f"{RSF}/metrics.rs"], 0),
+    # Stage F0 — rustty-font heavy-tier base: Atlas.zig (texture-atlas rect packing,
+    # 13 quoted tests) + CodepointMap.zig (codepoint->descriptor map, 1 test).
+    # apc_deferred=1 for font_atlas: the indented `test "happy path"` (Atlas.zig:564)
+    # lives INSIDE the wasm `Wasm` struct (the os/wasm + zig-js C-ABI/JS-canvas
+    # surface), feature-gated OFF in pure rustty-font (no os/wasm infra, R4). It is
+    # preserved verbatim as a commented reference in atlas.rs (mirrors the config/vt
+    # wasm-export deferrals; DEFERRALS.md). So need = 13-1 = 12; rust = 12 live
+    # #[test] (the 12 non-wasm Atlas tests). CodepointMap: 1 quoted test
+    # ("codepointmap") -> codepoint_map.rs; the discovery.Descriptor edge is SEAMed
+    # as a thin local `Descriptor` (family-only) — no C-lib/discovery edge pulled
+    # into pure rustty-font (the real discovery surface lands in the F3 shaper tier).
+    "font_atlas":        ([f"{GHF}/Atlas.zig"], [f"{RSF}/atlas.rs"], 1),
+    "font_codepoint_map":([f"{GHF}/CodepointMap.zig"], [f"{RSF}/codepoint_map.rs"], 0),
     # Stage C — rustty-args CLI arg parser (GH base = src/cli, not src/terminal).
     # args.zig (36t) tests live in src/args/tests.rs (module include from args.rs).
     # diagnostics.zig has 0 tests (ported as a sibling required by args.zig).
