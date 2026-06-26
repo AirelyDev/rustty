@@ -50,6 +50,19 @@ pub struct KeyEventWrapper {
 // the heap wrapper. The C ABI passes this as an opaque `*mut KeyEventWrapper`.
 pub type Event = *mut KeyEventWrapper;
 
+// PORT NOTE (sibling-module access): `key_encode.zig` reads `event_.?.event`
+// directly (same package). rustty keeps `KeyEventWrapper.event` private to this
+// module, so a crate-internal borrow helper mirrors the reference's field
+// access for `key_encode`.
+//
+/// # Safety
+/// `event_` must be a valid `new`-returned pointer (the reference's `event_.?`).
+pub(crate) unsafe fn event_ref<'a>(event_: Event) -> &'a key::KeyEvent {
+    // const event: *key.KeyEvent = &event_.?.event;
+    // SAFETY: `event_` validity is the caller's contract.
+    unsafe { &(*event_).event }
+}
+
 /// PORT NOTE: `pub fn new(alloc_, result) callconv(...) Result`.
 ///
 /// # Safety

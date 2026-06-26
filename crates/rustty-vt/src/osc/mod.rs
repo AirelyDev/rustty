@@ -226,6 +226,79 @@ impl Command {
     // Rust's enum layout is not byte-compatible with the Zig union (different
     // niche/discriminant rules), so the size invariant is intentionally not
     // asserted here. Carried as a comment per R2.
+
+    // PORT NOTE: `command.*` coerces to its tag (`union(Key)`), giving the
+    // `Command.Key` value for the active variant. `key` reproduces that
+    // coercion: the `CommandKey` discriminants are the variant order (identical
+    // to the LibEnum key order above), so the mapping is the index-for-index
+    // projection.
+    pub fn key(&self) -> CommandKey {
+        match self {
+            Command::Invalid => CommandKey::Invalid,
+            Command::ChangeWindowTitle(_) => CommandKey::ChangeWindowTitle,
+            Command::ChangeWindowIcon(_) => CommandKey::ChangeWindowIcon,
+            Command::SemanticPrompt(_) => CommandKey::SemanticPrompt,
+            Command::ClipboardContents { .. } => CommandKey::ClipboardContents,
+            Command::ReportPwd { .. } => CommandKey::ReportPwd,
+            Command::MouseShape { .. } => CommandKey::MouseShape,
+            Command::ColorOperation { .. } => CommandKey::ColorOperation,
+            Command::KittyColorProtocol(_) => CommandKey::KittyColorProtocol,
+            Command::ShowDesktopNotification { .. } => CommandKey::ShowDesktopNotification,
+            Command::HyperlinkStart { .. } => CommandKey::HyperlinkStart,
+            Command::HyperlinkEnd => CommandKey::HyperlinkEnd,
+            Command::ConemuSleep { .. } => CommandKey::ConemuSleep,
+            Command::ConemuShowMessageBox(_) => CommandKey::ConemuShowMessageBox,
+            Command::ConemuChangeTabTitle(_) => CommandKey::ConemuChangeTabTitle,
+            Command::ConemuProgressReport(_) => CommandKey::ConemuProgressReport,
+            Command::ConemuWaitInput => CommandKey::ConemuWaitInput,
+            Command::ConemuGuimacro(_) => CommandKey::ConemuGuimacro,
+            Command::ConemuRunProcess(_) => CommandKey::ConemuRunProcess,
+            Command::ConemuOutputEnvironmentVariable(_) => {
+                CommandKey::ConemuOutputEnvironmentVariable
+            }
+            Command::ConemuXtermEmulation { .. } => CommandKey::ConemuXtermEmulation,
+            Command::ConemuComment(_) => CommandKey::ConemuComment,
+            Command::KittyTextSizing(_) => CommandKey::KittyTextSizing,
+            Command::KittyClipboardProtocol(_) => CommandKey::KittyClipboardProtocol,
+            Command::ContextSignal(_) => CommandKey::ContextSignal,
+        }
+    }
+}
+
+/// PORT NOTE: `Command.Key = LibEnum(lib.target, &.{...})` — the union's tag
+/// type. For the `.c` target this is a fieldless `enum(c_int)` with the keys in
+/// declaration order. Modeled here as a `#[repr(i32)]` Rust enum (`Command` is
+/// `union(Key)`, so the tag is exactly the variant order). NOTE: Order matters,
+/// see LibEnum documentation — the discriminants MUST NOT be reordered to
+/// preserve C ABI compatibility.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandKey {
+    Invalid,
+    ChangeWindowTitle,
+    ChangeWindowIcon,
+    SemanticPrompt,
+    ClipboardContents,
+    ReportPwd,
+    MouseShape,
+    ColorOperation,
+    KittyColorProtocol,
+    ShowDesktopNotification,
+    HyperlinkStart,
+    HyperlinkEnd,
+    ConemuSleep,
+    ConemuShowMessageBox,
+    ConemuChangeTabTitle,
+    ConemuProgressReport,
+    ConemuWaitInput,
+    ConemuGuimacro,
+    ConemuRunProcess,
+    ConemuOutputEnvironmentVariable,
+    ConemuXtermEmulation,
+    ConemuComment,
+    KittyTextSizing,
+    KittyClipboardProtocol,
+    ContextSignal,
 }
 
 /// PORT NOTE: `parsers.semantic_prompt.Command` re-exported as

@@ -45,6 +45,29 @@ impl Write for FixedWriter<'_> {
     }
 }
 
+// PORT NOTE: several rustty-vt encoders (`formatter::*::format`,
+// `input::key_encode::encode`, `input::mouse_encode::encode`) are generic over
+// `std::io::Write` (returning `std::io::Result`) rather than `core::fmt::Write`.
+// The same two sinks are reproduced here: `FixedWriter` returns
+// `std::io::ErrorKind::WriteZero` (the rustty analog of `error.WriteFailed`) the
+// moment a write would overflow, while `CountingWriter` never fails. A write
+// that would overflow is rejected whole, matching `std.Io.Writer.fixed`.
+impl std::io::Write for FixedWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        // WriteFailed the moment the buffer would overflow.
+        if self.end + bytes.len() > self.buf.len() {
+            return Err(std::io::Error::from(std::io::ErrorKind::WriteZero));
+        }
+        self.buf[self.end..self.end + bytes.len()].copy_from_slice(bytes);
+        self.end += bytes.len();
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Mirrors `std.Io.Writer.Discarding`: discards all bytes but counts how many
 /// were written (`count`). Never fails.
 #[derive(Default)]
@@ -61,6 +84,17 @@ impl CountingWriter {
 impl Write for CountingWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         self.count += s.len();
+        Ok(())
+    }
+}
+
+impl std::io::Write for CountingWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.count += bytes.len();
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }

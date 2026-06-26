@@ -128,7 +128,7 @@ pub enum Format {
 impl Format {
     // PORT NOTE: bridge to the pure-VT `formatter::Format`. The discriminants are
     // identical by construction (same key order plain/vt/html).
-    fn to_zig(self) -> rustty_vt::formatter::Format {
+    pub fn to_zig(self) -> rustty_vt::formatter::Format {
         match self {
             Format::Plain => rustty_vt::formatter::Format::Plain,
             Format::Vt => rustty_vt::formatter::Format::Vt,

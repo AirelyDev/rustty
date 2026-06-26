@@ -590,6 +590,7 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "rustty-lib",
+ "rustty-render-types",
  "rustty-vt",
 ]
 

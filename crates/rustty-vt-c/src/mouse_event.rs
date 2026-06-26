@@ -42,6 +42,20 @@ pub struct MouseEventWrapper {
 /// C: RusttyMouseEvent (R2)
 pub type Event = *mut MouseEventWrapper;
 
+// PORT NOTE (sibling-module access): `mouse_encode.zig` reads `event.event`
+// directly (same package). rustty keeps `MouseEventWrapper.event` private to
+// this module, so a crate-internal copy helper mirrors the reference's field
+// access for `mouse_encode`. `mouse_encode::Event` is `Copy`, so the value is
+// returned by copy (the reference passes `event.event` by value to `encode`).
+//
+/// # Safety
+/// `event_` must be a valid `new`-returned pointer (the reference's `event_.?`).
+pub(crate) unsafe fn event_value(event_: Event) -> mouse_encode::Event {
+    // event.event
+    // SAFETY: `event_` validity is the caller's contract.
+    unsafe { (*event_).event }
+}
+
 /// C: RusttyMouseAction (R2)
 // PORT NOTE: `pub const Action = mouse.Action;`
 pub use mouse::Action;

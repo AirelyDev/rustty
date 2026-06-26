@@ -39,12 +39,16 @@ pub mod cell;
 pub mod color;
 mod cwrap;
 pub mod focus;
+pub mod formatter;
 pub mod grid_ref;
 pub mod grid_ref_tracked;
+pub mod key_encode;
 pub mod key_event;
 pub mod kitty_graphics;
 pub mod modes;
+pub mod mouse_encode;
 pub mod mouse_event;
+pub mod osc;
 pub mod paste;
 pub mod point;
 pub mod render;
@@ -59,17 +63,11 @@ pub mod sys;
 pub mod terminal;
 #[cfg(test)]
 mod test_util;
+// pub const types = @import("types.zig");
+// PORT NOTE: now landed (this sub-batch). `types.zig` registers the C-ABI
+// extern-struct layout for ~29 types whose `.C` projections are now all defined.
+pub mod types;
 mod writer;
-
-// PORT NOTE (DEFERRED): `pub const types = @import("types.zig");` and
-// `pub const type_json = types.get_json;` are NOT ported in this foundation
-// sub-batch. `types.zig` registers the C-ABI extern-struct layout for ~29 types
-// (terminal.DeviceAttributes, formatter.TerminalOptions, selection.CSelection,
-// render.Colors, grid_ref.CGridRef, style.Style, ...) whose `.C` projections are
-// defined in the heavy `c/` files that have NOT yet landed. Porting `types.zig`
-// with a partially-populated `structs` map would DROP reference registrations
-// (an R1 fidelity violation), so it is gated to the sub-batch that lands those
-// C struct types. Its 2 tests ride with it.
 
 // ===================================================================
 // C API exports — 1:1 with the `@export(&c.<fn>, .{ .name = "ghostty_<name>" })`
@@ -562,6 +560,83 @@ fn mouse_button_from_c_int(v: c_int) -> Option<rustty_vt::input::mouse::Button> 
     }
 }
 
+// ----- key_encode -----
+// pub const key_encoder_new = key_encode.new;  (ghostty_key_encoder_new)
+/// C: rustty_key_encoder_new
+///
+/// # Safety
+/// `alloc`, if non-null, must point to a valid allocator; `result` must be a
+/// valid, writable pointer to a key-encoder handle.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_encoder_new(
+    alloc: *const rustty_lib::allocator::Allocator,
+    result: *mut key_encode::Encoder,
+) -> c_int {
+    // SAFETY: `alloc`/`result` validity is the caller's contract.
+    unsafe { key_encode::new(alloc.as_ref(), result) }.to_c_int()
+}
+
+// pub const key_encoder_free = key_encode.free;  (ghostty_key_encoder_free)
+/// C: rustty_key_encoder_free
+///
+/// # Safety
+/// `encoder`, if non-null, must be a handle returned by `rustty_key_encoder_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_encoder_free(encoder: key_encode::Encoder) {
+    // SAFETY: `encoder` validity is the caller's contract.
+    unsafe { key_encode::free(encoder) }
+}
+
+// pub const key_encoder_setopt = key_encode.setopt;  (ghostty_key_encoder_setopt)
+/// C: rustty_key_encoder_setopt
+///
+/// # Safety
+/// `encoder`, if non-null, must be a `rustty_key_encoder_new` handle; `value`,
+/// if non-null, must point to a readable value of the option's in-type.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_encoder_setopt(
+    encoder: key_encode::Encoder,
+    option: c_int,
+    value: *const std::ffi::c_void,
+) {
+    // SAFETY: pointer validity is the caller's contract; the option-range guard
+    // runs inside `key_encode::setopt`.
+    unsafe { key_encode::setopt(encoder, option, value) }
+}
+
+// pub const key_encoder_setopt_from_terminal = key_encode.setopt_from_terminal;
+//   (ghostty_key_encoder_setopt_from_terminal)
+/// C: rustty_key_encoder_setopt_from_terminal
+///
+/// # Safety
+/// `encoder`/`terminal`, if non-null, must be live handles.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_encoder_setopt_from_terminal(
+    encoder: key_encode::Encoder,
+    terminal: terminal::Terminal,
+) {
+    // SAFETY: handle validity is the caller's contract.
+    unsafe { key_encode::setopt_from_terminal(encoder, terminal) }
+}
+
+// pub const key_encoder_encode = key_encode.encode;  (ghostty_key_encoder_encode)
+/// C: rustty_key_encoder_encode
+///
+/// # Safety
+/// `encoder`/`event` must be non-null `new` handles; `out` (if non-null) must
+/// point to `out_len` writable bytes; `out_written` must be valid, writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_key_encoder_encode(
+    encoder: key_encode::Encoder,
+    event: key_event::Event,
+    out: *mut u8,
+    out_len: usize,
+    out_written: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { key_encode::encode(encoder, event, out, out_len, out_written) }.to_c_int()
+}
+
 // ----- mouse_event -----
 // PORT NOTE: the `set_action`/`set_button` `intToEnum` guards live here on the
 // raw `c_int`; `mouse::Mods` is crossed as its `u16` backing; `Position` (Pos)
@@ -723,6 +798,95 @@ pub unsafe extern "C" fn rustty_mouse_event_get_position(
 ) -> mouse_event::Position {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { mouse_event::get_position(event) }
+}
+
+// ----- mouse_encode -----
+// pub const mouse_encoder_new = mouse_encode.new;  (ghostty_mouse_encoder_new)
+/// C: rustty_mouse_encoder_new
+///
+/// # Safety
+/// `alloc`, if non-null, must point to a valid allocator; `result` must be a
+/// valid, writable pointer to a mouse-encoder handle.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_encoder_new(
+    alloc: *const rustty_lib::allocator::Allocator,
+    result: *mut mouse_encode::Encoder,
+) -> c_int {
+    // SAFETY: `alloc`/`result` validity is the caller's contract.
+    unsafe { mouse_encode::new(alloc.as_ref(), result) }.to_c_int()
+}
+
+// pub const mouse_encoder_free = mouse_encode.free;  (ghostty_mouse_encoder_free)
+/// C: rustty_mouse_encoder_free
+///
+/// # Safety
+/// `encoder`, if non-null, must be a handle returned by `rustty_mouse_encoder_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_encoder_free(encoder: mouse_encode::Encoder) {
+    // SAFETY: `encoder` validity is the caller's contract.
+    unsafe { mouse_encode::free(encoder) }
+}
+
+// pub const mouse_encoder_setopt = mouse_encode.setopt;  (ghostty_mouse_encoder_setopt)
+/// C: rustty_mouse_encoder_setopt
+///
+/// # Safety
+/// `encoder`, if non-null, must be a `rustty_mouse_encoder_new` handle; `value`,
+/// if non-null, must point to a readable value of the option's in-type.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_encoder_setopt(
+    encoder: mouse_encode::Encoder,
+    option: c_int,
+    value: *const std::ffi::c_void,
+) {
+    // SAFETY: pointer validity is the caller's contract; the option-range guard
+    // runs inside `mouse_encode::setopt`.
+    unsafe { mouse_encode::setopt(encoder, option, value) }
+}
+
+// pub const mouse_encoder_setopt_from_terminal = mouse_encode.setopt_from_terminal;
+//   (ghostty_mouse_encoder_setopt_from_terminal)
+/// C: rustty_mouse_encoder_setopt_from_terminal
+///
+/// # Safety
+/// `encoder`/`terminal`, if non-null, must be live handles.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_encoder_setopt_from_terminal(
+    encoder: mouse_encode::Encoder,
+    terminal: terminal::Terminal,
+) {
+    // SAFETY: handle validity is the caller's contract.
+    unsafe { mouse_encode::setopt_from_terminal(encoder, terminal) }
+}
+
+// pub const mouse_encoder_reset = mouse_encode.reset;  (ghostty_mouse_encoder_reset)
+/// C: rustty_mouse_encoder_reset
+///
+/// # Safety
+/// `encoder`, if non-null, must be a `rustty_mouse_encoder_new` handle.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_encoder_reset(encoder: mouse_encode::Encoder) {
+    // SAFETY: `encoder` validity is the caller's contract.
+    unsafe { mouse_encode::reset(encoder) }
+}
+
+// pub const mouse_encoder_encode = mouse_encode.encode;  (ghostty_mouse_encoder_encode)
+/// C: rustty_mouse_encoder_encode
+///
+/// # Safety
+/// `encoder`/`event` must be `rustty_mouse_encoder_new`/`rustty_mouse_event_new`
+/// handles; `out` (if non-null) must point to `out_len` writable bytes;
+/// `out_written` must be valid, writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_mouse_encoder_encode(
+    encoder: mouse_encode::Encoder,
+    event: mouse_event::Event,
+    out: *mut u8,
+    out_len: usize,
+    out_written: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { mouse_encode::encode(encoder, event, out, out_len, out_written) }.to_c_int()
 }
 
 // ----- cell -----
@@ -966,6 +1130,177 @@ pub unsafe extern "C" fn rustty_sgr_attribute_value(
 ) -> *mut sgr::CValue {
     // SAFETY: `attr` validity is the caller's contract.
     unsafe { sgr::attribute_value(attr) }
+}
+
+// ----- osc -----
+// pub const osc_new = osc.new;  (ghostty_osc_new)
+/// C: rustty_osc_new
+///
+/// # Safety
+/// `alloc`, if non-null, must point to a valid allocator; `result` must be a
+/// valid, writable pointer to an osc-parser handle.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_osc_new(
+    alloc: *const rustty_lib::allocator::Allocator,
+    result: *mut osc::Parser,
+) -> c_int {
+    // SAFETY: `alloc`/`result` validity is the caller's contract.
+    unsafe { osc::new(alloc.as_ref(), result) }.to_c_int()
+}
+
+// pub const osc_free = osc.free;  (ghostty_osc_free)
+/// C: rustty_osc_free
+///
+/// # Safety
+/// `parser`, if non-null, must be a handle returned by `rustty_osc_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_osc_free(parser: osc::Parser) {
+    // SAFETY: `parser` validity is the caller's contract.
+    unsafe { osc::free(parser) }
+}
+
+// pub const osc_next = osc.next;  (ghostty_osc_next)
+/// C: rustty_osc_next
+///
+/// # Safety
+/// `parser` must be a non-null handle returned by `rustty_osc_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_osc_next(parser: osc::Parser, byte: u8) {
+    // SAFETY: `parser` validity is the caller's contract.
+    unsafe { osc::next(parser, byte) }
+}
+
+// pub const osc_reset = osc.reset;  (ghostty_osc_reset)
+/// C: rustty_osc_reset
+///
+/// # Safety
+/// `parser` must be a non-null handle returned by `rustty_osc_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_osc_reset(parser: osc::Parser) {
+    // SAFETY: `parser` validity is the caller's contract.
+    unsafe { osc::reset(parser) }
+}
+
+// pub const osc_end = osc.end;  (ghostty_osc_end)
+/// C: rustty_osc_end
+///
+/// # Safety
+/// `parser` must be a non-null handle returned by `rustty_osc_new`. The returned
+/// command pointer aliases the parser and is valid until the next parse op.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_osc_end(parser: osc::Parser, terminator: u8) -> osc::Command {
+    // SAFETY: `parser` validity is the caller's contract.
+    unsafe { osc::end(parser, terminator) }
+}
+
+// pub const osc_command_type = osc.commandType;  (ghostty_osc_command_type)
+/// C: rustty_osc_command_type
+///
+/// # Safety
+/// `command`, if non-null, must be a live command pointer returned by
+/// `rustty_osc_end`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_osc_command_type(
+    command: osc::Command,
+) -> rustty_vt::osc::CommandKey {
+    // SAFETY: `command` validity is the caller's contract.
+    unsafe { osc::command_type(command) }
+}
+
+// pub const osc_command_data = osc.commandData;  (ghostty_osc_command_data)
+/// C: rustty_osc_command_data
+///
+/// # Safety
+/// `command`, if non-null, must be a live command pointer; `out`, for a valid
+/// `data` kind, must point to writable storage of that kind's out-type.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_osc_command_data(
+    command: osc::Command,
+    data: c_int,
+    out: *mut std::ffi::c_void,
+) -> bool {
+    // SAFETY: `command`/`out` validity is the caller's contract.
+    unsafe { osc::command_data(command, data, out) }
+}
+
+// ----- formatter -----
+// pub const formatter_terminal_new = formatter.terminal_new;  (ghostty_formatter_terminal_new)
+/// C: rustty_formatter_terminal_new
+///
+/// # Safety
+/// `alloc`, if non-null, must point to a valid allocator; `result` must be a
+/// valid, writable pointer to a formatter handle; `terminal`, if non-null, must
+/// be a live terminal handle; `opts.selection`, if non-null, must point to a
+/// valid `CSelection`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_formatter_terminal_new(
+    alloc: *const rustty_lib::allocator::Allocator,
+    result: *mut formatter::Formatter,
+    terminal: terminal::Terminal,
+    opts: formatter::TerminalOptions,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { formatter::terminal_new(alloc.as_ref(), result, terminal, opts) }.to_c_int()
+}
+
+// pub const formatter_format_buf = formatter.format_buf;  (ghostty_formatter_format_buf)
+/// C: rustty_formatter_format_buf
+///
+/// # Safety
+/// `formatter`, if non-null, must be a handle returned by
+/// `rustty_formatter_terminal_new`; `out` (if non-null) must point to `out_len`
+/// writable bytes; `out_written` must be a valid, writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_formatter_format_buf(
+    formatter: formatter::Formatter,
+    out: *mut u8,
+    out_len: usize,
+    out_written: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { formatter::format_buf(formatter, out, out_len, out_written) }.to_c_int()
+}
+
+// pub const formatter_format_alloc = formatter.format_alloc;  (ghostty_formatter_format_alloc)
+/// C: rustty_formatter_format_alloc
+///
+/// # Safety
+/// `formatter`, if non-null, must be a `rustty_formatter_terminal_new` handle;
+/// `alloc`, if non-null, a valid allocator; `out_ptr`/`out_len` must be
+/// valid, writable pointers. The returned buffer is owned by the caller and must
+/// be freed with the same allocator.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_formatter_format_alloc(
+    formatter: formatter::Formatter,
+    alloc: *const rustty_lib::allocator::Allocator,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { formatter::format_alloc(formatter, alloc.as_ref(), out_ptr, out_len) }.to_c_int()
+}
+
+// pub const formatter_free = formatter.free;  (ghostty_formatter_free)
+/// C: rustty_formatter_free
+///
+/// # Safety
+/// `formatter`, if non-null, must be a handle returned by
+/// `rustty_formatter_terminal_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_formatter_free(formatter: formatter::Formatter) {
+    // SAFETY: `formatter` validity is the caller's contract.
+    unsafe { formatter::free(formatter) }
+}
+
+// ----- types -----
+// pub const type_json = types.get_json;  (ghostty_type_json)
+/// C: rustty_type_json
+///
+/// Returns a pointer to the NUL-terminated JSON string describing the layout of
+/// all C API extern structs (size/align/field offsets), for FFI consumers.
+#[no_mangle]
+pub extern "C" fn rustty_type_json() -> *const std::os::raw::c_char {
+    types::get_json()
 }
 
 // ----- kitty_graphics -----
