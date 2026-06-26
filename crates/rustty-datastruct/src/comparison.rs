@@ -75,6 +75,19 @@ impl DeepEqual for [u8] {
     }
 }
 
+// A `Vec<u8>` is the owned form of a `[]const u8` / `[:0]const u8` config field
+// (e.g. `term`, `language`, `title`). The reference compares these via the
+// `[]const u8` arm (`std.mem.eql`); here we forward an owned `Vec<u8>` to the
+// `[u8]` impl so `Option<Vec<u8>>` config fields resolve through the optional
+// arm exactly as the reference's `?[:0]const u8` does. (This impl lives here,
+// the trait's home crate, because both `Vec<u8>` and `DeepEqual` are otherwise
+// foreign to downstream crates — the orphan rule.)
+impl DeepEqual for Vec<u8> {
+    fn deep_equal(&self, other: &Self) -> bool {
+        deep_equal::<[u8]>(self.as_slice(), other.as_slice())
+    }
+}
+
 // .optional => |info| { ... deepEqual(info.child, old.?, new.?) }
 impl<T: DeepEqual> DeepEqual for Option<T> {
     fn deep_equal(&self, other: &Self) -> bool {

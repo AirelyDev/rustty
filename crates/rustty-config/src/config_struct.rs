@@ -107,6 +107,7 @@ pub enum Key {
     FontStyleBoldItalic,
     FontSyntheticStyle,
     FontFeature,
+    FontSize,
     FontVariation,
     FontVariationBold,
     FontVariationItalic,
@@ -116,6 +117,7 @@ pub enum Key {
     FontThicken,
     FontThickenStrength,
     FontShapingBreak,
+    AlphaBlending,
     AdjustCellWidth,
     AdjustCellHeight,
     AdjustFontBaseline,
@@ -173,11 +175,13 @@ pub enum Key {
     Command,
     InitialCommand,
     NotifyOnCommandFinish,
+    NotifyOnCommandFinishAction,
     NotifyOnCommandFinishAfter,
     Env,
     Input,
     WaitAfterCommand,
     AbnormalCommandExitRuntime,
+    ScrollbackLimit,
     Scrollbar,
     Link,
     LinkUrl,
@@ -225,6 +229,7 @@ pub enum Key {
     ClipboardPasteBracketedSafe,
     TitleReport,
     ImageStorageLimit,
+    CopyOnSelect,
     RightClickAction,
     MiddleClickAction,
     ClickRepeatInterval,
@@ -241,6 +246,7 @@ pub enum Key {
     GtkQuickTerminalNamespace,
     QuickTerminalScreen,
     QuickTerminalAnimationDuration,
+    QuickTerminalAutohide,
     QuickTerminalSpaceBehavior,
     QuickTerminalKeyboardInteractivity,
     ShellIntegration,
@@ -271,6 +277,7 @@ pub enum Key {
     MacosIconGhostColor,
     MacosIconScreenColor,
     MacosShortcuts,
+    LinuxCgroup,
     LinuxCgroupMemoryLimit,
     LinuxCgroupProcessesLimit,
     LinuxCgroupHardFail,
@@ -329,6 +336,9 @@ pub struct Config {
     // @"font-feature": RepeatableString = .{},
     pub font_feature: RepeatableString,
 
+    // @"font-size": f32 = switch (builtin.os.tag) { .macos => 13, else => 12 },
+    pub font_size: f32,
+
     // @"font-variation": RepeatableFontVariation = .{},
     pub font_variation: RepeatableFontVariation,
     pub font_variation_bold: RepeatableFontVariation,
@@ -348,6 +358,10 @@ pub struct Config {
 
     // @"font-shaping-break": FontShapingBreak = .{},
     pub font_shaping_break: FontShapingBreak,
+
+    // @"alpha-blending": AlphaBlending =
+    //     if (builtin.os.tag == .macos) .native else .@"linear-corrected",
+    pub alpha_blending: AlphaBlending,
 
     // @"adjust-*": ?MetricModifier = null,
     pub adjust_cell_width: Option<MetricModifier>,
@@ -465,6 +479,8 @@ pub struct Config {
 
     // @"notify-on-command-finish": NotifyOnCommandFinish = .never,
     pub notify_on_command_finish: NotifyOnCommandFinish,
+    // @"notify-on-command-finish-action": NotifyOnCommandFinishAction = .{ .bell = true, .notify = false },
+    pub notify_on_command_finish_action: NotifyOnCommandFinishAction,
     // @"notify-on-command-finish-after": Duration = .{ .duration = 5 * std.time.ns_per_s },
     pub notify_on_command_finish_after: Duration,
 
@@ -476,6 +492,8 @@ pub struct Config {
     pub wait_after_command: bool,
     // @"abnormal-command-exit-runtime": u32 = 250,
     pub abnormal_command_exit_runtime: u32,
+    // @"scrollback-limit": usize = 10_000_000, // 10MB
+    pub scrollback_limit: usize,
     // scrollbar: Scrollbar = .system,
     pub scrollbar: Scrollbar,
 
@@ -580,6 +598,11 @@ pub struct Config {
     // @"image-storage-limit": u32 = 320 * 1000 * 1000,
     pub image_storage_limit: u32,
 
+    // @"copy-on-select": CopyOnSelect = switch (builtin.os.tag) {
+    //     .linux => .true, .macos => .true, else => .false,
+    // },
+    pub copy_on_select: CopyOnSelect,
+
     // @"right-click-action": RightClickAction = .@"context-menu",
     pub right_click_action: RightClickAction,
     // @"middle-click-action": MiddleClickAction = .@"primary-paste",
@@ -616,6 +639,10 @@ pub struct Config {
     pub quick_terminal_screen: QuickTerminalScreen,
     // @"quick-terminal-animation-duration": f64 = 0.2,
     pub quick_terminal_animation_duration: f64,
+    // @"quick-terminal-autohide": bool = switch (builtin.os.tag) {
+    //     .linux => false, .macos => true, else => false,
+    // },
+    pub quick_terminal_autohide: bool,
     // @"quick-terminal-space-behavior": QuickTerminalSpaceBehavior = .move,
     pub quick_terminal_space_behavior: QuickTerminalSpaceBehavior,
     // @"quick-terminal-keyboard-interactivity": QuickTerminalKeyboardInteractivity = .@"on-demand",
@@ -683,6 +710,10 @@ pub struct Config {
     pub macos_icon_screen_color: Option<ColorList>,
     // @"macos-shortcuts": MacShortcuts = .ask,
     pub macos_shortcuts: MacShortcuts,
+
+    // @"linux-cgroup": LinuxCgroup = if (builtin.os.tag == .linux)
+    //     .@"single-instance" else .never,
+    pub linux_cgroup: LinuxCgroup,
 
     // @"linux-cgroup-memory-limit": ?u64 = null,
     pub linux_cgroup_memory_limit: Option<u64>,
@@ -775,6 +806,12 @@ impl Default for Config {
             font_style_bold_italic: FontStyle::Default,
             font_synthetic_style: FontSyntheticStyle::default(),
             font_feature: RepeatableString::default(),
+            // switch (builtin.os.tag) { .macos => 13, else => 12 }
+            font_size: if cfg!(target_os = "macos") {
+                13.0
+            } else {
+                12.0
+            },
             font_variation: RepeatableFontVariation::default(),
             font_variation_bold: RepeatableFontVariation::default(),
             font_variation_italic: RepeatableFontVariation::default(),
@@ -784,6 +821,12 @@ impl Default for Config {
             font_thicken: false,
             font_thicken_strength: 255,
             font_shaping_break: FontShapingBreak::default(),
+            // if (builtin.os.tag == .macos) .native else .@"linear-corrected"
+            alpha_blending: if cfg!(target_os = "macos") {
+                AlphaBlending::Native
+            } else {
+                AlphaBlending::LinearCorrected
+            },
             adjust_cell_width: None,
             adjust_cell_height: None,
             adjust_font_baseline: None,
@@ -857,6 +900,8 @@ impl Default for Config {
             command: None,
             initial_command: None,
             notify_on_command_finish: NotifyOnCommandFinish::Never,
+            // .{ .bell = true, .notify = false }
+            notify_on_command_finish_action: NotifyOnCommandFinishAction::default(),
             notify_on_command_finish_after: Duration {
                 duration: 5 * NS_PER_S,
             },
@@ -864,6 +909,8 @@ impl Default for Config {
             input: RepeatableReadableIO::default(),
             wait_after_command: false,
             abnormal_command_exit_runtime: 250,
+            // 10_000_000 (10MB)
+            scrollback_limit: 10_000_000,
             scrollbar: Scrollbar::System,
             link: RepeatableLink::default(),
             link_url: true,
@@ -919,6 +966,12 @@ impl Default for Config {
             clipboard_paste_bracketed_safe: true,
             title_report: false,
             image_storage_limit: 320 * 1000 * 1000,
+            // switch (builtin.os.tag) { .linux => .true, .macos => .true, else => .false }
+            copy_on_select: if cfg!(target_os = "linux") || cfg!(target_os = "macos") {
+                CopyOnSelect::True
+            } else {
+                CopyOnSelect::False
+            },
             right_click_action: RightClickAction::ContextMenu,
             middle_click_action: MiddleClickAction::PrimaryPaste,
             click_repeat_interval: 0,
@@ -938,6 +991,8 @@ impl Default for Config {
             gtk_quick_terminal_namespace: b"ghostty-quick-terminal".to_vec(),
             quick_terminal_screen: QuickTerminalScreen::Main,
             quick_terminal_animation_duration: 0.2,
+            // switch (builtin.os.tag) { .linux => false, .macos => true, else => false }
+            quick_terminal_autohide: cfg!(target_os = "macos"),
             quick_terminal_space_behavior: QuickTerminalSpaceBehavior::Move,
             quick_terminal_keyboard_interactivity: QuickTerminalKeyboardInteractivity::OnDemand,
             shell_integration: ShellIntegration::Detect,
@@ -968,6 +1023,12 @@ impl Default for Config {
             macos_icon_ghost_color: None,
             macos_icon_screen_color: None,
             macos_shortcuts: MacShortcuts::Ask,
+            // if (builtin.os.tag == .linux) .@"single-instance" else .never
+            linux_cgroup: if cfg!(target_os = "linux") {
+                LinuxCgroup::SingleInstance
+            } else {
+                LinuxCgroup::Never
+            },
             linux_cgroup_memory_limit: None,
             linux_cgroup_processes_limit: None,
             linux_cgroup_hard_fail: false,

@@ -16,6 +16,7 @@ pub mod clipboard_codepoint_map;
 pub mod command;
 pub mod conditional;
 pub mod config_struct;
+pub mod deep_equal;
 pub mod edit;
 pub mod error_list;
 pub mod file_load;
