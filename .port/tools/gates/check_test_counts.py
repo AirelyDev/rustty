@@ -39,6 +39,9 @@ RST = "/Users/gael/projects/rustty/crates/rustty-terminfo/src"
 GHCFG = "/Users/gael/projects/ghostty/src/config"
 RSCF = "/Users/gael/projects/rustty/crates/rustty-cfg-fmt/src"
 
+# rustty-config: C1 leaf value-types (same GH base = src/config as GHCFG above).
+RSCG = "/Users/gael/projects/rustty/crates/rustty-config/src"
+
 # rustty-input: GH base = src/input. The vt input slice (mouse/paste/key/
 # key_encode/mouse_encode/function_keys + the VT-Mods half of key_mods) already
 # lives in rustty-vt (mapped above as input_*). rustty-input is the REST of
@@ -161,6 +164,36 @@ MAP = {
     "input_keyboard":    ([f"{GHI}/keyboard.zig"], [f"{RSI}/keyboard.rs"], 0),
     # helpgen_actions.zig: 0 tests (build-time docs generator).
     "input_helpgen_actions":([f"{GHI}/helpgen_actions.zig"], [f"{RSI}/helpgen_actions.rs"], 0),
+    # rustty-config C1 — leaf value-types the giant Config struct (C2, later)
+    # composes. GH base = src/config (GHCFG, reused from cfg-fmt above). These are
+    # Config-INDEPENDENT (string/path/io/command/url/... value-types). The
+    # formatter.zig of src/config is mapped separately as cfg_fmt_formatter (a
+    # different crate, rustty-cfg-fmt); Config.zig itself is C2 (deferred).
+    "config_clipboard_codepoint_map":([f"{GHCFG}/ClipboardCodepointMap.zig"], [f"{RSCG}/clipboard_codepoint_map.rs"], 0),
+    # command.zig: 9 quoted tests (+1 anon refAllDecls, not counted); rust=11 (>= zig).
+    "config_command":    ([f"{GHCFG}/command.zig"], [f"{RSCG}/command.rs"], 0),
+    # conditional.zig: 1 quoted test.
+    "config_conditional":([f"{GHCFG}/conditional.zig"], [f"{RSCG}/conditional.rs"], 0),
+    # edit.zig: 0 tests (config-file edit path resolution).
+    "config_edit":       ([f"{GHCFG}/edit.zig"], [f"{RSCG}/edit.rs"], 0),
+    # ErrorList.zig: 0 tests (diagnostic accumulator).
+    "config_error_list": ([f"{GHCFG}/ErrorList.zig"], [f"{RSCG}/error_list.rs"], 0),
+    # file_load.zig: 0 tests (config-file load helper).
+    "config_file_load":  ([f"{GHCFG}/file_load.zig"], [f"{RSCG}/file_load.rs"], 0),
+    # io.zig: 3 quoted tests (+1 anon); rust=5 (>= zig).
+    "config_io":         ([f"{GHCFG}/io.zig"], [f"{RSCG}/io.rs"], 0),
+    # path.zig: 8 quoted tests (path expansion / homedir).
+    "config_path":       ([f"{GHCFG}/path.zig"], [f"{RSCG}/path.rs"], 0),
+    # RepeatableStringMap.zig: 4 quoted tests.
+    "config_repeatable_string_map":([f"{GHCFG}/RepeatableStringMap.zig"], [f"{RSCG}/repeatable_string_map.rs"], 0),
+    # string.zig: 9 quoted tests (RepeatableString / parse).
+    "config_string":     ([f"{GHCFG}/string.zig"], [f"{RSCG}/string.rs"], 0),
+    # url.zig: 1 quoted test ("url regex"), oniguruma-backed -> DEFERRED behind the
+    # off-by-default `oniguruma` cargo feature (SkipZigTest-style; documented in
+    # .port/phase-2/DEFERRALS.md). The regex string-assembly logic is ported
+    # normally; the test slot is `#[cfg(all(test, feature="oniguruma"))]`. So
+    # apc_deferred=1 -> need=0, rust=0 (the gated test has no live #[test] line).
+    "config_url":        ([f"{GHCFG}/url.zig"], [f"{RSCG}/url.rs"], 1),
 }
 
 def expand(globs):
