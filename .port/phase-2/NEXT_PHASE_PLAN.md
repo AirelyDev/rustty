@@ -32,13 +32,22 @@ signed off. (stream.Action [16]u64 c_union stays deferred — not a c/ export ty
 ## Stage C — cheap mid-tier leaves [MECHANICAL] (only ported deps)
 5. cfg-fmt (9t), args (64t, breaks config<->cli), crash (9t, sentry-sys), terminfo (4t, emits "rustty").
 
-## Config cluster — C1 ✅, C2 ✅ DONE (2026-06-26), C3 next
+## Config cluster — C1 ✅, C2 ✅, C3 ✅ DONE (2026-06-26) — CLUSTER COMPLETE
 C1 leaf value-types (36t) + C2 the giant Config.zig (10934loc, 113 tests, 203 fields
 == 203 Key variants — field-parity audit caught 7 dropped fields incl font-size; the
 4 comptime passes via Target-trait + exhaustiveness test; load/finalize/parseManuallyHook/
-Replay/theme machinery). 169 config tests, count-gate GREEN, no regression. Deferred:
-RepeatableCodepointMap (font/CodepointMap.zig unported), FileFormatter docs (help_strings),
-url regex (oniguruma-sys). NEXT: C3 = CApi.zig(8t) + c_get.zig(6t) in rustty-config.
+Replay/theme machinery). C3 = CApi.zig(8t) + c_get.zig(6t) — the config C-ABI
+(rustty_config_new/free/clone/load_*/finalize/get/trigger/diagnostics + the typed
+config_get over the Key registry); CApi stays IN rustty-config (NOT a -c crate);
+R2 identity exports rustty_config_* via #[no_mangle] extern "C". 183 config tests
+(incl. 14 C3), whole count-gate GREEN, no workspace regression (vt 2019). C3 verified:
+Miri 14 isolated (c_api 8 + c_get 6) 0 UB/leak + ASan c_api 0 findings + G3b CApi
+13/c_get 12 distinctive comments, missing=0 + clippy/fmt/acyclic green. Every
+config/*.zig now mapped in check_test_counts.py (incl. formatter_file + Wasm).
+Deferred (documented): RepeatableCodepointMap (font/CodepointMap.zig unported),
+FileFormatter docs (help_strings), url regex (oniguruma-sys), Wasm.zig browser
+exports (feature-gated OFF, mirrors vt wasm deferral). The renderer/apprt/cli/
+termio tier is now UNBLOCKED (config was the last shared dep for those modules).
 
 ## Stage D — heavy tier (later)
 rest of font (faces/shapers: freetype/harfbuzz/fontconfig/CoreText -sys, ~10.7k loc) →

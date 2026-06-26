@@ -214,6 +214,26 @@ MAP = {
     # using the REAL rustty-os ResourcesDir — see DEFERRALS.md, no .resources
     # deferral). Mapped for completeness/G3b tracking; 0 >= 0.
     "config_theme":      ([f"{GHCFG}/theme.zig"], [f"{RSCG}/theme.rs"], 0),
+    # rustty-config C3 — CApi.zig (the config C-ABI: ghostty_config_new/free/
+    # clone/load_*/finalize/get/trigger/diagnostics_count/get_diagnostic/
+    # open_path). 8 quoted tests (the ghostty_config_get bool/enum/optional/
+    # unknown-key/optional-string/float/struct-cval round-trips + the
+    # ghostty_config_trigger default-keybind). Ported in c_api.rs as the rustty_
+    # config_* exports (R2 identity). CApi stays IN rustty-config (not a -c crate).
+    "config_capi":       ([f"{GHCFG}/CApi.zig"], [f"{RSCG}/c_api.rs"], 0),
+    # rustty-config C3 — c_get.zig (the typed config_get over the Key registry:
+    # the comptime fieldByKey + getValue dispatch). 6 quoted tests (u8/enum/color/
+    # optional/background-blur/split-preserve-zoom). Ported in c_get.rs.
+    "config_c_get":      ([f"{GHCFG}/c_get.zig"], [f"{RSCG}/c_get.rs"], 0),
+    # rustty-config — formatter_file.zig (the FileFormatter: emits the default
+    # config file with `# ` doc-comments). 2 quoted tests ("format default
+    # config" + "format default config changed"). help_strings docs deferral is
+    # documented; the two behavioral tests are ported in formatter_file.rs.
+    "config_formatter_file":([f"{GHCFG}/formatter_file.zig"], [f"{RSCG}/formatter_file.rs"], 0),
+    # rustty-config C3 — Wasm.zig (0 behavioral tests: browser-gated wasm exports,
+    # feature-gated OFF — see DEFERRALS.md, mirrors the vt wasm-export deferral).
+    # Mapped for completeness/G3b tracking; 0 >= 0.
+    "config_wasm":       ([f"{GHCFG}/Wasm.zig"], [f"{RSCG}/wasm.rs"], 0),
 }
 
 def expand(globs):
