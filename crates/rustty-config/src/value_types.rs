@@ -25,7 +25,8 @@ use rustty_args::args::{
     parse_auto_struct, parse_bool, AutoStruct, Error, PackedStruct, ParseError, WHITESPACE,
 };
 use rustty_cfg_fmt::{
-    format_entry_display, format_entry_string, format_entry_void, FormatEntry, Writer,
+    format_entry_display, format_entry_packed_struct, format_entry_string, format_entry_void,
+    FormatEntry, Writer,
 };
 // PORTS: `u21` (Zig's 21-bit codepoint type) -> `rustty_vt::page::u21` (= u32).
 use rustty_vt::page::u21;
@@ -129,6 +130,15 @@ fn face_variation_id_str(id: u32) -> [u8; 4] {
 // placeholder for `font/CodepointMap.zig`. Wired when CodepointMap.zig lands.
 #[derive(Debug, Clone, Default)]
 pub struct CodepointMap;
+
+impl CodepointMap {
+    /// `self.list.len == 0` — the placeholder holds no entries (always empty
+    /// until `font/CodepointMap.zig` lands), so this is always `true`. Used by
+    /// `RepeatableCodepointMap.formatEntry`'s ported empty branch.
+    pub fn is_empty(&self) -> bool {
+        true
+    }
+}
 
 // ===========================================================================
 // Bare-enum name maps (the PARSE/FORMAT name tables).
@@ -666,6 +676,17 @@ impl WindowDecoration {
                 Some(v) => Ok(v),
                 None => Err(Error::InvalidValue),
             },
+        }
+    }
+
+    /// `@tagName(self)` — the Zig variant-name literal. `WindowDecoration` has no
+    /// `formatEntry` decl, so the generic `.@"enum"` arm prints `{t}` (this name).
+    pub fn to_name(self) -> &'static [u8] {
+        match self {
+            WindowDecoration::Auto => b"auto",
+            WindowDecoration::Client => b"client",
+            WindowDecoration::Server => b"server",
+            WindowDecoration::None => b"none",
         }
     }
 }
@@ -1383,6 +1404,137 @@ impl PackedStruct for NotifyOnCommandFinishAction {
             _ => return false,
         }
         true
+    }
+}
+
+// ===========================================================================
+// Packed-struct `FormatEntry` impls.
+//
+// PORT NOTE: the reference has NO `formatEntry` decl on these packed structs;
+// they are formatted by the generic `formatter.formatEntry`'s `.@"packed"` arm
+// (`format_entry_packed_struct`), which writes the fields comma-separated in
+// DECLARATION ORDER with a `no-` prefix for each `false` field, using the Zig
+// field-name spelling (hyphenated where hyphenated). Rust has no struct
+// reflection, so each impl supplies that ordered `(name, bool)` list explicitly
+// — exactly the `inline for (info.fields)` the reference walks. The names match
+// the `PackedStruct::set_field` arms above (the parse side), keeping the two
+// directions byte-symmetric.
+// ===========================================================================
+
+// packed struct { bold, italic, "bold-italic" }
+impl FormatEntry for FontSyntheticStyle {
+    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        format_entry_packed_struct(
+            name,
+            &[
+                (b"bold", self.bold),
+                (b"italic", self.italic),
+                (b"bold-italic", self.bold_italic),
+            ],
+            writer,
+        )
+    }
+}
+
+// packed struct { cursor }
+impl FormatEntry for FontShapingBreak {
+    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        format_entry_packed_struct(name, &[(b"cursor", self.cursor)], writer)
+    }
+}
+
+// packed struct { cursor, sudo, title, "ssh-env", "ssh-terminfo", path }
+impl FormatEntry for ShellIntegrationFeatures {
+    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        format_entry_packed_struct(
+            name,
+            &[
+                (b"cursor", self.cursor),
+                (b"sudo", self.sudo),
+                (b"title", self.title),
+                (b"ssh-env", self.ssh_env),
+                (b"ssh-terminfo", self.ssh_terminfo),
+                (b"path", self.path),
+            ],
+            writer,
+        )
+    }
+}
+
+// packed struct { navigation }
+impl FormatEntry for SplitPreserveZoom {
+    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        format_entry_packed_struct(name, &[(b"navigation", self.navigation)], writer)
+    }
+}
+
+// packed struct { "clipboard-copy", "config-reload" }
+impl FormatEntry for AppNotifications {
+    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        format_entry_packed_struct(
+            name,
+            &[
+                (b"clipboard-copy", self.clipboard_copy),
+                (b"config-reload", self.config_reload),
+            ],
+            writer,
+        )
+    }
+}
+
+// packed struct { system, audio, attention, title, border }
+impl FormatEntry for BellFeatures {
+    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        format_entry_packed_struct(
+            name,
+            &[
+                (b"system", self.system),
+                (b"audio", self.audio),
+                (b"attention", self.attention),
+                (b"title", self.title),
+                (b"border", self.border),
+            ],
+            writer,
+        )
+    }
+}
+
+// packed struct { hinting, "force-autohint", monochrome, autohint, light }
+impl FormatEntry for FreetypeLoadFlags {
+    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        format_entry_packed_struct(
+            name,
+            &[
+                (b"hinting", self.hinting),
+                (b"force-autohint", self.force_autohint),
+                (b"monochrome", self.monochrome),
+                (b"autohint", self.autohint),
+                (b"light", self.light),
+            ],
+            writer,
+        )
+    }
+}
+
+// packed struct { keystroke, output }
+impl FormatEntry for ScrollToBottom {
+    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        format_entry_packed_struct(
+            name,
+            &[(b"keystroke", self.keystroke), (b"output", self.output)],
+            writer,
+        )
+    }
+}
+
+// packed struct { bell, notify }
+impl FormatEntry for NotifyOnCommandFinishAction {
+    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        format_entry_packed_struct(
+            name,
+            &[(b"bell", self.bell), (b"notify", self.notify)],
+            writer,
+        )
     }
 }
 
@@ -4753,9 +4905,28 @@ impl RepeatableCodepointMap {
     }
 
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void
-    pub fn format_entry(&self) {
-        unimplemented!(
-            "RepeatableCodepointMap.formatEntry — deferred until font/CodepointMap.zig lands"
+    //
+    // PORT NOTE (PARTIAL — empty branch ported; non-empty branch DEFERRED): the
+    // reference first checks `self.map.list.len == 0` and, if empty, formats the
+    // bare `name = \n` line (`formatter.formatEntry(void, {})`); only the
+    // non-empty iteration touches `fontpkg.CodepointMap`'s `list`/`descriptor`
+    // API. The empty branch is ported here verbatim — the `CodepointMap`
+    // placeholder holds no entries (it is always empty until `font/CodepointMap.
+    // zig` lands), so this faithfully reproduces the only state it can represent.
+    // The non-empty `U+{X:0>4}[-U+{X:0>4}]={s}` emission is the clearly surfaced
+    // deferral (NOT a stub-to-pass) and is `unreachable!()` here.
+    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        // if (self.map.list.len == 0) {
+        if self.map.is_empty() {
+            // try formatter.formatEntry(void, {});
+            // return;
+            return format_entry_void(name, writer);
+        }
+
+        // var buf: [1024]u8 = undefined; ... (the non-empty per-entry iteration
+        // over `self.map.list` ranges/replacements) — deferred (font-blocked).
+        unreachable!(
+            "RepeatableCodepointMap.formatEntry non-empty branch — deferred until font/CodepointMap.zig lands"
         )
     }
 }
