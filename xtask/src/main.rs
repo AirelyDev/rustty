@@ -75,7 +75,6 @@ fn workspace_root() -> PathBuf {
 fn header_gen() -> Result<PathBuf, String> {
     let root = workspace_root();
     let config = root.join("crates/rustty-vt-c/cbindgen.toml");
-    let crate_dir = root.join("crates/rustty-vt-c");
     let include_dir = root.join("include");
     let output = include_dir.join("rustty.h");
 
@@ -88,7 +87,13 @@ fn header_gen() -> Result<PathBuf, String> {
         .arg("rustty-vt-c")
         .arg("--output")
         .arg(&output)
-        .current_dir(&crate_dir)
+        // Run from the WORKSPACE ROOT (not the crate dir). With `parse_deps =
+        // true` cbindgen must resolve the sibling workspace crates that define
+        // the cross-crate C-ABI types (rustty-vt / rustty-lib /
+        // rustty-render-types); resolving those is reliable only from the root
+        // (matches the documented manual `cbindgen --config ... --crate
+        // rustty-vt-c --output include/rustty.h` invocation run at the root).
+        .current_dir(&root)
         .status()
         .map_err(|e| format!("spawn cbindgen (install via `cargo install cbindgen`): {e}"))?;
 

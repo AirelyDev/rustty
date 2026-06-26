@@ -37,7 +37,121 @@ header = """
  */
 """
 
+# Cross-crate C-ABI types. The C signatures reference a handful of `#[repr(C)]`
+# types that are DEFINED in sibling workspace crates (the ported vt internals +
+# the lib allocator seam). With `parse_deps = false` (see `[parse]`) cbindgen does
+# not reach those crates, so it would emit a header referring to undefined types.
+# We therefore PIN their exact C layouts here, each mirroring the Rust
+# `#[repr(C)]` definition byte-for-byte, so the header is fully self-consistent
+# (compiles standalone as C and C++). This stays within R3: these are rustty's
+# OWN types, transcribed by hand — cbindgen never reads any crate here, and the
+# ghostty reference tree is not a dependency at all.
+#
+#   - CellCountInt   = u16                      (rustty-render-types term_size)
+#   - ModeTagBacking = u16                      (rustty-vt modes)
+#   - ModsBacking    = u16                      (rustty-vt input key_mods)
+#   - CommandKey     enum(i32)                  (rustty-vt osc::CommandKey)
+#   - RGB            { u8 r, g, b }             (rustty-vt color::RGB)
+#   - Coordinate     { u16 x; u32 y }           (rustty-vt point::Coordinate;
+#                                                x = size::CellCountInt = u16)
+#   - Position       { f32 x, y }               (rustty-vt input mouse_encode::Pos)
+#   - VTable         {alloc/resize/remap/free}  (rustty-lib allocator::VTable)
+#   - Allocator      { void* ctx; const VTable* vtable }  (rustty-lib Allocator)
+#   - Node           opaque (pointer-only; PageList node back-pointer)
+#   - Command        opaque pointer to osc::Command (OSC parser handle)
+after_includes = """
+
+typedef uint16_t CellCountInt;
+typedef uint16_t ModeTagBacking;
+typedef uint16_t ModsBacking;
+
+/**
+ * OSC command discriminant (the `Command` union tag). `#[repr(i32)]`; the
+ * discriminants MUST stay in declaration order for C ABI compatibility.
+ * C: RusttyOscCommandKey (rustty-vt osc::CommandKey)
+ */
+typedef enum {
+    OSC_COMMAND_KEY_INVALID = 0,
+    OSC_COMMAND_KEY_CHANGE_WINDOW_TITLE,
+    OSC_COMMAND_KEY_CHANGE_WINDOW_ICON,
+    OSC_COMMAND_KEY_SEMANTIC_PROMPT,
+    OSC_COMMAND_KEY_CLIPBOARD_CONTENTS,
+    OSC_COMMAND_KEY_REPORT_PWD,
+    OSC_COMMAND_KEY_MOUSE_SHAPE,
+    OSC_COMMAND_KEY_COLOR_OPERATION,
+    OSC_COMMAND_KEY_KITTY_COLOR_PROTOCOL,
+    OSC_COMMAND_KEY_SHOW_DESKTOP_NOTIFICATION,
+    OSC_COMMAND_KEY_HYPERLINK_START,
+    OSC_COMMAND_KEY_HYPERLINK_END,
+    OSC_COMMAND_KEY_CONEMU_SLEEP,
+    OSC_COMMAND_KEY_CONEMU_SHOW_MESSAGE_BOX,
+    OSC_COMMAND_KEY_CONEMU_CHANGE_TAB_TITLE,
+    OSC_COMMAND_KEY_CONEMU_PROGRESS_REPORT,
+    OSC_COMMAND_KEY_CONEMU_WAIT_INPUT,
+    OSC_COMMAND_KEY_CONEMU_GUIMACRO,
+    OSC_COMMAND_KEY_CONEMU_RUN_PROCESS,
+    OSC_COMMAND_KEY_CONEMU_OUTPUT_ENVIRONMENT_VARIABLE,
+    OSC_COMMAND_KEY_CONEMU_XTERM_EMULATION,
+    OSC_COMMAND_KEY_CONEMU_COMMENT,
+    OSC_COMMAND_KEY_KITTY_TEXT_SIZING,
+    OSC_COMMAND_KEY_KITTY_CLIPBOARD_PROTOCOL,
+    OSC_COMMAND_KEY_CONTEXT_SIGNAL,
+} CommandKey;
+
+typedef struct {
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+} RGB;
+
+typedef struct {
+    CellCountInt x;
+    uint32_t y;
+} Coordinate;
+
+typedef struct {
+    float x;
+    float y;
+} Position;
+
+/** The VTable required by the C interface. C: RusttyAllocatorVtable */
+typedef struct {
+    uint8_t *(*alloc)(void*, uintptr_t len, uint8_t alignment, uintptr_t ret_addr);
+    bool (*resize)(void*, uint8_t *memory, uintptr_t memory_len, uint8_t alignment, uintptr_t new_len, uintptr_t ret_addr);
+    uint8_t *(*remap)(void*, uint8_t *memory, uintptr_t memory_len, uint8_t alignment, uintptr_t new_len, uintptr_t ret_addr);
+    void (*free)(void*, uint8_t *memory, uintptr_t memory_len, uint8_t alignment, uintptr_t ret_addr);
+} VTable;
+
+/** The Allocator interface for custom allocation strategies. C: RusttyAllocator */
+typedef struct {
+    void *ctx;
+    const VTable *vtable;
+} Allocator;
+
+/** Opaque PageList node back-pointer (used only behind a pointer). */
+typedef struct Node Node;
+
+/** Opaque OSC parser command handle (a pointer to the internal command). */
+typedef struct RusttyOscCommand *Command;
+"""
+
 [parse]
+# The C-ABI surface references a small set of `#[repr(C)]` types that are DEFINED
+# in sibling workspace crates (the ported vt internals + the lib allocator seam):
+# `RGB`/`Coordinate`/`CellCountInt`/`Node` from `rustty-vt`, `Allocator` from
+# `rustty-lib`, and `ModeTagBacking` (a `u16` alias) from `rustty-vt::modes`.
+# With `parse_deps = false` cbindgen DROPS these and emits a header that refers to
+# undefined types (it will not compile as C/C++). We therefore parse those two
+# OWN-WORKSPACE crates so the types are emitted. This stays within R3: cbindgen
+# reads only rustty's own crates, NEVER the ghostty reference tree (which is not a
+# Cargo dependency of this crate at all, so it is unreachable here regardless).
+# cbindgen reads ONLY the rustty-vt-c crate (R3). The cross-crate C-ABI types it
+# would otherwise need to chase into `rustty-vt`/`rustty-lib`/`rustty-render-types`
+# are instead pinned by hand in `after_includes` above (their exact `#[repr(C)]`
+# layouts). We deliberately keep `parse_deps = false`: turning it on makes
+# cbindgen re-parse the entire vt crate tree (incl. the 16k-line terminal.rs),
+# which is pathologically slow (minutes) AND non-deterministic about which dep
+# types it re-emits — the hand-pinned layouts are both fast and exact.
 parse_deps = false
 
 [export]
@@ -45,6 +159,24 @@ parse_deps = false
 # emitted. Symbols are already authored with the `rustty_` prefix in the crate,
 # so no rename prefix is applied here (keeping symbol names verbatim).
 prefix = ""
+
+# These cross-crate types are pinned by hand in `after_includes` (their exact C
+# layouts), so cbindgen must NOT emit its own (incomplete / self-referential)
+# versions for them — exclude them to avoid duplicate/conflicting declarations.
+# (cbindgen emitted e.g. a broken `typedef Command *Command;` for the OSC handle.)
+exclude = [
+    "RGB",
+    "Coordinate",
+    "CellCountInt",
+    "ModeTagBacking",
+    "ModsBacking",
+    "CommandKey",
+    "Position",
+    "VTable",
+    "Allocator",
+    "Node",
+    "Command",
+]
 
 [export.rename]
 # (reserved) per-type renames land as the ABI is ported.

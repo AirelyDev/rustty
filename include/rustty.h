@@ -19,22 +19,2266 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+typedef uint16_t CellCountInt;
+typedef uint16_t ModeTagBacking;
+typedef uint16_t ModsBacking;
+
+/**
+ * OSC command discriminant (the `Command` union tag). `#[repr(i32)]`; the
+ * discriminants MUST stay in declaration order for C ABI compatibility.
+ * C: RusttyOscCommandKey (rustty-vt osc::CommandKey)
+ */
+typedef enum {
+    OSC_COMMAND_KEY_INVALID = 0,
+    OSC_COMMAND_KEY_CHANGE_WINDOW_TITLE,
+    OSC_COMMAND_KEY_CHANGE_WINDOW_ICON,
+    OSC_COMMAND_KEY_SEMANTIC_PROMPT,
+    OSC_COMMAND_KEY_CLIPBOARD_CONTENTS,
+    OSC_COMMAND_KEY_REPORT_PWD,
+    OSC_COMMAND_KEY_MOUSE_SHAPE,
+    OSC_COMMAND_KEY_COLOR_OPERATION,
+    OSC_COMMAND_KEY_KITTY_COLOR_PROTOCOL,
+    OSC_COMMAND_KEY_SHOW_DESKTOP_NOTIFICATION,
+    OSC_COMMAND_KEY_HYPERLINK_START,
+    OSC_COMMAND_KEY_HYPERLINK_END,
+    OSC_COMMAND_KEY_CONEMU_SLEEP,
+    OSC_COMMAND_KEY_CONEMU_SHOW_MESSAGE_BOX,
+    OSC_COMMAND_KEY_CONEMU_CHANGE_TAB_TITLE,
+    OSC_COMMAND_KEY_CONEMU_PROGRESS_REPORT,
+    OSC_COMMAND_KEY_CONEMU_WAIT_INPUT,
+    OSC_COMMAND_KEY_CONEMU_GUIMACRO,
+    OSC_COMMAND_KEY_CONEMU_RUN_PROCESS,
+    OSC_COMMAND_KEY_CONEMU_OUTPUT_ENVIRONMENT_VARIABLE,
+    OSC_COMMAND_KEY_CONEMU_XTERM_EMULATION,
+    OSC_COMMAND_KEY_CONEMU_COMMENT,
+    OSC_COMMAND_KEY_KITTY_TEXT_SIZING,
+    OSC_COMMAND_KEY_KITTY_CLIPBOARD_PROTOCOL,
+    OSC_COMMAND_KEY_CONTEXT_SIGNAL,
+} CommandKey;
+
+typedef struct {
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+} RGB;
+
+typedef struct {
+    CellCountInt x;
+    uint32_t y;
+} Coordinate;
+
+typedef struct {
+    float x;
+    float y;
+} Position;
+
+/** The VTable required by the C interface. C: RusttyAllocatorVtable */
+typedef struct {
+    uint8_t *(*alloc)(void*, uintptr_t len, uint8_t alignment, uintptr_t ret_addr);
+    bool (*resize)(void*, uint8_t *memory, uintptr_t memory_len, uint8_t alignment, uintptr_t new_len, uintptr_t ret_addr);
+    uint8_t *(*remap)(void*, uint8_t *memory, uintptr_t memory_len, uint8_t alignment, uintptr_t new_len, uintptr_t ret_addr);
+    void (*free)(void*, uint8_t *memory, uintptr_t memory_len, uint8_t alignment, uintptr_t ret_addr);
+} VTable;
+
+/** The Allocator interface for custom allocation strategies. C: RusttyAllocator */
+typedef struct {
+    void *ctx;
+    const VTable *vtable;
+} Allocator;
+
+/** Opaque PageList node back-pointer (used only behind a pointer). */
+typedef struct Node Node;
+
+/** Opaque OSC parser command handle (a pointer to the internal command). */
+typedef struct RusttyOscCommand *Command;
+
+
+/**
+ * C: GhosttyFocusEvent -> RusttyFocusEvent (R2)
+ */
+typedef enum {
+    FOCUS_EVENT_FOCUS_EVENT_GAINED = 0,
+    FOCUS_EVENT_FOCUS_EVENT_LOST = 1,
+} FocusEvent;
+
+/**
+ * C: GhosttySysLogLevel -> RusttySysLogLevel (R2)
+ */
+typedef enum {
+    LOG_LEVEL_LOG_LEVEL_ERROR = 0,
+    LOG_LEVEL_LOG_LEVEL_WARNING = 1,
+    LOG_LEVEL_LOG_LEVEL_INFO = 2,
+    LOG_LEVEL_LOG_LEVEL_DEBUG = 3,
+} LogLevel;
+
+/**
+ * C: RusttySizeReportStyle (R2)
+ */
+typedef enum {
+    STYLE_STYLE_MODE2048 = 0,
+    STYLE_STYLE_CSI14_T = 1,
+    STYLE_STYLE_CSI16_T = 2,
+    STYLE_STYLE_CSI18_T = 3,
+} Style;
+
+/**
+ * C: GhosttyCellData
+ */
+typedef enum {
+    CELL_DATA_CELL_DATA_INVALID = 0,
+    /**
+     * The codepoint of the cell (0 if empty or bg-color-only).
+     * Output type: uint32_t * (stored as u21, zero-extended)
+     */
+    CELL_DATA_CELL_DATA_CODEPOINT = 1,
+    /**
+     * The content tag describing what kind of content is in the cell.
+     * Output type: GhosttyCellContentTag *
+     */
+    CELL_DATA_CELL_DATA_CONTENT_TAG = 2,
+    /**
+     * The wide property of the cell.
+     * Output type: GhosttyCellWide *
+     */
+    CELL_DATA_CELL_DATA_WIDE = 3,
+    /**
+     * Whether the cell has text to render.
+     * Output type: bool *
+     */
+    CELL_DATA_CELL_DATA_HAS_TEXT = 4,
+    /**
+     * Whether the cell has styling (non-default style).
+     * Output type: bool *
+     */
+    CELL_DATA_CELL_DATA_HAS_STYLING = 5,
+    /**
+     * The style ID for the cell (for use with style lookups).
+     * Output type: uint16_t *
+     */
+    CELL_DATA_CELL_DATA_STYLE_ID = 6,
+    /**
+     * Whether the cell has a hyperlink.
+     * Output type: bool *
+     */
+    CELL_DATA_CELL_DATA_HAS_HYPERLINK = 7,
+    /**
+     * Whether the cell is protected.
+     * Output type: bool *
+     */
+    CELL_DATA_CELL_DATA_PROTECTED = 8,
+    /**
+     * The semantic content type of the cell (from OSC 133).
+     * Output type: GhosttyCellSemanticContent *
+     */
+    CELL_DATA_CELL_DATA_SEMANTIC_CONTENT = 9,
+    /**
+     * The palette index for the cell's background color.
+     * Only valid when content_tag is bg_color_palette.
+     * Output type: GhosttyColorPaletteIndex *
+     */
+    CELL_DATA_CELL_DATA_COLOR_PALETTE = 10,
+    /**
+     * The RGB value for the cell's background color.
+     * Only valid when content_tag is bg_color_rgb.
+     * Output type: GhosttyColorRgb *
+     */
+    CELL_DATA_CELL_DATA_COLOR_RGB = 11,
+} CellData;
+
+/**
+ * C: GhosttyRenderStateRowData
+ */
+typedef enum {
+    ROW_DATA_ROW_DATA_INVALID = 0,
+    ROW_DATA_ROW_DATA_DIRTY = 1,
+    ROW_DATA_ROW_DATA_RAW = 2,
+    ROW_DATA_ROW_DATA_CELLS = 3,
+    ROW_DATA_ROW_DATA_SELECTION = 4,
+} RowData;
+
+/**
+ * The C ABI compatible tag type for `Attribute`.
+ */
+typedef enum {
+    TAG_TAG_UNSET = 0,
+    TAG_TAG_UNKNOWN = 1,
+    TAG_TAG_BOLD = 2,
+    TAG_TAG_RESET_BOLD = 3,
+    TAG_TAG_ITALIC = 4,
+    TAG_TAG_RESET_ITALIC = 5,
+    TAG_TAG_FAINT = 6,
+    TAG_TAG_UNDERLINE = 7,
+    TAG_TAG_UNDERLINE_COLOR = 8,
+    TAG_TAG_COLOR256_UNDERLINE = 9,
+    TAG_TAG_RESET_UNDERLINE_COLOR = 10,
+    TAG_TAG_OVERLINE = 11,
+    TAG_TAG_RESET_OVERLINE = 12,
+    TAG_TAG_BLINK = 13,
+    TAG_TAG_RESET_BLINK = 14,
+    TAG_TAG_INVERSE = 15,
+    TAG_TAG_RESET_INVERSE = 16,
+    TAG_TAG_INVISIBLE = 17,
+    TAG_TAG_RESET_INVISIBLE = 18,
+    TAG_TAG_STRIKETHROUGH = 19,
+    TAG_TAG_RESET_STRIKETHROUGH = 20,
+    TAG_TAG_DIRECT_COLOR_FG = 21,
+    TAG_TAG_DIRECT_COLOR_BG = 22,
+    TAG_TAG_COLOR8_BG = 23,
+    TAG_TAG_COLOR8_FG = 24,
+    TAG_TAG_RESET_FG = 25,
+    TAG_TAG_RESET_BG = 26,
+    TAG_TAG_COLOR8_BRIGHT_BG = 27,
+    TAG_TAG_COLOR8_BRIGHT_FG = 28,
+    TAG_TAG_COLOR256_BG = 29,
+    TAG_TAG_COLOR256_FG = 30,
+} Tag;
+
+/**
+ * C: GhosttySelectionFormat — the `enum(c_int)` projection of `formatter.Format`.
+ */
+typedef enum {
+    FORMAT_FORMAT_PLAIN = 0,
+    FORMAT_FORMAT_VT = 1,
+    FORMAT_FORMAT_HTML = 2,
+} Format;
+
+/**
+ * C: GhosttyKittyGraphicsData
+ */
+typedef enum {
+    DATA_DATA_INVALID = 0,
+    DATA_DATA_PLACEMENT_ITERATOR = 1,
+} Data;
+
+/**
+ * C: GhosttyKittyGraphicsImageData
+ */
+typedef enum {
+    IMAGE_DATA_IMAGE_DATA_INVALID = 0,
+    IMAGE_DATA_IMAGE_DATA_ID = 1,
+    IMAGE_DATA_IMAGE_DATA_NUMBER = 2,
+    IMAGE_DATA_IMAGE_DATA_WIDTH = 3,
+    IMAGE_DATA_IMAGE_DATA_HEIGHT = 4,
+    IMAGE_DATA_IMAGE_DATA_FORMAT = 5,
+    IMAGE_DATA_IMAGE_DATA_COMPRESSION = 6,
+    IMAGE_DATA_IMAGE_DATA_DATA_PTR = 7,
+    IMAGE_DATA_IMAGE_DATA_DATA_LEN = 8,
+} ImageData;
+
+/**
+ * C: GhosttyKittyGraphicsPlacementData
+ */
+typedef enum {
+    PLACEMENT_DATA_PLACEMENT_DATA_INVALID = 0,
+    PLACEMENT_DATA_PLACEMENT_DATA_IMAGE_ID = 1,
+    PLACEMENT_DATA_PLACEMENT_DATA_PLACEMENT_ID = 2,
+    PLACEMENT_DATA_PLACEMENT_DATA_IS_VIRTUAL = 3,
+    PLACEMENT_DATA_PLACEMENT_DATA_X_OFFSET = 4,
+    PLACEMENT_DATA_PLACEMENT_DATA_Y_OFFSET = 5,
+    PLACEMENT_DATA_PLACEMENT_DATA_SOURCE_X = 6,
+    PLACEMENT_DATA_PLACEMENT_DATA_SOURCE_Y = 7,
+    PLACEMENT_DATA_PLACEMENT_DATA_SOURCE_WIDTH = 8,
+    PLACEMENT_DATA_PLACEMENT_DATA_SOURCE_HEIGHT = 9,
+    PLACEMENT_DATA_PLACEMENT_DATA_COLUMNS = 10,
+    PLACEMENT_DATA_PLACEMENT_DATA_ROWS = 11,
+    PLACEMENT_DATA_PLACEMENT_DATA_Z = 12,
+} PlacementData;
+
+/**
+ * C: GhosttyRenderStateRowCellsData
+ */
+typedef enum {
+    ROW_CELLS_DATA_ROW_CELLS_DATA_INVALID = 0,
+    ROW_CELLS_DATA_ROW_CELLS_DATA_RAW = 1,
+    ROW_CELLS_DATA_ROW_CELLS_DATA_STYLE = 2,
+    ROW_CELLS_DATA_ROW_CELLS_DATA_GRAPHEMES_LEN = 3,
+    ROW_CELLS_DATA_ROW_CELLS_DATA_GRAPHEMES_BUF = 4,
+    ROW_CELLS_DATA_ROW_CELLS_DATA_BG_COLOR = 5,
+    ROW_CELLS_DATA_ROW_CELLS_DATA_FG_COLOR = 6,
+    ROW_CELLS_DATA_ROW_CELLS_DATA_SELECTED = 7,
+    ROW_CELLS_DATA_ROW_CELLS_DATA_HAS_STYLING = 8,
+    ROW_CELLS_DATA_ROW_CELLS_DATA_GRAPHEMES_UTF8 = 9,
+} RowCellsData;
+
+/**
+ * The C ABI compatible tag for `ScrollViewport`.
+ */
+typedef enum {
+    SCROLL_VIEWPORT_TAG_SCROLL_VIEWPORT_TAG_TOP = 0,
+    SCROLL_VIEWPORT_TAG_SCROLL_VIEWPORT_TAG_BOTTOM = 1,
+    SCROLL_VIEWPORT_TAG_SCROLL_VIEWPORT_TAG_DELTA = 2,
+} ScrollViewportTag;
+
+/**
+ * C: GhosttyTerminalData
+ */
+typedef enum {
+    TERMINAL_DATA_TERMINAL_DATA_INVALID = 0,
+    TERMINAL_DATA_TERMINAL_DATA_COLS = 1,
+    TERMINAL_DATA_TERMINAL_DATA_ROWS = 2,
+    TERMINAL_DATA_TERMINAL_DATA_CURSOR_X = 3,
+    TERMINAL_DATA_TERMINAL_DATA_CURSOR_Y = 4,
+    TERMINAL_DATA_TERMINAL_DATA_CURSOR_PENDING_WRAP = 5,
+    TERMINAL_DATA_TERMINAL_DATA_ACTIVE_SCREEN = 6,
+    TERMINAL_DATA_TERMINAL_DATA_CURSOR_VISIBLE = 7,
+    TERMINAL_DATA_TERMINAL_DATA_KITTY_KEYBOARD_FLAGS = 8,
+    TERMINAL_DATA_TERMINAL_DATA_SCROLLBAR = 9,
+    TERMINAL_DATA_TERMINAL_DATA_CURSOR_STYLE = 10,
+    TERMINAL_DATA_TERMINAL_DATA_MOUSE_TRACKING = 11,
+    TERMINAL_DATA_TERMINAL_DATA_TITLE = 12,
+    TERMINAL_DATA_TERMINAL_DATA_PWD = 13,
+    TERMINAL_DATA_TERMINAL_DATA_TOTAL_ROWS = 14,
+    TERMINAL_DATA_TERMINAL_DATA_SCROLLBACK_ROWS = 15,
+    TERMINAL_DATA_TERMINAL_DATA_WIDTH_PX = 16,
+    TERMINAL_DATA_TERMINAL_DATA_HEIGHT_PX = 17,
+    TERMINAL_DATA_TERMINAL_DATA_COLOR_FOREGROUND = 18,
+    TERMINAL_DATA_TERMINAL_DATA_COLOR_BACKGROUND = 19,
+    TERMINAL_DATA_TERMINAL_DATA_COLOR_CURSOR = 20,
+    TERMINAL_DATA_TERMINAL_DATA_COLOR_PALETTE = 21,
+    TERMINAL_DATA_TERMINAL_DATA_COLOR_FOREGROUND_DEFAULT = 22,
+    TERMINAL_DATA_TERMINAL_DATA_COLOR_BACKGROUND_DEFAULT = 23,
+    TERMINAL_DATA_TERMINAL_DATA_COLOR_CURSOR_DEFAULT = 24,
+    TERMINAL_DATA_TERMINAL_DATA_COLOR_PALETTE_DEFAULT = 25,
+    TERMINAL_DATA_TERMINAL_DATA_KITTY_IMAGE_STORAGE_LIMIT = 26,
+    TERMINAL_DATA_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_FILE = 27,
+    TERMINAL_DATA_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_TEMP_FILE = 28,
+    TERMINAL_DATA_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_SHARED_MEM = 29,
+    TERMINAL_DATA_TERMINAL_DATA_KITTY_GRAPHICS = 30,
+    TERMINAL_DATA_TERMINAL_DATA_SELECTION = 31,
+    TERMINAL_DATA_TERMINAL_DATA_VIEWPORT_ACTIVE = 32,
+} TerminalData;
+
+/**
+ * C: GhosttySelectionAdjustment — the `enum(c_int)` projection of
+ * `Selection.Adjustment`.
+ */
+typedef enum {
+    ADJUSTMENT_ADJUSTMENT_LEFT = 0,
+    ADJUSTMENT_ADJUSTMENT_RIGHT = 1,
+    ADJUSTMENT_ADJUSTMENT_UP = 2,
+    ADJUSTMENT_ADJUSTMENT_DOWN = 3,
+    ADJUSTMENT_ADJUSTMENT_HOME = 4,
+    ADJUSTMENT_ADJUSTMENT_END = 5,
+    ADJUSTMENT_ADJUSTMENT_PAGE_UP = 6,
+    ADJUSTMENT_ADJUSTMENT_PAGE_DOWN = 7,
+    ADJUSTMENT_ADJUSTMENT_BEGINNING_OF_LINE = 8,
+    ADJUSTMENT_ADJUSTMENT_END_OF_LINE = 9,
+} Adjustment;
+
+/**
+ * C: GhosttySelectionOrder — the `enum(c_int)` projection of `Selection.Order`.
+ */
+typedef enum {
+    ORDER_ORDER_FORWARD = 0,
+    ORDER_ORDER_REVERSE = 1,
+    ORDER_ORDER_MIRRORED_FORWARD = 2,
+    ORDER_ORDER_MIRRORED_REVERSE = 3,
+} Order;
+
+/**
+ * The C ABI compatible tag type for `Point`.
+ */
+typedef enum {
+    TAG_C_TAG_C_ACTIVE = 0,
+    TAG_C_TAG_C_VIEWPORT = 1,
+    TAG_C_TAG_C_SCREEN = 2,
+    TAG_C_TAG_C_HISTORY = 3,
+} TagC;
+
+/**
+ * Wrapper around formatter that tracks the allocator for C API usage.
+ */
+typedef struct FormatterWrapper FormatterWrapper;
+
+typedef struct GestureWrapper GestureWrapper;
+
+/**
+ * Wrapper around key encoding options that tracks the allocator for C API usage.
+ */
+typedef struct KeyEncoderWrapper KeyEncoderWrapper;
+
+/**
+ * Wrapper around KeyEvent that tracks the allocator for C API usage.
+ * The UTF-8 text is not owned by this wrapper - the caller is responsible
+ * for ensuring the lifetime of any UTF-8 text set via set_utf8.
+ */
+typedef struct KeyEventWrapper KeyEventWrapper;
+
+/**
+ * Wrapper around the parser that tracks the allocator for C API usage.
+ */
+typedef struct OscParserWrapper OscParserWrapper;
+
+typedef struct PlacementIteratorWrapper PlacementIteratorWrapper;
+
+typedef struct RenderStateWrapper RenderStateWrapper;
+
+typedef struct RowCellsWrapper RowCellsWrapper;
+
+typedef struct RowIteratorWrapper RowIteratorWrapper;
+
+/**
+ * Wrapper around ZigTerminal that tracks additional state for C API usage,
+ * such as the persistent VT stream needed to handle escape sequences split
+ * across multiple vt_write calls.
+ */
+typedef struct TerminalWrapper TerminalWrapper;
+
+typedef struct TrackedGridRef TrackedGridRef;
+
+/**
+ * C: GhosttyColorRgb -> RusttyColorRgb (R2)
+ */
+typedef RGB RgbC;
+
+/**
+ * C: GhosttyModeReportState -> RusttyModeReportState (R2)
+ */
+typedef int ReportState;
+
+/**
+ * C: RusttyMouseEncoderSize (R2)
+ */
+typedef struct {
+    uintptr_t size;
+    uint32_t screen_width;
+    uint32_t screen_height;
+    uint32_t cell_width;
+    uint32_t cell_height;
+    uint32_t padding_top;
+    uint32_t padding_bottom;
+    uint32_t padding_right;
+    uint32_t padding_left;
+} Size;
+
+/**
+ * C: RusttyKeyEvent (R2)
+ */
+typedef KeyEventWrapper *Event;
+
+/**
+ * C: RusttyKeyEncoder (R2)
+ */
+typedef KeyEncoderWrapper *Encoder;
+
+/**
+ * C: GhosttyTerminal -> RusttyTerminal (R2)
+ */
+typedef TerminalWrapper *Terminal;
+
+/**
+ * C: GhosttyCell
+ */
+typedef uint64_t CCell;
+
+/**
+ * C: GhosttyRow
+ */
+typedef uint64_t CRow;
+
+/**
+ * C: RusttyOscParser (R2)
+ */
+typedef OscParserWrapper *Parser;
+
+/**
+ * The C ABI struct of `Attribute.Unknown`.
+ */
+typedef struct {
+    const uint16_t *full_ptr;
+    uintptr_t full_len;
+    const uint16_t *partial_ptr;
+    uintptr_t partial_len;
+} UnknownC;
+
+/**
+ * The C ABI value of `Underline`.
+ */
+typedef int UnderlineC;
+
+/**
+ * The C ABI compatible union value type for `Attribute` (`Attribute.CValue`).
+ */
+typedef union {
+    UnknownC unknown;
+    UnderlineC underline;
+    RGB underline_color;
+    /**
+     * "256_underline_color"
+     */
+    uint8_t color_256_underline;
+    RGB direct_color_fg;
+    RGB direct_color_bg;
+    /**
+     * "8_bg" — `color.Name.C` is `u8`.
+     */
+    uint8_t color_8_bg;
+    /**
+     * "8_fg"
+     */
+    uint8_t color_8_fg;
+    /**
+     * "8_bright_bg"
+     */
+    uint8_t color_8_bright_bg;
+    /**
+     * "8_bright_fg"
+     */
+    uint8_t color_8_bright_fg;
+    /**
+     * "256_bg"
+     */
+    uint8_t color_256_bg;
+    /**
+     * "256_fg"
+     */
+    uint8_t color_256_fg;
+    /**
+     * Padding to the PINNED ABI size. `[8]u64` (64 bytes) per the reference.
+     */
+    uint64_t _padding[8];
+} CValue;
+
+/**
+ * C: GhosttySgrAttribute — the hand-authored tagged union (`Attribute.C`).
+ */
+typedef struct {
+    Tag tag;
+    CValue value;
+} AttributeC;
+
+/**
+ * C: RusttyFormatter (R2)
+ */
+typedef FormatterWrapper *Formatter;
+
+/**
+ * C: RusttyFormatterScreenOptions (R2)
+ * C: RusttyFormatterScreenExtra (R2)
+ */
+typedef struct {
+    uintptr_t size;
+    bool cursor;
+    bool style;
+    bool hyperlink;
+    bool protection;
+    bool kitty_keyboard;
+    bool charsets;
+} ScreenOptionsExtra;
+
+/**
+ * C: RusttyFormatterTerminalExtra (R2)
+ */
+typedef struct {
+    uintptr_t size;
+    bool palette;
+    bool modes;
+    bool scrolling_region;
+    bool tabstops;
+    bool pwd;
+    bool keyboard;
+    ScreenOptionsExtra screen;
+} TerminalOptionsExtra;
+
+/**
+ * C: GhosttyGridRef -> RusttyGridRef (R2)
+ *
+ * A sized struct that holds a reference to a position in the terminal grid.
+ * The ref points to a specific cell position within the terminal's
+ * internal page structure.
+ */
+typedef struct {
+    uintptr_t size;
+    Node *node;
+    CellCountInt x;
+    CellCountInt y;
+} CGridRef;
+
+/**
+ * C: GhosttySelection -> RusttySelection (R2)
+ */
+typedef struct {
+    uintptr_t size;
+    CGridRef start;
+    CGridRef end;
+    bool rectangle;
+} CSelection;
+
+/**
+ * C: RusttyFormatterTerminalOptions (R2)
+ */
+typedef struct {
+    uintptr_t size;
+    Format emit;
+    bool unwrap;
+    bool trim;
+    TerminalOptionsExtra extra;
+    /**
+     * Optional selection to restrict output to a range.
+     * If null, the entire screen is formatted.
+     */
+    const CSelection *selection;
+} TerminalOptions;
+
+/**
+ * C: GhosttyKittyGraphics
+ */
+typedef void *KittyGraphics;
+
+/**
+ * C: GhosttySysImage -> RusttySysImage (R2)
+ */
+typedef struct {
+    uint32_t width;
+    uint32_t height;
+    uint8_t *data;
+    uintptr_t data_len;
+} Image;
+
+/**
+ * C: GhosttyKittyGraphicsImage
+ */
+typedef const Image *ImageHandle;
+
+/**
+ * C: GhosttyKittyGraphicsPlacementIterator
+ */
+typedef PlacementIteratorWrapper *PlacementIterator;
+
+/**
+ * C: GhosttyKittyGraphicsPlacementRenderInfo
+ */
+typedef struct {
+    uintptr_t size;
+    uint32_t pixel_width;
+    uint32_t pixel_height;
+    uint32_t grid_cols;
+    uint32_t grid_rows;
+    int32_t viewport_col;
+    int32_t viewport_row;
+    bool viewport_visible;
+    uint32_t source_x;
+    uint32_t source_y;
+    uint32_t source_width;
+    uint32_t source_height;
+} PlacementRenderInfo;
+
+/**
+ * C: GhosttyRenderState
+ */
+typedef RenderStateWrapper *RenderState;
+
+/**
+ * C: GhosttyRenderStateColors
+ */
+typedef struct {
+    uintptr_t size;
+    RGB background;
+    RGB foreground;
+    RGB cursor;
+    bool cursor_has_value;
+    RGB palette[256];
+} Colors;
+
+/**
+ * C: GhosttyRenderStateRowIterator
+ */
+typedef RowIteratorWrapper *RowIterator;
+
+/**
+ * C: GhosttyRenderStateRowCells
+ */
+typedef RowCellsWrapper *RowCells;
+
+/**
+ * C: GhosttySelectionGesture
+ */
+typedef GestureWrapper *Gesture;
+
+/**
+ * C: GhosttyTerminalOptions
+ */
+typedef struct {
+    CellCountInt cols;
+    CellCountInt rows;
+    uintptr_t max_scrollback;
+} Options;
+
+/**
+ * The C ABI compatible union value for `ScrollViewport`.
+ */
+typedef union {
+    intptr_t delta;
+    /**
+     * Padding to the PINNED ABI size. `[2]u64` (16 bytes) per the reference.
+     */
+    uint64_t _padding[2];
+} ScrollViewportCValue;
+
+/**
+ * C: GhosttyTerminalScrollViewport — the hand-authored tagged union.
+ */
+typedef struct {
+    ScrollViewportTag tag;
+    ScrollViewportCValue value;
+} ScrollViewportC;
+
+/**
+ * C: GhosttyTerminalScrollViewport
+ */
+typedef ScrollViewportC ScrollViewport;
+
+/**
+ * C: GhosttyTerminalSelectWordOptions
+ */
+typedef struct {
+    uintptr_t size;
+    CGridRef ref_;
+    const uint32_t *boundary_codepoints;
+    uintptr_t boundary_codepoints_len;
+} SelectWordOptions;
+
+/**
+ * C: GhosttyTerminalSelectWordBetweenOptions
+ */
+typedef struct {
+    uintptr_t size;
+    CGridRef start;
+    CGridRef end;
+    const uint32_t *boundary_codepoints;
+    uintptr_t boundary_codepoints_len;
+} SelectWordBetweenOptions;
+
+/**
+ * C: GhosttyTerminalSelectLineOptions
+ */
+typedef struct {
+    uintptr_t size;
+    CGridRef ref_;
+    const uint32_t *whitespace;
+    uintptr_t whitespace_len;
+    bool semantic_prompt_boundary;
+} SelectLineOptions;
+
+/**
+ * C: GhosttyTerminalSelectionFormatOptions
+ */
+typedef struct {
+    uintptr_t size;
+    Format emit;
+    bool unwrap;
+    bool trim;
+    const CSelection *selection;
+} FormatOptions;
+
+/**
+ * The C ABI compatible union value type for `Point` (`Point.CValue`).
+ */
+typedef union {
+    Coordinate active;
+    Coordinate viewport;
+    Coordinate screen;
+    Coordinate history;
+    /**
+     * Padding to the PINNED ABI size. `[2]u64` (16 bytes) per the reference.
+     */
+    uint64_t _padding[2];
+} PointCValue;
+
+/**
+ * C: GhosttyPoint -> RusttyPoint (R2) — the C ABI compatible tagged union.
+ */
+typedef struct {
+    TagC tag;
+    PointCValue value;
+} PointC;
+
+/**
+ * C: GhosttyTrackedGridRef -> RusttyTrackedGridRef (R2)
+ *
+ * An owned tracked reference to a position in the terminal grid. The
+ * underlying PageList pin is automatically updated as the PageList changes.
+ */
+typedef TrackedGridRef *CTrackedGridRef;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
 
 /**
- * Returns the ABI version of the rustty-vt C interface.
- *
- * Toolchain-proof stub: gives cbindgen a `#[no_mangle] extern "C"` symbol to
- * emit so the header pipeline can be validated before the real ABI is ported.
- * The `rustty_` prefix is applied by cbindgen (see `cbindgen.toml`).
+ * C: rustty_build_info
  *
  * # Safety
- * This function has no preconditions; it is `extern "C"` only to participate
- * in the C ABI.
+ * `out` must point to writable storage of the type required by `data` (see
+ * `build_info::BuildInfo::OutType`); for an out-of-range `data` value the call
+ * returns `INVALID_VALUE` without dereferencing `out`.
  */
-int rustty_vt_abi_version(void);
+int rustty_build_info(int data, void *out);
+
+/**
+ * C: rustty_color_rgb_get
+ *
+ * # Safety
+ * `r`, `g`, and `b` must be valid, writable pointers to `u8`.
+ */
+void rustty_color_rgb_get(RgbC c, uint8_t *r, uint8_t *g, uint8_t *b);
+
+/**
+ * C: rustty_focus_encode
+ *
+ * # Safety
+ * `out`, if non-null, must point to `out_len` writable bytes; `out_written`
+ * must be a valid, writable pointer to `usize`.
+ */
+int rustty_focus_encode(FocusEvent event, uint8_t *out, uintptr_t out_len, uintptr_t *out_written);
+
+/**
+ * C: rustty_mode_report_encode
+ *
+ * # Safety
+ * `out`, if non-null, must point to `out_len` writable bytes; `out_written`
+ * must be a valid, writable pointer to `usize`.
+ */
+int rustty_mode_report_encode(ModeTagBacking tag,
+                              ReportState state,
+                              uint8_t *out,
+                              uintptr_t out_len,
+                              uintptr_t *out_written);
+
+/**
+ * C: rustty_alloc
+ *
+ * # Safety
+ * `alloc_`, if non-null, must point to a valid C allocator. The returned
+ * pointer (if non-null) must be released with `rustty_free`.
+ */
+uint8_t *rustty_alloc(const Allocator *alloc_, uintptr_t len);
+
+/**
+ * C: rustty_free
+ *
+ * # Safety
+ * `ptr`, if non-null, must be a buffer previously returned by
+ * `rustty_alloc` with the same `alloc_` and `len`.
+ */
+void rustty_free(const Allocator *alloc_, uint8_t *ptr, uintptr_t len);
+
+/**
+ * C: rustty_sys_log_stderr
+ *
+ * # Safety
+ * `scope_ptr`/`message_ptr` must point to `scope_len`/`message_len` valid bytes.
+ */
+void rustty_sys_log_stderr(void *userdata,
+                           LogLevel level,
+                           const uint8_t *scope_ptr,
+                           uintptr_t scope_len,
+                           const uint8_t *message_ptr,
+                           uintptr_t message_len);
+
+/**
+ * C: rustty_sys_set
+ *
+ * # Safety
+ * `value` must be valid for the type required by `option`, or null. An
+ * out-of-range `option` returns `INVALID_VALUE`.
+ */
+int rustty_sys_set(int option, const void *value);
+
+/**
+ * C: rustty_paste_is_safe
+ *
+ * # Safety
+ * `data`, if non-null, must point to `len` readable bytes.
+ */
+bool rustty_paste_is_safe(const uint8_t *data, uintptr_t len);
+
+/**
+ * C: rustty_paste_encode
+ *
+ * # Safety
+ * `data`, if non-null, must point to `data_len` writable bytes; `out`, if
+ * non-null, must point to `out_len` writable bytes; `out_written` must be a
+ * valid, writable pointer to `usize`.
+ */
+int rustty_paste_encode(uint8_t *data,
+                        uintptr_t data_len,
+                        bool bracketed,
+                        uint8_t *out,
+                        uintptr_t out_len,
+                        uintptr_t *out_written);
+
+/**
+ * C: rustty_size_report_encode
+ *
+ * # Safety
+ * `out`, if non-null, must point to `out_len` writable bytes; `out_written`
+ * must be a valid, writable pointer to `usize`.
+ */
+int rustty_size_report_encode(Style style,
+                              Size size,
+                              uint8_t *out,
+                              uintptr_t out_len,
+                              uintptr_t *out_written);
+
+/**
+ * C: rustty_key_event_new
+ *
+ * # Safety
+ * `alloc`, if non-null, must point to a valid allocator; `result` must be a
+ * valid, writable pointer to a key-event handle.
+ */
+int rustty_key_event_new(const Allocator *alloc, Event *result);
+
+/**
+ * C: rustty_key_event_free
+ *
+ * # Safety
+ * `event`, if non-null, must be a handle returned by `rustty_key_event_new`.
+ */
+void rustty_key_event_free(Event event);
+
+/**
+ * C: rustty_key_event_set_action
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_key_event_new`.
+ */
+void rustty_key_event_set_action(Event event, int action);
+
+/**
+ * C: rustty_key_event_get_action
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_key_event_new`.
+ */
+int rustty_key_event_get_action(Event event);
+
+/**
+ * C: rustty_key_event_set_key
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_key_event_new`.
+ */
+void rustty_key_event_set_key(Event event, int k);
+
+/**
+ * C: rustty_key_event_get_key
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_key_event_new`.
+ */
+int rustty_key_event_get_key(Event event);
+
+/**
+ * C: rustty_key_event_set_mods
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_key_event_new`.
+ */
+void rustty_key_event_set_mods(Event event, ModsBacking mods);
+
+/**
+ * C: rustty_key_event_get_mods
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_key_event_new`.
+ */
+ModsBacking rustty_key_event_get_mods(Event event);
+
+/**
+ * C: rustty_key_event_set_consumed_mods
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_key_event_new`.
+ */
+void rustty_key_event_set_consumed_mods(Event event, ModsBacking consumed_mods);
+
+/**
+ * C: rustty_key_event_get_consumed_mods
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_key_event_new`.
+ */
+ModsBacking rustty_key_event_get_consumed_mods(Event event);
+
+/**
+ * C: rustty_key_event_set_composing
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_key_event_new`.
+ */
+void rustty_key_event_set_composing(Event event, bool composing);
+
+/**
+ * C: rustty_key_event_get_composing
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_key_event_new`.
+ */
+bool rustty_key_event_get_composing(Event event);
+
+/**
+ * C: rustty_key_event_set_utf8
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_key_event_new`; `utf8`, if
+ * non-null, must point to `len` readable bytes.
+ */
+void rustty_key_event_set_utf8(Event event, const uint8_t *utf8, uintptr_t len);
+
+/**
+ * C: rustty_key_event_get_utf8
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_key_event_new`; `len`, if
+ * non-null, must be a valid, writable pointer to `usize`.
+ */
+const uint8_t *rustty_key_event_get_utf8(Event event, uintptr_t *len);
+
+/**
+ * C: rustty_key_event_set_unshifted_codepoint
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_key_event_new`.
+ */
+void rustty_key_event_set_unshifted_codepoint(Event event, uint32_t codepoint);
+
+/**
+ * C: rustty_key_event_get_unshifted_codepoint
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_key_event_new`.
+ */
+uint32_t rustty_key_event_get_unshifted_codepoint(Event event);
+
+/**
+ * C: rustty_key_encoder_new
+ *
+ * # Safety
+ * `alloc`, if non-null, must point to a valid allocator; `result` must be a
+ * valid, writable pointer to a key-encoder handle.
+ */
+int rustty_key_encoder_new(const Allocator *alloc, Encoder *result);
+
+/**
+ * C: rustty_key_encoder_free
+ *
+ * # Safety
+ * `encoder`, if non-null, must be a handle returned by `rustty_key_encoder_new`.
+ */
+void rustty_key_encoder_free(Encoder encoder);
+
+/**
+ * C: rustty_key_encoder_setopt
+ *
+ * # Safety
+ * `encoder`, if non-null, must be a `rustty_key_encoder_new` handle; `value`,
+ * if non-null, must point to a readable value of the option's in-type.
+ */
+void rustty_key_encoder_setopt(Encoder encoder, int option, const void *value);
+
+/**
+ * C: rustty_key_encoder_setopt_from_terminal
+ *
+ * # Safety
+ * `encoder`/`terminal`, if non-null, must be live handles.
+ */
+void rustty_key_encoder_setopt_from_terminal(Encoder encoder, Terminal terminal);
+
+/**
+ * C: rustty_key_encoder_encode
+ *
+ * # Safety
+ * `encoder`/`event` must be non-null `new` handles; `out` (if non-null) must
+ * point to `out_len` writable bytes; `out_written` must be valid, writable.
+ */
+int rustty_key_encoder_encode(Encoder encoder,
+                              Event event,
+                              uint8_t *out,
+                              uintptr_t out_len,
+                              uintptr_t *out_written);
+
+/**
+ * C: rustty_mouse_event_new
+ *
+ * # Safety
+ * `alloc`, if non-null, must point to a valid allocator; `result` must be a
+ * valid, writable pointer to a mouse-event handle.
+ */
+int rustty_mouse_event_new(const Allocator *alloc, Event *result);
+
+/**
+ * C: rustty_mouse_event_free
+ *
+ * # Safety
+ * `event`, if non-null, must be a handle returned by `rustty_mouse_event_new`.
+ */
+void rustty_mouse_event_free(Event event);
+
+/**
+ * C: rustty_mouse_event_set_action
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_mouse_event_new`.
+ */
+void rustty_mouse_event_set_action(Event event, int action);
+
+/**
+ * C: rustty_mouse_event_get_action
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_mouse_event_new`.
+ */
+int rustty_mouse_event_get_action(Event event);
+
+/**
+ * C: rustty_mouse_event_set_button
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_mouse_event_new`.
+ */
+void rustty_mouse_event_set_button(Event event, int button);
+
+/**
+ * C: rustty_mouse_event_clear_button
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_mouse_event_new`.
+ */
+void rustty_mouse_event_clear_button(Event event);
+
+/**
+ * C: rustty_mouse_event_get_button
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_mouse_event_new`; `out`, if
+ * non-null, must be a valid, writable pointer to a `c_int` button code.
+ */
+bool rustty_mouse_event_get_button(Event event, int *out);
+
+/**
+ * C: rustty_mouse_event_set_mods
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_mouse_event_new`.
+ */
+void rustty_mouse_event_set_mods(Event event, ModsBacking mods);
+
+/**
+ * C: rustty_mouse_event_get_mods
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_mouse_event_new`.
+ */
+ModsBacking rustty_mouse_event_get_mods(Event event);
+
+/**
+ * C: rustty_mouse_event_set_position
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_mouse_event_new`.
+ */
+void rustty_mouse_event_set_position(Event event, Position pos);
+
+/**
+ * C: rustty_mouse_event_get_position
+ *
+ * # Safety
+ * `event` must be a handle returned by `rustty_mouse_event_new`.
+ */
+Position rustty_mouse_event_get_position(Event event);
+
+/**
+ * C: rustty_mouse_encoder_new
+ *
+ * # Safety
+ * `alloc`, if non-null, must point to a valid allocator; `result` must be a
+ * valid, writable pointer to a mouse-encoder handle.
+ */
+int rustty_mouse_encoder_new(const Allocator *alloc, Encoder *result);
+
+/**
+ * C: rustty_mouse_encoder_free
+ *
+ * # Safety
+ * `encoder`, if non-null, must be a handle returned by `rustty_mouse_encoder_new`.
+ */
+void rustty_mouse_encoder_free(Encoder encoder);
+
+/**
+ * C: rustty_mouse_encoder_setopt
+ *
+ * # Safety
+ * `encoder`, if non-null, must be a `rustty_mouse_encoder_new` handle; `value`,
+ * if non-null, must point to a readable value of the option's in-type.
+ */
+void rustty_mouse_encoder_setopt(Encoder encoder, int option, const void *value);
+
+/**
+ * C: rustty_mouse_encoder_setopt_from_terminal
+ *
+ * # Safety
+ * `encoder`/`terminal`, if non-null, must be live handles.
+ */
+void rustty_mouse_encoder_setopt_from_terminal(Encoder encoder, Terminal terminal);
+
+/**
+ * C: rustty_mouse_encoder_reset
+ *
+ * # Safety
+ * `encoder`, if non-null, must be a `rustty_mouse_encoder_new` handle.
+ */
+void rustty_mouse_encoder_reset(Encoder encoder);
+
+/**
+ * C: rustty_mouse_encoder_encode
+ *
+ * # Safety
+ * `encoder`/`event` must be `rustty_mouse_encoder_new`/`rustty_mouse_event_new`
+ * handles; `out` (if non-null) must point to `out_len` writable bytes;
+ * `out_written` must be valid, writable.
+ */
+int rustty_mouse_encoder_encode(Encoder encoder,
+                                Event event,
+                                uint8_t *out,
+                                uintptr_t out_len,
+                                uintptr_t *out_written);
+
+/**
+ * C: rustty_cell_get
+ *
+ * # Safety
+ * `out` must point to writable storage of the type required by `data`.
+ */
+int rustty_cell_get(CCell cell_, int data, void *out);
+
+/**
+ * C: rustty_cell_get_multi
+ *
+ * # Safety
+ * `keys`/`values`/`out_written` validity is the caller's contract.
+ */
+int rustty_cell_get_multi(CCell cell_,
+                          uintptr_t count,
+                          const CellData *keys,
+                          void **values,
+                          uintptr_t *out_written);
+
+/**
+ * C: rustty_row_get
+ *
+ * # Safety
+ * `out` must point to writable storage of the type required by `data`.
+ */
+int rustty_row_get(CRow row_, int data, void *out);
+
+/**
+ * C: rustty_row_get_multi
+ *
+ * # Safety
+ * `keys`/`values`/`out_written` validity is the caller's contract.
+ */
+int rustty_row_get_multi(CRow row_,
+                         uintptr_t count,
+                         const RowData *keys,
+                         void **values,
+                         uintptr_t *out_written);
+
+/**
+ * C: rustty_style_default
+ *
+ * # Safety
+ * `result` must be a valid, writable pointer to a `style::Style`.
+ */
+void rustty_style_default(Style *result);
+
+/**
+ * C: rustty_style_is_default
+ *
+ * # Safety
+ * `s` must be a valid, readable pointer to a `style::Style`.
+ */
+bool rustty_style_is_default(const Style *s);
+
+/**
+ * C: rustty_sgr_new
+ *
+ * # Safety
+ * `alloc`, if non-null, must point to a valid allocator; `result` must be a
+ * valid, writable pointer to a sgr-parser handle.
+ */
+int rustty_sgr_new(const Allocator *alloc, Parser *result);
+
+/**
+ * C: rustty_sgr_free
+ *
+ * # Safety
+ * `parser`, if non-null, must be a handle returned by `rustty_sgr_new`.
+ */
+void rustty_sgr_free(Parser parser);
+
+/**
+ * C: rustty_sgr_reset
+ *
+ * # Safety
+ * `parser`, if non-null, must be a handle returned by `rustty_sgr_new`.
+ */
+void rustty_sgr_reset(Parser parser);
+
+/**
+ * C: rustty_sgr_set_params
+ *
+ * # Safety
+ * `parser`, if non-null, must be a handle returned by `rustty_sgr_new`;
+ * `params` must point to `len` readable `u16`; `seps`, if non-null, must point
+ * to `len` readable bytes.
+ */
+int rustty_sgr_set_params(Parser parser,
+                          const uint16_t *params,
+                          const uint8_t *seps,
+                          uintptr_t len);
+
+/**
+ * C: rustty_sgr_next
+ *
+ * # Safety
+ * `parser`, if non-null, must be a handle returned by `rustty_sgr_new`;
+ * `result` must be a valid, writable pointer to a `sgr::AttributeC`.
+ */
+bool rustty_sgr_next(Parser parser, AttributeC *result);
+
+/**
+ * C: rustty_sgr_unknown_full
+ *
+ * # Safety
+ * `ptr`, if non-null, must be a valid, writable pointer to a `*const u16`.
+ */
+uintptr_t rustty_sgr_unknown_full(UnknownC unknown, const uint16_t **ptr);
+
+/**
+ * C: rustty_sgr_unknown_partial
+ *
+ * # Safety
+ * `ptr`, if non-null, must be a valid, writable pointer to a `*const u16`.
+ */
+uintptr_t rustty_sgr_unknown_partial(UnknownC unknown, const uint16_t **ptr);
+
+/**
+ * C: rustty_sgr_attribute_tag
+ */
+Tag rustty_sgr_attribute_tag(AttributeC attr);
+
+/**
+ * C: rustty_sgr_attribute_value
+ *
+ * # Safety
+ * `attr` must be a valid pointer to an `AttributeC`; the returned pointer
+ * aliases `attr.value` and is valid as long as `attr` is.
+ */
+CValue *rustty_sgr_attribute_value(AttributeC *attr);
+
+/**
+ * C: rustty_osc_new
+ *
+ * # Safety
+ * `alloc`, if non-null, must point to a valid allocator; `result` must be a
+ * valid, writable pointer to an osc-parser handle.
+ */
+int rustty_osc_new(const Allocator *alloc, Parser *result);
+
+/**
+ * C: rustty_osc_free
+ *
+ * # Safety
+ * `parser`, if non-null, must be a handle returned by `rustty_osc_new`.
+ */
+void rustty_osc_free(Parser parser);
+
+/**
+ * C: rustty_osc_next
+ *
+ * # Safety
+ * `parser` must be a non-null handle returned by `rustty_osc_new`.
+ */
+void rustty_osc_next(Parser parser, uint8_t byte);
+
+/**
+ * C: rustty_osc_reset
+ *
+ * # Safety
+ * `parser` must be a non-null handle returned by `rustty_osc_new`.
+ */
+void rustty_osc_reset(Parser parser);
+
+/**
+ * C: rustty_osc_end
+ *
+ * # Safety
+ * `parser` must be a non-null handle returned by `rustty_osc_new`. The returned
+ * command pointer aliases the parser and is valid until the next parse op.
+ */
+Command rustty_osc_end(Parser parser, uint8_t terminator);
+
+/**
+ * C: rustty_osc_command_type
+ *
+ * # Safety
+ * `command`, if non-null, must be a live command pointer returned by
+ * `rustty_osc_end`.
+ */
+CommandKey rustty_osc_command_type(Command command);
+
+/**
+ * C: rustty_osc_command_data
+ *
+ * # Safety
+ * `command`, if non-null, must be a live command pointer; `out`, for a valid
+ * `data` kind, must point to writable storage of that kind's out-type.
+ */
+bool rustty_osc_command_data(Command command, int data, void *out);
+
+/**
+ * C: rustty_formatter_terminal_new
+ *
+ * # Safety
+ * `alloc`, if non-null, must point to a valid allocator; `result` must be a
+ * valid, writable pointer to a formatter handle; `terminal`, if non-null, must
+ * be a live terminal handle; `opts.selection`, if non-null, must point to a
+ * valid `CSelection`.
+ */
+int rustty_formatter_terminal_new(const Allocator *alloc,
+                                  Formatter *result,
+                                  Terminal terminal,
+                                  TerminalOptions opts);
+
+/**
+ * C: rustty_formatter_format_buf
+ *
+ * # Safety
+ * `formatter`, if non-null, must be a handle returned by
+ * `rustty_formatter_terminal_new`; `out` (if non-null) must point to `out_len`
+ * writable bytes; `out_written` must be a valid, writable pointer.
+ */
+int rustty_formatter_format_buf(Formatter formatter,
+                                uint8_t *out,
+                                uintptr_t out_len,
+                                uintptr_t *out_written);
+
+/**
+ * C: rustty_formatter_format_alloc
+ *
+ * # Safety
+ * `formatter`, if non-null, must be a `rustty_formatter_terminal_new` handle;
+ * `alloc`, if non-null, a valid allocator; `out_ptr`/`out_len` must be
+ * valid, writable pointers. The returned buffer is owned by the caller and must
+ * be freed with the same allocator.
+ */
+int rustty_formatter_format_alloc(Formatter formatter,
+                                  const Allocator *alloc,
+                                  uint8_t **out_ptr,
+                                  uintptr_t *out_len);
+
+/**
+ * C: rustty_formatter_free
+ *
+ * # Safety
+ * `formatter`, if non-null, must be a handle returned by
+ * `rustty_formatter_terminal_new`.
+ */
+void rustty_formatter_free(Formatter formatter);
+
+/**
+ * C: rustty_type_json
+ *
+ * Returns a pointer to the NUL-terminated JSON string describing the layout of
+ * all C API extern structs (size/align/field offsets), for FFI consumers.
+ */
+const char *rustty_type_json(void);
+
+/**
+ * C: rustty_kitty_graphics_get
+ *
+ * # Safety
+ * `graphics` must be a valid `KittyGraphics` handle; `out` must point to storage
+ * of the type required by `data`.
+ */
+int rustty_kitty_graphics_get(KittyGraphics graphics, Data data, void *out);
+
+/**
+ * C: rustty_kitty_graphics_image
+ *
+ * # Safety
+ * `graphics` must be a valid `KittyGraphics` handle.
+ */
+ImageHandle rustty_kitty_graphics_image(KittyGraphics graphics, uint32_t image_id);
+
+/**
+ * C: rustty_kitty_graphics_image_get
+ *
+ * # Safety
+ * `image`, if non-null, must point to a valid `Image`; `out` must point to
+ * storage of the type required by `data`.
+ */
+int rustty_kitty_graphics_image_get(ImageHandle image, ImageData data, void *out);
+
+/**
+ * C: rustty_kitty_graphics_image_get_multi
+ *
+ * # Safety
+ * See `kitty_graphics::image_get_multi`.
+ */
+int rustty_kitty_graphics_image_get_multi(ImageHandle image,
+                                          uintptr_t count,
+                                          const ImageData *keys,
+                                          void *const *values,
+                                          uintptr_t *out_written);
+
+/**
+ * C: rustty_kitty_graphics_placement_iterator_new
+ *
+ * # Safety
+ * `alloc_`, if non-null, must point to a valid C allocator; `out` must be a
+ * valid, writable pointer to a `PlacementIterator`.
+ */
+int rustty_kitty_graphics_placement_iterator_new(const Allocator *alloc_, PlacementIterator *out);
+
+/**
+ * C: rustty_kitty_graphics_placement_iterator_free
+ *
+ * # Safety
+ * `iter`, if non-null, must be a pointer returned by the matching `_new`.
+ */
+void rustty_kitty_graphics_placement_iterator_free(PlacementIterator iter);
+
+/**
+ * C: rustty_kitty_graphics_placement_iterator_set
+ *
+ * # Safety
+ * `iter`, if non-null, must be a live iterator; `value`, if non-null, must point
+ * to a value of the type required by `option`.
+ */
+int rustty_kitty_graphics_placement_iterator_set(PlacementIterator iter,
+                                                 int option,
+                                                 const void *value);
+
+/**
+ * C: rustty_kitty_graphics_placement_next
+ *
+ * # Safety
+ * `iter`, if non-null, must be a live iterator seeded by `get(.., .placement_iterator, ..)`.
+ */
+bool rustty_kitty_graphics_placement_next(PlacementIterator iter);
+
+/**
+ * C: rustty_kitty_graphics_placement_get
+ *
+ * # Safety
+ * `iter`, if non-null, must be a live iterator positioned on an entry; `out`
+ * must point to storage of the type required by `data`.
+ */
+int rustty_kitty_graphics_placement_get(PlacementIterator iter, PlacementData data, void *out);
+
+/**
+ * C: rustty_kitty_graphics_placement_get_multi
+ *
+ * # Safety
+ * See `kitty_graphics::placement_get_multi`.
+ */
+int rustty_kitty_graphics_placement_get_multi(PlacementIterator iter,
+                                              uintptr_t count,
+                                              const PlacementData *keys,
+                                              void *const *values,
+                                              uintptr_t *out_written);
+
+/**
+ * C: rustty_kitty_graphics_placement_rect
+ *
+ * # Safety
+ * `iter`/`image`/`terminal`, if non-null, must be live; `out` must be a valid,
+ * writable pointer to a `CSelection`.
+ */
+int rustty_kitty_graphics_placement_rect(PlacementIterator iter,
+                                         ImageHandle image,
+                                         Terminal terminal,
+                                         CSelection *out);
+
+/**
+ * C: rustty_kitty_graphics_placement_pixel_size
+ *
+ * # Safety
+ * `iter`/`image`/`terminal`, if non-null, must be live; `out_width`/`out_height`
+ * must be valid, writable pointers to `u32`.
+ */
+int rustty_kitty_graphics_placement_pixel_size(PlacementIterator iter,
+                                               ImageHandle image,
+                                               Terminal terminal,
+                                               uint32_t *out_width,
+                                               uint32_t *out_height);
+
+/**
+ * C: rustty_kitty_graphics_placement_grid_size
+ *
+ * # Safety
+ * `iter`/`image`/`terminal`, if non-null, must be live; `out_cols`/`out_rows`
+ * must be valid, writable pointers to `u32`.
+ */
+int rustty_kitty_graphics_placement_grid_size(PlacementIterator iter,
+                                              ImageHandle image,
+                                              Terminal terminal,
+                                              uint32_t *out_cols,
+                                              uint32_t *out_rows);
+
+/**
+ * C: rustty_kitty_graphics_placement_viewport_pos
+ *
+ * # Safety
+ * `iter`/`image`/`terminal`, if non-null, must be live; `out_col`/`out_row` must
+ * be valid, writable pointers to `i32`.
+ */
+int rustty_kitty_graphics_placement_viewport_pos(PlacementIterator iter,
+                                                 ImageHandle image,
+                                                 Terminal terminal,
+                                                 int32_t *out_col,
+                                                 int32_t *out_row);
+
+/**
+ * C: rustty_kitty_graphics_placement_source_rect
+ *
+ * # Safety
+ * `iter`/`image`, if non-null, must be live; the four `out_*` pointers must be
+ * valid, writable pointers to `u32`.
+ */
+int rustty_kitty_graphics_placement_source_rect(PlacementIterator iter,
+                                                ImageHandle image,
+                                                uint32_t *out_x,
+                                                uint32_t *out_y,
+                                                uint32_t *out_width,
+                                                uint32_t *out_height);
+
+/**
+ * C: rustty_kitty_graphics_placement_render_info
+ *
+ * # Safety
+ * `iter`/`image`/`terminal`, if non-null, must be live; `out`, if non-null, must
+ * be a valid, writable pointer to a `PlacementRenderInfo`.
+ */
+int rustty_kitty_graphics_placement_render_info(PlacementIterator iter,
+                                                ImageHandle image,
+                                                Terminal terminal,
+                                                PlacementRenderInfo *out);
+
+/**
+ * C: rustty_render_state_new
+ *
+ * # Safety
+ * `alloc_`, if non-null, must point to a valid allocator; `result` must be a
+ * valid, writable pointer to a render-state handle.
+ */
+int rustty_render_state_new(const Allocator *alloc_, RenderState *result);
+
+/**
+ * C: rustty_render_state_free
+ *
+ * # Safety
+ * `state`, if non-null, must be a handle returned by `rustty_render_state_new`.
+ */
+void rustty_render_state_free(RenderState state);
+
+/**
+ * C: rustty_render_state_update
+ *
+ * # Safety
+ * `state`/`terminal`, if non-null, must be live handles.
+ */
+int rustty_render_state_update(RenderState state, Terminal terminal);
+
+/**
+ * C: rustty_render_state_get
+ *
+ * # Safety
+ * `out` must point to writable storage of the type required by `data`.
+ */
+int rustty_render_state_get(RenderState state, int data, void *out);
+
+/**
+ * C: rustty_render_state_get_multi
+ *
+ * # Safety
+ * `keys`/`values`/`out_written` validity is the caller's contract.
+ */
+int rustty_render_state_get_multi(RenderState state,
+                                  uintptr_t count,
+                                  const Data *keys,
+                                  void **values,
+                                  uintptr_t *out_written);
+
+/**
+ * C: rustty_render_state_set
+ *
+ * # Safety
+ * `value`, if non-null, must point to a value of the type required by `option`.
+ */
+int rustty_render_state_set(RenderState state, int option, const void *value);
+
+/**
+ * C: rustty_render_state_colors_get
+ *
+ * # Safety
+ * `out_colors`, if non-null, must be a valid, writable pointer to a `Colors`.
+ */
+int rustty_render_state_colors_get(RenderState state, Colors *out_colors);
+
+/**
+ * C: rustty_render_state_row_iterator_new
+ *
+ * # Safety
+ * `alloc_`, if non-null, must point to a valid allocator; `result` must be a
+ * valid, writable pointer to a row-iterator handle.
+ */
+int rustty_render_state_row_iterator_new(const Allocator *alloc_, RowIterator *result);
+
+/**
+ * C: rustty_render_state_row_iterator_next
+ *
+ * # Safety
+ * `iterator`, if non-null, must be a live iterator.
+ */
+bool rustty_render_state_row_iterator_next(RowIterator iterator);
+
+/**
+ * C: rustty_render_state_row_iterator_free
+ *
+ * # Safety
+ * `iterator`, if non-null, must be a handle returned by the matching `_new`.
+ */
+void rustty_render_state_row_iterator_free(RowIterator iterator);
+
+/**
+ * C: rustty_render_state_row_get
+ *
+ * # Safety
+ * `out` must point to writable storage of the type required by `data`.
+ */
+int rustty_render_state_row_get(RowIterator iterator, int data, void *out);
+
+/**
+ * C: rustty_render_state_row_get_multi
+ *
+ * # Safety
+ * `keys`/`values`/`out_written` validity is the caller's contract.
+ */
+int rustty_render_state_row_get_multi(RowIterator iterator,
+                                      uintptr_t count,
+                                      const RowData *keys,
+                                      void **values,
+                                      uintptr_t *out_written);
+
+/**
+ * C: rustty_render_state_row_set
+ *
+ * # Safety
+ * `value`, if non-null, must point to a value of the type required by `option`.
+ */
+int rustty_render_state_row_set(RowIterator iterator, int option, const void *value);
+
+/**
+ * C: rustty_render_state_row_cells_new
+ *
+ * # Safety
+ * `alloc_`, if non-null, must point to a valid allocator; `result` must be a
+ * valid, writable pointer to a row-cells handle.
+ */
+int rustty_render_state_row_cells_new(const Allocator *alloc_, RowCells *result);
+
+/**
+ * C: rustty_render_state_row_cells_next
+ *
+ * # Safety
+ * `cells`, if non-null, must be a live row-cells handle.
+ */
+bool rustty_render_state_row_cells_next(RowCells cells);
+
+/**
+ * C: rustty_render_state_row_cells_select
+ *
+ * # Safety
+ * `cells`, if non-null, must be a live row-cells handle.
+ */
+int rustty_render_state_row_cells_select(RowCells cells, CellCountInt x);
+
+/**
+ * C: rustty_render_state_row_cells_free
+ *
+ * # Safety
+ * `cells`, if non-null, must be a handle returned by the matching `_new`.
+ */
+void rustty_render_state_row_cells_free(RowCells cells);
+
+/**
+ * C: rustty_render_state_row_cells_get
+ *
+ * # Safety
+ * `out` must point to writable storage of the type required by `data`.
+ */
+int rustty_render_state_row_cells_get(RowCells cells, int data, void *out);
+
+/**
+ * C: rustty_render_state_row_cells_get_multi
+ *
+ * # Safety
+ * `keys`/`values`/`out_written` validity is the caller's contract.
+ */
+int rustty_render_state_row_cells_get_multi(RowCells cells,
+                                            uintptr_t count,
+                                            const RowCellsData *keys,
+                                            void **values,
+                                            uintptr_t *out_written);
+
+/**
+ * C: rustty_selection_gesture_new
+ *
+ * # Safety
+ * `alloc_`, if non-null, must point to a valid allocator; `out_gesture`, if
+ * non-null, must be a valid, writable pointer to a gesture handle.
+ */
+int rustty_selection_gesture_new(const Allocator *alloc_, Gesture *out_gesture);
+
+/**
+ * C: rustty_selection_gesture_free
+ *
+ * # Safety
+ * `gesture`, if non-null, must be a handle returned by `_new`; `terminal`, if
+ * non-null, must be a live terminal handle.
+ */
+void rustty_selection_gesture_free(Gesture gesture, Terminal terminal);
+
+/**
+ * C: rustty_selection_gesture_reset
+ *
+ * # Safety
+ * `gesture`/`terminal`, if non-null, must be live handles.
+ */
+void rustty_selection_gesture_reset(Gesture gesture, Terminal terminal);
+
+/**
+ * C: rustty_selection_gesture_event
+ *
+ * # Safety
+ * `gesture`/`terminal`/`event`, if non-null, must be live handles;
+ * `out_selection`, if non-null, must be a valid, writable pointer to a `CSelection`.
+ */
+int rustty_selection_gesture_event(Gesture gesture,
+                                   Terminal terminal,
+                                   Event event,
+                                   CSelection *out_selection);
+
+/**
+ * C: rustty_selection_gesture_get
+ *
+ * # Safety
+ * `out` must point to writable storage of the type required by `data`.
+ */
+int rustty_selection_gesture_get(Gesture gesture, Terminal terminal, int data, void *out);
+
+/**
+ * C: rustty_selection_gesture_get_multi
+ *
+ * # Safety
+ * `keys`/`values`/`out_written` validity is the caller's contract.
+ */
+int rustty_selection_gesture_get_multi(Gesture gesture,
+                                       Terminal terminal,
+                                       uintptr_t count,
+                                       const Data *keys,
+                                       void **values,
+                                       uintptr_t *out_written);
+
+/**
+ * C: rustty_selection_gesture_event_new
+ *
+ * # Safety
+ * `alloc_`, if non-null, must point to a valid allocator; `out_event`, if
+ * non-null, must be a valid, writable pointer to an event handle.
+ */
+int rustty_selection_gesture_event_new(const Allocator *alloc_, Event *out_event, int event_type);
+
+/**
+ * C: rustty_selection_gesture_event_free
+ *
+ * # Safety
+ * `event`, if non-null, must be a handle returned by `_event_new`.
+ */
+void rustty_selection_gesture_event_free(Event event);
+
+/**
+ * C: rustty_selection_gesture_event_set
+ *
+ * # Safety
+ * `value`, if non-null, must point to a value of the type required by `option`.
+ */
+int rustty_selection_gesture_event_set(Event event, int option, const void *value);
+
+/**
+ * C: rustty_terminal_new
+ *
+ * # Safety
+ * `alloc`, if non-null, must point to a valid allocator; `result` must be a
+ * valid, writable pointer to a terminal handle.
+ */
+int rustty_terminal_new(const Allocator *alloc, Terminal *result, Options opts);
+
+/**
+ * C: rustty_terminal_free
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a handle returned by `rustty_terminal_new`.
+ */
+void rustty_terminal_free(Terminal terminal);
+
+/**
+ * C: rustty_terminal_reset
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a handle returned by `rustty_terminal_new`.
+ */
+void rustty_terminal_reset(Terminal terminal);
+
+/**
+ * C: rustty_terminal_resize
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a handle returned by `rustty_terminal_new`.
+ */
+int rustty_terminal_resize(Terminal terminal,
+                           CellCountInt cols,
+                           CellCountInt rows,
+                           uint32_t cell_width_px,
+                           uint32_t cell_height_px);
+
+/**
+ * C: rustty_terminal_set
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `value`, if
+ * non-null, must point to a value of the type required by `option`.
+ */
+int rustty_terminal_set(Terminal terminal, int option, const void *value);
+
+/**
+ * C: rustty_terminal_vt_write
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `ptr`, if
+ * non-null, must point to `len` readable bytes.
+ */
+void rustty_terminal_vt_write(Terminal terminal, const uint8_t *ptr, uintptr_t len);
+
+/**
+ * C: rustty_terminal_scroll_viewport
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a handle returned by `rustty_terminal_new`.
+ */
+void rustty_terminal_scroll_viewport(Terminal terminal, ScrollViewport behavior);
+
+/**
+ * C: rustty_terminal_mode_get
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out_value`
+ * must be a valid, writable pointer to a `bool`.
+ */
+int rustty_terminal_mode_get(Terminal terminal, ModeTagBacking tag, bool *out_value);
+
+/**
+ * C: rustty_terminal_mode_set
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a handle returned by `rustty_terminal_new`.
+ */
+int rustty_terminal_mode_set(Terminal terminal, ModeTagBacking tag, bool value);
+
+/**
+ * C: rustty_terminal_get
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out` must
+ * point to writable storage of the type required by `data`.
+ */
+int rustty_terminal_get(Terminal terminal, int data, void *out);
+
+/**
+ * C: rustty_terminal_get_multi
+ *
+ * # Safety
+ * `keys`/`values`/`out_written` validity is the caller's contract.
+ */
+int rustty_terminal_get_multi(Terminal terminal,
+                              uintptr_t count,
+                              const TerminalData *keys,
+                              void **values,
+                              uintptr_t *out_written);
+
+/**
+ * C: rustty_terminal_select_word
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `options`, if
+ * non-null, must point to a valid `SelectWordOptions`; `out_selection`, if
+ * non-null, must be a valid, writable pointer to a `CSelection`.
+ */
+int rustty_terminal_select_word(Terminal terminal,
+                                const SelectWordOptions *options,
+                                CSelection *out_selection);
+
+/**
+ * C: rustty_terminal_select_word_between
+ *
+ * # Safety
+ * `terminal`/`options`/`out_selection` validity is the caller's contract.
+ */
+int rustty_terminal_select_word_between(Terminal terminal,
+                                        const SelectWordBetweenOptions *options,
+                                        CSelection *out_selection);
+
+/**
+ * C: rustty_terminal_select_line
+ *
+ * # Safety
+ * `terminal`/`options`/`out_selection` validity is the caller's contract.
+ */
+int rustty_terminal_select_line(Terminal terminal,
+                                const SelectLineOptions *options,
+                                CSelection *out_selection);
+
+/**
+ * C: rustty_terminal_select_all
+ *
+ * # Safety
+ * `terminal`/`out_selection` validity is the caller's contract.
+ */
+int rustty_terminal_select_all(Terminal terminal, CSelection *out_selection);
+
+/**
+ * C: rustty_terminal_select_output
+ *
+ * # Safety
+ * `terminal`/`out_selection` validity is the caller's contract; `ref_` must be a
+ * valid `CGridRef`.
+ */
+int rustty_terminal_select_output(Terminal terminal, CGridRef ref_, CSelection *out_selection);
+
+/**
+ * C: rustty_terminal_selection_format_buf
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out` (if
+ * non-null) must point to `out_len` writable bytes; `out_written` must be a
+ * valid, writable pointer.
+ */
+int rustty_terminal_selection_format_buf(Terminal terminal,
+                                         FormatOptions opts,
+                                         uint8_t *out,
+                                         uintptr_t out_len,
+                                         uintptr_t *out_written);
+
+/**
+ * C: rustty_terminal_selection_format_alloc
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `alloc`, if
+ * non-null, a valid allocator; `out_ptr`/`out_len` must be valid, writable
+ * pointers. The returned buffer is owned by the caller and must be freed with the
+ * same allocator.
+ */
+int rustty_terminal_selection_format_alloc(Terminal terminal,
+                                           const Allocator *alloc,
+                                           FormatOptions opts,
+                                           uint8_t **out_ptr,
+                                           uintptr_t *out_len);
+
+/**
+ * C: rustty_terminal_selection_adjust
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `selection`,
+ * if non-null, must be a valid, writable pointer to a `CSelection`.
+ */
+int rustty_terminal_selection_adjust(Terminal terminal,
+                                     CSelection *selection,
+                                     Adjustment adjustment);
+
+/**
+ * C: rustty_terminal_selection_order
+ *
+ * # Safety
+ * `terminal`/`selection`, if non-null, must be live; `out_order`, if non-null,
+ * must be a valid, writable pointer to an `Order`.
+ */
+int rustty_terminal_selection_order(Terminal terminal,
+                                    const CSelection *selection,
+                                    Order *out_order);
+
+/**
+ * C: rustty_terminal_selection_ordered
+ *
+ * # Safety
+ * `terminal`/`selection`, if non-null, must be live; `out_selection`, if
+ * non-null, must be a valid, writable pointer to a `CSelection`.
+ */
+int rustty_terminal_selection_ordered(Terminal terminal,
+                                      const CSelection *selection,
+                                      Order desired,
+                                      CSelection *out_selection);
+
+/**
+ * C: rustty_terminal_selection_contains
+ *
+ * # Safety
+ * `terminal`/`selection`, if non-null, must be live; `out_contains`, if
+ * non-null, must be a valid, writable pointer to a `bool`.
+ */
+int rustty_terminal_selection_contains(Terminal terminal,
+                                       const CSelection *selection,
+                                       PointC pt,
+                                       bool *out_contains);
+
+/**
+ * C: rustty_terminal_selection_equal
+ *
+ * # Safety
+ * `terminal`/`a`/`b`, if non-null, must be live; `out_equal`, if non-null, must
+ * be a valid, writable pointer to a `bool`.
+ */
+int rustty_terminal_selection_equal(Terminal terminal,
+                                    const CSelection *a,
+                                    const CSelection *b,
+                                    bool *out_equal);
+
+/**
+ * C: rustty_terminal_grid_ref
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out_ref`, if
+ * non-null, must be a valid, writable pointer to a `CGridRef`.
+ */
+int rustty_terminal_grid_ref(Terminal terminal, PointC pt, CGridRef *out_ref);
+
+/**
+ * C: rustty_terminal_grid_ref_track
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out_ref`, if
+ * non-null, must be a valid, writable pointer to a `CTrackedGridRef`.
+ */
+int rustty_terminal_grid_ref_track(Terminal terminal, PointC pt, CTrackedGridRef *out_ref);
+
+/**
+ * C: rustty_terminal_point_from_grid_ref
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `ref_` must
+ * be a valid `CGridRef`; `out`, if non-null, must be a valid, writable pointer
+ * to a `Coordinate`.
+ */
+int rustty_terminal_point_from_grid_ref(Terminal terminal,
+                                        const CGridRef *ref_,
+                                        TagC tag,
+                                        Coordinate *out);
+
+/**
+ * C: rustty_grid_ref_cell
+ *
+ * # Safety
+ * `ref_` must be a valid pointer to a `CGridRef`; `out`, if non-null, must be a
+ * valid, writable pointer to a `CCell`.
+ */
+int rustty_grid_ref_cell(const CGridRef *ref_, CCell *out);
+
+/**
+ * C: rustty_grid_ref_row
+ *
+ * # Safety
+ * `ref_` must be a valid pointer to a `CGridRef`; `out`, if non-null, must be a
+ * valid, writable pointer to a `CRow`.
+ */
+int rustty_grid_ref_row(const CGridRef *ref_, CRow *out);
+
+/**
+ * C: rustty_grid_ref_graphemes
+ *
+ * # Safety
+ * `ref_` must be a valid `CGridRef`; `out_buf`, if non-null, must point to
+ * `buf_len` writable `u32`; `out_len` must be a valid, writable pointer.
+ */
+int rustty_grid_ref_graphemes(const CGridRef *ref_,
+                              uint32_t *out_buf,
+                              uintptr_t buf_len,
+                              uintptr_t *out_len);
+
+/**
+ * C: rustty_grid_ref_hyperlink_uri
+ *
+ * # Safety
+ * `ref_` must be a valid `CGridRef`; `out_buf`, if non-null, must point to
+ * `buf_len` writable bytes; `out_len` must be a valid, writable pointer.
+ */
+int rustty_grid_ref_hyperlink_uri(const CGridRef *ref_,
+                                  uint8_t *out_buf,
+                                  uintptr_t buf_len,
+                                  uintptr_t *out_len);
+
+/**
+ * C: rustty_grid_ref_style
+ *
+ * # Safety
+ * `ref_` must be a valid pointer to a `CGridRef`; `out`, if non-null, must be a
+ * valid, writable pointer to a `Style`.
+ */
+int rustty_grid_ref_style(const CGridRef *ref_, Style *out);
+
+/**
+ * C: rustty_tracked_grid_ref_free
+ *
+ * # Safety
+ * `ref_`, if non-null, must be a handle returned by `rustty_terminal_grid_ref_track`.
+ */
+void rustty_tracked_grid_ref_free(CTrackedGridRef ref_);
+
+/**
+ * C: rustty_tracked_grid_ref_has_value
+ *
+ * # Safety
+ * `ref_`, if non-null, must be a live tracked-grid-ref handle.
+ */
+bool rustty_tracked_grid_ref_has_value(CTrackedGridRef ref_);
+
+/**
+ * C: rustty_tracked_grid_ref_point
+ *
+ * # Safety
+ * `ref_`, if non-null, must be a live handle; `out`, if non-null, must be a
+ * valid, writable pointer to a `Coordinate`.
+ */
+int rustty_tracked_grid_ref_point(CTrackedGridRef ref_, TagC tag, Coordinate *out);
+
+/**
+ * C: rustty_tracked_grid_ref_set
+ *
+ * # Safety
+ * `ref_`/`terminal`, if non-null, must be live handles.
+ */
+int rustty_tracked_grid_ref_set(CTrackedGridRef ref_, Terminal terminal, PointC pt);
+
+/**
+ * C: rustty_tracked_grid_ref_snapshot
+ *
+ * # Safety
+ * `ref_`, if non-null, must be a live handle; `out_ref`, if non-null, must be a
+ * valid, writable pointer to a `CGridRef`.
+ */
+int rustty_tracked_grid_ref_snapshot(CTrackedGridRef ref_, CGridRef *out_ref);
 
 #ifdef __cplusplus
 }  // extern "C"

@@ -31,6 +31,16 @@ RSA = "/Users/gael/projects/rustty/crates/rustty-args/src"
 GHT = "/Users/gael/projects/ghostty/src/terminfo"
 RST = "/Users/gael/projects/rustty/crates/rustty-terminfo/src"
 
+# rustty-vt-c: the C-ABI projection crate (Stage B). GH base = src/terminal/c
+# (the `c/*.zig` ABI wrappers behind lib_vt.zig's @export lines). All test bodies
+# live in the rustty-vt-c crate (`crates/rustty-vt-c/src/**/*.rs`, incl. the
+# render/ + selection_gesture/ test submodules). This is an AGGREGATE mapping
+# (28 c/*.zig ref files vs the whole vt-c src tree) because the C wrappers are one
+# tightly-coupled ABI surface; the per-crate `cargo test -p rustty-vt-c` count is
+# the authoritative backstop and this gate guards rust #[test] >= zig test{}.
+GHVC = "/Users/gael/projects/ghostty/src/terminal/c"
+RSVC = "/Users/gael/projects/rustty/crates/rustty-vt-c/src"
+
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
@@ -100,6 +110,10 @@ MAP = {
     "terminfo_source":   ([f"{GHT}/Source.zig"], [f"{RST}/source.rs"], 0),
     "terminfo_entry":    ([f"{GHT}/ghostty.zig"], [f"{RST}/entry.rs"], 0),
     "terminfo_main":     ([f"{GHT}/main.zig"], [f"{RST}/lib.rs"], 0),
+    # Stage B — rustty-vt-c C-ABI projection. AGGREGATE: all c/*.zig (the 28 ABI
+    # wrapper files; main.zig/result.zig/color.zig carry 0 behavioral tests) vs
+    # the whole vt-c src tree (incl. render/ + selection_gesture/ test submods).
+    "vt_c":              (glob.glob(f"{GHVC}/*.zig"), [f"{RSVC}/**/*.rs"], 0),
 }
 
 def expand(globs):
