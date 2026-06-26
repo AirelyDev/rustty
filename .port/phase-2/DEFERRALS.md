@@ -147,12 +147,22 @@ Embedded C-ABI declarations inside vt `.zig` files belong to the C FFI layer
 (`terminal/c` → the separate `rustty-vt-c` crate, PORT_PLAN module 12), not the
 pure-VT `rustty-vt` crate:
 
+**STATUS 2026-06-25 — rustty-vt-c COMPLETE (Stage B DONE).** All 28 `terminal/c/`
+files ported (307 ref tests, 308 rust), 156 non-WASM `rustty_*` C exports wired
+(1:1 with lib_vt.zig; the 12 `ghostty_wasm_*` are WASM-gated, absent in the non-WASM
+ABI), cbindgen `include/rustty.h` regenerated + C/C++ self-consistency compile clean,
+ABI const-asserts pinned (ScrollViewport `[2]u64`, sgr Attribute `[8]u64`), the D3
+Effects trampoline (offset_of! container_of, exposed-provenance) **Miri-clean (SB+TB)**,
+**ASan-clean** (after fixing the SIMD test-buffer sentinel over-read, 387d04c). rustty-vt
+untouched (2019). ScrollViewport + sgr-Attribute C-ABI surfaces are now RESOLVED here.
+
 1. **`stream.zig` `c_union`** (the Action type's `lib.TaggedUnion(...)` C-ABI
    representation, ref stream.zig:228-234) — carries the
    "TODO: Before shipping an ABI-compatible libghostty, verify this." +
-   "This was just arbitrarily chosen for now." comments. Deferred to rustty-vt-c
-   (it needs the C-ABI tagged-union machinery + the `[16]u64` size verification).
-   Watch for more embedded `c_*`/`lib.TaggedUnion`/C-ABI decls in Screen/Terminal.
+   "This was just arbitrarily chosen for now." comments. **STILL DEFERRED** (NOT
+   resolved by Stage B): no `terminal/c/*.zig` file references `stream.Action`, so it
+   is not part of the vt-c C export surface. Its `[16]u64`=128 size verification +
+   const-assert land if/when an ABI-compatible `Action` is actually shipped.
 
 ## Pre-existing deferred seams (lower priority, noted)
 - `sgr.rs` local `SepList` — can be retargeted to re-export `parser::SepList` (vt-5

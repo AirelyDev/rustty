@@ -17,6 +17,12 @@ ported (~2197 tests); 18 stubs. This sequences the rest.
    keeping apc inside vt + the 2001-test contract self-contained. Alt: hoist apc above
    vt+font. apc/glyph/response (12t, leaf, no font) can land first.
 
+## Stage B — vt-c C-ABI artifact — ✅ DONE (2026-06-25)
+rustty-vt-c COMPLETE: 308 tests, 156 non-WASM rustty_* exports, cbindgen header +
+C/C++ compile, ABI const-asserts pinned, D3 trampoline seam (offset_of! container_of)
+Miri-clean (SB+TB) + ASan-clean, vt untouched (2019). D2 cbindgen + D3 trampoline both
+signed off. (stream.Action [16]u64 c_union stays deferred — not a c/ export type.)
+
 ## Stage B — vt-c C-ABI artifact [MECHANICAL + 1 decision]
 4. **rustty-vt-c** (terminal/c, 28 files, 13.7k loc, 307t) — absorbs the deferred
    ScrollViewport/stream c_union C-ABI. Rust enums are source-of-truth; vt-c is FFI
