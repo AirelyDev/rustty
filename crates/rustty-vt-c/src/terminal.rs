@@ -2022,7 +2022,15 @@ pub unsafe fn grid_ref_track(
     };
 
     // const alloc = t.gpa();
-    let alloc = unsafe { (*t).gpa() };
+    // PORT NOTE (Miri SB+TB): `t.gpa()` is `fn gpa(&mut self)` and would form a
+    // `&Terminal`/`&mut Terminal` reborrow over `*t`, freezing/aliasing the
+    // `tracked_pin` tag created above through the `&mut Terminal` path and causing
+    // a Tree-Borrows protector violation when the pin is later written during a
+    // terminal scroll. `gpa()` merely reads `self.screens.active.alloc` (a `Global`
+    // ZST copy), so we read that field through the existing `active: *mut Screen`
+    // raw pointer, keeping the access window to a single field read and never
+    // forming a reference to `*t`.
+    let alloc = unsafe { (*active).alloc };
     // const ref = alloc.create(grid_ref_tracked_c.TrackedGridRef) catch { list.untrackPin(tracked_pin); return .out_of_memory; };
     // PORT NOTE: `alloc.create` is the per-terminal allocator; rustty heap-boxes
     // the `TrackedGridRef` (the `gpa()` is `Global`). `Box::new` does not return a
