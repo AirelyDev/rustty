@@ -31,6 +31,23 @@ RSA = "/Users/gael/projects/rustty/crates/rustty-args/src"
 GHT = "/Users/gael/projects/ghostty/src/terminfo"
 RST = "/Users/gael/projects/rustty/crates/rustty-terminfo/src"
 
+# rustty-cfg-fmt: GH base = src/config (config/formatter.zig). Near-leaf below
+# config<->input (formatter.zig's key.zig import is DEAD code; Key lives with
+# Config later). Distinct from the EXISTING `formatter` module above, which maps
+# the much larger src/terminal/formatter.zig (the Page/Screen/Terminal debug
+# formatters in rustty-vt).
+GHCFG = "/Users/gael/projects/ghostty/src/config"
+RSCF = "/Users/gael/projects/rustty/crates/rustty-cfg-fmt/src"
+
+# rustty-input: GH base = src/input. The vt input slice (mouse/paste/key/
+# key_encode/mouse_encode/function_keys + the VT-Mods half of key_mods) already
+# lives in rustty-vt (mapped above as input_*). rustty-input is the REST of
+# src/input/: Binding/command/config/keycodes/KeymapDarwin/KeymapNoop/Link/
+# keyboard/helpgen_actions (+ the config-dependent RemapSet/translation half of
+# key_mods, counted by the existing input_key_mods entry above).
+GHI = "/Users/gael/projects/ghostty/src/input"
+RSI = "/Users/gael/projects/rustty/crates/rustty-input/src"
+
 # rustty-vt-c: the C-ABI projection crate (Stage B). GH base = src/terminal/c
 # (the `c/*.zig` ABI wrappers behind lib_vt.zig's @export lines). All test bodies
 # live in the rustty-vt-c crate (`crates/rustty-vt-c/src/**/*.rs`, incl. the
@@ -121,6 +138,29 @@ MAP = {
     # wrapper files; main.zig/result.zig/color.zig carry 0 behavioral tests) vs
     # the whole vt-c src tree (incl. render/ + selection_gesture/ test submods).
     "vt_c":              (glob.glob(f"{GHVC}/*.zig"), [f"{RSVC}/**/*.rs"], 0),
+    # rustty-cfg-fmt — config/formatter.zig (8 quoted tests). The reference's
+    # comptime formatEntry reflection -> the FormatEntry trait pattern; tests live
+    # in formatter.rs. writer.rs/lib.rs carry 0 behavioral tests.
+    "cfg_fmt_formatter": ([f"{GHCFG}/formatter.zig"], [f"{RSCF}/formatter.rs", f"{RSCF}/writer.rs", f"{RSCF}/lib.rs"], 0),
+    # rustty-input — the non-vt half of src/input/.
+    # Binding.zig: 85 quoted tests (the keybind grammar trigger>action parse).
+    "input_binding":     ([f"{GHI}/Binding.zig"], [f"{RSI}/binding.rs"], 0),
+    # command.zig: 1 quoted test.
+    "input_command":     ([f"{GHI}/command.zig"], [f"{RSI}/command.rs"], 0),
+    # config.zig: 0 tests (OptionAsAlt enum only).
+    "input_config":      ([f"{GHI}/config.zig"], [f"{RSI}/config.rs"], 0),
+    # keycodes.zig: 0 quoted (1 anon refAllDecls, not counted); rust +1 helper.
+    "input_keycodes":    ([f"{GHI}/keycodes.zig"], [f"{RSI}/keycodes.rs"], 0),
+    # KeymapDarwin.zig: 1 quoted test (+1 anon); rust=2 (>= zig).
+    "input_keymap_darwin":([f"{GHI}/KeymapDarwin.zig"], [f"{RSI}/keymap_darwin.rs"], 0),
+    # KeymapNoop.zig: 0 tests (non-macOS noop keymap).
+    "input_keymap_noop": ([f"{GHI}/KeymapNoop.zig"], [f"{RSI}/keymap_noop.rs"], 0),
+    # Link.zig: 0 tests (oniguruma-backed regex link).
+    "input_link":        ([f"{GHI}/Link.zig"], [f"{RSI}/link.rs"], 0),
+    # keyboard.zig: 0 tests (KeyboardLayout enum + OptionAsAlt glue).
+    "input_keyboard":    ([f"{GHI}/keyboard.zig"], [f"{RSI}/keyboard.rs"], 0),
+    # helpgen_actions.zig: 0 tests (build-time docs generator).
+    "input_helpgen_actions":([f"{GHI}/helpgen_actions.zig"], [f"{RSI}/helpgen_actions.rs"], 0),
 }
 
 def expand(globs):
