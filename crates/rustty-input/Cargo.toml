@@ -21,3 +21,6 @@ rustty-datastruct = { workspace = true }
 rustty-util = { workspace = true }
 rustty-cfg-fmt = { workspace = true }
 rustty-render-types = { workspace = true }
+# RemapSet's `map: AutoArrayHashMapUnmanaged(Mods, Mods)` (key_mods.rs) — the
+# insertion-ordered hash map from the Zig-stdlib port (auto context = std hashing).
+rustty-zigstd = { workspace = true }

@@ -355,6 +355,69 @@ where
         self.entries.clear();
         self.index.clear();
     }
+
+    /// Sorts the entries in place using the given `less_than` comparator, which
+    /// is given the entry INDICES (`a_index`, `b_index`) into the current
+    /// `keys()`/`values()` arrays — exactly the `Context.lessThan(ctx, a_index,
+    /// b_index)` signature of `std.ArrayHashMap.sort`. The comparator reads the
+    /// keys array (captured by the caller's context) at those indices. Faithful
+    /// port of `sort(ctx)`: Zig sorts the parallel entries arrays with a STABLE
+    /// sort using the index-based comparator, then rebuilds the index header.
+    //
+    // PORT NOTE: Zig's `sort` calls `std.sort.insertionContext` (stable) with the
+    // entries' current positions. We snapshot the keys, run a stable sort over
+    // `0..len` with the caller's index comparator, then permute the entries and
+    // rebuild the side index so `getIndex`/lookup stay correct.
+    pub fn sort<F>(&mut self, mut less_than: F)
+    where
+        F: FnMut(usize, usize) -> bool,
+    {
+        let len = self.entries.len();
+        let mut order: Vec<usize> = (0..len).collect();
+        // Stable sort (Zig's sort context here is `insertionContext`, stable).
+        order.sort_by(|&a, &b| {
+            if less_than(a, b) {
+                std::cmp::Ordering::Less
+            } else if less_than(b, a) {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        });
+        // Move the entries into the sorted order. Stage each slot through an
+        // `Option` so we can move (not clone) the owned `(K, V)` out exactly once.
+        let mut staging: Vec<Option<(K, V)>> = self.entries.drain(..).map(Some).collect();
+        let mut new_entries: Vec<(K, V)> = Vec::with_capacity(len);
+        for &i in &order {
+            new_entries.push(staging[i].take().expect("sort: each index visited once"));
+        }
+        self.entries = new_entries;
+        self.index.clear();
+        for (i, (k, _)) in self.entries.iter().enumerate() {
+            self.index.insert(k.clone(), i);
+        }
+    }
+}
+
+impl<K, V> AutoArrayHashMapUnmanaged<K, V>
+where
+    K: Eq + Hash + Clone,
+    V: Clone,
+{
+    /// Deep copy of the map (entries + index). Faithful port of
+    /// `clone(alloc)` — Zig allocates a fresh entries array and index header and
+    /// copies every key/value. Insertion order is preserved.
+    //
+    // PORT NOTE: named `clone` to match the Zig `clone(alloc)` it ports; the
+    // `should_implement_trait` lint is allowed for that fidelity (callers invoke
+    // `map.clone()` mirroring `try self.map.clone(alloc)`).
+    #[allow(clippy::should_implement_trait)]
+    pub fn clone(&self) -> Self {
+        AutoArrayHashMapUnmanaged {
+            entries: self.entries.clone(),
+            index: self.index.clone(),
+        }
+    }
 }
 
 /// Faithful alias for `AutoArrayHashMap(K, V)`. Since our backing store owns its

@@ -237,20 +237,24 @@ The vt-14 input leaf slice (`input/{mouse,paste,key,function_keys}.rs` +
   verbatim as a comment for the future apprt port. **Target: apprt layer.** No
   `imguiKey`-specific `test{}` exists in the reference, so there is no skipped
   test (the SkipZigTest mirror pattern is N/A here).
-- **`input/key_mods.rs` is a PARTIAL port.** Only the `Mods` packed struct and
-  the VT-relevant methods used by `key.zig` / `function_keys.zig`
-  (`int`/`empty`/`equal`/`keys`/`binding`/`unset`/`without_locks`/`ctrl_or_super`
-  + `from_int`/`Side`/`Keys`/`SIDE_MASK` + the bit-layout `test{}`) are ported.
-  The reference `key_mods.zig` additionally defines `Mod` + its `alias` table,
-  `Mods.translation` (needs `config.OptionAsAlt`), and the `RemapSet` type with
-  its `parseCLI`/`parse`/`finalize`/`clone`/`equal`/`formatEntry`/`apply`/`Mask`
-  machinery — all of which depend on the apprt-layer `config.zig` (`OptionAsAlt`,
-  the config `formatter`) which is NOT yet ported. Those declarations, plus the
-  full `RemapSet` `test{}` suite (~28 tests) and the `translation
-  macos-option-as-alt` test, are DEFERRED with the config/apprt seam. **Target:
-  whenever `config.OptionAsAlt` + config `formatter` land (config/apprt cluster).**
-  G3b for `key_mods.zig`'s RemapSet/translation/alias comments maps to this
-  deferral and is EXPECTED-missing until then.
+- ~~**`input/key_mods.rs` is a PARTIAL port.**~~ **RESOLVED.** The `Mods` packed
+  struct + VT-relevant methods (`int`/`empty`/`equal`/`keys`/`binding`/`unset`/
+  `without_locks`/`ctrl_or_super` + `from_int`/`Side`/`Keys`/`SIDE_MASK` + the
+  bit-layout `test{}`) remain in `rustty-vt`'s `input/key_mods.rs`; `Mod` + its
+  `alias` table + `ModSide` also live there (added for `Binding.zig` trigger
+  parsing, consumed by vt's `function_keys`/`key_encode` and `rustty-input`'s
+  `binding`). The remaining config-dependent slice — `Mods.translation` (needs
+  `config.OptionAsAlt`) and the `RemapSet` type with its `parseCLI`/`parse`/
+  `finalize`/`clone`/`equal`/`formatEntry`/`apply`/`Mask` machinery (needs the
+  config `formatter`) — is now PORTED in `rustty-input`'s `key_mods.rs`, since
+  both seams are available (`rustty-input::config::OptionAsAlt` + `rustty-cfg-fmt`).
+  `translation` is ported as a free fn (its `Mods` host lives in vt); the
+  `AutoArrayHashMapUnmanaged(Mods, Mods)` map uses `rustty-zigstd` (gaining a
+  faithful `sort`/`clone` for `finalize`/Config-clone). All 23 deferred `test{}`
+  blocks — the 22 `RemapSet:` tests + `translation macos-option-as-alt` — are
+  ported assertion-for-assertion (`check_test_counts.py` `input_key_mods`
+  apc_deferred 23→0; both rust files count against the one zig file, 24≥23).
+  Scoped G3b for `key_mods.zig` → missing=0.
 - **`function_keys` `keys` test — `termio.Message.WriteReq.Small.Max`.** The
   reference test reads the termio small-message capacity (`MessageData(u8, 38)`
   ⇒ `38`); termio is an apprt/termio-layer module the reference explicitly keeps

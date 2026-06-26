@@ -78,7 +78,14 @@ MAP = {
     "input_mouse_encode":(["/Users/gael/projects/ghostty/src/input/mouse_encode.zig"], [f"{RS}/input/mouse_encode.rs"], 0),
     "input_key_encode":  (["/Users/gael/projects/ghostty/src/input/key_encode.zig"], [f"{RS}/input/key_encode.rs"], 0),
     "input_function_keys":(["/Users/gael/projects/ghostty/src/input/function_keys.zig"], [f"{RS}/input/function_keys.rs"], 0),
-    "input_key_mods":    (["/Users/gael/projects/ghostty/src/input/key_mods.zig"], [f"{RS}/input/key_mods.rs"], 23),  # 23 RemapSet/translation tests -> config/apprt-seam deferred
+    # key_mods.zig is split across two crates: the VT-Mods slice (Mods packed
+    # struct + VT methods + bit-layout test) in rustty-vt's input/key_mods.rs,
+    # and the config-dependent RemapSet/translation slice (the 23 RemapSet: +
+    # translation-macos-option-as-alt tests) in rustty-input's key_mods.rs. The
+    # 23 are no longer deferred — they landed once OptionAsAlt + cfg-fmt became
+    # available — so apc_deferred is now 0 and BOTH rust files count against the
+    # one zig file (vt=1 anon test + input=23 -> 24 >= 23).
+    "input_key_mods":    (["/Users/gael/projects/ghostty/src/input/key_mods.zig"], [f"{RS}/input/key_mods.rs", "/Users/gael/projects/rustty/crates/rustty-input/src/key_mods.rs"], 0),
     # vt-15 search/ (gated)
     "search":            ([f"{GH}/search/Thread.zig", f"{GH}/search/active.zig", f"{GH}/search/pagelist.zig", f"{GH}/search/screen.zig", f"{GH}/search/sliding_window.zig", f"{GH}/search/viewport.zig"], [f"{RS}/search/*.rs"], 0),
     # vt-16 tmux/ (control mode; oniguruma-gated control tests counted via static

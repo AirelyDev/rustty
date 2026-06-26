@@ -5,10 +5,13 @@
 //! PORT STATUS: partial
 //!
 //! PORT NOTE: only the `Mods` packed struct and the VT-relevant methods used by
-//! `key.zig` / `function_keys.zig` are ported here. `Mod`, `RemapSet` and
-//! `Mods.translation` depend on the apprt-layer `config.OptionAsAlt` and the
-//! config `formatter` (an apprt/config seam, not VT). Those, plus the
-//! `RemapSet` test suite, are DEFERRED — see DEFERRALS.md.
+//! `key.zig` / `function_keys.zig` are ported here, PLUS `Mod`/`ALIAS`/`ModSide`
+//! (consumed by `function_keys`/`key_encode` and `rustty-input`'s `binding`).
+//! `RemapSet` and `Mods.translation` depend on the apprt-layer
+//! `config.OptionAsAlt` and the config `formatter` (an apprt/config seam, not VT)
+//! and are therefore ported in their config-dependent peer crate
+//! `rustty-input` (`crates/rustty-input/src/key_mods.rs`, with the full
+//! `RemapSet`/`translation` test suite) — see DEFERRALS.md (RESOLVED).
 
 // PORT NOTE: the reference imports
 //   const std = @import("std");
@@ -58,7 +61,7 @@ impl Mod {
 
 /// PORT NOTE: `Mod.Side` — `enum(u1) { left, right }`. Mirrored below as
 /// `ModSide`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum ModSide {
     #[default]
@@ -74,7 +77,7 @@ pub enum ModSide {
 /// bit positions: shift=0, ctrl=1, alt=2, super=3, caps_lock=4, num_lock=5, then
 /// the `sides` (a packed `u4`: shift/ctrl/alt/super at bits 6..=9), then a `u6`
 /// padding. `int()` reproduces that layout bit-for-bit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Mods {
     pub shift: bool,
     pub ctrl: bool,
@@ -90,7 +93,7 @@ pub struct Mods {
 /// only standard bindable keys.
 ///
 /// PORT NOTE: `packed struct(u4)`. shift=bit0, ctrl=bit1, alt=bit2, super=bit3.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Keys {
     pub shift: bool,
     pub ctrl: bool,
@@ -109,6 +112,18 @@ impl Keys {
             | ((self.alt as u8) << 2)
             | ((self.super_ as u8) << 3)
     }
+
+    /// PORT NOTE: `@bitCast` from the `u4` backing integer back to the packed
+    /// `Keys` struct. Reproduces the bit layout from `int()` (shift=bit0,
+    /// ctrl=bit1, alt=bit2, super=bit3). Used by `RemapSet.Mask` (rustty-input).
+    pub fn from_int(v: u8) -> Keys {
+        Keys {
+            shift: (v & 0b0001) != 0,
+            ctrl: (v & 0b0010) != 0,
+            alt: (v & 0b0100) != 0,
+            super_: (v & 0b1000) != 0,
+        }
+    }
 }
 
 /// PORT NOTE: alias for the documented `u4` backing integer of `Keys`/`Side`.
@@ -125,7 +140,7 @@ pub type u4_repr = u8;
 ///
 /// PORT NOTE: `packed struct(u4)` of four `Mod.Side` (each a `u1`). shift=bit0,
 /// ctrl=bit1, alt=bit2, super=bit3, with `right = 1`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Side {
     pub shift: ModSide,
     pub ctrl: ModSide,
@@ -139,6 +154,35 @@ impl Side {
             | ((self.ctrl as u8) << 1)
             | ((self.alt as u8) << 2)
             | ((self.super_ as u8) << 3)
+    }
+
+    /// PORT NOTE: `@bitCast` from the `u4` backing integer back to the packed
+    /// `Side` struct. Reproduces the bit layout from `int()` (shift=bit0,
+    /// ctrl=bit1, alt=bit2, super=bit3, with `right = 1`). Used by
+    /// `RemapSet.Mask` (rustty-input).
+    pub fn from_int(v: u8) -> Side {
+        Side {
+            shift: if (v & 0b0001) != 0 {
+                ModSide::Right
+            } else {
+                ModSide::Left
+            },
+            ctrl: if (v & 0b0010) != 0 {
+                ModSide::Right
+            } else {
+                ModSide::Left
+            },
+            alt: if (v & 0b0100) != 0 {
+                ModSide::Right
+            } else {
+                ModSide::Left
+            },
+            super_: if (v & 0b1000) != 0 {
+                ModSide::Right
+            } else {
+                ModSide::Left
+            },
+        }
     }
 }
 
