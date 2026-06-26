@@ -1074,7 +1074,13 @@ fn render_row_cells_bg_color_from_style() {
         with_terminal_state(alloc, 80, 24, |terminal, state| {
             // Set an RGB background via SGR 48;2;R;G;B and write text.
             // terminal_c.vt_write(terminal, "\x1b[48;2;10;20;30mA", 18);
-            let input = b"\x1b[48;2;10;20;30mA";
+            //
+            // The reference's Zig string literal is sentinel-terminated
+            // (`[17:0]u8`), so passing count 18 reads an in-bounds 0x00 as the
+            // 18th byte. Rust byte-string literals carry no sentinel, so we add
+            // the trailing 0x00 explicitly to make the allocation byte-identical
+            // to what the reference passes (and avoid a real over-read).
+            let input = b"\x1b[48;2;10;20;30mA\x00";
             unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 18) };
 
             assert_eq!(Result::Success, unsafe { update(state, terminal) });
@@ -1126,7 +1132,11 @@ fn render_row_cells_bg_color_from_content_tag() {
             // should carry the background color via the content tag (bg_color_rgb)
             // rather than through the style.
             // terminal_c.vt_write(terminal, "\x1b[48;2;10;20;30m\x1b[2K", 21);
-            let input = b"\x1b[48;2;10;20;30m\x1b[2K";
+            //
+            // Sentinel-terminated to match the reference's `[20:0]u8` literal:
+            // count 21 reads an in-bounds 0x00 as the 21st byte. See
+            // render_row_cells_bg_color_from_style for the rationale.
+            let input = b"\x1b[48;2;10;20;30m\x1b[2K\x00";
             unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 21) };
 
             assert_eq!(Result::Success, unsafe { update(state, terminal) });
@@ -1221,7 +1231,11 @@ fn render_row_cells_fg_color_from_style() {
         with_terminal_state(alloc, 80, 24, |terminal, state| {
             // Set an RGB foreground via SGR 38;2;R;G;B and write text.
             // terminal_c.vt_write(terminal, "\x1b[38;2;10;20;30mA", 18);
-            let input = b"\x1b[38;2;10;20;30mA";
+            //
+            // Sentinel-terminated to match the reference's `[17:0]u8` literal:
+            // count 18 reads an in-bounds 0x00 as the 18th byte. See
+            // render_row_cells_bg_color_from_style for the rationale.
+            let input = b"\x1b[38;2;10;20;30mA\x00";
             unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 18) };
 
             assert_eq!(Result::Success, unsafe { update(state, terminal) });

@@ -201,6 +201,33 @@ mod tests {
     #![allow(non_snake_case)]
     use super::*;
 
+    // Regression: the SIMD kernel must never read past `input.len()`, even when
+    // the input lives in a TIGHT allocation (no page/sentinel slack). Under
+    // AddressSanitizer this fails loudly if any LoadU/IndexOf chunk over-reads.
+    //
+    // The reference's Zig string literals are sentinel-terminated (`[N:0]u8`),
+    // so the reference's callers can pass a count that reads an in-bounds 0x00;
+    // Rust byte-string literals carry no such slack, so we exercise exact-sized
+    // heap buffers here to prove the kernel stays in bounds without it.
+    #[test]
+    fn decode_tight_buffer_no_overread() {
+        for s in [
+            &b"A"[..],
+            &b"hello\xf0\x90"[..], // 4-byte sequence truncated at end of buffer
+            &b"hello\xc2"[..],     // 2-byte sequence truncated at end of buffer
+            &b"\x1b[48;2;10;20;30mA"[..], // ESC scan then a tight 1-byte tail
+            &b"world"[..],
+            &b"\xff"[..],     // lone invalid lead byte
+            &b"\xe2\x28"[..], // ill-formed 3-byte prefix
+        ] {
+            // Exact-sized heap buffer: ASan red-zones surround it, so any read
+            // past `input.len()` is caught.
+            let input: Vec<u8> = s.to_vec();
+            let mut output = vec![0u32; input.len() + 64];
+            let _ = utf8DecodeUntilControlSeq(&input, &mut output);
+        }
+    }
+
     #[test]
     fn decode_no_escape() {
         let mut output: [u32; 1024] = [0; 1024];
