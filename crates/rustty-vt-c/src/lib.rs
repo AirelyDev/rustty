@@ -164,14 +164,14 @@ pub unsafe extern "C" fn rustty_mode_report_encode(
 }
 
 // ----- allocator -----
-// pub const alloc_alloc = allocator.alloc;  (ghostty_alloc_alloc)
-/// C: rustty_alloc_alloc
+// pub const alloc_alloc = allocator.alloc;  (@export name ghostty_alloc)
+/// C: rustty_alloc
 ///
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid C allocator. The returned
-/// pointer (if non-null) must be released with `rustty_alloc_free`.
+/// pointer (if non-null) must be released with `rustty_free`.
 #[no_mangle]
-pub unsafe extern "C" fn rustty_alloc_alloc(
+pub unsafe extern "C" fn rustty_alloc(
     alloc_: *const rustty_lib::allocator::Allocator,
     len: usize,
 ) -> *mut u8 {
@@ -179,14 +179,14 @@ pub unsafe extern "C" fn rustty_alloc_alloc(
     unsafe { allocator::alloc(alloc_.as_ref(), len) }
 }
 
-// pub const alloc_free = allocator.free;  (ghostty_alloc_free)
-/// C: rustty_alloc_free
+// pub const alloc_free = allocator.free;  (@export name ghostty_free)
+/// C: rustty_free
 ///
 /// # Safety
 /// `ptr`, if non-null, must be a buffer previously returned by
-/// `rustty_alloc_alloc` with the same `alloc_` and `len`.
+/// `rustty_alloc` with the same `alloc_` and `len`.
 #[no_mangle]
-pub unsafe extern "C" fn rustty_alloc_free(
+pub unsafe extern "C" fn rustty_free(
     alloc_: *const rustty_lib::allocator::Allocator,
     ptr: *mut u8,
     len: usize,
@@ -1007,6 +1007,29 @@ fn row_data_from_c_int(v: c_int) -> Option<row::RowData> {
     if (0..ROW_DATA_COUNT).contains(&v) {
         // SAFETY: `v` is a valid `RowData` discriminant (range-checked above).
         Some(unsafe { std::mem::transmute::<c_int, row::RowData>(v) })
+    } else {
+        None
+    }
+}
+
+// PORT NOTE: range-checked `c_int -> enum` projections for the terminal get/set
+// guards (the `std.meta.intToEnum` guard on the raw `c_int` crossing the C
+// boundary). `TerminalData`/`Option` are contiguous `#[repr(C)]` enums.
+const TERMINAL_DATA_COUNT: c_int = 33; // contiguous 0..=32
+fn terminal_data_from_c_int(v: c_int) -> Option<terminal::TerminalData> {
+    if (0..TERMINAL_DATA_COUNT).contains(&v) {
+        // SAFETY: `v` is a valid `TerminalData` discriminant (range-checked above).
+        Some(unsafe { std::mem::transmute::<c_int, terminal::TerminalData>(v) })
+    } else {
+        None
+    }
+}
+
+const TERMINAL_OPTION_COUNT: c_int = 26; // contiguous 0..=25
+fn terminal_option_from_c_int(v: c_int) -> Option<terminal::Option_> {
+    if (0..TERMINAL_OPTION_COUNT).contains(&v) {
+        // SAFETY: `v` is a valid terminal `Option` discriminant (range-checked).
+        Some(unsafe { std::mem::transmute::<c_int, terminal::Option_>(v) })
     } else {
         None
     }
@@ -2127,6 +2150,611 @@ fn selection_gesture_event_option_from_c_int(v: c_int) -> Option<selection_gestu
     } else {
         None
     }
+}
+
+// ----- terminal -----
+// PORT NOTE: 1:1 with the `@export(&c.terminal_*, ...)` lines in `lib_vt.zig`.
+// The `c.zig` aliases map `terminal_<name> -> terminal.<name>` (e.g.
+// `terminal_new -> terminal.new`). The `set` `intToEnum` runtime-safety guard
+// lives inside `terminal::set` on the raw `c_int` option; the `mode_*`/`get`
+// guards run inside the ported module fns (the C-ABI enum args are crossed
+// directly). `Options`/`ScrollViewport`/`TerminalData` are `#[repr(C)]`.
+
+// pub const terminal_new = terminal.new;  (ghostty_terminal_new)
+/// C: rustty_terminal_new
+///
+/// # Safety
+/// `alloc`, if non-null, must point to a valid allocator; `result` must be a
+/// valid, writable pointer to a terminal handle.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_new(
+    alloc: *const rustty_lib::allocator::Allocator,
+    result: *mut terminal::Terminal,
+    opts: terminal::Options,
+) -> c_int {
+    // SAFETY: `alloc`/`result` validity is the caller's contract.
+    unsafe { terminal::new(alloc, result, opts) }.to_c_int()
+}
+
+// pub const terminal_free = terminal.free;  (ghostty_terminal_free)
+/// C: rustty_terminal_free
+///
+/// # Safety
+/// `terminal`, if non-null, must be a handle returned by `rustty_terminal_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_free(terminal: terminal::Terminal) {
+    // SAFETY: `terminal` validity is the caller's contract.
+    unsafe { terminal::free(terminal) }
+}
+
+// pub const terminal_reset = terminal.reset;  (ghostty_terminal_reset)
+/// C: rustty_terminal_reset
+///
+/// # Safety
+/// `terminal`, if non-null, must be a handle returned by `rustty_terminal_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_reset(terminal: terminal::Terminal) {
+    // SAFETY: `terminal` validity is the caller's contract.
+    unsafe { terminal::reset(terminal) }
+}
+
+// pub const terminal_resize = terminal.resize;  (ghostty_terminal_resize)
+/// C: rustty_terminal_resize
+///
+/// # Safety
+/// `terminal`, if non-null, must be a handle returned by `rustty_terminal_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_resize(
+    terminal: terminal::Terminal,
+    cols: rustty_vt::size::CellCountInt,
+    rows: rustty_vt::size::CellCountInt,
+    cell_width_px: u32,
+    cell_height_px: u32,
+) -> c_int {
+    // SAFETY: `terminal` validity is the caller's contract.
+    unsafe { terminal::resize(terminal, cols, rows, cell_width_px, cell_height_px) }.to_c_int()
+}
+
+// pub const terminal_set = terminal.set;  (ghostty_terminal_set)
+/// C: rustty_terminal_set
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `value`, if
+/// non-null, must point to a value of the type required by `option`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_set(
+    terminal: terminal::Terminal,
+    option: c_int,
+    value: *const std::ffi::c_void,
+) -> c_int {
+    // _ = std.meta.intToEnum(Option, ...) catch { log.warn(...); return .invalid_value; }
+    let Some(opt) = terminal_option_from_c_int(option) else {
+        // log.warn("terminal_set invalid option value={d}", .{...});
+        eprintln!("terminal_set invalid option value={option}");
+        return result::Result::InvalidValue.to_c_int();
+    };
+    // SAFETY: `terminal`/`value` validity is the caller's contract.
+    unsafe { terminal::set(terminal, opt, value) }.to_c_int()
+}
+
+// pub const terminal_vt_write = terminal.vt_write;  (ghostty_terminal_vt_write)
+/// C: rustty_terminal_vt_write
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `ptr`, if
+/// non-null, must point to `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_vt_write(
+    terminal: terminal::Terminal,
+    ptr: *const u8,
+    len: usize,
+) {
+    // SAFETY: `terminal`/`ptr` validity is the caller's contract.
+    unsafe { terminal::vt_write(terminal, ptr, len) }
+}
+
+// pub const terminal_scroll_viewport = terminal.scroll_viewport;  (ghostty_terminal_scroll_viewport)
+/// C: rustty_terminal_scroll_viewport
+///
+/// # Safety
+/// `terminal`, if non-null, must be a handle returned by `rustty_terminal_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_scroll_viewport(
+    terminal: terminal::Terminal,
+    behavior: terminal::ScrollViewport,
+) {
+    // SAFETY: `terminal` validity is the caller's contract.
+    unsafe { terminal::scroll_viewport(terminal, behavior) }
+}
+
+// pub const terminal_mode_get = terminal.mode_get;  (ghostty_terminal_mode_get)
+/// C: rustty_terminal_mode_get
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out_value`
+/// must be a valid, writable pointer to a `bool`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_mode_get(
+    terminal: terminal::Terminal,
+    tag: rustty_vt::modes::ModeTagBacking,
+    out_value: *mut bool,
+) -> c_int {
+    // SAFETY: `terminal`/`out_value` validity is the caller's contract.
+    unsafe { terminal::mode_get(terminal, tag, out_value) }.to_c_int()
+}
+
+// pub const terminal_mode_set = terminal.mode_set;  (ghostty_terminal_mode_set)
+/// C: rustty_terminal_mode_set
+///
+/// # Safety
+/// `terminal`, if non-null, must be a handle returned by `rustty_terminal_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_mode_set(
+    terminal: terminal::Terminal,
+    tag: rustty_vt::modes::ModeTagBacking,
+    value: bool,
+) -> c_int {
+    // SAFETY: `terminal` validity is the caller's contract.
+    unsafe { terminal::mode_set(terminal, tag, value) }.to_c_int()
+}
+
+// pub const terminal_get = terminal.get;  (ghostty_terminal_get)
+/// C: rustty_terminal_get
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out` must
+/// point to writable storage of the type required by `data`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_get(
+    terminal: terminal::Terminal,
+    data: c_int,
+    out: *mut std::ffi::c_void,
+) -> c_int {
+    // _ = std.meta.intToEnum(TerminalData, ...) catch { log.warn(...); return .invalid_value; }
+    let Some(d) = terminal_data_from_c_int(data) else {
+        // log.warn("terminal_get invalid data value={d}", .{...});
+        eprintln!("terminal_get invalid data value={data}");
+        return result::Result::InvalidValue.to_c_int();
+    };
+    // SAFETY: `terminal`/`out` validity is the caller's contract.
+    unsafe { terminal::get(terminal, d, out) }.to_c_int()
+}
+
+// pub const terminal_get_multi = terminal.get_multi;  (ghostty_terminal_get_multi)
+/// C: rustty_terminal_get_multi
+///
+/// # Safety
+/// `keys`/`values`/`out_written` validity is the caller's contract.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_get_multi(
+    terminal: terminal::Terminal,
+    count: usize,
+    keys: *const terminal::TerminalData,
+    values: *mut *mut std::ffi::c_void,
+    out_written: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { terminal::get_multi(terminal, count, keys, values, out_written) }.to_c_int()
+}
+
+// pub const terminal_select_word = selection.word;  (ghostty_terminal_select_word)
+/// C: rustty_terminal_select_word
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `options`, if
+/// non-null, must point to a valid `SelectWordOptions`; `out_selection`, if
+/// non-null, must be a valid, writable pointer to a `CSelection`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_select_word(
+    terminal: terminal::Terminal,
+    options: *const selection::SelectWordOptions,
+    out_selection: *mut selection::CSelection,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { selection::word(terminal, options, out_selection) }.to_c_int()
+}
+
+// pub const terminal_select_word_between = selection.word_between;
+//   (ghostty_terminal_select_word_between)
+/// C: rustty_terminal_select_word_between
+///
+/// # Safety
+/// `terminal`/`options`/`out_selection` validity is the caller's contract.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_select_word_between(
+    terminal: terminal::Terminal,
+    options: *const selection::SelectWordBetweenOptions,
+    out_selection: *mut selection::CSelection,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { selection::word_between(terminal, options, out_selection) }.to_c_int()
+}
+
+// pub const terminal_select_line = selection.line;  (ghostty_terminal_select_line)
+/// C: rustty_terminal_select_line
+///
+/// # Safety
+/// `terminal`/`options`/`out_selection` validity is the caller's contract.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_select_line(
+    terminal: terminal::Terminal,
+    options: *const selection::SelectLineOptions,
+    out_selection: *mut selection::CSelection,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { selection::line(terminal, options, out_selection) }.to_c_int()
+}
+
+// pub const terminal_select_all = selection.all;  (ghostty_terminal_select_all)
+/// C: rustty_terminal_select_all
+///
+/// # Safety
+/// `terminal`/`out_selection` validity is the caller's contract.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_select_all(
+    terminal: terminal::Terminal,
+    out_selection: *mut selection::CSelection,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { selection::all(terminal, out_selection) }.to_c_int()
+}
+
+// pub const terminal_select_output = selection.output;  (ghostty_terminal_select_output)
+/// C: rustty_terminal_select_output
+///
+/// # Safety
+/// `terminal`/`out_selection` validity is the caller's contract; `ref_` must be a
+/// valid `CGridRef`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_select_output(
+    terminal: terminal::Terminal,
+    ref_: grid_ref::CGridRef,
+    out_selection: *mut selection::CSelection,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { selection::output(terminal, ref_, out_selection) }.to_c_int()
+}
+
+// pub const terminal_selection_format_buf = selection.format_buf;
+//   (ghostty_terminal_selection_format_buf)
+/// C: rustty_terminal_selection_format_buf
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out` (if
+/// non-null) must point to `out_len` writable bytes; `out_written` must be a
+/// valid, writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_selection_format_buf(
+    terminal: terminal::Terminal,
+    opts: selection::FormatOptions,
+    out: *mut u8,
+    out_len: usize,
+    out_written: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { selection::format_buf(terminal, opts, out, out_len, out_written) }.to_c_int()
+}
+
+// pub const terminal_selection_format_alloc = selection.format_alloc;
+//   (ghostty_terminal_selection_format_alloc)
+/// C: rustty_terminal_selection_format_alloc
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `alloc`, if
+/// non-null, a valid allocator; `out_ptr`/`out_len` must be valid, writable
+/// pointers. The returned buffer is owned by the caller and must be freed with the
+/// same allocator.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_selection_format_alloc(
+    terminal: terminal::Terminal,
+    alloc: *const rustty_lib::allocator::Allocator,
+    opts: selection::FormatOptions,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { selection::format_alloc(terminal, alloc, opts, out_ptr, out_len) }.to_c_int()
+}
+
+// pub const terminal_selection_adjust = selection.adjust;  (ghostty_terminal_selection_adjust)
+/// C: rustty_terminal_selection_adjust
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `selection`,
+/// if non-null, must be a valid, writable pointer to a `CSelection`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_selection_adjust(
+    terminal: terminal::Terminal,
+    selection: *mut selection::CSelection,
+    adjustment: selection::Adjustment,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { selection::adjust(terminal, selection, adjustment) }.to_c_int()
+}
+
+// pub const terminal_selection_order = selection.order;  (ghostty_terminal_selection_order)
+/// C: rustty_terminal_selection_order
+///
+/// # Safety
+/// `terminal`/`selection`, if non-null, must be live; `out_order`, if non-null,
+/// must be a valid, writable pointer to an `Order`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_selection_order(
+    terminal: terminal::Terminal,
+    selection: *const selection::CSelection,
+    out_order: *mut selection::Order,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { selection::order(terminal, selection, out_order) }.to_c_int()
+}
+
+// pub const terminal_selection_ordered = selection.ordered;  (ghostty_terminal_selection_ordered)
+/// C: rustty_terminal_selection_ordered
+///
+/// # Safety
+/// `terminal`/`selection`, if non-null, must be live; `out_selection`, if
+/// non-null, must be a valid, writable pointer to a `CSelection`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_selection_ordered(
+    terminal: terminal::Terminal,
+    selection: *const selection::CSelection,
+    desired: selection::Order,
+    out_selection: *mut selection::CSelection,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { selection::ordered(terminal, selection, desired, out_selection) }.to_c_int()
+}
+
+// pub const terminal_selection_contains = selection.contains;  (ghostty_terminal_selection_contains)
+/// C: rustty_terminal_selection_contains
+///
+/// # Safety
+/// `terminal`/`selection`, if non-null, must be live; `out_contains`, if
+/// non-null, must be a valid, writable pointer to a `bool`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_selection_contains(
+    terminal: terminal::Terminal,
+    selection: *const selection::CSelection,
+    pt: point::PointC,
+    out_contains: *mut bool,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { selection::contains(terminal, selection, pt, out_contains) }.to_c_int()
+}
+
+// pub const terminal_selection_equal = selection.equal;  (ghostty_terminal_selection_equal)
+/// C: rustty_terminal_selection_equal
+///
+/// # Safety
+/// `terminal`/`a`/`b`, if non-null, must be live; `out_equal`, if non-null, must
+/// be a valid, writable pointer to a `bool`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_selection_equal(
+    terminal: terminal::Terminal,
+    a: *const selection::CSelection,
+    b: *const selection::CSelection,
+    out_equal: *mut bool,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { selection::equal(terminal, a, b, out_equal) }.to_c_int()
+}
+
+// pub const terminal_grid_ref = terminal.grid_ref;  (ghostty_terminal_grid_ref)
+/// C: rustty_terminal_grid_ref
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out_ref`, if
+/// non-null, must be a valid, writable pointer to a `CGridRef`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_grid_ref(
+    terminal: terminal::Terminal,
+    pt: point::PointC,
+    out_ref: *mut grid_ref::CGridRef,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { terminal::grid_ref(terminal, pt, out_ref) }.to_c_int()
+}
+
+// pub const terminal_grid_ref_track = terminal.grid_ref_track;  (ghostty_terminal_grid_ref_track)
+/// C: rustty_terminal_grid_ref_track
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out_ref`, if
+/// non-null, must be a valid, writable pointer to a `CTrackedGridRef`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_grid_ref_track(
+    terminal: terminal::Terminal,
+    pt: point::PointC,
+    out_ref: *mut grid_ref_tracked::CTrackedGridRef,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { terminal::grid_ref_track(terminal, pt, out_ref) }.to_c_int()
+}
+
+// pub const terminal_point_from_grid_ref = terminal.point_from_grid_ref;
+//   (ghostty_terminal_point_from_grid_ref)
+/// C: rustty_terminal_point_from_grid_ref
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `ref_` must
+/// be a valid `CGridRef`; `out`, if non-null, must be a valid, writable pointer
+/// to a `Coordinate`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_point_from_grid_ref(
+    terminal: terminal::Terminal,
+    ref_: *const grid_ref::CGridRef,
+    tag: point::TagC,
+    out: *mut rustty_vt::point::Coordinate,
+) -> c_int {
+    // PORT NOTE: `tag: point.Tag` crosses the C ABI as its `enum(c_int)`
+    // projection (`point::TagC`); bridge to the pure-VT `point::Tag`.
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { terminal::point_from_grid_ref(terminal, ref_, tag.to_tag(), out) }.to_c_int()
+}
+
+// ----- grid_ref -----
+// PORT NOTE: 1:1 with the 5 `@export(&c.grid_ref_*, ...)` lines; the `c.zig`
+// aliases map `grid_ref_<name> -> grid_ref.grid_ref_<name>`.
+
+// pub const grid_ref_cell = grid_ref.grid_ref_cell;  (ghostty_grid_ref_cell)
+/// C: rustty_grid_ref_cell
+///
+/// # Safety
+/// `ref_` must be a valid pointer to a `CGridRef`; `out`, if non-null, must be a
+/// valid, writable pointer to a `CCell`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_grid_ref_cell(
+    ref_: *const grid_ref::CGridRef,
+    out: *mut cell::CCell,
+) -> c_int {
+    // SAFETY: `ref_`/`out` validity is the caller's contract.
+    unsafe { grid_ref::grid_ref_cell(ref_, out) }.to_c_int()
+}
+
+// pub const grid_ref_row = grid_ref.grid_ref_row;  (ghostty_grid_ref_row)
+/// C: rustty_grid_ref_row
+///
+/// # Safety
+/// `ref_` must be a valid pointer to a `CGridRef`; `out`, if non-null, must be a
+/// valid, writable pointer to a `CRow`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_grid_ref_row(
+    ref_: *const grid_ref::CGridRef,
+    out: *mut row::CRow,
+) -> c_int {
+    // SAFETY: `ref_`/`out` validity is the caller's contract.
+    unsafe { grid_ref::grid_ref_row(ref_, out) }.to_c_int()
+}
+
+// pub const grid_ref_graphemes = grid_ref.grid_ref_graphemes;  (ghostty_grid_ref_graphemes)
+/// C: rustty_grid_ref_graphemes
+///
+/// # Safety
+/// `ref_` must be a valid `CGridRef`; `out_buf`, if non-null, must point to
+/// `buf_len` writable `u32`; `out_len` must be a valid, writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_grid_ref_graphemes(
+    ref_: *const grid_ref::CGridRef,
+    out_buf: *mut u32,
+    buf_len: usize,
+    out_len: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { grid_ref::grid_ref_graphemes(ref_, out_buf, buf_len, out_len) }.to_c_int()
+}
+
+// pub const grid_ref_hyperlink_uri = grid_ref.grid_ref_hyperlink_uri;
+//   (ghostty_grid_ref_hyperlink_uri)
+/// C: rustty_grid_ref_hyperlink_uri
+///
+/// # Safety
+/// `ref_` must be a valid `CGridRef`; `out_buf`, if non-null, must point to
+/// `buf_len` writable bytes; `out_len` must be a valid, writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_grid_ref_hyperlink_uri(
+    ref_: *const grid_ref::CGridRef,
+    out_buf: *mut u8,
+    buf_len: usize,
+    out_len: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { grid_ref::grid_ref_hyperlink_uri(ref_, out_buf, buf_len, out_len) }.to_c_int()
+}
+
+// pub const grid_ref_style = grid_ref.grid_ref_style;  (ghostty_grid_ref_style)
+/// C: rustty_grid_ref_style
+///
+/// # Safety
+/// `ref_` must be a valid pointer to a `CGridRef`; `out`, if non-null, must be a
+/// valid, writable pointer to a `Style`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_grid_ref_style(
+    ref_: *const grid_ref::CGridRef,
+    out: *mut style::Style,
+) -> c_int {
+    // SAFETY: `ref_`/`out` validity is the caller's contract.
+    unsafe { grid_ref::grid_ref_style(ref_, out) }.to_c_int()
+}
+
+// ----- grid_ref_tracked -----
+// PORT NOTE: 1:1 with the 5 `@export(&c.tracked_grid_ref_*, ...)` lines; the
+// `c.zig` aliases map `tracked_grid_ref_<name> ->
+// grid_ref_tracked.tracked_grid_ref_<name>`.
+
+// pub const tracked_grid_ref_free = grid_ref_tracked.tracked_grid_ref_free;
+//   (ghostty_tracked_grid_ref_free)
+/// C: rustty_tracked_grid_ref_free
+///
+/// # Safety
+/// `ref_`, if non-null, must be a handle returned by `rustty_terminal_grid_ref_track`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_tracked_grid_ref_free(ref_: grid_ref_tracked::CTrackedGridRef) {
+    // SAFETY: `ref_` validity is the caller's contract.
+    unsafe { grid_ref_tracked::tracked_grid_ref_free(ref_) }
+}
+
+// pub const tracked_grid_ref_has_value = grid_ref_tracked.tracked_grid_ref_has_value;
+//   (ghostty_tracked_grid_ref_has_value)
+/// C: rustty_tracked_grid_ref_has_value
+///
+/// # Safety
+/// `ref_`, if non-null, must be a live tracked-grid-ref handle.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_tracked_grid_ref_has_value(
+    ref_: grid_ref_tracked::CTrackedGridRef,
+) -> bool {
+    // SAFETY: `ref_` validity is the caller's contract.
+    unsafe { grid_ref_tracked::tracked_grid_ref_has_value(ref_) }
+}
+
+// pub const tracked_grid_ref_point = grid_ref_tracked.tracked_grid_ref_point;
+//   (ghostty_tracked_grid_ref_point)
+/// C: rustty_tracked_grid_ref_point
+///
+/// # Safety
+/// `ref_`, if non-null, must be a live handle; `out`, if non-null, must be a
+/// valid, writable pointer to a `Coordinate`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_tracked_grid_ref_point(
+    ref_: grid_ref_tracked::CTrackedGridRef,
+    tag: point::TagC,
+    out: *mut rustty_vt::point::Coordinate,
+) -> c_int {
+    // PORT NOTE: `tag: point.Tag` crosses as `point::TagC`; bridge to `point::Tag`.
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { grid_ref_tracked::tracked_grid_ref_point(ref_, tag.to_tag(), out) }.to_c_int()
+}
+
+// pub const tracked_grid_ref_set = grid_ref_tracked.tracked_grid_ref_set;
+//   (ghostty_tracked_grid_ref_set)
+/// C: rustty_tracked_grid_ref_set
+///
+/// # Safety
+/// `ref_`/`terminal`, if non-null, must be live handles.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_tracked_grid_ref_set(
+    ref_: grid_ref_tracked::CTrackedGridRef,
+    terminal: terminal::Terminal,
+    pt: point::PointC,
+) -> c_int {
+    // SAFETY: handle validity is the caller's contract.
+    unsafe { grid_ref_tracked::tracked_grid_ref_set(ref_, terminal, pt) }.to_c_int()
+}
+
+// pub const tracked_grid_ref_snapshot = grid_ref_tracked.tracked_grid_ref_snapshot;
+//   (ghostty_tracked_grid_ref_snapshot)
+/// C: rustty_tracked_grid_ref_snapshot
+///
+/// # Safety
+/// `ref_`, if non-null, must be a live handle; `out_ref`, if non-null, must be a
+/// valid, writable pointer to a `CGridRef`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_tracked_grid_ref_snapshot(
+    ref_: grid_ref_tracked::CTrackedGridRef,
+    out_ref: *mut grid_ref::CGridRef,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { grid_ref_tracked::tracked_grid_ref_snapshot(ref_, out_ref) }.to_c_int()
 }
 
 #[cfg(test)]
