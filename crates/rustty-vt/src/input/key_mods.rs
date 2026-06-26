@@ -18,9 +18,46 @@
 //   const OptionAsAlt = @import("config.zig").OptionAsAlt;
 // Only `builtin` (target OS, for `ctrlOrSuper`) is needed by the ported slice.
 
+/// Aliases for modifier names.
+//
+// PORT NOTE: the reference `alias: []const struct { []const u8, Mod }`. Used by
+// the deferred `RemapSet` parsing AND by `Binding.zig` trigger parsing (modifier
+// aliases like `cmd`/`command`/`opt`/`option`/`control`). Each entry pairs a
+// name with the `Mod` it aliases.
+pub const ALIAS: &[(&[u8], Mod)] = &[
+    (b"cmd", Mod::Super),
+    (b"command", Mod::Super),
+    (b"opt", Mod::Alt),
+    (b"option", Mod::Alt),
+    (b"control", Mod::Ctrl),
+];
+
 /// Single modifier
 // PORT NOTE: `Mod` and its `alias` table are used by the deferred `RemapSet`
-// parsing only; the side enum is mirrored below as `ModSide`.
+// parsing AND by `Binding.zig`; the side enum is mirrored below as `ModSide`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mod {
+    Shift,
+    Ctrl,
+    Alt,
+    Super,
+}
+
+impl Mod {
+    /// PORT NOTE: the reference uses `@tagName(pair[1])` to name the `Mods`
+    /// field to set. Returns the matching `Mods` bool field name.
+    pub fn tag_name(self) -> &'static str {
+        match self {
+            Mod::Shift => "shift",
+            Mod::Ctrl => "ctrl",
+            Mod::Alt => "alt",
+            Mod::Super => "super",
+        }
+    }
+}
+
+/// PORT NOTE: `Mod.Side` — `enum(u1) { left, right }`. Mirrored below as
+/// `ModSide`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum ModSide {
@@ -193,6 +230,43 @@ impl Mods {
             return self.super_;
         }
         self.ctrl
+    }
+
+    /// PORT NOTE: the bool field names of the `Mods` packed struct, in
+    /// declaration order. The reference iterates
+    /// `inline for (@typeInfo(key.Mods).@"struct".fields) |field|` and acts on
+    /// each `field.type == bool` field by name; this exposes exactly those
+    /// names so a downstream port (`Binding`) can reproduce that loop.
+    pub const BOOL_FIELD_NAMES: &'static [&'static str] =
+        &["shift", "ctrl", "alt", "super", "caps_lock", "num_lock"];
+
+    /// PORT NOTE: `@field(self, name)` read for the bool fields — supports the
+    /// reference's "repeat not allowed" check (`if (@field(result.mods, ...))`).
+    /// Returns `None` if `name` is not a bool field.
+    pub fn get_bool_field(self, name: &str) -> Option<bool> {
+        match name {
+            "shift" => Some(self.shift),
+            "ctrl" => Some(self.ctrl),
+            "alt" => Some(self.alt),
+            "super" => Some(self.super_),
+            "caps_lock" => Some(self.caps_lock),
+            "num_lock" => Some(self.num_lock),
+            _ => None,
+        }
+    }
+
+    /// PORT NOTE: `@field(self, name) = value` write for the bool fields. Used
+    /// to reproduce the reference's `@field(result.mods, field.name) = true`.
+    pub fn set_bool_field(&mut self, name: &str, value: bool) {
+        match name {
+            "shift" => self.shift = value,
+            "ctrl" => self.ctrl = value,
+            "alt" => self.alt = value,
+            "super" => self.super_ = value,
+            "caps_lock" => self.caps_lock = value,
+            "num_lock" => self.num_lock = value,
+            _ => {}
+        }
     }
 
     /// PORT NOTE: `@bitCast` from the `u16` backing integer back to the packed

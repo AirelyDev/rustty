@@ -544,13 +544,20 @@ const TAG_NAMES: &[(Key, &str)] = &[
 
 impl Key {
     /// PORT NOTE: the reference `@tagName(self)` for the snake_case tag name.
-    fn tag_name(self) -> &'static str {
+    pub fn tag_name(self) -> &'static str {
         TAG_NAMES[self.tag_index()].1
+    }
+
+    /// PORT NOTE: exposes the `(Key, tag-name)` table so downstream ports
+    /// (e.g. `Binding`) can reproduce `inline for (@typeInfo(key.Key).@"enum".fields)`
+    /// — iterating every key variant and its snake_case `@tagName`.
+    pub fn tag_names() -> &'static [(Key, &'static str)] {
+        TAG_NAMES
     }
 
     /// PORT NOTE: the reference `std.meta.stringToEnum(Key, name)` — looks up a
     /// `Key` by its snake_case tag name, returning `None` if unknown.
-    fn string_to_enum(name: &str) -> Option<Key> {
+    pub fn string_to_enum(name: &str) -> Option<Key> {
         for (k, tag) in TAG_NAMES {
             if *tag == name {
                 return Some(*k);
