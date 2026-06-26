@@ -138,6 +138,13 @@ impl CodepointMap {
     pub fn is_empty(&self) -> bool {
         true
     }
+
+    /// `self.list.len` — the placeholder holds no entries (always empty until
+    /// `font/CodepointMap.zig` lands), so this is always `0`. Used by
+    /// `RepeatableCodepointMap.equal`'s ported length comparison.
+    pub fn len(&self) -> usize {
+        0
+    }
 }
 
 // ===========================================================================
@@ -4894,14 +4901,64 @@ impl RepeatableCodepointMap {
         )
     }
 
-    // pub fn clone(self: *const Self, alloc: Allocator) Allocator.Error!Self
+    // pub fn clone(self: *const Self, alloc: Allocator) Allocator.Error!Self {
+    //     return .{ .map = try self.map.clone(alloc) };
+    // }
+    //
+    // PORT NOTE (PARTIAL — empty placeholder ported; font body DEFERRED): the
+    // reference returns a copy of `self.map` (the font `CodepointMap`). The
+    // placeholder `CodepointMap` is always empty (it cannot hold entries until
+    // `font/CodepointMap.zig` lands), so its `Clone` faithfully reproduces the
+    // only state it can represent. The real font-map clone (the `add`/`list`/
+    // `descriptor` deep copy) is the clearly surfaced deferral. Required by
+    // `Config.clone` (`cloneValue`).
     pub fn clone_in(&self) -> RepeatableCodepointMap {
-        unimplemented!("RepeatableCodepointMap.clone — deferred until font/CodepointMap.zig lands")
+        // return .{ .map = try self.map.clone(alloc) };
+        RepeatableCodepointMap {
+            map: self.map.clone(),
+        }
     }
 
-    // pub fn equal(self: Self, other: Self) bool
-    pub fn equal(&self, _other: &RepeatableCodepointMap) -> bool {
-        unimplemented!("RepeatableCodepointMap.equal — deferred until font/CodepointMap.zig lands")
+    // pub fn equal(self: Self, other: Self) bool {
+    //     const itemsA = self.map.list.slice();
+    //     const itemsB = other.map.list.slice();
+    //     if (itemsA.len != itemsB.len) return false;
+    //     for (0..itemsA.len) |i| {
+    //         const a = itemsA.get(i);
+    //         const b = itemsB.get(i);
+    //         if (!std.meta.eql(a, b)) return false;
+    //     } else return true;
+    // }
+    //
+    // PORT NOTE (PARTIAL — empty placeholder ported; font body DEFERRED): the
+    // reference compares the two maps' entry lists (length, then `std.meta.eql`
+    // per entry). The placeholder `CodepointMap` is always empty, so the length
+    // comparison (`0 != 0` is false) short-circuits to the `for ... else` `true`
+    // path — the only state the placeholder can represent — and the per-entry
+    // `std.meta.eql` loop never runs (it is the font-coupled deferral). Required
+    // by `Config.changed` (`deepEqual`).
+    pub fn equal(&self, other: &RepeatableCodepointMap) -> bool {
+        // const itemsA = self.map.list.slice();
+        // const itemsB = other.map.list.slice();
+        // if (itemsA.len != itemsB.len) return false;
+        if self.map.len() != other.map.len() {
+            return false;
+        }
+        // for (0..itemsA.len) |i| {
+        //     const a = itemsA.get(i); const b = itemsB.get(i);
+        //     if (!std.meta.eql(a, b)) return false;
+        // } else return true;
+        //
+        // The per-entry `std.meta.eql` body is the font-coupled deferral; the
+        // always-empty placeholder makes this loop empty, so it falls to `else`
+        // (`never_loop` is expected — the loop body is the surfaced deferral).
+        #[allow(clippy::never_loop)]
+        for _i in 0..self.map.len() {
+            unreachable!(
+                "RepeatableCodepointMap.equal per-entry compare — deferred until font/CodepointMap.zig lands"
+            );
+        }
+        true
     }
 
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void

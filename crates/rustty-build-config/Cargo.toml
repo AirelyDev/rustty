@@ -19,3 +19,7 @@ workspace = true
 # Version/identity source-of-truth (R2). identity has no deps so this adds no
 # cycle; BREAK #3 keeps build-config a leaf above only util/identity.
 rustty-identity = { workspace = true }
+# DeepEqual impl for `ReleaseChannel` (a config field type): the orphan rule
+# requires the impl in this crate (the type's home) or datastruct (the trait's).
+# datastruct deps only util, so this is acyclic.
+rustty-datastruct = { workspace = true }

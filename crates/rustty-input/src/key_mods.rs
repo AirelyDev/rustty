@@ -495,6 +495,17 @@ impl RemapSet {
     }
 }
 
+// `RemapSet` (the `KeyRemapSet`) is used as the `key-remap` config field type.
+// It has an `equal` decl, so the reference's `Config.changed` resolves its
+// `deepEqual` via the `@hasDecl(T, "equal")` fast path (`old.equal(new)`). The
+// orphan rule requires this `DeepEqual` impl to live in `RemapSet`'s home crate
+// (rustty-input) rather than rustty-config.
+impl rustty_datastruct::comparison::DeepEqual for RemapSet {
+    fn deep_equal(&self, other: &Self) -> bool {
+        self.equal(other)
+    }
+}
+
 /// PORT NOTE: a `void` value implementing `FormatEntry` so `RemapSet.formatEntry`
 /// can pass it to `EntryFormatter::format_entry` — the reference's
 /// `formatter.formatEntry(void, {})` (`.void` arm, `format_entry_void`).

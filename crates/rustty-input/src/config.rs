@@ -20,3 +20,13 @@ pub enum OptionAsAlt {
     Left,
     Right,
 }
+
+// `OptionAsAlt` is used as the `macos-option-as-alt` config field type
+// (`?OptionAsAlt`). The reference's `Config.changed` resolves its `deepEqual`
+// via the `.@"enum"` arm (`old == new`). The orphan rule requires this
+// `DeepEqual` impl to live in `OptionAsAlt`'s home crate (rustty-input).
+impl rustty_datastruct::comparison::DeepEqual for OptionAsAlt {
+    fn deep_equal(&self, other: &Self) -> bool {
+        self == other
+    }
+}

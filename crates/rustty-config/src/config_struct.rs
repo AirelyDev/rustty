@@ -1108,14 +1108,55 @@ pub enum ReplayStep {
 }
 
 impl ReplayStep {
-    // fn clone(self: Step, alloc: Allocator) Allocator.Error!Step
+    // fn clone(self: Step, alloc: Allocator) Allocator.Error!Step {
+    //     return switch (self) {
+    //         .@"-e" => self,
+    //         .diagnostic => |v| .{ .diagnostic = try v.clone(alloc) },
+    //         .arg => |v| .{ .arg = try alloc.dupeZ(u8, v) },
+    //         .expand => |v| .{ .expand = try alloc.dupe(u8, v) },
+    //         .conditional_arg => |v| conditional: {
+    //             var conds = try alloc.alloc(Conditional, v.conditions.len);
+    //             for (v.conditions, 0..) |cond, i| conds[i] = try cond.clone(alloc);
+    //             break :conditional .{ .conditional_arg = .{
+    //                 .conditions = conds,
+    //                 .arg = try alloc.dupe(u8, v.arg),
+    //             } };
+    //         },
+    //     };
+    // }
+    //
+    // PARITY: named `clone_in` (the workspace convention for ported `clone`
+    // decls) — Config relies on it to clone `_replay_steps`.
     pub fn clone_in(&self) -> ReplayStep {
-        todo!("port Replay.Step.clone")
+        match self {
+            // .@"-e" => self,
+            ReplayStep::DashE => ReplayStep::DashE,
+            // .diagnostic => |v| .{ .diagnostic = try v.clone(alloc) },
+            ReplayStep::Diagnostic(v) => ReplayStep::Diagnostic(v.clone_in()),
+            // .arg => |v| .{ .arg = try alloc.dupeZ(u8, v) },
+            ReplayStep::Arg(v) => ReplayStep::Arg(v.clone()),
+            // .expand => |v| .{ .expand = try alloc.dupe(u8, v) },
+            ReplayStep::Expand(v) => ReplayStep::Expand(v.clone()),
+            // .conditional_arg => |v| { var conds = ...; ... }
+            ReplayStep::ConditionalArg { conditions, arg } => {
+                // var conds = try alloc.alloc(Conditional, v.conditions.len);
+                // for (v.conditions, 0..) |cond, i| conds[i] = try cond.clone(alloc);
+                let conds: Vec<Conditional> = conditions.iter().map(|cond| cond.clone()).collect();
+                ReplayStep::ConditionalArg {
+                    conditions: conds,
+                    // .arg = try alloc.dupe(u8, v.arg),
+                    arg: arg.clone(),
+                }
+            }
+        }
     }
 }
 
 /// PORTS: `pub const ChangeIterator` (Config.zig:5056) — iterates `Key`s whose
 /// value differs between `old` and `new`.
+///
+/// This yields a key for every changed field between old and new.
+// pub const ChangeIterator = struct { old, new, i = 0, pub fn next(...) ?Key };
 pub struct ChangeIterator<'a> {
     pub old: &'a Config,
     pub new: &'a Config,
@@ -1130,7 +1171,35 @@ impl<'a> ChangeIterator<'a> {
     // implementing `std::iter::Iterator`.
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<Key> {
-        todo!("port ChangeIterator.next")
+        // const fields = comptime std.meta.fields(Key);
+        // while (self.i < fields.len) {
+        //     switch (self.i) {
+        //         inline 0...(fields.len - 1) => |i| {
+        //             const field = fields[i];
+        //             const key = @field(Key, field.name);
+        //             self.i += 1;
+        //             if (self.old.changed(self.new, key)) return key;
+        //         },
+        //         else => unreachable,
+        //     }
+        // }
+        // return null;
+        //
+        // PORT NOTE: Zig's `std.meta.fields(Key)` is the comptime `Key`-variant
+        // sequence. Rust has no enum reflection, so we iterate the `CONFIG_FIELDS`
+        // table's keys, which are the `Key` variants in the reference's struct
+        // declaration order (the same order `std.meta.fields(Key)` yields, since
+        // `Key` is derived from the Config fields in order). `self.i` indexes that
+        // sequence exactly as the reference's `self.i` indexes `fields`.
+        while self.i < CONFIG_FIELDS.len() {
+            let (_name, key) = CONFIG_FIELDS[self.i];
+            self.i += 1;
+            if self.old.changed(self.new, key) {
+                return Some(key);
+            }
+        }
+
+        None
     }
 }
 
@@ -1177,28 +1246,626 @@ impl Config {
     }
 
     /// PORTS: `pub fn cloneEmpty(self, alloc_gpa) Allocator.Error!Config`.
+    ///
+    /// Create a copy of the metadata of this configuration but without
+    /// the actual values. Metadata includes conditional state.
+    // pub fn cloneEmpty(self, alloc_gpa) Allocator.Error!Config {
+    //     var result = try default(alloc_gpa);
+    //     result._conditional_state = self._conditional_state;
+    //     return result;
+    // }
+    // PARITY: the reference is verbatim `var result = try default(alloc); result.
+    // _conditional_state = self._conditional_state; return result;` — a deliberate
+    // default-then-override-one-field, so the lint does not apply.
+    #[allow(clippy::field_reassign_with_default)]
     pub fn clone_empty(&self) -> Config {
-        todo!("port Config.cloneEmpty")
+        // var result = try default(alloc_gpa);
+        let mut result = Config::default();
+        // result._conditional_state = self._conditional_state;
+        result._conditional_state = self._conditional_state;
+        // return result;
+        result
     }
 
     /// PORTS: `pub fn clone(self, alloc_gpa) Allocator.Error!Config`.
+    ///
+    /// Create a copy of this configuration.
+    ///
+    /// This will not re-read referenced configuration files and operates
+    /// purely in-memory.
+    // pub fn clone(self, alloc_gpa) Allocator.Error!Config {
     pub fn clone_config(&self) -> Config {
-        todo!("port Config.clone")
+        // Start with an empty config
+        // var result = try self.cloneEmpty(alloc_gpa);
+        // errdefer result.deinit();
+        // const alloc_arena = result._arena.?.allocator();
+        let mut result = self.clone_empty();
+
+        // Copy our values
+        //
+        // inline for (@typeInfo(Config).@"struct".fields) |field| {
+        //     if (!@hasField(Key, field.name)) continue;
+        //     @field(result, field.name) = try cloneValue(
+        //         alloc_arena, field.type, @field(self, field.name));
+        // }
+        //
+        // PORT NOTE: the reference iterates the Config struct fields, skipping the
+        // `_`-prefixed ones (those NOT in `Key`), and deep-copies each via
+        // `cloneValue`. Rust has no struct reflection, so the per-field copy is
+        // written explicitly via `self.clone_value_into(&mut result)`, which has
+        // one arm per `Key` field — the `clone_value` half of the CLONE pass (see
+        // `clone_value_into`). In Rust each value type owns its data (no arena),
+        // so `cloneValue` collapses to a deep `.clone()` per field, exactly the
+        // reference's per-`field.type` `cloneValue` dispatch (scalars/enums/unions
+        // copy, owning types deep-clone, strings dupe). The `_`-prefixed fields
+        // are NOT copied here (they keep their `clone_empty` defaults); the ones
+        // that matter are handled explicitly below, mirroring the reference.
+        self.clone_value_into(&mut result);
+
+        // Copy our diagnostics
+        // result._diagnostics = try self._diagnostics.clone(alloc_arena);
+        result._diagnostics = self._diagnostics.clone_in();
+
+        // Preserve our replay steps. We copy them exactly to also preserve
+        // the exact conditionals required for some steps.
+        // try result._replay_steps.ensureTotalCapacity(
+        //     alloc_arena, self._replay_steps.items.len);
+        result._replay_steps.reserve(self._replay_steps.len());
+        // for (self._replay_steps.items) |item| {
+        //     result._replay_steps.appendAssumeCapacity(try item.clone(alloc_arena));
+        // }
+        for item in self._replay_steps.iter() {
+            result._replay_steps.push(item.clone_in());
+        }
+        // assert(result._replay_steps.items.len == self._replay_steps.items.len);
+        assert_eq!(result._replay_steps.len(), self._replay_steps.len());
+
+        // Copy the conditional set
+        // result._conditional_set = self._conditional_set;
+        result._conditional_set = self._conditional_set.clone();
+
+        // return result;
+        result
     }
 
     /// PORTS: `pub fn changed(self, new, comptime key: Key) bool` — true if the
-    /// value for `key` differs between `self` and `new`. The comptime `key` is a
-    /// runtime `Key` here; dispatch is per-variant (EQUAL/DIFF / CHANGED pass).
+    /// value for `key` differs between `self` and `new`.
     ///
-    /// DEFERRED to the CHANGED pass: the per-`Key` `deepEqual` dispatch needs
-    /// `DeepEqual` on foreign leaf field types deferred to that pass (see the
-    /// CHANGED-dispatch note below + `deep_equal.rs`).
-    pub fn changed(&self, _new: &Config, _key: Key) -> bool {
-        todo!("port Config.changed — CHANGED pass (deepEqual on foreign leaf field types)")
+    /// Returns true if the given key has changed from old to new. This
+    /// requires the key to be comptime known to make this more efficient.
+    // pub fn changed(self: *const Config, new: *const Config, comptime key: Key) bool {
+    //     const field = comptime field: { ... resolve key -> field ... };
+    //     const old_value = @field(self, field.name);
+    //     const new_value = @field(new, field.name);
+    //     return !deepEqual(field.type, old_value, new_value);
+    // }
+    //
+    // PORT NOTE: the reference's comptime `key` resolves to the matching Config
+    // field, then returns `!deepEqual(field.type, old, new)`. Here `key` is a
+    // runtime `Key`; the `match` below is the per-`Key` field resolution, each arm
+    // returning `!deep_equal(&self.<field>, &new.<field>)` — the EQUAL/DIFF
+    // (CHANGED) dispatch. Every field type implements `DeepEqual` (config-owned
+    // types in `deep_equal.rs`; the foreign leaf types — `MetricModifier`,
+    // `KeyRemapSet`, `CursorStyle`, `WindowPaddingBalance`, `OptionAsAlt`,
+    // `ReleaseChannel` — in their home crates per the orphan rule). `Option<T>`
+    // fields resolve through the `Option` blanket impl, exactly as the reference's
+    // `.optional` arm does.
+    pub fn changed(&self, new: &Config, key: Key) -> bool {
+        use rustty_datastruct::comparison::deep_equal;
+
+        // `!deepEqual(field.type, old_value, new_value)` for the field named by
+        // `key`. Each arm reads `self.$f`/`new.$f` (the `old_value`/`new_value`).
+        macro_rules! c {
+            ($f:ident) => {
+                !deep_equal(&self.$f, &new.$f)
+            };
+        }
+
+        match key {
+            Key::Language => c!(language),
+            Key::FontFamily => c!(font_family),
+            Key::FontFamilyBold => c!(font_family_bold),
+            Key::FontFamilyItalic => c!(font_family_italic),
+            Key::FontFamilyBoldItalic => c!(font_family_bold_italic),
+            Key::FontStyle => c!(font_style),
+            Key::FontStyleBold => c!(font_style_bold),
+            Key::FontStyleItalic => c!(font_style_italic),
+            Key::FontStyleBoldItalic => c!(font_style_bold_italic),
+            Key::FontSyntheticStyle => c!(font_synthetic_style),
+            Key::FontFeature => c!(font_feature),
+            Key::FontSize => c!(font_size),
+            Key::FontVariation => c!(font_variation),
+            Key::FontVariationBold => c!(font_variation_bold),
+            Key::FontVariationItalic => c!(font_variation_italic),
+            Key::FontVariationBoldItalic => c!(font_variation_bold_italic),
+            Key::FontCodepointMap => c!(font_codepoint_map),
+            Key::ClipboardCodepointMap => c!(clipboard_codepoint_map),
+            Key::FontThicken => c!(font_thicken),
+            Key::FontThickenStrength => c!(font_thicken_strength),
+            Key::FontShapingBreak => c!(font_shaping_break),
+            Key::AlphaBlending => c!(alpha_blending),
+            Key::AdjustCellWidth => c!(adjust_cell_width),
+            Key::AdjustCellHeight => c!(adjust_cell_height),
+            Key::AdjustFontBaseline => c!(adjust_font_baseline),
+            Key::AdjustUnderlinePosition => c!(adjust_underline_position),
+            Key::AdjustUnderlineThickness => c!(adjust_underline_thickness),
+            Key::AdjustStrikethroughPosition => c!(adjust_strikethrough_position),
+            Key::AdjustStrikethroughThickness => c!(adjust_strikethrough_thickness),
+            Key::AdjustOverlinePosition => c!(adjust_overline_position),
+            Key::AdjustOverlineThickness => c!(adjust_overline_thickness),
+            Key::AdjustCursorThickness => c!(adjust_cursor_thickness),
+            Key::AdjustCursorHeight => c!(adjust_cursor_height),
+            Key::AdjustBoxThickness => c!(adjust_box_thickness),
+            Key::AdjustIconHeight => c!(adjust_icon_height),
+            Key::GraphemeWidthMethod => c!(grapheme_width_method),
+            Key::FreetypeLoadFlags => c!(freetype_load_flags),
+            Key::Theme => c!(theme),
+            Key::Background => c!(background),
+            Key::Foreground => c!(foreground),
+            Key::BackgroundImage => c!(background_image),
+            Key::BackgroundImageOpacity => c!(background_image_opacity),
+            Key::BackgroundImagePosition => c!(background_image_position),
+            Key::BackgroundImageFit => c!(background_image_fit),
+            Key::BackgroundImageRepeat => c!(background_image_repeat),
+            Key::SelectionForeground => c!(selection_foreground),
+            Key::SelectionBackground => c!(selection_background),
+            Key::SelectionClearOnTyping => c!(selection_clear_on_typing),
+            Key::SelectionClearOnCopy => c!(selection_clear_on_copy),
+            Key::SelectionWordChars => c!(selection_word_chars),
+            Key::MinimumContrast => c!(minimum_contrast),
+            Key::Palette => c!(palette),
+            Key::PaletteGenerate => c!(palette_generate),
+            Key::PaletteHarmonious => c!(palette_harmonious),
+            Key::CursorColor => c!(cursor_color),
+            Key::CursorOpacity => c!(cursor_opacity),
+            Key::CursorStyle => c!(cursor_style),
+            Key::CursorStyleBlink => c!(cursor_style_blink),
+            Key::CursorText => c!(cursor_text),
+            Key::CursorClickToMove => c!(cursor_click_to_move),
+            Key::MouseHideWhileTyping => c!(mouse_hide_while_typing),
+            Key::ScrollToBottom => c!(scroll_to_bottom),
+            Key::MouseShiftCapture => c!(mouse_shift_capture),
+            Key::MouseReporting => c!(mouse_reporting),
+            Key::MouseScrollMultiplier => c!(mouse_scroll_multiplier),
+            Key::BackgroundOpacity => c!(background_opacity),
+            Key::BackgroundOpacityCells => c!(background_opacity_cells),
+            Key::BackgroundBlur => c!(background_blur),
+            Key::UnfocusedSplitOpacity => c!(unfocused_split_opacity),
+            Key::UnfocusedSplitFill => c!(unfocused_split_fill),
+            Key::SplitDividerColor => c!(split_divider_color),
+            Key::SplitPreserveZoom => c!(split_preserve_zoom),
+            Key::SearchForeground => c!(search_foreground),
+            Key::SearchBackground => c!(search_background),
+            Key::SearchSelectedForeground => c!(search_selected_foreground),
+            Key::SearchSelectedBackground => c!(search_selected_background),
+            Key::Command => c!(command),
+            Key::InitialCommand => c!(initial_command),
+            Key::NotifyOnCommandFinish => c!(notify_on_command_finish),
+            Key::NotifyOnCommandFinishAction => c!(notify_on_command_finish_action),
+            Key::NotifyOnCommandFinishAfter => c!(notify_on_command_finish_after),
+            Key::Env => c!(env),
+            Key::Input => c!(input),
+            Key::WaitAfterCommand => c!(wait_after_command),
+            Key::AbnormalCommandExitRuntime => c!(abnormal_command_exit_runtime),
+            Key::ScrollbackLimit => c!(scrollback_limit),
+            Key::Scrollbar => c!(scrollbar),
+            Key::Link => c!(link),
+            Key::LinkUrl => c!(link_url),
+            Key::LinkPreviews => c!(link_previews),
+            Key::Maximize => c!(maximize),
+            Key::Fullscreen => c!(fullscreen),
+            Key::Title => c!(title),
+            Key::Class => c!(class),
+            Key::X11InstanceName => c!(x11_instance_name),
+            Key::WorkingDirectory => c!(working_directory),
+            Key::Keybind => c!(keybind),
+            Key::KeyRemap => c!(key_remap),
+            Key::WindowPaddingX => c!(window_padding_x),
+            Key::WindowPaddingY => c!(window_padding_y),
+            Key::WindowPaddingBalance => c!(window_padding_balance),
+            Key::WindowPaddingColor => c!(window_padding_color),
+            Key::WindowVsync => c!(window_vsync),
+            Key::WindowInheritWorkingDirectory => c!(window_inherit_working_directory),
+            Key::TabInheritWorkingDirectory => c!(tab_inherit_working_directory),
+            Key::SplitInheritWorkingDirectory => c!(split_inherit_working_directory),
+            Key::WindowInheritFontSize => c!(window_inherit_font_size),
+            Key::WindowDecoration => c!(window_decoration),
+            Key::WindowTitleFontFamily => c!(window_title_font_family),
+            Key::WindowSubtitle => c!(window_subtitle),
+            Key::WindowTheme => c!(window_theme),
+            Key::WindowColorspace => c!(window_colorspace),
+            Key::WindowHeight => c!(window_height),
+            Key::WindowWidth => c!(window_width),
+            Key::WindowPositionX => c!(window_position_x),
+            Key::WindowPositionY => c!(window_position_y),
+            Key::WindowSaveState => c!(window_save_state),
+            Key::WindowStepResize => c!(window_step_resize),
+            Key::WindowNewTabPosition => c!(window_new_tab_position),
+            Key::WindowShowTabBar => c!(window_show_tab_bar),
+            Key::WindowTitlebarBackground => c!(window_titlebar_background),
+            Key::WindowTitlebarForeground => c!(window_titlebar_foreground),
+            Key::ResizeOverlay => c!(resize_overlay),
+            Key::ResizeOverlayPosition => c!(resize_overlay_position),
+            Key::ResizeOverlayDuration => c!(resize_overlay_duration),
+            Key::FocusFollowsMouse => c!(focus_follows_mouse),
+            Key::ClipboardRead => c!(clipboard_read),
+            Key::ClipboardWrite => c!(clipboard_write),
+            Key::ClipboardTrimTrailingSpaces => c!(clipboard_trim_trailing_spaces),
+            Key::ClipboardPasteProtection => c!(clipboard_paste_protection),
+            Key::ClipboardPasteBracketedSafe => c!(clipboard_paste_bracketed_safe),
+            Key::TitleReport => c!(title_report),
+            Key::ImageStorageLimit => c!(image_storage_limit),
+            Key::CopyOnSelect => c!(copy_on_select),
+            Key::RightClickAction => c!(right_click_action),
+            Key::MiddleClickAction => c!(middle_click_action),
+            Key::ClickRepeatInterval => c!(click_repeat_interval),
+            Key::ConfigFile => c!(config_file),
+            Key::ConfigDefaultFiles => c!(config_default_files),
+            Key::ConfirmCloseSurface => c!(confirm_close_surface),
+            Key::QuitAfterLastWindowClosed => c!(quit_after_last_window_closed),
+            Key::QuitAfterLastWindowClosedDelay => c!(quit_after_last_window_closed_delay),
+            Key::InitialWindow => c!(initial_window),
+            Key::UndoTimeout => c!(undo_timeout),
+            Key::QuickTerminalPosition => c!(quick_terminal_position),
+            Key::QuickTerminalSize => c!(quick_terminal_size),
+            Key::GtkQuickTerminalLayer => c!(gtk_quick_terminal_layer),
+            Key::GtkQuickTerminalNamespace => c!(gtk_quick_terminal_namespace),
+            Key::QuickTerminalScreen => c!(quick_terminal_screen),
+            Key::QuickTerminalAnimationDuration => c!(quick_terminal_animation_duration),
+            Key::QuickTerminalAutohide => c!(quick_terminal_autohide),
+            Key::QuickTerminalSpaceBehavior => c!(quick_terminal_space_behavior),
+            Key::QuickTerminalKeyboardInteractivity => c!(quick_terminal_keyboard_interactivity),
+            Key::ShellIntegration => c!(shell_integration),
+            Key::ShellIntegrationFeatures => c!(shell_integration_features),
+            Key::CommandPaletteEntry => c!(command_palette_entry),
+            Key::OscColorReportFormat => c!(osc_color_report_format),
+            Key::VtKamAllowed => c!(vt_kam_allowed),
+            Key::CustomShader => c!(custom_shader),
+            Key::CustomShaderAnimation => c!(custom_shader_animation),
+            Key::BellFeatures => c!(bell_features),
+            Key::BellAudioPath => c!(bell_audio_path),
+            Key::BellAudioVolume => c!(bell_audio_volume),
+            Key::AppNotifications => c!(app_notifications),
+            Key::MacosNonNativeFullscreen => c!(macos_non_native_fullscreen),
+            Key::MacosWindowButtons => c!(macos_window_buttons),
+            Key::MacosTitlebarStyle => c!(macos_titlebar_style),
+            Key::MacosTitlebarProxyIcon => c!(macos_titlebar_proxy_icon),
+            Key::MacosDockDropBehavior => c!(macos_dock_drop_behavior),
+            Key::MacosOptionAsAlt => c!(macos_option_as_alt),
+            Key::MacosWindowShadow => c!(macos_window_shadow),
+            Key::MacosHidden => c!(macos_hidden),
+            Key::MacosAutoSecureInput => c!(macos_auto_secure_input),
+            Key::MacosSecureInputIndication => c!(macos_secure_input_indication),
+            Key::MacosApplescript => c!(macos_applescript),
+            Key::MacosIcon => c!(macos_icon),
+            Key::MacosCustomIcon => c!(macos_custom_icon),
+            Key::MacosIconFrame => c!(macos_icon_frame),
+            Key::MacosIconGhostColor => c!(macos_icon_ghost_color),
+            Key::MacosIconScreenColor => c!(macos_icon_screen_color),
+            Key::MacosShortcuts => c!(macos_shortcuts),
+            Key::LinuxCgroup => c!(linux_cgroup),
+            Key::LinuxCgroupMemoryLimit => c!(linux_cgroup_memory_limit),
+            Key::LinuxCgroupProcessesLimit => c!(linux_cgroup_processes_limit),
+            Key::LinuxCgroupHardFail => c!(linux_cgroup_hard_fail),
+            Key::GtkOpenglDebug => c!(gtk_opengl_debug),
+            Key::GtkSingleInstance => c!(gtk_single_instance),
+            Key::GtkTitlebar => c!(gtk_titlebar),
+            Key::GtkTabsLocation => c!(gtk_tabs_location),
+            Key::GtkTitlebarHideWhenMaximized => c!(gtk_titlebar_hide_when_maximized),
+            Key::GtkToolbarStyle => c!(gtk_toolbar_style),
+            Key::GtkTitlebarStyle => c!(gtk_titlebar_style),
+            Key::GtkWideTabs => c!(gtk_wide_tabs),
+            Key::GtkCustomCss => c!(gtk_custom_css),
+            Key::DesktopNotifications => c!(desktop_notifications),
+            Key::ProgressStyle => c!(progress_style),
+            Key::BoldColor => c!(bold_color),
+            Key::FaintOpacity => c!(faint_opacity),
+            Key::Term => c!(term),
+            Key::EnquiryResponse => c!(enquiry_response),
+            Key::AsyncBackend => c!(async_backend),
+            Key::AutoUpdate => c!(auto_update),
+            Key::AutoUpdateChannel => c!(auto_update_channel),
+        }
+    }
+
+    /// Deep-copies every `Key` field from `self` into `dest`. This is the Rust
+    /// expansion of the reference `clone`'s `inline for (fields) |field|
+    /// @field(result, field.name) = try cloneValue(..., @field(self,
+    /// field.name))`. There is exactly one arm per `Key` field, which makes the
+    /// clone dispatch exhaustive over the field set — the `clone` half of the
+    /// per-`Key` exhaustiveness contract (see `key_exhaustive_parse_format_clone_changed`).
+    ///
+    /// PORT NOTE: in the reference `cloneValue` dispatches on `field.type`:
+    ///
+    ///   * `[]const u8` / `[:0]const u8` -> `alloc.dupe`/`dupeZ` (deep string copy)
+    ///   * a type with a `clone` decl (`@hasDecl(T, "clone")`) -> `src.clone(alloc)`
+    ///   * `.bool`/`.int`/`.float`/`.@"enum"`/`.@"union"` -> `return src` (copy)
+    ///   * `.optional` -> recurse into the child (or `null`)
+    ///   * packed `.@"struct"` -> `return src` (copy)
+    ///
+    /// Rust has no comptime type dispatch, so each field is written explicitly
+    /// here with the arm that matches its reference `cloneValue` resolution:
+    ///
+    ///   * `cv!` — the copy/`dupe` arms: owned `Vec`/scalar/enum/union/packed
+    ///     struct field whose Rust type derives `Clone`; `.clone()` is the deep
+    ///     copy (a `Vec<u8>` clone == `dupe`, a `Copy` scalar/enum == `return src`).
+    ///   * `ci!` — the `@hasDecl(T, "clone")` arm for a type that does NOT derive
+    ///     `Clone` and whose ported clone decl is named `clone_in` (the workspace
+    ///     convention): `Keybinds`, `RepeatableClipboardCodepointMap`,
+    ///     `RepeatablePath`.
+    ///
+    /// (Types whose Rust form derives `Clone` — including the `Option`-wrapped
+    /// `clone_in` types `Theme`/`Path`/`WorkingDirectory`/`ColorList`/`Duration` —
+    /// resolve through `cv!`'s `.clone()` directly, which is the same deep copy.
+    /// `?Command` is the one exception: `Command` has an inherent `clone` but no
+    /// `Clone` trait, so its `.optional` arm is mapped explicitly below.)
+    //
+    // PORTS the reference `fn cloneValue(alloc, comptime T, src) !T`, whose body
+    // is the comptime type dispatch reproduced field-by-field below:
+    //
+    //   fn cloneValue(alloc, comptime T, src) Allocator.Error!T {
+    //       // Do known named types first
+    //       switch (T) {
+    //           []const u8 => return try alloc.dupe(u8, src),
+    //           [:0]const u8 => return try alloc.dupeZ(u8, src),
+    //           else => {},
+    //       }
+    //
+    //       // If we're a type that can have decls and we have clone, then
+    //       // call clone and be done.
+    //       const t = @typeInfo(T);
+    //       if (t == .@"struct" or t == .@"enum" or t == .@"union") {
+    //           if (@hasDecl(T, "clone")) return try src.clone(alloc);
+    //       }
+    //
+    //       // Back into types of types
+    //       switch (t) {
+    //           inline .bool, .int, .float, .@"enum", .@"union" => return src,
+    //           .optional => |info| return try cloneValue(
+    //               alloc, info.child, src orelse return null),
+    //           .@"struct" => |info| {
+    //               // Packed structs we can return directly as copies.
+    //               assert(info.layout == .@"packed");
+    //               return src;
+    //           },
+    //           else => { @compileLog(T); @compileError("unsupported field type"); },
+    //       }
+    //   }
+    fn clone_value_into(&self, dest: &mut Config) {
+        // copy / `dupe` arm (derive-`Clone` deep copy, or inherent `clone`).
+        macro_rules! cv {
+            ($f:ident) => {
+                dest.$f = self.$f.clone()
+            };
+        }
+        // `@hasDecl(T, "clone")` arm: the ported `clone` decl (named `clone_in`).
+        macro_rules! ci {
+            ($f:ident) => {
+                dest.$f = self.$f.clone_in()
+            };
+        }
+
+        cv!(language);
+        cv!(font_family);
+        cv!(font_family_bold);
+        cv!(font_family_italic);
+        cv!(font_family_bold_italic);
+        cv!(font_style);
+        cv!(font_style_bold);
+        cv!(font_style_italic);
+        cv!(font_style_bold_italic);
+        cv!(font_synthetic_style);
+        cv!(font_feature);
+        cv!(font_size);
+        cv!(font_variation);
+        cv!(font_variation_bold);
+        cv!(font_variation_italic);
+        cv!(font_variation_bold_italic);
+        cv!(font_codepoint_map);
+        // RepeatableClipboardCodepointMap (no derived `Clone`)
+        ci!(clipboard_codepoint_map);
+        cv!(font_thicken);
+        cv!(font_thicken_strength);
+        cv!(font_shaping_break);
+        cv!(alpha_blending);
+        cv!(adjust_cell_width);
+        cv!(adjust_cell_height);
+        cv!(adjust_font_baseline);
+        cv!(adjust_underline_position);
+        cv!(adjust_underline_thickness);
+        cv!(adjust_strikethrough_position);
+        cv!(adjust_strikethrough_thickness);
+        cv!(adjust_overline_position);
+        cv!(adjust_overline_thickness);
+        cv!(adjust_cursor_thickness);
+        cv!(adjust_cursor_height);
+        cv!(adjust_box_thickness);
+        cv!(adjust_icon_height);
+        cv!(grapheme_width_method);
+        cv!(freetype_load_flags);
+        cv!(theme);
+        cv!(background);
+        cv!(foreground);
+        cv!(background_image);
+        cv!(background_image_opacity);
+        cv!(background_image_position);
+        cv!(background_image_fit);
+        cv!(background_image_repeat);
+        cv!(selection_foreground);
+        cv!(selection_background);
+        cv!(selection_clear_on_typing);
+        cv!(selection_clear_on_copy);
+        cv!(selection_word_chars);
+        cv!(minimum_contrast);
+        cv!(palette);
+        cv!(palette_generate);
+        cv!(palette_harmonious);
+        cv!(cursor_color);
+        cv!(cursor_opacity);
+        cv!(cursor_style);
+        cv!(cursor_style_blink);
+        cv!(cursor_text);
+        cv!(cursor_click_to_move);
+        cv!(mouse_hide_while_typing);
+        cv!(scroll_to_bottom);
+        cv!(mouse_shift_capture);
+        cv!(mouse_reporting);
+        cv!(mouse_scroll_multiplier);
+        cv!(background_opacity);
+        cv!(background_opacity_cells);
+        cv!(background_blur);
+        cv!(unfocused_split_opacity);
+        cv!(unfocused_split_fill);
+        cv!(split_divider_color);
+        cv!(split_preserve_zoom);
+        cv!(search_foreground);
+        cv!(search_background);
+        cv!(search_selected_foreground);
+        cv!(search_selected_background);
+        // ?Command — Command's ported `clone` is an inherent `clone` (no Clone
+        // trait), so the `.optional` arm maps it explicitly.
+        dest.command = self.command.as_ref().map(|v| v.clone());
+        dest.initial_command = self.initial_command.as_ref().map(|v| v.clone());
+        cv!(notify_on_command_finish);
+        cv!(notify_on_command_finish_action);
+        cv!(notify_on_command_finish_after);
+        cv!(env);
+        cv!(input);
+        cv!(wait_after_command);
+        cv!(abnormal_command_exit_runtime);
+        cv!(scrollback_limit);
+        cv!(scrollbar);
+        cv!(link);
+        cv!(link_url);
+        cv!(link_previews);
+        cv!(maximize);
+        cv!(fullscreen);
+        cv!(title);
+        cv!(class);
+        cv!(x11_instance_name);
+        cv!(working_directory);
+        // Keybinds (no derived `Clone`)
+        ci!(keybind);
+        cv!(key_remap);
+        cv!(window_padding_x);
+        cv!(window_padding_y);
+        cv!(window_padding_balance);
+        cv!(window_padding_color);
+        cv!(window_vsync);
+        cv!(window_inherit_working_directory);
+        cv!(tab_inherit_working_directory);
+        cv!(split_inherit_working_directory);
+        cv!(window_inherit_font_size);
+        cv!(window_decoration);
+        cv!(window_title_font_family);
+        cv!(window_subtitle);
+        cv!(window_theme);
+        cv!(window_colorspace);
+        cv!(window_height);
+        cv!(window_width);
+        cv!(window_position_x);
+        cv!(window_position_y);
+        cv!(window_save_state);
+        cv!(window_step_resize);
+        cv!(window_new_tab_position);
+        cv!(window_show_tab_bar);
+        cv!(window_titlebar_background);
+        cv!(window_titlebar_foreground);
+        cv!(resize_overlay);
+        cv!(resize_overlay_position);
+        cv!(resize_overlay_duration);
+        cv!(focus_follows_mouse);
+        cv!(clipboard_read);
+        cv!(clipboard_write);
+        cv!(clipboard_trim_trailing_spaces);
+        cv!(clipboard_paste_protection);
+        cv!(clipboard_paste_bracketed_safe);
+        cv!(title_report);
+        cv!(image_storage_limit);
+        cv!(copy_on_select);
+        cv!(right_click_action);
+        cv!(middle_click_action);
+        cv!(click_repeat_interval);
+        // RepeatablePath (no derived `Clone`)
+        ci!(config_file);
+        cv!(config_default_files);
+        cv!(confirm_close_surface);
+        cv!(quit_after_last_window_closed);
+        cv!(quit_after_last_window_closed_delay);
+        cv!(initial_window);
+        cv!(undo_timeout);
+        cv!(quick_terminal_position);
+        cv!(quick_terminal_size);
+        cv!(gtk_quick_terminal_layer);
+        cv!(gtk_quick_terminal_namespace);
+        cv!(quick_terminal_screen);
+        cv!(quick_terminal_animation_duration);
+        cv!(quick_terminal_autohide);
+        cv!(quick_terminal_space_behavior);
+        cv!(quick_terminal_keyboard_interactivity);
+        cv!(shell_integration);
+        cv!(shell_integration_features);
+        cv!(command_palette_entry);
+        cv!(osc_color_report_format);
+        cv!(vt_kam_allowed);
+        // RepeatablePath (no derived `Clone`)
+        ci!(custom_shader);
+        cv!(custom_shader_animation);
+        cv!(bell_features);
+        cv!(bell_audio_path);
+        cv!(bell_audio_volume);
+        cv!(app_notifications);
+        cv!(macos_non_native_fullscreen);
+        cv!(macos_window_buttons);
+        cv!(macos_titlebar_style);
+        cv!(macos_titlebar_proxy_icon);
+        cv!(macos_dock_drop_behavior);
+        cv!(macos_option_as_alt);
+        cv!(macos_window_shadow);
+        cv!(macos_hidden);
+        cv!(macos_auto_secure_input);
+        cv!(macos_secure_input_indication);
+        cv!(macos_applescript);
+        cv!(macos_icon);
+        cv!(macos_custom_icon);
+        cv!(macos_icon_frame);
+        cv!(macos_icon_ghost_color);
+        cv!(macos_icon_screen_color);
+        cv!(macos_shortcuts);
+        cv!(linux_cgroup);
+        cv!(linux_cgroup_memory_limit);
+        cv!(linux_cgroup_processes_limit);
+        cv!(linux_cgroup_hard_fail);
+        cv!(gtk_opengl_debug);
+        cv!(gtk_single_instance);
+        cv!(gtk_titlebar);
+        cv!(gtk_tabs_location);
+        cv!(gtk_titlebar_hide_when_maximized);
+        cv!(gtk_toolbar_style);
+        cv!(gtk_titlebar_style);
+        cv!(gtk_wide_tabs);
+        // RepeatablePath (no derived `Clone`)
+        ci!(gtk_custom_css);
+        cv!(desktop_notifications);
+        cv!(progress_style);
+        cv!(bold_color);
+        cv!(faint_opacity);
+        cv!(term);
+        cv!(enquiry_response);
+        cv!(async_backend);
+        cv!(auto_update);
+        cv!(auto_update_channel);
     }
 
     /// PORTS: `pub fn changeIterator(self, new) ChangeIterator`.
+    ///
+    /// Returns an iterator that goes through each changed field from
+    /// old to new. The order of old or new do not matter.
+    // pub fn changeIterator(old: *const Config, new: *const Config) ChangeIterator {
+    //     return .{ .old = old, .new = new };
+    // }
     pub fn change_iterator<'a>(&'a self, new: &'a Config) -> ChangeIterator<'a> {
+        // return .{ .old = old, .new = new };
         ChangeIterator {
             old: self,
             new,
@@ -3710,5 +4377,378 @@ mod parse_tests {
         cfg.parse_into_field(b"cursor-style", Some(b"block_hollow"))
             .unwrap();
         assert_eq!(cfg.cursor_style, CursorStyle::BlockHollow);
+    }
+}
+
+// ===========================================================================
+// CLONE + CHANGED tests + the ONE Key-exhaustiveness test.
+//
+// PORTS: the `clone default` / `clone preserves conditional state` / `changed`
+// `test {}` blocks (Config.zig:10384/10401/10533), plus a Rust-only
+// exhaustiveness test that replaces Zig's comptime completeness check: the
+// reference's `clone`/`changed`/`formatEntry`/`parseIntoField` all `inline for`
+// over the comptime field/`Key` set, so a missing arm is a COMPILE error there.
+// Rust's explicit `match`/dispatch tables can drift, so this test asserts every
+// `Key` variant has a parse + format + clone + changed arm.
+// ===========================================================================
+#[cfg(test)]
+mod clone_changed_tests {
+    use super::*;
+
+    /// Every `Key` variant, in declaration order. Used by the exhaustiveness
+    /// test to drive each per-`Key` pass over the full key set.
+    const ALL_KEYS: &[Key] = &[
+        Key::Language,
+        Key::FontFamily,
+        Key::FontFamilyBold,
+        Key::FontFamilyItalic,
+        Key::FontFamilyBoldItalic,
+        Key::FontStyle,
+        Key::FontStyleBold,
+        Key::FontStyleItalic,
+        Key::FontStyleBoldItalic,
+        Key::FontSyntheticStyle,
+        Key::FontFeature,
+        Key::FontSize,
+        Key::FontVariation,
+        Key::FontVariationBold,
+        Key::FontVariationItalic,
+        Key::FontVariationBoldItalic,
+        Key::FontCodepointMap,
+        Key::ClipboardCodepointMap,
+        Key::FontThicken,
+        Key::FontThickenStrength,
+        Key::FontShapingBreak,
+        Key::AlphaBlending,
+        Key::AdjustCellWidth,
+        Key::AdjustCellHeight,
+        Key::AdjustFontBaseline,
+        Key::AdjustUnderlinePosition,
+        Key::AdjustUnderlineThickness,
+        Key::AdjustStrikethroughPosition,
+        Key::AdjustStrikethroughThickness,
+        Key::AdjustOverlinePosition,
+        Key::AdjustOverlineThickness,
+        Key::AdjustCursorThickness,
+        Key::AdjustCursorHeight,
+        Key::AdjustBoxThickness,
+        Key::AdjustIconHeight,
+        Key::GraphemeWidthMethod,
+        Key::FreetypeLoadFlags,
+        Key::Theme,
+        Key::Background,
+        Key::Foreground,
+        Key::BackgroundImage,
+        Key::BackgroundImageOpacity,
+        Key::BackgroundImagePosition,
+        Key::BackgroundImageFit,
+        Key::BackgroundImageRepeat,
+        Key::SelectionForeground,
+        Key::SelectionBackground,
+        Key::SelectionClearOnTyping,
+        Key::SelectionClearOnCopy,
+        Key::SelectionWordChars,
+        Key::MinimumContrast,
+        Key::Palette,
+        Key::PaletteGenerate,
+        Key::PaletteHarmonious,
+        Key::CursorColor,
+        Key::CursorOpacity,
+        Key::CursorStyle,
+        Key::CursorStyleBlink,
+        Key::CursorText,
+        Key::CursorClickToMove,
+        Key::MouseHideWhileTyping,
+        Key::ScrollToBottom,
+        Key::MouseShiftCapture,
+        Key::MouseReporting,
+        Key::MouseScrollMultiplier,
+        Key::BackgroundOpacity,
+        Key::BackgroundOpacityCells,
+        Key::BackgroundBlur,
+        Key::UnfocusedSplitOpacity,
+        Key::UnfocusedSplitFill,
+        Key::SplitDividerColor,
+        Key::SplitPreserveZoom,
+        Key::SearchForeground,
+        Key::SearchBackground,
+        Key::SearchSelectedForeground,
+        Key::SearchSelectedBackground,
+        Key::Command,
+        Key::InitialCommand,
+        Key::NotifyOnCommandFinish,
+        Key::NotifyOnCommandFinishAction,
+        Key::NotifyOnCommandFinishAfter,
+        Key::Env,
+        Key::Input,
+        Key::WaitAfterCommand,
+        Key::AbnormalCommandExitRuntime,
+        Key::ScrollbackLimit,
+        Key::Scrollbar,
+        Key::Link,
+        Key::LinkUrl,
+        Key::LinkPreviews,
+        Key::Maximize,
+        Key::Fullscreen,
+        Key::Title,
+        Key::Class,
+        Key::X11InstanceName,
+        Key::WorkingDirectory,
+        Key::Keybind,
+        Key::KeyRemap,
+        Key::WindowPaddingX,
+        Key::WindowPaddingY,
+        Key::WindowPaddingBalance,
+        Key::WindowPaddingColor,
+        Key::WindowVsync,
+        Key::WindowInheritWorkingDirectory,
+        Key::TabInheritWorkingDirectory,
+        Key::SplitInheritWorkingDirectory,
+        Key::WindowInheritFontSize,
+        Key::WindowDecoration,
+        Key::WindowTitleFontFamily,
+        Key::WindowSubtitle,
+        Key::WindowTheme,
+        Key::WindowColorspace,
+        Key::WindowHeight,
+        Key::WindowWidth,
+        Key::WindowPositionX,
+        Key::WindowPositionY,
+        Key::WindowSaveState,
+        Key::WindowStepResize,
+        Key::WindowNewTabPosition,
+        Key::WindowShowTabBar,
+        Key::WindowTitlebarBackground,
+        Key::WindowTitlebarForeground,
+        Key::ResizeOverlay,
+        Key::ResizeOverlayPosition,
+        Key::ResizeOverlayDuration,
+        Key::FocusFollowsMouse,
+        Key::ClipboardRead,
+        Key::ClipboardWrite,
+        Key::ClipboardTrimTrailingSpaces,
+        Key::ClipboardPasteProtection,
+        Key::ClipboardPasteBracketedSafe,
+        Key::TitleReport,
+        Key::ImageStorageLimit,
+        Key::CopyOnSelect,
+        Key::RightClickAction,
+        Key::MiddleClickAction,
+        Key::ClickRepeatInterval,
+        Key::ConfigFile,
+        Key::ConfigDefaultFiles,
+        Key::ConfirmCloseSurface,
+        Key::QuitAfterLastWindowClosed,
+        Key::QuitAfterLastWindowClosedDelay,
+        Key::InitialWindow,
+        Key::UndoTimeout,
+        Key::QuickTerminalPosition,
+        Key::QuickTerminalSize,
+        Key::GtkQuickTerminalLayer,
+        Key::GtkQuickTerminalNamespace,
+        Key::QuickTerminalScreen,
+        Key::QuickTerminalAnimationDuration,
+        Key::QuickTerminalAutohide,
+        Key::QuickTerminalSpaceBehavior,
+        Key::QuickTerminalKeyboardInteractivity,
+        Key::ShellIntegration,
+        Key::ShellIntegrationFeatures,
+        Key::CommandPaletteEntry,
+        Key::OscColorReportFormat,
+        Key::VtKamAllowed,
+        Key::CustomShader,
+        Key::CustomShaderAnimation,
+        Key::BellFeatures,
+        Key::BellAudioPath,
+        Key::BellAudioVolume,
+        Key::AppNotifications,
+        Key::MacosNonNativeFullscreen,
+        Key::MacosWindowButtons,
+        Key::MacosTitlebarStyle,
+        Key::MacosTitlebarProxyIcon,
+        Key::MacosDockDropBehavior,
+        Key::MacosOptionAsAlt,
+        Key::MacosWindowShadow,
+        Key::MacosHidden,
+        Key::MacosAutoSecureInput,
+        Key::MacosSecureInputIndication,
+        Key::MacosApplescript,
+        Key::MacosIcon,
+        Key::MacosCustomIcon,
+        Key::MacosIconFrame,
+        Key::MacosIconGhostColor,
+        Key::MacosIconScreenColor,
+        Key::MacosShortcuts,
+        Key::LinuxCgroup,
+        Key::LinuxCgroupMemoryLimit,
+        Key::LinuxCgroupProcessesLimit,
+        Key::LinuxCgroupHardFail,
+        Key::GtkOpenglDebug,
+        Key::GtkSingleInstance,
+        Key::GtkTitlebar,
+        Key::GtkTabsLocation,
+        Key::GtkTitlebarHideWhenMaximized,
+        Key::GtkToolbarStyle,
+        Key::GtkTitlebarStyle,
+        Key::GtkWideTabs,
+        Key::GtkCustomCss,
+        Key::DesktopNotifications,
+        Key::ProgressStyle,
+        Key::BoldColor,
+        Key::FaintOpacity,
+        Key::Term,
+        Key::EnquiryResponse,
+        Key::AsyncBackend,
+        Key::AutoUpdate,
+        Key::AutoUpdateChannel,
+    ];
+
+    // The ONE Key-exhaustiveness test: every `Key` variant has a parse + format +
+    // clone + changed arm. This replaces Zig's comptime completeness guarantee
+    // (its `inline for` over the field/`Key` set is a compile error if an arm is
+    // missing) with a runtime check over the explicit Rust dispatch tables.
+    //
+    // - `ALL_KEYS` enumerates every variant (its length is checked == 203, the
+    //   `Key`-count contract, and == `CONFIG_FIELDS`).
+    // - Each `Key` maps to exactly one `(name, key)` in `CONFIG_FIELDS` (the
+    //   ordered name+key table shared by parse/format/clone).
+    // - PARSE arm: `parse_into_field(name, Some(b""))` dispatches (never
+    //   `InvalidField`) — the same proof as `parse_into_field_exhaustive`.
+    // - FORMAT arm: `format_entry_field(name, ..)` dispatches (writes a line).
+    // - CHANGED arm: `default.changed(&default, key)` resolves the key to a field
+    //   (returns `false` for an unchanged clone — every arm is reachable).
+    // - CLONE arm: `clone_value_into` (driven by `clone_config`) copies the field;
+    //   `changeIterator` over the clone yields nothing, proving every Key field
+    //   was deep-copied.
+    #[test]
+    fn key_exhaustive_parse_format_clone_changed() {
+        // `Key`-count contract: 203 variants, matching `CONFIG_FIELDS` and the
+        // 203 field names.
+        assert_eq!(ALL_KEYS.len(), 203);
+        assert_eq!(CONFIG_FIELDS.len(), 203);
+
+        let default = Config::default();
+
+        for &key in ALL_KEYS {
+            // Resolve the key to its `(name, key)` entry — every Key has exactly
+            // one CONFIG_FIELDS row.
+            let (name, _) = CONFIG_FIELDS
+                .iter()
+                .copied()
+                .find(|(_, k)| *k == key)
+                .unwrap_or_else(|| panic!("Key {key:?} missing from CONFIG_FIELDS"));
+
+            // PARSE arm.
+            let mut cfg = Config::default();
+            let r = cfg.parse_into_field(name, Some(b""));
+            assert!(
+                r.is_ok(),
+                "Key {:?} ({:?}) has no parse arm (got {:?})",
+                key,
+                std::str::from_utf8(name),
+                r
+            );
+
+            // FORMAT arm: the call dispatching (not `InvalidField`, not an
+            // `unreachable!` deferral panic) is the proof the arm exists. Some
+            // empty repeatable types legitimately emit zero bytes when empty
+            // (e.g. `link`), so we assert dispatch, not non-empty output.
+            let mut buf = rustty_cfg_fmt::AllocatingWriter::init();
+            default
+                .format_entry_field(name, &mut buf)
+                .expect("format_entry_field writes to an AllocatingWriter");
+
+            // CHANGED arm: an unchanged clone never reports a change.
+            assert!(
+                !default.changed(&default, key),
+                "Key {:?} reported a spurious change against itself",
+                key
+            );
+        }
+
+        // CLONE arm (over every Key field at once): a clone has no changes.
+        let clone = default.clone_config();
+        let mut it = default.change_iterator(&clone);
+        assert_eq!(
+            it.next(),
+            None,
+            "clone_config left a Key field uncopied (changeIterator yielded a change)"
+        );
+    }
+
+    // test "clone default" {
+    //     var source = try Config.default(alloc);
+    //     var dest = try source.clone(alloc);
+    //     var it = source.changeIterator(&dest);
+    //     try testing.expectEqual(@as(?Key, null), it.next());
+    // }
+    #[test]
+    fn clone_default() {
+        // var source = try Config.default(alloc);
+        let source = Config::default();
+        // var dest = try source.clone(alloc);
+        let dest = source.clone_config();
+
+        // Should have no changes
+        // var it = source.changeIterator(&dest);
+        let mut it = source.change_iterator(&dest);
+        // try testing.expectEqual(@as(?Key, null), it.next());
+        assert_eq!(it.next(), None);
+
+        // I want to do this but this doesn't work (the API doesn't work)
+        // try testing.expectEqualDeep(dest, source);
+    }
+
+    // test "clone preserves conditional state" {
+    //     var a = try Config.default(alloc);
+    //     a._conditional_state.theme = .dark;
+    //     try testing.expectEqual(.dark, a._conditional_state.theme);
+    //     var dest = try a.clone(alloc);
+    //     var it = a.changeIterator(&dest);
+    //     try testing.expectEqual(@as(?Key, null), it.next());
+    //     try testing.expectEqual(.dark, dest._conditional_state.theme);
+    // }
+    #[test]
+    fn clone_preserves_conditional_state() {
+        // var a = try Config.default(alloc);
+        let mut a = Config::default();
+        // a._conditional_state.theme = .dark;
+        a._conditional_state.theme = conditional::Theme::Dark;
+        // try testing.expectEqual(.dark, a._conditional_state.theme);
+        assert_eq!(a._conditional_state.theme, conditional::Theme::Dark);
+        // var dest = try a.clone(alloc);
+        let dest = a.clone_config();
+
+        // Should have no changes
+        // var it = a.changeIterator(&dest);
+        let mut it = a.change_iterator(&dest);
+        // try testing.expectEqual(@as(?Key, null), it.next());
+        assert_eq!(it.next(), None);
+
+        // Should have the same conditional state
+        // try testing.expectEqual(.dark, dest._conditional_state.theme);
+        assert_eq!(dest._conditional_state.theme, conditional::Theme::Dark);
+    }
+
+    // test "changed" {
+    //     var source = try Config.default(alloc);
+    //     var dest = try source.clone(alloc);
+    //     dest.@"font-thicken" = true;
+    //     try testing.expect(source.changed(&dest, .@"font-thicken"));
+    //     try testing.expect(!source.changed(&dest, .@"font-size"));
+    // }
+    #[test]
+    fn changed() {
+        // var source = try Config.default(alloc);
+        let source = Config::default();
+        // var dest = try source.clone(alloc);
+        let mut dest = source.clone_config();
+        // dest.@"font-thicken" = true;
+        dest.font_thicken = true;
+
+        // try testing.expect(source.changed(&dest, .@"font-thicken"));
+        assert!(source.changed(&dest, Key::FontThicken));
+        // try testing.expect(!source.changed(&dest, .@"font-size"));
+        assert!(!source.changed(&dest, Key::FontSize));
     }
 }

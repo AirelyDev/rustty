@@ -20,3 +20,13 @@ pub enum Style {
     /// Reported as DECSCUSR 1 or 2 (block).
     BlockHollow,
 }
+
+// `Style` (the terminal `CursorStyle`) is used as the `cursor-style` config
+// field type. The reference's `Config.changed` resolves its `deepEqual` via the
+// `.@"enum"` arm (`old == new`). The orphan rule requires this `DeepEqual` impl
+// to live in `Style`'s home crate (rustty-vt) rather than rustty-config.
+impl rustty_datastruct::comparison::DeepEqual for Style {
+    fn deep_equal(&self, other: &Self) -> bool {
+        self == other
+    }
+}

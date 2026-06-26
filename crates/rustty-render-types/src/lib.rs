@@ -40,6 +40,16 @@ pub enum PaddingBalance {
     Equal,
 }
 
+// `PaddingBalance` is used as the `window-padding-balance` config field type.
+// The reference's `Config.changed` resolves its `deepEqual` via the `.@"enum"`
+// arm (`old == new`). The orphan rule requires this `DeepEqual` impl to live in
+// `PaddingBalance`'s home crate (rustty-render-types) rather than rustty-config.
+impl rustty_datastruct::comparison::DeepEqual for PaddingBalance {
+    fn deep_equal(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 /// All relevant sizes for a rendered terminal. These are all the sizes that
 /// any functionality should need to know about the terminal in order to
 /// convert between any coordinate systems.

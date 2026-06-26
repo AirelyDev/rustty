@@ -366,6 +366,7 @@ dependencies = [
 name = "rustty-build-config"
 version = "0.1.0"
 dependencies = [
+ "rustty-datastruct",
  "rustty-identity",
 ]
 
@@ -509,6 +510,7 @@ dependencies = [
 name = "rustty-render-types"
 version = "0.1.0"
 dependencies = [
+ "rustty-datastruct",
  "rustty-util",
 ]
 

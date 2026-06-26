@@ -42,7 +42,7 @@ impl Default for State {
 }
 
 // pub const Theme = enum { light, dark };
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Theme {
     Light,
     Dark,

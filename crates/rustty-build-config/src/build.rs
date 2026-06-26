@@ -218,6 +218,16 @@ pub enum ReleaseChannel {
     Stable,
 }
 
+// `ReleaseChannel` is used as the `auto-update-channel` config field type
+// (`?ReleaseChannel`). The reference's `Config.changed` resolves its `deepEqual`
+// via the `.@"enum"` arm (`old == new`). The orphan rule requires this
+// `DeepEqual` impl to live in `ReleaseChannel`'s home crate.
+impl rustty_datastruct::comparison::DeepEqual for ReleaseChannel {
+    fn deep_equal(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 impl ReleaseChannel {
     /// Derive the release channel from a version's pre-release component,
     /// mirroring the reference channel logic in `Config.addOptions`:

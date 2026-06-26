@@ -17,3 +17,4 @@ workspace = true
 
 [dependencies]
 rustty-util = { workspace = true }
+rustty-datastruct = { workspace = true }

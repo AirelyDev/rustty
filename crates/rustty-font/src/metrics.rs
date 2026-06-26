@@ -614,6 +614,18 @@ pub enum Modifier {
     Absolute(i32),
 }
 
+// `Modifier` (the `MetricModifier`) is used as the type of the `adjust-*` config
+// fields (`?Modifier`). It is a `union(enum)` with NO `equal` decl, so the
+// reference's `Config.changed` resolves its `deepEqual` via the `.@"union"` arm:
+// compare the active tag, then `deepEqual` the active payload (`f64`/`i32`, both
+// `old == new`). That is exactly the derived `PartialEq`. The orphan rule
+// requires this `DeepEqual` impl to live in `Modifier`'s home crate.
+impl rustty_datastruct::comparison::DeepEqual for Modifier {
+    fn deep_equal(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 /// Error type for `Modifier::parse`.
 // PORT NOTE: the reference uses Zig error set values `error.InvalidFormat` and
 // `error.ValueRequired` (and `error.OutOfMemory` in `formatEntry`); modeled as a
