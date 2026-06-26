@@ -41,3 +41,8 @@ pub use config_struct::{Config, Key};
 pub use error_list::ErrorList;
 pub use formatter_file::FileFormatter;
 pub use repeatable_string_map::RepeatableStringMap;
+// PORT NOTE: `theme.zig` is imported by `Config` as `themepkg` (theme.open /
+// theme.Location / theme.LocationIterator). Re-export its public surface.
+pub use theme::{
+    open as theme_open, open_absolute as theme_open_absolute, Location, LocationIterator,
+};

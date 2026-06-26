@@ -2,13 +2,9 @@
 //!
 //! PORTS: ghostty src/config/theme.zig
 //!
-//! PORT STATUS: SKELETON (C2). The public surface (`Location`, `LocationIterator`,
-//! `open`, `openAbsolute`) is laid down with `todo!()` bodies so the giant
-//! `Config` struct (which references `theme.open`/`theme.Location`) compiles. The
-//! full faithful port of every line/comment/test{} (R1) lands in a follow-up
-//! sub-batch.
-
-#![allow(dead_code)]
+//! PORT STATUS: ported. Every line/comment/test{} (R1) is ported here. The only
+//! retarget is product identity (R2): the "Ghostty resources dir" comments keep
+//! their meaning but name the rustty resources dir.
 
 // const std = @import("std");
 // const builtin = @import("builtin");
@@ -16,19 +12,64 @@
 // const global_state = &@import("../global.zig").state;
 // const internal_os = @import("../os/main.zig");
 // const cli = @import("../cli.zig");
+//
+// PORT NOTE (R4 cycle-break, BREAK #1): the reference reaches the process-global
+// resources dir via `global_state.resources_dir`. `rustty-global` is a leaf and
+// the concrete `ResourcesDir` type lives in `rustty-os` (above `rustty-global` in
+// the port order), so the global `state` is generic over it. `rustty-config`
+// cannot depend on `rustty-global` without re-introducing the cycle, so the
+// `.resources` arm reads the resources dir through a leaf-safe injection seam
+// (`set_resources_dir`/`resources_dir`) that `rustty-core` populates from the
+// process-global `GlobalState.resources_dir`. The seam carries the REAL
+// `rustty_os::ResourcesDir` value, so the `.resources` arm is faithful (not a
+// stub): when wired, `resources_dir().app()` is exactly the reference's
+// `global_state.resources_dir.app()`.
+
+use rustty_args::diagnostics::{Diagnostic, DiagnosticList};
+use rustty_os as internal_os;
+use rustty_os::ResourcesDir;
+use std::sync::OnceLock;
+
+/// PORT NOTE (BREAK #1 seam): the process-global resources directory the
+/// reference reads via `global_state.resources_dir`. `rustty-core` sets this once
+/// from the real `GlobalState.resources_dir` (built by `rustty_os::resourcesDir`).
+/// Until set, the `.resources` location reports no directory — identical to the
+/// reference behavior when `resources_dir.app()` is null (a perfectly valid state
+/// per `Location.dir`'s own docs).
+static RESOURCES_DIR: OnceLock<ResourcesDir> = OnceLock::new();
+
+/// Inject the process-global resources directory (BREAK #1 seam). Called once by
+/// `rustty-core` during global-state init. Mirrors the reference's
+/// `global_state.resources_dir` being populated in `GlobalState.init`.
+pub fn set_resources_dir(dir: ResourcesDir) -> Result<(), ResourcesDir> {
+    RESOURCES_DIR.set(dir)
+}
+
+/// Read the process-global resources directory's `app()` path, or `None` if the
+/// seam is unset or the dir has no app path. Equivalent to the reference's
+/// `global_state.resources_dir.app()`.
+fn resources_dir_app() -> Option<String> {
+    RESOURCES_DIR.get().and_then(|d| d.app().map(String::from))
+}
 
 /// Location of possible themes. The order of this enum matters because it
 /// defines the priority of theme search (from top to bottom).
-// pub const Location = enum { user, resources, ... };
+// pub const Location = enum {
+//     user, // XDG config dir
+//     resources, // Ghostty resources dir
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Location {
     /// XDG config dir
     User,
-    /// Ghostty resources dir
+    /// rustty resources dir
     Resources,
 }
 
 impl Location {
+    /// PORT NOTE: the reference iterates `Location` via `@enumFromInt(self.i)`.
+    /// This is the declaration-order list of variants used by `LocationIterator`.
+    const ALL: [Location; 2] = [Location::User, Location::Resources];
+
     /// Returns the directory for the given theme based on this location type.
     ///
     /// This will return null with no error if the directory type doesn't exist
@@ -38,31 +79,531 @@ impl Location {
     /// Due to the way allocations are handled, an Arena allocator (or another
     /// similar allocator implementation) should be used. It may not be safe to
     /// free the returned allocations.
-    // pub fn dir(self: Location, arena_alloc: Allocator) error{OutOfMemory}!?[]const u8
-    pub fn dir(self: Location) -> Option<Vec<u8>> {
-        let _ = self;
-        todo!("port theme.Location.dir")
+    // pub fn dir(
+    //     self: Location,
+    //     arena_alloc: Allocator,
+    // ) error{OutOfMemory}!?[]const u8 {
+    //
+    // PORT NOTE: allocation in Rust is infallible for the owned `String`/`Vec`
+    // collections used here, so the reference's `error{OutOfMemory}` set collapses
+    // away — `dir` returns `Option<Vec<u8>>` directly. The `BufferTooSmall`/iOS
+    // comptime error juggling in the `.user` arm exists only to remap the
+    // platform-specific `xdg.config` error set into `OutOfMemory`; in Rust
+    // `xdg::config` returns the single `DirError::NoHomeDir`, which we treat as
+    // "the XDG directory doesn't exist" (the reference's `else => return null`).
+    pub fn dir(self) -> Option<Vec<u8>> {
+        // return switch (self) {
+        match self {
+            // .user => user: {
+            Location::User => {
+                // const subdir = std.fs.path.join(arena_alloc, &.{
+                //     "ghostty", "themes",
+                // }) catch return error.OutOfMemory;
+                let subdir = join(&[b"ghostty", b"themes"]);
+
+                // break :user internal_os.xdg.config(
+                //     arena_alloc,
+                //     .{ .subdir = subdir },
+                // ) catch |err| {
+                //     // We need to do some comptime tricks to get the right
+                //     // error set since some platforms don't support some
+                //     // error types.
+                //     const Error = @TypeOf(err) || switch (builtin.os.tag) {
+                //         .ios => error{BufferTooSmall},
+                //         else => error{},
+                //     };
+                //
+                //     switch (@as(Error, err)) {
+                //         error.OutOfMemory => return error.OutOfMemory,
+                //         error.BufferTooSmall => return error.OutOfMemory,
+                //
+                //         // Any other error we treat as the XDG directory not
+                //         // existing. Windows in particularly can return a LOT
+                //         // of errors here.
+                //         else => return null,
+                //     }
+                // };
+                let subdir_str = String::from_utf8_lossy(&subdir);
+                match internal_os::xdg::config(internal_os::xdg::Options {
+                    subdir: Some(&subdir_str),
+                    ..Default::default()
+                }) {
+                    Ok(v) => Some(v.into_bytes()),
+                    // Any other error we treat as the XDG directory not
+                    // existing. Windows in particularly can return a LOT
+                    // of errors here.
+                    Err(_) => None,
+                }
+            }
+
+            // .resources => try std.fs.path.join(arena_alloc, &.{
+            //     global_state.resources_dir.app() orelse return null,
+            //     "themes",
+            // }),
+            Location::Resources => {
+                let app = resources_dir_app()?;
+                Some(join(&[app.as_bytes(), b"themes"]))
+            }
+        }
     }
 }
 
-/// PORTS: theme.zig `LocationIterator`.
-// pub const LocationIterator = struct { ... };
-pub struct LocationIterator;
+/// PORT NOTE: `std.fs.path.join` for the in-tree uses here joins the components
+/// with the platform path separator. On the POSIX targets the parity harness
+/// runs, that is '/'. Empty components are skipped (matching `std.fs.path.join`),
+/// and no trailing separator is added.
+fn join(parts: &[&[u8]]) -> Vec<u8> {
+    let sep = std::path::MAIN_SEPARATOR as u8;
+    let mut out: Vec<u8> = Vec::new();
+    for part in parts {
+        if part.is_empty() {
+            continue;
+        }
+        if !out.is_empty() && *out.last().unwrap() != sep {
+            out.push(sep);
+        }
+        out.extend_from_slice(part);
+    }
+    out
+}
 
-/// PORTS: theme.zig `Theme` — the resolved theme file (path + open file handle).
-/// `open` returns this. Skeleton placeholder carrying the path the caller reads.
+/// An iterator that returns all possible directories for finding themes in
+/// order of priority.
+// pub const LocationIterator = struct {
+pub struct LocationIterator {
+    /// Due to the way allocations are handled, an Arena allocator (or another
+    /// similar allocator implementation) should be used. It may not be safe to
+    /// free the returned allocations.
+    // arena_alloc: Allocator,
+    //
+    // PORT NOTE: the reference threads `arena_alloc` through `next`; the Rust
+    // `dir`/`join` own their results, so there is no allocator field to carry.
+    // i: usize = 0,
+    pub i: usize,
+}
+
+/// The item yielded by `LocationIterator.next` — the matched location and its
+/// resolved directory.
+// pub fn next(self: *LocationIterator) !?struct {
+//     location: Location,
+//     dir: []const u8,
+// }
+pub struct LocationItem {
+    pub location: Location,
+    pub dir: Vec<u8>,
+}
+
+impl LocationIterator {
+    pub fn new() -> LocationIterator {
+        LocationIterator { i: 0 }
+    }
+
+    // pub fn next(self: *LocationIterator) !?struct {
+    //     location: Location,
+    //     dir: []const u8,
+    // } {
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> Option<LocationItem> {
+        // const max = @typeInfo(Location).@"enum".fields.len;
+        let max = Location::ALL.len();
+        // while (self.i < max) {
+        while self.i < max {
+            // const location: Location = @enumFromInt(self.i);
+            let location: Location = Location::ALL[self.i];
+            // self.i += 1;
+            self.i += 1;
+            // if (try location.dir(self.arena_alloc)) |dir|
+            //     return .{
+            //         .location = location,
+            //         .dir = dir,
+            //     };
+            if let Some(dir) = location.dir() {
+                return Some(LocationItem { location, dir });
+            }
+        }
+        // return null;
+        None
+    }
+
+    // pub fn reset(self: *LocationIterator) void {
+    pub fn reset(&mut self) {
+        // self.i = 0;
+        self.i = 0;
+    }
+}
+
+impl Default for LocationIterator {
+    fn default() -> LocationIterator {
+        LocationIterator::new()
+    }
+}
+
+/// The resolved theme: its path and the open file handle. Returned by `open`.
+// returns: ?struct { path: []const u8, file: std.fs.File }
 pub struct ThemeFile {
     pub path: Vec<u8>,
+    pub file: std::fs::File,
 }
 
-/// Open the given named theme. If there are any errors then messaging is logged
-/// and null is returned. (`pub fn open`)
-// pub fn open(arena_alloc, themes_dir, theme, errors) !?...
-pub fn open(_theme: &[u8]) -> Option<ThemeFile> {
-    todo!("port theme.open")
+/// Open the given named theme. If there are any errors then messages
+/// will be appended to the given error list and null is returned. If
+/// a non-null return value is returned, there are never any errors added.
+///
+/// One error that is not recoverable and may be returned is OOM. This is
+/// always a critical error for configuration loading so it is returned.
+///
+/// Due to the way allocations are handled, an Arena allocator (or another
+/// similar allocator implementation) should be used. It may not be safe to
+/// free the returned allocations.
+///
+/// This will never return anything other than a handle to a regular file. If
+/// the theme resolves to something other than a regular file a diagnostic entry
+/// will be added to the list and null will be returned.
+// pub fn open(
+//     arena_alloc: Allocator,
+//     theme: []const u8,
+//     diags: *cli.DiagnosticList,
+// ) error{OutOfMemory}!?struct {
+//     path: []const u8,
+//     file: std.fs.File,
+// } {
+pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
+    // Absolute themes are loaded a different path.
+    // if (std.fs.path.isAbsolute(theme)) {
+    if is_absolute(theme) {
+        // const file: std.fs.File = try openAbsolute(
+        //     arena_alloc,
+        //     theme,
+        //     diags,
+        // ) orelse return null;
+        let file: std::fs::File = open_absolute(theme, diags)?;
+        // const stat = file.stat() catch |err| {
+        //     try diags.append(arena_alloc, .{
+        //         .message = try std.fmt.allocPrintSentinel(
+        //             arena_alloc,
+        //             "not reading theme from \"{s}\": {}",
+        //             .{ theme, err },
+        //             0,
+        //         ),
+        //     });
+        //     return null;
+        // };
+        let stat = match file.metadata() {
+            Ok(m) => m,
+            Err(err) => {
+                diags.append(Diagnostic {
+                    message: alloc_print(format!(
+                        "not reading theme from \"{}\": {}",
+                        display(theme),
+                        err
+                    )),
+                    ..Default::default()
+                });
+                return None;
+            }
+        };
+        // switch (stat.kind) {
+        //     .file => {},
+        //     else => {
+        //         try diags.append(arena_alloc, .{
+        //             .message = try std.fmt.allocPrintSentinel(
+        //                 arena_alloc,
+        //                 "not reading theme from \"{s}\": it is a {s}",
+        //                 .{ theme, @tagName(stat.kind) },
+        //                 0,
+        //             ),
+        //         });
+        //         return null;
+        //     },
+        // }
+        if !stat.is_file() {
+            diags.append(Diagnostic {
+                message: alloc_print(format!(
+                    "not reading theme from \"{}\": it is a {}",
+                    display(theme),
+                    kind_name(&stat)
+                )),
+                ..Default::default()
+            });
+            return None;
+        }
+        // return .{ .path = theme, .file = file };
+        return Some(ThemeFile {
+            path: theme.to_vec(),
+            file,
+        });
+    }
+
+    // const basename = std.fs.path.basename(theme);
+    let basename = basename(theme);
+    // if (!std.mem.eql(u8, theme, basename)) {
+    if theme != basename {
+        // try diags.append(arena_alloc, .{
+        //     .message = try std.fmt.allocPrintSentinel(
+        //         arena_alloc,
+        //         "theme \"{s}\" cannot include path separators unless it is an absolute path",
+        //         .{theme},
+        //         0,
+        //     ),
+        // });
+        // return null;
+        diags.append(Diagnostic {
+            message: alloc_print(format!(
+                "theme \"{}\" cannot include path separators unless it is an absolute path",
+                display(theme)
+            )),
+            ..Default::default()
+        });
+        return None;
+    }
+
+    // Iterate over the possible locations to try to find the
+    // one that exists.
+    // var it: LocationIterator = .{ .arena_alloc = arena_alloc };
+    let mut it = LocationIterator::new();
+    // const cwd = std.fs.cwd();
+    // while (try it.next()) |loc| {
+    while let Some(loc) = it.next() {
+        // const path = try std.fs.path.join(arena_alloc, &.{ loc.dir, theme });
+        let path = join(&[&loc.dir, theme]);
+        // if (cwd.openFile(path, .{})) |file| {
+        match std::fs::File::open(os_str_from_bytes(&path)) {
+            Ok(file) => {
+                // const stat = file.stat() catch |err| {
+                //     try diags.append(arena_alloc, .{
+                //         .message = try std.fmt.allocPrintSentinel(
+                //             arena_alloc,
+                //             "not reading theme from \"{s}\": {}",
+                //             .{ theme, err },
+                //             0,
+                //         ),
+                //     });
+                //     return null;
+                // };
+                let stat = match file.metadata() {
+                    Ok(m) => m,
+                    Err(err) => {
+                        diags.append(Diagnostic {
+                            message: alloc_print(format!(
+                                "not reading theme from \"{}\": {}",
+                                display(theme),
+                                err
+                            )),
+                            ..Default::default()
+                        });
+                        return None;
+                    }
+                };
+                // switch (stat.kind) {
+                //     .file => {},
+                //     else => {
+                //         try diags.append(arena_alloc, .{
+                //             .message = ... "not reading theme from \"{s}\": it is a {s}" ...
+                //         });
+                //         return null;
+                //     },
+                // }
+                if !stat.is_file() {
+                    diags.append(Diagnostic {
+                        message: alloc_print(format!(
+                            "not reading theme from \"{}\": it is a {}",
+                            display(theme),
+                            kind_name(&stat)
+                        )),
+                        ..Default::default()
+                    });
+                    return None;
+                }
+                // return .{
+                //     .path = path,
+                //     .file = file,
+                // };
+                return Some(ThemeFile { path, file });
+            }
+            // } else |err| switch (err) {
+            Err(err) => match err.kind() {
+                // Not an error, just continue to the next location.
+                // error.FileNotFound => {},
+                std::io::ErrorKind::NotFound => {}
+                // Anything else is an error we log and give up on.
+                // else => {
+                //     try diags.append(arena_alloc, .{
+                //         .message = try std.fmt.allocPrintSentinel(
+                //             arena_alloc,
+                //             "failed to load theme \"{s}\" from the file \"{s}\": {}",
+                //             .{ theme, path, err },
+                //             0,
+                //         ),
+                //     });
+                //
+                //     return null;
+                // },
+                _ => {
+                    diags.append(Diagnostic {
+                        message: alloc_print(format!(
+                            "failed to load theme \"{}\" from the file \"{}\": {}",
+                            display(theme),
+                            display(&path),
+                            err
+                        )),
+                        ..Default::default()
+                    });
+                    return None;
+                }
+            },
+        }
+    }
+
+    // Unlikely scenario: the theme doesn't exist. In this case, we reset
+    // our iterator, reiterate over in order to build a better error message.
+    // This does double allocate some memory but for errors I think that's
+    // fine.
+    // it.reset();
+    it.reset();
+    // while (try it.next()) |loc| {
+    while let Some(loc) = it.next() {
+        // const path = try std.fs.path.join(arena_alloc, &.{ loc.dir, theme });
+        let path = join(&[&loc.dir, theme]);
+        // try diags.append(arena_alloc, .{
+        //     .message = try std.fmt.allocPrintSentinel(
+        //         arena_alloc,
+        //         "theme \"{s}\" not found, tried path \"{s}\"",
+        //         .{ theme, path },
+        //         0,
+        //     ),
+        // });
+        diags.append(Diagnostic {
+            message: alloc_print(format!(
+                "theme \"{}\" not found, tried path \"{}\"",
+                display(theme),
+                display(&path)
+            )),
+            ..Default::default()
+        });
+    }
+
+    // return null;
+    None
 }
 
-/// PORTS: theme.zig `openAbsolute`.
-pub fn open_absolute(_path: &[u8]) -> Option<ThemeFile> {
-    todo!("port theme.openAbsolute")
+/// Open the given theme from an absolute path. If there are any errors
+/// then messages will be appended to the given error list and null is
+/// returned. If a non-null return value is returned, there are never any
+/// errors added.
+///
+/// Due to the way allocations are handled, an Arena allocator (or another
+/// similar allocator implementation) should be used. It may not be safe to
+/// free the returned allocations.
+// pub fn openAbsolute(
+//     arena_alloc: Allocator,
+//     theme: []const u8,
+//     diags: *cli.DiagnosticList,
+// ) error{OutOfMemory}!?std.fs.File {
+pub fn open_absolute(theme: &[u8], diags: &mut DiagnosticList) -> Option<std::fs::File> {
+    // return std.fs.openFileAbsolute(theme, .{}) catch |err| {
+    match std::fs::File::open(os_str_from_bytes(theme)) {
+        Ok(file) => Some(file),
+        Err(err) => {
+            // switch (err) {
+            match err.kind() {
+                // error.FileNotFound => try diags.append(arena_alloc, .{
+                //     .message = try std.fmt.allocPrintSentinel(
+                //         arena_alloc,
+                //         "failed to load theme from the path \"{s}\"",
+                //         .{theme},
+                //         0,
+                //     ),
+                // }),
+                std::io::ErrorKind::NotFound => diags.append(Diagnostic {
+                    message: alloc_print(format!(
+                        "failed to load theme from the path \"{}\"",
+                        display(theme)
+                    )),
+                    ..Default::default()
+                }),
+                // else => try diags.append(arena_alloc, .{
+                //     .message = try std.fmt.allocPrintSentinel(
+                //         arena_alloc,
+                //         "failed to load theme from the path \"{s}\": {}",
+                //         .{ theme, err },
+                //         0,
+                //     ),
+                // }),
+                _ => diags.append(Diagnostic {
+                    message: alloc_print(format!(
+                        "failed to load theme from the path \"{}\": {}",
+                        display(theme),
+                        err
+                    )),
+                    ..Default::default()
+                }),
+            }
+
+            // return null;
+            None
+        }
+    }
+}
+
+// ===========================================================================
+// PORT helpers — std.fs / std.fmt analogues used above. These add nothing the
+// reference doesn't already do (R1): they are the minimal Rust glue for the std
+// calls the reference makes inline.
+// ===========================================================================
+
+/// `std.fs.path.isAbsolute` for the POSIX targets the parity harness runs.
+fn is_absolute(path: &[u8]) -> bool {
+    path.first() == Some(&(std::path::MAIN_SEPARATOR as u8))
+}
+
+/// `std.fs.path.basename` — the final path component (no trailing-separator
+/// handling beyond what the reference relies on for theme names).
+fn basename(path: &[u8]) -> &[u8] {
+    let sep = std::path::MAIN_SEPARATOR as u8;
+    match path.iter().rposition(|&b| b == sep) {
+        Some(idx) => &path[idx + 1..],
+        None => path,
+    }
+}
+
+/// `std.fmt.allocPrintSentinel(.., 0)` — owned message bytes. The trailing NUL
+/// sentinel the reference appends is implicit (`Vec<u8>` carries no sentinel);
+/// `Diagnostic.message` is the byte payload.
+fn alloc_print(s: String) -> Vec<u8> {
+    s.into_bytes()
+}
+
+/// The `{s}` rendering of a byte-slice path for diagnostic messages.
+fn display(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
+    String::from_utf8_lossy(bytes)
+}
+
+/// `@tagName(stat.kind)` for the non-file kinds the diagnostics report. Returns
+/// the reference's `std.fs.File.Kind` tag name.
+fn kind_name(meta: &std::fs::Metadata) -> &'static str {
+    let ft = meta.file_type();
+    if ft.is_dir() {
+        "directory"
+    } else if ft.is_symlink() {
+        "sym_link"
+    } else {
+        // Block/char devices, fifos, sockets, etc. We only ever hit this arm for
+        // non-regular files; report the generic "unknown" the reference's Kind
+        // would render for anything not specifically named.
+        "unknown"
+    }
+}
+
+/// Build an `&OsStr` from raw path bytes without a lossy round-trip (R3/fidelity:
+/// byte-slices stay bytes). POSIX-only, matching the parity harness targets.
+#[cfg(unix)]
+fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::OsStr::from_bytes(bytes)
+}
+
+#[cfg(not(unix))]
+fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
+    // Non-unix fallback (not exercised by the POSIX parity harness).
+    std::ffi::OsStr::new(std::str::from_utf8(bytes).unwrap_or(""))
 }

@@ -208,7 +208,15 @@ pub trait Target: Sized {
 
     /// `@hasDecl(T, "compatibility")` + `T.compatibility.get(key)`. Returns the
     /// compatibility handler for `key` if one exists.
-    fn compatibility(&self, _key: &[u8]) -> Option<CompatibilityHandler<Self>> {
+    //
+    // PORT NOTE: the reference's `compatibility` map values are bare
+    // `CompatibilityHandler(T)` fn-pointers; some entries are produced by
+    // `compatibilityRenamed`, which in the Rust port must capture the target field
+    // name and so is a boxed closure. To let renamed and custom handlers share one
+    // return type, this returns the boxed `BoxedCompatibilityHandler<Self>` (a
+    // bare fn coerces into the box trivially). Semantically identical to the
+    // reference's `T.compatibility.get(key)`.
+    fn compatibility(&self, _key: &[u8]) -> Option<BoxedCompatibilityHandler<Self>> {
         None
     }
 
@@ -463,6 +471,145 @@ where
                 //     .location = try diags.Location.fromIter(iter, arena_alloc),
                 // });
                 let location = Location::from_iter(iter);
+                dst.diagnostics_mut().unwrap().append(Diagnostic {
+                    key: key.to_vec(),
+                    message,
+                    location,
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// PORT NOTE (Replay aliasing): the reference `Replay.Iterator` holds
+/// `config: *Config` while `cli.args.parse` is simultaneously called with the
+/// SAME `*Config` as `dst` (see `Config.loadIter`/`changeConditionalState`/
+/// `loadTheme`). Each `Replay.Iterator.next` mutates that config (expanding paths
+/// and appending diagnostics) before yielding the arg that `parse` then parses
+/// into the very same config. In Rust two `&mut Config` cannot coexist, and the
+/// raw-ptr-aliasing workaround is forbidden (Stacked-Borrows UB; see memory
+/// `rust-mut-args-strongly-protected`).
+///
+/// The faithful, sound resolution is `SelfDrivenIterator` + `parse_self`: an
+/// iterator whose `next` receives `&mut T` (the destination) as a parameter
+/// rather than capturing it. `parse_self` owns the single `&mut T` and lends it
+/// to the iterator's `next` for the duration of that call, then uses it for field
+/// parsing — exactly the reference's interleaving, with no aliasing. Non-replay
+/// iterators (`LineIterator`/`SliceIterator`/`ArgsIterator`) ignore the lent
+/// destination, so `parse` (above) remains for them; `parse_self` is the variant
+/// `Config.loadIter` routes through so a single code path serves both.
+pub trait SelfDrivenIterator<T> {
+    /// `next`, but the destination is lent in. Replay's `next` mutates it
+    /// (expand/diagnostic) before returning the arg; other iterators ignore it.
+    fn next_self(&mut self, dst: &mut T) -> Option<Vec<u8>>;
+
+    /// `iter.location(alloc)` — the diagnostic location for the current item.
+    fn location_self(&self) -> Option<Location>;
+}
+
+/// Any plain `ArgIterator + LocationProvider` (the file/CLI/slice iterators) is a
+/// `SelfDrivenIterator` that simply ignores the lent destination. This lets
+/// `Config.loadIter` route ALL iterators — replay and non-replay — through the
+/// single `parse_self` path, matching the reference's single `cli.args.parse`
+/// call site. The Replay iterator (which DOES use the destination) provides its
+/// own `SelfDrivenIterator` impl in the config crate and deliberately does NOT
+/// implement `ArgIterator`/`LocationProvider`, so there is no coherence overlap.
+impl<T, I> SelfDrivenIterator<T> for I
+where
+    I: ArgIterator<Item = Vec<u8>> + LocationProvider,
+{
+    fn next_self(&mut self, _dst: &mut T) -> Option<Vec<u8>> {
+        ArgIterator::next(self)
+    }
+
+    fn location_self(&self) -> Option<Location> {
+        self.location().ok().flatten()
+    }
+}
+
+/// `parse`, but driven by a `SelfDrivenIterator` whose `next` is lent `&mut T`.
+/// This is the aliasing-safe analogue of the reference calling `cli.args.parse`
+/// with a `Replay.Iterator` that captures the same `*Config` as `dst`. The body
+/// is line-for-line the same as `parse`; only the `iter.next()`/`iter.location()`
+/// calls become `iter.next_self(dst)`/`iter.location_self()`.
+pub fn parse_self<T, I>(dst: &mut T, iter: &mut I) -> Result<(), ParseError>
+where
+    T: Target,
+    I: SelfDrivenIterator<T>,
+{
+    // while (iter.next()) |arg| {
+    while let Some(arg) = iter.next_self(dst) {
+        let arg: &[u8] = arg.as_slice();
+        // Do manual parsing if we have a hook for it.
+        // if (@hasDecl(T, "parseManuallyHook")) {
+        //     if (!try dst.parseManuallyHook(arena_alloc, arg, iter)) return;
+        // }
+        if let Some(res) = dst.parse_manually_hook(arg) {
+            if !res? {
+                return Ok(());
+            }
+        }
+
+        // If the destination supports help then we check for it, call
+        // the help function and return.
+        #[allow(clippy::collapsible_if)]
+        if dst.has_help_decl() {
+            if arg == b"--help" || arg == b"-h" {
+                if let Some(res) = dst.help() {
+                    res?;
+                }
+                return Ok(());
+            }
+        }
+
+        // If this doesn't start with "--" then it isn't a config flag.
+        // if (!mem.startsWith(u8, arg, "--")) {
+        if !arg.starts_with(b"--") {
+            if !dst.can_track_diags() {
+                return Err(Error::InvalidField);
+            }
+            let location = iter.location_self().unwrap_or(Location::None);
+            dst.diagnostics_mut().unwrap().append(Diagnostic {
+                key: arg.to_vec(),
+                message: b"invalid field".to_vec(),
+                location,
+            });
+            continue;
+        }
+
+        // var key: []const u8 = arg[2..];
+        let mut key: &[u8] = &arg[2..];
+        let value: Option<&[u8]> = if let Some(idx) = index_of(key, b"=") {
+            let v = &key[idx + 1..];
+            key = &key[0..idx];
+            Some(v)
+        } else {
+            None
+        };
+
+        // parseIntoField(...) catch |err| ...
+        match dst.parse_into_field(key, value) {
+            Ok(()) => {}
+            Err(err) => 'err: {
+                if let Some(handler) = dst.compatibility(key) {
+                    if handler(dst, key, value) {
+                        break 'err;
+                    }
+                }
+
+                if !dst.can_track_diags() {
+                    return Err(err);
+                }
+
+                let message: Vec<u8> = match err {
+                    Error::InvalidField => b"unknown field".to_vec(),
+                    Error::ValueRequired => format_value_required(dst, key),
+                    Error::InvalidValue => format_invalid_value(dst, key, value),
+                };
+
+                let location = iter.location_self().unwrap_or(Location::None);
                 dst.diagnostics_mut().unwrap().append(Diagnostic {
                     key: key.to_vec(),
                     message,

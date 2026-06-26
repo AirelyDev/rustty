@@ -535,10 +535,10 @@ fn parse_compatibility_handler() {
                 _ => Err(Error::InvalidField),
             }
         }
-        fn compatibility(&self, key: &[u8]) -> Option<CompatibilityHandler<Self>> {
+        fn compatibility(&self, key: &[u8]) -> Option<BoxedCompatibilityHandler<Self>> {
             // .{ "a", compat }
             if key == b"a" {
-                Some(Data::compat)
+                Some(Box::new(Data::compat))
             } else {
                 None
             }
@@ -590,13 +590,13 @@ fn parse_compatibility_renamed() {
         // `CompatibilityHandler` (fn pointer) cannot capture `to`, so the handler
         // for "old" is dispatched here by name and forwards to
         // `parse_into_field("a", value)`, exactly as the generated handler does.
-        fn compatibility(&self, key: &[u8]) -> Option<CompatibilityHandler<Self>> {
+        fn compatibility(&self, key: &[u8]) -> Option<BoxedCompatibilityHandler<Self>> {
             if key == b"old" {
-                Some(
+                Some(Box::new(
                     |dst: &mut Data, _key: &[u8], value: Option<&[u8]>| -> bool {
                         matches!(dst.parse_into_field(b"a", value), Ok(()))
                     },
-                )
+                ))
             } else {
                 None
             }

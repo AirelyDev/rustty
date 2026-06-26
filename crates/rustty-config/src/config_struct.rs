@@ -1152,6 +1152,334 @@ impl ReplayStep {
     }
 }
 
+// ===========================================================================
+// PORT support — the std/OS glue + error/iterator types the machinery above
+// uses. These add nothing the reference doesn't already do (R1): they are the
+// minimal Rust counterparts of the inline std calls in the reference functions.
+// ===========================================================================
+
+/// `std.fs.max_path_bytes` — the platform max path length (4096 on Linux/macOS).
+const MAX_PATH_BYTES: usize = 4096;
+
+/// `std.time.ns_per_s`.
+const NS_PER_S: u64 = 1_000_000_000;
+
+/// The error set of `loadFile`/`loadFsFile`/`loadReader`/`loadRecursiveFiles`.
+/// The reference threads `std.fs`/reader errors plus the parse error set; the
+/// `loadOptionalFile` arm specifically distinguishes `FileNotFound`.
+#[derive(Debug)]
+pub enum LoadError {
+    /// `error.FileNotFound` — used by `loadOptionalFile` to return `.not_found`.
+    FileNotFound,
+    /// Any other IO error during load.
+    Io(std::io::Error),
+    /// A parse error propagated from `loadIter`.
+    Parse(ParseError),
+}
+
+impl LoadError {
+    /// Map a `file_load.open` error (other than `NotAFile`, handled inline) into
+    /// a `LoadError`, preserving the `FileNotFound` distinction.
+    fn from_open(err: crate::file_load::OpenFileError) -> LoadError {
+        match err {
+            // error.FileNotFound => loadOptionalFile returns .not_found
+            crate::file_load::OpenFileError::FileNotFound => LoadError::FileNotFound,
+            // `NotAFile` is handled inline in `loadFile`; the remaining variants
+            // (`FileIsEmpty`, `FileOpenFailed`) are surfaced as IO errors.
+            other => LoadError::Io(std::io::Error::other(format!("{other:?}"))),
+        }
+    }
+}
+
+impl From<std::io::Error> for LoadError {
+    fn from(e: std::io::Error) -> LoadError {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            LoadError::FileNotFound
+        } else {
+            LoadError::Io(e)
+        }
+    }
+}
+
+impl From<ParseError> for LoadError {
+    fn from(e: ParseError) -> LoadError {
+        LoadError::Parse(e)
+    }
+}
+
+/// `std.log.info` / `std.log.warn` scoped `.config`. The parity harness does not
+/// assert log output; these go to stderr like the reference's scoped logger.
+fn log_info(msg: String) {
+    eprintln!("info(config): {msg}");
+}
+
+fn log_warn(msg: String) {
+    eprintln!("warning(config): {msg}");
+}
+
+/// `std.fs.path.dirname` — the directory portion of `path`, or `None` if there
+/// is no separator (matching `std.fs.path.dirname` returning null).
+fn dirname(path: &[u8]) -> Option<&[u8]> {
+    let sep = std::path::MAIN_SEPARATOR as u8;
+    let idx = path.iter().rposition(|&b| b == sep)?;
+    if idx == 0 {
+        // Root: dirname("/foo") == "/".
+        Some(&path[..1])
+    } else {
+        Some(&path[..idx])
+    }
+}
+
+/// `@tagName(stat.kind)` for a non-file stat used in `config-file` diagnostics.
+fn file_kind_name(meta: &std::fs::Metadata) -> &'static str {
+    let ft = meta.file_type();
+    if ft.is_dir() {
+        "directory"
+    } else if ft.is_symlink() {
+        "sym_link"
+    } else {
+        "unknown"
+    }
+}
+
+/// Build an `&OsStr` from raw path bytes without a lossy round-trip.
+#[cfg(unix)]
+fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::OsStr::from_bytes(bytes)
+}
+
+#[cfg(not(unix))]
+fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
+    std::ffi::OsStr::new(std::str::from_utf8(bytes).unwrap_or(""))
+}
+
+/// `std.fs.Dir.realpath` result -> raw path bytes (no lossy round-trip).
+#[cfg(unix)]
+fn path_to_bytes(p: &std::path::Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    p.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(not(unix))]
+fn path_to_bytes(p: &std::path::Path) -> Vec<u8> {
+    p.to_string_lossy().into_owned().into_bytes()
+}
+
+/// `fn writeConfigTemplate(path: []const u8) !void` — create the template config
+/// file at `path`. Reproduces the reference: makes the parent dir, creates the
+/// file, and writes the embedded template with the `path` substituted.
+// fn writeConfigTemplate(path: []const u8) !void {
+fn write_config_template(path: &[u8]) -> std::io::Result<()> {
+    // log.info("creating template config file: path={s}", .{path});
+    log_info(format!(
+        "creating template config file: path={}",
+        String::from_utf8_lossy(path)
+    ));
+    // if (std.fs.path.dirname(path)) |dir_path| {
+    //     try std.fs.cwd().makePath(dir_path);
+    // }
+    if let Some(dir_path) = dirname(path) {
+        std::fs::create_dir_all(os_str_from_bytes(dir_path))?;
+    }
+    // const file = try std.fs.createFileAbsolute(path, .{});
+    // defer file.close();
+    let mut file = std::fs::File::create(os_str_from_bytes(path))?;
+    // var buf: [4096]u8 = undefined;
+    // var file_writer = file.writer(&buf);
+    // const writer = &file_writer.interface;
+    // try writer.print(
+    //     @embedFile("./config-template"),
+    //     .{ .path = path },
+    // );
+    use std::io::Write;
+    file.write_all(&render_config_template(path))?;
+    Ok(())
+}
+
+/// PORTS: `@embedFile("./config-template")` rendered with `.{ .path = path }`.
+/// The template is a format string with a single `{[path]s}` substitution.
+fn render_config_template(path: &[u8]) -> Vec<u8> {
+    // PORT NOTE: the reference embeds `src/config/config-template`; its sole
+    // substitution is the config-file `path`. The template body is reproduced
+    // here verbatim so the generated file is byte-faithful.
+    let template = include_str!("config-template");
+    template
+        .replace("{[path]s}", &String::from_utf8_lossy(path))
+        .into_bytes()
+}
+
+/// This runs a heuristic to determine if we are likely running
+/// Ghostty in a CLI environment. We need this to change some behaviors.
+/// We should keep the set of behaviors that depend on this as small
+/// as possible because magic sucks, but each place is well documented.
+// fn probableCliEnvironment() bool {
+fn probable_cli_environment() -> bool {
+    // switch (builtin.os.tag) {
+    //     // Windows has its own problems, just ignore it for now since
+    //     // its not a real supported target and GTK via WSL2 assuming
+    //     // single instance is probably fine.
+    //     .windows => return false,
+    //     // On macOS, we don't want to detect `open` calls as CLI envs.
+    //     // Our desktop detection on macOS is very accurate due to how
+    //     // processes are launched on macOS, so if we detect we're launched
+    //     // from the app bundle then we're not in a CLI environment.
+    //     .macos => if (internal_os.launchedFromDesktop()) return false,
+    //     else => {},
+    // }
+    #[cfg(target_os = "windows")]
+    {
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if rustty_os::desktop::launchedFromDesktop() {
+            return false;
+        }
+    }
+
+    // If we have TERM_PROGRAM set to a non-empty value, we assume
+    // a graphical terminal environment.
+    // if (std.posix.getenv("TERM_PROGRAM")) |v| {
+    //     if (v.len > 0) return true;
+    // }
+    if let Ok(v) = std::env::var("TERM_PROGRAM") {
+        if !v.is_empty() {
+            return true;
+        }
+    }
+
+    // CLI arguments makes things probable
+    // if (std.os.argv.len > 1) return true;
+    if std::env::args_os().len() > 1 {
+        return true;
+    }
+
+    // Unlikely CLI environment
+    // return false;
+    false
+}
+
+/// This is used to "replay" the configuration. See loadTheme for details.
+///
+/// PORTS: `const Replay = struct { ... }` — the `Step` element type lives above
+/// as `ReplayStep`; this is the `Iterator` + `iterator` constructor.
+// const Replay = struct { const Step = ...; const Iterator = struct {...}; fn iterator(...) {...} };
+//
+// PORT NOTE (aliasing): the reference `Replay.Iterator` holds `config: *Config`
+// and mutates it inside `next` while `cli.args.parse` drives it with the SAME
+// `*Config`. In Rust the iterator cannot capture `&mut Config` (it would alias
+// the `&mut Config` `parse_self` holds), so `ReplayIterator` is a
+// `SelfDrivenIterator<Config>`: its `next_self` receives `&mut Config` as a
+// parameter, exactly recreating the reference's interleaving without aliasing.
+pub struct ReplayIterator {
+    // slice: []const Replay.Step,
+    slice: Vec<ReplayStep>,
+    // idx: usize = 0,
+    idx: usize,
+}
+
+impl ReplayIterator {
+    /// Construct a Replay iterator from a slice of replay elements.
+    /// This can be used with args.parse and handles intermediate
+    /// steps such as expanding relative paths.
+    // fn iterator(slice: []const Replay.Step, dst: *Config) Iterator {
+    //     return .{ .slice = slice, .config = dst };
+    // }
+    //
+    // PORT NOTE: `dst` (the `*Config`) is no longer captured; it is lent to
+    // `next_self` per the aliasing note above.
+    pub fn new(slice: Vec<ReplayStep>) -> ReplayIterator {
+        ReplayIterator { slice, idx: 0 }
+    }
+}
+
+impl rustty_args::args::SelfDrivenIterator<Config> for ReplayIterator {
+    // pub fn next(self: *Self) ?[]const u8 {
+    fn next_self(&mut self, config: &mut Config) -> Option<Vec<u8>> {
+        // while (true) {
+        loop {
+            // if (self.idx >= self.slice.len) return null;
+            if self.idx >= self.slice.len() {
+                return None;
+            }
+            // defer self.idx += 1;
+            let cur = self.idx;
+            self.idx += 1;
+            // switch (self.slice[self.idx]) {
+            match self.slice[cur].clone() {
+                // .expand => |base| self.config.expandPaths(base) catch |err| {
+                //     // This shouldn't happen because to reach this step
+                //     // means that it succeeded before. Its possible since
+                //     // expanding paths is a side effect process that the
+                //     // world state changed and we can't expand anymore.
+                //     // In that really unfortunate case, we log a warning.
+                //     log.warn("error expanding paths err={}", .{err});
+                // },
+                ReplayStep::Expand(base) => {
+                    if let Err(err) = config.expand_paths(&base) {
+                        log_warn(format!("error expanding paths err={err:?}"));
+                    }
+                }
+
+                // .diagnostic => |diag| diag: {
+                ReplayStep::Diagnostic(diag) => {
+                    // Best effort to clone and append the diagnostic.
+                    // If it fails we log a warning and continue.
+                    // const arena_alloc = self.config._arena.?.allocator();
+                    // const cloned = diag.clone(arena_alloc) catch |err| {
+                    //     log.warn("error cloning diagnostic err={}", .{err});
+                    //     break :diag;
+                    // };
+                    let cloned = diag.clone_in();
+                    // self.config._diagnostics.append(arena_alloc, cloned) catch |err| {
+                    //     log.warn("error appending diagnostic err={}", .{err});
+                    //     break :diag;
+                    // };
+                    config._diagnostics.append(cloned);
+                }
+
+                // .conditional_arg => |v| conditional: {
+                ReplayStep::ConditionalArg { conditions, arg } => {
+                    // All conditions must match.
+                    // for (v.conditions) |cond| {
+                    //     if (!self.config._conditional_state.match(cond)) {
+                    //         break :conditional;
+                    //     }
+                    // }
+                    // return v.arg;
+                    let mut all_match = true;
+                    for cond in &conditions {
+                        if !config._conditional_state.is_match(cond) {
+                            all_match = false;
+                            break;
+                        }
+                    }
+                    if all_match {
+                        return Some(arg);
+                    }
+                }
+
+                // .arg => |arg| return arg,
+                ReplayStep::Arg(arg) => return Some(arg),
+                // .@"-e" => return "-e",
+                ReplayStep::DashE => return Some(b"-e".to_vec()),
+            }
+        }
+    }
+
+    // pub fn location(self: *const Self, _: Allocator) error{}!?diags.Location {
+    //     return .{ .cli = self.index };
+    // }
+    //
+    // PORT NOTE: the reference's `Replay.Iterator` has no `location` decl; it
+    // relies on `cli.Location.fromIter` returning `.none` for iterators without
+    // one. We return `None`, which `parse_self` maps to `Location::None`.
+    fn location_self(&self) -> Option<rustty_args::diagnostics::Location> {
+        None
+    }
+}
+
 /// PORTS: `pub const ChangeIterator` (Config.zig:5056) — iterates `Key`s whose
 /// value differs between `old` and `new`.
 ///
@@ -1208,41 +1536,1625 @@ impl<'a> ChangeIterator<'a> {
 // ===========================================================================
 
 impl Config {
-    /// PORTS: `pub fn default(alloc_gpa) Allocator.Error!Config` — the default
-    /// config with an initialized arena. (Data half lives in `Default::default`.)
-    pub fn default_config() -> Config {
-        todo!("port Config.default")
+    // pub fn load(alloc_gpa: Allocator) !Config {
+    pub fn load() -> Result<Config, LoadError> {
+        // var result = try default(alloc_gpa);
+        let mut result = Config::default_config();
+        // errdefer result.deinit();
+
+        // If we have a configuration file in our home directory, parse that first.
+        // try result.loadDefaultFiles(alloc_gpa);
+        result.load_default_files()?;
+
+        // Parse the config from the CLI args.
+        // try result.loadCliArgs(alloc_gpa);
+        result.load_cli_args()?;
+
+        // Parse the config files that were added from our file and CLI args.
+        // try result.loadRecursiveFiles(alloc_gpa);
+        result.load_recursive_files()?;
+        // try result.finalize();
+        result.finalize()?;
+
+        // return result;
+        Ok(result)
     }
 
-    /// PORTS: `pub fn load(alloc_gpa) !Config`.
-    pub fn load() -> Result<Config, ParseError> {
-        todo!("port Config.load")
+    /// PORTS: `pub fn default(alloc_gpa) Allocator.Error!Config`.
+    ///
+    /// The data half (the `Config` struct defaults) lives in `Default::default`;
+    /// `default_config` performs the post-default initialization the reference
+    /// does after `var result: Config = .{ ._arena = .init(alloc_gpa) }`.
+    // pub fn default(alloc_gpa: Allocator) Allocator.Error!Config {
+    // PARITY: the reference is `var result: Config = .{ ._arena = .init(alloc) }`
+    // — a deliberate default-then-set-one-field, so the lint does not apply.
+    #[allow(clippy::field_reassign_with_default)]
+    pub fn default_config() -> Config {
+        // Build up our basic config
+        // var result: Config = .{
+        //     ._arena = .init(alloc_gpa),
+        // };
+        // errdefer result.deinit();
+        // const alloc = result._arena.?.allocator();
+        let mut result: Config = Config::default();
+        // PARITY: the reference creates the arena here; the Rust port owns data
+        // per-field, so we record that the arena "exists" via `_arena = true`
+        // (the same flag the args parser observes).
+        result._arena = true;
+
+        // Add our default keybindings
+        // try result.keybind.init(alloc);
+        result.keybind.init();
+
+        // Add our default command palette entries
+        // try result.@"command-palette-entry".init(alloc);
+        result.command_palette_entry.init();
+
+        // Add our default link for URL detection
+        // try result.link.links.append(alloc, .{
+        //     .regex = url.regex,
+        //     .action = .{ .open = {} },
+        //     .highlight = .{ .hover_mods = inputpkg.ctrlOrSuper(.{}) },
+        // });
+        result.link.links.push(rustty_input::link::Link {
+            regex: crate::url::regex().into_bytes(),
+            action: rustty_input::link::Action::Open,
+            highlight: rustty_input::link::Highlight::HoverMods(rustty_input::ctrl_or_super(
+                rustty_vt::input::key_mods::Mods::default(),
+            )),
+        });
+
+        // return result;
+        result
     }
 
     /// PORTS: `pub fn deinit(self: *Config) void`.
+    // pub fn deinit(self: *Config) void {
+    //     if (self._arena) |arena| arena.deinit();
+    //     self.* = undefined;
+    // }
+    //
+    // PORT NOTE: the reference frees the arena (which owns every value's bytes).
+    // In Rust each value type owns its own bytes and is dropped automatically; the
+    // arena flag is cleared to match the reference's `_arena` teardown.
     pub fn deinit(&mut self) {
-        todo!("port Config.deinit")
+        self._arena = false;
     }
 
-    /// PORTS: `pub fn loadIter(self, alloc, iter) !void`.
-    pub fn load_iter<I: Iterator<Item = Vec<u8>>>(&mut self, _iter: I) -> Result<(), ParseError> {
-        todo!("port Config.loadIter")
+    /// Load configuration from an iterator that yields values that look like
+    /// command-line arguments, i.e. `--key=value`.
+    // pub fn loadIter(
+    //     self: *Config,
+    //     alloc: Allocator,
+    //     iter: anytype,
+    // ) !void {
+    //     try cli.args.parse(Config, alloc, self, iter);
+    // }
+    //
+    // PORT NOTE: routed through `parse_self` (the aliasing-safe `parse` variant)
+    // so both replay and non-replay iterators share one path. See the
+    // `SelfDrivenIterator` note in rustty-args.
+    pub fn load_iter<I: rustty_args::args::SelfDrivenIterator<Config>>(
+        &mut self,
+        iter: &mut I,
+    ) -> Result<(), ParseError> {
+        rustty_args::args::parse_self(self, iter)
     }
 
-    /// PORTS: `pub fn loadFile(self, alloc, path) !void`.
-    pub fn load_file(&mut self, _path: &[u8]) -> Result<(), ParseError> {
-        todo!("port Config.loadFile")
+    /// Load configuration from the target config file at `path`.
+    ///
+    /// `path` must be resolved and absolute.
+    // pub fn loadFile(self: *Config, alloc: Allocator, path: []const u8) !void {
+    pub fn load_file(&mut self, path: &[u8]) -> Result<(), LoadError> {
+        // assert(std.fs.path.isAbsolute(path));
+        assert!(std::path::Path::new(os_str_from_bytes(path)).is_absolute());
+        // var file = file_load.open(path) catch |err| switch (err) {
+        let file = match crate::file_load::open(path) {
+            Ok(f) => f,
+            // error.NotAFile => {
+            //     log.warn(
+            //         "config-file {s}: not reading because it is not a file",
+            //         .{path},
+            //     );
+            //     return;
+            // },
+            Err(crate::file_load::OpenFileError::NotAFile) => {
+                log_warn(format!(
+                    "config-file {}: not reading because it is not a file",
+                    String::from_utf8_lossy(path)
+                ));
+                return Ok(());
+            }
+            // else => return err,
+            Err(err) => return Err(LoadError::from_open(err)),
+        };
+        // defer file.close();
+
+        // try self.loadFsFile(alloc, &file, path);
+        self.load_fs_file(file, path)
     }
 
-    /// PORTS: `pub fn finalize(self: *Config) !void`.
-    pub fn finalize(&mut self) -> Result<(), ParseError> {
-        todo!("port Config.finalize")
+    /// Load config from the given File.
+    // fn loadFsFile(self: *Config, alloc: Allocator, file: *std.fs.File, path: []const u8) !void {
+    fn load_fs_file(&mut self, mut file: std::fs::File, path: &[u8]) -> Result<(), LoadError> {
+        // std.log.info("reading configuration file path={s}", .{path});
+        log_info(format!(
+            "reading configuration file path={}",
+            String::from_utf8_lossy(path)
+        ));
+        // var buf: [2048]u8 = undefined;
+        // var file_reader = file.reader(&buf);
+        // const reader = &file_reader.interface;
+        //
+        // PORT NOTE: `std.Io.Reader` over the file is modeled by reading the file
+        // contents into a byte buffer that `LineIterator` (a byte-cursor reader)
+        // consumes. This is byte-faithful for the configuration files the loader
+        // reads (small, fully-buffered).
+        use std::io::Read;
+        let mut contents: Vec<u8> = Vec::new();
+        file.read_to_end(&mut contents)?;
+        // try self.loadReader(alloc, reader, path);
+        self.load_reader(&contents, path)
+    }
+
+    /// Load config from the given Reader.
+    // fn loadReader(self: *Config, alloc: Allocator, reader: *std.Io.Reader, path: []const u8) !void {
+    fn load_reader(&mut self, reader: &[u8], path: &[u8]) -> Result<(), LoadError> {
+        // bom: {
+        //     // If the file starts with a UTF-8 byte order mark, skip it.
+        //     // https://en.wikipedia.org/wiki/Byte_order_mark#UTF-8
+        //     const bom: []const u8 = &.{ 0xef, 0xbb, 0xbf };
+        //     const str = reader.peek(bom.len) catch break :bom;
+        //     if (std.mem.eql(u8, str, bom)) {
+        //         log.info("skipping UTF-8 byte order mark", .{});
+        //         reader.toss(bom.len);
+        //     }
+        // }
+        let bom: &[u8] = &[0xef, 0xbb, 0xbf];
+        let reader: &[u8] = 'bom: {
+            if reader.len() >= bom.len() && &reader[..bom.len()] == bom {
+                log_info("skipping UTF-8 byte order mark".to_string());
+                break 'bom &reader[bom.len()..];
+            }
+            reader
+        };
+        // var iter: cli.args.LineIterator = .{ .r = reader, .filepath = path };
+        let mut iter = rustty_args::args::LineIterator::with_filepath(reader, path);
+        // try self.loadIter(alloc, &iter);
+        self.load_iter(&mut iter)?;
+        // try self.expandPaths(std.fs.path.dirname(path).?);
+        self.expand_paths(dirname(path).unwrap())?;
+        Ok(())
+    }
+
+    /// Load optional configuration file from `path`. All errors are ignored.
+    ///
+    /// Returns the action that was taken.
+    // pub fn loadOptionalFile(
+    //     self: *Config,
+    //     alloc: Allocator,
+    //     path: []const u8,
+    // ) OptionalFileAction {
+    pub fn load_optional_file(&mut self, path: &[u8]) -> OptionalFileAction {
+        // if (self.loadFile(alloc, path)) {
+        //     return .loaded;
+        // } else |err| switch (err) {
+        match self.load_file(path) {
+            // return .loaded;
+            Ok(()) => OptionalFileAction::Loaded,
+            // error.FileNotFound => return .not_found,
+            Err(LoadError::FileNotFound) => OptionalFileAction::NotFound,
+            // else => {
+            //     std.log.warn(
+            //         "error reading optional config file, not loading err={} path={s}",
+            //         .{ err, path },
+            //     );
+            //     return .@"error";
+            // },
+            Err(err) => {
+                log_warn(format!(
+                    "error reading optional config file, not loading err={err:?} path={}",
+                    String::from_utf8_lossy(path)
+                ));
+                OptionalFileAction::Error
+            }
+        }
+    }
+
+    /// Load configurations from the default configuration files. The default
+    /// configuration file is at `$XDG_CONFIG_HOME/ghostty/config.ghostty`.
+    ///
+    /// On macOS, `$HOME/Library/Application Support/$CFBundleIdentifier/`
+    /// is also loaded.
+    ///
+    /// The legacy `config` file (without extension) is first loaded,
+    /// then `config.ghostty`.
+    // pub fn loadDefaultFiles(self: *Config, alloc: Allocator) !void {
+    pub fn load_default_files(&mut self) -> Result<(), LoadError> {
+        // Load XDG first
+        // const legacy_xdg_path = try file_load.legacyDefaultXdgPath(alloc);
+        // defer alloc.free(legacy_xdg_path);
+        let legacy_xdg_path = crate::file_load::legacy_default_xdg_path()
+            .map(String::into_bytes)
+            .unwrap_or_default();
+        // const xdg_path = try file_load.defaultXdgPath(alloc);
+        // defer alloc.free(xdg_path);
+        let xdg_path = crate::file_load::default_xdg_path()
+            .map(String::into_bytes)
+            .unwrap_or_default();
+        // const xdg_loaded: bool = xdg_loaded: {
+        let xdg_loaded: bool = {
+            // const legacy_xdg_action = self.loadOptionalFile(alloc, legacy_xdg_path);
+            let legacy_xdg_action = self.load_optional_file(&legacy_xdg_path);
+            // const xdg_action = self.loadOptionalFile(alloc, xdg_path);
+            let xdg_action = self.load_optional_file(&xdg_path);
+            // if (xdg_action != .not_found and legacy_xdg_action != .not_found) {
+            if xdg_action != OptionalFileAction::NotFound
+                && legacy_xdg_action != OptionalFileAction::NotFound
+            {
+                // log.warn("both config files `{s}` and `{s}` exist.", .{ legacy_xdg_path, xdg_path });
+                log_warn(format!(
+                    "both config files `{}` and `{}` exist.",
+                    String::from_utf8_lossy(&legacy_xdg_path),
+                    String::from_utf8_lossy(&xdg_path)
+                ));
+                // log.warn("loading them both in that order", .{});
+                log_warn("loading them both in that order".to_string());
+                // break :xdg_loaded true;
+                true
+            } else {
+                // break :xdg_loaded xdg_action != .not_found or
+                //     legacy_xdg_action != .not_found;
+                xdg_action != OptionalFileAction::NotFound
+                    || legacy_xdg_action != OptionalFileAction::NotFound
+            }
+        };
+
+        // On macOS load the app support directory as well
+        // if (comptime builtin.os.tag == .macos) {
+        #[cfg(target_os = "macos")]
+        {
+            // const legacy_app_support_path = try file_load.legacyDefaultAppSupportPath(alloc);
+            // defer alloc.free(legacy_app_support_path);
+            let legacy_app_support_path = crate::file_load::legacy_default_app_support_path()
+                .map(String::into_bytes)
+                .unwrap_or_default();
+            // const app_support_path = try file_load.preferredAppSupportPath(alloc);
+            // defer alloc.free(app_support_path);
+            let app_support_path = crate::file_load::preferred_app_support_path()
+                .map(String::into_bytes)
+                .unwrap_or_default();
+            // const app_support_loaded: bool = loaded: {
+            let app_support_loaded: bool = {
+                // const legacy_app_support_action = self.loadOptionalFile(
+                //     alloc,
+                //     legacy_app_support_path,
+                // );
+                let legacy_app_support_action = self.load_optional_file(&legacy_app_support_path);
+
+                // The app support path and legacy may be the same, since we
+                // use the `preferred` call above. If its the same, avoid
+                // a double-load.
+                // const app_support_action: OptionalFileAction = if (!std.mem.eql(
+                //     u8,
+                //     legacy_app_support_path,
+                //     app_support_path,
+                // )) self.loadOptionalFile(
+                //     alloc,
+                //     app_support_path,
+                // ) else .not_found;
+                let app_support_action: OptionalFileAction =
+                    if legacy_app_support_path != app_support_path {
+                        self.load_optional_file(&app_support_path)
+                    } else {
+                        OptionalFileAction::NotFound
+                    };
+
+                // if (app_support_action != .not_found and legacy_app_support_action != .not_found) {
+                if app_support_action != OptionalFileAction::NotFound
+                    && legacy_app_support_action != OptionalFileAction::NotFound
+                {
+                    // log.warn(
+                    //     "both config files `{s}` and `{s}` exist.",
+                    //     .{ legacy_app_support_path, app_support_path },
+                    // );
+                    log_warn(format!(
+                        "both config files `{}` and `{}` exist.",
+                        String::from_utf8_lossy(&legacy_app_support_path),
+                        String::from_utf8_lossy(&app_support_path)
+                    ));
+                    // log.warn("loading them both in that order", .{});
+                    log_warn("loading them both in that order".to_string());
+                    // break :loaded true;
+                    true
+                } else {
+                    // break :loaded app_support_action != .not_found or
+                    //     legacy_app_support_action != .not_found;
+                    app_support_action != OptionalFileAction::NotFound
+                        || legacy_app_support_action != OptionalFileAction::NotFound
+                }
+            };
+
+            // If both files are not found, then we create a template file.
+            // For macOS, we only create the template file in the app support
+            // if (!app_support_loaded and !xdg_loaded) {
+            if !app_support_loaded && !xdg_loaded {
+                // writeConfigTemplate(app_support_path) catch |err| {
+                //     log.warn("error creating template config file err={}", .{err});
+                // };
+                if let Err(err) = write_config_template(&app_support_path) {
+                    log_warn(format!("error creating template config file err={err:?}"));
+                }
+            }
+        }
+        // } else {
+        #[cfg(not(target_os = "macos"))]
+        {
+            // if (!xdg_loaded) {
+            if !xdg_loaded {
+                // writeConfigTemplate(xdg_path) catch |err| {
+                //     log.warn("error creating template config file err={}", .{err});
+                // };
+                if let Err(err) = write_config_template(&xdg_path) {
+                    log_warn(format!("error creating template config file err={err:?}"));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// PORTS: `pub fn parseManuallyHook(self, alloc, arg, iter) !bool` — the
     /// `@hasDecl(T, "parseManuallyHook")` entry point used by the args parser.
-    pub fn parse_manually_hook(&mut self, _arg: &[u8]) -> Result<bool, ParseError> {
-        todo!("port Config.parseManuallyHook")
+    ///
+    /// Callback for src/cli/args.zig to allow us to handle special cases
+    /// like `--help` or `-e`. Returns "false" if the CLI parsing should halt.
+    // pub fn parseManuallyHook(
+    //     self: *Config,
+    //     alloc: Allocator,
+    //     arg: []const u8,
+    //     iter: anytype,
+    // ) !bool {
+    //
+    // PORT NOTE: the reference consumes the rest of `iter` here (for `-e`).
+    // `parse_self` exposes the iterator only via `next_self`, so the hook cannot
+    // drain it inline. Instead the hook records the `-e` marker + the parse
+    // position and the `-e` command is assembled by the parse driver. To preserve
+    // the reference's per-arg behavior WITHOUT threading the iterator, the hook is
+    // kept arg-at-a-time: it appends each replay step and, for `-e`, the parse
+    // loop's subsequent args become the command. See `parse_manually_hook` Target
+    // impl which records args; the `-e` command finalization runs in `finalize`-
+    // adjacent assembly. For the scope of this batch the hook ports the non-`-e`
+    // replay-recording path faithfully and the `-e` marker path; the full
+    // iterator-draining `-e` command assembly is exercised by loadCliArgs/replay.
+    pub fn parse_manually_hook(&mut self, arg: &[u8]) -> Result<bool, ParseError> {
+        // if (std.mem.eql(u8, arg, "-e")) {
+        if arg == b"-e" {
+            // Add the special -e marker. This prevents:
+            // (1) config-file from adding args to the end (see #2908)
+            // (2) dark/light theme from making this conditional
+            // try self._replay_steps.append(alloc, .@"-e");
+            self._replay_steps.push(ReplayStep::DashE);
+
+            // Build up the command. We don't clean this up because we take
+            // ownership in our allocator.
+            // var command: std.ArrayList([:0]const u8) = .empty;
+            // errdefer command.deinit(alloc);
+            //
+            // while (iter.next()) |param| {
+            //     const copy = try alloc.dupeZ(u8, param);
+            //     try self._replay_steps.append(alloc, .{ .arg = copy });
+            //     try command.append(alloc, copy);
+            // }
+            //
+            // if (command.items.len == 0) {
+            //     try self._diagnostics.append(alloc, .{
+            //         .location = try cli.Location.fromIter(iter, alloc),
+            //         .message = try std.fmt.allocPrintSentinel(
+            //             alloc,
+            //             "missing command after {s}",
+            //             .{arg},
+            //             0,
+            //         ),
+            //     });
+            //     return false;
+            // }
+            //
+            // // See "command" docs for the implied configurations and why.
+            // self.@"initial-command" = .{ .direct = command.items };
+            //
+            // PORT NOTE (iterator draining — KNOWN GAP): the reference drains
+            // `iter` here to build the `-e` command, emit a "missing command"
+            // diagnostic if empty, and set `initial-command = .{ .direct = ... }`.
+            // The `Target::parseManuallyHook` contract (fixed in a prior batch) is
+            // arg-at-a-time and does NOT pass the iterator, so this hook cannot
+            // drain `iter` inline. Reproducing the command-assembly (and its
+            // "missing command after -e" diagnostic) requires extending the hook
+            // contract to thread the `SelfDrivenIterator` — a cross-batch change.
+            // Until then the `-e` MARKER + the implied configurations below are
+            // ported faithfully (they do not depend on the command contents); the
+            // `.direct` command build + missing-command diagnostic are the deferred
+            // piece. See the verbatim reference body above.
+            //
+            // The implied configurations (reference, after the command is built):
+            // self.@"gtk-single-instance" = .false;
+            self.gtk_single_instance = GtkSingleInstance::False;
+            // self.@"quit-after-last-window-closed" = true;
+            self.quit_after_last_window_closed = true;
+            // self.@"quit-after-last-window-closed-delay" = null;
+            self.quit_after_last_window_closed_delay = None;
+            // if (self.@"shell-integration" != .none) {
+            //     self.@"shell-integration" = .detect;
+            // }
+            if self.shell_integration != ShellIntegration::None {
+                self.shell_integration = ShellIntegration::Detect;
+            }
+
+            // Do not continue, we consumed everything.
+            // return false;
+            return Ok(false);
+        }
+
+        // Keep track of our input args for replay
+        // try self._replay_steps.append(
+        //     alloc,
+        //     .{ .arg = try alloc.dupeZ(u8, arg) },
+        // );
+        self._replay_steps.push(ReplayStep::Arg(arg.to_vec()));
+
+        // If we didn't find a special case, continue parsing normally
+        // return true;
+        Ok(true)
+    }
+
+    // fn compatGtkTabsLocation(
+    //     self: *Config,
+    //     alloc: Allocator,
+    //     key: []const u8,
+    //     value: ?[]const u8,
+    // ) bool {
+    fn compat_gtk_tabs_location(&mut self, key: &[u8], value: Option<&[u8]>) -> bool {
+        // _ = alloc;
+        // assert(std.mem.eql(u8, key, "gtk-tabs-location"));
+        assert!(key == b"gtk-tabs-location");
+
+        // if (std.mem.eql(u8, value orelse "", "hidden")) {
+        if value.unwrap_or(b"") == b"hidden" {
+            // self.@"window-show-tab-bar" = .never;
+            self.window_show_tab_bar = WindowShowTabBar::Never;
+            // return true;
+            return true;
+        }
+
+        // return false;
+        false
+    }
+
+    // fn compatGtkSingleInstance(
+    //     self: *Config,
+    //     alloc: Allocator,
+    //     key: []const u8,
+    //     value: ?[]const u8,
+    // ) bool {
+    fn compat_gtk_single_instance(&mut self, key: &[u8], value: Option<&[u8]>) -> bool {
+        // _ = alloc;
+        // assert(std.mem.eql(u8, key, "gtk-single-instance"));
+        assert!(key == b"gtk-single-instance");
+
+        // if (std.mem.eql(u8, value orelse "", "desktop")) {
+        if value.unwrap_or(b"") == b"desktop" {
+            // self.@"gtk-single-instance" = .detect;
+            self.gtk_single_instance = GtkSingleInstance::Detect;
+            // return true;
+            return true;
+        }
+
+        // return false;
+        false
+    }
+
+    // fn compatCursorInvertFgBg(
+    //     self: *Config,
+    //     alloc: Allocator,
+    //     key: []const u8,
+    //     value_: ?[]const u8,
+    // ) bool {
+    fn compat_cursor_invert_fg_bg(&mut self, key: &[u8], value_: Option<&[u8]>) -> bool {
+        // _ = alloc;
+        // assert(std.mem.eql(u8, key, "cursor-invert-fg-bg"));
+        assert!(key == b"cursor-invert-fg-bg");
+
+        // We don't do anything if the value is unset, which is technically
+        // not EXACTLY the same as prior behavior since it would fallback
+        // to doing whatever cursor-color/cursor-text were set to, but
+        // I don't want to store what that is separately so this is close
+        // enough.
+        //
+        // Realistically, these fields were mutually exclusive so anyone
+        // relying on that behavior should just upgrade to the new
+        // cursor-color/cursor-text fields.
+        // const set = cli.args.parseBool(value_ orelse "t") catch return false;
+        let set = match rustty_args::args::parse_bool(value_.unwrap_or(b"t")) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        // if (set) {
+        if set {
+            // self.@"cursor-color" = .@"cell-foreground";
+            self.cursor_color = Some(TerminalColor::CellForeground);
+            // self.@"cursor-text" = .@"cell-background";
+            self.cursor_text = Some(TerminalColor::CellBackground);
+        }
+
+        // return true;
+        true
+    }
+
+    // fn compatSelectionInvertFgBg(
+    //     self: *Config,
+    //     alloc: Allocator,
+    //     key: []const u8,
+    //     value_: ?[]const u8,
+    // ) bool {
+    fn compat_selection_invert_fg_bg(&mut self, key: &[u8], value_: Option<&[u8]>) -> bool {
+        // _ = alloc;
+        // assert(std.mem.eql(u8, key, "selection-invert-fg-bg"));
+        assert!(key == b"selection-invert-fg-bg");
+
+        // const set = cli.args.parseBool(value_ orelse "t") catch return false;
+        let set = match rustty_args::args::parse_bool(value_.unwrap_or(b"t")) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        // if (set) {
+        if set {
+            // self.@"selection-foreground" = .@"cell-background";
+            self.selection_foreground = Some(TerminalColor::CellBackground);
+            // self.@"selection-background" = .@"cell-foreground";
+            self.selection_background = Some(TerminalColor::CellForeground);
+        }
+
+        // return true;
+        true
+    }
+
+    // fn compatBoldIsBright(
+    //     self: *Config,
+    //     alloc: Allocator,
+    //     key: []const u8,
+    //     value_: ?[]const u8,
+    // ) bool {
+    fn compat_bold_is_bright(&mut self, key: &[u8], value_: Option<&[u8]>) -> bool {
+        // _ = alloc;
+        // assert(std.mem.eql(u8, key, "bold-is-bright"));
+        assert!(key == b"bold-is-bright");
+
+        // const isset = cli.args.parseBool(value_ orelse "t") catch return false;
+        let isset = match rustty_args::args::parse_bool(value_.unwrap_or(b"t")) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        // if (isset) {
+        if isset {
+            // self.@"bold-color" = .bright;
+            self.bold_color = Some(BoldColor::Bright);
+        }
+
+        // return true;
+        true
+    }
+
+    // fn compatMacOSDockDropBehavior(
+    //     self: *Config,
+    //     alloc: Allocator,
+    //     key: []const u8,
+    //     value: ?[]const u8,
+    // ) bool {
+    fn compat_macos_dock_drop_behavior(&mut self, key: &[u8], value: Option<&[u8]>) -> bool {
+        // _ = alloc;
+        // assert(std.mem.eql(u8, key, "macos-dock-drop-behavior"));
+        assert!(key == b"macos-dock-drop-behavior");
+
+        // if (std.mem.eql(u8, value orelse "", "window")) {
+        if value.unwrap_or(b"") == b"window" {
+            // self.@"macos-dock-drop-behavior" = .@"new-window";
+            self.macos_dock_drop_behavior = MacOSDockDropBehavior::NewWindow;
+            // return true;
+            return true;
+        }
+
+        // return false;
+        false
+    }
+
+    /// Add a diagnostic message to the config with the given string.
+    /// This is always added with a location of "none".
+    // pub fn addDiagnosticFmt(
+    //     self: *Config,
+    //     comptime fmt: []const u8,
+    //     args: anytype,
+    // ) Allocator.Error!void {
+    //
+    // PORT NOTE: Rust has no comptime format string; callers pass the already-
+    // formatted message bytes (the `std.fmt.allocPrintSentinel(.., fmt, args, 0)`
+    // result). The location defaults to `.none` exactly as the reference.
+    pub fn add_diagnostic_fmt(&mut self, message: Vec<u8>) {
+        // const alloc = self._arena.?.allocator();
+        // try self._diagnostics.append(alloc, .{
+        //     .message = try std.fmt.allocPrintSentinel(alloc, fmt, args, 0),
+        // });
+        self._diagnostics
+            .append(rustty_args::diagnostics::Diagnostic {
+                message,
+                ..Default::default()
+            });
+    }
+
+    /// Create a shallow copy of this config. This will share all the memory
+    /// allocated with the previous config but will have a new arena for
+    /// any changes or new allocations. The config should have `deinit`
+    /// called when it is complete.
+    ///
+    /// Beware: these shallow clones are not meant for a long lifetime,
+    /// they are just meant to exist temporarily for the duration of some
+    /// modifications. It is very important that the original config not
+    /// be deallocated while shallow clones exist.
+    // pub fn shallowClone(self: *const Config, alloc_gpa: Allocator) Config {
+    //     var result = self.*;
+    //     result._arena = .init(alloc_gpa);
+    //     return result;
+    // }
+    //
+    // PORT NOTE: the reference's shallow clone shares the original's bytes via a
+    // bitwise struct copy and only swaps in a fresh arena. The Rust port owns data
+    // per-field (no shared bump arena), so a "shallow" clone is a deep `.clone()`
+    // with the `_arena` flag set — the closest faithful equivalent. Long-lived
+    // aliasing of the original's bytes (the reference's caveat) does not apply
+    // since nothing is shared.
+    pub fn shallow_clone(&self) -> Config {
+        // var result = self.*;
+        let mut result = self.clone_config();
+        // result._arena = .init(alloc_gpa);
+        result._arena = true;
+        // return result;
+        result
+    }
+
+    /// Load and parse the CLI args.
+    // pub fn loadCliArgs(self: *Config, alloc_gpa: Allocator) !void {
+    pub fn load_cli_args(&mut self) -> Result<(), LoadError> {
+        // switch (builtin.os.tag) {
+        //     .windows => {},
+        //     // Fast-path if we are Linux/BSD and have no args.
+        //     .linux, .freebsd => if (std.os.argv.len <= 1) return,
+        //     // Everything else we have to at least try because it may
+        //     // not use std.os.argv.
+        //     else => {},
+        // }
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        {
+            if std::env::args_os().len() <= 1 {
+                return Ok(());
+            }
+        }
+
+        // On Linux, we have a special case where if the executing
+        // program is "xdg-terminal-exec" then we treat all CLI
+        // args as if they are a command to execute.
+        //
+        // In this mode, we also behave slightly differently:
+        //
+        //   - The initial window title is set to the full command. This
+        //     can be used with window managers to modify positioning,
+        //     styling, etc. based on the command.
+        //
+        // See: https://github.com/Vladimir-csp/xdg-terminal-exec
+        // if ((comptime builtin.os.tag == .linux) or (comptime builtin.os.tag == .freebsd)) {
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        {
+            // if (internal_os.xdg.parseTerminalExec(std.os.argv)) |args| {
+            let argv: Vec<String> = std::env::args().collect();
+            let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+            if let Some(args) = rustty_os::xdg::parseTerminalExec(&argv_refs) {
+                // const arena_alloc = self._arena.?.allocator();
+
+                // First, we add an artificial "-e" so that if we
+                // replay the inputs to rebuild the config (i.e. if
+                // a theme is set) then we will get the same behavior.
+                // try self._replay_steps.append(arena_alloc, .@"-e");
+                self._replay_steps.push(ReplayStep::DashE);
+
+                // Next, take all remaining args and use that to build up
+                // a command to execute.
+                // var builder: std.ArrayList([:0]const u8) = .empty;
+                // errdefer builder.deinit(arena_alloc);
+                let mut builder: Vec<Vec<u8>> = Vec::new();
+                // for (args) |arg_raw| {
+                for arg_raw in args {
+                    // const arg = std.mem.sliceTo(arg_raw, 0);
+                    // const copy = try arena_alloc.dupeZ(u8, arg);
+                    let copy = arg_raw.as_bytes().to_vec();
+                    // try self._replay_steps.append(arena_alloc, .{ .arg = copy });
+                    self._replay_steps.push(ReplayStep::Arg(copy.clone()));
+                    // try builder.append(arena_alloc, copy);
+                    builder.push(copy);
+                }
+
+                // self.@"_xdg-terminal-exec" = true;
+                self._xdg_terminal_exec = true;
+                // self.@"initial-command" = .{ .direct = try builder.toOwnedSlice(arena_alloc) };
+                self.initial_command = Some(Command::Direct(builder));
+                // return;
+                return Ok(());
+            }
+        }
+
+        // We set config-default-files to true here because this
+        // should always be reset so we can detect if it is set
+        // in the CLI since it is documented as having no affect
+        // from files.
+        // self.@"config-default-files" = true;
+        self.config_default_files = true;
+
+        // Keep track of the replay steps up to this point so we
+        // can replay if we are discarding the default files.
+        // const replay_len_start = self._replay_steps.items.len;
+        let replay_len_start = self._replay_steps.len();
+
+        // font-family settings set via the CLI overwrite any prior values
+        // rather than append. This avoids a UX oddity where you have to
+        // specify `font-family=""` to clear the font families.
+        // const fields = &[_][]const u8{ "font-family", ... };
+        // inline for (fields) |field| @field(self, field).overwrite_next = true;
+        self.font_family.overwrite_next = true;
+        self.font_family_bold.overwrite_next = true;
+        self.font_family_italic.overwrite_next = true;
+        self.font_family_bold_italic.overwrite_next = true;
+        // defer {
+        //     inline for (fields) |field| @field(self, field).overwrite_next = false;
+        // }
+        //
+        // PORT NOTE: the `defer` reset is performed at the end of this fn (Rust has
+        // no `defer`; the resets are placed before each return path / at the tail).
+
+        // Initialize our CLI iterator.
+        // var iter = try cli.args.argsIterator(alloc_gpa);
+        // defer iter.deinit();
+        let mut iter = match rustty_args::args::args_iterator() {
+            Ok(it) => it,
+            Err(_) => {
+                self.reset_font_family_overwrite();
+                return Ok(());
+            }
+        };
+        // try self.loadIter(alloc_gpa, &iter);
+        let r = self.load_iter(&mut iter);
+        iter.deinit();
+        r?;
+
+        // (defer reset, see note above)
+        self.reset_font_family_overwrite();
+
+        // If we are not loading the default files, then we need to
+        // replay the steps up to this point so that we can rebuild
+        // the config without it.
+        // if (!self.@"config-default-files") reload: {
+        if !self.config_default_files {
+            'reload: {
+                // const replay_len_end = self._replay_steps.items.len;
+                let replay_len_end = self._replay_steps.len();
+                // if (replay_len_end == replay_len_start) break :reload;
+                if replay_len_end == replay_len_start {
+                    break 'reload;
+                }
+                // log.info("config-default-files unset, discarding configuration from default files", .{});
+                log_info(
+                    "config-default-files unset, discarding configuration from default files"
+                        .to_string(),
+                );
+
+                // var new_config = try self.cloneEmpty(alloc_gpa);
+                // errdefer new_config.deinit();
+                let mut new_config = self.clone_empty();
+                // var it = Replay.iterator(
+                //     self._replay_steps.items[replay_len_start..replay_len_end],
+                //     &new_config,
+                // );
+                let slice: Vec<ReplayStep> =
+                    self._replay_steps[replay_len_start..replay_len_end].to_vec();
+                let mut it = ReplayIterator::new(slice);
+                // try new_config.loadIter(alloc_gpa, &it);
+                new_config.load_iter(&mut it)?;
+                // self.deinit();
+                self.deinit();
+                // self.* = new_config;
+                *self = new_config;
+            }
+        }
+
+        // Any paths referenced from the CLI are relative to the current working
+        // directory.
+        // var buf: [std.fs.max_path_bytes]u8 = undefined;
+        // try self.expandPaths(try std.fs.cwd().realpath(".", &buf));
+        let cwd = std::env::current_dir()
+            .ok()
+            .and_then(|p| p.canonicalize().ok())
+            .map(|p| path_to_bytes(&p))
+            .unwrap_or_default();
+        self.expand_paths(&cwd)?;
+
+        Ok(())
+    }
+
+    /// Reset the `overwrite_next` flag on the font-family fields (the reference's
+    /// `defer { inline for (fields) ... = false; }` in `loadCliArgs`).
+    fn reset_font_family_overwrite(&mut self) {
+        self.font_family.overwrite_next = false;
+        self.font_family_bold.overwrite_next = false;
+        self.font_family_italic.overwrite_next = false;
+        self.font_family_bold_italic.overwrite_next = false;
+    }
+
+    /// Load and parse the config files that were added in the "config-file" key.
+    // pub fn loadRecursiveFiles(self: *Config, alloc_gpa: Allocator) !void {
+    pub fn load_recursive_files(&mut self) -> Result<(), LoadError> {
+        // if (self.@"config-file".value.items.len == 0) return;
+        if self.config_file.value.is_empty() {
+            return Ok(());
+        }
+        // const arena_alloc = self._arena.?.allocator();
+
+        // Keeps track of loaded files to prevent cycles.
+        // var loaded = std.StringHashMap(void).init(alloc_gpa);
+        // defer loaded.deinit();
+        let mut loaded: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+
+        // We need to insert all of our loaded config-file values
+        // PRIOR to the "-e" in our replay steps, since everything
+        // after "-e" becomes an "initial-command". To do this, we
+        // dupe the values if we find it.
+        // var replay_suffix: std.ArrayList(Replay.Step) = .empty;
+        // defer replay_suffix.deinit(alloc_gpa);
+        let mut replay_suffix: Vec<ReplayStep> = Vec::new();
+        // for (self._replay_steps.items, 0..) |step, i| if (step == .@"-e") {
+        for i in 0..self._replay_steps.len() {
+            if matches!(self._replay_steps[i], ReplayStep::DashE) {
+                // We don't need to clone the steps because they should
+                // all be allocated in our arena and we're keeping our
+                // arena.
+                // try replay_suffix.appendSlice(alloc_gpa, self._replay_steps.items[i..]);
+                replay_suffix.extend_from_slice(&self._replay_steps[i..]);
+                // Remove our old values. Again, don't need to free any
+                // memory here because its all part of our arena.
+                // self._replay_steps.shrinkRetainingCapacity(i);
+                self._replay_steps.truncate(i);
+                // break;
+                break;
+            }
+        }
+
+        // We must use a while below and not a for(items) because we
+        // may add items to the list while iterating for recursive
+        // config-file entries.
+        // var i: usize = 0;
+        let mut i: usize = 0;
+        // while (i < self.@"config-file".value.items.len) : (i += 1) {
+        while i < self.config_file.value.len() {
+            // const path, const optional = switch (self.@"config-file".value.items[i]) {
+            //     .optional => |path| .{ path, true },
+            //     .required => |path| .{ path, false },
+            // };
+            let (path, optional): (Vec<u8>, bool) = match &self.config_file.value[i] {
+                Path::Optional(path) => (path.clone(), true),
+                Path::Required(path) => (path.clone(), false),
+            };
+
+            // Error paths
+            // if (path.len == 0) continue;
+            if path.is_empty() {
+                i += 1;
+                continue;
+            }
+
+            // All paths should already be absolute at this point because
+            // they're fixed up after each load.
+            // assert(std.fs.path.isAbsolute(path));
+            assert!(std::path::Path::new(os_str_from_bytes(&path)).is_absolute());
+
+            // We must only load a unique file once
+            // if (try loaded.fetchPut(path, {}) != null) {
+            if !loaded.insert(path.clone()) {
+                // const diag: cli.Diagnostic = .{
+                //     .message = try std.fmt.allocPrintSentinel(
+                //         arena_alloc, "config-file {s}: cycle detected", .{path}, 0),
+                // };
+                let diag = rustty_args::diagnostics::Diagnostic {
+                    message: format!(
+                        "config-file {}: cycle detected",
+                        String::from_utf8_lossy(&path)
+                    )
+                    .into_bytes(),
+                    ..Default::default()
+                };
+                // try self._diagnostics.append(arena_alloc, diag);
+                self._diagnostics.append(diag.clone());
+                // try self._replay_steps.append(arena_alloc, .{ .diagnostic = diag });
+                self._replay_steps.push(ReplayStep::Diagnostic(diag));
+                // continue;
+                i += 1;
+                continue;
+            }
+
+            // var file = std.fs.openFileAbsolute(path, .{}) catch |err| {
+            let file = match std::fs::File::open(os_str_from_bytes(&path)) {
+                Ok(f) => f,
+                Err(err) => {
+                    // if (err != error.FileNotFound or !optional) {
+                    if err.kind() != std::io::ErrorKind::NotFound || !optional {
+                        // const diag: cli.Diagnostic = .{
+                        //     .message = ... "error opening config-file {s}: {}" ...
+                        // };
+                        let diag = rustty_args::diagnostics::Diagnostic {
+                            message: format!(
+                                "error opening config-file {}: {}",
+                                String::from_utf8_lossy(&path),
+                                err
+                            )
+                            .into_bytes(),
+                            ..Default::default()
+                        };
+                        // try self._diagnostics.append(arena_alloc, diag);
+                        self._diagnostics.append(diag.clone());
+                        // try self._replay_steps.append(arena_alloc, .{ .diagnostic = diag });
+                        self._replay_steps.push(ReplayStep::Diagnostic(diag));
+                    }
+                    // continue;
+                    i += 1;
+                    continue;
+                }
+            };
+            // defer file.close();
+
+            // const stat = try file.stat();
+            let stat = file.metadata()?;
+            // switch (stat.kind) {
+            //     .file => {},
+            //     else => |kind| { ... "config-file {s}: not reading because file type is {s}" ... continue; },
+            // }
+            if !stat.is_file() {
+                let diag = rustty_args::diagnostics::Diagnostic {
+                    message: format!(
+                        "config-file {}: not reading because file type is {}",
+                        String::from_utf8_lossy(&path),
+                        file_kind_name(&stat)
+                    )
+                    .into_bytes(),
+                    ..Default::default()
+                };
+                self._diagnostics.append(diag.clone());
+                self._replay_steps.push(ReplayStep::Diagnostic(diag));
+                i += 1;
+                continue;
+            }
+
+            // try self.loadFsFile(arena_alloc, &file, path);
+            self.load_fs_file(file, &path)?;
+            i += 1;
+        }
+
+        // If we have a suffix, add that back.
+        // if (replay_suffix.items.len > 0) {
+        if !replay_suffix.is_empty() {
+            // try self._replay_steps.appendSlice(arena_alloc, replay_suffix.items);
+            self._replay_steps.extend(replay_suffix);
+        }
+
+        Ok(())
+    }
+
+    // Get the arena allocator associated with the configuration.
+    // pub fn arenaAlloc(self: *Config) Allocator {
+    //     return self._arena.?.allocator();
+    // }
+    //
+    // PORT NOTE: there is no shared bump arena in the Rust port (each value owns
+    // its bytes), so `arenaAlloc` has no observable Rust counterpart. It is
+    // retained as a comment for fidelity; call sites that needed the arena now use
+    // owned allocation directly.
+
+    /// Change the state of conditionals and reload the configuration
+    /// based on the new state. This returns a new configuration based
+    /// on the new state. The caller must free the old configuration if they
+    /// wish.
+    ///
+    /// This returns null if the conditional state would result in no changes
+    /// to the configuration. In this case, the caller can continue to use
+    /// the existing configuration or clone if they want a copy.
+    ///
+    /// This doesn't re-read any files, it just re-applies the same
+    /// configuration with the new conditional state. Importantly, this means
+    /// that if you change the conditional state and the user in the interim
+    /// deleted a file that was referenced in the configuration, then the
+    /// configuration can still be reloaded.
+    // pub fn changeConditionalState(
+    //     self: *const Config,
+    //     new: conditional.State,
+    // ) !?Config {
+    pub fn change_conditional_state(
+        &self,
+        new: conditional::State,
+    ) -> Result<Option<Config>, LoadError> {
+        // If the conditional state between the old and new is the same,
+        // then we don't need to do anything.
+        // relevant: {
+        let relevant = 'relevant: {
+            // inline for (@typeInfo(conditional.Key).@"enum".fields) |field| {
+            //     const key: conditional.Key = @field(conditional.Key, field.name);
+            //     // Conditional set contains the keys that this config uses. So we
+            //     // only continue if we use this key.
+            //     if (self._conditional_set.contains(key) and !deepEqual(
+            //         @TypeOf(@field(self._conditional_state, field.name)),
+            //         @field(self._conditional_state, field.name),
+            //         @field(new, field.name),
+            //     )) {
+            //         break :relevant;
+            //     }
+            // }
+            for key in [conditional::Key::Theme, conditional::Key::Os] {
+                let differs = match key {
+                    conditional::Key::Theme => self._conditional_state.theme != new.theme,
+                    // PORT NOTE: `OsTag` carries only its tag-name bytes (the
+                    // reference's `deepEqual` over the enum compares its tag), so
+                    // we compare tag names.
+                    conditional::Key::Os => {
+                        self._conditional_state.os.tag_name() != new.os.tag_name()
+                    }
+                };
+                if self._conditional_set.contains(&key) && differs {
+                    break 'relevant true;
+                }
+            }
+            // If we got here, then we didn't find any differences between
+            // the old and new conditional state that would affect the
+            // configuration.
+            // return null;
+            false
+        };
+        if !relevant {
+            return Ok(None);
+        }
+
+        // Create our new configuration
+        // const alloc_gpa = self._arena.?.child_allocator;
+        // var new_config = try self.cloneEmpty(alloc_gpa);
+        // errdefer new_config.deinit();
+        let mut new_config = self.clone_empty();
+
+        // Set our conditional state so the replay below can use it
+        // new_config._conditional_state = new;
+        new_config._conditional_state = new;
+
+        // Replay all of our steps to rebuild the configuration
+        // var it = Replay.iterator(self._replay_steps.items, &new_config);
+        let mut it = ReplayIterator::new(self._replay_steps.clone());
+        // try new_config.loadIter(alloc_gpa, &it);
+        new_config.load_iter(&mut it)?;
+        // try new_config.finalize();
+        new_config.finalize()?;
+
+        // return new_config;
+        Ok(Some(new_config))
+    }
+
+    /// Expand the relative paths in config-files to be absolute paths
+    /// relative to the base directory.
+    // fn expandPaths(self: *Config, base: []const u8) !void {
+    fn expand_paths(&mut self, base: &[u8]) -> Result<(), LoadError> {
+        // const arena_alloc = self._arena.?.allocator();
+
+        // Keep track of this step for replays
+        // try self._replay_steps.append(
+        //     arena_alloc,
+        //     .{ .expand = try arena_alloc.dupe(u8, base) },
+        // );
+        self._replay_steps.push(ReplayStep::Expand(base.to_vec()));
+
+        // Expand all of our paths
+        // inline for (@typeInfo(Config).@"struct".fields) |field| {
+        //     switch (field.type) {
+        //         RepeatablePath, Path => {
+        //             try @field(self, field.name).expand(arena_alloc, base, &self._diagnostics);
+        //         },
+        //         ?RepeatablePath, ?Path => {
+        //             if (@field(self, field.name)) |*path| {
+        //                 try path.expand(arena_alloc, base, &self._diagnostics);
+        //             }
+        //         },
+        //         else => {},
+        //     }
+        // }
+        //
+        // PORT NOTE: Rust has no struct reflection; the `RepeatablePath`/`Path`
+        // (and optional) fields are enumerated explicitly. The set is:
+        //   RepeatablePath: config_file, custom_shader, gtk_custom_css
+        //   ?Path:          background_image, bell_audio_path
+        self.config_file.expand(base, &mut self._diagnostics)?;
+        self.custom_shader.expand(base, &mut self._diagnostics)?;
+        self.gtk_custom_css.expand(base, &mut self._diagnostics)?;
+        if let Some(path) = &mut self.background_image {
+            path.expand(base, &mut self._diagnostics)?;
+        }
+        if let Some(path) = &mut self.bell_audio_path {
+            path.expand(base, &mut self._diagnostics)?;
+        }
+
+        Ok(())
+    }
+
+    // fn loadTheme(self: *Config, theme: Theme) !void {
+    fn load_theme(&mut self, theme: Theme) -> Result<(), LoadError> {
+        // Load the correct theme depending on the conditional state.
+        // Dark/light themes were programmed prior to conditional configuration
+        // so when we introduce that we probably want to replace this.
+        // const name: []const u8 = switch (self._conditional_state.theme) {
+        //     .light => theme.light,
+        //     .dark => theme.dark,
+        // };
+        let name: Vec<u8> = match self._conditional_state.theme {
+            conditional::Theme::Light => theme.light.clone(),
+            conditional::Theme::Dark => theme.dark.clone(),
+        };
+
+        // Find our theme file and open it. See the open function for details.
+        // const themefile = (try themepkg.open(
+        //     self._arena.?.allocator(),
+        //     name,
+        //     &self._diagnostics,
+        // )) orelse return;
+        let themefile = match crate::theme::open(&name, &mut self._diagnostics) {
+            Some(tf) => tf,
+            None => return Ok(()),
+        };
+        // const path = themefile.path;
+        let path = themefile.path;
+        // const file = themefile.file;
+        // defer file.close();
+        let mut file = themefile.file;
+
+        // From this point onwards, we load the theme and do a bit of a dance
+        // to achieve two separate goals:
+        //
+        //   (1) We want the theme to be loaded and our existing config to
+        //       override the theme. So we need to load the theme and apply
+        //       our config on top of it.
+        //
+        //   (2) We want to free existing memory that we aren't using anymore
+        //       as a result of reloading the configuration.
+        //
+        // Point 2 is strictly a result of aur approach to point 1, but it is
+        // a nice property to have to limit memory bloat as much as possible.
+
+        // Load into a new configuration so that we can free the existing memory.
+        // const alloc_gpa = self._arena.?.child_allocator;
+        // var new_config = try self.cloneEmpty(alloc_gpa);
+        // errdefer new_config.deinit();
+        let mut new_config = self.clone_empty();
+
+        // Load our theme
+        // var buf: [2048]u8 = undefined;
+        // var file_reader = file.reader(&buf);
+        // const reader = &file_reader.interface;
+        // var iter: cli.args.LineIterator = .{ .r = reader, .filepath = path };
+        // try new_config.loadIter(alloc_gpa, &iter);
+        use std::io::Read;
+        let mut contents: Vec<u8> = Vec::new();
+        file.read_to_end(&mut contents)?;
+        {
+            let mut iter = rustty_args::args::LineIterator::with_filepath(&contents, &path);
+            new_config.load_iter(&mut iter)?;
+        }
+
+        // Setup our replay to be conditional.
+        // conditional: for (new_config._replay_steps.items) |*item| {
+        'conditional: for item in new_config._replay_steps.iter_mut() {
+            // switch (item.*) {
+            match item {
+                // .expand, .diagnostic => {},
+                ReplayStep::Expand(_) | ReplayStep::Diagnostic(_) => {}
+
+                // If we see "-e" then we do NOT make the following arguments
+                // conditional since they are supposed to be part of the
+                // initial command.
+                // .@"-e" => break :conditional,
+                ReplayStep::DashE => break 'conditional,
+
+                // Change our arg to be conditional on our theme.
+                // .arg => |v| {
+                ReplayStep::Arg(v) => {
+                    // const alloc_arena = new_config._arena.?.allocator();
+                    // const conds = try alloc_arena.alloc(Conditional, 1);
+                    // conds[0] = .{
+                    //     .key = .theme,
+                    //     .op = .eq,
+                    //     .value = @tagName(self._conditional_state.theme),
+                    // };
+                    let conds = vec![Conditional {
+                        key: conditional::Key::Theme,
+                        op: conditional::Op::Eq,
+                        value: self._conditional_state.theme.tag_name().to_vec(),
+                    }];
+                    // item.* = .{ .conditional_arg = .{ .conditions = conds, .arg = v } };
+                    *item = ReplayStep::ConditionalArg {
+                        conditions: conds,
+                        arg: std::mem::take(v),
+                    };
+                }
+
+                // .conditional_arg => |v| {
+                ReplayStep::ConditionalArg { conditions, arg } => {
+                    // const alloc_arena = new_config._arena.?.allocator();
+                    // const conds = try alloc_arena.alloc(Conditional, v.conditions.len + 1);
+                    // conds[0] = .{ .key = .theme, .op = .eq, .value = @tagName(self._conditional_state.theme) };
+                    // @memcpy(conds[1..], v.conditions);
+                    let mut conds = Vec::with_capacity(conditions.len() + 1);
+                    conds.push(Conditional {
+                        key: conditional::Key::Theme,
+                        op: conditional::Op::Eq,
+                        value: self._conditional_state.theme.tag_name().to_vec(),
+                    });
+                    conds.extend(std::mem::take(conditions));
+                    // item.* = .{ .conditional_arg = .{ .conditions = conds, .arg = v.arg } };
+                    *item = ReplayStep::ConditionalArg {
+                        conditions: conds,
+                        arg: std::mem::take(arg),
+                    };
+                }
+            }
+        }
+
+        // Replay our previous inputs so that we can override values
+        // from the theme.
+        // var slice_it = Replay.iterator(self._replay_steps.items, &new_config);
+        // try new_config.loadIter(alloc_gpa, &slice_it);
+        let mut slice_it = ReplayIterator::new(self._replay_steps.clone());
+        new_config.load_iter(&mut slice_it)?;
+
+        // Success, swap our new config in and free the old.
+        // self.deinit();
+        self.deinit();
+        // self.* = new_config;
+        *self = new_config;
+
+        Ok(())
+    }
+
+    /// Call this once after you are done setting configuration. This
+    /// is idempotent but will waste memory if called multiple times.
+    // pub fn finalize(self: *Config) !void {
+    pub fn finalize(&mut self) -> Result<(), LoadError> {
+        // We always load the theme first because it may set other fields
+        // in our config.
+        // if (self.theme) |theme| {
+        if let Some(theme) = self.theme.clone() {
+            // const different = !std.mem.eql(u8, theme.light, theme.dark);
+            let different = theme.light != theme.dark;
+
+            // Warning: loadTheme will deinit our existing config and replace
+            // it so all memory from self prior to this point will be freed.
+            // try self.loadTheme(theme);
+            self.load_theme(theme)?;
+
+            // If we have different light vs dark mode themes, disable
+            // window-theme = auto since that breaks it.
+            // if (different) {
+            if different {
+                // This setting doesn't make sense with different light/dark themes
+                // because it'll force the theme based on the Ghostty theme.
+                // if (self.@"window-theme" == .auto) self.@"window-theme" = .system;
+                if self.window_theme == WindowTheme::Auto {
+                    self.window_theme = WindowTheme::System;
+                }
+
+                // Mark that we use a conditional theme
+                // self._conditional_set.insert(.theme);
+                self._conditional_set.insert(conditional::Key::Theme);
+            }
+        }
+
+        // const alloc = self._arena.?.allocator();
+
+        // Used for a variety of defaults. See the function docs as well the
+        // specific variable use sites for more details.
+        // const probable_cli = probableCliEnvironment();
+        let probable_cli = probable_cli_environment();
+
+        // If we have a font-family set and don't set the others, default
+        // the others to the font family. This way, if someone does
+        // --font-family=foo, then we try to get the stylized versions of
+        // "foo" as well.
+        // if (self.@"font-family".count() > 0) {
+        if self.font_family.count() > 0 {
+            // const fields = &[_][]const u8{
+            //     "font-family-bold",
+            //     "font-family-italic",
+            //     "font-family-bold-italic",
+            // };
+            // inline for (fields) |field| {
+            //     if (@field(self, field).count() == 0) {
+            //         @field(self, field) = try self.@"font-family".clone(alloc);
+            //     }
+            // }
+            if self.font_family_bold.count() == 0 {
+                self.font_family_bold = self.font_family.clone_in();
+            }
+            if self.font_family_italic.count() == 0 {
+                self.font_family_italic = self.font_family.clone_in();
+            }
+            if self.font_family_bold_italic.count() == 0 {
+                self.font_family_bold_italic = self.font_family.clone_in();
+            }
+        }
+
+        // Prevent setting TERM to an empty string
+        // if (self.term.len == 0) {
+        if self.term.is_empty() {
+            // HACK: See comment above at definition
+            // self.term = "xterm-ghostty";
+            self.term = b"xterm-ghostty".to_vec();
+        }
+
+        // The default for the working directory depends on the system.
+        // var wd: WorkingDirectory = self.@"working-directory" orelse if (probable_cli)
+        //     .inherit
+        // else
+        //     .home;
+        let mut wd: WorkingDirectory = self.working_directory.clone().unwrap_or(if probable_cli {
+            WorkingDirectory::Inherit
+        } else {
+            WorkingDirectory::Home
+        });
+
+        // If we are missing either a command or home directory, we need
+        // to look up defaults which is kind of expensive. We only do this
+        // on desktop.
+        // if ((comptime !builtin.target.cpu.arch.isWasm()) and
+        //     (comptime !builtin.is_test))
+        // {
+        #[cfg(not(test))]
+        {
+            // if (self.command == null or wd == .home) command: {
+            if self.command.is_none() || wd == WorkingDirectory::Home {
+                'command: {
+                    // First look up the command using the SHELL env var if needed.
+                    // We don't do this in flatpak because SHELL in Flatpak is always
+                    // set to /bin/sh.
+                    // if (self.command) |cmd|
+                    //     log.info("shell src=config value={}", .{cmd})
+                    // else shell_env: {
+                    if let Some(_cmd) = &self.command {
+                        log_info("shell src=config".to_string());
+                    } else {
+                        'shell_env: {
+                            // Flatpak always gets its shell from outside the sandbox
+                            // if (internal_os.isFlatpak()) break :shell_env;
+                            if rustty_os::flatpak::isFlatpak() {
+                                break 'shell_env;
+                            }
+
+                            // If we were launched from the desktop, our SHELL env var
+                            // will represent our SHELL at login time. We only want to
+                            // read from SHELL if we're in a probable CLI environment.
+                            // if (!probable_cli) break :shell_env;
+                            if !probable_cli {
+                                break 'shell_env;
+                            }
+
+                            // if (std.process.getEnvVarOwned(alloc, "SHELL")) |value| {
+                            if let Ok(value) = std::env::var("SHELL") {
+                                // log.info("default shell source=env value={s}", .{value});
+                                log_info(format!("default shell source=env value={value}"));
+                                // const copy = try alloc.dupeZ(u8, value);
+                                // self.command = .{ .shell = copy };
+                                self.command = Some(Command::Shell(value.into_bytes()));
+                                // If we don't need the working directory, then we can exit now.
+                                // if (wd != .home) break :command;
+                                if wd != WorkingDirectory::Home {
+                                    break 'command;
+                                }
+                            } // } else |_| {}
+                        }
+                    }
+
+                    // switch (builtin.os.tag) {
+                    //     .windows => { ... },
+                    //     else => { ... passwd ... },
+                    // }
+                    #[cfg(target_os = "windows")]
+                    {
+                        // if (self.command == null) {
+                        if self.command.is_none() {
+                            // log.warn("no default shell found, will default to using cmd", .{});
+                            log_warn(
+                                "no default shell found, will default to using cmd".to_string(),
+                            );
+                            // self.command = .{ .shell = "cmd.exe" };
+                            self.command = Some(Command::Shell(b"cmd.exe".to_vec()));
+                        }
+                        // if (wd == .home) {
+                        if wd == WorkingDirectory::Home {
+                            // var buf: [std.fs.max_path_bytes]u8 = undefined;
+                            let mut buf = [0u8; MAX_PATH_BYTES];
+                            // if (try internal_os.home(&buf)) |home| {
+                            if let Ok(Some(home)) = rustty_os::homedir::home(&mut buf) {
+                                // wd = .{ .path = try alloc.dupe(u8, home) };
+                                wd = WorkingDirectory::Path(home.to_vec());
+                            } else {
+                                // wd = .inherit;
+                                wd = WorkingDirectory::Inherit;
+                            }
+                        }
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        // We need the passwd entry for the remainder
+                        // const pw = try internal_os.passwd.get(alloc);
+                        let pw = rustty_os::passwd::get()
+                            .map_err(|e| LoadError::Io(std::io::Error::other(format!("{e:?}"))))?;
+                        // if (self.command == null) {
+                        if self.command.is_none() {
+                            // if (pw.shell) |sh| {
+                            if let Some(sh) = &pw.shell {
+                                // log.info("default shell src=passwd value={s}", .{sh});
+                                log_info(format!(
+                                    "default shell src=passwd value={}",
+                                    sh.to_string_lossy()
+                                ));
+                                // self.command = .{ .shell = sh };
+                                self.command = Some(Command::Shell(sh.to_bytes().to_vec()));
+                            }
+                        }
+
+                        // if (wd == .home) {
+                        if wd == WorkingDirectory::Home {
+                            // if (pw.home) |home| {
+                            if let Some(home) = &pw.home {
+                                // log.info("default working directory src=passwd value={s}", .{home});
+                                log_info(format!(
+                                    "default working directory src=passwd value={}",
+                                    home.to_string_lossy()
+                                ));
+                                // wd = .{ .path = home };
+                                wd = WorkingDirectory::Path(home.to_bytes().to_vec());
+                            } else {
+                                // wd = .inherit;
+                                wd = WorkingDirectory::Inherit;
+                            }
+                        }
+
+                        // if (self.command == null) {
+                        if self.command.is_none() {
+                            // log.warn("no default shell found, will default to using sh", .{});
+                            log_warn(
+                                "no default shell found, will default to using sh".to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        // try wd.finalize(alloc);
+        wd.finalize();
+        // self.@"working-directory" = wd;
+        self.working_directory = Some(wd);
+
+        // Apprt-specific defaults
+        // switch (build_config.app_runtime) {
+        match rustty_build_config::app_runtime() {
+            // .none => {},
+            rustty_build_config::Runtime::None => {}
+            // .gtk => {
+            rustty_build_config::Runtime::Gtk => {
+                // switch (self.@"gtk-single-instance") {
+                match self.gtk_single_instance {
+                    // .true, .false => {},
+                    GtkSingleInstance::True | GtkSingleInstance::False => {}
+                    // For detection, we assume single instance unless we're
+                    // in a CLI environment, then we disable single instance.
+                    // .detect => self.@"gtk-single-instance" = if (probable_cli)
+                    //     .false
+                    // else
+                    //     .true,
+                    GtkSingleInstance::Detect => {
+                        self.gtk_single_instance = if probable_cli {
+                            GtkSingleInstance::False
+                        } else {
+                            GtkSingleInstance::True
+                        };
+                    }
+                }
+            }
+        }
+
+        // Default our click interval
+        // if (self.@"click-repeat-interval" == 0 and
+        //     (comptime !builtin.is_test))
+        // {
+        //     self.@"click-repeat-interval" = internal_os.clickInterval() orelse 500;
+        // }
+        #[cfg(not(test))]
+        {
+            if self.click_repeat_interval == 0 {
+                self.click_repeat_interval = rustty_os::mouse::clickInterval().unwrap_or(500);
+            }
+        }
+
+        // Clamp our mouse scroll multiplier
+        // self.@"mouse-scroll-multiplier".precision = @min(10_000.0, @max(0.01, self.@"mouse-scroll-multiplier".precision));
+        self.mouse_scroll_multiplier.precision =
+            10_000.0_f64.min(0.01_f64.max(self.mouse_scroll_multiplier.precision));
+        // self.@"mouse-scroll-multiplier".discrete = @min(10_000.0, @max(0.01, self.@"mouse-scroll-multiplier".discrete));
+        self.mouse_scroll_multiplier.discrete =
+            10_000.0_f64.min(0.01_f64.max(self.mouse_scroll_multiplier.discrete));
+
+        // Clamp our split opacity
+        // self.@"unfocused-split-opacity" = @min(1.0, @max(0.15, self.@"unfocused-split-opacity"));
+        self.unfocused_split_opacity = 1.0_f64.min(0.15_f64.max(self.unfocused_split_opacity));
+
+        // Clamp our contrast
+        // self.@"minimum-contrast" = @min(21, @max(1, self.@"minimum-contrast"));
+        self.minimum_contrast = 21.0_f64.min(1.0_f64.max(self.minimum_contrast));
+
+        // Minimum window size
+        // if (self.@"window-width" > 0) self.@"window-width" = @max(10, self.@"window-width");
+        if self.window_width > 0 {
+            self.window_width = 10.max(self.window_width);
+        }
+        // if (self.@"window-height" > 0) self.@"window-height" = @max(4, self.@"window-height");
+        if self.window_height > 0 {
+            self.window_height = 4.max(self.window_height);
+        }
+
+        // If URLs are disabled, cut off the first link. The first link is
+        // always the URL matcher.
+        // if (!self.@"link-url") self.link.links.items = self.link.links.items[1..];
+        if !self.link_url && !self.link.links.is_empty() {
+            self.link.links.remove(0);
+        }
+
+        // We warn when the quit-after-last-window-closed-delay is set to a very
+        // short value because it can cause Ghostty to quit before the first
+        // window is even shown.
+        // if (self.@"quit-after-last-window-closed-delay") |duration| {
+        if let Some(duration) = &self.quit_after_last_window_closed_delay {
+            // if (duration.duration < 5 * std.time.ns_per_s) {
+            if duration.duration < 5 * NS_PER_S {
+                // log.warn(
+                //     "quit-after-last-window-closed-delay is set to a very short value ({f}), which might cause problems",
+                //     .{duration},
+                // );
+                log_warn(
+                    "quit-after-last-window-closed-delay is set to a very short value, which might cause problems"
+                        .to_string(),
+                );
+            }
+        }
+
+        // We can't set this as a struct default because our config is
+        // loaded in environments where a build config isn't available.
+        // if (self.@"auto-update-channel" == null) {
+        if self.auto_update_channel.is_none() {
+            // self.@"auto-update-channel" = build_config.release_channel;
+            self.auto_update_channel = Some(rustty_build_config::release_channel());
+        }
+
+        // self.@"faint-opacity" = std.math.clamp(self.@"faint-opacity", 0.0, 1.0);
+        self.faint_opacity = self.faint_opacity.clamp(0.0, 1.0);
+
+        // Finalize key remapping set for efficient lookups
+        // self.@"key-remap".finalize();
+        self.key_remap.finalize();
+
+        Ok(())
     }
 
     /// PORTS: `pub fn cloneEmpty(self, alloc_gpa) Allocator.Error!Config`.
@@ -1260,7 +3172,7 @@ impl Config {
     #[allow(clippy::field_reassign_with_default)]
     pub fn clone_empty(&self) -> Config {
         // var result = try default(alloc_gpa);
-        let mut result = Config::default();
+        let mut result = Config::default_config();
         // result._conditional_state = self._conditional_state;
         result._conditional_state = self._conditional_state;
         // return result;
@@ -1334,7 +3246,16 @@ impl Config {
     /// Returns true if the given key has changed from old to new. This
     /// requires the key to be comptime known to make this more efficient.
     // pub fn changed(self: *const Config, new: *const Config, comptime key: Key) bool {
-    //     const field = comptime field: { ... resolve key -> field ... };
+    //     // Get the field at comptime
+    //     const field = comptime field: {
+    //         const fields = std.meta.fields(Config);
+    //         for (fields) |field| {
+    //             if (@field(Key, field.name) == key) {
+    //                 break :field field;
+    //             }
+    //         }
+    //         unreachable;
+    //     };
     //     const old_value = @field(self, field.name);
     //     const new_value = @field(new, field.name);
     //     return !deepEqual(field.type, old_value, new_value);
@@ -2941,6 +4862,89 @@ impl Target for Config {
     // canTrackDiags(Config) == @hasField(Config, "_diagnostics")
     fn diagnostics_mut(&mut self) -> Option<&mut DiagnosticList> {
         Some(&mut self._diagnostics)
+    }
+
+    /// PORTS: `pub const compatibility = std.StaticStringMap(...).initComptime(&.{...})`
+    /// + `@hasDecl(Config, "compatibility")` lookup in `parseIntoField`.
+    ///
+    /// The reference's `compatibility` map values are either `compatibilityRenamed`
+    /// closures (renames) or the `compat*` handler fns. This returns the matching
+    /// handler for `key`, boxed (see the `Target::compatibility` note).
+    // pub const compatibility = std.StaticStringMap(...).initComptime(&.{ ... });
+    fn compatibility(
+        &self,
+        key: &[u8],
+    ) -> Option<rustty_args::args::BoxedCompatibilityHandler<Self>> {
+        match key {
+            // Ghostty 1.1 introduced background-blur support for Linux which
+            // doesn't support a specific radius value. The renaming is to let
+            // one field be used for both platforms (macOS retained the ability
+            // to set a radius).
+            // .{ "background-blur-radius", cli.compatibilityRenamed(Config, "background-blur") },
+            b"background-blur-radius" => {
+                Some(rustty_args::args::compatibility_renamed(b"background-blur"))
+            }
+
+            // Ghostty 1.2 renamed all our adw options to gtk because we now have
+            // a hard dependency on libadwaita.
+            // .{ "adw-toolbar-style", cli.compatibilityRenamed(Config, "gtk-toolbar-style") },
+            b"adw-toolbar-style" => Some(rustty_args::args::compatibility_renamed(
+                b"gtk-toolbar-style",
+            )),
+
+            // Ghostty 1.2 removed the `hidden` value from `gtk-tabs-location` and
+            // moved it to `window-show-tab-bar`.
+            // .{ "gtk-tabs-location", compatGtkTabsLocation },
+            b"gtk-tabs-location" => {
+                Some(Box::new(|dst: &mut Config, k: &[u8], v: Option<&[u8]>| {
+                    dst.compat_gtk_tabs_location(k, v)
+                }))
+            }
+
+            // Ghostty 1.2 lets you set `cell-foreground` and `cell-background`
+            // to match the cell foreground and background colors, respectively.
+            // This can be used with `cursor-color` and `cursor-text` to recreate
+            // this behavior. This applies to selection too.
+            // .{ "cursor-invert-fg-bg", compatCursorInvertFgBg },
+            b"cursor-invert-fg-bg" => {
+                Some(Box::new(|dst: &mut Config, k: &[u8], v: Option<&[u8]>| {
+                    dst.compat_cursor_invert_fg_bg(k, v)
+                }))
+            }
+            // .{ "selection-invert-fg-bg", compatSelectionInvertFgBg },
+            b"selection-invert-fg-bg" => {
+                Some(Box::new(|dst: &mut Config, k: &[u8], v: Option<&[u8]>| {
+                    dst.compat_selection_invert_fg_bg(k, v)
+                }))
+            }
+
+            // Ghostty 1.2 merged `bold-is-bright` into the new `bold-color`
+            // by setting the value to "bright".
+            // .{ "bold-is-bright", compatBoldIsBright },
+            b"bold-is-bright" => Some(Box::new(|dst: &mut Config, k: &[u8], v: Option<&[u8]>| {
+                dst.compat_bold_is_bright(k, v)
+            })),
+
+            // Ghostty 1.2 removed the "desktop" option and renamed it to "detect".
+            // The semantics also changed slightly but this is the correct mapping.
+            // .{ "gtk-single-instance", compatGtkSingleInstance },
+            b"gtk-single-instance" => {
+                Some(Box::new(|dst: &mut Config, k: &[u8], v: Option<&[u8]>| {
+                    dst.compat_gtk_single_instance(k, v)
+                }))
+            }
+
+            // Ghostty 1.3 rename the "window" option to "new-window".
+            // See: https://github.com/ghostty-org/ghostty/pull/9764
+            // .{ "macos-dock-drop-behavior", compatMacOSDockDropBehavior },
+            b"macos-dock-drop-behavior" => {
+                Some(Box::new(|dst: &mut Config, k: &[u8], v: Option<&[u8]>| {
+                    dst.compat_macos_dock_drop_behavior(k, v)
+                }))
+            }
+
+            _ => None,
+        }
     }
 
     /// PORTS: the PARSE pass — `parseIntoField(Config, alloc, dst, key, value)`.
@@ -4750,5 +6754,76 @@ mod clone_changed_tests {
         assert!(source.changed(&dest, Key::FontThicken));
         // try testing.expect(!source.changed(&dest, .@"font-size"));
         assert!(!source.changed(&dest, Key::FontSize));
+    }
+}
+
+// ===========================================================================
+// MACHINERY tests (load/loadReader/finalize). PORTS: the `test {}` blocks in the
+// `load`..`Replay` range of Config.zig (Phase-0 inventory: ONE test in range —
+// "handle bom in config files", assertion-for-assertion below).
+// ===========================================================================
+#[cfg(test)]
+mod machinery_tests {
+    use super::*;
+
+    // test "handle bom in config files" {
+    #[test]
+    fn handle_bom_in_config_files() {
+        // const testing = std.testing;
+        // const alloc = testing.allocator;
+
+        // {
+        {
+            // const data = "\xef\xbb\xbfabnormal-command-exit-runtime = 2500\n";
+            let data: &[u8] = b"\xef\xbb\xbfabnormal-command-exit-runtime = 2500\n";
+            // var reader: std.Io.Reader = .fixed(data);
+            // var cfg = try Config.default(alloc);
+            // defer cfg.deinit();
+            let mut cfg = Config::default_config();
+            // try cfg.loadReader(
+            //     alloc,
+            //     &reader,
+            //     "/home/ghostty/.config/ghostty/config.ghostty",
+            // );
+            cfg.load_reader(data, b"/home/ghostty/.config/ghostty/config.ghostty")
+                .unwrap();
+            // try cfg.finalize();
+            cfg.finalize().unwrap();
+
+            // try testing.expect(cfg._diagnostics.empty());
+            assert!(cfg._diagnostics.empty());
+            // try testing.expectEqual(
+            //     2500,
+            //     cfg.@"abnormal-command-exit-runtime",
+            // );
+            assert_eq!(2500, cfg.abnormal_command_exit_runtime);
+        }
+
+        // {
+        {
+            // const data = "abnormal-command-exit-runtime = 2500\n";
+            let data: &[u8] = b"abnormal-command-exit-runtime = 2500\n";
+            // var reader: std.Io.Reader = .fixed(data);
+            // var cfg = try Config.default(alloc);
+            // defer cfg.deinit();
+            let mut cfg = Config::default_config();
+            // try cfg.loadReader(
+            //     alloc,
+            //     &reader,
+            //     "/home/ghostty/.config/ghostty/config.ghostty",
+            // );
+            cfg.load_reader(data, b"/home/ghostty/.config/ghostty/config.ghostty")
+                .unwrap();
+            // try cfg.finalize();
+            cfg.finalize().unwrap();
+
+            // try testing.expect(cfg._diagnostics.empty());
+            assert!(cfg._diagnostics.empty());
+            // try testing.expectEqual(
+            //     2500,
+            //     cfg.@"abnormal-command-exit-runtime",
+            // );
+            assert_eq!(2500, cfg.abnormal_command_exit_runtime);
+        }
     }
 }
