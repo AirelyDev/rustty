@@ -12,6 +12,8 @@
 //! composes. Each is ported leaves-first under the acyclicity gate (R4):
 //! every line/comment/test{} (R1).
 
+pub mod c_api;
+pub mod c_get;
 pub mod clipboard_codepoint_map;
 pub mod command;
 pub mod conditional;
@@ -28,6 +30,7 @@ pub mod string;
 pub mod theme;
 pub mod url;
 pub mod value_types;
+pub mod wasm;
 
 // Re-exports under the reference's top-level names (the config package exposes
 // these types via `@import("config/<File>.zig")` from `config/main.zig`).

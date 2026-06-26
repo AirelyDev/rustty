@@ -167,6 +167,21 @@ impl CodepointMap {
 // match having one arm per variant (a missing variant is a compile error).
 // ===========================================================================
 
+/// Copies `s` into a fixed `[u8; N]` whose tail byte stays `0` — the NUL
+/// terminator. `N` must be `s.len() + 1`. This is the const builder behind the
+/// `to_name_z` arms: the reference's `@tagName` is a `[:0]const u8` (a
+/// sentinel-terminated string literal), so the C-API enum path needs a
+/// NUL-terminated copy of the un-terminated `to_name` slice.
+pub const fn name_z_array<const N: usize>(s: &[u8]) -> [u8; N] {
+    let mut out = [0u8; N];
+    let mut i = 0;
+    while i < s.len() {
+        out[i] = s[i];
+        i += 1;
+    }
+    out
+}
+
 /// Generates `string_to_enum` (== `std.meta.stringToEnum`) and `to_name`
 /// (== `@tagName`) for a bare config enum, over the exact Zig variant-name
 /// literals. Each `Variant => b"name"` pair maps a Rust variant to its Zig
@@ -187,6 +202,20 @@ macro_rules! bare_enum_names {
             pub fn to_name(self) -> &'static [u8] {
                 match self {
                     $(<$ty>::$variant => $name,)+
+                }
+            }
+
+            /// `@tagName(self)` as a NUL-terminated `[*:0]const u8` for the C API
+            /// (`c_get`'s `.@"enum"` arm). Each variant's name is materialized as a
+            /// `'static` NUL-terminated array, matching the reference's sentinel
+            /// `@tagName` pointer.
+            pub fn to_name_z(self) -> *const std::os::raw::c_char {
+                match self {
+                    $(<$ty>::$variant => {
+                        static Z: [u8; $name.len() + 1] =
+                            $crate::value_types::name_z_array($name);
+                        Z.as_ptr().cast()
+                    })+
                 }
             }
         }
@@ -694,6 +723,19 @@ impl WindowDecoration {
             WindowDecoration::Client => b"client",
             WindowDecoration::Server => b"server",
             WindowDecoration::None => b"none",
+        }
+    }
+
+    /// `@tagName(self)` as a NUL-terminated `[*:0]const u8` for the C API
+    /// (`c_get`'s `.@"enum"` arm). `WindowDecoration` has a hand-written
+    /// `to_name` (not via `bare_enum_names!`), so the terminated form is
+    /// provided here too.
+    pub fn to_name_z(self) -> *const std::os::raw::c_char {
+        match self {
+            WindowDecoration::Auto => c"auto".as_ptr(),
+            WindowDecoration::Client => c"client".as_ptr(),
+            WindowDecoration::Server => c"server".as_ptr(),
+            WindowDecoration::None => c"none".as_ptr(),
         }
     }
 }
@@ -1413,6 +1455,72 @@ impl PackedStruct for NotifyOnCommandFinishAction {
         true
     }
 }
+
+// ===========================================================================
+// Packed-struct C-API bit projection (`c_get`'s `.@"struct"` packed arm).
+//
+// PORTS: `getValue`'s packed-struct branch — `ptr.* = @intCast(@as(Backing,
+// @bitCast(value)))`. Zig `@bitCast` of a `packed struct` reads the fields
+// LSB-first in declaration order into the backing integer. Rust structs are not
+// bit-packed, so `to_c_uint` reconstructs that backing integer by OR-ing each
+// `bool` field at its declaration-order bit (the same field order as `set_all`).
+// All these packed structs have <= `c_uint` bits, so the size guard in the
+// reference always passes.
+// ===========================================================================
+macro_rules! packed_to_c_uint {
+    ($ty:ty { $($field:ident),+ $(,)? }) => {
+        impl $ty {
+            /// `@intCast(@as(Backing, @bitCast(self)))` — the packed struct's
+            /// backing-integer bit pattern for the C API.
+            pub fn to_c_uint(&self) -> std::os::raw::c_uint {
+                let mut bits: std::os::raw::c_uint = 0;
+                let mut shift: u32 = 0;
+                $(
+                    bits |= (self.$field as std::os::raw::c_uint) << shift;
+                    shift += 1;
+                )+
+                let _ = shift;
+                bits
+            }
+        }
+    };
+}
+
+packed_to_c_uint!(FontSyntheticStyle {
+    bold,
+    italic,
+    bold_italic
+});
+packed_to_c_uint!(FontShapingBreak { cursor });
+packed_to_c_uint!(ShellIntegrationFeatures {
+    cursor,
+    sudo,
+    title,
+    ssh_env,
+    ssh_terminfo,
+    path
+});
+packed_to_c_uint!(SplitPreserveZoom { navigation });
+packed_to_c_uint!(AppNotifications {
+    clipboard_copy,
+    config_reload
+});
+packed_to_c_uint!(BellFeatures {
+    system,
+    audio,
+    attention,
+    title,
+    border
+});
+packed_to_c_uint!(FreetypeLoadFlags {
+    hinting,
+    force_autohint,
+    monochrome,
+    autohint,
+    light
+});
+packed_to_c_uint!(ScrollToBottom { keystroke, output });
+packed_to_c_uint!(NotifyOnCommandFinishAction { bell, notify });
 
 // ===========================================================================
 // Packed-struct `FormatEntry` impls.

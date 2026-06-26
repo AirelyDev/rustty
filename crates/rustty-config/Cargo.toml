@@ -21,6 +21,10 @@ workspace = true
 # see .port/phase-2/DEFERRALS.md). The url regex string-assembly logic is always
 # compiled; only its test requires this feature.
 oniguruma = []
+# Browser/wasm `Config` C ABI (`config/Wasm.zig`). Off by default and never
+# compiled in the desktop config cluster; the gate flips on with the wasm
+# app-runtime (see src/wasm.rs and .port/phase-2/DEFERRALS.md).
+wasm = []
 
 [dependencies]
 rustty-build-config = { workspace = true }

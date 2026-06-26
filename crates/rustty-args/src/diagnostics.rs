@@ -324,6 +324,14 @@ impl DiagnosticList {
         &self.list
     }
 
+    /// The precomputed (formatted) message bytes for diagnostic `idx`, i.e. the
+    /// reference's `self.precompute.messages.items[idx]`. Used by the
+    /// `ghostty_config_get_diagnostic` C ABI to hand a stable message pointer to
+    /// C. Returns `None` when precompute is disabled or `idx` is out of range.
+    pub fn precompute_message(&self, idx: usize) -> Option<&[u8]> {
+        self.precompute.messages.get(idx).map(Vec::as_slice)
+    }
+
     /// Returns true if there are any diagnostics for the given
     /// location type.
     // pub fn containsLocation(self: *const DiagnosticList, location: Location.Key) bool {

@@ -311,6 +311,229 @@ pub enum Key {
 }
 
 // ===========================================================================
+// `std.meta.stringToEnum(Key, name)` — the `ghostty_config_get` key lookup
+// (CApi.zig:100). Zig derives this at comptime from the `Key` enum field names
+// (the hyphenated Config field names); Rust has no enum reflection, so the map
+// is written explicitly with one arm per non-`_` Config field. The byte-string
+// patterns are the exact Zig field-name spellings (`field_ident` with `_`->`-`),
+// identical to the PARSE/FORMAT dispatch keys.
+// ===========================================================================
+impl Key {
+    /// `std.meta.stringToEnum(Key, name)` — maps a hyphenated Config key name to
+    /// its `Key` variant, `None` for an unknown name.
+    pub fn string_to_enum(name: &[u8]) -> Option<Key> {
+        match name {
+            b"abnormal-command-exit-runtime" => Some(Key::AbnormalCommandExitRuntime),
+            b"adjust-box-thickness" => Some(Key::AdjustBoxThickness),
+            b"adjust-cell-height" => Some(Key::AdjustCellHeight),
+            b"adjust-cell-width" => Some(Key::AdjustCellWidth),
+            b"adjust-cursor-height" => Some(Key::AdjustCursorHeight),
+            b"adjust-cursor-thickness" => Some(Key::AdjustCursorThickness),
+            b"adjust-font-baseline" => Some(Key::AdjustFontBaseline),
+            b"adjust-icon-height" => Some(Key::AdjustIconHeight),
+            b"adjust-overline-position" => Some(Key::AdjustOverlinePosition),
+            b"adjust-overline-thickness" => Some(Key::AdjustOverlineThickness),
+            b"adjust-strikethrough-position" => Some(Key::AdjustStrikethroughPosition),
+            b"adjust-strikethrough-thickness" => Some(Key::AdjustStrikethroughThickness),
+            b"adjust-underline-position" => Some(Key::AdjustUnderlinePosition),
+            b"adjust-underline-thickness" => Some(Key::AdjustUnderlineThickness),
+            b"alpha-blending" => Some(Key::AlphaBlending),
+            b"app-notifications" => Some(Key::AppNotifications),
+            b"async-backend" => Some(Key::AsyncBackend),
+            b"auto-update" => Some(Key::AutoUpdate),
+            b"auto-update-channel" => Some(Key::AutoUpdateChannel),
+            b"background" => Some(Key::Background),
+            b"background-blur" => Some(Key::BackgroundBlur),
+            b"background-image" => Some(Key::BackgroundImage),
+            b"background-image-fit" => Some(Key::BackgroundImageFit),
+            b"background-image-opacity" => Some(Key::BackgroundImageOpacity),
+            b"background-image-position" => Some(Key::BackgroundImagePosition),
+            b"background-image-repeat" => Some(Key::BackgroundImageRepeat),
+            b"background-opacity" => Some(Key::BackgroundOpacity),
+            b"background-opacity-cells" => Some(Key::BackgroundOpacityCells),
+            b"bell-audio-path" => Some(Key::BellAudioPath),
+            b"bell-audio-volume" => Some(Key::BellAudioVolume),
+            b"bell-features" => Some(Key::BellFeatures),
+            b"bold-color" => Some(Key::BoldColor),
+            b"class" => Some(Key::Class),
+            b"click-repeat-interval" => Some(Key::ClickRepeatInterval),
+            b"clipboard-codepoint-map" => Some(Key::ClipboardCodepointMap),
+            b"clipboard-paste-bracketed-safe" => Some(Key::ClipboardPasteBracketedSafe),
+            b"clipboard-paste-protection" => Some(Key::ClipboardPasteProtection),
+            b"clipboard-read" => Some(Key::ClipboardRead),
+            b"clipboard-trim-trailing-spaces" => Some(Key::ClipboardTrimTrailingSpaces),
+            b"clipboard-write" => Some(Key::ClipboardWrite),
+            b"command" => Some(Key::Command),
+            b"command-palette-entry" => Some(Key::CommandPaletteEntry),
+            b"config-default-files" => Some(Key::ConfigDefaultFiles),
+            b"config-file" => Some(Key::ConfigFile),
+            b"confirm-close-surface" => Some(Key::ConfirmCloseSurface),
+            b"copy-on-select" => Some(Key::CopyOnSelect),
+            b"cursor-click-to-move" => Some(Key::CursorClickToMove),
+            b"cursor-color" => Some(Key::CursorColor),
+            b"cursor-opacity" => Some(Key::CursorOpacity),
+            b"cursor-style" => Some(Key::CursorStyle),
+            b"cursor-style-blink" => Some(Key::CursorStyleBlink),
+            b"cursor-text" => Some(Key::CursorText),
+            b"custom-shader" => Some(Key::CustomShader),
+            b"custom-shader-animation" => Some(Key::CustomShaderAnimation),
+            b"desktop-notifications" => Some(Key::DesktopNotifications),
+            b"enquiry-response" => Some(Key::EnquiryResponse),
+            b"env" => Some(Key::Env),
+            b"faint-opacity" => Some(Key::FaintOpacity),
+            b"focus-follows-mouse" => Some(Key::FocusFollowsMouse),
+            b"font-codepoint-map" => Some(Key::FontCodepointMap),
+            b"font-family" => Some(Key::FontFamily),
+            b"font-family-bold" => Some(Key::FontFamilyBold),
+            b"font-family-bold-italic" => Some(Key::FontFamilyBoldItalic),
+            b"font-family-italic" => Some(Key::FontFamilyItalic),
+            b"font-feature" => Some(Key::FontFeature),
+            b"font-shaping-break" => Some(Key::FontShapingBreak),
+            b"font-size" => Some(Key::FontSize),
+            b"font-style" => Some(Key::FontStyle),
+            b"font-style-bold" => Some(Key::FontStyleBold),
+            b"font-style-bold-italic" => Some(Key::FontStyleBoldItalic),
+            b"font-style-italic" => Some(Key::FontStyleItalic),
+            b"font-synthetic-style" => Some(Key::FontSyntheticStyle),
+            b"font-thicken" => Some(Key::FontThicken),
+            b"font-thicken-strength" => Some(Key::FontThickenStrength),
+            b"font-variation" => Some(Key::FontVariation),
+            b"font-variation-bold" => Some(Key::FontVariationBold),
+            b"font-variation-bold-italic" => Some(Key::FontVariationBoldItalic),
+            b"font-variation-italic" => Some(Key::FontVariationItalic),
+            b"foreground" => Some(Key::Foreground),
+            b"freetype-load-flags" => Some(Key::FreetypeLoadFlags),
+            b"fullscreen" => Some(Key::Fullscreen),
+            b"grapheme-width-method" => Some(Key::GraphemeWidthMethod),
+            b"gtk-custom-css" => Some(Key::GtkCustomCss),
+            b"gtk-opengl-debug" => Some(Key::GtkOpenglDebug),
+            b"gtk-quick-terminal-layer" => Some(Key::GtkQuickTerminalLayer),
+            b"gtk-quick-terminal-namespace" => Some(Key::GtkQuickTerminalNamespace),
+            b"gtk-single-instance" => Some(Key::GtkSingleInstance),
+            b"gtk-tabs-location" => Some(Key::GtkTabsLocation),
+            b"gtk-titlebar" => Some(Key::GtkTitlebar),
+            b"gtk-titlebar-hide-when-maximized" => Some(Key::GtkTitlebarHideWhenMaximized),
+            b"gtk-titlebar-style" => Some(Key::GtkTitlebarStyle),
+            b"gtk-toolbar-style" => Some(Key::GtkToolbarStyle),
+            b"gtk-wide-tabs" => Some(Key::GtkWideTabs),
+            b"image-storage-limit" => Some(Key::ImageStorageLimit),
+            b"initial-command" => Some(Key::InitialCommand),
+            b"initial-window" => Some(Key::InitialWindow),
+            b"input" => Some(Key::Input),
+            b"key-remap" => Some(Key::KeyRemap),
+            b"keybind" => Some(Key::Keybind),
+            b"language" => Some(Key::Language),
+            b"link" => Some(Key::Link),
+            b"link-previews" => Some(Key::LinkPreviews),
+            b"link-url" => Some(Key::LinkUrl),
+            b"linux-cgroup" => Some(Key::LinuxCgroup),
+            b"linux-cgroup-hard-fail" => Some(Key::LinuxCgroupHardFail),
+            b"linux-cgroup-memory-limit" => Some(Key::LinuxCgroupMemoryLimit),
+            b"linux-cgroup-processes-limit" => Some(Key::LinuxCgroupProcessesLimit),
+            b"macos-applescript" => Some(Key::MacosApplescript),
+            b"macos-auto-secure-input" => Some(Key::MacosAutoSecureInput),
+            b"macos-custom-icon" => Some(Key::MacosCustomIcon),
+            b"macos-dock-drop-behavior" => Some(Key::MacosDockDropBehavior),
+            b"macos-hidden" => Some(Key::MacosHidden),
+            b"macos-icon" => Some(Key::MacosIcon),
+            b"macos-icon-frame" => Some(Key::MacosIconFrame),
+            b"macos-icon-ghost-color" => Some(Key::MacosIconGhostColor),
+            b"macos-icon-screen-color" => Some(Key::MacosIconScreenColor),
+            b"macos-non-native-fullscreen" => Some(Key::MacosNonNativeFullscreen),
+            b"macos-option-as-alt" => Some(Key::MacosOptionAsAlt),
+            b"macos-secure-input-indication" => Some(Key::MacosSecureInputIndication),
+            b"macos-shortcuts" => Some(Key::MacosShortcuts),
+            b"macos-titlebar-proxy-icon" => Some(Key::MacosTitlebarProxyIcon),
+            b"macos-titlebar-style" => Some(Key::MacosTitlebarStyle),
+            b"macos-window-buttons" => Some(Key::MacosWindowButtons),
+            b"macos-window-shadow" => Some(Key::MacosWindowShadow),
+            b"maximize" => Some(Key::Maximize),
+            b"middle-click-action" => Some(Key::MiddleClickAction),
+            b"minimum-contrast" => Some(Key::MinimumContrast),
+            b"mouse-hide-while-typing" => Some(Key::MouseHideWhileTyping),
+            b"mouse-reporting" => Some(Key::MouseReporting),
+            b"mouse-scroll-multiplier" => Some(Key::MouseScrollMultiplier),
+            b"mouse-shift-capture" => Some(Key::MouseShiftCapture),
+            b"notify-on-command-finish" => Some(Key::NotifyOnCommandFinish),
+            b"notify-on-command-finish-action" => Some(Key::NotifyOnCommandFinishAction),
+            b"notify-on-command-finish-after" => Some(Key::NotifyOnCommandFinishAfter),
+            b"osc-color-report-format" => Some(Key::OscColorReportFormat),
+            b"palette" => Some(Key::Palette),
+            b"palette-generate" => Some(Key::PaletteGenerate),
+            b"palette-harmonious" => Some(Key::PaletteHarmonious),
+            b"progress-style" => Some(Key::ProgressStyle),
+            b"quick-terminal-animation-duration" => Some(Key::QuickTerminalAnimationDuration),
+            b"quick-terminal-autohide" => Some(Key::QuickTerminalAutohide),
+            b"quick-terminal-keyboard-interactivity" => {
+                Some(Key::QuickTerminalKeyboardInteractivity)
+            }
+            b"quick-terminal-position" => Some(Key::QuickTerminalPosition),
+            b"quick-terminal-screen" => Some(Key::QuickTerminalScreen),
+            b"quick-terminal-size" => Some(Key::QuickTerminalSize),
+            b"quick-terminal-space-behavior" => Some(Key::QuickTerminalSpaceBehavior),
+            b"quit-after-last-window-closed" => Some(Key::QuitAfterLastWindowClosed),
+            b"quit-after-last-window-closed-delay" => Some(Key::QuitAfterLastWindowClosedDelay),
+            b"resize-overlay" => Some(Key::ResizeOverlay),
+            b"resize-overlay-duration" => Some(Key::ResizeOverlayDuration),
+            b"resize-overlay-position" => Some(Key::ResizeOverlayPosition),
+            b"right-click-action" => Some(Key::RightClickAction),
+            b"scroll-to-bottom" => Some(Key::ScrollToBottom),
+            b"scrollback-limit" => Some(Key::ScrollbackLimit),
+            b"scrollbar" => Some(Key::Scrollbar),
+            b"search-background" => Some(Key::SearchBackground),
+            b"search-foreground" => Some(Key::SearchForeground),
+            b"search-selected-background" => Some(Key::SearchSelectedBackground),
+            b"search-selected-foreground" => Some(Key::SearchSelectedForeground),
+            b"selection-background" => Some(Key::SelectionBackground),
+            b"selection-clear-on-copy" => Some(Key::SelectionClearOnCopy),
+            b"selection-clear-on-typing" => Some(Key::SelectionClearOnTyping),
+            b"selection-foreground" => Some(Key::SelectionForeground),
+            b"selection-word-chars" => Some(Key::SelectionWordChars),
+            b"shell-integration" => Some(Key::ShellIntegration),
+            b"shell-integration-features" => Some(Key::ShellIntegrationFeatures),
+            b"split-divider-color" => Some(Key::SplitDividerColor),
+            b"split-inherit-working-directory" => Some(Key::SplitInheritWorkingDirectory),
+            b"split-preserve-zoom" => Some(Key::SplitPreserveZoom),
+            b"tab-inherit-working-directory" => Some(Key::TabInheritWorkingDirectory),
+            b"term" => Some(Key::Term),
+            b"theme" => Some(Key::Theme),
+            b"title" => Some(Key::Title),
+            b"title-report" => Some(Key::TitleReport),
+            b"undo-timeout" => Some(Key::UndoTimeout),
+            b"unfocused-split-fill" => Some(Key::UnfocusedSplitFill),
+            b"unfocused-split-opacity" => Some(Key::UnfocusedSplitOpacity),
+            b"vt-kam-allowed" => Some(Key::VtKamAllowed),
+            b"wait-after-command" => Some(Key::WaitAfterCommand),
+            b"window-colorspace" => Some(Key::WindowColorspace),
+            b"window-decoration" => Some(Key::WindowDecoration),
+            b"window-height" => Some(Key::WindowHeight),
+            b"window-inherit-font-size" => Some(Key::WindowInheritFontSize),
+            b"window-inherit-working-directory" => Some(Key::WindowInheritWorkingDirectory),
+            b"window-new-tab-position" => Some(Key::WindowNewTabPosition),
+            b"window-padding-balance" => Some(Key::WindowPaddingBalance),
+            b"window-padding-color" => Some(Key::WindowPaddingColor),
+            b"window-padding-x" => Some(Key::WindowPaddingX),
+            b"window-padding-y" => Some(Key::WindowPaddingY),
+            b"window-position-x" => Some(Key::WindowPositionX),
+            b"window-position-y" => Some(Key::WindowPositionY),
+            b"window-save-state" => Some(Key::WindowSaveState),
+            b"window-show-tab-bar" => Some(Key::WindowShowTabBar),
+            b"window-step-resize" => Some(Key::WindowStepResize),
+            b"window-subtitle" => Some(Key::WindowSubtitle),
+            b"window-theme" => Some(Key::WindowTheme),
+            b"window-title-font-family" => Some(Key::WindowTitleFontFamily),
+            b"window-titlebar-background" => Some(Key::WindowTitlebarBackground),
+            b"window-titlebar-foreground" => Some(Key::WindowTitlebarForeground),
+            b"window-vsync" => Some(Key::WindowVsync),
+            b"window-width" => Some(Key::WindowWidth),
+            b"working-directory" => Some(Key::WorkingDirectory),
+            b"x11-instance-name" => Some(Key::X11InstanceName),
+            _ => None,
+        }
+    }
+}
+
+// ===========================================================================
 // PORTS: src/config/key.zig — the `Value(comptime key: Key) type` helper.
 //
 // key.zig's `Value` is a comptime function returning the *type* of the Config
@@ -5097,6 +5320,58 @@ fn window_padding_balance_to_name(v: WindowPaddingBalance) -> &'static [u8] {
         WindowPaddingBalance::False => b"false",
         WindowPaddingBalance::True => b"true",
         WindowPaddingBalance::Equal => b"equal",
+    }
+}
+
+// ===========================================================================
+// Foreign-enum `@tagName` NUL-terminated name maps (the C-API `c_get` `.@"enum"`
+// arm). Symmetric with the `*_to_name` maps above, but each literal is
+// sentinel-terminated (`[*:0]const u8`) so the pointer is a valid C string —
+// exactly the reference's `@tagName` projection for `ghostty_config_get`.
+// ===========================================================================
+
+/// `@tagName(terminal.CursorStyle)`, NUL-terminated for the C API.
+pub(crate) fn cursor_style_to_name_z(v: CursorStyle) -> *const std::os::raw::c_char {
+    match v {
+        CursorStyle::Bar => c"bar".as_ptr(),
+        CursorStyle::Block => c"block".as_ptr(),
+        CursorStyle::Underline => c"underline".as_ptr(),
+        CursorStyle::BlockHollow => c"block_hollow".as_ptr(),
+    }
+}
+
+/// `@tagName(inputpkg.OptionAsAlt)`, NUL-terminated for the C API.
+pub(crate) fn option_as_alt_to_name_z(
+    v: rustty_input::config::OptionAsAlt,
+) -> *const std::os::raw::c_char {
+    use rustty_input::config::OptionAsAlt;
+    match v {
+        OptionAsAlt::False => c"false".as_ptr(),
+        OptionAsAlt::True => c"true".as_ptr(),
+        OptionAsAlt::Left => c"left".as_ptr(),
+        OptionAsAlt::Right => c"right".as_ptr(),
+    }
+}
+
+/// `@tagName(build_config.ReleaseChannel)`, NUL-terminated for the C API.
+pub(crate) fn release_channel_to_name_z(
+    v: rustty_build_config::ReleaseChannel,
+) -> *const std::os::raw::c_char {
+    use rustty_build_config::ReleaseChannel;
+    match v {
+        ReleaseChannel::Tip => c"tip".as_ptr(),
+        ReleaseChannel::Stable => c"stable".as_ptr(),
+    }
+}
+
+/// `@tagName(renderer.size.PaddingBalance)`, NUL-terminated for the C API.
+pub(crate) fn window_padding_balance_to_name_z(
+    v: WindowPaddingBalance,
+) -> *const std::os::raw::c_char {
+    match v {
+        WindowPaddingBalance::False => c"false".as_ptr(),
+        WindowPaddingBalance::True => c"true".as_ptr(),
+        WindowPaddingBalance::Equal => c"equal".as_ptr(),
     }
 }
 
