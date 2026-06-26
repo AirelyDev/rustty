@@ -164,7 +164,7 @@ impl State {
 // stay in sync with `State`'s fields (the reference derives it; here adding a
 // state field requires adding a `Key` variant — the `match` arms above are the
 // `@compileError` analogue that catches a divergence).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Key {
     Theme,
     Os,
@@ -172,6 +172,7 @@ pub enum Key {
 
 /// A single conditional that can be true or false.
 // pub const Conditional = struct {
+#[derive(Clone, Debug)]
 pub struct Conditional {
     // key: Key,
     pub key: Key,
@@ -182,7 +183,7 @@ pub struct Conditional {
 }
 
 // pub const Op = enum { eq, ne };
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Op {
     Eq,
     Ne,

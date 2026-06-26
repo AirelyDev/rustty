@@ -23,9 +23,11 @@ workspace = true
 oniguruma = []
 
 [dependencies]
+rustty-build-config = { workspace = true }
 rustty-datastruct = { workspace = true }
 rustty-identity = { workspace = true }
 rustty-os = { workspace = true }
+rustty-render-types = { workspace = true }
 rustty-util = { workspace = true }
 rustty-vt = { workspace = true }
 rustty-zigstd = { workspace = true }

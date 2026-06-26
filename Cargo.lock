@@ -394,12 +394,14 @@ name = "rustty-config"
 version = "0.1.0"
 dependencies = [
  "rustty-args",
+ "rustty-build-config",
  "rustty-cfg-fmt",
  "rustty-datastruct",
  "rustty-font",
  "rustty-identity",
  "rustty-input",
  "rustty-os",
+ "rustty-render-types",
  "rustty-renderer",
  "rustty-util",
  "rustty-vt",

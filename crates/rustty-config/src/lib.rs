@@ -15,6 +15,7 @@
 pub mod clipboard_codepoint_map;
 pub mod command;
 pub mod conditional;
+pub mod config_struct;
 pub mod edit;
 pub mod error_list;
 pub mod file_load;
@@ -22,11 +23,18 @@ pub mod io;
 pub mod path;
 pub mod repeatable_string_map;
 pub mod string;
+pub mod theme;
 pub mod url;
+pub mod value_types;
 
 // Re-exports under the reference's top-level names (the config package exposes
 // these types via `@import("config/<File>.zig")` from `config/main.zig`).
 pub use clipboard_codepoint_map::ClipboardCodepointMap;
-pub use conditional::{Conditional, Key, Op, State};
+// PORT NOTE: `conditional.Key` and the Config `Key` (from key.zig) are DISTINCT
+// enums. The package-level `Key` is the Config key (key.zig derives it FROM the
+// Config fields), so the top-level re-export points at `config_struct::Key`;
+// `conditional::Key` stays namespaced (`conditional::Key`) to avoid ambiguity.
+pub use conditional::{Conditional, Op, State};
+pub use config_struct::{Config, Key};
 pub use error_list::ErrorList;
 pub use repeatable_string_map::RepeatableStringMap;
