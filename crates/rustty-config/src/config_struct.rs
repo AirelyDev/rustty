@@ -4,24 +4,26 @@
 //! `src/config/key.zig` (the `Key` enum, which key.zig derives FROM the Config
 //! fields — so it lives here WITH Config, not in cfg-fmt).
 //!
-//! PORT STATUS: C2 SKELETON. This lays down:
+//! PORT STATUS: C2 COMPLETE. This module carries:
 //!   - the `Config` struct with ALL ~105 public config fields (exact reference
 //!     names → Rust idents; hyphens → underscores; `@"_x"` internal fields kept
 //!     with a leading `_`), their value-types, and reference defaults via the
 //!     `Default` impl;
 //!   - the `Key` enum (port of key.zig) — one variant per non-`_` field;
-//!   - the `compatibility` rename table entries (data);
-//!   - the four-pass method SIGNATURES (`load`/`default`/`loadIter`/`loadFile`/
-//!     `finalize`/`parseManuallyHook`/`clone`/`cloneEmpty`/`changed`) as
-//!     `todo!()`, plus `ChangeIterator` and `Replay`;
-//!   - the `Target` impl skeleton wiring per-field PARSE dispatch.
+//!   - the `compatibility` rename table entries + handler bodies;
+//!   - the four passes (`load`/`default`/`loadIter`/`loadFile`/`finalize`/
+//!     `parseManuallyHook`/`clone`/`cloneEmpty`/`changed`), `ChangeIterator`,
+//!     `Replay`, and theme application — fully implemented;
+//!   - the `Target` impl wiring per-field PARSE/FORMAT/CLONE/CHANGED dispatch.
 //!
-//! The per-field doc comments (Pandoc Markdown), the method bodies, the
-//! `compatibility` handler bodies, and EVERY `test {}` (R1 — the count is a
-//! contract) are ported in the subsequent fill sub-batches, each gated on a
-//! SCOPED G3b (per-sub-batch comment-coverage; memory `per-subbatch-scoped-g3b`).
-//! This skeleton intentionally carries NO logic and NO tests; it exists only so
-//! `rustty-config` COMPILES with the full type surface present.
+//! EVERY `test {}` (R1 — the count is a contract) is ported, including the Config
+//! integration tests and the key.zig `Value` test. Documented deferrals: (1) the
+//! `RepeatableCodepointMap` font-blocked `parseCLI`/`formatConfig` tests (see
+//! DEFERRALS.md), which land when `font/CodepointMap.zig` arrives in rustty-font;
+//! (2) the per-field Pandoc Markdown `///` doc comments (~3499 reference lines)
+//! are still deferred to the field-doc fill sub-batch (see the `Config` struct
+//! PORT NOTE) — they are NOT yet ported, so the whole-`Config.zig` G3b
+//! comment-coverage gate remains RED until that sub-batch lands.
 //
 // Config is the main config struct. These fields map directly to the
 // CLI flag names hence we use a lot of `@""` syntax to support hyphens.
@@ -306,6 +308,268 @@ pub enum Key {
     AsyncBackend,
     AutoUpdate,
     AutoUpdateChannel,
+}
+
+// ===========================================================================
+// PORTS: src/config/key.zig — the `Value(comptime key: Key) type` helper.
+//
+// key.zig's `Value` is a comptime function returning the *type* of the Config
+// field a `Key` names (it iterates `std.meta.fields(Config)`, matches the field
+// whose `@field(Key, name) == key`, and returns `field.type`; the no-match path
+// is `unreachable`). Rust functions cannot return types, so the faithful
+// rendering returns the field type's `std::any::TypeId` — a runtime token that
+// is `==` iff the types are identical, exactly the equality the reference's
+// `Value(...)` participates in (e.g. `Value(.@"font-family") == RepeatableString`).
+// Every `Key` resolves to its field's `TypeId`; the exhaustive `match` is the
+// Rust analogue of the comptime field search (no `unreachable` arm is needed —
+// the match covers all variants).
+// ===========================================================================
+
+/// PORTS: `pub fn Value(comptime key: Key) type` (key.zig:35).
+// pub fn Value(comptime key: Key) type {
+//     const field = comptime field: {
+//         @setEvalBranchQuota(100_000);
+//         const fields = std.meta.fields(Config);
+//         for (fields) |field| {
+//             if (@field(Key, field.name) == key) {
+//                 break :field field;
+//             }
+//         }
+//         unreachable;
+//     };
+//     return field.type;
+// }
+pub fn value_type(key: Key) -> std::any::TypeId {
+    use std::any::TypeId;
+    match key {
+        Key::Language => TypeId::of::<Option<Vec<u8>>>(),
+        Key::FontFamily => TypeId::of::<RepeatableString>(),
+        Key::FontFamilyBold => TypeId::of::<RepeatableString>(),
+        Key::FontFamilyItalic => TypeId::of::<RepeatableString>(),
+        Key::FontFamilyBoldItalic => TypeId::of::<RepeatableString>(),
+        Key::FontStyle => TypeId::of::<FontStyle>(),
+        Key::FontStyleBold => TypeId::of::<FontStyle>(),
+        Key::FontStyleItalic => TypeId::of::<FontStyle>(),
+        Key::FontStyleBoldItalic => TypeId::of::<FontStyle>(),
+        Key::FontSyntheticStyle => TypeId::of::<FontSyntheticStyle>(),
+        Key::FontFeature => TypeId::of::<RepeatableString>(),
+        Key::FontSize => TypeId::of::<f32>(),
+        Key::FontVariation => TypeId::of::<RepeatableFontVariation>(),
+        Key::FontVariationBold => TypeId::of::<RepeatableFontVariation>(),
+        Key::FontVariationItalic => TypeId::of::<RepeatableFontVariation>(),
+        Key::FontVariationBoldItalic => TypeId::of::<RepeatableFontVariation>(),
+        Key::FontCodepointMap => TypeId::of::<RepeatableCodepointMap>(),
+        Key::ClipboardCodepointMap => TypeId::of::<RepeatableClipboardCodepointMap>(),
+        Key::FontThicken => TypeId::of::<bool>(),
+        Key::FontThickenStrength => TypeId::of::<u8>(),
+        Key::FontShapingBreak => TypeId::of::<FontShapingBreak>(),
+        Key::AlphaBlending => TypeId::of::<AlphaBlending>(),
+        Key::AdjustCellWidth => TypeId::of::<Option<MetricModifier>>(),
+        Key::AdjustCellHeight => TypeId::of::<Option<MetricModifier>>(),
+        Key::AdjustFontBaseline => TypeId::of::<Option<MetricModifier>>(),
+        Key::AdjustUnderlinePosition => TypeId::of::<Option<MetricModifier>>(),
+        Key::AdjustUnderlineThickness => TypeId::of::<Option<MetricModifier>>(),
+        Key::AdjustStrikethroughPosition => TypeId::of::<Option<MetricModifier>>(),
+        Key::AdjustStrikethroughThickness => TypeId::of::<Option<MetricModifier>>(),
+        Key::AdjustOverlinePosition => TypeId::of::<Option<MetricModifier>>(),
+        Key::AdjustOverlineThickness => TypeId::of::<Option<MetricModifier>>(),
+        Key::AdjustCursorThickness => TypeId::of::<Option<MetricModifier>>(),
+        Key::AdjustCursorHeight => TypeId::of::<Option<MetricModifier>>(),
+        Key::AdjustBoxThickness => TypeId::of::<Option<MetricModifier>>(),
+        Key::AdjustIconHeight => TypeId::of::<Option<MetricModifier>>(),
+        Key::GraphemeWidthMethod => TypeId::of::<GraphemeWidthMethod>(),
+        Key::FreetypeLoadFlags => TypeId::of::<FreetypeLoadFlags>(),
+        Key::Theme => TypeId::of::<Option<Theme>>(),
+        Key::Background => TypeId::of::<Color>(),
+        Key::Foreground => TypeId::of::<Color>(),
+        Key::BackgroundImage => TypeId::of::<Option<Path>>(),
+        Key::BackgroundImageOpacity => TypeId::of::<f32>(),
+        Key::BackgroundImagePosition => TypeId::of::<BackgroundImagePosition>(),
+        Key::BackgroundImageFit => TypeId::of::<BackgroundImageFit>(),
+        Key::BackgroundImageRepeat => TypeId::of::<bool>(),
+        Key::SelectionForeground => TypeId::of::<Option<TerminalColor>>(),
+        Key::SelectionBackground => TypeId::of::<Option<TerminalColor>>(),
+        Key::SelectionClearOnTyping => TypeId::of::<bool>(),
+        Key::SelectionClearOnCopy => TypeId::of::<bool>(),
+        Key::SelectionWordChars => TypeId::of::<SelectionWordChars>(),
+        Key::MinimumContrast => TypeId::of::<f64>(),
+        Key::Palette => TypeId::of::<Palette>(),
+        Key::PaletteGenerate => TypeId::of::<bool>(),
+        Key::PaletteHarmonious => TypeId::of::<bool>(),
+        Key::CursorColor => TypeId::of::<Option<TerminalColor>>(),
+        Key::CursorOpacity => TypeId::of::<f64>(),
+        Key::CursorStyle => TypeId::of::<CursorStyle>(),
+        Key::CursorStyleBlink => TypeId::of::<Option<bool>>(),
+        Key::CursorText => TypeId::of::<Option<TerminalColor>>(),
+        Key::CursorClickToMove => TypeId::of::<bool>(),
+        Key::MouseHideWhileTyping => TypeId::of::<bool>(),
+        Key::ScrollToBottom => TypeId::of::<ScrollToBottom>(),
+        Key::MouseShiftCapture => TypeId::of::<MouseShiftCapture>(),
+        Key::MouseReporting => TypeId::of::<bool>(),
+        Key::MouseScrollMultiplier => TypeId::of::<MouseScrollMultiplier>(),
+        Key::BackgroundOpacity => TypeId::of::<f64>(),
+        Key::BackgroundOpacityCells => TypeId::of::<bool>(),
+        Key::BackgroundBlur => TypeId::of::<BackgroundBlur>(),
+        Key::UnfocusedSplitOpacity => TypeId::of::<f64>(),
+        Key::UnfocusedSplitFill => TypeId::of::<Option<Color>>(),
+        Key::SplitDividerColor => TypeId::of::<Option<Color>>(),
+        Key::SplitPreserveZoom => TypeId::of::<SplitPreserveZoom>(),
+        Key::SearchForeground => TypeId::of::<TerminalColor>(),
+        Key::SearchBackground => TypeId::of::<TerminalColor>(),
+        Key::SearchSelectedForeground => TypeId::of::<TerminalColor>(),
+        Key::SearchSelectedBackground => TypeId::of::<TerminalColor>(),
+        Key::Command => TypeId::of::<Option<Command>>(),
+        Key::InitialCommand => TypeId::of::<Option<Command>>(),
+        Key::NotifyOnCommandFinish => TypeId::of::<NotifyOnCommandFinish>(),
+        Key::NotifyOnCommandFinishAction => TypeId::of::<NotifyOnCommandFinishAction>(),
+        Key::NotifyOnCommandFinishAfter => TypeId::of::<Duration>(),
+        Key::Env => TypeId::of::<RepeatableStringMap>(),
+        Key::Input => TypeId::of::<RepeatableReadableIO>(),
+        Key::WaitAfterCommand => TypeId::of::<bool>(),
+        Key::AbnormalCommandExitRuntime => TypeId::of::<u32>(),
+        Key::ScrollbackLimit => TypeId::of::<usize>(),
+        Key::Scrollbar => TypeId::of::<Scrollbar>(),
+        Key::Link => TypeId::of::<RepeatableLink>(),
+        Key::LinkUrl => TypeId::of::<bool>(),
+        Key::LinkPreviews => TypeId::of::<LinkPreviews>(),
+        Key::Maximize => TypeId::of::<bool>(),
+        Key::Fullscreen => TypeId::of::<Fullscreen>(),
+        Key::Title => TypeId::of::<Option<Vec<u8>>>(),
+        Key::Class => TypeId::of::<Option<Vec<u8>>>(),
+        Key::X11InstanceName => TypeId::of::<Option<Vec<u8>>>(),
+        Key::WorkingDirectory => TypeId::of::<Option<WorkingDirectory>>(),
+        Key::Keybind => TypeId::of::<Keybinds>(),
+        Key::KeyRemap => TypeId::of::<KeyRemapSet>(),
+        Key::WindowPaddingX => TypeId::of::<WindowPadding>(),
+        Key::WindowPaddingY => TypeId::of::<WindowPadding>(),
+        Key::WindowPaddingBalance => TypeId::of::<WindowPaddingBalance>(),
+        Key::WindowPaddingColor => TypeId::of::<WindowPaddingColor>(),
+        Key::WindowVsync => TypeId::of::<bool>(),
+        Key::WindowInheritWorkingDirectory => TypeId::of::<bool>(),
+        Key::TabInheritWorkingDirectory => TypeId::of::<bool>(),
+        Key::SplitInheritWorkingDirectory => TypeId::of::<bool>(),
+        Key::WindowInheritFontSize => TypeId::of::<bool>(),
+        Key::WindowDecoration => TypeId::of::<WindowDecoration>(),
+        Key::WindowTitleFontFamily => TypeId::of::<Option<Vec<u8>>>(),
+        Key::WindowSubtitle => TypeId::of::<WindowSubtitle>(),
+        Key::WindowTheme => TypeId::of::<WindowTheme>(),
+        Key::WindowColorspace => TypeId::of::<WindowColorspace>(),
+        Key::WindowHeight => TypeId::of::<u32>(),
+        Key::WindowWidth => TypeId::of::<u32>(),
+        Key::WindowPositionX => TypeId::of::<Option<i16>>(),
+        Key::WindowPositionY => TypeId::of::<Option<i16>>(),
+        Key::WindowSaveState => TypeId::of::<WindowSaveState>(),
+        Key::WindowStepResize => TypeId::of::<bool>(),
+        Key::WindowNewTabPosition => TypeId::of::<WindowNewTabPosition>(),
+        Key::WindowShowTabBar => TypeId::of::<WindowShowTabBar>(),
+        Key::WindowTitlebarBackground => TypeId::of::<Option<Color>>(),
+        Key::WindowTitlebarForeground => TypeId::of::<Option<Color>>(),
+        Key::ResizeOverlay => TypeId::of::<ResizeOverlay>(),
+        Key::ResizeOverlayPosition => TypeId::of::<ResizeOverlayPosition>(),
+        Key::ResizeOverlayDuration => TypeId::of::<Duration>(),
+        Key::FocusFollowsMouse => TypeId::of::<bool>(),
+        Key::ClipboardRead => TypeId::of::<ClipboardAccess>(),
+        Key::ClipboardWrite => TypeId::of::<ClipboardAccess>(),
+        Key::ClipboardTrimTrailingSpaces => TypeId::of::<bool>(),
+        Key::ClipboardPasteProtection => TypeId::of::<bool>(),
+        Key::ClipboardPasteBracketedSafe => TypeId::of::<bool>(),
+        Key::TitleReport => TypeId::of::<bool>(),
+        Key::ImageStorageLimit => TypeId::of::<u32>(),
+        Key::CopyOnSelect => TypeId::of::<CopyOnSelect>(),
+        Key::RightClickAction => TypeId::of::<RightClickAction>(),
+        Key::MiddleClickAction => TypeId::of::<MiddleClickAction>(),
+        Key::ClickRepeatInterval => TypeId::of::<u32>(),
+        Key::ConfigFile => TypeId::of::<RepeatablePath>(),
+        Key::ConfigDefaultFiles => TypeId::of::<bool>(),
+        Key::ConfirmCloseSurface => TypeId::of::<ConfirmCloseSurface>(),
+        Key::QuitAfterLastWindowClosed => TypeId::of::<bool>(),
+        Key::QuitAfterLastWindowClosedDelay => TypeId::of::<Option<Duration>>(),
+        Key::InitialWindow => TypeId::of::<bool>(),
+        Key::UndoTimeout => TypeId::of::<Duration>(),
+        Key::QuickTerminalPosition => TypeId::of::<QuickTerminalPosition>(),
+        Key::QuickTerminalSize => TypeId::of::<QuickTerminalSize>(),
+        Key::GtkQuickTerminalLayer => TypeId::of::<QuickTerminalLayer>(),
+        Key::GtkQuickTerminalNamespace => TypeId::of::<Vec<u8>>(),
+        Key::QuickTerminalScreen => TypeId::of::<QuickTerminalScreen>(),
+        Key::QuickTerminalAnimationDuration => TypeId::of::<f64>(),
+        Key::QuickTerminalAutohide => TypeId::of::<bool>(),
+        Key::QuickTerminalSpaceBehavior => TypeId::of::<QuickTerminalSpaceBehavior>(),
+        Key::QuickTerminalKeyboardInteractivity => {
+            TypeId::of::<QuickTerminalKeyboardInteractivity>()
+        }
+        Key::ShellIntegration => TypeId::of::<ShellIntegration>(),
+        Key::ShellIntegrationFeatures => TypeId::of::<ShellIntegrationFeatures>(),
+        Key::CommandPaletteEntry => TypeId::of::<RepeatableCommand>(),
+        Key::OscColorReportFormat => TypeId::of::<OSCColorReportFormat>(),
+        Key::VtKamAllowed => TypeId::of::<bool>(),
+        Key::CustomShader => TypeId::of::<RepeatablePath>(),
+        Key::CustomShaderAnimation => TypeId::of::<CustomShaderAnimation>(),
+        Key::BellFeatures => TypeId::of::<BellFeatures>(),
+        Key::BellAudioPath => TypeId::of::<Option<Path>>(),
+        Key::BellAudioVolume => TypeId::of::<f64>(),
+        Key::AppNotifications => TypeId::of::<AppNotifications>(),
+        Key::MacosNonNativeFullscreen => TypeId::of::<NonNativeFullscreen>(),
+        Key::MacosWindowButtons => TypeId::of::<MacWindowButtons>(),
+        Key::MacosTitlebarStyle => TypeId::of::<MacTitlebarStyle>(),
+        Key::MacosTitlebarProxyIcon => TypeId::of::<MacTitlebarProxyIcon>(),
+        Key::MacosDockDropBehavior => TypeId::of::<MacOSDockDropBehavior>(),
+        Key::MacosOptionAsAlt => TypeId::of::<Option<rustty_input::config::OptionAsAlt>>(),
+        Key::MacosWindowShadow => TypeId::of::<bool>(),
+        Key::MacosHidden => TypeId::of::<MacHidden>(),
+        Key::MacosAutoSecureInput => TypeId::of::<bool>(),
+        Key::MacosSecureInputIndication => TypeId::of::<bool>(),
+        Key::MacosApplescript => TypeId::of::<bool>(),
+        Key::MacosIcon => TypeId::of::<MacAppIcon>(),
+        Key::MacosCustomIcon => TypeId::of::<Option<Vec<u8>>>(),
+        Key::MacosIconFrame => TypeId::of::<MacAppIconFrame>(),
+        Key::MacosIconGhostColor => TypeId::of::<Option<Color>>(),
+        Key::MacosIconScreenColor => TypeId::of::<Option<ColorList>>(),
+        Key::MacosShortcuts => TypeId::of::<MacShortcuts>(),
+        Key::LinuxCgroup => TypeId::of::<LinuxCgroup>(),
+        Key::LinuxCgroupMemoryLimit => TypeId::of::<Option<u64>>(),
+        Key::LinuxCgroupProcessesLimit => TypeId::of::<Option<u64>>(),
+        Key::LinuxCgroupHardFail => TypeId::of::<bool>(),
+        Key::GtkOpenglDebug => TypeId::of::<bool>(),
+        Key::GtkSingleInstance => TypeId::of::<GtkSingleInstance>(),
+        Key::GtkTitlebar => TypeId::of::<bool>(),
+        Key::GtkTabsLocation => TypeId::of::<GtkTabsLocation>(),
+        Key::GtkTitlebarHideWhenMaximized => TypeId::of::<bool>(),
+        Key::GtkToolbarStyle => TypeId::of::<GtkToolbarStyle>(),
+        Key::GtkTitlebarStyle => TypeId::of::<GtkTitlebarStyle>(),
+        Key::GtkWideTabs => TypeId::of::<bool>(),
+        Key::GtkCustomCss => TypeId::of::<RepeatablePath>(),
+        Key::DesktopNotifications => TypeId::of::<bool>(),
+        Key::ProgressStyle => TypeId::of::<bool>(),
+        Key::BoldColor => TypeId::of::<Option<BoldColor>>(),
+        Key::FaintOpacity => TypeId::of::<f64>(),
+        Key::Term => TypeId::of::<Vec<u8>>(),
+        Key::EnquiryResponse => TypeId::of::<Vec<u8>>(),
+        Key::AsyncBackend => TypeId::of::<AsyncBackend>(),
+        Key::AutoUpdate => TypeId::of::<Option<AutoUpdate>>(),
+        Key::AutoUpdateChannel => TypeId::of::<Option<rustty_build_config::ReleaseChannel>>(),
+    }
+}
+
+// PORTS: the `test "Value"` block in src/config/key.zig (key.zig:52).
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+    use std::any::TypeId;
+
+    // test "Value" {
+    #[test]
+    fn value() {
+        // try testing.expectEqual(Config.RepeatableString, Value(.@"font-family"));
+        assert_eq!(
+            TypeId::of::<RepeatableString>(),
+            value_type(Key::FontFamily)
+        );
+        // try testing.expectEqual(?bool, Value(.@"cursor-style-blink"));
+        assert_eq!(
+            TypeId::of::<Option<bool>>(),
+            value_type(Key::CursorStyleBlink)
+        );
+    }
 }
 
 /// PORTS: `pub const OptionalFileAction = enum { loaded, not_found, "error" };`
@@ -1927,7 +2191,11 @@ impl Config {
     // adjacent assembly. For the scope of this batch the hook ports the non-`-e`
     // replay-recording path faithfully and the `-e` marker path; the full
     // iterator-draining `-e` command assembly is exercised by loadCliArgs/replay.
-    pub fn parse_manually_hook(&mut self, arg: &[u8]) -> Result<bool, ParseError> {
+    pub fn parse_manually_hook(
+        &mut self,
+        arg: &[u8],
+    ) -> Result<rustty_args::args::HookOutcome, ParseError> {
+        use rustty_args::args::HookOutcome;
         // if (std.mem.eql(u8, arg, "-e")) {
         if arg == b"-e" {
             // Add the special -e marker. This prevents:
@@ -1947,52 +2215,18 @@ impl Config {
             //     try command.append(alloc, copy);
             // }
             //
-            // if (command.items.len == 0) {
-            //     try self._diagnostics.append(alloc, .{
-            //         .location = try cli.Location.fromIter(iter, alloc),
-            //         .message = try std.fmt.allocPrintSentinel(
-            //             alloc,
-            //             "missing command after {s}",
-            //             .{arg},
-            //             0,
-            //         ),
-            //     });
-            //     return false;
-            // }
-            //
-            // // See "command" docs for the implied configurations and why.
-            // self.@"initial-command" = .{ .direct = command.items };
-            //
-            // PORT NOTE (iterator draining — KNOWN GAP): the reference drains
-            // `iter` here to build the `-e` command, emit a "missing command"
-            // diagnostic if empty, and set `initial-command = .{ .direct = ... }`.
-            // The `Target::parseManuallyHook` contract (fixed in a prior batch) is
-            // arg-at-a-time and does NOT pass the iterator, so this hook cannot
-            // drain `iter` inline. Reproducing the command-assembly (and its
-            // "missing command after -e" diagnostic) requires extending the hook
-            // contract to thread the `SelfDrivenIterator` — a cross-batch change.
-            // Until then the `-e` MARKER + the implied configurations below are
-            // ported faithfully (they do not depend on the command contents); the
-            // `.direct` command build + missing-command diagnostic are the deferred
-            // piece. See the verbatim reference body above.
-            //
-            // The implied configurations (reference, after the command is built):
-            // self.@"gtk-single-instance" = .false;
-            self.gtk_single_instance = GtkSingleInstance::False;
-            // self.@"quit-after-last-window-closed" = true;
-            self.quit_after_last_window_closed = true;
-            // self.@"quit-after-last-window-closed-delay" = null;
-            self.quit_after_last_window_closed_delay = None;
-            // if (self.@"shell-integration" != .none) {
-            //     self.@"shell-integration" = .detect;
-            // }
-            if self.shell_integration != ShellIntegration::None {
-                self.shell_integration = ShellIntegration::Detect;
-            }
-
-            // Do not continue, we consumed everything.
-            // return false;
-            return Ok(false);
+            // PORT NOTE (iterator threading): the reference drains `iter` HERE to
+            // build the `-e` command. The hook holds `&mut self`, and the driver's
+            // `next_self` also needs `&mut self`, so the drain cannot run inline
+            // without aliasing UB. Instead the hook records the `-e` MARKER and
+            // returns `HookOutcome::ConsumeRest`; the driver (`parse`/`parse_self`)
+            // — which owns `self` and `iter` non-overlappingly — runs the verbatim
+            // `while (iter.next())` drain (recording each arg via
+            // `record_replay_arg` and collecting the command), then calls
+            // `apply_e_command` below, which ports the rest of this branch
+            // (lines 4739-4763) line-for-line: the empty-command diagnostic and
+            // the `initial-command = .{ .direct = ... }` + implied configs.
+            return Ok(HookOutcome::ConsumeRest);
         }
 
         // Keep track of our input args for replay
@@ -2004,7 +2238,60 @@ impl Config {
 
         // If we didn't find a special case, continue parsing normally
         // return true;
-        Ok(true)
+        Ok(HookOutcome::Continue)
+    }
+
+    /// PORTS the tail of `parseManuallyHook`'s `-e` branch (Config.zig:4739-4763),
+    /// run by the driver after it has drained `iter` into `command` (each arg
+    /// already appended to `_replay_steps` via `record_replay_arg`).
+    pub fn apply_e_command(
+        &mut self,
+        command: Vec<Vec<u8>>,
+        location: rustty_args::diagnostics::Location,
+    ) -> bool {
+        // if (command.items.len == 0) {
+        if command.is_empty() {
+            // try self._diagnostics.append(alloc, .{
+            //     .location = try cli.Location.fromIter(iter, alloc),
+            //     .message = try std.fmt.allocPrintSentinel(
+            //         alloc,
+            //         "missing command after {s}",
+            //         .{arg},
+            //         0,
+            //     ),
+            // });
+            //
+            // `arg` is always "-e" on this path (the `-e` branch).
+            self._diagnostics
+                .append(rustty_args::diagnostics::Diagnostic {
+                    key: Vec::new(),
+                    location,
+                    message: b"missing command after -e".to_vec(),
+                });
+
+            // return false;
+            return false;
+        }
+
+        // See "command" docs for the implied configurations and why.
+        // self.@"initial-command" = .{ .direct = command.items };
+        self.initial_command = Some(Command::Direct(command));
+        // self.@"gtk-single-instance" = .false;
+        self.gtk_single_instance = GtkSingleInstance::False;
+        // self.@"quit-after-last-window-closed" = true;
+        self.quit_after_last_window_closed = true;
+        // self.@"quit-after-last-window-closed-delay" = null;
+        self.quit_after_last_window_closed_delay = None;
+        // if (self.@"shell-integration" != .none) {
+        //     self.@"shell-integration" = .detect;
+        // }
+        if self.shell_integration != ShellIntegration::None {
+            self.shell_integration = ShellIntegration::Detect;
+        }
+
+        // Do not continue, we consumed everything.
+        // return false;
+        false
     }
 
     // fn compatGtkTabsLocation(
@@ -4689,18 +4976,16 @@ impl Config {
 // ===========================================================================
 // CHANGED dispatch — `pub fn changed(self, new, comptime key: Key) bool`.
 //
-// PORT NOTE (DEFERRED, CHANGED pass): `FileFormatter`'s change-tracking branch
-// calls `default.changed(self.config, key)`, which resolves `key` to a field and
+// PORT NOTE: `FileFormatter`'s change-tracking branch calls
+// `default.changed(self.config, key)`, which resolves `key` to a field and
 // returns `!deepEqual(field.type, old, new)`. That per-`Key` `deepEqual` dispatch
-// is the EQUAL/DIFF (CHANGED) pass: it requires `DeepEqual` on the foreign leaf
-// types used as config fields (`MetricModifier`/`KeyRemapSet`/`CursorStyle`/
-// `WindowPaddingBalance`/`OptionAsAlt`/`ReleaseChannel`), whose impls live in
-// their own crates and are explicitly deferred to that pass (see `deep_equal.rs`
-// SCOPE note + DEFERRALS.md). `Config::changed` therefore stays `todo!()` here;
-// the FORMAT-pass `FileFormatter` ports the change-tracking branch faithfully
-// (it calls `self.changed`) but only the `changed = false` mode is exercised by
-// the ported FORMAT tests. The `changed = true` path (and its test) lands with
-// the CHANGED pass. This is a clearly surfaced deferral (NOT a stub-to-pass).
+// is the EQUAL/DIFF (CHANGED) pass: it requires `DeepEqual` on every config field
+// type, including the foreign leaf types (`MetricModifier`/`KeyRemapSet`/
+// `CursorStyle`/`WindowPaddingBalance`/`OptionAsAlt`/`ReleaseChannel`), whose
+// impls live in their own crates per the orphan rule. The pass has landed:
+// `Config::changed` is fully implemented above (the per-`Key` `c!` match), and
+// both the `changed = false` and `changed = true` `FileFormatter` modes (and the
+// `format default config changed` test) are exercised.
 // ===========================================================================
 
 // ===========================================================================
@@ -5928,8 +6213,26 @@ impl Target for Config {
     }
 
     // @hasDecl(Config, "parseManuallyHook")
-    fn parse_manually_hook(&mut self, _arg: &[u8]) -> Option<Result<bool, ParseError>> {
+    fn parse_manually_hook(
+        &mut self,
+        _arg: &[u8],
+    ) -> Option<Result<rustty_args::args::HookOutcome, ParseError>> {
         Some(Config::parse_manually_hook(self, _arg))
+    }
+
+    // The `-e` drain finalization — see `Config::apply_e_command`.
+    fn apply_e_command(
+        &mut self,
+        command: Vec<Vec<u8>>,
+        location: rustty_args::diagnostics::Location,
+    ) -> bool {
+        Config::apply_e_command(self, command, location)
+    }
+
+    // The per-arg replay recording the driver performs while draining `-e`.
+    // PORTS `try self._replay_steps.append(alloc, .{ .arg = copy })`.
+    fn record_replay_arg(&mut self, arg: &[u8]) {
+        self._replay_steps.push(ReplayStep::Arg(arg.to_vec()));
     }
 }
 
@@ -6824,6 +7127,791 @@ mod machinery_tests {
             //     cfg.@"abnormal-command-exit-runtime",
             // );
             assert_eq!(2500, cfg.abnormal_command_exit_runtime);
+        }
+    }
+}
+
+// ===========================================================================
+// INTEGRATION tests. PORTS: the top-level `test {}` blocks in the
+// finalize/clone/conditional/theme/compatibility range of Config.zig
+// (lines 10341-10934), assertion-for-assertion. The Duration tests
+// ("parse duration"/"test format"/"test entryFormatter") and the
+// "handle bom"/"clone default"/"clone preserves conditional state"/"changed"
+// tests in this range are ported in their home modules (value_types.rs and the
+// `tests`/`machinery_tests` modules above).
+// ===========================================================================
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use crate::value_types::{BoldColor, Color, MacOSDockDropBehavior, TerminalColor};
+    use rustty_os::tempdir::TempDir;
+
+    // const TestIterator = struct {
+    //     data: []const []const u8,
+    //     i: usize = 0,
+    //     pub fn next(self: *TestIterator) ?[]const u8 { ... }
+    // };
+    //
+    // PORTS the reference's test-local `TestIterator`. Like the reference's
+    // iterator it yields raw arg strings and has no `location` decl. It
+    // implements `SelfDrivenIterator<Config>` directly (ignoring the lent
+    // destination, exactly as a non-replay iterator does) so it can drive
+    // `Config::load_iter`.
+    struct TestIterator {
+        data: Vec<Vec<u8>>,
+        i: usize,
+    }
+
+    impl TestIterator {
+        fn new(data: &[&[u8]]) -> TestIterator {
+            TestIterator {
+                data: data.iter().map(|s| s.to_vec()).collect(),
+                i: 0,
+            }
+        }
+    }
+
+    impl rustty_args::args::SelfDrivenIterator<Config> for TestIterator {
+        // pub fn next(self: *TestIterator) ?[]const u8 {
+        //     if (self.i >= self.data.len) return null;
+        //     const result = self.data[self.i];
+        //     self.i += 1;
+        //     return result;
+        // }
+        fn next_self(&mut self, _config: &mut Config) -> Option<Vec<u8>> {
+            // if (self.i >= self.data.len) return null;
+            if self.i >= self.data.len() {
+                return None;
+            }
+            // const result = self.data[self.i];
+            let result = self.data[self.i].clone();
+            // self.i += 1;
+            self.i += 1;
+            // return result;
+            Some(result)
+        }
+
+        // TestIterator has no `location` decl => `Location.fromIter` yields `.none`.
+        fn location_self(&self) -> Option<rustty_args::diagnostics::Location> {
+            None
+        }
+    }
+
+    // test "parse hook: invalid command" {
+    #[test]
+    fn parse_hook_invalid_command() {
+        // var cfg = try Config.default(testing.allocator);
+        let mut cfg = Config::default_config();
+        // const alloc = cfg._arena.?.allocator();
+
+        // var it: TestIterator = .{ .data = &.{"foo"} };
+        let mut it = TestIterator::new(&[b"foo"]);
+        // try testing.expect(try cfg.parseManuallyHook(alloc, "--command", &it));
+        //
+        // PORT NOTE: `parseManuallyHook("--command", iter)` returns `Continue`
+        // (the reference's `true`) — `--command` is not `-e`, so it records the
+        // replay arg and returns "continue". We assert the `HookOutcome` rather
+        // than a bare bool.
+        assert_eq!(
+            cfg.parse_manually_hook(b"--command").unwrap(),
+            rustty_args::args::HookOutcome::Continue
+        );
+        let _ = &mut it;
+        // try testing.expect(cfg.command == null);
+        assert!(cfg.command.is_none());
+    }
+
+    // test "parse e: command only" {
+    #[test]
+    fn parse_e_command_only() {
+        // var cfg = try Config.default(testing.allocator);
+        let mut cfg = Config::default_config();
+
+        // var it: TestIterator = .{ .data = &.{"foo"} };
+        let mut it = TestIterator::new(&[b"foo"]);
+        // try testing.expect(!try cfg.parseManuallyHook(alloc, "-e", &it));
+        //
+        // PORT NOTE: the reference invokes `parseManuallyHook("-e", &it)` and the
+        // hook itself drains `it`. The Rust hook is split: it records the `-e`
+        // marker and returns `ConsumeRest` (the reference's `!... => return false`,
+        // i.e. "do not continue"); the DRIVER then drains `it` and calls
+        // `apply_e_command`. This test reproduces the driver's verbatim drain loop
+        // inline so it exercises exactly the path `parseManuallyHook("-e", &it)`
+        // runs in the reference.
+        assert_eq!(
+            cfg.parse_manually_hook(b"-e").unwrap(),
+            rustty_args::args::HookOutcome::ConsumeRest
+        );
+        // The driver's drain (see `parse_self`'s `ConsumeRest` arm).
+        let mut command: Vec<Vec<u8>> = Vec::new();
+        while let Some(param) = {
+            use rustty_args::args::SelfDrivenIterator;
+            it.next_self(&mut cfg)
+        } {
+            // `dst.record_replay_arg(&param)` — the driver's per-arg replay record.
+            cfg._replay_steps.push(ReplayStep::Arg(param.clone()));
+            command.push(param);
+        }
+        let consumed_everything =
+            !cfg.apply_e_command(command, rustty_args::diagnostics::Location::None);
+        // The reference's hook returns `false` ("do not continue") on this path.
+        assert!(consumed_everything);
+
+        // const cmd = cfg.@"initial-command".?;
+        let cmd = cfg.initial_command.as_ref().unwrap();
+        // try testing.expect(cmd == .direct);
+        // try testing.expectEqual(cmd.direct.len, 1);
+        // try testing.expectEqualStrings(cmd.direct[0], "foo");
+        match cmd {
+            Command::Direct(direct) => {
+                assert_eq!(direct.len(), 1);
+                assert_eq!(direct[0].as_slice(), b"foo");
+            }
+            _ => panic!("expected .direct"),
+        }
+    }
+
+    // test "parse e: command and args" {
+    #[test]
+    fn parse_e_command_and_args() {
+        // var cfg = try Config.default(testing.allocator);
+        let mut cfg = Config::default_config();
+
+        // var it: TestIterator = .{ .data = &.{ "echo", "foo", "bar baz" } };
+        let mut it = TestIterator::new(&[b"echo", b"foo", b"bar baz"]);
+        // try testing.expect(!try cfg.parseManuallyHook(alloc, "-e", &it));
+        //
+        // See `parse_e_command_only` for the hook/driver split. We reproduce the
+        // driver's drain inline here too.
+        assert_eq!(
+            cfg.parse_manually_hook(b"-e").unwrap(),
+            rustty_args::args::HookOutcome::ConsumeRest
+        );
+        let mut command: Vec<Vec<u8>> = Vec::new();
+        while let Some(param) = {
+            use rustty_args::args::SelfDrivenIterator;
+            it.next_self(&mut cfg)
+        } {
+            // `dst.record_replay_arg(&param)` — the driver's per-arg replay record.
+            cfg._replay_steps.push(ReplayStep::Arg(param.clone()));
+            command.push(param);
+        }
+        let consumed_everything =
+            !cfg.apply_e_command(command, rustty_args::diagnostics::Location::None);
+        assert!(consumed_everything);
+
+        // const cmd = cfg.@"initial-command".?;
+        let cmd = cfg.initial_command.as_ref().unwrap();
+        // try testing.expect(cmd == .direct);
+        // try testing.expectEqual(cmd.direct.len, 3);
+        // try testing.expectEqualStrings(cmd.direct[0], "echo");
+        // try testing.expectEqualStrings(cmd.direct[1], "foo");
+        // try testing.expectEqualStrings(cmd.direct[2], "bar baz");
+        match cmd {
+            Command::Direct(direct) => {
+                assert_eq!(direct.len(), 3);
+                assert_eq!(direct[0].as_slice(), b"echo");
+                assert_eq!(direct[1].as_slice(), b"foo");
+                assert_eq!(direct[2].as_slice(), b"bar baz");
+            }
+            _ => panic!("expected .direct"),
+        }
+    }
+
+    // test "clone can then change conditional state" {
+    #[test]
+    fn clone_can_then_change_conditional_state() {
+        // This tests a particular bug sequence where:
+        //   1. Load light
+        //   2. Convert to dark
+        //   3. Clone dark
+        //   4. Convert to light
+        //   5. Config is still dark (bug)
+
+        // Setup our test theme
+        // var td = try internal_os.TempDir.init();
+        let mut td = TempDir::init().unwrap();
+        // defer td.deinit();
+        // {
+        //     var file = try td.dir.createFile("theme_light", .{});
+        //     ... writeAll(@embedFile("testdata/theme_light")); ...
+        // }
+        td.dir()
+            .writeFile("theme_light", include_bytes!("testdata/theme_light"))
+            .unwrap();
+        // {
+        //     var file = try td.dir.createFile("theme_dark", .{});
+        //     ... writeAll(@embedFile("testdata/theme_dark")); ...
+        // }
+        td.dir()
+            .writeFile("theme_dark", include_bytes!("testdata/theme_dark"))
+            .unwrap();
+        // const light = try td.dir.realpath("theme_light", &light_buf);
+        let light = td.dir().realpath("theme_light").unwrap();
+        let light = light.to_str().unwrap();
+        // const dark = try td.dir.realpath("theme_dark", &dark_buf);
+        let dark = td.dir().realpath("theme_dark").unwrap();
+        let dark = dark.to_str().unwrap();
+
+        // var cfg_light = try Config.default(alloc);
+        let mut cfg_light = Config::default_config();
+        // var it: TestIterator = .{ .data = &.{
+        //     try std.fmt.allocPrint(alloc_arena, "--theme=light:{s},dark:{s}", .{ light, dark }),
+        // } };
+        let arg = format!("--theme=light:{light},dark:{dark}").into_bytes();
+        let mut it = TestIterator::new(&[arg.as_slice()]);
+        // try cfg_light.loadIter(alloc, &it);
+        cfg_light.load_iter(&mut it).unwrap();
+        // try cfg_light.finalize();
+        cfg_light.finalize().unwrap();
+
+        // var cfg_dark = (try cfg_light.changeConditionalState(.{ .theme = .dark })).?;
+        let mut cfg_dark = cfg_light
+            .change_conditional_state(conditional::State {
+                theme: conditional::Theme::Dark,
+                ..Default::default()
+            })
+            .unwrap()
+            .unwrap();
+
+        // try testing.expectEqual(Color{ .r = 0xEE, .g = 0xEE, .b = 0xEE }, cfg_dark.background);
+        assert_eq!(
+            Color {
+                r: 0xEE,
+                g: 0xEE,
+                b: 0xEE,
+            },
+            cfg_dark.background
+        );
+
+        // var cfg_clone = try cfg_dark.clone(alloc);
+        let mut cfg_clone = cfg_dark.clone_config();
+        // try testing.expectEqual(Color{ .r = 0xEE, .g = 0xEE, .b = 0xEE }, cfg_clone.background);
+        assert_eq!(
+            Color {
+                r: 0xEE,
+                g: 0xEE,
+                b: 0xEE,
+            },
+            cfg_clone.background
+        );
+
+        // var cfg_light2 = (try cfg_clone.changeConditionalState(.{ .theme = .light })).?;
+        let mut cfg_light2 = cfg_clone
+            .change_conditional_state(conditional::State {
+                theme: conditional::Theme::Light,
+                ..Default::default()
+            })
+            .unwrap()
+            .unwrap();
+        // try testing.expectEqual(Color{ .r = 0xFF, .g = 0xFF, .b = 0xFF }, cfg_light2.background);
+        assert_eq!(
+            Color {
+                r: 0xFF,
+                g: 0xFF,
+                b: 0xFF,
+            },
+            cfg_light2.background
+        );
+
+        // defers
+        cfg_light2.deinit();
+        cfg_clone.deinit();
+        cfg_dark.deinit();
+        cfg_light.deinit();
+        td.deinit();
+    }
+
+    // test "clone preserves conditional set" {
+    #[test]
+    fn clone_preserves_conditional_set() {
+        // var cfg = try Config.default(alloc);
+        let mut cfg = Config::default_config();
+        // var it: TestIterator = .{ .data = &.{
+        //     "--theme=light:foo,dark:bar",
+        //     "--window-theme=auto",
+        // } };
+        let mut it = TestIterator::new(&[b"--theme=light:foo,dark:bar", b"--window-theme=auto"]);
+        // try cfg.loadIter(alloc, &it);
+        cfg.load_iter(&mut it).unwrap();
+        // try cfg.finalize();
+        cfg.finalize().unwrap();
+
+        // var clone1 = try cfg.clone(alloc);
+        let clone1 = cfg.clone_config();
+
+        // try testing.expect(clone1._conditional_set.contains(.theme));
+        assert!(clone1._conditional_set.contains(&conditional::Key::Theme));
+    }
+
+    // test "working-directory expands tilde" {
+    #[test]
+    fn working_directory_expands_tilde() {
+        // var cfg = try Config.default(alloc);
+        let mut cfg = Config::default_config();
+        // var it: TestIterator = .{ .data = &.{
+        //     "--working-directory=~/projects/ghostty",
+        // } };
+        let mut it = TestIterator::new(&[b"--working-directory=~/projects/ghostty"]);
+        // try cfg.loadIter(alloc, &it);
+        cfg.load_iter(&mut it).unwrap();
+        // try cfg.finalize();
+        cfg.finalize().unwrap();
+
+        // var buf: [std.fs.max_path_bytes]u8 = undefined;
+        // const expected = internal_os.expandHome("~/projects/ghostty", &buf)
+        //     catch "~/projects/ghostty";
+        let mut buf = [0u8; MAX_PATH_BYTES];
+        let expected: Vec<u8> = rustty_os::expandHome(b"~/projects/ghostty", &mut buf)
+            .map(|s| s.to_vec())
+            .unwrap_or_else(|_| b"~/projects/ghostty".to_vec());
+        // try testing.expectEqualStrings(expected, cfg.@"working-directory".?.value().?);
+        assert_eq!(
+            expected.as_slice(),
+            cfg.working_directory.as_ref().unwrap().value().unwrap()
+        );
+    }
+
+    // test "changeConditionalState ignores irrelevant changes" {
+    #[test]
+    fn change_conditional_state_ignores_irrelevant_changes() {
+        // {
+        {
+            // var cfg = try Config.default(alloc);
+            let mut cfg = Config::default_config();
+            // var it: TestIterator = .{ .data = &.{ "--theme=foo" } };
+            let mut it = TestIterator::new(&[b"--theme=foo"]);
+            // try cfg.loadIter(alloc, &it);
+            cfg.load_iter(&mut it).unwrap();
+            // try cfg.finalize();
+            cfg.finalize().unwrap();
+
+            // try testing.expect(try cfg.changeConditionalState(.{ .theme = .dark }) == null);
+            assert!(cfg
+                .change_conditional_state(conditional::State {
+                    theme: conditional::Theme::Dark,
+                    ..Default::default()
+                })
+                .unwrap()
+                .is_none());
+        }
+    }
+
+    // test "changeConditionalState applies relevant changes" {
+    #[test]
+    fn change_conditional_state_applies_relevant_changes() {
+        // {
+        {
+            // var cfg = try Config.default(alloc);
+            let mut cfg = Config::default_config();
+            // var it: TestIterator = .{ .data = &.{ "--theme=light:foo,dark:bar" } };
+            let mut it = TestIterator::new(&[b"--theme=light:foo,dark:bar"]);
+            // try cfg.loadIter(alloc, &it);
+            cfg.load_iter(&mut it).unwrap();
+            // try cfg.finalize();
+            cfg.finalize().unwrap();
+
+            // var cfg2 = (try cfg.changeConditionalState(.{ .theme = .dark })).?;
+            let cfg2 = cfg
+                .change_conditional_state(conditional::State {
+                    theme: conditional::Theme::Dark,
+                    ..Default::default()
+                })
+                .unwrap()
+                .unwrap();
+
+            // try testing.expect(cfg2._conditional_set.contains(.theme));
+            assert!(cfg2._conditional_set.contains(&conditional::Key::Theme));
+        }
+    }
+
+    // test "theme loading" {
+    #[test]
+    fn theme_loading() {
+        // Setup our test theme
+        // var td = try internal_os.TempDir.init();
+        let mut td = TempDir::init().unwrap();
+        // { var file = try td.dir.createFile("theme", .{}); ... @embedFile("testdata/theme_simple") ... }
+        td.dir()
+            .writeFile("theme", include_bytes!("testdata/theme_simple"))
+            .unwrap();
+        // const path = try td.dir.realpath("theme", &path_buf);
+        let path = td.dir().realpath("theme").unwrap();
+        let path = path.to_str().unwrap();
+
+        // var cfg = try Config.default(alloc);
+        let mut cfg = Config::default_config();
+        // var it: TestIterator = .{ .data = &.{
+        //     try std.fmt.allocPrint(alloc_arena, "--theme={s}", .{path}),
+        // } };
+        let arg = format!("--theme={path}").into_bytes();
+        let mut it = TestIterator::new(&[arg.as_slice()]);
+        // try cfg.loadIter(alloc, &it);
+        cfg.load_iter(&mut it).unwrap();
+        // try cfg.finalize();
+        cfg.finalize().unwrap();
+
+        // try testing.expectEqual(Color{ .r = 0x12, .g = 0x3A, .b = 0xBC }, cfg.background);
+        assert_eq!(
+            Color {
+                r: 0x12,
+                g: 0x3A,
+                b: 0xBC,
+            },
+            cfg.background
+        );
+
+        // Not a conditional theme
+        // try testing.expect(!cfg._conditional_set.contains(.theme));
+        assert!(!cfg._conditional_set.contains(&conditional::Key::Theme));
+
+        // defer td.deinit();
+        td.deinit();
+    }
+
+    // test "theme loading preserves conditional state" {
+    #[test]
+    fn theme_loading_preserves_conditional_state() {
+        // Setup our test theme
+        // var td = try internal_os.TempDir.init();
+        let mut td = TempDir::init().unwrap();
+        td.dir()
+            .writeFile("theme", include_bytes!("testdata/theme_simple"))
+            .unwrap();
+        // const path = try td.dir.realpath("theme", &path_buf);
+        let path = td.dir().realpath("theme").unwrap();
+        let path = path.to_str().unwrap();
+
+        // var cfg = try Config.default(alloc);
+        let mut cfg = Config::default_config();
+        // cfg._conditional_state = .{ .theme = .dark };
+        cfg._conditional_state = conditional::State {
+            theme: conditional::Theme::Dark,
+            ..Default::default()
+        };
+        // var it: TestIterator = .{ .data = &.{
+        //     try std.fmt.allocPrint(alloc_arena, "--theme={s}", .{path}),
+        // } };
+        let arg = format!("--theme={path}").into_bytes();
+        let mut it = TestIterator::new(&[arg.as_slice()]);
+        // try cfg.loadIter(alloc, &it);
+        cfg.load_iter(&mut it).unwrap();
+        // try cfg.finalize();
+        cfg.finalize().unwrap();
+
+        // try testing.expect(cfg._conditional_state.theme == .dark);
+        assert!(cfg._conditional_state.theme == conditional::Theme::Dark);
+
+        // defer td.deinit();
+        td.deinit();
+    }
+
+    // test "theme priority is lower than config" {
+    #[test]
+    fn theme_priority_is_lower_than_config() {
+        // Setup our test theme
+        // var td = try internal_os.TempDir.init();
+        let mut td = TempDir::init().unwrap();
+        td.dir()
+            .writeFile("theme", include_bytes!("testdata/theme_simple"))
+            .unwrap();
+        // const path = try td.dir.realpath("theme", &path_buf);
+        let path = td.dir().realpath("theme").unwrap();
+        let path = path.to_str().unwrap();
+
+        // var cfg = try Config.default(alloc);
+        let mut cfg = Config::default_config();
+        // var it: TestIterator = .{ .data = &.{
+        //     "--background=#ABCDEF",
+        //     try std.fmt.allocPrint(alloc_arena, "--theme={s}", .{path}),
+        // } };
+        let theme_arg = format!("--theme={path}").into_bytes();
+        let mut it = TestIterator::new(&[b"--background=#ABCDEF", theme_arg.as_slice()]);
+        // try cfg.loadIter(alloc, &it);
+        cfg.load_iter(&mut it).unwrap();
+        // try cfg.finalize();
+        cfg.finalize().unwrap();
+
+        // try testing.expectEqual(Color{ .r = 0xAB, .g = 0xCD, .b = 0xEF }, cfg.background);
+        assert_eq!(
+            Color {
+                r: 0xAB,
+                g: 0xCD,
+                b: 0xEF,
+            },
+            cfg.background
+        );
+
+        // defer td.deinit();
+        td.deinit();
+    }
+
+    // test "theme loading correct light/dark" {
+    #[test]
+    fn theme_loading_correct_light_dark() {
+        // Setup our test theme
+        // var td = try internal_os.TempDir.init();
+        let mut td = TempDir::init().unwrap();
+        td.dir()
+            .writeFile("theme_light", include_bytes!("testdata/theme_light"))
+            .unwrap();
+        td.dir()
+            .writeFile("theme_dark", include_bytes!("testdata/theme_dark"))
+            .unwrap();
+        // const light = try td.dir.realpath("theme_light", &light_buf);
+        let light = td.dir().realpath("theme_light").unwrap();
+        let light = light.to_str().unwrap();
+        // const dark = try td.dir.realpath("theme_dark", &dark_buf);
+        let dark = td.dir().realpath("theme_dark").unwrap();
+        let dark = dark.to_str().unwrap();
+
+        // Light
+        // {
+        {
+            // var cfg = try Config.default(alloc);
+            let mut cfg = Config::default_config();
+            // var it: TestIterator = .{ .data = &.{
+            //     try std.fmt.allocPrint(alloc_arena, "--theme=light:{s},dark:{s}", .{ light, dark }),
+            // } };
+            let arg = format!("--theme=light:{light},dark:{dark}").into_bytes();
+            let mut it = TestIterator::new(&[arg.as_slice()]);
+            // try cfg.loadIter(alloc, &it);
+            cfg.load_iter(&mut it).unwrap();
+            // try cfg.finalize();
+            cfg.finalize().unwrap();
+
+            // try testing.expectEqual(Color{ .r = 0xFF, .g = 0xFF, .b = 0xFF }, cfg.background);
+            assert_eq!(
+                Color {
+                    r: 0xFF,
+                    g: 0xFF,
+                    b: 0xFF,
+                },
+                cfg.background
+            );
+        }
+
+        // Dark
+        // {
+        {
+            // var cfg = try Config.default(alloc);
+            let mut cfg = Config::default_config();
+            // cfg._conditional_state = .{ .theme = .dark };
+            cfg._conditional_state = conditional::State {
+                theme: conditional::Theme::Dark,
+                ..Default::default()
+            };
+            // var it: TestIterator = .{ .data = &.{
+            //     try std.fmt.allocPrint(alloc_arena, "--theme=light:{s},dark:{s}", .{ light, dark }),
+            // } };
+            let arg = format!("--theme=light:{light},dark:{dark}").into_bytes();
+            let mut it = TestIterator::new(&[arg.as_slice()]);
+            // try cfg.loadIter(alloc, &it);
+            cfg.load_iter(&mut it).unwrap();
+            // try cfg.finalize();
+            cfg.finalize().unwrap();
+
+            // try testing.expectEqual(Color{ .r = 0xEE, .g = 0xEE, .b = 0xEE }, cfg.background);
+            assert_eq!(
+                Color {
+                    r: 0xEE,
+                    g: 0xEE,
+                    b: 0xEE,
+                },
+                cfg.background
+            );
+        }
+
+        // Light to Dark
+        // {
+        {
+            // var cfg = try Config.default(alloc);
+            let mut cfg = Config::default_config();
+            // var it: TestIterator = .{ .data = &.{
+            //     try std.fmt.allocPrint(alloc_arena, "--theme=light:{s},dark:{s}", .{ light, dark }),
+            // } };
+            let arg = format!("--theme=light:{light},dark:{dark}").into_bytes();
+            let mut it = TestIterator::new(&[arg.as_slice()]);
+            // try cfg.loadIter(alloc, &it);
+            cfg.load_iter(&mut it).unwrap();
+            // try cfg.finalize();
+            cfg.finalize().unwrap();
+
+            // var new = (try cfg.changeConditionalState(.{ .theme = .dark })).?;
+            let new = cfg
+                .change_conditional_state(conditional::State {
+                    theme: conditional::Theme::Dark,
+                    ..Default::default()
+                })
+                .unwrap()
+                .unwrap();
+            // try testing.expectEqual(Color{ .r = 0xEE, .g = 0xEE, .b = 0xEE }, new.background);
+            assert_eq!(
+                Color {
+                    r: 0xEE,
+                    g: 0xEE,
+                    b: 0xEE,
+                },
+                new.background
+            );
+        }
+
+        // defer td.deinit();
+        td.deinit();
+    }
+
+    // test "theme specifying light/dark changes window-theme from auto" {
+    #[test]
+    fn theme_specifying_light_dark_changes_window_theme_from_auto() {
+        // {
+        {
+            // var cfg = try Config.default(alloc);
+            let mut cfg = Config::default_config();
+            // var it: TestIterator = .{ .data = &.{
+            //     "--theme=light:foo,dark:bar",
+            //     "--window-theme=auto",
+            // } };
+            let mut it =
+                TestIterator::new(&[b"--theme=light:foo,dark:bar", b"--window-theme=auto"]);
+            // try cfg.loadIter(alloc, &it);
+            cfg.load_iter(&mut it).unwrap();
+            // try cfg.finalize();
+            cfg.finalize().unwrap();
+
+            // try testing.expect(cfg.@"window-theme" == .system);
+            assert!(cfg.window_theme == WindowTheme::System);
+        }
+    }
+
+    // test "theme specifying light/dark sets theme usage in conditional state" {
+    #[test]
+    fn theme_specifying_light_dark_sets_theme_usage_in_conditional_state() {
+        // {
+        {
+            // var cfg = try Config.default(alloc);
+            let mut cfg = Config::default_config();
+            // var it: TestIterator = .{ .data = &.{
+            //     "--theme=light:foo,dark:bar",
+            //     "--window-theme=auto",
+            // } };
+            let mut it =
+                TestIterator::new(&[b"--theme=light:foo,dark:bar", b"--window-theme=auto"]);
+            // try cfg.loadIter(alloc, &it);
+            cfg.load_iter(&mut it).unwrap();
+            // try cfg.finalize();
+            cfg.finalize().unwrap();
+
+            // try testing.expect(cfg.@"window-theme" == .system);
+            assert!(cfg.window_theme == WindowTheme::System);
+            // try testing.expect(cfg._conditional_set.contains(.theme));
+            assert!(cfg._conditional_set.contains(&conditional::Key::Theme));
+        }
+    }
+
+    // test "compatibility: gtk-single-instance desktop" {
+    #[test]
+    fn compatibility_gtk_single_instance_desktop() {
+        // {
+        {
+            // var cfg = try Config.default(alloc);
+            let mut cfg = Config::default_config();
+            // var it: TestIterator = .{ .data = &.{ "--gtk-single-instance=desktop" } };
+            let mut it = TestIterator::new(&[b"--gtk-single-instance=desktop"]);
+            // try cfg.loadIter(alloc, &it);
+            cfg.load_iter(&mut it).unwrap();
+
+            // We need to test this BEFORE finalize, because finalize will
+            // convert our detect to a real value.
+            // try testing.expectEqual(GtkSingleInstance.detect, cfg.@"gtk-single-instance");
+            assert_eq!(GtkSingleInstance::Detect, cfg.gtk_single_instance);
+        }
+    }
+
+    // test "compatibility: removed cursor-invert-fg-bg" {
+    #[test]
+    fn compatibility_removed_cursor_invert_fg_bg() {
+        // {
+        {
+            // var cfg = try Config.default(alloc);
+            let mut cfg = Config::default_config();
+            // var it: TestIterator = .{ .data = &.{ "--cursor-invert-fg-bg" } };
+            let mut it = TestIterator::new(&[b"--cursor-invert-fg-bg"]);
+            // try cfg.loadIter(alloc, &it);
+            cfg.load_iter(&mut it).unwrap();
+            // try cfg.finalize();
+            cfg.finalize().unwrap();
+
+            // try testing.expectEqual(TerminalColor.@"cell-foreground", cfg.@"cursor-color");
+            assert_eq!(Some(TerminalColor::CellForeground), cfg.cursor_color);
+            // try testing.expectEqual(TerminalColor.@"cell-background", cfg.@"cursor-text");
+            assert_eq!(Some(TerminalColor::CellBackground), cfg.cursor_text);
+        }
+    }
+
+    // test "compatibility: removed selection-invert-fg-bg" {
+    #[test]
+    fn compatibility_removed_selection_invert_fg_bg() {
+        // {
+        {
+            // var cfg = try Config.default(alloc);
+            let mut cfg = Config::default_config();
+            // var it: TestIterator = .{ .data = &.{ "--selection-invert-fg-bg" } };
+            let mut it = TestIterator::new(&[b"--selection-invert-fg-bg"]);
+            // try cfg.loadIter(alloc, &it);
+            cfg.load_iter(&mut it).unwrap();
+            // try cfg.finalize();
+            cfg.finalize().unwrap();
+
+            // try testing.expectEqual(TerminalColor.@"cell-background", cfg.@"selection-foreground");
+            assert_eq!(
+                Some(TerminalColor::CellBackground),
+                cfg.selection_foreground
+            );
+            // try testing.expectEqual(TerminalColor.@"cell-foreground", cfg.@"selection-background");
+            assert_eq!(
+                Some(TerminalColor::CellForeground),
+                cfg.selection_background
+            );
+        }
+    }
+
+    // test "compatibility: removed bold-is-bright" {
+    #[test]
+    fn compatibility_removed_bold_is_bright() {
+        // {
+        {
+            // var cfg = try Config.default(alloc);
+            let mut cfg = Config::default_config();
+            // var it: TestIterator = .{ .data = &.{ "--bold-is-bright" } };
+            let mut it = TestIterator::new(&[b"--bold-is-bright"]);
+            // try cfg.loadIter(alloc, &it);
+            cfg.load_iter(&mut it).unwrap();
+            // try cfg.finalize();
+            cfg.finalize().unwrap();
+
+            // try testing.expectEqual(BoldColor.bright, cfg.@"bold-color");
+            assert_eq!(Some(BoldColor::Bright), cfg.bold_color);
+        }
+    }
+
+    // test "compatibility: window new-window" {
+    #[test]
+    fn compatibility_window_new_window() {
+        // {
+        {
+            // var cfg = try Config.default(alloc);
+            let mut cfg = Config::default_config();
+            // var it: TestIterator = .{ .data = &.{ "--macos-dock-drop-behavior=window" } };
+            let mut it = TestIterator::new(&[b"--macos-dock-drop-behavior=window"]);
+            // try cfg.loadIter(alloc, &it);
+            cfg.load_iter(&mut it).unwrap();
+            // try cfg.finalize();
+            cfg.finalize().unwrap();
+            // try testing.expectEqual(MacOSDockDropBehavior.@"new-window", cfg.@"macos-dock-drop-behavior");
+            assert_eq!(
+                MacOSDockDropBehavior::NewWindow,
+                cfg.macos_dock_drop_behavior
+            );
         }
     }
 }

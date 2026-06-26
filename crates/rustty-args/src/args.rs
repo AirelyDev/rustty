@@ -69,6 +69,23 @@ pub enum Error {
 // reference's `parseIntoField` returns.
 pub type ParseError = Error;
 
+/// The outcome of a `parseManuallyHook` call. The reference hook returns a
+/// plain `bool` (`true` = continue parsing, `false` = halt), but the `-e` path
+/// additionally needs the driver to drain `iter` into the initial command — a
+/// step Rust cannot run inside the hook (aliasing; see `parse_manually_hook`).
+/// `ConsumeRest` is that extra signal: the driver drains the iterator, records
+/// each remaining arg as a replay step, then calls `apply_e_command`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookOutcome {
+    /// The reference's `return true` — continue parsing the next arg.
+    Continue,
+    /// The reference's `return false` — stop parsing, nothing more to do.
+    Halt,
+    /// The `-e` path: drive the verbatim `while (iter.next())` drain in the
+    /// caller, then finish via `apply_e_command`.
+    ConsumeRest,
+}
+
 /// PORTS: the comptime destination type `T` of `parse`/`parseIntoField`.
 ///
 /// The reference reflects over `T` at comptime; here the destination implements
@@ -189,10 +206,43 @@ pub trait Target: Sized {
     fn parse_into_field(&mut self, key: &[u8], value: Option<&[u8]>) -> Result<(), ParseError>;
 
     /// `@hasDecl(T, "parseManuallyHook")`. Returns `None` if the type has no
-    /// hook; otherwise `Some(Ok(continue_parsing))` / `Some(Err(..))`.
-    fn parse_manually_hook(&mut self, _arg: &[u8]) -> Option<Result<bool, ParseError>> {
+    /// hook; otherwise `Some(Ok(outcome))` / `Some(Err(..))`.
+    ///
+    /// PORT NOTE (iterator threading): the reference signature is
+    /// `parseManuallyHook(self, alloc, arg, iter)` — the hook is handed the live
+    /// `iter` so the `-e` path can `iter.next()`-drain the rest of the args into
+    /// the initial command. In Rust the hook holds `&mut self` (the destination)
+    /// and `next_self` also needs `&mut dst`, so the hook cannot drain `iter`
+    /// inline without aliasing UB (see memory `rust-mut-args-strongly-protected`).
+    /// The faithful, sound split: the hook records what it can and returns a
+    /// `HookOutcome`; for `-e` it returns `ConsumeRest`, and the driver
+    /// (`parse`/`parse_self`) — which owns both `dst` and `iter` non-overlappingly
+    /// — performs the verbatim drain loop, then calls `apply_e_command` back on
+    /// `dst`. This reproduces the reference body line-for-line with no aliasing.
+    fn parse_manually_hook(&mut self, _arg: &[u8]) -> Option<Result<HookOutcome, ParseError>> {
         None
     }
+
+    /// Finish the reference's `-e` handling after the driver has drained `iter`.
+    ///
+    /// `command` is the list of args collected after `-e` (each already appended
+    /// to the replay steps by the driver as it drained). `location` is
+    /// `cli.Location.fromIter(iter, alloc)` captured by the driver. PORTS the tail
+    /// of `parseManuallyHook`'s `-e` branch (Config.zig:4739-4763): emit the
+    /// "missing command after -e" diagnostic when empty, else set
+    /// `initial-command = .{ .direct = command }` plus the implied configs.
+    ///
+    /// Returns the `continue_parsing` bool the reference's hook returns (always
+    /// `false` for `-e`: "we consumed everything").
+    fn apply_e_command(&mut self, _command: Vec<Vec<u8>>, _location: Location) -> bool {
+        false
+    }
+
+    /// Append a single drained `-e` arg to the destination's replay steps.
+    /// PORTS the per-arg `try self._replay_steps.append(alloc, .{ .arg = copy })`
+    /// inside the `-e` drain loop. Default is a no-op (types without replay
+    /// recording). Called by the driver as it drains `iter` for `ConsumeRest`.
+    fn record_replay_arg(&mut self, _arg: &[u8]) {}
 
     /// `@hasDecl(T, "help")` — whether this type has a `help` decl. Gates the
     /// `--help`/`-h` check in `parse`.
@@ -337,8 +387,24 @@ where
         //     if (!try dst.parseManuallyHook(arena_alloc, arg, iter)) return;
         // }
         if let Some(res) = dst.parse_manually_hook(arg) {
-            if !res? {
-                return Ok(());
+            match res? {
+                HookOutcome::Continue => {}
+                HookOutcome::Halt => return Ok(()),
+                HookOutcome::ConsumeRest => {
+                    // The `-e` drain (see `parse_self` for the verbatim
+                    // reference body). The plain `parse` driver drains via
+                    // `iter.next()`.
+                    let mut command: Vec<Vec<u8>> = Vec::new();
+                    while let Some(param) = iter.next() {
+                        let param = param.as_slice().to_vec();
+                        dst.record_replay_arg(&param);
+                        command.push(param);
+                    }
+                    let location = iter.location().ok().flatten().unwrap_or(Location::None);
+                    if !dst.apply_e_command(command, location) {
+                        return Ok(());
+                    }
+                }
             }
         }
 
@@ -547,8 +613,30 @@ where
         //     if (!try dst.parseManuallyHook(arena_alloc, arg, iter)) return;
         // }
         if let Some(res) = dst.parse_manually_hook(arg) {
-            if !res? {
-                return Ok(());
+            match res? {
+                HookOutcome::Continue => {}
+                HookOutcome::Halt => return Ok(()),
+                HookOutcome::ConsumeRest => {
+                    // The `-e` drain: PORTS the reference's
+                    //   while (iter.next()) |param| {
+                    //       const copy = try alloc.dupeZ(u8, param);
+                    //       try self._replay_steps.append(alloc, .{ .arg = copy });
+                    //       try command.append(alloc, copy);
+                    //   }
+                    // run here because the driver owns both `dst` and `iter`
+                    // without aliasing. Each drained arg is recorded as a replay
+                    // step (via `dst.record_replay_arg`) and collected into the
+                    // command, then `apply_e_command` finishes the branch.
+                    let mut command: Vec<Vec<u8>> = Vec::new();
+                    while let Some(param) = iter.next_self(dst) {
+                        dst.record_replay_arg(&param);
+                        command.push(param);
+                    }
+                    let location = iter.location_self().unwrap_or(Location::None);
+                    if !dst.apply_e_command(command, location) {
+                        return Ok(());
+                    }
+                }
             }
         }
 

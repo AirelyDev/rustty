@@ -192,17 +192,16 @@ mod tests {
 
     // test "format default config changed"
     //
-    // PORT NOTE (DEFERRED, CHANGED pass): this test uses `changed = true`, whose
-    // per-field `default.changed(self.config, key)` dispatch is the EQUAL/DIFF
-    // (CHANGED) pass — it requires `DeepEqual` on foreign leaf field types
-    // (`MetricModifier`/`KeyRemapSet`/`CursorStyle`/`WindowPaddingBalance`/
-    // `OptionAsAlt`/`ReleaseChannel`) whose impls are deferred to that pass (see
-    // `config_struct.rs` CHANGED-dispatch note + `deep_equal.rs` SCOPE note).
-    // `Config::changed` is therefore `todo!()` and this test is `#[ignore]`d —
-    // a clearly surfaced deferral (NOT a stub-to-pass): the test body is ported
-    // verbatim and re-enables unchanged once the CHANGED pass lands.
+    // PORT NOTE: this test uses `changed = true`, whose per-field
+    // `default.changed(self.config, key)` dispatch is the EQUAL/DIFF (CHANGED)
+    // pass — `Config::changed` resolves `key` to a field and returns
+    // `!deepEqual(field.type, old, new)`, relying on `DeepEqual` for every field
+    // type (config-owned types in `deep_equal.rs`; the foreign leaf types —
+    // `MetricModifier`/`KeyRemapSet`/`CursorStyle`/`WindowPaddingBalance`/
+    // `OptionAsAlt`/`ReleaseChannel` — in their home crates per the orphan rule).
+    // That pass has landed (`Config::changed` is fully implemented), so this test
+    // runs normally.
     #[test]
-    #[ignore = "deferred to CHANGED pass: Config::changed needs DeepEqual on foreign leaf field types"]
     // PORT NOTE: the reference is `var cfg = try Config.default(alloc); cfg.@"font-size" = 42;`
     // — a default then a single-field mutation. Clippy's `field_reassign_with_default`
     // would fold that into a struct literal, deviating from the reference's
