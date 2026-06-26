@@ -15,11 +15,20 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+# The single `url.zig` test uses oniguruma. oniguruma-sys is not built yet, so
+# the test is gated behind this off-by-default feature (SkipZigTest-style defer;
+# see .port/phase-2/DEFERRALS.md). The url regex string-assembly logic is always
+# compiled; only its test requires this feature.
+oniguruma = []
+
 [dependencies]
 rustty-datastruct = { workspace = true }
+rustty-identity = { workspace = true }
 rustty-os = { workspace = true }
 rustty-util = { workspace = true }
 rustty-vt = { workspace = true }
+rustty-zigstd = { workspace = true }
 rustty-font = { workspace = true }
 rustty-renderer = { workspace = true }
 rustty-input = { workspace = true }

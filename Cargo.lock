@@ -397,11 +397,13 @@ dependencies = [
  "rustty-cfg-fmt",
  "rustty-datastruct",
  "rustty-font",
+ "rustty-identity",
  "rustty-input",
  "rustty-os",
  "rustty-renderer",
  "rustty-util",
  "rustty-vt",
+ "rustty-zigstd",
 ]
 
 [[package]]

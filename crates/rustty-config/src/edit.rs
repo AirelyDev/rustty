@@ -1,0 +1,201 @@
+//! rustty-config::edit
+//!
+//! PORTS: ghostty src/config/edit.zig — resolve/create the config file to open
+//! for editing (`openPath` + private path helpers). C1 leaf value-type (0 tests).
+//!
+//! PORT STATUS: ported (every line/comment, R1).
+
+// const std = @import("std");
+// const builtin = @import("builtin");
+// const assert = @import("../quirks.zig").inlineAssert;
+// const Allocator = std.mem.Allocator;
+// const ArenaAllocator = std.heap.ArenaAllocator;
+// const file_load = @import("file_load.zig");
+use crate::file_load::{self, FileLoadError};
+use rustty_util::quirks::inlineAssert as assert;
+
+/// The path to the configuration that should be opened for editing.
+///
+/// On Linux, this will use the file at the XDG config path. This is the
+/// only valid path for Linux so we don't need to check for other paths.
+///
+/// On macOS, both XDG and AppSupport paths are valid. Because Ghostty
+/// prioritizes AppSupport over XDG, we will use AppSupport if it exists,
+/// followed by XDG if it exists, and finally AppSupport if neither exist.
+/// For the existence check, we also prefer non-empty files over empty
+/// files.
+///
+/// The returned value is allocated using the provided allocator.
+// pub fn openPath(alloc_gpa: Allocator) ![:0]const u8 {
+pub fn open_path() -> Result<Vec<u8>, FileLoadError> {
+    // Use an arena to make memory management easier in here.
+    // var arena = ArenaAllocator.init(alloc_gpa);
+    // defer arena.deinit();
+    // const alloc_arena = arena.allocator();
+    //
+    // PORT NOTE: the reference uses an arena purely for scratch-allocation
+    // ergonomics, dupe-ing the final result into `alloc_gpa`. Rust's owned
+    // `String`/`Vec` manage their own memory, so the arena is unnecessary; the
+    // final path is returned as an owned `Vec<u8>`.
+
+    // Get the path we should open
+    // const config_path = try configPath(alloc_arena);
+    let config_path = config_path()?;
+
+    // Create config directory recursively.
+    // if (std.fs.path.dirname(config_path)) |config_dir| {
+    //     try std.fs.cwd().makePath(config_dir);
+    // }
+    if let Some(config_dir) = dirname(&config_path) {
+        std::fs::create_dir_all(os_str_from_bytes(config_dir))?;
+    }
+
+    // Try to create file and go on if it already exists
+    // _ = std.fs.createFileAbsolute(
+    //     config_path,
+    //     .{ .exclusive = true },
+    // ) catch |err| {
+    //     switch (err) {
+    //         error.PathAlreadyExists => {},
+    //         else => return err,
+    //     }
+    // };
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(os_str_from_bytes(&config_path))
+    {
+        Ok(_) => {}
+        Err(err) => match err.kind() {
+            std::io::ErrorKind::AlreadyExists => {}
+            _ => return Err(FileLoadError::Io(err)),
+        },
+    }
+
+    // return try alloc_gpa.dupeZ(u8, config_path);
+    Ok(config_path)
+}
+
+/// Returns the config path to use for open for the current OS.
+///
+/// The allocator must be an arena allocator. No memory is freed by this
+/// function and the resulting path is not all the memory that is allocated.
+// fn configPath(alloc_arena: Allocator) ![]const u8 {
+fn config_path() -> Result<Vec<u8>, FileLoadError> {
+    // const paths: []const []const u8 = try configPathCandidates(alloc_arena);
+    let paths = config_path_candidates()?;
+    // assert(paths.len > 0);
+    assert(!paths.is_empty());
+
+    // Find the first path that exists and is non-empty. If no paths are
+    // non-empty but at least one exists, we will return the first path that
+    // exists.
+    // var exists: ?[]const u8 = null;
+    let mut exists: Option<Vec<u8>> = None;
+    // for (paths) |path| {
+    for path in &paths {
+        // const f = std.fs.openFileAbsolute(path, .{}) catch |err| {
+        //     switch (err) {
+        //         // File doesn't exist, continue.
+        //         error.BadPathName, error.FileNotFound => continue,
+        //
+        //         // Some other error, assume it exists and return it.
+        //         else => return err,
+        //     }
+        // };
+        // defer f.close();
+        let f = match std::fs::File::open(os_str_from_bytes(path)) {
+            Ok(f) => f,
+            Err(err) => match err.kind() {
+                // File doesn't exist, continue.
+                std::io::ErrorKind::NotFound => continue,
+                // Some other error, assume it exists and return it.
+                //
+                // PORT NOTE: the reference also treats `error.BadPathName` as
+                // "doesn't exist, continue"; Rust's `io::ErrorKind` does not
+                // distinguish a bad path name from other errors portably, so the
+                // non-NotFound branch returns the error as the reference's `else`
+                // arm does. (`BadPathName` is a Windows-only consideration here.)
+                _ => return Err(FileLoadError::Io(err)),
+            },
+        };
+
+        // We expect stat to succeed because we just opened the file.
+        // const stat = try f.stat();
+        let stat = f.metadata()?;
+
+        // If the file is non-empty, return it.
+        // if (stat.size > 0) return path;
+        if stat.len() > 0 {
+            return Ok(path.clone());
+        }
+
+        // If the file is empty, remember it exists.
+        // if (exists == null) exists = path;
+        if exists.is_none() {
+            exists = Some(path.clone());
+        }
+    }
+
+    // No paths are non-empty, return the first path that exists.
+    // if (exists) |v| return v;
+    if let Some(v) = exists {
+        return Ok(v);
+    }
+
+    // No paths are non-empty or exist, return the first path.
+    // return paths[0];
+    Ok(paths[0].clone())
+}
+
+/// Returns a const list of possible paths the main config file could be
+/// in for the current OS.
+// fn configPathCandidates(alloc_arena: Allocator) ![]const []const u8 {
+fn config_path_candidates() -> Result<Vec<Vec<u8>>, FileLoadError> {
+    // var paths: std.ArrayList([]const u8) = try .initCapacity(alloc_arena, 4);
+    // errdefer paths.deinit(alloc_arena);
+    let mut paths: Vec<Vec<u8>> = Vec::with_capacity(4);
+
+    // if (comptime builtin.os.tag == .macos) {
+    //     paths.appendAssumeCapacity(try file_load.defaultAppSupportPath(alloc_arena));
+    //     paths.appendAssumeCapacity(try file_load.legacyDefaultAppSupportPath(alloc_arena));
+    // }
+    #[cfg(target_os = "macos")]
+    {
+        paths.push(file_load::default_app_support_path()?.into_bytes());
+        paths.push(file_load::legacy_default_app_support_path()?.into_bytes());
+    }
+
+    // paths.appendAssumeCapacity(try file_load.defaultXdgPath(alloc_arena));
+    paths.push(file_load::default_xdg_path()?.into_bytes());
+    // paths.appendAssumeCapacity(try file_load.legacyDefaultXdgPath(alloc_arena));
+    paths.push(file_load::legacy_default_xdg_path()?.into_bytes());
+
+    // return paths.items;
+    Ok(paths)
+}
+
+/// PORTS: `std.fs.path.dirname(path)` for POSIX — the parent directory of
+/// `path`, or `None` if there is none.
+fn dirname(path: &[u8]) -> Option<&[u8]> {
+    // Find the last `/` and return the prefix before it (matching POSIX
+    // dirname semantics used by std.fs.path.dirname).
+    let idx = path.iter().rposition(|&b| b == b'/')?;
+    if idx == 0 {
+        // Root-only: dirname of "/foo" is "/".
+        return Some(&path[..1]);
+    }
+    Some(&path[..idx])
+}
+
+/// Convert raw path bytes to an `OsStr`.
+#[cfg(unix)]
+fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::OsStr::from_bytes(bytes)
+}
+
+#[cfg(not(unix))]
+fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
+    std::ffi::OsStr::new(std::str::from_utf8(bytes).unwrap_or(""))
+}
