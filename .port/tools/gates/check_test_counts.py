@@ -194,6 +194,26 @@ MAP = {
     # normally; the test slot is `#[cfg(all(test, feature="oniguruma"))]`. So
     # apc_deferred=1 -> need=0, rust=0 (the gated test has no live #[test] line).
     "config_url":        ([f"{GHCFG}/url.zig"], [f"{RSCG}/url.rs"], 1),
+    # rustty-config C2 — the giant `Config` struct of Config.zig (113 quoted
+    # tests). The Config-struct integration tests live in config_struct.rs; the
+    # in-file value-type tests (the `pub const X = enum/struct/union` types the
+    # Config struct composes, each with its own `test{}`) live in value_types.rs.
+    # BOTH map against Config.zig (the value types are defined inside Config.zig).
+    # apc_deferred=4: the four `RepeatableCodepointMap` tests ("parseCLI",
+    # "formatConfig single/range/multiple", Config.zig:8160-8224) are font-blocked
+    # (wraps font/CodepointMap.zig, not yet in rustty-font — see DEFERRALS.md).
+    # NOTE: the 5 `RepeatableClipboardCodepointMap` tests (8352-8415) ARE ported
+    # (ClipboardCodepointMap is a landed C1 leaf type). need = 113-4 = 109; rust
+    # = config_struct.rs + value_types.rs (>= 109, with rustty round-trip margin).
+    "config_struct":     ([f"{GHCFG}/Config.zig"], [f"{RSCG}/config_struct.rs", f"{RSCG}/value_types.rs"], 4),
+    # rustty-config C2 — key.zig (the `Key` enum derived FROM the Config fields).
+    # 1 quoted test ("Value", key.zig:52), ported in config_struct.rs (the `value`
+    # test) alongside the `Key` enum it exercises.
+    "config_key":        ([f"{GHCFG}/key.zig"], [f"{RSCG}/config_struct.rs"], 0),
+    # rustty-config C2 — theme.zig (0 behavioral tests: theme path resolution
+    # using the REAL rustty-os ResourcesDir — see DEFERRALS.md, no .resources
+    # deferral). Mapped for completeness/G3b tracking; 0 >= 0.
+    "config_theme":      ([f"{GHCFG}/theme.zig"], [f"{RSCG}/theme.rs"], 0),
 }
 
 def expand(globs):
