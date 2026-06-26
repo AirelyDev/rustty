@@ -966,6 +966,289 @@ pub unsafe extern "C" fn rustty_sgr_attribute_value(
     unsafe { sgr::attribute_value(attr) }
 }
 
+// ----- kitty_graphics -----
+// PORT NOTE: 1:1 with the 16 `@export(&c.kitty_graphics_*, ...)` lines in
+// `lib_vt.zig`. The `c.zig` aliases map two names to differently-named module
+// fns: `kitty_graphics_image -> image_get_handle`, `kitty_graphics_placement_next
+// -> placement_iterator_next`. The typed enum args (`Data`, `ImageData`,
+// `PlacementData`) cross the C ABI as their `enum(c_int)` (cbindgen emits a C
+// enum); the `placement_iterator_set` `intToEnum` runtime-safety guard lives on
+// the raw `c_int` `option` here (the typed `set` cannot receive an invalid tag).
+
+// pub const kitty_graphics_get = kitty_graphics.get;
+/// C: rustty_kitty_graphics_get
+///
+/// # Safety
+/// `graphics` must be a valid `KittyGraphics` handle; `out` must point to storage
+/// of the type required by `data`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_get(
+    graphics: kitty_graphics::KittyGraphics,
+    data: kitty_graphics::Data,
+    out: *mut std::ffi::c_void,
+) -> c_int {
+    // SAFETY: `graphics`/`out` validity is the caller's contract.
+    unsafe { kitty_graphics::get(graphics, data, out) }.to_c_int()
+}
+
+// pub const kitty_graphics_image = kitty_graphics.image_get_handle;
+/// C: rustty_kitty_graphics_image
+///
+/// # Safety
+/// `graphics` must be a valid `KittyGraphics` handle.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_image(
+    graphics: kitty_graphics::KittyGraphics,
+    image_id: u32,
+) -> kitty_graphics::ImageHandle {
+    // SAFETY: `graphics` validity is the caller's contract.
+    unsafe { kitty_graphics::image_get_handle(graphics, image_id) }
+}
+
+// pub const kitty_graphics_image_get = kitty_graphics.image_get;
+/// C: rustty_kitty_graphics_image_get
+///
+/// # Safety
+/// `image`, if non-null, must point to a valid `Image`; `out` must point to
+/// storage of the type required by `data`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_image_get(
+    image: kitty_graphics::ImageHandle,
+    data: kitty_graphics::ImageData,
+    out: *mut std::ffi::c_void,
+) -> c_int {
+    // SAFETY: `image`/`out` validity is the caller's contract.
+    unsafe { kitty_graphics::image_get(image, data, out) }.to_c_int()
+}
+
+// pub const kitty_graphics_image_get_multi = kitty_graphics.image_get_multi;
+/// C: rustty_kitty_graphics_image_get_multi
+///
+/// # Safety
+/// See `kitty_graphics::image_get_multi`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_image_get_multi(
+    image: kitty_graphics::ImageHandle,
+    count: usize,
+    keys: *const kitty_graphics::ImageData,
+    values: *const *mut std::ffi::c_void,
+    out_written: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { kitty_graphics::image_get_multi(image, count, keys, values, out_written) }.to_c_int()
+}
+
+// pub const kitty_graphics_placement_iterator_new = kitty_graphics.placement_iterator_new;
+/// C: rustty_kitty_graphics_placement_iterator_new
+///
+/// # Safety
+/// `alloc_`, if non-null, must point to a valid C allocator; `out` must be a
+/// valid, writable pointer to a `PlacementIterator`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_new(
+    alloc_: *const rustty_lib::allocator::Allocator,
+    out: *mut kitty_graphics::PlacementIterator,
+) -> c_int {
+    // SAFETY: `alloc_`/`out` validity is the caller's contract.
+    unsafe { kitty_graphics::placement_iterator_new(alloc_.as_ref(), out) }.to_c_int()
+}
+
+// pub const kitty_graphics_placement_iterator_free = kitty_graphics.placement_iterator_free;
+/// C: rustty_kitty_graphics_placement_iterator_free
+///
+/// # Safety
+/// `iter`, if non-null, must be a pointer returned by the matching `_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_free(
+    iter: kitty_graphics::PlacementIterator,
+) {
+    // SAFETY: `iter` validity is the caller's contract.
+    unsafe { kitty_graphics::placement_iterator_free(iter) }
+}
+
+// pub const kitty_graphics_placement_iterator_set = kitty_graphics.placement_iterator_set;
+/// C: rustty_kitty_graphics_placement_iterator_set
+///
+/// # Safety
+/// `iter`, if non-null, must be a live iterator; `value`, if non-null, must point
+/// to a value of the type required by `option`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_set(
+    iter: kitty_graphics::PlacementIterator,
+    option: c_int,
+    value: *const std::ffi::c_void,
+) -> c_int {
+    use kitty_graphics::PlacementIteratorOption;
+    // PORT NOTE: `if (comptime std.debug.runtime_safety) intToEnum(...) catch
+    // return .invalid_value;` — the guard lives here on the raw `c_int`.
+    let opt = match option {
+        0 => PlacementIteratorOption::Layer,
+        _ => return result::Result::InvalidValue.to_c_int(),
+    };
+    // SAFETY: `iter`/`value` validity is the caller's contract.
+    unsafe { kitty_graphics::placement_iterator_set(iter, opt, value) }.to_c_int()
+}
+
+// pub const kitty_graphics_placement_next = kitty_graphics.placement_iterator_next;
+/// C: rustty_kitty_graphics_placement_next
+///
+/// # Safety
+/// `iter`, if non-null, must be a live iterator seeded by `get(.., .placement_iterator, ..)`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_placement_next(
+    iter: kitty_graphics::PlacementIterator,
+) -> bool {
+    // SAFETY: `iter` validity is the caller's contract.
+    unsafe { kitty_graphics::placement_iterator_next(iter) }
+}
+
+// pub const kitty_graphics_placement_get = kitty_graphics.placement_get;
+/// C: rustty_kitty_graphics_placement_get
+///
+/// # Safety
+/// `iter`, if non-null, must be a live iterator positioned on an entry; `out`
+/// must point to storage of the type required by `data`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_placement_get(
+    iter: kitty_graphics::PlacementIterator,
+    data: kitty_graphics::PlacementData,
+    out: *mut std::ffi::c_void,
+) -> c_int {
+    // SAFETY: `iter`/`out` validity is the caller's contract.
+    unsafe { kitty_graphics::placement_get(iter, data, out) }.to_c_int()
+}
+
+// pub const kitty_graphics_placement_get_multi = kitty_graphics.placement_get_multi;
+/// C: rustty_kitty_graphics_placement_get_multi
+///
+/// # Safety
+/// See `kitty_graphics::placement_get_multi`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_placement_get_multi(
+    iter: kitty_graphics::PlacementIterator,
+    count: usize,
+    keys: *const kitty_graphics::PlacementData,
+    values: *const *mut std::ffi::c_void,
+    out_written: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { kitty_graphics::placement_get_multi(iter, count, keys, values, out_written) }
+        .to_c_int()
+}
+
+// pub const kitty_graphics_placement_rect = kitty_graphics.placement_rect;
+/// C: rustty_kitty_graphics_placement_rect
+///
+/// # Safety
+/// `iter`/`image`/`terminal`, if non-null, must be live; `out` must be a valid,
+/// writable pointer to a `CSelection`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_placement_rect(
+    iter: kitty_graphics::PlacementIterator,
+    image: kitty_graphics::ImageHandle,
+    terminal: terminal::Terminal,
+    out: *mut selection::CSelection,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { kitty_graphics::placement_rect(iter, image, terminal, out) }.to_c_int()
+}
+
+// pub const kitty_graphics_placement_pixel_size = kitty_graphics.placement_pixel_size;
+/// C: rustty_kitty_graphics_placement_pixel_size
+///
+/// # Safety
+/// `iter`/`image`/`terminal`, if non-null, must be live; `out_width`/`out_height`
+/// must be valid, writable pointers to `u32`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_placement_pixel_size(
+    iter: kitty_graphics::PlacementIterator,
+    image: kitty_graphics::ImageHandle,
+    terminal: terminal::Terminal,
+    out_width: *mut u32,
+    out_height: *mut u32,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { kitty_graphics::placement_pixel_size(iter, image, terminal, out_width, out_height) }
+        .to_c_int()
+}
+
+// pub const kitty_graphics_placement_grid_size = kitty_graphics.placement_grid_size;
+/// C: rustty_kitty_graphics_placement_grid_size
+///
+/// # Safety
+/// `iter`/`image`/`terminal`, if non-null, must be live; `out_cols`/`out_rows`
+/// must be valid, writable pointers to `u32`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_placement_grid_size(
+    iter: kitty_graphics::PlacementIterator,
+    image: kitty_graphics::ImageHandle,
+    terminal: terminal::Terminal,
+    out_cols: *mut u32,
+    out_rows: *mut u32,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { kitty_graphics::placement_grid_size(iter, image, terminal, out_cols, out_rows) }
+        .to_c_int()
+}
+
+// pub const kitty_graphics_placement_viewport_pos = kitty_graphics.placement_viewport_pos;
+/// C: rustty_kitty_graphics_placement_viewport_pos
+///
+/// # Safety
+/// `iter`/`image`/`terminal`, if non-null, must be live; `out_col`/`out_row` must
+/// be valid, writable pointers to `i32`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_placement_viewport_pos(
+    iter: kitty_graphics::PlacementIterator,
+    image: kitty_graphics::ImageHandle,
+    terminal: terminal::Terminal,
+    out_col: *mut i32,
+    out_row: *mut i32,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { kitty_graphics::placement_viewport_pos(iter, image, terminal, out_col, out_row) }
+        .to_c_int()
+}
+
+// pub const kitty_graphics_placement_source_rect = kitty_graphics.placement_source_rect;
+/// C: rustty_kitty_graphics_placement_source_rect
+///
+/// # Safety
+/// `iter`/`image`, if non-null, must be live; the four `out_*` pointers must be
+/// valid, writable pointers to `u32`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_placement_source_rect(
+    iter: kitty_graphics::PlacementIterator,
+    image: kitty_graphics::ImageHandle,
+    out_x: *mut u32,
+    out_y: *mut u32,
+    out_width: *mut u32,
+    out_height: *mut u32,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe {
+        kitty_graphics::placement_source_rect(iter, image, out_x, out_y, out_width, out_height)
+    }
+    .to_c_int()
+}
+
+// pub const kitty_graphics_placement_render_info = kitty_graphics.placement_render_info;
+/// C: rustty_kitty_graphics_placement_render_info
+///
+/// # Safety
+/// `iter`/`image`/`terminal`, if non-null, must be live; `out`, if non-null, must
+/// be a valid, writable pointer to a `PlacementRenderInfo`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_kitty_graphics_placement_render_info(
+    iter: kitty_graphics::PlacementIterator,
+    image: kitty_graphics::ImageHandle,
+    terminal: terminal::Terminal,
+    out: *mut kitty_graphics::PlacementRenderInfo,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { kitty_graphics::placement_render_info(iter, image, terminal, out) }.to_c_int()
+}
+
 #[cfg(test)]
 mod main_tests {
     // PORT NOTE: ghostty `terminal/c/main.zig` `test { _ = allocator; _ = color;
@@ -985,5 +1268,7 @@ mod main_tests {
         let _ = super::build_info::get as unsafe fn(_, _) -> _;
         let _ = super::allocator::alloc as unsafe fn(_, _) -> _;
         let _ = super::sys::set as unsafe fn(_, _) -> _;
+        // _ = kitty_graphics; (main.zig line 219)
+        let _ = super::kitty_graphics::get as unsafe fn(_, _, _) -> _;
     }
 }
