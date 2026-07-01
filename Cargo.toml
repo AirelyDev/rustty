@@ -163,6 +163,12 @@ spirv-cross-sys = { path = "crates-sys/spirv-cross-sys" }
 # path, built with ghostty's fixed `backend = .inproc` / `transport = .none`
 # options. KAT-only today (no consumer yet).
 sentry-sys = { path = "crates-sys/sentry-sys" }
+# R3: vendored Dear ImGui 1.92.5 (docking) + Dear Bindings 0.17 C API (the SAME
+# `ocornut/imgui` release + `dearimgui/dear_bindings` generator the reference
+# links via pkg/dcimgui). The FFI leaf backing the inspector UI; FreeType (with
+# its bundled libpng) is provided by `freetype-sys`. KAT-only today (no consumer
+# yet — the inspector tier is not yet ported).
+dcimgui-sys = { path = "crates-sys/dcimgui-sys" }
 # Stable polyfill of the unstable `core::alloc::Allocator` trait. This is the
 # faithful Rust map of Zig's `std.mem.Allocator`: `Allocator::allocate(Layout)`
 # / `deallocate` map to Zig `rawAlloc`/`rawFree`. `Global` == the current

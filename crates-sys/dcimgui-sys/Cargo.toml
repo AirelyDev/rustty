@@ -1,9 +1,26 @@
-# dcimgui-sys — vendored C dependency (R3: self-contained, no ghostty dep)
+# dcimgui-sys — vendored C/C++ dependency (R3: self-contained, no ghostty dep)
 #
-# This crate will vendor copied C sources from the SAME upstream library the
-# reference uses (Dear ImGui (C bindings) for the inspector) and build them standalone via `cc` + `bindgen`.
+# This crate vendors the SAME upstream sources the reference uses for its
+# inspector UI — Dear ImGui 1.92.5 (docking branch) plus the Dear Bindings 0.17
+# C API generated over it — copied in-tree under `vendor/` and built standalone
+# via `cc` + `bindgen`. It mirrors the reference's pkg/dcimgui/build.zig
+# `buildLib`: the same Dear ImGui core translation units (`imgui.cpp`,
+# `imgui_draw.cpp`, `imgui_tables.cpp`, `imgui_widgets.cpp`, `imgui_demo.cpp`),
+# the FreeType font backend (`misc/freetype/imgui_freetype.cpp`, enabled because
+# SharedDeps.zig sets `.freetype = true`), the Dear Bindings C wrappers
+# (`dcimgui.cpp`, `dcimgui_internal.cpp`), and ghostty's `ext.cpp` extension
+# shim — all compiled as C++ with the reference's `-D` flags
+# (`-DIMGUI_HAS_DOCK=1 -DIMGUI_USE_WCHAR32=1 -DIMGUI_DISABLE_OBSOLETE_FUNCTIONS=1
+# -DIMGUI_ENABLE_FREETYPE=1`, plus the non-Windows `IMGUI_IMPL_API=extern "C"`).
+#
+# Scope: the KAT-only FFI leaf provides the Dear ImGui core + C API. The
+# platform rendering backends the reference conditionally compiles
+# (`imgui_impl_metal.mm`, `imgui_impl_osx.mm`, `imgui_impl_opengl3.cpp`) are
+# Objective-C++/GL glue used only by the not-yet-ported renderer/apprt tiers and
+# require Metal/AppKit/GL framework linking; they are deferred until those
+# consumers land (the KAT exercises context lifecycle, no rendering backend).
+#
 # `links` declares the native lib so Cargo enforces one-version linking.
-# STUB: no C is compiled yet (see build.rs).
 [package]
 name = "dcimgui-sys"
 version.workspace = true
@@ -15,10 +32,42 @@ authors.workspace = true
 links = "dcimgui"
 build = "build.rs"
 
+[lib]
+# The FFI is bindgen-generated: the "doctests" harvested from Dear ImGui's C
+# documentation comments are not Rust and must not be compiled/run. (This
+# crate's real test is the KAT in the unit-test harness.)
+doctest = false
+
 [lints]
 workspace = true
 
 [dependencies]
+# Dear ImGui is built with `-DIMGUI_ENABLE_FREETYPE=1` (the reference's
+# `.freetype = true`), so `imgui_draw.cpp` references
+# `ImGuiFreeType::GetFontLoader()` (in `misc/freetype/imgui_freetype.cpp`),
+# which `#include <ft2build.h>` and calls the FreeType API. A normal dependency
+# on `freetype-sys` (a) exposes its vendored FreeType headers to this build
+# script as `DEP_FREETYPE_INCLUDE` (for compiling `imgui_freetype.cpp`), and
+# (b) propagates its static `freetype` archive to the final link of the KAT test
+# binary — the reference wires FreeType the same way via
+# `lib.linkLibrary(freetype_dep.artifact("freetype"))`. The dependency is
+# link-only; dcimgui-sys uses none of freetype-sys's Rust API.
+#
+# NOTE on libpng: the reference builds its FreeType dependency with
+# `.@"enable-libpng" = true`, so PNG color-bitmap decoding is available. In this
+# workspace that libpng (1.6.43) is already compiled *into* `libfreetype.a` by
+# `freetype-sys` (its build.rs bundles the same `png*.c` sources), so the PNG
+# symbols arrive transitively through the freetype archive. dcimgui/imgui
+# sources include no `<png.h>` directly, so a separate `libpng-sys` dependency
+# is neither needed for headers (`DEP_PNG_INCLUDE` would be unused) nor for
+# linking — and force-linking it would duplicate freetype-sys's bundled `png_*`
+# symbols. It is therefore intentionally omitted.
+freetype-sys = { path = "../freetype-sys" }
 
 [build-dependencies]
-# TODO(R3): add `cc` and `bindgen` here when the vendored C source lands.
+# R3: compile the vendored Dear ImGui + Dear Bindings C++ standalone (`cc` in
+# C++17 mode) with the reference's flags, and auto-generate the FFI (`bindgen`)
+# from the same public C header the reference's `pkg/dcimgui/main.zig` @cImports
+# (`dcimgui.h`).
+cc = "1"
+bindgen = "0.72"
