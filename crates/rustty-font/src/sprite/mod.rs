@@ -2,11 +2,10 @@
 // const canvas = @import("sprite/canvas.zig");
 // pub const Face = @import("sprite/Face.zig");
 //
-// PORT NOTE: `canvas` is the `canvas` submodule below. `Face` (sprite/Face.zig)
-// is ported in a later sprite batch; its re-export is recorded here as a
-// commented reference until then.
+// PORT NOTE: `canvas` is the `canvas` submodule below; `face` is `sprite/Face.zig`.
 pub mod canvas;
 pub mod draw;
+pub mod face;
 
 // pub const Box = canvas.Box;
 pub use canvas::Box;
@@ -16,6 +15,8 @@ pub use canvas::Point;
 pub use canvas::Canvas;
 // pub const Color = canvas.Color;
 pub use canvas::Color;
+// pub const Face = @import("sprite/Face.zig");
+pub use face::Face;
 
 /// Sprites are represented as special codepoints outside of the Unicode
 /// codepoint range. Unicode maxes out at U+10FFFF (21 bits), and we use the

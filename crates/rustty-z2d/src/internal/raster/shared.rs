@@ -5,10 +5,16 @@
 // (R3 vendored dep).
 //
 // SUBSET NOTE (rustty): the non-fast-path branches (where the operator does not
-// reduce to a direct source/opacity write and the full `StrideCompositor` is
-// invoked) are NOT part of the ghostty fill subset — ghostty fills/strokes with
-// opaque `alpha8`, which always fast-paths through `paint_stride`. Those
-// branches are `unimplemented!` and never reached in the subset.
+// reduce to a direct source/opacity write) are reached by ghostty's *shaded*
+// sprite fills, which fill with a TRANSLUCENT `alpha8` source (e.g. the corner
+// triangle / block shades) and so cannot fast-path through `paint_stride`. The
+// reference routes those through the full SIMD `StrideCompositor`; the scalar
+// equivalent — `Surface::composite_stride` (RGBA `dst_in` premultiply by the
+// span opacity, then a per-pixel `run_pixel_t(dst, src, operator)` composite) —
+// already reproduces that pipeline exactly, so the non-fast-path branches
+// delegate to it. The `getStride`/`pxLen() == 0` guard is subsumed by
+// `composite_stride`'s own bounds check. Only `OpaquePattern` (pixel) sources
+// exist in this subset; gradient/dither pattern sources are not ported.
 
 use crate::compositor::{Operator, Precision};
 use crate::pattern::Pattern;
@@ -34,9 +40,12 @@ pub fn composite_opaque(
         if fill_reduces_to_source(operator, op.pixel) {
             surface.paint_stride(x, y, len, op.pixel);
         } else {
-            unimplemented!(
-                "composite_opaque non-fast-path requires the full StrideCompositor (not in the z2d subset)"
-            );
+            // Non-fast-path: `dst = operator(dst, src_pixel)` per pixel. The
+            // reference runs the single-op `StrideCompositor` (`{operator, src:
+            // pixel}`); the scalar equivalent is `composite_stride` at full
+            // opacity (255) — no premultiply, then `run_pixel_t(dst, src,
+            // operator)` across the span.
+            surface.composite_stride(x, y, len, op.pixel, operator, 255);
         }
     }
 }
@@ -67,9 +76,12 @@ pub fn composite_opacity(
         if fill_reduces_to_source(operator, op.pixel) {
             surface.composite_stride(x, y, len, op.pixel, operator, opacity);
         } else {
-            unimplemented!(
-                "composite_opacity non-fast-path requires the full StrideCompositor (not in the z2d subset)"
-            );
+            // Non-fast-path: premultiply the source by `opacity` (`dst_in`
+            // against an alpha8 mask) then composite with `operator`. The
+            // reference runs the two-op `StrideCompositor` pipeline;
+            // `composite_stride` performs exactly that scalar sequence (DstIn
+            // premultiply when opacity < 255, then the operator composite).
+            surface.composite_stride(x, y, len, op.pixel, operator, opacity);
         }
     }
 }

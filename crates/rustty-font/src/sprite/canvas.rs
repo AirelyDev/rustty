@@ -165,7 +165,11 @@ impl Color {
 pub struct Canvas {
     /// The underlying z2d surface.
     // sfc: z2d.Surface,
-    sfc: Surface,
+    // PORT NOTE: Zig struct fields are public across files; `sprite/Face.zig`'s
+    // `testDrawRanges` reads `canvas.sfc` (to composite the glyph into the test
+    // atlas) and zeroes `canvas.sfc.image_surface_alpha8.buf`. This narrows that
+    // access to `pub(crate)` so `sprite::face` can reach it faithfully.
+    pub(crate) sfc: Surface,
 
     // PORT NOTE: the reference fields are package-visible; `special.zig` reads
     // `canvas.padding_y` from a sibling `draw/` module, and the legacy-computing
@@ -756,10 +760,21 @@ impl Canvas {
         // defer closed_path.deinit(self.alloc);
         // try closed_path.close(self.alloc);
         //
-        // PORT NOTE: rustty-z2d's `Path` is `Vec`-backed, so cloning the whole
-        // path (`path.clone()`) copies its node buffer and drawing state; `close`
-        // is infallible and needs no allocator. The cloned path frees on drop.
-        let mut closed_path = path.clone();
+        // PORT NOTE: the reference copies the path struct and then REPLACES its
+        // node list with a heap clone (`closed_path.nodes = try
+        // path.nodes.clone(self.alloc)`) — a GROWABLE list, so the subsequent
+        // `close` can append two nodes even when the source `path` came from a
+        // fixed-capacity `StaticPath`. rustty-z2d's `Path::clone` would carry the
+        // source's static capacity limit (panicking on `close`), so we rebuild a
+        // growable path from `Path::empty()` with the cloned nodes and drawing
+        // state, matching the reference's growable-clone semantics. `close` is
+        // infallible and needs no allocator; the cloned path frees on drop.
+        let mut closed_path = Path::empty();
+        closed_path.nodes = path.nodes.clone();
+        closed_path.initial_point = path.initial_point;
+        closed_path.current_point = path.current_point;
+        closed_path.tolerance = path.tolerance;
+        closed_path.transformation = path.transformation;
         closed_path.close();
 
         // Fill the shape in white to the fill surface, we use

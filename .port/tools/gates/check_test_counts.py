@@ -143,6 +143,28 @@ MAP = {
     # mirroring the reference `test { _ = @import(png_test) }` inclusion) +
     # glyf_rasterize/glyf_rasterize_png_test.rs (1) = 15 -> 15 >= 14.
     "font_glyf_rasterize":([f"{GHF}/glyf_rasterize.zig", f"{GHF}/glyf_rasterize_png_test.zig"], [f"{RSF}/glyf_rasterize.rs", f"{RSF}/glyf_rasterize/glyf_rasterize_png_test.rs"], 0),
+    # Stage F0 sprite — src/font/sprite (GHF base = src/font). The sprite.zig
+    # module root (Sprite enum) -> sprite/mod.rs; canvas.zig (the z2d-backed draw
+    # Canvas) -> sprite/canvas.rs; and the per-glyph draw/ modules. The draw
+    # modules are 0-test BY DESIGN — their contract is the G3b comment-coverage
+    # gate (check_comment_coverage.py), not test-count — so most rows are 0 vs the
+    # rustty helper-test margin. The ONLY quoted sprite test is Face.zig's "sprite
+    # face render all sprites" PNG known-answer (Face.zig:513), now LANDED in
+    # sprite/face.rs along with the sprite/testdata PNG suite it decodes (pixel-
+    # exact vs res/*.png). face.rs adds two helper #[test]s (ranges_have_no_overlap
+    # — the reference's comptime overlap assertion; has_codepoint_and_blank_glyph —
+    # the refAllDecls smoke), so rust=3 >= zig=1 (apc_deferred=0). branch.zig/
+    # special.zig/symbols_for_legacy_computing(+supplement).zig are 0-test by design
+    # (tracked by G3b), so not mapped here.
+    "font_sprite":               ([f"{GHF}/sprite.zig"], [f"{RSF}/sprite/mod.rs"], 0),
+    "font_sprite_canvas":        ([f"{GHF}/sprite/canvas.zig"], [f"{RSF}/sprite/canvas.rs"], 0),
+    "font_sprite_face":          ([f"{GHF}/sprite/Face.zig"], [f"{RSF}/sprite/face.rs"], 0),
+    "font_sprite_draw_block":    ([f"{GHF}/sprite/draw/block.zig"], [f"{RSF}/sprite/draw/block.rs"], 0),
+    "font_sprite_draw_box":      ([f"{GHF}/sprite/draw/box.zig"], [f"{RSF}/sprite/draw/box.rs"], 0),
+    "font_sprite_draw_braille":  ([f"{GHF}/sprite/draw/braille.zig"], [f"{RSF}/sprite/draw/braille.rs"], 0),
+    "font_sprite_draw_common":   ([f"{GHF}/sprite/draw/common.zig"], [f"{RSF}/sprite/draw/common.rs"], 0),
+    "font_sprite_draw_geometric_shapes":([f"{GHF}/sprite/draw/geometric_shapes.zig"], [f"{RSF}/sprite/draw/geometric_shapes.rs"], 0),
+    "font_sprite_draw_powerline":([f"{GHF}/sprite/draw/powerline.zig"], [f"{RSF}/sprite/draw/powerline.rs"], 0),
     # Stage C — rustty-args CLI arg parser (GH base = src/cli, not src/terminal).
     # args.zig (36t) tests live in src/args/tests.rs (module include from args.rs).
     # diagnostics.zig has 0 tests (ported as a sibling required by args.zig).
