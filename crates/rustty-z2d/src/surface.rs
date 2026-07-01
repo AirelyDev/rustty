@@ -6,10 +6,13 @@
 // SUBSET NOTE (rustty): only the memory-backed `ImageSurface` variants (argb,
 // xrgb, rgb, rgba, alpha8) are ported — the ghostty sprite/glyf rasterizers use
 // `alpha8` (plus rgb/rgba scratch surfaces). The sub-8-bit `PackedImageSurface`
-// (alpha4/2/1), and the compositor-backed `composite` / `composite_stride` /
-// `get_stride` paths, are NOT part of this subset (they pull in the full SIMD
-// compositor). Those methods are present but unimplemented, and calling them
-// panics with a clear message; see the crate-level blockers doc.
+// (alpha4/2/1) and the `get_stride` path are NOT part of this subset (they pull
+// in the full SIMD compositor); those methods are present but unimplemented, and
+// calling them panics with a clear message. The compositor-backed `composite` /
+// `composite_stride` paths ARE ported, but as scalar reproductions that route
+// each pixel through the integer `run_pixel_t` core rather than the SIMD
+// `SurfaceCompositor`/`StrideCompositor` (integer operators only); see the
+// crate-level blockers doc.
 
 //! Surface types represented by the library.
 
@@ -478,11 +481,101 @@ impl Surface {
         dispatch!(self, s => s.composite_stride(x, y, len, px, operator, opacity));
     }
 
-    /// Runs the single compositor operation described by `operator`.
-    ///
-    /// SUBSET: requires the full compositor; unimplemented.
-    pub fn composite(&mut self, _src: &Surface, _operator: Operator, _dst_x: i32, _dst_y: i32) {
-        unimplemented!("Surface::composite requires the full compositor (not in the z2d subset)")
+    /// Composites `src` onto this surface using `operator`, with the source
+    /// bounded to its own dimensions and oriented at `(dst_x, dst_y)`. Any parts
+    /// of the source outside the destination are ignored.
+    //
+    // PORT NOTE: faithful scalar port of `Surface.composite`, which in z2d is a
+    // one-operation call into `SurfaceCompositor.run` with the source `Param`
+    // being a `.surface`. The SIMD `SurfaceCompositor`/`StrideCompositor` are not
+    // in the ghostty subset; instead we reproduce `SurfaceCompositor.run`'s
+    // geometry (negative-offset reflection, destination clamping, per-scanline
+    // stride bounds) exactly and composite each destination pixel through the
+    // scalar integer `run_pixel_t` (the same core `StrideCompositor` uses via
+    // `runOperator`). For the single-surface-source op, `StrideCompositor.run`
+    // reduces to `_dst = runOperator(_dst_from_dst, _src_from_src, operator)`
+    // written back to the destination stride — i.e. `run_pixel_t(dst, src, op)`
+    // per pixel. The computed `scanline_width` keeps every access within both
+    // buffers, so no stride wrapping can occur. The `opts.precision` parameter is
+    // omitted: this subset is integer-only, matching `composite_stride`.
+    pub fn composite(&mut self, src: &Surface, operator: Operator, dst_x: i32, dst_y: i32) {
+        // No-op if we'd just be drawing out of bounds of the surface.
+        if dst_x >= self.get_width() || dst_y >= self.get_height() {
+            return;
+        }
+
+        // The bounding info is taken from the (surface) source.
+        let src_width = src.get_width();
+        let src_height = src.get_height();
+        let dst_width = self.get_width();
+        let dst_height = self.get_height();
+
+        // "Reflect" our x/y offsets if they are negative, which indicates
+        // where we start on the source, otherwise we start at 0.
+        let src_start_x: i32 = if dst_x < 0 {
+            dst_x.unsigned_abs() as i32
+        } else {
+            0
+        };
+        let src_start_y: i32 = if dst_y < 0 {
+            dst_y.unsigned_abs() as i32
+        } else {
+            0
+        };
+
+        // Compute our actual drawing dimensions.
+        let width = if src_width + dst_x > dst_width {
+            dst_width - dst_x
+        } else {
+            src_width
+        };
+        let height = if src_height + dst_y > dst_height {
+            dst_height - dst_y
+        } else {
+            src_height
+        };
+
+        if src_start_x >= width || src_start_y >= height {
+            // Our calculated source offsets are completely outside of the draw
+            // area itself. This can happen when the source is offset above or
+            // to the left enough that it does not overlap with the destination
+            // at all (due to the reflection of the large negative offset in
+            // this scenario). Return, as nothing will be drawn.
+            return;
+        }
+
+        let src_scan_low: i32 = src_start_y; // limited to >= 0 above
+        let src_scan_high: i32 = src_scan_low.max(height);
+        let dst_start_x: i32 = src_start_x + dst_x;
+        let scanline_width: usize = (width - src_start_x).max(0) as usize;
+
+        // Assert that the dst_start_x (calculated above) and absolute minimum
+        // dst_start_y (calculated per scanline below) are not below zero. This
+        // should be ultimately handled above, and negative co-ordinates are
+        // safe to pass into getStride (in this case, a zero-length stride is
+        // returned), but it's not intended and this exists as a final
+        // safeguard against that.
+        {
+            let dst_start_y: i32 = src_scan_low + dst_y;
+            if dst_start_x < 0 || dst_start_y < 0 {
+                panic!("invalid initial effective offsets. this is a bug, please report it");
+            }
+        }
+
+        for src_y in src_scan_low.max(0)..src_scan_high.max(0) {
+            let dst_start_y: i32 = src_y + dst_y;
+            // Composite this scanline: the destination stride starts at
+            // `(dst_start_x, dst_start_y)`, the source stride at
+            // `(src_start_x, src_y)`, both `scanline_width` long.
+            for k in 0..scanline_width as i32 {
+                let dpx = self.get_pixel(dst_start_x + k, dst_start_y);
+                let spx = src.get_pixel(src_start_x + k, src_y);
+                if let (Some(dpx), Some(spx)) = (dpx, spx) {
+                    let out = crate::compositor::run_pixel_t(dpx, spx, operator);
+                    self.put_pixel(dst_start_x + k, dst_start_y, out);
+                }
+            }
+        }
     }
 
     /// Convenience accessor for the alpha8 backing buffer (immutable).
@@ -597,6 +690,67 @@ mod tests {
                 },
                 sfc.buf[21]
             );
+        }
+    }
+
+    #[test]
+    fn composite_alpha8_src() {
+        // `.src` copies the source alpha onto the destination, ignoring the
+        // existing destination pixel.
+        let mut dst = Surface::init_pixel(Pixel::Alpha8(Alpha8 { a: 200 }), 4, 3).unwrap();
+        let src = Surface::init_pixel(Pixel::Alpha8(Alpha8 { a: 100 }), 4, 3).unwrap();
+        dst.composite(&src, Operator::Src, 0, 0);
+        for y in 0..3 {
+            for x in 0..4 {
+                assert_eq!(Some(Pixel::Alpha8(Alpha8 { a: 100 })), dst.get_pixel(x, y));
+            }
+        }
+    }
+
+    #[test]
+    fn composite_alpha8_src_over() {
+        // `.src_over`: out.a = src.a + dst.a - mul(src.a, dst.a)
+        //            = 100 + 200 - (100 * 200 / 255) = 300 - 78 = 222.
+        let mut dst = Surface::init_pixel(Pixel::Alpha8(Alpha8 { a: 200 }), 4, 3).unwrap();
+        let src = Surface::init_pixel(Pixel::Alpha8(Alpha8 { a: 100 }), 4, 3).unwrap();
+        dst.composite(&src, Operator::SrcOver, 0, 0);
+        for y in 0..3 {
+            for x in 0..4 {
+                assert_eq!(Some(Pixel::Alpha8(Alpha8 { a: 222 })), dst.get_pixel(x, y));
+            }
+        }
+    }
+
+    #[test]
+    fn composite_alpha8_offset_clipped() {
+        // A 2x2 source placed at (3, 2) on a 4x3 destination: only the top-left
+        // source pixel lands (at dst (3, 2)); the rest is clipped by the
+        // destination bounds. `.src` overwrites just that pixel.
+        let mut dst = Surface::init_pixel(Pixel::Alpha8(Alpha8 { a: 0 }), 4, 3).unwrap();
+        let src = Surface::init_pixel(Pixel::Alpha8(Alpha8 { a: 128 }), 2, 2).unwrap();
+        dst.composite(&src, Operator::Src, 3, 2);
+        for y in 0..3 {
+            for x in 0..4 {
+                let want = if x == 3 && y == 2 { 128 } else { 0 };
+                assert_eq!(Some(Pixel::Alpha8(Alpha8 { a: want })), dst.get_pixel(x, y));
+            }
+        }
+    }
+
+    #[test]
+    fn composite_alpha8_negative_offset_reflects() {
+        // A 4x4 source placed at (-2, -1): the negative offset reflects the
+        // source start to (2, 1), so dst (0, 0) receives src (2, 1). With a
+        // uniform source and `.src` the whole (overlapping) destination is set.
+        let mut dst = Surface::init_pixel(Pixel::Alpha8(Alpha8 { a: 0 }), 4, 3).unwrap();
+        let src = Surface::init_pixel(Pixel::Alpha8(Alpha8 { a: 77 }), 4, 4).unwrap();
+        dst.composite(&src, Operator::Src, -2, -1);
+        // Overlap region: dst x in 0..2 (src cols 2..4), dst y in 0..3 (src rows 1..4).
+        for y in 0..3 {
+            for x in 0..4 {
+                let want = if x < 2 { 77 } else { 0 };
+                assert_eq!(Some(Pixel::Alpha8(Alpha8 { a: want })), dst.get_pixel(x, y));
+            }
         }
     }
 }
