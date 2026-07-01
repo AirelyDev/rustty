@@ -74,13 +74,17 @@ pub use feature::DEFAULT_FEATURES;
 // };
 //
 // PORT NOTE (selector): the reference selects the active shaper from
-// `options.backend`; the freetype/`coretext_harfbuzz` backends resolve to
-// `harfbuzz.Shaper`. This crate models the macOS `coretext_harfbuzz`
-// configuration (CoreText faces carry an `hb_font`) and the Linux
-// `fontconfig_freetype` default (FreeType faces carry an `hb_font`) — both use
-// the HarfBuzz shaper, so the selector points here. The `coretext`-native and
-// `coretext_noshape` (`noop`) arms land with the CoreText shaper. `noop` is
-// still built and tested via its own submodule.
+// `options.backend`, which defaults (per `font/backend.zig` `Backend.default`)
+// to `.coretext` on macOS/Darwin and `.fontconfig_freetype` elsewhere. The
+// `.coretext` arm resolves to `coretext.Shaper` (CoreText-native shaping); the
+// `fontconfig_freetype`/`freetype`/`coretext_harfbuzz` arms resolve to
+// `harfbuzz.Shaper`. We mirror those defaults with a cfg split: macOS lands on
+// the CoreText shaper, every other target on the HarfBuzz shaper. The
+// `coretext_noshape` (`noop`) arm is still built and tested via its own
+// submodule.
+#[cfg(target_os = "macos")]
+pub type Shaper = coretext::Shaper;
+#[cfg(not(target_os = "macos"))]
 pub type Shaper = harfbuzz::Shaper;
 
 /// A cell is a single glyph within a terminal that should be rendered

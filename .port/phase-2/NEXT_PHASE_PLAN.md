@@ -144,6 +144,25 @@ discoverer (skip-stub), web_canvas face (wasm, feature-gated OFF).
 NEXT = **F4 shaper** (shape.zig + shaper/{coretext,harfbuzz,noop,run}.zig — the
 HarfBuzz/CoreText text-shaping tier over the F3 faces).
 
+## Stage F4 — font shaper tier: ✅ DONE (2026-07-01) — rustty-font-shaper COMPLETE
+The text-shaping tier over the F3 faces. shape.rs `Shaper` selector wired from the
+`noop` placeholder to the reference default backend (`font/backend.zig`
+`Backend.default`): cfg split → macOS lands on `coretext::Shaper` (CoreText-native),
+every other target on `harfbuzz::Shaper`; the `noop` shaper stays built+tested via its
+own submodule. shaper/harfbuzz.rs+harfbuzz_tests.rs (24 tests: 20 executing + 4
+SkipZigTest-style) over hb.rs (RunIteratorHook prepare/addCodepoint/finalize +
+glyph-run/ligature cell_offset extraction). shaper/coretext.rs+coretext_tests.rs
+(27 tests, live CoreText via objc2 CTLine/CTRun/CTTypesetter/CTStringAttributes +
+the cf_release_thread raw-ptr Box<Thread>). check_test_counts.py extended:
+`font_shaper_coretext` now maps coretext.rs + coretext_tests.rs (mirrors the
+harfbuzz.rs+harfbuzz_tests.rs split). 110 rustty-font-shaper tests pass (59 F3 + 24
+harfbuzz + 27 coretext); ASan clean (FFI tests can't run under Miri, ASan covers
+harfbuzz/CoreText); clippy -D/fmt/acyclic green (rustty-font STILL no vt edge); whole
+count gate GREEN (count_ok); scoped G3b harfbuzz.zig+coretext.zig missing=0; no
+workspace regression (vt 2019, font 74).
+**renderer now UNBLOCKED**: consumes SharedGrid (full init/deinit/RwLock/metrics/atlas
+grids) + the `Shaper` selector.
+
 ## Stage D — heavy tier (later)
 rest of font (faces/shapers: freetype/harfbuzz/fontconfig/CoreText -sys, ~10.7k loc) →
 input (completes key_mods once config lands) → config (oniguruma-sys) → renderer

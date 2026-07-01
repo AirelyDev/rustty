@@ -324,8 +324,10 @@ MAP = {
     # `test { ... }` blocks live in the sibling shaper/harfbuzz_tests.rs, attached
     # as the `tests` submodule — same split as the `page` module's page_tests.rs).
     "font_shaper_harfbuzz":      ([f"{GHF}/shaper/harfbuzz.zig"], [f"{RSFS}/shaper/harfbuzz.rs", f"{RSFS}/shaper/harfbuzz_tests.rs"], 0),
-    # shaper/coretext.zig: 27 quoted shaping tests -> shaper/coretext.rs.
-    "font_shaper_coretext":      ([f"{GHF}/shaper/coretext.zig"], [f"{RSFS}/shaper/coretext.rs"], 0),
+    # shaper/coretext.zig: 27 quoted shaping tests -> shaper/coretext.rs (the
+    # `test { ... }` blocks live in the sibling shaper/coretext_tests.rs, attached
+    # as the `tests` submodule — same split as shaper/harfbuzz_tests.rs).
+    "font_shaper_coretext":      ([f"{GHF}/shaper/coretext.zig"], [f"{RSFS}/shaper/coretext.rs", f"{RSFS}/shaper/coretext_tests.rs"], 0),
     # shaper/feature.zig: 2 quoted tests -> shaper/feature.rs.
     "font_shaper_feature":       ([f"{GHF}/shaper/feature.zig"], [f"{RSFS}/shaper/feature.rs"], 0),
     # shaper/Cache.zig: 1 named-unquoted behavioral test -> shaper/cache.rs.
