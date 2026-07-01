@@ -23,6 +23,12 @@ pub mod collection;
 pub mod deferred_face;
 pub mod discovery;
 pub mod face;
+// PORT: `shape.zig` (the `Shaper` interface + backend selector) and its
+// `shaper/` sub-files (`run`/`feature`/`Cache`/`noop`) — the shaper framework.
+pub mod shape;
+// SEAM for `SharedGrid.zig` (the shared glyph-atlas grid the renderer reads).
+// The full port is a later heavy-tier subtask; see the module doc.
+pub mod shared_grid;
 // FFI-glue modules backing the FreeType face (thin `unsafe` wrappers over the
 // `-sys` crates; see each module's PORT NOTE). Not part of any reference file's
 // test contract — the full `pkg/freetype`, `pkg/harfbuzz`, `src/font/Library.zig`
@@ -79,6 +85,12 @@ pub use discovery::Descriptor;
 pub use discovery::Discover;
 // pub const Library = library.Library;
 pub use library::Library;
+// pub const Shaper = shape.Shaper;
+pub use shape::Shaper;
+// pub const ShaperCache = shape.Cache;
+pub use shape::Cache as ShaperCache;
+// pub const SharedGrid = @import("SharedGrid.zig");
+pub use shared_grid::SharedGrid;
 // pub const SpriteFace = sprite.Face;
 pub use rustty_font::sprite::Face as SpriteFace;
 // pub const Sprite = sprite.Sprite;
