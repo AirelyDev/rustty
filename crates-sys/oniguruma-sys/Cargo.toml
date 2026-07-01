@@ -1,9 +1,13 @@
 # oniguruma-sys — vendored C dependency (R3: self-contained, no ghostty dep)
 #
-# This crate will vendor copied C sources from the SAME upstream library the
-# reference uses (Oniguruma regex engine) and build them standalone via `cc` + `bindgen`.
-# `links` declares the native lib so Cargo enforces one-version linking.
-# STUB: no C is compiled yet (see build.rs).
+# This crate vendors the SAME upstream C library the reference uses — Oniguruma
+# 6.9.9, the regex engine — copied in-tree under `vendor/` (fetched from the
+# exact URL in the reference's pkg/oniguruma/build.zig.zon) and built standalone
+# via `cc` + `bindgen`. It mirrors the reference's pkg/oniguruma/build.zig
+# `buildLib`: the same 47 `src/*.c` translation units, the same generated
+# `config.h` (from `src/config.h.cmake.in` with the reference's substitutions),
+# and the same public header for the FFI (`oniguruma.h`). `links = "onig"`
+# declares the native lib so Cargo enforces one-version linking.
 [package]
 name = "oniguruma-sys"
 version.workspace = true
@@ -15,10 +19,20 @@ authors.workspace = true
 links = "onig"
 build = "build.rs"
 
+[lib]
+# The FFI is bindgen-generated: the "doctests" harvested from Oniguruma's C
+# documentation comments are not Rust and must not be compiled/run. (This
+# crate's real test is the KAT in the unit-test harness.)
+doctest = false
+
 [lints]
 workspace = true
 
 [dependencies]
 
 [build-dependencies]
-# TODO(R3): add `cc` and `bindgen` here when the vendored C source lands.
+# R3: compile the vendored Oniguruma C standalone (`cc`) with a generated
+# `config.h`, and auto-generate the FFI (`bindgen`) from the same public header
+# the reference's `c.zig` @cImports (`oniguruma.h`).
+cc = "1"
+bindgen = "0.72"
