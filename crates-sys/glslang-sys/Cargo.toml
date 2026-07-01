@@ -1,9 +1,16 @@
-# glslang-sys — vendored C dependency (R3: self-contained, no ghostty dep)
+# glslang-sys — vendored C++ dependency (R3: self-contained, no ghostty dep)
 #
-# This crate will vendor copied C sources from the SAME upstream library the
-# reference uses (glslang GLSL->SPIR-V compiler) and build them standalone via `cc` + `bindgen`.
+# This crate vendors the SAME upstream library the reference uses — glslang
+# 14.2.0, the Khronos GLSL/HLSL -> SPIR-V compiler — copied in-tree under
+# `vendor/` (fetched from the exact URL in the reference's
+# pkg/glslang/build.zig.zon) and built standalone via `cc` + `bindgen`. It
+# mirrors the reference's pkg/glslang/build.zig `buildGlslang`: the same ~40 C++
+# translation units across `glslang/` (GenericCodeGen, MachineIndependent + its
+# preprocessor, the C interface, ResourceLimits, OSDependent/Unix) and `SPIRV/`
+# (incl. the SPIR-V C interface), the same C++17 toolchain (`linkLibCpp`), and
+# the reference's `override/` include dir which supplies the CMake-generated
+# `glslang/build_info.h` (ghostty-authored build input, vendored faithfully).
 # `links` declares the native lib so Cargo enforces one-version linking.
-# STUB: no C is compiled yet (see build.rs).
 [package]
 name = "glslang-sys"
 version.workspace = true
@@ -15,10 +22,21 @@ authors.workspace = true
 links = "glslang"
 build = "build.rs"
 
+[lib]
+# The FFI is bindgen-generated: the "doctests" harvested from glslang's C
+# documentation comments are not Rust and must not be compiled/run. (This
+# crate's real test is the KAT in the unit-test harness.)
+doctest = false
+
 [lints]
 workspace = true
 
 [dependencies]
 
 [build-dependencies]
-# TODO(R3): add `cc` and `bindgen` here when the vendored C source lands.
+# R3: compile the vendored glslang C++ standalone (`cc` in C++17 mode) with the
+# reference's flags, and auto-generate the FFI (`bindgen`) from the same public
+# headers the reference's `c.zig` @cImports (`glslang_c_interface.h` +
+# `resource_limits_c.h`).
+cc = "1"
+bindgen = "0.72"
