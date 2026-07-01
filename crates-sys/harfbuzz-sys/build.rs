@@ -79,6 +79,17 @@ fn main() {
             .define("HAVE_PTHREAD", Some("1"));
     }
 
+    // CoreText backend (macOS): the `coretext_harfbuzz` / `coretext_freetype`
+    // backends shape with HarfBuzz over a CoreText-provided `hb_font_t` created
+    // via `hb_coretext_font_create` (`src/hb-coretext-font.cc`). Enable the
+    // capability and link the system frameworks HarfBuzz's CoreText integration
+    // uses (CoreText/CoreGraphics/CoreFoundation, umbrella'd by
+    // ApplicationServices). Additive: the FreeType `hb-ft` path is unchanged.
+    if target_os == "macos" {
+        build.define("HAVE_CORETEXT", Some("1"));
+        println!("cargo:rustc-link-lib=framework=ApplicationServices");
+    }
+
     // The reference disables ubsan on MSVC (Zig's ubsan runtime cannot be
     // bundled on Windows, leaving __ubsan_handle_* unresolved).
     if target_env == "msvc" {
@@ -102,10 +113,30 @@ fn main() {
     // `c.zig` @cImports (see wrapper.h: `hb.h` + `hb-ft.h`). Uses the vendored
     // HarfBuzz src include dir plus the FreeType include dir (hb-ft.h pulls
     // <ft2build.h>).
-    let bindings = bindgen::Builder::default()
+    let mut builder = bindgen::Builder::default()
         .header(manifest_dir.join("wrapper.h").to_string_lossy())
         .clang_arg(format!("-I{}", hb_src.display()))
-        .clang_arg(format!("-I{ft_include}"))
+        .clang_arg(format!("-I{ft_include}"));
+
+    // On macOS, `wrapper.h` pulls `hb-coretext.h`, which includes the
+    // `ApplicationServices` framework umbrella header. `cc` auto-supplies the
+    // SDK sysroot, but libclang (bindgen) does not — point it at the active SDK
+    // so the framework headers resolve.
+    if target_os == "macos" {
+        if let Ok(output) = std::process::Command::new("xcrun")
+            .args(["--show-sdk-path"])
+            .output()
+        {
+            if output.status.success() {
+                let sdk = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !sdk.is_empty() {
+                    builder = builder.clang_arg(format!("-isysroot{sdk}"));
+                }
+            }
+        }
+    }
+
+    let bindings = builder
         // Emit the HarfBuzz public surface (hb_* functions/types + HB_* macros).
         .allowlist_function("hb_.*")
         .allowlist_type("hb_.*")

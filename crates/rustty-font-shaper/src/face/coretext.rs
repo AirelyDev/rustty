@@ -58,6 +58,8 @@ use rustty_font::opentype::post::Post;
 use rustty_font::opentype::svg::SVG;
 use rustty_util::quirks::inlineAssert as assert;
 
+use crate::hb;
+
 use super::{DesiredSize, Options, Variation};
 
 /// Raw C entry points that objc2 0.3 does not wrap.
@@ -149,13 +151,17 @@ pub struct Face {
     // performs the single `CFRelease` the reference's `deinit`/`errdefer` do.
     pub font: CFRetained<CTFont>,
 
-    // /// Harfbuzz font corresponding to this face. We only use this
-    // /// if we're using Harfbuzz.
+    /// Harfbuzz font corresponding to this face. We only use this
+    /// if we're using Harfbuzz.
     // hb_font: if (harfbuzz_shaper) harfbuzz.Font else void,
     //
-    // PORT NOTE: `harfbuzz_shaper == false` on the `coretext` backend, so this
-    // field is `void` and is omitted; it returns with the `coretext_harfbuzz`
-    // backend port.
+    // PORT NOTE: this crate models the macOS `coretext_harfbuzz` backend for the
+    // shaper tier (`harfbuzz_shaper == true`, see `HARFBUZZ_SHAPER` below), so the
+    // face carries a real `hb_font` built from the `CTFont` via
+    // `harfbuzz.coretext.createFont`. `hb::Font` is a raw-pointer handle (no
+    // `Drop`); it is destroyed in `deinit`, exactly as the FreeType face does.
+    pub hb_font: hb::Font,
+
     /// Set quirks.disableDefaultFontFeatures
     pub quirks_disable_default_font_features: bool,
 
@@ -181,7 +187,7 @@ impl Face {
     // PORT NOTE: the macOS default backend is `coretext`, whose `hasHarfbuzz()` is
     // false; this const is reproduced as `false` so the comptime-gated Harfbuzz
     // arms below collapse to comments.
-    const HARFBUZZ_SHAPER: bool = false;
+    const HARFBUZZ_SHAPER: bool = true;
 
     /// Initialize a CoreText-based font from a TTF/TTC in memory.
     // PORT NOTE: the reference signature is `init(lib: font.Library, source, opts)`
@@ -237,12 +243,34 @@ impl Face {
         // } else {};
         // errdefer if (comptime harfbuzz_shaper) hb_font.destroy();
         //
-        // PORT NOTE: `harfbuzz_shaper == false` — no Harfbuzz font is created.
+        // PORT NOTE (`harfbuzz_shaper == true`): build the HarfBuzz font from the
+        // `CTFont`. `opentype.sfnt.F26Dot6.from(pixels)` rounds `pixels*64` to a
+        // 26.6 fixed-point `i32` and `@bitCast`s it to the `u32` scale argument;
+        // reproduced as `(pixels*64).round() as i32 as u32`.
         let _ = Self::HARFBUZZ_SHAPER;
+        let hb_font = {
+            let ct_font_ptr = CFRetained::as_ptr(&ct_font).as_ptr() as *const core::ffi::c_void;
+            let hb_font =
+                hb::create_font_coretext(ct_font_ptr).map_err(|_| Error::FontInitFailure)?;
+            let pixels = opts.size.pixels();
+            let scale = (pixels * 64.0).round() as i32 as u32;
+            hb_font.set_scale(scale, scale);
+            hb_font
+        };
+        // errdefer hb_font.destroy(); — the only fallible op below is
+        // `ColorState::init`; on its error the face is not yet built, so destroy
+        // `hb_font` explicitly to avoid a leak (mirrors the reference `errdefer`).
 
         let color: Option<ColorState> = if traits.0 & CTFontSymbolicTraits::TraitColorGlyphs.0 != 0
         {
-            Some(ColorState::init(&ct_font)?)
+            match ColorState::init(&ct_font) {
+                Ok(cs) => Some(cs),
+                // errdefer hb_font.destroy();
+                Err(e) => {
+                    hb_font.destroy();
+                    return Err(e);
+                }
+            }
         } else {
             None
         };
@@ -251,6 +279,7 @@ impl Face {
 
         let mut result = Face {
             font: ct_font,
+            hb_font,
             color,
             size: opts.size,
             quirks_disable_default_font_features: false,
@@ -307,10 +336,14 @@ impl Face {
         // if (self.color) |v| v.deinit();
         // self.* = undefined;
         //
-        // PORT NOTE: RAII — `self.font` (`CFRetained<CTFont>`) and `self.color`
+        // PORT NOTE: `self.font` (`CFRetained<CTFont>`) and `self.color`
         // (`ColorState`, which owns its bytes) release/free on `Drop`, reproducing
-        // the reference's manual `release`/`deinit` + `self.* = undefined`. This is
-        // a no-op; the storage is freed when the `Face` is dropped or overwritten.
+        // the reference's manual `release`/`deinit` + `self.* = undefined`. The
+        // HarfBuzz font is a raw-pointer handle (no `Drop`), so — exactly as the
+        // FreeType face does — it is destroyed here (`harfbuzz_shaper == true`).
+        // All faces are torn down through `deinit` (the Collection walks entries
+        // calling `deinit`; the face tests call it explicitly), so this runs once.
+        self.hb_font.destroy();
     }
 
     /// Return a new face that is the same as this but has a transformation

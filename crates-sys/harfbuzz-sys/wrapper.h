@@ -10,3 +10,11 @@
  */
 #include <hb.h>
 #include <hb-ft.h>
+
+/* On macOS the CoreText integration is enabled (`HAVE_CORETEXT`), exposing
+ * `hb_coretext_font_create` used by the `coretext_harfbuzz`/`coretext_freetype`
+ * backends to build an `hb_font_t` from a `CTFontRef`. Mirrors the reference's
+ * `c.zig` including `hb-coretext.h` when `build_options.coretext == true`. */
+#ifdef __APPLE__
+#include <hb-coretext.h>
+#endif

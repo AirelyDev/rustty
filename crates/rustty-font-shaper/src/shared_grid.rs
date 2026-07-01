@@ -82,7 +82,11 @@ pub struct SharedGrid<A: Allocator + Copy = allocator_api2::alloc::Global> {
     /// this directly if they need to i.e. access the atlas directly. Because
     /// callers can use this lock directly, maintainers need to be extra careful
     /// to review call sites to ensure they are using the lock correctly.
-    lock: RwLock<()>,
+    // PORT NOTE: the reference field `lock: RwLock` is public — its doc says
+    // "Callers are expected to use this directly". The HarfBuzz shaper's `shape`
+    // takes the exclusive lock (`run.grid.lock.lock()`) before touching the
+    // freetype/coretext face, so it is `pub` here too.
+    pub lock: RwLock<()>,
 }
 
 /// The error set for `init` (`Atlas.init` / capacity reserve / `reloadMetrics`).

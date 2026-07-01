@@ -25,6 +25,8 @@ pub mod run;
 #[path = "shaper/noop.rs"]
 pub mod noop;
 // pub const harfbuzz = @import("shaper/harfbuzz.zig");
+#[path = "shaper/harfbuzz.rs"]
+pub mod harfbuzz;
 // pub const coretext = @import("shaper/coretext.zig");
 // pub const web_canvas = @import("shaper/web_canvas.zig");
 //
@@ -65,14 +67,15 @@ pub use feature::DEFAULT_FEATURES;
 //     .web_canvas => web_canvas.Shaper,
 // };
 //
-// PORT NOTE (scaffold): the reference selects the active shaper from
-// `options.backend`. The HarfBuzz/CoreText shapers land in a later subtask, so
-// like `face.rs`'s initial backend scaffold, the selector currently resolves to
-// the always-available `noop::Shaper`. It is re-pointed at the real
-// `switch(options.backend)` result (macOS default `coretext` → `coretext.Shaper`;
-// Linux default `fontconfig_freetype` → `harfbuzz.Shaper`) when those backends
-// are ported. `noop` is always tested.
-pub type Shaper = noop::Shaper;
+// PORT NOTE (selector): the reference selects the active shaper from
+// `options.backend`; the freetype/`coretext_harfbuzz` backends resolve to
+// `harfbuzz.Shaper`. This crate models the macOS `coretext_harfbuzz`
+// configuration (CoreText faces carry an `hb_font`) and the Linux
+// `fontconfig_freetype` default (FreeType faces carry an `hb_font`) — both use
+// the HarfBuzz shaper, so the selector points here. The `coretext`-native and
+// `coretext_noshape` (`noop`) arms land with the CoreText shaper. `noop` is
+// still built and tested via its own submodule.
+pub type Shaper = harfbuzz::Shaper;
 
 /// A cell is a single glyph within a terminal that should be rendered
 /// for a shaping call. Not all terminal cells may be present; only

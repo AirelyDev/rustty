@@ -314,6 +314,28 @@ MAP = {
     # so rust=8 live #[test] == zig=8 (apc_deferred=0). The coretext discovery
     # tests are #[cfg(target_os = "macos")] (the macOS default backend).
     "font_shaper_discovery":     ([f"{GHF}/discovery.zig"], [f"{RSFS}/discovery.rs"], 0),
+    # rustty-font-shaper F4 — the shaper framework + backends (D1 top tier). The
+    # framework files (shape/feature/Cache/noop/SharedGrid/SharedGridSet) landed;
+    # the HarfBuzz + CoreText *shaping backends* (the hb_buffer/hb_shape + CTLine/
+    # CTRun run producers, 24 + 27 behavioral tests) are the core deliverable.
+    # shape.zig: anon `test {` refify -> zig_count=0; shape.rs=1 (>= zig).
+    "font_shaper_shape":         ([f"{GHF}/shape.zig"], [f"{RSFS}/shape.rs"], 0),
+    # shaper/harfbuzz.zig: 24 quoted shaping tests -> shaper/harfbuzz.rs (the
+    # `test { ... }` blocks live in the sibling shaper/harfbuzz_tests.rs, attached
+    # as the `tests` submodule — same split as the `page` module's page_tests.rs).
+    "font_shaper_harfbuzz":      ([f"{GHF}/shaper/harfbuzz.zig"], [f"{RSFS}/shaper/harfbuzz.rs", f"{RSFS}/shaper/harfbuzz_tests.rs"], 0),
+    # shaper/coretext.zig: 27 quoted shaping tests -> shaper/coretext.rs.
+    "font_shaper_coretext":      ([f"{GHF}/shaper/coretext.zig"], [f"{RSFS}/shaper/coretext.rs"], 0),
+    # shaper/feature.zig: 2 quoted tests -> shaper/feature.rs.
+    "font_shaper_feature":       ([f"{GHF}/shaper/feature.zig"], [f"{RSFS}/shaper/feature.rs"], 0),
+    # shaper/Cache.zig: 1 named-unquoted behavioral test -> shaper/cache.rs.
+    "font_shaper_cache":         ([f"{GHF}/shaper/Cache.zig"], [f"{RSFS}/shaper/cache.rs"], 0),
+    # shaper/noop.zig: anon refAllDecls -> zig_count=0; shaper/noop.rs=1 (>= zig).
+    "font_shaper_noop":          ([f"{GHF}/shaper/noop.zig"], [f"{RSFS}/shaper/noop.rs"], 0),
+    # SharedGrid.zig: getIndex (named) + 2 quoted = 3 -> shared_grid.rs.
+    "font_shaper_shared_grid":   ([f"{GHF}/SharedGrid.zig"], [f"{RSFS}/shared_grid.rs"], 0),
+    # SharedGridSet.zig: SharedGridSet (named) + 3 quoted = 4 -> shared_grid_set.rs.
+    "font_shaper_shared_grid_set":([f"{GHF}/SharedGridSet.zig"], [f"{RSFS}/shared_grid_set.rs"], 0),
 }
 
 def expand(globs):
