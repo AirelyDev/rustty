@@ -231,6 +231,18 @@ impl ApproxEqual for i32 {
     }
 }
 
+// A `u32` struct field (e.g. `Metrics.cell_width`) hits the reference's
+// "fall back to expectEqual" arm just like `i32`; exact-equality compare.
+impl ApproxEqual for u32 {
+    fn approx_equal(&self, actual: &Self) -> Result<(), Error> {
+        if *self == *actual {
+            Ok(())
+        } else {
+            Err(Error::TestExpectedApproxEqual)
+        }
+    }
+}
+
 // unwrap unions, optionals, and error unions
 //
 // (The reference groups the `.@"union"`, `.optional`, and `.error_union` arms

@@ -184,7 +184,15 @@ impl Face {
     const HARFBUZZ_SHAPER: bool = false;
 
     /// Initialize a CoreText-based font from a TTF/TTC in memory.
-    pub fn init(_lib: (), source: &[u8], opts: Options) -> Result<Face, Error> {
+    // PORT NOTE: the reference signature is `init(lib: font.Library, source, opts)`
+    // and immediately does `_ = lib` (CoreText needs no library state). `lib` is
+    // the backend-switched `crate::Library` (= `NoopLibrary` on the macOS coretext
+    // backend); it is accepted for call-shape fidelity and ignored.
+    pub fn init(
+        _lib: crate::library::Library,
+        source: &[u8],
+        opts: Options,
+    ) -> Result<Face, Error> {
         // _ = lib;
 
         let data = new_data_no_copy(source).ok_or(Error::OutOfMemory)?;
@@ -1393,7 +1401,11 @@ mod tests {
         // defer atlas.deinit(alloc);
 
         // var lib = try font.Library.init(alloc); defer lib.deinit();
-        let mut face = Face::init((), test_font, opts(12.0))?;
+        let mut face = Face::init(
+            crate::library::Library::init().unwrap(),
+            test_font,
+            opts(12.0),
+        )?;
         // defer face.deinit();
 
         // Generate all visible ASCII
@@ -1426,7 +1438,11 @@ mod tests {
         let mut atlas = Atlas::init(alloc, 512, Format::Grayscale)?;
         // defer atlas.deinit(alloc);
 
-        let mut face = Face::init((), test_font, opts(12.0))?;
+        let mut face = Face::init(
+            crate::library::Library::init().unwrap(),
+            test_font,
+            opts(12.0),
+        )?;
         // defer face.deinit();
 
         // Generate all visible ASCII
@@ -1459,7 +1475,11 @@ mod tests {
         let mut atlas = Atlas::init(alloc, 512, Format::Grayscale)?;
         // defer atlas.deinit(alloc);
 
-        let mut face = Face::init((), test_font, opts(12.0))?;
+        let mut face = Face::init(
+            crate::library::Library::init().unwrap(),
+            test_font,
+            opts(12.0),
+        )?;
         // defer face.deinit();
 
         face.set_variations(
@@ -1497,7 +1517,11 @@ mod tests {
         let alloc = Global;
         let test_font = embedded::JULIA_MONO;
 
-        let mut face = Face::init((), test_font, opts(12.0))?;
+        let mut face = Face::init(
+            crate::library::Library::init().unwrap(),
+            test_font,
+            opts(12.0),
+        )?;
         // defer face.deinit();
 
         let table = face.copy_table(alloc, b"SVG ")?.unwrap();
@@ -1514,7 +1538,11 @@ mod tests {
     fn glyph_index_colored_vs_text() -> Result<(), Error> {
         let test_font = embedded::JULIA_MONO;
 
-        let mut face = Face::init((), test_font, opts(12.0))?;
+        let mut face = Face::init(
+            crate::library::Library::init().unwrap(),
+            test_font,
+            opts(12.0),
+        )?;
         // defer face.deinit();
 
         {

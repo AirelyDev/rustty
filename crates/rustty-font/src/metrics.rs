@@ -3,8 +3,65 @@
 // `rustty_util::quirks::inlineAssert` and the `ModifierSet` hash map is the std
 // `HashMap` (the reference uses `std.AutoHashMapUnmanaged`).
 
+use rustty_datastruct::comparison::{expect_approx_equal, ApproxEqual, Error as ApproxError};
 use rustty_util::quirks::inlineAssert as assert;
 use std::collections::HashMap;
+
+// PORT NOTE (comparison glue): the reference's `comparison.expectApproxEqual`
+// (datastruct/comparison.zig) is comptime-generic and recurses over every struct
+// field. Rust dispatches that via the `ApproxEqual` trait, so `Metrics` and
+// `FaceMetrics` (compared field-by-field by the Collection "metrics"/"face
+// metrics" tests in `rustty-font-shaper`) implement it here — the orphan rule
+// requires the impl live in this crate, which owns the types and deps datastruct.
+// Each impl reproduces the reference struct arm: `inline for (fields) |f| try
+// expectApproxEqual(@field(expected, f), @field(actual, f))`.
+impl ApproxEqual for Metrics {
+    fn approx_equal(&self, actual: &Self) -> Result<(), ApproxError> {
+        expect_approx_equal(&self.cell_width, &actual.cell_width)?;
+        expect_approx_equal(&self.cell_height, &actual.cell_height)?;
+        expect_approx_equal(&self.cell_baseline, &actual.cell_baseline)?;
+        expect_approx_equal(&self.underline_position, &actual.underline_position)?;
+        expect_approx_equal(&self.underline_thickness, &actual.underline_thickness)?;
+        expect_approx_equal(&self.strikethrough_position, &actual.strikethrough_position)?;
+        expect_approx_equal(
+            &self.strikethrough_thickness,
+            &actual.strikethrough_thickness,
+        )?;
+        expect_approx_equal(&self.overline_position, &actual.overline_position)?;
+        expect_approx_equal(&self.overline_thickness, &actual.overline_thickness)?;
+        expect_approx_equal(&self.box_thickness, &actual.box_thickness)?;
+        expect_approx_equal(&self.cursor_thickness, &actual.cursor_thickness)?;
+        expect_approx_equal(&self.cursor_height, &actual.cursor_height)?;
+        expect_approx_equal(&self.icon_height, &actual.icon_height)?;
+        expect_approx_equal(&self.icon_height_single, &actual.icon_height_single)?;
+        expect_approx_equal(&self.face_width, &actual.face_width)?;
+        expect_approx_equal(&self.face_height, &actual.face_height)?;
+        expect_approx_equal(&self.face_y, &actual.face_y)?;
+        Ok(())
+    }
+}
+
+impl ApproxEqual for FaceMetrics {
+    fn approx_equal(&self, actual: &Self) -> Result<(), ApproxError> {
+        expect_approx_equal(&self.px_per_em, &actual.px_per_em)?;
+        expect_approx_equal(&self.cell_width, &actual.cell_width)?;
+        expect_approx_equal(&self.ascent, &actual.ascent)?;
+        expect_approx_equal(&self.descent, &actual.descent)?;
+        expect_approx_equal(&self.line_gap, &actual.line_gap)?;
+        expect_approx_equal(&self.underline_position, &actual.underline_position)?;
+        expect_approx_equal(&self.underline_thickness, &actual.underline_thickness)?;
+        expect_approx_equal(&self.strikethrough_position, &actual.strikethrough_position)?;
+        expect_approx_equal(
+            &self.strikethrough_thickness,
+            &actual.strikethrough_thickness,
+        )?;
+        expect_approx_equal(&self.cap_height, &actual.cap_height)?;
+        expect_approx_equal(&self.ex_height, &actual.ex_height)?;
+        expect_approx_equal(&self.ascii_height, &actual.ascii_height)?;
+        expect_approx_equal(&self.ic_width, &actual.ic_width)?;
+        Ok(())
+    }
+}
 
 /// Recommended cell width and height for a monospace grid using this font.
 // PORT NOTE: the reference declares these as bare struct fields on the

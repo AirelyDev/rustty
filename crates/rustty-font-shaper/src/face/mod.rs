@@ -57,24 +57,26 @@ pub mod coretext;
 //     .web_canvas => web_canvas.Face,
 // };
 //
-// PORT NOTE (F3 scaffold): the concrete backend `Face` impls (`face/coretext.zig`,
-// `face/freetype.zig`, `face/web_canvas.zig`) are ported in later F3 subtasks.
-// Until they land, this selector is wired to the scaffold placeholder
-// `BackendFace` so the backend matrix is expressed and gated now. No reference
-// logic is lost: the `switch` above is preserved verbatim and is re-pointed at
-// the real `coretext::Face` / `freetype::Face` / `web_canvas::Face` when those
-// files are ported. Every arm currently resolves to the same placeholder.
-pub type Face = BackendFace;
+// PORT NOTE: the concrete backend `Face` impls (`face/coretext.zig`,
+// `face/freetype.zig`) are ported in the `coretext`/`freetype` submodules, so the
+// selector is now re-pointed at the real backend `Face` type. The `switch` above
+// is preserved verbatim as a reference; it is modeled here with `cfg(target_os)`
+// matching `backend.zig`'s `Backend.default`: macOS default `coretext` →
+// `coretext::Face`; Linux default `fontconfig_freetype` → `freetype::Face`. The
+// `web_canvas => web_canvas.Face` arm lands with the wasm backend.
+#[cfg(target_os = "macos")]
+pub type Face = coretext::Face;
+#[cfg(not(target_os = "macos"))]
+pub type Face = freetype::Face;
 
-/// Scaffold placeholder for the not-yet-ported backend `Face` implementations.
-/// Replaced by `coretext::Face` / `freetype::Face` / `web_canvas::Face` (per the
-/// build backend) as those files are ported in later F3 subtasks.
-#[derive(Debug)]
-pub struct BackendFace {
-    // Private: the placeholder holds no state; it exists only so the backend
-    // selector `Face` alias resolves and the scaffold gates green.
-    _private: (),
-}
+/// The error type of the active backend `Face` (`coretext::Error` /
+/// `freetype::Error`). Introduced so higher-tier callers (Collection,
+/// DeferredFace) can compose the backend-face error into their own error sets
+/// (the reference threads the backend's inferred error set through `!` unions).
+#[cfg(target_os = "macos")]
+pub type FaceError = coretext::Error;
+#[cfg(not(target_os = "macos"))]
+pub type FaceError = freetype::Error;
 
 /// If a DPI can't be calculated, this DPI is used. This is probably
 /// wrong on modern devices so it is highly recommended you get the DPI
@@ -249,7 +251,6 @@ mod tests {
     #[test]
     fn ref_all_decls() {
         let _ = core::mem::size_of::<Face>();
-        let _ = core::mem::size_of::<BackendFace>();
         let _ = DEFAULT_DPI;
         let _ = core::mem::size_of_val(&FREETYPE_LOAD_FLAGS_DEFAULT);
         let _ = core::mem::size_of::<FreetypeLoadFlags>();

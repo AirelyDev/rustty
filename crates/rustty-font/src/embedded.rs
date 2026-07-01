@@ -31,9 +31,17 @@ pub const VARIABLE: &[u8] = include_bytes!("../res/JetBrainsMono-Variable.ttf");
 
 // PORT NOTE (DEFERRED — build-anonymous imports, not source-tree files):
 //   pub const variable_italic = @embedFile("jetbrains_mono_variable_italic");
-//
-//   /// Symbols-only nerd font.
-//   pub const symbols_nerd_font = @embedFile("nerd_fonts_symbols_only");
+
+/// Symbols-only nerd font.
+// PORT: the reference `symbols_nerd_font = @embedFile("nerd_fonts_symbols_only")`
+// is a build-anonymous import of `SymbolsNerdFont-Regular.ttf` from the
+// `nerd_fonts_symbols_only` build dependency (NerdFontsSymbolsOnly 3.4.0,
+// https://deps.files.ghostty.org/NerdFontsSymbolsOnly-3.4.0.tar.gz — the Symbols
+// Nerd Font is MIT-licensed and redistributable per R3), not a `font/` source-tree
+// file. It is required by the Collection "adjusted sizes" test (the symbol-face
+// `ex_height`→`cap_height`→`lineHeight` fallback), so the exact dependency file is
+// vendored into this crate's `res/` and embedded here.
+pub const SYMBOLS_NERD_FONT: &[u8] = include_bytes!("../res/SymbolsNerdFont-Regular.ttf");
 
 /// Static jetbrains mono faces, currently unused.
 // PORT: the reference `regular = @embedFile("jetbrains_mono_regular")` is a

@@ -85,13 +85,16 @@ impl FSSelection {
     }
 }
 
-/// OS/2 and Windows Metrics Table
-///
-/// References:
-/// - https://learn.microsoft.com/en-us/typography/opentype/spec/os2
-///
-/// Field names are in camelCase to match names in spec.
-// PORT NOTE: this doc header sits on the reference's versioned `OS2v5` struct.
+// OS/2 and Windows Metrics Table
+//
+// References:
+// - https://learn.microsoft.com/en-us/typography/opentype/spec/os2
+//
+// Field names are in camelCase to match names in spec.
+// PORT NOTE: this doc header sits on the reference's versioned `OS2v5` struct;
+// since that versioned struct is collapsed into `OS2::init` in this port (see the
+// note below), the header is a plain comment here rather than a `///` doc comment
+// orphaned from any item.
 //
 // PORT NOTE: the reference defines four versioned `extern struct`s — `OS2v5`,
 // `OS2v4_3_2`, `OS2v1`, `OS2v0` — that are read whole via `readStructEndian(.big)`

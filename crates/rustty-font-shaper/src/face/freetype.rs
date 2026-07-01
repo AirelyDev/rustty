@@ -43,7 +43,13 @@ use std::os::raw::c_int;
 
 use crate::ft::{self, Encoding, LoadFlags, RenderMode, Tag, Target};
 use crate::hb;
-use crate::library::{self, Library};
+// PORT NOTE: the reference `const Library = font.Library` resolves to
+// `FreetypeLibrary` on every freetype-active backend. Since both backend faces
+// are compiled in rustty regardless of the active backend (unlike Zig, which only
+// analyzes the selected face), the freetype face names `FreetypeLibrary` directly
+// — it always requires a real FreeType library — rather than the backend-switched
+// `crate::library::Library` alias (which is `NoopLibrary` on macOS).
+use crate::library::{self, FreetypeLibrary as Library};
 
 use freetype_sys as c;
 

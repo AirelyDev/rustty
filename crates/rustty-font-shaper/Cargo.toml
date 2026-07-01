@@ -43,6 +43,9 @@ rustty-font = { workspace = true }
 rustty-render-types = { workspace = true }
 # Base utilities leaf.
 rustty-util = { workspace = true }
+# Container/testing utilities leaf. Provides `comparison::expectApproxEqual`
+# (the Collection metrics tests) — the reference `datastruct/comparison.zig`.
+rustty-datastruct = { workspace = true }
 # Faithful model of `std.mem.Allocator` (same map rustty-font/vt use): the
 # freetype face's `renderGlyph`/`copyTable` thread an allocator, and `Atlas<A>`
 # is generic over it. Callers pass `allocator_api2::alloc::Global`.
