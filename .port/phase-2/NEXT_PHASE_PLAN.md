@@ -91,6 +91,42 @@ REUSABLE for NEXT: **harfbuzz-sys → freetype** (consume `DEP_FREETYPE_INCLUDE`
 for hb-ft; same vendor+cc+bindgen+KAT template), **fontconfig-sys → freetype +
 libxml2** (add a libxml2-sys vendor first, then wire both include dirs).
 
+## Stage F2 — font -sys tier: harfbuzz-sys DONE
+`crates-sys/harfbuzz-sys` vendors HarfBuzz **11.0.0** (the exact release the
+reference pins in pkg/harfbuzz/build.zig.zon — the
+`deps.files.ghostty.org/harfbuzz-11.0.0.tar.xz` mirror) under `vendor/` and
+builds it standalone via `cc` (C++17) + `bindgen` — R3 clean (no ghostty
+build-time ref; the sole `/Users/gael/projects/ghostty` string is a
+doc-comment). Applies the validated -sys template as a C++ variant:
+  * `vendor/` = full upstream `src/` tree + `AUTHORS` + `COPYING` (Old-MIT license).
+  * `build.rs`: `cc::Build.cpp(true).std("c++17")` over the reference `buildLib`'s
+    ONE amalgamation TU `src/harfbuzz.cc` (which `#include`s the whole `src/`
+    tree), include path = `src`; same `-D` flags (`-DHAVE_STDBOOL_H`; off-Windows
+    `-DHAVE_UNISTD_H -DHAVE_SYS_MMAN_H -DHAVE_PTHREAD=1`; `-DHAVE_FREETYPE=1` +
+    the four `HAVE_FT_*` capability flags the reference hard-enables), CoreText
+    OFF (reference default `enable-coretext=false`), `.warnings(false)`/`-w`,
+    MSVC ubsan-off guard mirrors the reference.
+  * FreeType wired to `freetype-sys` (the reference's `lib.linkLibrary(freetype)`):
+    headers via `DEP_FREETYPE_INCLUDE` (for `hb-ft.cc`/`hb-ft.h`), the static FT
+    archive kept on the link line by `extern crate freetype_sys;` (one-version
+    linking). `links = "harfbuzz"` enforces single linkage.
+  * bindgen over `wrapper.h` (`hb.h` + `hb-ft.h`, mirroring reference c.zig
+    @cImports; hb-coretext.h omitted since coretext is off). `[lib] doctest=false`
+    (HB doc-comments are not Rust).
+  * KAT (`kat_harfbuzz_11_0_0_shape_hello`): `hb_version`==(11,0,0) → build an
+    `hb_font_t` from an embedded GeistMono FT_Face (`hb_ft_font_create_referenced`,
+    the `-DHAVE_FREETYPE=1` bridge) → buffer add-utf8 "hello" + set LTR/Latin/"en"
+    → `hb_shape` → assert 5 glyphs, all non-.notdef, monospace equal +x_advance,
+    zero y_advance. GREEN — proves HB links AND shapes, and that the FT bridge
+    links a single static FT archive.
+  * `cargo:include` re-exports the HarfBuzz `src` include dir as
+    `DEP_HARFBUZZ_INCLUDE` for downstream (rustty-font).
+  * `cargo tree -e no-dev` = harfbuzz-sys → freetype-sys → zlib-sys (G7 acyclic,
+    check_acyclic GREEN). clippy/fmt clean (generated bindings allow-gated).
+**F3 faces now UNBLOCKED**: freetype + harfbuzz both done. Remaining face deps:
+CoreText via `objc2`/`objc2-core-text` crates (macOS-native, no vendored -sys);
+fontconfig/libxml2 -sys deferred to the Linux font-discovery milestone.
+
 ## Stage D — heavy tier (later)
 rest of font (faces/shapers: freetype/harfbuzz/fontconfig/CoreText -sys, ~10.7k loc) →
 input (completes key_mods once config lands) → config (oniguruma-sys) → renderer
