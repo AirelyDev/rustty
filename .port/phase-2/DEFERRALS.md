@@ -261,25 +261,28 @@ The vt-14 input leaf slice (`input/{mouse,paste,key,function_keys}.rs` +
   out of libghostty-vt. The ported test inlines the constant `38` (documented as
   the reference value) so it runs in-crate; no termio dependency is introduced.
 
-## Deferred from config C1 (leaf value-types) — oniguruma-gated test
+## config C1 (leaf value-types) — oniguruma-gated test — RESOLVED
 
 The config C1 leaf value-types (`rustty-config`:
 string/RepeatableStringMap/io/path/command/conditional/ClipboardCodepointMap/
 ErrorList/edit/file_load/url) are fully ported (36 non-deferred tests pass,
-scoped G3b missing=0). One test is deferred:
+scoped G3b missing=0). The one previously-deferred test is now ported:
 
-- **`url.zig` `url regex` test — oniguruma.** The single `test "url regex"` in
-  `config/url.zig` builds an `oni.Regex` from the ported `regex` string and
-  asserts ~90 match + ~10 no-match cases. oniguruma-sys is not built yet (R3:
-  same C lib, bindings later), so the test is gated behind the off-by-default
-  `oniguruma` cargo feature on `rustty-config` (a SkipZigTest-style defer). It is
-  NOT dropped (R1): the FULL reference test body (every match/no-match case,
-  assertion-for-assertion, plus the commented-out `std.debug.print` debug lines)
-  is preserved verbatim as a comment in `url.rs`, and the `#[cfg(all(test,
-  feature = "oniguruma"))]` module is the slot it will be ported into once
-  `oniguruma-sys` lands. The `regex` string-assembly logic itself has no
-  oniguruma dependency and is ported normally (`url::regex()` builds the
-  byte-for-byte-identical pattern). **Target: when oniguruma-sys is carved.**
+- **`url.zig` `url regex` test — oniguruma. RESOLVED.** The single
+  `test "url regex"` in `config/url.zig` builds an `oni.Regex` from the ported
+  `regex` string and asserts 80 match + 10 no-match cases. `oniguruma-sys` +
+  `rustty-oniguruma` (the `oni` safe wrapper) have landed, so the test is now
+  PORTED assertion-for-assertion into the `#[cfg(all(test, feature =
+  "oniguruma"))]` module of `url.rs` (every match case's span + every no-match
+  case's `Error.Mismatch`, faithful to the reference control flow). It is gated
+  behind the off-by-default `oniguruma` cargo feature on `rustty-config`, which
+  pulls in `rustty-oniguruma` (`oniguruma = ["dep:rustty-oniguruma"]`) — exactly
+  as vt's string_map search surface is gated — so the C Oniguruma dependency
+  stays out of the default build. `cargo test -p rustty-config --features
+  oniguruma` runs the ported test (all 90 cases pass); the default
+  `cargo test -p rustty-config` is unchanged (feature off). The `regex`
+  string-assembly logic itself has no oniguruma dependency and is compiled
+  always (`url::regex()` builds the byte-for-byte-identical pattern). **RESOLVED.**
 
 ## StringMap oniguruma search surface — RESOLVED (vt `oniguruma` feature wired)
 

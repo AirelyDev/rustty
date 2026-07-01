@@ -1,20 +1,24 @@
 //! rustty-config::url
 //!
 //! PORTS: ghostty src/config/url.zig — the default URL/path detection regex (the
-//! non-regex string-assembly logic; the single oniguruma-backed test is gated
+//! non-regex string-assembly logic plus the single oniguruma-backed test, gated
 //! behind the off-by-default `oniguruma` feature). C1 leaf value-type (1 test,
-//! deferred behind `oniguruma`).
+//! ported behind `oniguruma`).
 //!
-//! PORT STATUS: ported (every line/comment; the 1 oniguruma test gated, R1).
+//! PORT STATUS: ported (every line/comment; the 1 oniguruma test ported behind
+//! the `oniguruma` feature, R1).
 
 // const std = @import("std");
 // const oni = @import("oniguruma");
 //
-// PORT NOTE: `oniguruma` is only used by the one `url regex` test. oniguruma-sys
-// is not built yet, so that test is gated behind the off-by-default `oniguruma`
-// cargo feature (a SkipZigTest-style defer, documented in DEFERRALS.md). The
-// regex string-assembly logic below has no runtime dependency on oniguruma and
-// is ported normally.
+// PORT NOTE: `oniguruma` is only used by the one `url regex` test. That test is
+// ported (see the `#[cfg(all(test, feature = "oniguruma"))]` module below) and
+// gated behind the off-by-default `oniguruma` cargo feature, which pulls in the
+// `oni` safe wrapper crate (`rustty-oniguruma`) — exactly as vt's string_map
+// search surface is gated. The feature keeps the C Oniguruma dependency out of
+// the default build (documented in DEFERRALS.md, RESOLVED). The regex
+// string-assembly logic below has no runtime dependency on oniguruma and is
+// ported normally.
 
 /// Default URL/path regex. This is used to detect URLs and file paths in
 /// terminal output.
@@ -175,176 +179,329 @@ pub fn regex() -> String {
 
 // test "url regex" {
 //
-// PORT NOTE (DEFERRED, R1): this is the single oniguruma-backed test in
-// `url.zig`. oniguruma-sys is not built yet, so the test is gated behind the
-// off-by-default `oniguruma` cargo feature (a SkipZigTest-style defer). It is
-// NOT dropped — it is scheduled, recorded in `.port/phase-2/DEFERRALS.md`. The
-// full reference body (all match/no-match cases) is preserved below verbatim as
-// a comment so the assertion inventory is intact; it will be enabled and ported
-// assertion-for-assertion once `oniguruma-sys` lands.
-//
-//     const testing = std.testing;
-//
-//     try oni.testing.ensureInit();
-//     var re = try oni.Regex.init(
-//         regex,
-//         .{},
-//         oni.Encoding.utf8,
-//         oni.Syntax.default,
-//         null,
-//     );
-//     defer re.deinit();
-//
-//     // The URL cases to test what our regex matches. Feel free to add to this
-//     // as we find bugs or just want more coverage.
-//     const cases = [_]struct {
-//         input: []const u8,
-//         expect: []const u8,
-//         num_matches: usize = 1,
-//     }{
-//         .{ .input = "hello https://example.com world", .expect = "https://example.com" },
-//         .{ .input = "https://example.com/foo(bar) more", .expect = "https://example.com/foo(bar)" },
-//         .{ .input = "https://example.com/foo(bar)baz more", .expect = "https://example.com/foo(bar)baz" },
-//         .{ .input = "Link inside (https://example.com) parens", .expect = "https://example.com" },
-//         .{ .input = "Link period https://example.com. More text.", .expect = "https://example.com" },
-//         .{ .input = "Link trailing comma https://example.com, more text.", .expect = "https://example.com" },
-//         .{ .input = "Link in double quotes \"https://example.com\" and more", .expect = "https://example.com" },
-//         .{ .input = "Link in single quotes 'https://example.com' and more", .expect = "https://example.com" },
-//         .{ .input = "some file with https://google.com https://duckduckgo.com links.", .expect = "https://google.com" },
-//         .{ .input = "and links in it. links https://yahoo.com mailto:test@example.com ssh://1.2.3.4", .expect = "https://yahoo.com" },
-//         .{ .input = "also match http://example.com non-secure links", .expect = "http://example.com" },
-//         .{ .input = "match tel://+12123456789 phone numbers", .expect = "tel://+12123456789" },
-//         .{ .input = "match with query url https://example.com?query=1&other=2 and more text.", .expect = "https://example.com?query=1&other=2" },
-//         .{ .input = "url with dashes [mode 2027](https://github.com/contour-terminal/terminal-unicode-core) for better unicode support", .expect = "https://github.com/contour-terminal/terminal-unicode-core" },
-//         .{ .input = "dot.http://example.com", .expect = "http://example.com" },
-//         // weird characters in URL
-//         .{ .input = "weird characters https://example.com/~user/?query=1&other=2#hash and more", .expect = "https://example.com/~user/?query=1&other=2#hash" },
-//         // square brackets in URL
-//         .{ .input = "square brackets https://example.com/[foo] and more", .expect = "https://example.com/[foo]" },
-//         // square bracket following url
-//         .{ .input = "[13]:TooManyStatements: TempFile#assign_temp_file_to_entity has approx 7 statements [https://example.com/docs/Too-Many-Statements.md]", .expect = "https://example.com/docs/Too-Many-Statements.md" },
-//         // remaining URL schemes tests
-//         .{ .input = "match ftp://example.com ftp links", .expect = "ftp://example.com" },
-//         .{ .input = "match file://example.com file links", .expect = "file://example.com" },
-//         .{ .input = "match ssh://example.com ssh links", .expect = "ssh://example.com" },
-//         .{ .input = "match git://example.com git links", .expect = "git://example.com" },
-//         .{ .input = "/tmp/test.txt http://www.google.com", .expect = "/tmp/test.txt" },
-//         .{ .input = "match tel:+18005551234 tel links", .expect = "tel:+18005551234" },
-//         .{ .input = "match magnet:?xt=urn:btih:1234567890 magnet links", .expect = "magnet:?xt=urn:btih:1234567890" },
-//         .{ .input = "match ipfs://QmSomeHashValue ipfs links", .expect = "ipfs://QmSomeHashValue" },
-//         .{ .input = "match ipns://QmSomeHashValue ipns links", .expect = "ipns://QmSomeHashValue" },
-//         .{ .input = "match gemini://example.com gemini links", .expect = "gemini://example.com" },
-//         .{ .input = "match gopher://example.com gopher links", .expect = "gopher://example.com" },
-//         .{ .input = "match news:comp.infosystems.www.servers.unix news links", .expect = "news:comp.infosystems.www.servers.unix" },
-//         .{ .input = "/Users/ghostty.user/code/example.py", .expect = "/Users/ghostty.user/code/example.py" },
-//         .{ .input = "/Users/ghostty.user/code/../example.py", .expect = "/Users/ghostty.user/code/../example.py" },
-//         .{ .input = "/Users/ghostty.user/code/../example.py hello world", .expect = "/Users/ghostty.user/code/../example.py" },
-//         .{ .input = "../example.py", .expect = "../example.py" },
-//         .{ .input = "../example.py ", .expect = "../example.py " },
-//         .{ .input = "first time ../example.py contributor ", .expect = "../example.py" },
-//         .{ .input = "[link](/home/user/ghostty.user/example)", .expect = "/home/user/ghostty.user/example" },
-//         // IPv6 URL tests - Basic tests
-//         .{ .input = "Serving HTTP on :: port 8000 (http://[::]:8000/)", .expect = "http://[::]:8000/" },
-//         .{ .input = "IPv6 address https://[2001:db8::1]:8080/path", .expect = "https://[2001:db8::1]:8080/path" },
-//         .{ .input = "IPv6 localhost http://[::1]:3000", .expect = "http://[::1]:3000" },
-//         .{ .input = "Complex IPv6 https://[2001:db8:85a3:8d3:1319:8a2e:370:7348]:443/", .expect = "https://[2001:db8:85a3:8d3:1319:8a2e:370:7348]:443/" },
-//         // IPv6 URL tests - URLs with paths and query parameters
-//         .{ .input = "IPv6 with path https://[2001:db8::1]/path/to/resource", .expect = "https://[2001:db8::1]/path/to/resource" },
-//         .{ .input = "IPv6 with query https://[2001:db8::1]:8080/api?param=value&other=123", .expect = "https://[2001:db8::1]:8080/api?param=value&other=123" },
-//         // IPv6 URL tests - Compressed forms
-//         .{ .input = "IPv6 compressed http://[2001:db8::]:80/", .expect = "http://[2001:db8::]:80/" },
-//         .{ .input = "IPv6 multiple zeros http://[2001:0:0:0:0:0:0:1]", .expect = "http://[2001:0:0:0:0:0:0:1]" },
-//         // IPv6 URL tests - Special cases
-//         .{ .input = "IPv6 link-local https://[fe80::1234:5678:9abc]", .expect = "https://[fe80::1234:5678:9abc]" },
-//         .{ .input = "IPv6 multicast http://[ff02::1]/stream", .expect = "http://[ff02::1]/stream" },
-//         // IPv6 URL tests - Mixed scenarios
-//         .{ .input = "IPv6 in markdown [link](http://[2001:db8::1]/docs)", .expect = "http://[2001:db8::1]/docs" },
-//         // File paths with spaces
-//         .{ .input = "./spaces-end.   ", .expect = "./spaces-end.   " },
-//         .{ .input = "./space middle", .expect = "./space middle" },
-//         .{ .input = "../test folder/file.txt", .expect = "../test folder/file.txt" },
-//         .{ .input = "/tmp/test folder/file.txt", .expect = "/tmp/test folder/file.txt" },
-//         .{ .input = "/tmp/test  folder/file.txt", .expect = "/tmp/test" },
-//         // unified diff lines
-//         .{ .input = "diff --git a/src/font/shaper/harfbuzz.zig b/src/font/shaper/harfbuzz.zig", .expect = "a/src/font/shaper/harfbuzz.zig" },
-//         // Two space-separated absolute paths should match only the first
-//         .{ .input = "/tmp/foo /tmp/bar", .expect = "/tmp/foo" },
-//         .{ .input = "/tmp/foo.txt /tmp/bar.txt", .expect = "/tmp/foo.txt" },
-//         // Bare relative file paths (no ./ or ../ prefix)
-//         .{ .input = "src/config/url.zig", .expect = "src/config/url.zig" },
-//         .{ .input = "app/folder/file.rb:1", .expect = "app/folder/file.rb:1" },
-//         .{ .input = "modified:   src/config/url.zig", .expect = "src/config/url.zig" },
-//         .{ .input = "lib/ghostty/terminal.zig:42:10", .expect = "lib/ghostty/terminal.zig:42:10" },
-//         .{ .input = "some-pkg/src/file.txt more text", .expect = "some-pkg/src/file.txt" },
-//         // comma should match substrings
-//         .{ .input = "src/foo.c,baz.txt", .expect = "src/foo.c" },
-//         .{ .input = "~/foo/bar.txt", .expect = "~/foo/bar.txt" },
-//         .{ .input = "open ~/Documents/notes.md please", .expect = "~/Documents/notes.md" },
-//         .{ .input = "~/.config/ghostty/config", .expect = "~/.config/ghostty/config" },
-//         .{ .input = "directory: ~/src/ghostty-org/ghostty", .expect = "~/src/ghostty-org/ghostty" },
-//         .{ .input = "$HOME/src/config/url.zig", .expect = "$HOME/src/config/url.zig" },
-//         .{ .input = "project dir: $PWD/src/ghostty/main.zig", .expect = "$PWD/src/ghostty/main.zig" },
-//         // $VAR mid-path should match fully, not partially from the $
-//         .{ .input = "foo/$BAR/baz", .expect = "foo/$BAR/baz" },
-//         .{ .input = ".foo/bar/$VAR", .expect = ".foo/bar/$VAR" },
-//         .{ .input = ".config/ghostty/config", .expect = ".config/ghostty/config" },
-//         .{ .input = "loaded from .local/share/ghostty/state.db now", .expect = ".local/share/ghostty/state.db" },
-//         .{ .input = "../some/where", .expect = "../some/where" },
-//         // comma-separated file paths
-//         .{ .input = "  - shared/src/foo/SomeItem.m:12, shared/src/", .expect = "shared/src/foo/SomeItem.m:12" },
-//         // mid-string dot should not partially match but fully
-//         .{ .input = "foo.local/share", .expect = "foo.local/share" },
-//         // numeric directory should match fully
-//         .{ .input = "2024/report.txt", .expect = "2024/report.txt" },
-//         // comma should stop matching in spaced path segments
-//         .{ .input = "./foo bar,baz", .expect = "./foo bar" },
-//         .{ .input = "/tmp/foo bar,baz", .expect = "/tmp/foo bar" },
-//         // trailing colon should not be part of the path
-//         .{ .input = "./.config/ghostty: Needs upstream (main)", .expect = "./.config/ghostty" },
-//         .{ .input = "./Downloads: Operation not permitted", .expect = "./Downloads" },
-//     };
-//
-//     for (cases) |case| {
-//         //std.debug.print("input: {s}\n", .{case.input});
-//         //std.debug.print("match: {s}\n", .{case.expect});
-//         var reg = try re.search(case.input, .{});
-//         //std.debug.print("count: {d}\n", .{@as(usize, reg.count())});
-//         //std.debug.print("starts: {d}\n", .{reg.starts()});
-//         //std.debug.print("ends: {d}\n", .{reg.ends()});
-//         defer reg.deinit();
-//         try testing.expectEqual(@as(usize, case.num_matches), reg.count());
-//         const match = case.input[@intCast(reg.starts()[0])..@intCast(reg.ends()[0])];
-//         try testing.expectEqualStrings(case.expect, match);
-//     }
-//
-//     const no_match_cases = [_][]const u8{
-//         // bare relative paths without any dot should not match as file paths
-//         "input/output",
-//         "foo/bar",
-//         // $-numeric character should not match
-//         "$10/bar",
-//         "$10/$20",
-//         "$10/bar.txt",
-//         // comma should not let dot detection look past it
-//         "foo/bar,baz.txt",
-//         // $VAR should not match mid-word
-//         "foo$BAR/baz.txt",
-//         // ~ should not match mid-word
-//         "foo~/bar.txt",
-//         // double-slash comments are not paths
-//         "// foo bar",
-//         "//foo",
-//     };
-//     for (no_match_cases) |input| {
-//         var result = re.search(input, .{});
-//         if (result) |*reg| {
-//             reg.deinit();
-//             return error.TestUnexpectedResult;
-//         } else |_| {}
-//     }
-// }
+// PORT NOTE (R1): the single oniguruma-backed test in `url.zig`, ported below
+// assertion-for-assertion into the `#[cfg(all(test, feature = "oniguruma"))]`
+// module. It compiles the assembled `regex()` with Oniguruma (the `oni` safe
+// wrapper) and asserts every match case's span + every no-match case's mismatch,
+// exactly as the reference does. Gated behind the off-by-default `oniguruma`
+// feature (which pulls in `rustty-oniguruma`), documented in DEFERRALS.md
+// (RESOLVED).
 #[cfg(all(test, feature = "oniguruma"))]
 mod tests {
-    // The oniguruma-backed `url regex` test will be ported here once
-    // oniguruma-sys is built. See the verbatim reference body above.
+    use super::regex;
+
+    // PORT NOTE: the reference `cases` array element is an anonymous struct with a
+    // `num_matches: usize = 1` default field. The faithful mirror is `Case` + the
+    // `case(input, expect)` helper supplying that same `num_matches = 1` default
+    // (no reference case overrides it). `input`/`expect` are `&[u8]` mirroring the
+    // reference `[]const u8` (byte-faithful, not lossy `String`).
+    struct Case {
+        input: &'static [u8],
+        expect: &'static [u8],
+        num_matches: usize,
+    }
+
+    fn case(input: &'static [u8], expect: &'static [u8]) -> Case {
+        Case {
+            input,
+            expect,
+            num_matches: 1,
+        }
+    }
+
+    // test "url regex"
+    #[test]
+    fn url_regex() {
+        oni::testing::ensure_init().unwrap();
+        let pattern = regex();
+        let mut re = oni::Regex::init(
+            pattern.as_bytes(),
+            oni::RegexOptions::default(),
+            oni::Encoding::utf8(),
+            oni::Syntax::default(),
+            None,
+        )
+        .unwrap();
+        // defer re.deinit();
+
+        // The URL cases to test what our regex matches. Feel free to add to this
+        // as we find bugs or just want more coverage.
+        let cases = [
+            case(b"hello https://example.com world", b"https://example.com"),
+            case(
+                b"https://example.com/foo(bar) more",
+                b"https://example.com/foo(bar)",
+            ),
+            case(
+                b"https://example.com/foo(bar)baz more",
+                b"https://example.com/foo(bar)baz",
+            ),
+            case(
+                b"Link inside (https://example.com) parens",
+                b"https://example.com",
+            ),
+            case(
+                b"Link period https://example.com. More text.",
+                b"https://example.com",
+            ),
+            case(
+                b"Link trailing comma https://example.com, more text.",
+                b"https://example.com",
+            ),
+            case(
+                b"Link in double quotes \"https://example.com\" and more",
+                b"https://example.com",
+            ),
+            case(
+                b"Link in single quotes 'https://example.com' and more",
+                b"https://example.com",
+            ),
+            case(
+                b"some file with https://google.com https://duckduckgo.com links.",
+                b"https://google.com",
+            ),
+            case(
+                b"and links in it. links https://yahoo.com mailto:test@example.com ssh://1.2.3.4",
+                b"https://yahoo.com",
+            ),
+            case(
+                b"also match http://example.com non-secure links",
+                b"http://example.com",
+            ),
+            case(
+                b"match tel://+12123456789 phone numbers",
+                b"tel://+12123456789",
+            ),
+            case(
+                b"match with query url https://example.com?query=1&other=2 and more text.",
+                b"https://example.com?query=1&other=2",
+            ),
+            case(
+                b"url with dashes [mode 2027](https://github.com/contour-terminal/terminal-unicode-core) for better unicode support",
+                b"https://github.com/contour-terminal/terminal-unicode-core",
+            ),
+            case(b"dot.http://example.com", b"http://example.com"),
+            // weird characters in URL
+            case(
+                b"weird characters https://example.com/~user/?query=1&other=2#hash and more",
+                b"https://example.com/~user/?query=1&other=2#hash",
+            ),
+            // square brackets in URL
+            case(
+                b"square brackets https://example.com/[foo] and more",
+                b"https://example.com/[foo]",
+            ),
+            // square bracket following url
+            case(
+                b"[13]:TooManyStatements: TempFile#assign_temp_file_to_entity has approx 7 statements [https://example.com/docs/Too-Many-Statements.md]",
+                b"https://example.com/docs/Too-Many-Statements.md",
+            ),
+            // remaining URL schemes tests
+            case(b"match ftp://example.com ftp links", b"ftp://example.com"),
+            case(b"match file://example.com file links", b"file://example.com"),
+            case(b"match ssh://example.com ssh links", b"ssh://example.com"),
+            case(b"match git://example.com git links", b"git://example.com"),
+            case(b"/tmp/test.txt http://www.google.com", b"/tmp/test.txt"),
+            case(b"match tel:+18005551234 tel links", b"tel:+18005551234"),
+            case(
+                b"match magnet:?xt=urn:btih:1234567890 magnet links",
+                b"magnet:?xt=urn:btih:1234567890",
+            ),
+            case(
+                b"match ipfs://QmSomeHashValue ipfs links",
+                b"ipfs://QmSomeHashValue",
+            ),
+            case(
+                b"match ipns://QmSomeHashValue ipns links",
+                b"ipns://QmSomeHashValue",
+            ),
+            case(
+                b"match gemini://example.com gemini links",
+                b"gemini://example.com",
+            ),
+            case(
+                b"match gopher://example.com gopher links",
+                b"gopher://example.com",
+            ),
+            case(
+                b"match news:comp.infosystems.www.servers.unix news links",
+                b"news:comp.infosystems.www.servers.unix",
+            ),
+            case(
+                b"/Users/ghostty.user/code/example.py",
+                b"/Users/ghostty.user/code/example.py",
+            ),
+            case(
+                b"/Users/ghostty.user/code/../example.py",
+                b"/Users/ghostty.user/code/../example.py",
+            ),
+            case(
+                b"/Users/ghostty.user/code/../example.py hello world",
+                b"/Users/ghostty.user/code/../example.py",
+            ),
+            case(b"../example.py", b"../example.py"),
+            case(b"../example.py ", b"../example.py "),
+            case(b"first time ../example.py contributor ", b"../example.py"),
+            case(
+                b"[link](/home/user/ghostty.user/example)",
+                b"/home/user/ghostty.user/example",
+            ),
+            // IPv6 URL tests - Basic tests
+            case(
+                b"Serving HTTP on :: port 8000 (http://[::]:8000/)",
+                b"http://[::]:8000/",
+            ),
+            case(
+                b"IPv6 address https://[2001:db8::1]:8080/path",
+                b"https://[2001:db8::1]:8080/path",
+            ),
+            case(b"IPv6 localhost http://[::1]:3000", b"http://[::1]:3000"),
+            case(
+                b"Complex IPv6 https://[2001:db8:85a3:8d3:1319:8a2e:370:7348]:443/",
+                b"https://[2001:db8:85a3:8d3:1319:8a2e:370:7348]:443/",
+            ),
+            // IPv6 URL tests - URLs with paths and query parameters
+            case(
+                b"IPv6 with path https://[2001:db8::1]/path/to/resource",
+                b"https://[2001:db8::1]/path/to/resource",
+            ),
+            case(
+                b"IPv6 with query https://[2001:db8::1]:8080/api?param=value&other=123",
+                b"https://[2001:db8::1]:8080/api?param=value&other=123",
+            ),
+            // IPv6 URL tests - Compressed forms
+            case(
+                b"IPv6 compressed http://[2001:db8::]:80/",
+                b"http://[2001:db8::]:80/",
+            ),
+            case(
+                b"IPv6 multiple zeros http://[2001:0:0:0:0:0:0:1]",
+                b"http://[2001:0:0:0:0:0:0:1]",
+            ),
+            // IPv6 URL tests - Special cases
+            case(
+                b"IPv6 link-local https://[fe80::1234:5678:9abc]",
+                b"https://[fe80::1234:5678:9abc]",
+            ),
+            case(
+                b"IPv6 multicast http://[ff02::1]/stream",
+                b"http://[ff02::1]/stream",
+            ),
+            // IPv6 URL tests - Mixed scenarios
+            case(
+                b"IPv6 in markdown [link](http://[2001:db8::1]/docs)",
+                b"http://[2001:db8::1]/docs",
+            ),
+            // File paths with spaces
+            case(b"./spaces-end.   ", b"./spaces-end.   "),
+            case(b"./space middle", b"./space middle"),
+            case(b"../test folder/file.txt", b"../test folder/file.txt"),
+            case(b"/tmp/test folder/file.txt", b"/tmp/test folder/file.txt"),
+            case(b"/tmp/test  folder/file.txt", b"/tmp/test"),
+            // unified diff lines
+            case(
+                b"diff --git a/src/font/shaper/harfbuzz.zig b/src/font/shaper/harfbuzz.zig",
+                b"a/src/font/shaper/harfbuzz.zig",
+            ),
+            // Two space-separated absolute paths should match only the first
+            case(b"/tmp/foo /tmp/bar", b"/tmp/foo"),
+            case(b"/tmp/foo.txt /tmp/bar.txt", b"/tmp/foo.txt"),
+            // Bare relative file paths (no ./ or ../ prefix)
+            case(b"src/config/url.zig", b"src/config/url.zig"),
+            case(b"app/folder/file.rb:1", b"app/folder/file.rb:1"),
+            case(b"modified:   src/config/url.zig", b"src/config/url.zig"),
+            case(
+                b"lib/ghostty/terminal.zig:42:10",
+                b"lib/ghostty/terminal.zig:42:10",
+            ),
+            case(b"some-pkg/src/file.txt more text", b"some-pkg/src/file.txt"),
+            // comma should match substrings
+            case(b"src/foo.c,baz.txt", b"src/foo.c"),
+            case(b"~/foo/bar.txt", b"~/foo/bar.txt"),
+            case(b"open ~/Documents/notes.md please", b"~/Documents/notes.md"),
+            case(b"~/.config/ghostty/config", b"~/.config/ghostty/config"),
+            case(
+                b"directory: ~/src/ghostty-org/ghostty",
+                b"~/src/ghostty-org/ghostty",
+            ),
+            case(b"$HOME/src/config/url.zig", b"$HOME/src/config/url.zig"),
+            case(
+                b"project dir: $PWD/src/ghostty/main.zig",
+                b"$PWD/src/ghostty/main.zig",
+            ),
+            // $VAR mid-path should match fully, not partially from the $
+            case(b"foo/$BAR/baz", b"foo/$BAR/baz"),
+            case(b".foo/bar/$VAR", b".foo/bar/$VAR"),
+            case(b".config/ghostty/config", b".config/ghostty/config"),
+            case(
+                b"loaded from .local/share/ghostty/state.db now",
+                b".local/share/ghostty/state.db",
+            ),
+            case(b"../some/where", b"../some/where"),
+            // comma-separated file paths
+            case(
+                b"  - shared/src/foo/SomeItem.m:12, shared/src/",
+                b"shared/src/foo/SomeItem.m:12",
+            ),
+            // mid-string dot should not partially match but fully
+            case(b"foo.local/share", b"foo.local/share"),
+            // numeric directory should match fully
+            case(b"2024/report.txt", b"2024/report.txt"),
+            // comma should stop matching in spaced path segments
+            case(b"./foo bar,baz", b"./foo bar"),
+            case(b"/tmp/foo bar,baz", b"/tmp/foo bar"),
+            // trailing colon should not be part of the path
+            case(b"./.config/ghostty: Needs upstream (main)", b"./.config/ghostty"),
+            case(b"./Downloads: Operation not permitted", b"./Downloads"),
+        ];
+
+        for c in &cases {
+            //std.debug.print("input: {s}\n", .{case.input});
+            //std.debug.print("match: {s}\n", .{case.expect});
+            let mut reg = re.search(c.input, oni::SearchOptions::default()).unwrap();
+            //std.debug.print("count: {d}\n", .{@as(usize, reg.count())});
+            //std.debug.print("starts: {d}\n", .{reg.starts()});
+            //std.debug.print("ends: {d}\n", .{reg.ends()});
+            // defer reg.deinit();
+            assert_eq!(c.num_matches, reg.count());
+            let matched = &c.input[reg.starts()[0] as usize..reg.ends()[0] as usize];
+            assert_eq!(
+                c.expect,
+                matched,
+                "input={:?}",
+                String::from_utf8_lossy(c.input),
+            );
+            reg.deinit();
+        }
+
+        let no_match_cases: [&[u8]; 10] = [
+            // bare relative paths without any dot should not match as file paths
+            b"input/output",
+            b"foo/bar",
+            // $-numeric character should not match
+            b"$10/bar",
+            b"$10/$20",
+            b"$10/bar.txt",
+            // comma should not let dot detection look past it
+            b"foo/bar,baz.txt",
+            // $VAR should not match mid-word
+            b"foo$BAR/baz.txt",
+            // ~ should not match mid-word
+            b"foo~/bar.txt",
+            // double-slash comments are not paths
+            b"// foo bar",
+            b"//foo",
+        ];
+        for &input in &no_match_cases {
+            // PORT NOTE: the reference `if (result) |*reg| { reg.deinit();
+            // return error.TestUnexpectedResult; } else |_| {}` — a match is a
+            // failure (a no-match search returns `Error.Mismatch`).
+            if let Ok(mut reg) = re.search(input, oni::SearchOptions::default()) {
+                reg.deinit();
+                panic!("TestUnexpectedResult");
+            }
+        }
+
+        re.deinit();
+    }
 }

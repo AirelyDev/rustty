@@ -16,11 +16,11 @@ authors.workspace = true
 workspace = true
 
 [features]
-# The single `url.zig` test uses oniguruma. oniguruma-sys is not built yet, so
-# the test is gated behind this off-by-default feature (SkipZigTest-style defer;
-# see .port/phase-2/DEFERRALS.md). The url regex string-assembly logic is always
-# compiled; only its test requires this feature.
-oniguruma = []
+# The single `url.zig` test uses oniguruma. It is gated behind this off-by-default
+# feature which pulls in the `oni` safe wrapper crate (`rustty-oniguruma`). The url
+# regex string-assembly logic is always compiled; only its test requires this
+# feature. See .port/phase-2/DEFERRALS.md (RESOLVED).
+oniguruma = ["dep:rustty-oniguruma"]
 # Browser/wasm `Config` C ABI (`config/Wasm.zig`). Off by default and never
 # compiled in the desktop config cluster; the gate flips on with the wasm
 # app-runtime (see src/wasm.rs and .port/phase-2/DEFERRALS.md).
@@ -40,3 +40,6 @@ rustty-renderer = { workspace = true }
 rustty-input = { workspace = true }
 rustty-args = { workspace = true }
 rustty-cfg-fmt = { workspace = true }
+# The `oni` safe wrapper (lib name `oni`), pulled in only by the `oniguruma`
+# feature for the url.zig `url regex` test.
+rustty-oniguruma = { workspace = true, optional = true }
