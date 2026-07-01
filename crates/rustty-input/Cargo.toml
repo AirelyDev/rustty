@@ -30,3 +30,15 @@ rustty-render-types = { workspace = true }
 # RemapSet's `map: AutoArrayHashMapUnmanaged(Mods, Mods)` (key_mods.rs) — the
 # insertion-ordered hash map from the Zig-stdlib port (auto context = std hashing).
 rustty-zigstd = { workspace = true }
+# `Link.oniRegex` (link.rs) compiles the link's byte pattern into an `oni.Regex`.
+# The reference imports `oniguruma` UNCONDITIONALLY in src/input/Link.zig — Link
+# is core input, NOT gated behind `build_options.oniguruma`. Only the standalone
+# libghostty-vt build disables oniguruma (GhosttyZig.zig sets vt_options.oniguruma
+# = false), which is why the *vt* file terminal/StringMap.zig gates its regex
+# surface on `build_options.oniguruma` and rustty-vt/rustty-config expose an
+# off-by-default `oniguruma` feature. `src/input/` is always built with oniguruma
+# present (SharedDeps.zig adds the module; Config.zig defaults `.oniguruma = true`),
+# so `rustty-oniguruma` (lib name `oni`) is a NON-optional dependency here and
+# `oni_regex` is always compiled (no cargo feature gate). This adds a transitive
+# C-FFI edge (oniguruma-sys), so rustty-input is an FFI crate for G6 (ASan).
+rustty-oniguruma = { workspace = true }

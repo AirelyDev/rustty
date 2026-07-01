@@ -227,7 +227,10 @@ MAP = {
     "input_keymap_darwin":([f"{GHI}/KeymapDarwin.zig"], [f"{RSI}/keymap_darwin.rs"], 0),
     # KeymapNoop.zig: 0 tests (non-macOS noop keymap).
     "input_keymap_noop": ([f"{GHI}/KeymapNoop.zig"], [f"{RSI}/keymap_noop.rs"], 0),
-    # Link.zig: 0 tests (oniguruma-backed regex link).
+    # Link.zig: 0 tests (oniguruma-backed regex link). `oni_regex` is now wired
+    # to the real `oni::Regex` (rustty-oniguruma, non-optional dep — the reference
+    # imports oniguruma unconditionally in src/input/); no reference test exists,
+    # so this stays a normally-counted 0 (NOT deferred/excluded).
     "input_link":        ([f"{GHI}/Link.zig"], [f"{RSI}/link.rs"], 0),
     # keyboard.zig: 0 tests (KeyboardLayout enum + OptionAsAlt glue).
     "input_keyboard":    ([f"{GHI}/keyboard.zig"], [f"{RSI}/keyboard.rs"], 0),
@@ -257,12 +260,13 @@ MAP = {
     "config_repeatable_string_map":([f"{GHCFG}/RepeatableStringMap.zig"], [f"{RSCG}/repeatable_string_map.rs"], 0),
     # string.zig: 9 quoted tests (RepeatableString / parse).
     "config_string":     ([f"{GHCFG}/string.zig"], [f"{RSCG}/string.rs"], 0),
-    # url.zig: 1 quoted test ("url regex"), oniguruma-backed -> DEFERRED behind the
-    # off-by-default `oniguruma` cargo feature (SkipZigTest-style; documented in
-    # .port/phase-2/DEFERRALS.md). The regex string-assembly logic is ported
-    # normally; the test slot is `#[cfg(all(test, feature="oniguruma"))]`. So
-    # apc_deferred=1 -> need=0, rust=0 (the gated test has no live #[test] line).
-    "config_url":        ([f"{GHCFG}/url.zig"], [f"{RSCG}/url.rs"], 1),
+    # url.zig: 1 quoted test ("url regex"), oniguruma-backed -> now PORTED behind
+    # the off-by-default `oniguruma` cargo feature (which pulls in the `oni` safe
+    # wrapper crate; documented in .port/phase-2/DEFERRALS.md, RESOLVED). The
+    # ported test lives in the `#[cfg(all(test, feature="oniguruma"))]` module; its
+    # `#[test]` line is counted by rust_count regardless of cfg. So apc_deferred=0
+    # -> need=1, rust=1.
+    "config_url":        ([f"{GHCFG}/url.zig"], [f"{RSCG}/url.rs"], 0),
     # rustty-config C2 — the giant `Config` struct of Config.zig (113 quoted
     # tests). The Config-struct integration tests live in config_struct.rs; the
     # in-file value-type tests (the `pub const X = enum/struct/union` types the

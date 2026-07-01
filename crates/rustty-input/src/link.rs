@@ -15,14 +15,19 @@
 //   const oni = @import("oniguruma");
 //   const Mods = @import("key.zig").Mods;
 // `std`/`Allocator` map to the Rust system allocator. `Mods` maps to the ported
-// `rustty_vt::input::key_mods::Mods`. `oni` (Oniguruma) is NOT yet ported — the
-// `oniguruma-sys` crate is a stub with no `oni.Regex` type. Following the
-// established deferred-seam precedent (binding.rs `uucode`/`gobject`), `oniRegex`
-// is ported as a deferred seam preserving the reference body and comments
-// verbatim; it is satisfied when the Oniguruma binding lands. The `regex` byte
-// slice (`[]const u8`) maps to an owned `Vec<u8>` for the stored field and a
-// borrowed `&[u8]` ownership note (the reference: "Ownership of this memory is
-// up to the caller. The link will never free this memory.").
+// `rustty_vt::input::key_mods::Mods`. `oni` (Oniguruma) maps to the ported `oni`
+// safe-wrapper crate (`rustty-oniguruma`, lib name `oni`); referenced directly as
+// `oni::*` (no `use`, mirroring the reference's `const oni = @import("oniguruma")`
+// module binding). The reference imports `oniguruma` UNCONDITIONALLY — Link is
+// core input, NOT behind `build_options.oniguruma`; only the standalone
+// libghostty-vt build disables oniguruma (which is why the *vt* file
+// `terminal/StringMap.zig` gates its regex surface on `build_options.oniguruma`),
+// while `src/input/` is always built with oniguruma present. So `rustty-oniguruma`
+// is a NON-optional dependency of `rustty-input` and `oni_regex` is always
+// compiled (no cargo feature gate). The `regex` byte slice (`[]const u8`) maps to
+// an owned `Vec<u8>` for the stored field and a borrowed `&[u8]` ownership note
+// (the reference: "Ownership of this memory is up to the caller. The link will
+// never free this memory.").
 
 use rustty_vt::input::key_mods::Mods;
 
@@ -80,23 +85,25 @@ pub enum Highlight {
 
 impl Link {
     /// Returns a new oni.Regex that can be used to match the link.
-    //
-    // PORT NOTE (DEFERRED SEAM, R4): the reference body is
-    //   return try oni.Regex.init(
-    //       self.regex,
-    //       .{},
-    //       oni.Encoding.utf8,
-    //       oni.Syntax.default,
-    //       null,
-    //   );
-    // The Oniguruma binding (`oni.Regex`/`oni.Encoding`/`oni.Syntax`) is not yet
-    // ported (the `oniguruma-sys` crate is a C-binding stub). The full reference
-    // call is preserved above; this seam is wired to the real binding when the
-    // Oniguruma layer lands. No reference logic or comment is dropped.
-    #[allow(clippy::result_unit_err)]
-    pub fn oni_regex(&self) -> Result<OniRegex, ()> {
-        // DEFERRED: requires the Oniguruma binding (see PORT NOTE above).
-        unimplemented!("oni.Regex.init — deferred until the Oniguruma binding lands")
+    // PORT NOTE: `!oni.Regex` maps to `Result<oni::Regex, oni::Error>`; the
+    // `.{}` (2nd arg) is the default `RegexOptions`, `null` (5th arg) the absent
+    // `?*ErrorInfo` -> `None`. `oni.Encoding.utf8`/`oni.Syntax.default` are the
+    // `oni::Encoding::utf8()`/`oni::Syntax::default()` accessors.
+    pub fn oni_regex(&self) -> Result<oni::Regex, oni::Error> {
+        // return try oni.Regex.init(
+        //     self.regex,
+        //     .{},
+        //     oni.Encoding.utf8,
+        //     oni.Syntax.default,
+        //     null,
+        // );
+        oni::Regex::init(
+            &self.regex,
+            oni::RegexOptions::default(),
+            oni::Encoding::utf8(),
+            oni::Syntax::default(),
+            None,
+        )
     }
 
     /// Deep clone the link.
@@ -123,8 +130,3 @@ impl Link {
             && self.regex == other.regex
     }
 }
-
-// PORT NOTE (DEFERRED SEAM, R4): the reference's `oni.Regex` return type. A
-// placeholder until the Oniguruma binding is ported (see `oni_regex`).
-#[derive(Debug)]
-pub enum OniRegex {}

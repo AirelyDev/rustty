@@ -316,6 +316,26 @@ Three pre-existing bugs in the off-by-default gated code were fixed so
   owns the sole `Regex` handle; faithful to Zig where `re`/`it.regex` alias the
   same OnigRegex).
 
+## input `Link.oniRegex` oniguruma seam — RESOLVED (`oni` wrapper landed)
+
+`rustty-input`'s `link.rs` (`ghostty src/input/Link.zig`) `oniRegex` was a deferred
+seam (`unimplemented!()` + a placeholder `OniRegex` enum) because the `oni` binding
+crate did not exist. `oniguruma-sys` + `rustty-oniguruma` (the `oni` wrapper) have
+landed, so the seam is filled with the faithful
+`oni::Regex::init(&self.regex, oni::RegexOptions::default(), oni::Encoding::utf8(),
+oni::Syntax::default(), None)` returning `Result<oni::Regex, oni::Error>`, and the
+placeholder enum is removed. **RESOLVED.** Unlike `rustty-vt`/`rustty-config` (which
+gate oniguruma behind an off-by-default feature because the standalone libghostty-vt
+build disables it), the reference imports `oniguruma` UNCONDITIONALLY in
+`src/input/Link.zig` — `src/input/` is always built with oniguruma present — so
+`rustty-oniguruma` is a **NON-optional** dependency of `rustty-input` and `oni_regex`
+is always compiled (no cargo feature gate). This adds a transitive C-FFI edge
+(oniguruma-sys), so `rustty-input` is now an FFI crate for G6 (routed to ASan, not
+Miri; added to `check_leaks.sh` `FFI_CRATES`). `Link.zig` has **0 `test{}` blocks**,
+so no test is un-deferred (`check_test_counts.py` `input_link` stays a
+normally-counted 0 — never a deferral/exclusion); the vt `string_map.rs` tests
+already exercise the `oni::Regex::init` surface.
+
 ## Deferred: DCS <-> tmux enter/exit wiring — test `dcs::tests::tmux_enter_and_implicit_exit`
 
 `dcs.rs`'s `TmuxState`/`TmuxCommand` are still `()` stubs (the reference's
