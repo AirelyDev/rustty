@@ -24,3 +24,4 @@ pub mod metrics;
 pub mod nerd_font_attributes;
 pub mod opentype;
 pub mod options;
+pub mod sprite;

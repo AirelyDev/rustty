@@ -148,7 +148,10 @@ pub struct Atlas<A: Allocator + Copy = Global> {
     /// The format of the texture data being written into the Atlas. This must be
     /// uniform for all textures in the Atlas. If you have some textures with
     /// different formats, you must use multiple atlases or convert the textures.
-    format: Format,
+    // PORT NOTE: `pub(crate)` so `sprite::canvas::Canvas::writeAtlas` can assert
+    // `atlas.format == .grayscale` exactly as the reference does (Zig struct
+    // fields are public across files; this narrows that to the crate).
+    pub(crate) format: Format,
 
     /// This will be incremented every time the atlas is modified. This is useful
     /// for knowing if the texture data has changed since the last time it was
