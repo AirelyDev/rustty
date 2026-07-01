@@ -405,3 +405,62 @@ follows (R4 — break crate cycles with minimal glue, never weaken):
   macOS/Linux/BSD + the debug/release ordering), NOT a stub. So when `theme.zig`
   is ported in the Machinery phase, its `.resources` arm has a real `ResourcesDir`
   to build on — **no `.resources` deferral is needed.**
+
+## rustty-renderer R-b/R-c — shadertoy + size + link
+
+### `renderer/link.zig` oniguruma deferral — RESOLVED
+
+`renderer/link.zig` (the `oni.Regex`-backed renderer link `Set`/`renderCellMap`)
+was DEFERRED behind the Oniguruma binding (`oni.Regex` was unported tree-wide). It
+is now RESOLVED: `oniguruma-sys` + the `oni` safe wrapper (`rustty-oniguruma`) have
+landed, so `crates/rustty-renderer/src/link.rs` ports `Link`/`Set.fromConfig`
+(real `oni::Regex::init`) + `renderCellMap` (real `regex.search`) + all **3
+`test{}`** (`renderCellMap` / `renderCellMap hover links` / `renderCellMap mods no
+match`) assertion-for-assertion; they pass. Like `rustty-input`'s `Link` (the
+reference imports oniguruma unconditionally in the renderer link path),
+`rustty-oniguruma` is a **NON-optional** dep of `rustty-renderer`, adding a C-FFI
+edge (`oniguruma-sys`) — so `rustty-renderer` routes to ASan for G6 (already in
+`check_leaks.sh` `FFI_CRATES`). `check_test_counts.py` `renderer_link` apc_deferred
+3 → 0. Scoped `link.zig` G3b → missing=0.
+
+### `renderer/shadertoy.zig` — ported; `loadFromFiles`/`loadFromFile` DEFERRED
+
+`shadertoy.zig` (the custom-shader transpile path GLSL → glslang → SPIR-V →
+spirv-cross → MSL/GLSL) is ported in `crates/rustty-renderer/src/shadertoy.rs`
+against the vendored `glslang-sys` + `spirv-cross-sys` FFI, with all **4 `test{}`**
+(`spirv` / `spirv invalid` / `shadertoy to msl` / `shadertoy to glsl`) passing
+against real glslang + spirv-cross. `check_test_counts.py` gains `renderer_shadertoy`
+(4/4). Scoped `shadertoy.zig` G3b → missing=0. The pkg/glslang safe-wrapper surface
+(`Shader`/`Program`/`init`/`testing.ensureInit`) is inlined (the tree vendors only
+raw `glslang-sys`), byte-faithful to pkg/glslang/{init,shader,program,test}.zig.
+
+- **DEFERRED: `loadFromFiles` / `loadFromFile`.** They take a
+  `configpkg.RepeatablePath` (`@import("../config.zig")`), but `rustty-config`
+  ALREADY depends on `rustty-renderer` (config/Cargo.toml), so a
+  `rustty-renderer → rustty-config` edge would form a crate cycle (G7 RED). The two
+  functions are NOT GPU-coupled and carry **0 `test{}`** (no test-count impact);
+  their verbatim bodies are preserved as a commented block in `shadertoy.rs` (R5,
+  never a silent drop). **Target:** when the renderer↔config custom-shader load
+  layering is resolved (the surface/apprt wiring milestone). The `Uniforms` extern
+  struct's exact per-field `align(16)` std140 layout is likewise pinned when the
+  GPU draw path (R-d/Phase 3) consumes it (declared `#[repr(C)]` now; unused this
+  milestone) — this is part of the already-tracked GPU-draw-path deferral, not a
+  new one.
+
+### KNOWN ISSUE (pre-existing, below this crate): parallel `Terminal::init` corruption
+
+`cargo test -p rustty-renderer` runs `#[test]`s CONCURRENTLY (whereas the reference
+`zig test` runs a file's tests SERIALLY). Running several `Terminal`-constructing
+renderer tests at once drives `rustty-vt`/`rustty-zigstd`'s arena/memory-pool
+allocation concurrently and exposes a rare (~1/25 at full-suite level) PRE-EXISTING
+concurrency corruption there — surfacing as an `ArenaAllocator::usable`
+`data - buf_node_size()` underflow from a torn `BufNode.data` (the arena is the
+victim, not the cause). This is NOT introduced by the ported renderer code:
+`rustty-vt`'s own suite, the original 11-test renderer suite, and the link-only /
+shadertoy-only subsets are each stable in isolation; only the *combination* of the
+added `Terminal`-heavy tests trips it. As a reference-faithful, no-assertion-weakening
+workaround, the crate's `Terminal`-constructing tests (`cell_constraint_widths`, the
+4 `cursor_*`, the 3 `render_cell_map*`) take a process-global `TERMINAL_TEST_LOCK`
+(`lib.rs`), restoring the serial execution model — 0 crashes in 50 consecutive full
+runs. **Target:** remove the lock once the underlying rustty-vt/rustty-zigstd race is
+root-caused and fixed (out of scope for the renderer port).

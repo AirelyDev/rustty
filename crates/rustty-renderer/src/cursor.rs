@@ -128,6 +128,8 @@ mod tests {
     // test "cursor: default uses configured style"
     #[test]
     fn cursor_default_uses_configured_style() {
+        // Serialize `Terminal`-constructing tests (see crate lib.rs TERMINAL_TEST_LOCK).
+        let _terminal_guard = crate::terminal_test_guard();
         let alloc = Global;
         let mut term: Terminal = Terminal::init(alloc, opts(10, 10)).unwrap();
 
@@ -187,6 +189,8 @@ mod tests {
     // test "cursor: blinking disabled"
     #[test]
     fn cursor_blinking_disabled() {
+        // Serialize `Terminal`-constructing tests (see crate lib.rs TERMINAL_TEST_LOCK).
+        let _terminal_guard = crate::terminal_test_guard();
         let alloc = Global;
         let mut term = Terminal::init(alloc, opts(10, 10)).unwrap();
 
@@ -246,6 +250,8 @@ mod tests {
     // test "cursor: explicitly not visible"
     #[test]
     fn cursor_explicitly_not_visible() {
+        // Serialize `Terminal`-constructing tests (see crate lib.rs TERMINAL_TEST_LOCK).
+        let _terminal_guard = crate::terminal_test_guard();
         let alloc = Global;
         let mut term = Terminal::init(alloc, opts(10, 10)).unwrap();
 
@@ -306,6 +312,8 @@ mod tests {
     // test "cursor: always block with preedit"
     #[test]
     fn cursor_always_block_with_preedit() {
+        // Serialize `Terminal`-constructing tests (see crate lib.rs TERMINAL_TEST_LOCK).
+        let _terminal_guard = crate::terminal_test_guard();
         let alloc = Global;
         let mut term = Terminal::init(alloc, opts(10, 10)).unwrap();
 

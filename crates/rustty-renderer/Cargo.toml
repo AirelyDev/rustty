@@ -30,8 +30,24 @@ rustty-render-types = { workspace = true }
 # yet touch the shaper directly; the edge is wired now so the glyph-consuming
 # draw path (R-d/Phase 3) has it available. The edge is acyclic.
 rustty-font-shaper = { workspace = true }
-
-[dev-dependencies]
-# The cell/cursor tests drive a real `Terminal`/`RenderState`, whose `alloc`
-# parameter is `allocator_api2::alloc::Global` (matching rustty-vt's Allocator).
+# renderer/link.zig imports `../input.zig` (`inputpkg.Link`/`Highlight`) and
+# `oniguruma` (`oni.Regex`). The reference imports oniguruma UNCONDITIONALLY in
+# the renderer link path (same as src/input/Link.zig), so `rustty-oniguruma` is a
+# NON-optional dep. Both edges are acyclic (neither input nor oniguruma depends
+# on renderer; only apprt/config/core depend on renderer). This adds a C-FFI edge
+# (oniguruma-sys), so rustty-renderer is an FFI crate for G6 (already in
+# check_leaks.sh FFI_CRATES).
+rustty-input = { workspace = true }
+rustty-oniguruma = { workspace = true }
+# renderer/shadertoy.zig imports `glslang` + `spirv_cross` for the custom-shader
+# transpile path (GLSL -> SPIR-V -> MSL/GLSL). These are the vendored FFI sys
+# crates. (shadertoy.zig also imports `../config.zig` for `RepeatablePath`, but
+# rustty-config ALREADY depends on rustty-renderer, so that back-edge would cycle;
+# the two config-coupled `loadFromFile*` fns are deferred — see DEFERRALS.md.)
+glslang-sys = { workspace = true }
+spirv-cross-sys = { workspace = true }
+# link.rs's `render_cell_map`/`from_config` public API takes an `Allocator`
+# (`allocator_api2::alloc::Global`, matching `RenderState::string`'s parameter),
+# so allocator-api2 is a NORMAL dependency (not dev-only). It also backs the
+# cell/cursor tests, which drive a real `Terminal`/`RenderState`.
 allocator-api2 = { workspace = true }

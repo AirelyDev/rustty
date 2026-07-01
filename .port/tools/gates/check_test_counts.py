@@ -67,11 +67,12 @@ RSI = "/Users/gael/projects/rustty/crates/rustty-input/src"
 # Screen + font SharedGrid), cursor.zig (cursor rects/style), State.zig (the
 # renderer State/mailbox), and size.zig (GridSize/ScreenSize/CellSize/padding).
 # size.zig already landed in the rustty-render-types leaf (the A1 hoist) and is
-# re-exported by rustty-renderer, so it maps to the render-types file. link.zig
-# (link/hover highlight rects) is DEFERRED behind Oniguruma (oni.Regex is not yet
-# ported anywhere; mirrors the config url-regex + input Link.zig deferrals —
-# DEFERRALS.md), so apc_deferred=3 -> need=0. The GPU draw path (Metal/OpenGL/
-# generic/image/custom shaders) is R-d/Phase 3.
+# re-exported by rustty-renderer, so it maps to the render-types file. shadertoy.zig
+# (the custom-shader GLSL->SPIR-V->MSL/GLSL transpile path over glslang-sys +
+# spirv-cross-sys) is ported (4 tests). link.zig (link/hover highlight rects) is
+# ported now that Oniguruma landed — the previous apc_deferred=3 is flipped to 0
+# (mirrors the config url-regex + input Link.zig resolutions, DEFERRALS.md). The GPU
+# draw path (Metal/OpenGL/generic/image/custom shaders) is R-d/Phase 3.
 GHR = "/Users/gael/projects/ghostty/src/renderer"
 RSR = "/Users/gael/projects/rustty/crates/rustty-renderer/src"
 RSRT = "/Users/gael/projects/rustty/crates/rustty-render-types/src"
@@ -371,11 +372,17 @@ MAP = {
     # leaf (A1 hoist) and re-exported by rustty-renderer; maps to render-types
     # lib.rs (the 6 size.zig tests). rust=6.
     "renderer_size":     ([f"{GHR}/size.zig"], [f"{RSRT}/lib.rs"], 0),
-    # link.zig: 3 quoted tests -> DEFERRED behind Oniguruma (Set.fromConfig compiles
-    # an oni.Regex; renderCellMap runs regex.search — no honest port without the
-    # binding, which is unported tree-wide; mirrors config url-regex + input Link
-    # deferrals, DEFERRALS.md). apc_deferred=3 -> need=0, rust=0 (no link.rs yet).
-    "renderer_link":     ([f"{GHR}/link.zig"], [], 3),
+    # shadertoy.zig: 4 quoted tests (spirv / spirv invalid / shadertoy to msl /
+    # shadertoy to glsl) -> shadertoy.rs, over glslang-sys + spirv-cross-sys FFI.
+    # rust=4. (loadFromFiles/loadFromFile are config-coupled and would cycle
+    # renderer->config->renderer, so they are DEFERRED with verbatim bodies — but
+    # they carry NO test{}, so there is no count impact; DEFERRALS.md.)
+    "renderer_shadertoy":([f"{GHR}/shadertoy.zig"], [f"{RSR}/shadertoy.rs"], 0),
+    # link.zig: 3 quoted tests (renderCellMap / renderCellMap hover links /
+    # renderCellMap mods no match) -> link.rs. The Oniguruma deferral is RESOLVED
+    # (oni.Regex/Region landed via rustty-oniguruma), so apc_deferred flips 3 -> 0
+    # and rust=3 (>= zig=3).
+    "renderer_link":     ([f"{GHR}/link.zig"], [f"{RSR}/link.rs"], 0),
 }
 
 def expand(globs):

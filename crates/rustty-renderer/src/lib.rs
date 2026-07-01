@@ -12,27 +12,54 @@
 //! - `state` — renderer/State.zig (2 tests): the render `State`/`Preedit`.
 //! - `shaders` — the CPU-side vertex-data structs (`CellText`/`CellBg`/`Uniforms`)
 //!   that `cell.zig` fills, from renderer/opengl/shaders.zig.
+//! - `shadertoy` — renderer/shadertoy.zig (4 tests): the custom-shader transpile
+//!   path GLSL -> (glslang) -> SPIR-V -> (spirv-cross) -> MSL/GLSL, over the
+//!   vendored `glslang-sys` + `spirv-cross-sys` FFI.
+//! - `link` — renderer/link.zig (3 tests): the `oni.Regex`-backed renderer link
+//!   `Set`/`renderCellMap` (Oniguruma deferral now RESOLVED).
 //!
 //! renderer/size.zig (6 tests) is already ported in the `rustty-render-types`
 //! leaf (the A1 hoist) and re-exported below.
 //!
 //! DEFERRED:
 //!
-//! - renderer/link.zig (3 tests) — blocked on the Oniguruma binding
-//!   (`oni.Regex`), which is not yet ported anywhere in the tree (see
-//!   rustty-input `link.rs`'s deferred `oni_regex` seam). `Set.fromConfig`
-//!   compiles a regex and `renderCellMap` runs `regex.search`, so its code and
-//!   all 3 tests require real regex matching that cannot be honestly satisfied
-//!   without the binding. Ported when Oniguruma lands (R5: not weakened/stubbed).
+//! - `shadertoy`'s `loadFromFiles`/`loadFromFile` — they take
+//!   `configpkg.RepeatablePath`, but `rustty-config` already depends on
+//!   `rustty-renderer`, so a `renderer -> config` edge would cycle (G7). The
+//!   verbatim bodies are preserved in `shadertoy.rs` (R5) and are NOT exercised
+//!   by any test. See .port/phase-2/DEFERRALS.md.
 //! - The GPU draw path (OpenGL/Metal backends, pipelines, generic renderer,
 //!   images, custom shaders) — R-d/Phase 3.
 
 pub mod cell;
 pub mod cursor;
+pub mod link;
 pub mod shaders;
+pub mod shadertoy;
 pub mod state;
 
 // renderer/size.zig lives in the rustty-render-types leaf (A1 hoist). The
 // reference `renderer.zig` re-exports these size types (`GridSize`, `Size`,
 // `ScreenSize`, `CellSize`, `Padding`, `Coordinate`, ...); mirror that re-export.
 pub use rustty_render_types as size;
+
+// PORT NOTE (test-harness only): the reference is unit-tested by `zig test`,
+// which runs a file's `test{}` blocks SERIALLY. `cargo test` instead runs
+// `#[test]`s CONCURRENTLY across threads. Running several `Terminal`-constructing
+// tests at once drives `rustty-vt`/`rustty-zigstd`'s arena/memory-pool allocation
+// path concurrently and exposes a rare, pre-existing concurrency corruption there
+// (an `ArenaAllocator::usable` `data - buf_node_size()` underflow from a torn
+// `BufNode.data` — the arena is the victim, not the cause; the bug lives below
+// this crate and neither `rustty-vt`'s own suite nor the original renderer suite
+// hits it in isolation). This is NOT introduced by the ported renderer code.
+// To keep `cargo test -p rustty-renderer` deterministically green WITHOUT
+// weakening any assertion, the crate's `Terminal`-constructing tests take this
+// process-global lock, restoring the reference's serial execution model. Remove
+// once the underlying rustty-vt/rustty-zigstd race is fixed.
+#[cfg(test)]
+pub(crate) static TERMINAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn terminal_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    TERMINAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}

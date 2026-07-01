@@ -676,15 +676,19 @@ name = "rustty-renderer"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "glslang-sys",
  "rustty-crash",
  "rustty-datastruct",
  "rustty-font",
  "rustty-font-shaper",
+ "rustty-input",
+ "rustty-oniguruma",
  "rustty-os",
  "rustty-render-types",
  "rustty-unicode",
  "rustty-util",
  "rustty-vt",
+ "spirv-cross-sys",
 ]
 
 [[package]]

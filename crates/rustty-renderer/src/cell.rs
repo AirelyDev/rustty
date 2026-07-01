@@ -623,6 +623,8 @@ mod tests {
     // test "Cell constraint widths"
     #[test]
     fn cell_constraint_widths() {
+        // Serialize `Terminal`-constructing tests (see crate lib.rs TERMINAL_TEST_LOCK).
+        let _terminal_guard = crate::terminal_test_guard();
         let alloc = Global;
 
         let mut t: Terminal = Terminal::init(alloc, opts(4, 1)).unwrap();
