@@ -14,6 +14,13 @@
 // const coretext = @import("face/coretext.zig");
 // pub const web_canvas = @import("face/web_canvas.zig");
 //
+// PORT: `face/freetype.zig` (the FreeType backend `Face`) is ported in the
+// `freetype` submodule below. `face/coretext.zig` / `face/web_canvas.zig` land
+// in later F3 subtasks. The `Face = switch(options.backend)` selector still
+// resolves to the scaffold placeholder (below) until those backends land; the
+// concrete `freetype::Face` is reachable directly as `face::freetype::Face`.
+pub mod freetype;
+//
 // PORT NOTE: the reference imports the two build seams `options` (from
 // `main.zig`, providing `options.backend`) and `config` (providing
 // `config.FreetypeLoadFlags`) plus the three concrete backend faces. In rustty:

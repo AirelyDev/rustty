@@ -78,6 +78,27 @@ const SOURCES: &[&str] = &[
     "src/winfonts/winfnt.c",
 ];
 
+/// libpng 1.6.43 compilation units — the verbatim `srcs` list from the
+/// reference's pkg/libpng/build.zig, vendored under `vendor/libpng/` so FreeType
+/// can be built with `FT_CONFIG_OPTION_USE_PNG` (color-bitmap glyph decoding).
+const LIBPNG_SOURCES: &[&str] = &[
+    "png.c",
+    "pngerror.c",
+    "pngget.c",
+    "pngmem.c",
+    "pngpread.c",
+    "pngread.c",
+    "pngrio.c",
+    "pngrtran.c",
+    "pngrutil.c",
+    "pngset.c",
+    "pngtrans.c",
+    "pngwio.c",
+    "pngwrite.c",
+    "pngwtran.c",
+    "pngwutil.c",
+];
+
 fn main() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let vendor = manifest_dir.join("vendor");
@@ -95,6 +116,12 @@ fn main() {
         // Reference flags (pkg/freetype/build.zig `buildLib`).
         .define("FT2_BUILD_LIBRARY", None)
         .define("FT_CONFIG_OPTION_SYSTEM_ZLIB", Some("1"))
+        // The reference builds FreeType with libpng enabled
+        // (`SharedDeps.zig`: `.@"enable-libpng" = true`) so color-bitmap fonts
+        // that store glyphs as PNG (e.g. NotoColorEmoji's CBDT strikes) can be
+        // decoded. Without it `FT_Load_Glyph` returns `Unimplemented_Feature` on
+        // such glyphs. Enabled here and satisfied by the vendored libpng below.
+        .define("FT_CONFIG_OPTION_USE_PNG", Some("1"))
         .flag_if_supported("-fno-sanitize=undefined");
 
     // Off-Windows the reference defines HAVE_UNISTD_H / HAVE_FCNTL_H (used by
@@ -115,6 +142,25 @@ fn main() {
     // `src/gzip/ftgzip.c` `#include <zlib.h>`.
     let zlib_include = env::var("DEP_Z_INCLUDE").expect("DEP_Z_INCLUDE not set by zlib-sys");
     build.include(&zlib_include);
+
+    // Vendored libpng 1.6.43 (the reference's `libpng` dependency), compiled into
+    // the same archive so FreeType's `FT_CONFIG_OPTION_USE_PNG` sfnt png-shim can
+    // decode PNG color-bitmap glyphs. `FreeType`'s `pngshim.c` `#include <png.h>`,
+    // so the libpng dir goes on the include path; `png.c` et al. use the vendored
+    // `pnglibconf.h` (the reference's own build config) and the system `zlib.h`
+    // already added above. SIMD paths are disabled to keep the build portable
+    // (matches the reference's `-DPNG_*_OPT=0` flags).
+    let libpng = vendor.join("libpng");
+    build.include(&libpng);
+    build
+        .define("PNG_ARM_NEON_OPT", Some("0"))
+        .define("PNG_POWERPC_VSX_OPT", Some("0"))
+        .define("PNG_INTEL_SSE_OPT", Some("0"))
+        .define("PNG_MIPS_MSA_OPT", Some("0"));
+    for src in LIBPNG_SOURCES {
+        build.file(libpng.join(src));
+        println!("cargo:rerun-if-changed=vendor/libpng/{src}");
+    }
 
     // The module entry points.
     for src in SOURCES {

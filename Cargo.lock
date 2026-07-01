@@ -577,6 +577,8 @@ dependencies = [
 name = "rustty-font-shaper"
 version = "0.1.0"
 dependencies = [
+ "allocator-api2",
+ "cc",
  "freetype-sys",
  "harfbuzz-sys",
  "objc2-core-graphics",

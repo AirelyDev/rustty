@@ -18,6 +18,14 @@
 //! `DesiredSize` / `Variation`, `default_dpi`, the `FreetypeLoadFlags` seam).
 
 pub mod face;
+// FFI-glue modules backing the FreeType face (thin `unsafe` wrappers over the
+// `-sys` crates; see each module's PORT NOTE). Not part of any reference file's
+// test contract — the full `pkg/freetype`, `pkg/harfbuzz`, `src/font/Library.zig`
+// and `src/stb` ports supersede them.
+pub mod ft;
+pub mod hb;
+pub mod library;
+pub mod stb;
 
 // The active backend `Face` type, selected by `face.zig`'s `switch` over the
 // build backend (macOS default=coretext, Linux default=fontconfig_freetype).

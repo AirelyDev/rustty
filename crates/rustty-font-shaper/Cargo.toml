@@ -43,6 +43,10 @@ rustty-font = { workspace = true }
 rustty-render-types = { workspace = true }
 # Base utilities leaf.
 rustty-util = { workspace = true }
+# Faithful model of `std.mem.Allocator` (same map rustty-font/vt use): the
+# freetype face's `renderGlyph`/`copyTable` thread an allocator, and `Atlas<A>`
+# is generic over it. Callers pass `allocator_api2::alloc::Global`.
+allocator-api2 = { workspace = true }
 # R3: bindings to the SAME C libraries the reference links — NOT reimplementations.
 # FreeType 2.13.2 (glyph rasterization for the freetype backend) and HarfBuzz
 # 11.0.0 (text shaping; the `hb_ft` bridge works against freetype-sys). Referenced
@@ -60,3 +64,9 @@ harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys" }
 objc2-foundation = "0.3"
 objc2-core-graphics = "0.3"
 objc2-core-text = "0.3"
+
+# R3: compile the vendored `stb_image_resize` single-header C (used by the
+# freetype face to scale bitmap-strike glyphs) standalone with `cc`. Same lib
+# the reference links (`src/stb`), copied into `vendor/` — see `build.rs`.
+[build-dependencies]
+cc = "1"

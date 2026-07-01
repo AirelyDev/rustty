@@ -181,6 +181,27 @@ pub struct Atlas<A: Allocator + Copy = Global> {
 
 impl<A: Allocator + Copy> Atlas<A> {
     // pub fn init(alloc: Allocator, size: u32, format: Format) Allocator.Error!Atlas {
+    /// Read-only view of the raw texture data.
+    // PORT NOTE: the reference `data` is a public field; downstream faces (e.g.
+    // the freetype face's render tests) read it directly. Rust keeps the field
+    // private and exposes this accessor.
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// The width/height of the (square) atlas texture.
+    // PORT NOTE: the reference `size` is a public field.
+    pub fn size(&self) -> u32 {
+        self.size
+    }
+
+    /// The pixel format of the atlas.
+    // PORT NOTE: the reference `format` is a public field; the freetype face
+    // reads it (`atlas.format.depth()`) to pick pitch/depth during render.
+    pub fn format(&self) -> Format {
+        self.format
+    }
+
     pub fn init(alloc: A, size: u32, format: Format) -> Result<Atlas<A>, OutOfMemory> {
         // const tw = init_tw;
 

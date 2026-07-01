@@ -19,9 +19,17 @@
 // source-tree fixtures and are copied into this crate's `res/` and embedded via
 // `include_bytes!`.
 
+/// Default fonts that we prefer for Ghostty.
+// PORT: the reference `variable = @embedFile("jetbrains_mono_variable")` is a
+// build-anonymous import of `fonts/variable/JetBrainsMono[wght].ttf` from the
+// `jetbrains_mono` build dependency (JetBrains Mono 2.304, SIL OFL — redistributable
+// per R3), not a `font/` source-tree file. It is required by the freetype face's
+// "face name" test, so the exact dependency file is vendored into this crate's
+// `res/` and embedded here. (`variable_italic` remains deferred; no ported test
+// uses it.)
+pub const VARIABLE: &[u8] = include_bytes!("../res/JetBrainsMono-Variable.ttf");
+
 // PORT NOTE (DEFERRED — build-anonymous imports, not source-tree files):
-//   /// Default fonts that we prefer for Ghostty.
-//   pub const variable = @embedFile("jetbrains_mono_variable");
 //   pub const variable_italic = @embedFile("jetbrains_mono_variable_italic");
 //
 //   /// Symbols-only nerd font.

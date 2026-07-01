@@ -159,6 +159,15 @@ impl<T: FixedPointRepr, const INT_BITS: u64, const FRAC_BITS: u64>
         Self { raw }
     }
 
+    /// Return the packed backing value.
+    // PORT NOTE: the reference recovers the raw fixed-point word via
+    // `@as(i32, @bitCast(fp))` (e.g. freetype face's `renderGlyph` stores a
+    // transformed outline point back into `p.x`/`p.y`). This accessor exposes
+    // that same backing word for such round-trips.
+    pub fn to_raw(self) -> T {
+        self.raw
+    }
+
     /// Convert to a floating-point value.
     pub fn to_f64(self) -> f64 {
         // PORT NOTE: comptime
