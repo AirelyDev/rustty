@@ -19,7 +19,8 @@
 //!
 //! * [`transformation::Transformation`] — the affine matrix (full).
 //! * [`path::Path`] + [`static_path::StaticPath`] — the path builders
-//!   (move/line/curve/close; `arc` excluded).
+//!   (move/line/curve/close/arc, the last via [`internal::arc`]'s
+//!   arc→bezier-spline decomposition).
 //! * [`pixel`] — `Format`/`Pixel` with the RGB(A) family + `Alpha8` (full).
 //! * [`surface::Surface`] — memory-backed `ImageSurface` (argb/xrgb/rgb/rgba/
 //!   alpha8); putPixel/paintStride/clearStride/getPixel/init/initPixel.
@@ -37,7 +38,9 @@
 //! * [`compositor`] — `Operator`/`Precision` plus the scalar integer single-pixel
 //!   core (`run_pixel_t` + `IntegerOps`) used by `Surface::composite_stride` for
 //!   anti-aliased partial-coverage spans.
-//! * [`pattern`], [`options`], and a minimal [`context::Context`].
+//! * [`pattern`], [`options`], and the managed [`context::Context`] drawing API
+//!   (`set_source`, `move_to`/`line_to`/`curve_to`/`arc`/`close_path`, `fill`,
+//!   `stroke`), which delegates to the unmanaged `painter` core.
 //!
 //! ## NOT yet ported (blockers for full ghostty pixel-parity)
 //!

@@ -4,11 +4,12 @@
 // Ported to Rust for rustty from z2d 0.10.0 `src/Path.zig` (R3 vendored dep).
 //
 // SUBSET NOTE (rustty): `arc` / `arc_negative` (the `internal/arc.zig` spline
-// deconstruction) are NOT part of the ghostty subset and are not ported here;
-// ghostty's sprite/glyf paths only use move/line/curve/close. The Zig
-// `ArrayListUnmanaged`-with-external-buffer duality is modelled with a `Vec`
-// plus an optional `cap_limit` that reproduces the "assume capacity" overflow
-// as a safety-checked panic (faithful to Zig's `appendAssumeCapacity`).
+// deconstruction) ARE now ported (backed by `internal::arc::arc_in_direction`),
+// as ghostty's `branch`/`symbols_for_legacy_computing`/`special` sprites draw
+// circles through `Context.arc`. The Zig `ArrayListUnmanaged`-with-external-
+// buffer duality is modelled with a `Vec` plus an optional `cap_limit` that
+// reproduces the "assume capacity" overflow as a safety-checked panic (faithful
+// to Zig's `appendAssumeCapacity`).
 
 //! Path is the "path builder" type, and contains a set of sub-paths used for
 //! filling or stroking operations.
@@ -317,6 +318,81 @@ impl Path {
         } else {
             Err(Error::NoCurrentPoint)
         }
+    }
+
+    /// Adds a circular arc of the given radius to the current path. The arc is
+    /// centered at (`xc`, `yc`), begins at `angle1` and proceeds in the
+    /// direction of increasing angles (i.e., counterclockwise direction) to end
+    /// at `angle2`.
+    ///
+    /// If `angle2` is less than `angle1`, it will be increased by 2 * Π until
+    /// it's greater than `angle1`.
+    ///
+    /// Angles are measured at radians (to convert from degrees, multiply by Π /
+    /// 180).
+    ///
+    /// If there's a current point, an initial line segment will be added to the
+    /// path to connect the current point to the beginning of the arc. If this
+    /// behavior is undesired, call `reset` before calling. This will trigger a
+    /// `move_to` before the splines are plotted, creating a new subpath.
+    ///
+    /// After this operation, the current point will be the end of the arc.
+    pub fn arc(
+        &mut self,
+        xc: f64,
+        yc: f64,
+        radius: f64,
+        angle1: f64,
+        angle2: f64,
+    ) -> Result<(), Error> {
+        let mut effective_angle2 = angle2;
+        while effective_angle2 < angle1 {
+            effective_angle2 += std::f64::consts::PI * 2.0;
+        }
+        let transformation = self.transformation;
+        let tolerance = self.tolerance.max(0.001);
+        crate::internal::arc::arc_in_direction(
+            self,
+            xc,
+            yc,
+            radius,
+            angle1,
+            effective_angle2,
+            crate::internal::arc::Direction::Forward,
+            transformation,
+            Some(tolerance),
+        )
+    }
+
+    /// Like `arc`, but draws in the reverse direction, i.e., begins at `angle1`,
+    /// and moves in decreasing angles (i.e., counterclockwise direction) to end
+    /// at `angle2`. If `angle2` is greater than `angle1`, it will be decreased
+    /// by 2 * Π until it's less than `angle1`.
+    pub fn arc_negative(
+        &mut self,
+        xc: f64,
+        yc: f64,
+        radius: f64,
+        angle1: f64,
+        angle2: f64,
+    ) -> Result<(), Error> {
+        let mut effective_angle2 = angle2;
+        while effective_angle2 > angle1 {
+            effective_angle2 -= std::f64::consts::PI * 2.0;
+        }
+        let transformation = self.transformation;
+        let tolerance = self.tolerance.max(0.001);
+        crate::internal::arc::arc_in_direction(
+            self,
+            xc,
+            yc,
+            radius,
+            effective_angle2,
+            angle1,
+            crate::internal::arc::Direction::Reverse,
+            transformation,
+            Some(tolerance),
+        )
     }
 
     /// Closes the path by drawing a line from the current point by the starting
