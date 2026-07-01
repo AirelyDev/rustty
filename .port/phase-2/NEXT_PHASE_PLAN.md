@@ -49,6 +49,48 @@ FileFormatter docs (help_strings), url regex (oniguruma-sys), Wasm.zig browser
 exports (feature-gated OFF, mirrors vt wasm deferral). The renderer/apprt/cli/
 termio tier is now UNBLOCKED (config was the last shared dep for those modules).
 
+## Stage F0 — font-pure tier: DONE
+The rustty-font PURE tier is complete (F0): opentype/{glyf,sfnt,head} + Metrics +
+Atlas + CodepointMap + glyf_rasterize (z2d-backed, PNG known-answer pixel-exact) +
+the WHOLE sprite tier — sprite.zig root + sprite/{canvas,Face} + draw/{block,box,
+braille,branch,common,geometric_shapes,powerline,special,symbols_for_legacy_computing
+(+supplement)}. check_test_counts.py carries the font_sprite* mappings (draw modules
+0-test by design → gated by G3b comment-coverage, missing=0). Face.zig "render all
+sprites" + bubbletea glyph-protocol PNG compares are pixel-exact vs res/*.png.
+rustty-font stays PURE & BELOW vt (no rustty-vt edge; G7 asserts it). Miri clean,
+clippy/fmt clean. NEXT = F1 (the -sys/face tier below).
+
+## Stage F1 — font -sys tier: freetype-sys DONE
+`crates-sys/freetype-sys` vendors FreeType **2.13.2** (the exact release the
+reference pins in pkg/freetype/build.zig.zon) under `vendor/` and builds it
+standalone via `cc` + `bindgen` — R3 clean (no ghostty build-time ref; the sole
+`/Users/gael/projects/ghostty` string is a doc-comment). This is the FIRST
+bindgen -sys and it VALIDATES the -sys-at-scale template:
+  * `vendor/` = full upstream src tree + `include/` + `LICENSE.TXT`+`docs/{FTL,GPLv2}.TXT`.
+  * `build.rs`: `cc::Build` over the verbatim `SOURCES` module list from the
+    reference `buildLib`; same flags (`-DFT2_BUILD_LIBRARY
+    -DFT_CONFIG_OPTION_SYSTEM_ZLIB=1 -fno-sanitize=undefined`, `-DHAVE_UNISTD_H
+    -DHAVE_FCNTL_H` off-Windows, `-fPIC` on freebsd/musl), `.warnings(false)`.
+  * per-OS `ftsystem.c`/`ftdebug.c` selection (linux=builds/unix, windows=
+    builds/windows, else=src/base) mirrors the reference switch. macOS uses the
+    generic `src/base/ftsystem.c` — cc resolves system headers natively (no
+    apple-sdk path shim needed as in the Zig build). Cross-platform: config is
+    `-D`-driven (ftoption.h keeps SYSTEM_ZLIB commented, we define it), no
+    macOS-only assumptions.
+  * system-zlib wired to `zlib-sys`: header via `DEP_Z_INCLUDE`, static `z`
+    archive kept on the link line by `extern crate zlib_sys;` (rustc would
+    otherwise prune it + drop the ftgzip inflate symbols). `cargo tree -e normal`
+    = freetype-sys → zlib-sys ONLY (G7 acyclic).
+  * bindgen over `wrapper.h` (same headers as reference c.zig) → 4054-line
+    bindings; libclang = Xcode `libclang.dylib`. KAT (`kat_freetype_2_13_2_
+    memory_face`): FT_Init → version==(2,13,2) → FT_New_Memory_Face on embedded
+    GeistMono → num_glyphs==825, units_per_EM==1000, SCALABLE flag → Done. GREEN.
+  * `cargo:include` re-exports the FreeType include dir as `DEP_FREETYPE_INCLUDE`
+    for downstream (harfbuzz-sys/rustty-font).
+REUSABLE for NEXT: **harfbuzz-sys → freetype** (consume `DEP_FREETYPE_INCLUDE`
+for hb-ft; same vendor+cc+bindgen+KAT template), **fontconfig-sys → freetype +
+libxml2** (add a libxml2-sys vendor first, then wire both include dirs).
+
 ## Stage D — heavy tier (later)
 rest of font (faces/shapers: freetype/harfbuzz/fontconfig/CoreText -sys, ~10.7k loc) →
 input (completes key_mods once config lands) → config (oniguruma-sys) → renderer
