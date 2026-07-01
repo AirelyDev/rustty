@@ -29,8 +29,14 @@
 // uses it.)
 pub const VARIABLE: &[u8] = include_bytes!("../res/JetBrainsMono-Variable.ttf");
 
-// PORT NOTE (DEFERRED — build-anonymous imports, not source-tree files):
-//   pub const variable_italic = @embedFile("jetbrains_mono_variable_italic");
+// PORT: the reference `variable_italic = @embedFile("jetbrains_mono_variable_italic")`
+// is a build-anonymous import of `fonts/variable/JetBrainsMono-Italic[wght].ttf`
+// from the `jetbrains_mono` build dependency (JetBrains Mono 2.304, SIL OFL —
+// redistributable per R3), not a `font/` source-tree file. It is required by the
+// `SharedGridSet` `collection` builder (the italic + bold-italic built-in fallback
+// faces), so the exact dependency file is vendored into this crate's `res/` and
+// embedded here.
+pub const VARIABLE_ITALIC: &[u8] = include_bytes!("../res/JetBrainsMono-Variable-Italic.ttf");
 
 /// Symbols-only nerd font.
 // PORT: the reference `symbols_nerd_font = @embedFile("nerd_fonts_symbols_only")`

@@ -20,15 +20,20 @@
 pub mod backend;
 pub mod codepoint_resolver;
 pub mod collection;
+// Local DI stand-ins for the `rustty-config` value types `SharedGridSet` reads
+// (break #9: config is a HIGHER crate injected via DI; see the module doc).
+pub mod config;
 pub mod deferred_face;
 pub mod discovery;
 pub mod face;
 // PORT: `shape.zig` (the `Shaper` interface + backend selector) and its
 // `shaper/` sub-files (`run`/`feature`/`Cache`/`noop`) — the shaper framework.
 pub mod shape;
-// SEAM for `SharedGrid.zig` (the shared glyph-atlas grid the renderer reads).
-// The full port is a later heavy-tier subtask; see the module doc.
+// PORT: `SharedGrid.zig` (the shared glyph-atlas grid the renderer reads —
+// `renderGlyph` caching over Collection+Atlas) and `SharedGridSet.zig` (the set
+// keyed by config/font descriptors).
 pub mod shared_grid;
+pub mod shared_grid_set;
 // FFI-glue modules backing the FreeType face (thin `unsafe` wrappers over the
 // `-sys` crates; see each module's PORT NOTE). Not part of any reference file's
 // test contract — the full `pkg/freetype`, `pkg/harfbuzz`, `src/font/Library.zig`
@@ -91,6 +96,8 @@ pub use shape::Shaper;
 pub use shape::Cache as ShaperCache;
 // pub const SharedGrid = @import("SharedGrid.zig");
 pub use shared_grid::SharedGrid;
+// pub const SharedGridSet = @import("SharedGridSet.zig");
+pub use shared_grid_set::SharedGridSet;
 // pub const SpriteFace = sprite.Face;
 pub use rustty_font::sprite::Face as SpriteFace;
 // pub const Sprite = sprite.Sprite;
@@ -124,7 +131,10 @@ pub enum Style {
 
 /// The presentation for an emoji.
 // pub const Presentation = enum(u1) { text=0 /*U+FE0E*/, emoji=1 /*U+FE0F*/ };
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// PORT NOTE: `Hash` is derived (beyond the reference's plain enum) so
+// `Presentation` can be a field of `SharedGrid`'s `CodepointKey` hash-map key
+// (the reference's `AutoHashMapUnmanaged` auto-derives key hashing).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Presentation {
     /// U+FE0E
