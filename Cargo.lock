@@ -182,6 +182,11 @@ version = "0.1.0"
 [[package]]
 name = "harfbuzz-sys"
 version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "cc",
+ "freetype-sys",
+]
 
 [[package]]
 name = "highway-sys"
