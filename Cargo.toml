@@ -150,6 +150,10 @@ wuffs-sys = { path = "crates-sys/wuffs-sys" }
 # links). The FFI leaf the renderer's GLSL->SPIR-V shader-compilation path
 # builds on (glslang C interface + resource_limits_c).
 glslang-sys = { path = "crates-sys/glslang-sys" }
+# R3: vendored KhronosGroup SPIRV-Cross (the SAME C++ cross-compiler the
+# reference links; C API 0.59). The FFI leaf the renderer's Metal path builds on
+# to cross-compile SPIR-V into MSL/GLSL (spirv_cross_c C interface).
+spirv-cross-sys = { path = "crates-sys/spirv-cross-sys" }
 # Stable polyfill of the unstable `core::alloc::Allocator` trait. This is the
 # faithful Rust map of Zig's `std.mem.Allocator`: `Allocator::allocate(Layout)`
 # / `deallocate` map to Zig `rawAlloc`/`rawFree`. `Global` == the current

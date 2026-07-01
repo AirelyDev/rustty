@@ -1,9 +1,18 @@
-# spirv-cross-sys — vendored C dependency (R3: self-contained, no ghostty dep)
+# spirv-cross-sys — vendored C++ dependency (R3: self-contained, no ghostty dep)
 #
-# This crate will vendor copied C sources from the SAME upstream library the
-# reference uses (SPIRV-Cross shader cross-compiler) and build them standalone via `cc` + `bindgen`.
-# `links` declares the native lib so Cargo enforces one-version linking.
-# STUB: no C is compiled yet (see build.rs).
+# This crate vendors the SAME upstream library the reference uses — KhronosGroup
+# SPIRV-Cross (the shader cross-compiler; C API version 0.59, upstream commit
+# 476f384eb7d9e48613c45179e502a15ab95b6b49) — copied in-tree under `vendor/`
+# (fetched from the exact URL in the reference's pkg/spirv-cross/build.zig.zon)
+# and built standalone via `cc` + `bindgen`. It mirrors the reference's
+# pkg/spirv-cross/build.zig `buildSpirvCross`: the same seven C++ translation
+# units (Core `spirv_cross`/`spirv_parser`/`spirv_cross_parsed_ir`/`spirv_cfg`,
+# the C API `spirv_cross_c`, and the GLSL/MSL backends), the same include dir
+# (the vendored upstream root), and the same `-D` flags
+# (`-DSPIRV_CROSS_C_API_GLSL=1 -DSPIRV_CROSS_C_API_MSL=1`; the HLSL/CPP/REFLECT
+# backends are OFF, matching the reference, so those headers/TUs are never
+# pulled in and are not vendored) plus the reference's ubsan opt-outs. `links`
+# declares the native lib so Cargo enforces one-version linking.
 [package]
 name = "spirv-cross-sys"
 version.workspace = true
@@ -15,10 +24,20 @@ authors.workspace = true
 links = "spirv_cross"
 build = "build.rs"
 
+[lib]
+# The FFI is bindgen-generated: the "doctests" harvested from SPIRV-Cross's C
+# documentation comments are not Rust and must not be compiled/run. (This
+# crate's real test is the KAT in the unit-test harness.)
+doctest = false
+
 [lints]
 workspace = true
 
 [dependencies]
 
 [build-dependencies]
-# TODO(R3): add `cc` and `bindgen` here when the vendored C source lands.
+# R3: compile the vendored SPIRV-Cross C++ standalone (`cc` in C++17 mode) with
+# the reference's flags, and auto-generate the FFI (`bindgen`) from the same
+# public header the reference's `c.zig` @cImports (`spirv_cross_c.h`).
+cc = "1"
+bindgen = "0.72"

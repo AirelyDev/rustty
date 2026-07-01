@@ -806,6 +806,10 @@ dependencies = [
 [[package]]
 name = "spirv-cross-sys"
 version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "cc",
+]
 
 [[package]]
 name = "syn"
