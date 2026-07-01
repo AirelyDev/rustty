@@ -21,6 +21,14 @@
 // concrete `freetype::Face` is reachable directly as `face::freetype::Face`.
 pub mod freetype;
 //
+// PORT: `face/coretext.zig` (the CoreText backend `Face`) is ported in the
+// `coretext` submodule below (macOS only). Like `freetype::Face`, the concrete
+// `coretext::Face` is reachable directly as `face::coretext::Face`; the
+// `Face = switch(options.backend)` selector still resolves to the scaffold
+// placeholder until the selector is re-pointed at the real backends.
+#[cfg(target_os = "macos")]
+pub mod coretext;
+//
 // PORT NOTE: the reference imports the two build seams `options` (from
 // `main.zig`, providing `options.backend`) and `config` (providing
 // `config.FreetypeLoadFlags`) plus the three concrete backend faces. In rustty:

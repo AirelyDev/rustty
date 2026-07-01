@@ -34,9 +34,18 @@ pub const VARIABLE: &[u8] = include_bytes!("../res/JetBrainsMono-Variable.ttf");
 //
 //   /// Symbols-only nerd font.
 //   pub const symbols_nerd_font = @embedFile("nerd_fonts_symbols_only");
-//
-//   /// Static jetbrains mono faces, currently unused.
-//   pub const regular = @embedFile("jetbrains_mono_regular");
+
+/// Static jetbrains mono faces, currently unused.
+// PORT: the reference `regular = @embedFile("jetbrains_mono_regular")` is a
+// build-anonymous import of `fonts/ttf/JetBrainsMono-Regular.ttf` from the
+// `jetbrains_mono` build dependency (JetBrains Mono 2.304, SIL OFL —
+// redistributable per R3), not a `font/` source-tree file. It is required by the
+// CoreText face's "in-memory" test, so the exact dependency file is vendored into
+// this crate's `res/` and embedded here. (`bold`/`italic`/`bold_italic` remain
+// deferred; no ported test uses them.)
+pub const REGULAR: &[u8] = include_bytes!("../res/JetBrainsMono-Regular.ttf");
+
+// PORT NOTE (DEFERRED — build-anonymous imports, not source-tree files):
 //   pub const bold = @embedFile("jetbrains_mono_bold");
 //   pub const italic = @embedFile("jetbrains_mono_italic");
 //   pub const bold_italic = @embedFile("jetbrains_mono_bold_italic");

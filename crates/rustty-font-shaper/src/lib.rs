@@ -8,9 +8,9 @@
 //! shaping, so it may depend on both `rustty-vt` and `rustty-font` plus the
 //! `-sys`/objc2 backends.
 //!
-//! PORT STATUS: F3 scaffold — `face.zig` (the backend selector) ported; the
-//! concrete `face/coretext.zig`, `face/freetype.zig`, `face/web_canvas.zig`
-//! backend faces and `shape.zig` land in later F3 subtasks.
+//! PORT STATUS: F3 — `face.zig` (the backend selector) + the `face/freetype.zig`
+//! and `face/coretext.zig` (macOS) backend faces ported; `face/web_canvas.zig`
+//! and `shape.zig` land in later F3 subtasks.
 //!
 //! Carved leaves-first (R1: every line/comment/test{} ported as the crate is
 //! carved, under the acyclicity gate per R4). Ported so far: `face` (the
