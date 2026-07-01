@@ -146,6 +146,10 @@ oniguruma-sys = { path = "crates-sys/oniguruma-sys" }
 # the reference links). The FFI leaf the PNG/JPEG image decode + pixel-swizzle
 # port builds on (ghostty's ADLER32/CRC32/DEFLATE/JPEG/PNG/ZLIB module subset).
 wuffs-sys = { path = "crates-sys/wuffs-sys" }
+# R3: vendored libpng 1.6.43 (the SAME `glennrp/libpng` release the reference
+# links via pkg/libpng). The FFI leaf backing dcimgui-sys; zlib is provided by
+# `zlib-sys` and the ghostty-provided `pnglibconf.h` is vendored in-tree.
+libpng-sys = { path = "crates-sys/libpng-sys" }
 # R3: vendored glslang 14.2.0 (the SAME KhronosGroup C++ compiler the reference
 # links). The FFI leaf the renderer's GLSL->SPIR-V shader-compilation path
 # builds on (glslang C interface + resource_limits_c).

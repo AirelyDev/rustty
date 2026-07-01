@@ -1,9 +1,17 @@
 # libpng-sys — vendored C dependency (R3: self-contained, no ghostty dep)
 #
-# This crate will vendor copied C sources from the SAME upstream library the
-# reference uses (libpng PNG codec) and build them standalone via `cc` + `bindgen`.
-# `links` declares the native lib so Cargo enforces one-version linking.
-# STUB: no C is compiled yet (see build.rs).
+# This crate vendors copied C sources from the SAME upstream library the
+# reference uses — libpng 1.6.43, the PNG codec — copied in-tree under
+# `vendor/` and built standalone via `cc` + `bindgen`. It mirrors the
+# reference's pkg/libpng/build.zig: the same 15 `png*.c` translation units, the
+# same SIMD-disabling flags (`-DPNG_ARM_NEON_OPT=0 -DPNG_POWERPC_VSX_OPT=0
+# -DPNG_INTEL_SSE_OPT=0 -DPNG_MIPS_MSA_OPT=0`), the ghostty-PROVIDED pre-built
+# `pnglibconf.h` on the include path (instead of running libpng's configure),
+# and zlib wired to `zlib-sys` (the reference's `linkLibrary(zlib)`). `links`
+# declares the native lib so Cargo enforces one-version linking.
+#
+# This is the faithful separate ghostty package (pkg/libpng) — distinct from the
+# copy freetype-sys bundles internally — and will back dcimgui-sys.
 [package]
 name = "libpng-sys"
 version.workspace = true
@@ -15,10 +23,27 @@ authors.workspace = true
 links = "png"
 build = "build.rs"
 
+[lib]
+# The FFI is bindgen-generated: the "doctests" harvested from libpng's C
+# documentation comments are not Rust and must not be compiled/run. (This
+# crate's real test is the KAT in the unit-test harness.)
+doctest = false
+
 [lints]
 workspace = true
 
 [dependencies]
+# libpng's `pngstruct.h` does `#include "zlib.h"` and the codec references the
+# zlib inflate API. A normal dependency on `zlib-sys` (a) exposes its vendored
+# `zlib.h` dir to this build script as `DEP_Z_INCLUDE`, and (b) propagates its
+# static `z` archive to the final link of the KAT test binary — the reference
+# wires zlib the same way via `lib.linkLibrary(zlib_dep)`. The dependency is
+# link-only; libpng-sys uses none of zlib-sys's Rust API.
+zlib-sys = { path = "../zlib-sys" }
 
 [build-dependencies]
-# TODO(R3): add `cc` and `bindgen` here when the vendored C source lands.
+# R3: compile the vendored libpng C standalone (`cc`) with the reference's
+# flags, and auto-generate the FFI (`bindgen`) from the same public header the
+# reference exposes (`png.h`).
+cc = "1"
+bindgen = "0.72"

@@ -227,6 +227,11 @@ dependencies = [
 [[package]]
 name = "libpng-sys"
 version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "cc",
+ "zlib-sys",
+]
 
 [[package]]
 name = "log"

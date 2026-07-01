@@ -22,7 +22,7 @@ RUSTTY_ROOT="$(cd "$GATES_DIR/../../.." && pwd)"
 cd "$RUSTTY_ROOT"
 
 # Crates whose tests cross into C (depend on a crates-sys/* crate) -> ASan, not Miri.
-FFI_CRATES="rustty-simd rustty-font rustty-renderer rustty-config rustty-crash rustty-inspector rustty-font-shaper rustty-oniguruma rustty-input wuffs-sys glslang-sys spirv-cross-sys"
+FFI_CRATES="rustty-simd rustty-font rustty-renderer rustty-config rustty-crash rustty-inspector rustty-font-shaper rustty-oniguruma rustty-input wuffs-sys glslang-sys spirv-cross-sys libpng-sys"
 is_ffi() { case " $FFI_CRATES " in *" $1 "*) return 0;; *) return 1;; esac; }
 
 require_miri() {
