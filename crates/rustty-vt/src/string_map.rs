@@ -183,7 +183,14 @@ impl Match {
     }
 
     /// Returns the selection containing the full match.
-    pub fn selection(self) -> crate::selection::Selection {
+    // PORT NOTE: the reference `selection(self: Match)` takes `self` BY VALUE — a
+    // read-only copy of the `Match` value type that does NOT consume the caller's
+    // binding (Zig frees the region separately via `match.deinit()`). Since the
+    // Rust `Match` is not `Copy` (it owns a heap `oni::Region` freed by the
+    // explicit `deinit`), the faithful mirror of that non-consuming by-value read
+    // is `&self`: the caller keeps `match_` alive to `deinit()` afterward, exactly
+    // as the reference's `defer match.deinit()` runs after `match.selection()`.
+    pub fn selection(&self) -> crate::selection::Selection {
         let start_idx: usize = self.region.starts()[0] as usize;
         let end_idx: usize = (self.region.ends()[0] - 1) as usize;
         let start_pt = self.map.map[self.offset + start_idx];
@@ -206,6 +213,110 @@ mod tests {
     use crate::screen::{Options, Screen, SelectLine, SelectionString};
     use allocator_api2::alloc::Global;
 
+    // PORT NOTE (config-layering fixture): the reference StringMap.zig URL tests
+    // import `../config/url.zig` and use `url.regex` as a fixture
+    // (StringMap.zig:177,238). vt CANNOT depend on rustty-config — config is
+    // ABOVE vt, so a vt->config edge would be a dependency cycle (check_acyclic.sh
+    // forbids it). Instead we inline the URL/path regex here, mirroring
+    // config/url.zig's `regex` assembly byte-for-byte (this is a verbatim copy of
+    // `rustty-config::url`'s ported string-build; the canonical copy lives there).
+    // This keeps both URL tests in vt with identical behavior and introduces no
+    // vt->config edge — the faithful adaptation of Zig's cross-file `@import`.
+    mod url {
+        const URL_SCHEMES: &str = r"https?://|mailto:|ftp://|file:|ssh:|git://|ssh://|tel:|magnet:|ipfs://|ipns://|gemini://|gopher://|news:";
+
+        const IPV6_URL_PATTERN: &str = r"(?:\[[:0-9a-fA-F]+(?:[:0-9a-fA-F]*)+\](?::[0-9]+)?)";
+
+        const SCHEME_URL_CHARS: &str = r"[\w\-.~:/?#@!$&*+,;=%]";
+
+        const PATH_CHARS: &str = r"[\w\-.~:\/?#@!$&*+;=%]";
+
+        const OPTIONAL_BRACKETED_WORD_SUFFIX: &str = r"(?:[\(\[]\w*[\)\]])?";
+
+        const NO_TRAILING_PUNCTUATION: &str = r"(?<![,.])";
+
+        const NO_TRAILING_COLON: &str = r"(?<!:)";
+
+        const TRAILING_SPACES_AT_EOL: &str = r"(?: +(?= *$))?";
+
+        const DOTTED_PATH_LOOKAHEAD: &str = r"(?=[\w\-.~:\/?#@!$&*+;=%]*\.)";
+
+        const NON_DOTTED_PATH_LOOKAHEAD: &str = r"(?![\w\-.~:\/?#@!$&*+;=%]*\.)";
+
+        const DOTTED_PATH_SPACE_SEGMENTS: &str =
+            r"(?:(?<!:) (?!\w+:\/\/)(?!\.{0,2}\/)(?!~\/)[\w\-.~:\/?#@!$&*+;=%]*[\/.])*";
+
+        const ANY_PATH_SPACE_SEGMENTS: &str =
+            r"(?:(?<!:) (?!\w+:\/\/)(?!\.{0,2}\/)(?!~\/)[\w\-.~:\/?#@!$&*+;=%]+)*";
+
+        // Branch 1: URLs with explicit schemes (http, mailto, ftp, etc.).
+        fn scheme_url_branch() -> String {
+            let mut s = String::new();
+            s.push_str("(?:");
+            s.push_str(URL_SCHEMES);
+            s.push(')');
+            s.push_str("(?:");
+            s.push_str(IPV6_URL_PATTERN);
+            s.push('|');
+            s.push_str(SCHEME_URL_CHARS);
+            s.push('+');
+            s.push_str(OPTIONAL_BRACKETED_WORD_SUFFIX);
+            s.push_str(")+");
+            s.push_str(NO_TRAILING_PUNCTUATION);
+            s
+        }
+
+        const ROOTED_OR_RELATIVE_PATH_PREFIX: &str = r"(?:\.\.\/|\.\/|(?<!\w)~\/|(?:[\w][\w\-.]*\/)*(?<!\w)\$[A-Za-z_]\w*\/|\.[\w][\w\-.]*\/|(?<![\w~\/])\/(?!\/))";
+
+        // Branch 2: Absolute paths and dot-relative paths (/, ./, ../).
+        fn rooted_or_relative_path_branch() -> String {
+            let mut s = String::new();
+            s.push_str(ROOTED_OR_RELATIVE_PATH_PREFIX);
+            s.push_str("(?:");
+            s.push_str(DOTTED_PATH_LOOKAHEAD);
+            s.push_str(PATH_CHARS);
+            s.push('+');
+            s.push_str(DOTTED_PATH_SPACE_SEGMENTS);
+            s.push_str(NO_TRAILING_COLON);
+            s.push_str(TRAILING_SPACES_AT_EOL);
+            s.push('|');
+            s.push_str(NON_DOTTED_PATH_LOOKAHEAD);
+            s.push_str(PATH_CHARS);
+            s.push('+');
+            s.push_str(ANY_PATH_SPACE_SEGMENTS);
+            s.push_str(NO_TRAILING_COLON);
+            s.push_str(TRAILING_SPACES_AT_EOL);
+            s.push(')');
+            s
+        }
+
+        // Branch 3: Bare relative paths such as src/config/url.zig.
+        const BARE_RELATIVE_PATH_PREFIX: &str = r"(?<!\$\d*)(?<!\w)[\w][\w\-.]*\/";
+
+        fn bare_relative_path_branch() -> String {
+            let mut s = String::new();
+            s.push_str(DOTTED_PATH_LOOKAHEAD);
+            s.push_str(BARE_RELATIVE_PATH_PREFIX);
+            s.push_str(PATH_CHARS);
+            s.push('+');
+            s.push_str(NO_TRAILING_COLON);
+            s.push_str(TRAILING_SPACES_AT_EOL);
+            s
+        }
+
+        /// Mirrors config/url.zig `pub const regex` — the full URL/path detection
+        /// regex, assembled byte-for-byte identically to `rustty-config::url::regex`.
+        pub fn regex() -> String {
+            let mut s = String::new();
+            s.push_str(&scheme_url_branch());
+            s.push('|');
+            s.push_str(&rooted_or_relative_path_branch());
+            s.push('|');
+            s.push_str(&bare_relative_path_branch());
+            s
+        }
+    }
+
     // test "StringMap searchIterator"
     #[test]
     fn string_map_search_iterator() {
@@ -213,7 +324,7 @@ mod tests {
 
         // Initialize our regex
         oni::testing::ensure_init().unwrap();
-        let mut re = oni::Regex::init(
+        let re = oni::Regex::init(
             b"[A-B]{2}",
             oni::RegexOptions::default(),
             oni::Encoding::utf8(),
@@ -285,9 +396,12 @@ mod tests {
 
         assert!(it.next().unwrap().is_none());
 
-        // map.deinit consumes the map; the regex outlives the iterator.
+        // map.deinit consumes the map; the regex was moved into the iterator
+        // (`search_iterator` takes it by value), so deinit the iterator's owned
+        // Regex handle — faithful to the reference `defer re.deinit()`, where
+        // `re` and `it.regex` alias the same OnigRegex.
         it.map.deinit(alloc);
-        re.deinit();
+        it.regex.deinit();
         s.deinit();
     }
 
@@ -295,12 +409,12 @@ mod tests {
     #[test]
     fn string_map_search_iterator_url_detection() {
         let alloc = Global;
-        use crate::config::url;
 
         // Initialize URL regex
         oni::testing::ensure_init().unwrap();
-        let mut re = oni::Regex::init(
-            url::REGEX,
+        let pattern = url::regex();
+        let re = oni::Regex::init(
+            pattern.as_bytes(),
             oni::RegexOptions::default(),
             oni::Encoding::utf8(),
             oni::Syntax::default(),
@@ -375,8 +489,11 @@ mod tests {
 
         assert!(it.next().unwrap().is_none());
 
+        // The regex was moved into the iterator (`search_iterator` takes it by
+        // value), so deinit the iterator's owned Regex handle — faithful to the
+        // reference `defer re.deinit()` (`re`/`it.regex` alias the same OnigRegex).
         it.map.deinit(alloc);
-        re.deinit();
+        it.regex.deinit();
         s.deinit();
     }
 
@@ -384,12 +501,12 @@ mod tests {
     #[test]
     fn string_map_search_iterator_url_with_click_position() {
         let alloc = Global;
-        use crate::config::url;
 
         // Initialize URL regex
         oni::testing::ensure_init().unwrap();
-        let mut re = oni::Regex::init(
-            url::REGEX,
+        let pattern = url::regex();
+        let re = oni::Regex::init(
+            pattern.as_bytes(),
             oni::RegexOptions::default(),
             oni::Encoding::utf8(),
             oni::Syntax::default(),
@@ -445,6 +562,14 @@ mod tests {
         // Search for URL match and verify click position is within URL
         let mut it = map.search_iterator(re);
         let mut found_url = false;
+        // PORT NOTE: this faithfully mirrors the reference's
+        //   while (true) { var match = (try it.next()) orelse break; ... }
+        // — an infinite loop whose body pulls the next match and breaks on `null`
+        // (the `orelse break`). Clippy's `while_let_loop` would fold this into a
+        // `while let Some(..) = ..`, but that hides the reference's explicit
+        // `while (true)` + `orelse break` control flow, so the lint is suppressed
+        // to keep the port structurally 1:1.
+        #[allow(clippy::while_let_loop)]
         loop {
             let mut match_ = match it.next().unwrap() {
                 Some(m) => m,
@@ -474,8 +599,11 @@ mod tests {
         }
         assert!(found_url);
 
+        // The regex was moved into the iterator (`search_iterator` takes it by
+        // value), so deinit the iterator's owned Regex handle — faithful to the
+        // reference `defer re.deinit()` (`re`/`it.regex` alias the same OnigRegex).
         it.map.deinit(alloc);
-        re.deinit();
+        it.regex.deinit();
         s.deinit();
     }
 }

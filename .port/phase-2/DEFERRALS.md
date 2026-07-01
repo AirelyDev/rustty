@@ -281,6 +281,59 @@ scoped G3b missing=0). One test is deferred:
   oniguruma dependency and is ported normally (`url::regex()` builds the
   byte-for-byte-identical pattern). **Target: when oniguruma-sys is carved.**
 
+## StringMap oniguruma search surface — RESOLVED (vt `oniguruma` feature wired)
+
+`terminal/StringMap.zig`'s regex search surface (`searchIterator`/`SearchIterator`/
+`Match`) and its 3 `searchIterator` tests were gated behind vt's off-by-default
+`oniguruma` feature because the `oni` binding crate did not exist. `oniguruma-sys`
++ `rustty-oniguruma` (the `oni` wrapper) have landed and vt's `oniguruma` feature
+is wired to them, so the gated surface now COMPILES and its tests PASS under
+`cargo test -p rustty-vt --features oniguruma` (`string_map::tests::string_map_search_iterator`
++ the two `..._url_detection` / `..._url_with_click_position` tests). **RESOLVED.**
+Three pre-existing bugs in the off-by-default gated code were fixed so
+`--features oniguruma` builds + passes (default build stays 2019, unaffected):
+
+- **`tmux/control.rs` (8 sites) — nonexistent `oni::RegexOptions::capture_group()`.**
+  `capture_group` is a struct FIELD (rustty-oniguruma types.rs), not a ctor.
+  Rewritten to the faithful struct-literal
+  `oni::RegexOptions { capture_group: true, ..Default::default() }` (mirrors
+  ghostty control.zig's `.{ .capture_group = true }`). Also (same gated blocks)
+  the 8 `let region` bindings became `let mut region` — `oni::Region::deinit`
+  takes `&mut self`; faithful to Zig's `var region`.
+- **`string_map.rs` URL tests imported `crate::config::url` — a vt->config cycle.**
+  config is ABOVE vt, so that edge is forbidden (check_acyclic.sh). CHOSE OPTION
+  (a) (inline, preferred): the URL/path regex is inlined as a local test fixture
+  `tests::url::regex()`, mirroring `config/url.zig`'s `regex` assembly
+  byte-for-byte (a verbatim copy of the already-ported `rustty-config::url`
+  string-build) with a config-layering PORT NOTE. No vt->config edge; both URL
+  tests run in vt with identical behavior. The canonical copy stays in
+  `rustty-config::url::regex()`.
+- **`string_map.rs` move-after-use (E0382) in the gated tests.** `Match::selection`
+  was `self` (consuming), so `match_.deinit()` (frees the `oni::Region`) could not
+  run after `.selection()`; changed to `&self` — the faithful mirror of Zig's
+  by-value, non-consuming `selection(self: Match)`. And `re.deinit()` after `re`
+  was moved into `search_iterator(re)` is now `it.regex.deinit()` (the iterator
+  owns the sole `Regex` handle; faithful to Zig where `re`/`it.regex` alias the
+  same OnigRegex).
+
+## Deferred: DCS <-> tmux enter/exit wiring — test `dcs::tests::tmux_enter_and_implicit_exit`
+
+`dcs.rs`'s `TmuxState`/`TmuxCommand` are still `()` stubs (the reference's
+`tmux.ControlParser`/`ControlNotification`, `= void` while `tmux_control_mode` is
+off), and the DCS `b'p'` `'tmux` hook is an `unreachable!()` placeholder — the real
+DCS<->tmux `enter`/`exit` construction (real `ControlParser` buffer + `enter`/`exit`
+`ControlNotification`) lands in a later vt tmux control-mode sub-batch. Enabling
+`--features oniguruma` flips `build_options::TMUX_CONTROL_MODE` (`= ONIGURUMA`) on,
+which would otherwise make the faithful `tmux_enter_and_implicit_exit` test assert
+against that stub (it panicked at the `unreachable!()`). The test now ALSO defers
+while `!TMUX_DCS_WIRED` — a `false` marker const in `dcs.rs` `mod tests`, flipped
+to `true` by the wiring sub-batch — so it stays a passing no-op in BOTH the default
+(2019) and `--features oniguruma` (2030) builds; the faithful body is preserved
+verbatim (R1, not weakened). This is NOT one of the StringMap gaps above — it is a
+pre-existing stub exposed by turning the flag on. **Target: the vt tmux
+control-mode DCS wiring sub-batch (replaces the `()` stubs + `unreachable!()` and
+flips `TMUX_DCS_WIRED` to `true`, enabling the test body).**
+
 ## Config C2 seams (Config.zig value-type DI seams)
 
 The three Config.zig value-type dependency seams were resolved/scheduled as

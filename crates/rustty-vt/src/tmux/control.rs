@@ -335,7 +335,10 @@ impl Parser {
         if cmd == b"%output" {
             let mut re = oni::Regex::init(
                 b"^%output %([0-9]+) (.+)$",
-                oni::RegexOptions::capture_group(),
+                oni::RegexOptions {
+                    capture_group: true,
+                    ..Default::default()
+                },
                 oni::Encoding::utf8(),
                 oni::Syntax::default(),
                 None,
@@ -346,7 +349,7 @@ impl Parser {
             })?;
             // defer re.deinit();
 
-            let region = match re.search(line, oni::SearchOptions::default()) {
+            let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
                 Err(_err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });
@@ -370,7 +373,10 @@ impl Parser {
         } else if cmd == b"%session-changed" {
             let mut re = oni::Regex::init(
                 b"^%session-changed \\$([0-9]+) (.+)$",
-                oni::RegexOptions::capture_group(),
+                oni::RegexOptions {
+                    capture_group: true,
+                    ..Default::default()
+                },
                 oni::Encoding::utf8(),
                 oni::Syntax::default(),
                 None,
@@ -381,7 +387,7 @@ impl Parser {
             })?;
             // defer re.deinit();
 
-            let region = match re.search(line, oni::SearchOptions::default()) {
+            let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
                 Err(_err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });
@@ -404,7 +410,10 @@ impl Parser {
         } else if cmd == b"%layout-change" {
             let mut re = oni::Regex::init(
                 b"^%layout-change @([0-9]+) (.+) (.+) (.*)$",
-                oni::RegexOptions::capture_group(),
+                oni::RegexOptions {
+                    capture_group: true,
+                    ..Default::default()
+                },
                 oni::Encoding::utf8(),
                 oni::Syntax::default(),
                 None,
@@ -415,7 +424,7 @@ impl Parser {
             })?;
             // defer re.deinit();
 
-            let region = match re.search(line, oni::SearchOptions::default()) {
+            let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
                 Err(_err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });
@@ -445,7 +454,10 @@ impl Parser {
         } else if cmd == b"%window-add" {
             let mut re = oni::Regex::init(
                 b"^%window-add @([0-9]+)$",
-                oni::RegexOptions::capture_group(),
+                oni::RegexOptions {
+                    capture_group: true,
+                    ..Default::default()
+                },
                 oni::Encoding::utf8(),
                 oni::Syntax::default(),
                 None,
@@ -456,7 +468,7 @@ impl Parser {
             })?;
             // defer re.deinit();
 
-            let region = match re.search(line, oni::SearchOptions::default()) {
+            let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
                 Err(_err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });
@@ -478,7 +490,10 @@ impl Parser {
         } else if cmd == b"%window-renamed" {
             let mut re = oni::Regex::init(
                 b"^%window-renamed @([0-9]+) (.+)$",
-                oni::RegexOptions::capture_group(),
+                oni::RegexOptions {
+                    capture_group: true,
+                    ..Default::default()
+                },
                 oni::Encoding::utf8(),
                 oni::Syntax::default(),
                 None,
@@ -489,7 +504,7 @@ impl Parser {
             })?;
             // defer re.deinit();
 
-            let region = match re.search(line, oni::SearchOptions::default()) {
+            let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
                 Err(_err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });
@@ -512,7 +527,10 @@ impl Parser {
         } else if cmd == b"%window-pane-changed" {
             let mut re = oni::Regex::init(
                 b"^%window-pane-changed @([0-9]+) %([0-9]+)$",
-                oni::RegexOptions::capture_group(),
+                oni::RegexOptions {
+                    capture_group: true,
+                    ..Default::default()
+                },
                 oni::Encoding::utf8(),
                 oni::Syntax::default(),
                 None,
@@ -523,7 +541,7 @@ impl Parser {
             })?;
             // defer re.deinit();
 
-            let region = match re.search(line, oni::SearchOptions::default()) {
+            let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
                 Err(_err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });
@@ -546,7 +564,10 @@ impl Parser {
         } else if cmd == b"%client-detached" {
             let mut re = oni::Regex::init(
                 b"^%client-detached (.+)$",
-                oni::RegexOptions::capture_group(),
+                oni::RegexOptions {
+                    capture_group: true,
+                    ..Default::default()
+                },
                 oni::Encoding::utf8(),
                 oni::Syntax::default(),
                 None,
@@ -557,7 +578,7 @@ impl Parser {
             })?;
             // defer re.deinit();
 
-            let region = match re.search(line, oni::SearchOptions::default()) {
+            let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
                 Err(_err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });
@@ -579,7 +600,10 @@ impl Parser {
         } else if cmd == b"%client-session-changed" {
             let mut re = oni::Regex::init(
                 b"^%client-session-changed (.+) \\$([0-9]+) (.+)$",
-                oni::RegexOptions::capture_group(),
+                oni::RegexOptions {
+                    capture_group: true,
+                    ..Default::default()
+                },
                 oni::Encoding::utf8(),
                 oni::Syntax::default(),
                 None,
@@ -590,7 +614,7 @@ impl Parser {
             })?;
             // defer re.deinit();
 
-            let region = match re.search(line, oni::SearchOptions::default()) {
+            let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
                 Err(_err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });

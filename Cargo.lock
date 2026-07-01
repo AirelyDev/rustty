@@ -736,6 +736,7 @@ dependencies = [
  "rustty-datastruct",
  "rustty-font",
  "rustty-lib",
+ "rustty-oniguruma",
  "rustty-os",
  "rustty-render-types",
  "rustty-simd",
