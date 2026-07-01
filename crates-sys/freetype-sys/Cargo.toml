@@ -1,9 +1,13 @@
 # freetype-sys — vendored C dependency (R3: self-contained, no ghostty dep)
 #
-# This crate will vendor copied C sources from the SAME upstream library the
-# reference uses (FreeType font rasterizer) and build them standalone via `cc` + `bindgen`.
+# This crate vendors the SAME upstream library the reference uses — FreeType
+# 2.13.2, the font rasterizer — copied in-tree under `vendor/` and built
+# standalone via `cc` + `bindgen`. It mirrors the reference's
+# pkg/freetype/build.zig `buildLib`: the same `src/*.c` module list, the same
+# flags (`-DFT2_BUILD_LIBRARY -DFT_CONFIG_OPTION_SYSTEM_ZLIB=1
+# -fno-sanitize=undefined`, plus `-DHAVE_UNISTD_H -DHAVE_FCNTL_H` off-Windows),
+# and system-zlib wired to `zlib-sys` (the reference's `linkLibrary(zlib)`).
 # `links` declares the native lib so Cargo enforces one-version linking.
-# STUB: no C is compiled yet (see build.rs).
 [package]
 name = "freetype-sys"
 version.workspace = true
@@ -15,10 +19,28 @@ authors.workspace = true
 links = "freetype"
 build = "build.rs"
 
+[lib]
+# The FFI is bindgen-generated: the "doctests" harvested from FreeType's C
+# documentation comments are not Rust and must not be compiled/run. (This
+# crate's real tests are the KAT in the unit-test harness.)
+doctest = false
+
 [lints]
 workspace = true
 
 [dependencies]
+# FreeType is built with `FT_CONFIG_OPTION_SYSTEM_ZLIB=1`, so its
+# `src/gzip/ftgzip.c` does `#include <zlib.h>` and references the inflate API.
+# A normal dependency on `zlib-sys` (a) exposes its vendored `zlib.h` dir to
+# this build script as `DEP_Z_INCLUDE`, and (b) propagates its static `z`
+# archive to the final link of the KAT test binary — the reference wires
+# system-zlib the same way via `lib.linkLibrary(zlib_dep)`. The dependency is
+# link-only; freetype-sys uses none of zlib-sys's Rust API.
+zlib-sys = { path = "../zlib-sys" }
 
 [build-dependencies]
-# TODO(R3): add `cc` and `bindgen` here when the vendored C source lands.
+# R3: compile the vendored FreeType C standalone (`cc`) with the reference's
+# flags, and auto-generate the FFI (`bindgen`) from the same public headers the
+# reference's `c.zig` imports.
+cc = "1"
+bindgen = "0.72"

@@ -155,6 +155,11 @@ version = "0.1.0"
 [[package]]
 name = "freetype-sys"
 version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "cc",
+ "zlib-sys",
+]
 
 [[package]]
 name = "gettext-sys"

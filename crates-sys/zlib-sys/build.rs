@@ -58,6 +58,13 @@ fn main() {
     // crate declares `links = "z"`, Cargo enforces a single linkage of this lib.
     build.compile("z");
 
+    // Export the vendored header dir so dependent crates can add it to their C
+    // include path (Cargo sets `DEP_Z_INCLUDE`). freetype-sys builds FreeType
+    // with `FT_CONFIG_OPTION_SYSTEM_ZLIB=1`, whose `src/gzip/ftgzip.c` does
+    // `#include <zlib.h>` — the reference gets this include via
+    // `lib.linkLibrary(zlib_dep)`; here it flows through `DEP_Z_INCLUDE`.
+    println!("cargo:include={}", vendor.display());
+
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=vendor/zlib.h");
     println!("cargo:rerun-if-changed=vendor/zconf.h");
