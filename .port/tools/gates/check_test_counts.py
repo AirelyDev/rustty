@@ -23,6 +23,16 @@ RS = "/Users/gael/projects/rustty/crates/rustty-vt/src"
 GHF = "/Users/gael/projects/ghostty/src/font"
 RSF = "/Users/gael/projects/rustty/crates/rustty-font/src"
 
+# rustty-font-shaper: the D1 3-tier shaper crate (ABOVE vt+font). Same GH base
+# (src/font) as rustty-font, but the impure C-lib/CoreText face+discovery+
+# collection tier (freetype/coretext faces, Collection, DeferredFace,
+# CodepointResolver, discovery) — the FFI surface rustty-font (pure) must never
+# pull in. Face backends are cfg/feature matrixed (macOS default=coretext,
+# Linux default=fontconfig_freetype); the fontconfig discoverer + web_canvas
+# face are DEFERRED (documented in DEFERRALS.md), ported as SkipZigTest-style
+# skip-stub #[test]s so the count still holds.
+RSFS = "/Users/gael/projects/rustty/crates/rustty-font-shaper/src"
+
 # rustty-args: GH base differs (src/cli, not src/terminal). Stage C.
 GHC = "/Users/gael/projects/ghostty/src/cli"
 RSA = "/Users/gael/projects/rustty/crates/rustty-args/src"
@@ -279,6 +289,31 @@ MAP = {
     # feature-gated OFF — see DEFERRALS.md, mirrors the vt wasm-export deferral).
     # Mapped for completeness/G3b tracking; 0 >= 0.
     "config_wasm":       ([f"{GHCFG}/Wasm.zig"], [f"{RSCG}/wasm.rs"], 0),
+    # rustty-font-shaper F3 — the impure face/discovery/collection tier (D1 split).
+    # face/freetype.zig: 8 quoted tests (the FreeType Face render/metrics/glyph
+    # over freetype-sys). Rust=9 (>= zig, +1 rustty helper margin).
+    "font_shaper_face_freetype": ([f"{GHF}/face/freetype.zig"], [f"{RSFS}/face/freetype.rs"], 0),
+    # face/coretext.zig: 7 quoted tests (the CoreText Face over objc2-core-text).
+    # macOS-only backend; Rust=8 (>= zig).
+    "font_shaper_face_coretext": ([f"{GHF}/face/coretext.zig"], [f"{RSFS}/face/coretext.rs"], 0),
+    # face.zig: 2 quoted tests (the backend-selecting Face facade). Rust=3 (>= zig).
+    # web_canvas.zig face is DEFERRED (wasm-only, feature-gated OFF; DEFERRALS.md).
+    "font_shaper_face":          ([f"{GHF}/face.zig"], [f"{RSFS}/face/mod.rs"], 0),
+    # Collection.zig: 6 quoted + 6 named-unquoted behavioral tests (init/getFace/
+    # getIndex/completeStyles/setSize/hasCodepoint) = 12 zig. Rust=13 (>= zig).
+    "font_shaper_collection":    ([f"{GHF}/Collection.zig"], [f"{RSFS}/collection.rs"], 0),
+    # DeferredFace.zig: 2 quoted tests (the lazy face loader). Rust=2 (>= zig).
+    "font_shaper_deferred_face": ([f"{GHF}/DeferredFace.zig"], [f"{RSFS}/deferred_face.rs"], 0),
+    # CodepointResolver.zig: 2 quoted + 1 named-unquoted (getIndex) = 3 zig.
+    # Rust=3 (>= zig).
+    "font_shaper_codepoint_resolver":([f"{GHF}/CodepointResolver.zig"], [f"{RSFS}/codepoint_resolver.rs"], 0),
+    # discovery.zig: 8 quoted tests (descriptor hash x2 + fontconfig x2 + coretext
+    # x3 + windows). The fontconfig (Linux) + windows (DirectWrite) tests are
+    # DEFERRED with their backends (DEFERRALS.md) but ported as SkipZigTest-style
+    # skip-stub #[test]s (the reference `!= backend -> SkipZigTest` early-return),
+    # so rust=8 live #[test] == zig=8 (apc_deferred=0). The coretext discovery
+    # tests are #[cfg(target_os = "macos")] (the macOS default backend).
+    "font_shaper_discovery":     ([f"{GHF}/discovery.zig"], [f"{RSFS}/discovery.rs"], 0),
 }
 
 def expand(globs):

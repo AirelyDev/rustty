@@ -127,6 +127,23 @@ doc-comment). Applies the validated -sys template as a C++ variant:
 CoreText via `objc2`/`objc2-core-text` crates (macOS-native, no vendored -sys);
 fontconfig/libxml2 -sys deferred to the Linux font-discovery milestone.
 
+## Stage F3 — font faces + discovery tier: ✅ DONE (2026-07-01)
+New crate **rustty-font-shaper** (the D1 3-tier split: ABOVE vt+font; rustty-font
+STAYS pure below vt, acyclic gate confirms no rustty-font→vt edge). The impure
+C-lib/CoreText face+collection+discovery tier: face/freetype.rs (9t, FreeType Face
+over freetype-sys) + face/coretext.rs (8t, CoreText Face over objc2-core-text) +
+face/mod.rs (3t, backend-selecting facade) + collection.rs (13t) + deferred_face.rs
+(2t) + codepoint_resolver.rs (3t) + discovery.rs (8t, coretext discoverer +
+fontconfig/windows skip-stubs). 47 tests pass; ASan clean; clippy/fmt/acyclic green;
+whole check_test_counts.py gate GREEN (7 font_shaper_* modules mapped, rust>=zig);
+scoped G3b missing=0; no workspace regression (vt 2019, font 74). Backend matrix
+cfg-gated (macOS default=coretext, Linux default=fontconfig_freetype). DEFERRED
+(documented, DEFERRALS.md): fontconfig discoverer (Linux, ported as SkipZigTest-style
+skip-stub #[test]s guarded on BACKEND==FontconfigFreetype), windows/DirectWrite
+discoverer (skip-stub), web_canvas face (wasm, feature-gated OFF).
+NEXT = **F4 shaper** (shape.zig + shaper/{coretext,harfbuzz,noop,run}.zig — the
+HarfBuzz/CoreText text-shaping tier over the F3 faces).
+
 ## Stage D — heavy tier (later)
 rest of font (faces/shapers: freetype/harfbuzz/fontconfig/CoreText -sys, ~10.7k loc) →
 input (completes key_mods once config lands) → config (oniguruma-sys) → renderer
