@@ -28,12 +28,18 @@ pub mod noop;
 #[path = "shaper/harfbuzz.rs"]
 pub mod harfbuzz;
 // pub const coretext = @import("shaper/coretext.zig");
+#[cfg(target_os = "macos")]
+#[path = "shaper/coretext.rs"]
+pub mod coretext;
 // pub const web_canvas = @import("shaper/web_canvas.zig");
 //
-// PORT NOTE: the HarfBuzz and CoreText *shapers* (and the wasm `web_canvas`
-// shaper) are NOT part of the shaper-framework file set — they land in a later
-// subtask. Their imports are preserved above as comments; the `Shaper` selector
-// (below) currently scaffolds to `noop::Shaper` until they are ported.
+// PORT NOTE: the CoreText shaper is CoreText-native (`.coretext` backend) and so
+// is gated to macOS. The wasm `web_canvas` shaper is NOT part of this tier; its
+// import is preserved above as a comment. The `Shaper` selector (below) models
+// the `coretext_harfbuzz`/`fontconfig_freetype` configurations and points at
+// `harfbuzz::Shaper`; the CoreText shaper is exercised through its own
+// `coretext::Shaper` type + tests, exactly as the reference's coretext.zig tests
+// reference the file's own `Shaper` (not the backend selector).
 
 // pub const Cache = @import("shaper/Cache.zig");
 pub use cache::Cache;
