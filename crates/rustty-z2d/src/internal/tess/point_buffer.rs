@@ -49,6 +49,27 @@ impl<const SPLIT: usize, const BUFFER_LEN: usize> PointBuffer<SPLIT, BUFFER_LEN>
         self.len = 0;
     }
 
+    /// Returns the start of the buffer with the offset in `n` applied, as
+    /// `self.items[n]`.
+    pub fn head(&self, n: usize) -> Option<Point> {
+        if n >= self.len {
+            return None;
+        }
+        Some(self.items[n])
+    }
+
+    /// Returns the end of the buffer with the offset in `n` applied, as
+    /// `self.items[self.len - n]`.
+    pub fn tail(&self, n: usize) -> Option<Point> {
+        if n == 0 {
+            panic!("invalid tail index");
+        }
+        if self.len < n {
+            return None;
+        }
+        Some(self.items[self.len - n])
+    }
+
     pub fn last(&self) -> Option<Point> {
         if self.len == 0 {
             return None;

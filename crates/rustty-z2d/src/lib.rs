@@ -28,6 +28,12 @@
 //!   anti-aliased (`.default`/`.multisample_4x`) rasterizer
 //!   ([`internal::raster::multisample`] + [`internal::raster::sparse_coverage`]),
 //!   via [`internal::tess::fill_plotter`] + [`internal::tess::polygon`].
+//! * [`painter::stroke`] — the STROKE operation for the (non-hairline,
+//!   non-dashed) path the sprite canvas exercises, via
+//!   [`internal::tess::stroke_plotter`] + [`internal::tess::pen`] /
+//!   [`internal::tess::face`] / [`internal::tess::slope`] +
+//!   `internal::tess::polygon::Contour`, fed into the same fill rasterizers
+//!   (butt/round caps, miter/bevel/round joins).
 //! * [`compositor`] — `Operator`/`Precision` plus the scalar integer single-pixel
 //!   core (`run_pixel_t` + `IntegerOps`) used by `Surface::composite_stride` for
 //!   anti-aliased partial-coverage spans.
@@ -35,11 +41,11 @@
 //!
 //! ## NOT yet ported (blockers for full ghostty pixel-parity)
 //!
-//! * The `.supersample_4x` fill rasterizer, and the SIMD-vectorized
+//! * The `.supersample_4x` fill/stroke rasterizer, and the SIMD-vectorized
 //!   `StrideCompositor` / `RGBA16Vec` / `RGBAFloat` (`color`/`color_vector`)
 //!   pipelines. Only the scalar integer single-pixel compositor is ported.
-//! * The entire STROKE tessellation pipeline (`stroke_plotter` + `Pen`/`Face`/
-//!   `Slope`/`Spline`-stroke/`Dasher` + `hairline`).
+//! * Hairline stroking (`polyline_plotter` + `hairline`) and dashed stroking
+//!   (`Dasher`/`dashed_plotter`) — neither is reached by the sprite canvas.
 //! * `PackedImageSurface` (sub-8-bit alpha), gradients, dithering, PNG export.
 //!
 //! Those code paths are marked `unimplemented!` where present. See the task

@@ -8,11 +8,14 @@
 // anti-aliased (`.default` / `.multisample_4x`) rasterizer
 // (`internal/raster/multisample.rs` + `sparse_coverage.rs` + the scalar integer
 // compositor), which together are the pixel-producing core ghostty's glyf/sprite
-// fills use. The `.supersample_4x` fill rasterizer and the entire STROKE
-// tessellation pipeline (`internal/tess/stroke_plotter.zig` + `Pen`/`Face`/
-// `Slope`/`Dasher` + hairline) are NOT part of this subset; those code paths are
-// `unimplemented!` (and reported as blockers). `stroke`'s leading uninvertible-
-// matrix check is ported so its error semantics are preserved.
+// fills use. The STROKE operation is ported for the (non-hairline, non-dashed)
+// path the sprite canvas exercises — `internal/tess/stroke_plotter.rs` +
+// `Pen`/`Face`/`Slope` + `Contour`, fed into the same `.none`/`.default`
+// rasterizers as fill (butt/round caps, miter/bevel/round joins). The
+// `.supersample_4x` rasterizer, hairline stroking (`polyline_plotter` +
+// `hairline` — never reached by the sprite canvas, which leaves `hairline`
+// false), and dashed stroking (`Dasher`/`dashed_plotter`) are NOT part of this
+// subset; those code paths are `unimplemented!` (and reported as blockers).
 
 //! Contains unmanaged painter functions for filling and stroking.
 
@@ -20,7 +23,7 @@ use crate::compositor::{Operator, Precision};
 use crate::internal::error::InternalError;
 use crate::internal::path_nodes::PathNode;
 use crate::internal::raster::{direct, multisample};
-use crate::internal::tess::fill_plotter;
+use crate::internal::tess::{fill_plotter, stroke_plotter};
 use crate::options::{self, AntiAliasMode, CapMode, FillRule, JoinMode};
 use crate::pattern::Pattern;
 use crate::surface::{self, Surface, SUPERSAMPLE_SCALE};
@@ -190,14 +193,18 @@ impl From<transformation::Error> for StrokeError {
     }
 }
 
-/// Runs a stroke operation on the path set represented by `nodes`.
-///
-/// SUBSET: the tessellation of a stroke into fillable polygons is not yet
-/// ported; only the leading uninvertible-matrix check and the zero-node
-/// short-circuit are faithful. Any actual stroking is `unimplemented!`.
+impl From<InternalError> for StrokeError {
+    fn from(e: InternalError) -> StrokeError {
+        StrokeError::Internal(e)
+    }
+}
+
+/// Runs a stroke operation on the path set represented by `nodes`. The path(s)
+/// is/are transformed to one or more polygon(s) representing the line(s),
+/// which are then filled.
 pub fn stroke(
-    _surface: &mut Surface,
-    _pattern: &Pattern,
+    surface: &mut Surface,
+    pattern: &Pattern,
     nodes: &[PathNode],
     opts: StrokeOptions,
 ) -> Result<(), StrokeError> {
@@ -210,7 +217,98 @@ pub fn stroke(
         return Ok(());
     }
 
-    unimplemented!("stroke tessellation is not part of the initial z2d subset")
+    // NOTE (subset): the Zig original forces AA to `.none` on 1-bit alpha
+    // surfaces; this subset has no packed alpha1 surface, so the option is used
+    // as-is.
+    let aa_mode = opts.anti_aliasing_mode;
+
+    // We can fast-path here if we're using hairline stroking.
+    if opts.hairline {
+        unimplemented!("hairline stroking is not part of the z2d sprite subset");
+    }
+
+    let scale: f64 = match aa_mode {
+        AntiAliasMode::None => 1.0,
+        AntiAliasMode::Supersample4x => SUPERSAMPLE_SCALE as f64,
+        AntiAliasMode::Default | AntiAliasMode::Multisample4x => MULTISAMPLE_SCALE,
+    };
+
+    // NOTE: for now, we set a minimum thickness for the following options:
+    // join_mode, miter_limit, and cap_mode. Any thickness lower than 2 will
+    // cause these options to revert to the defaults of join_mode = .miter,
+    // miter_limit = 10.0, cap_mode = .butt.
+    //
+    // This is a stop-gap to prevent artifacts with very thin lines (not
+    // necessarily hairline, but close to being the single-pixel width that are
+    // used to represent hairlines). As our path builder gets better for
+    // stroking, I'm expecting that some of these restrictions will be lifted
+    // and/or moved to specific places where they can be used to address the
+    // artifacts related to particular edge cases.
+    //
+    // Not a stop gap more than likely: minimum line width. This is value is
+    // sort of arbitrarily chosen as Cairo's minimum 24.8 fixed-point value (so
+    // 1/256).
+    let minimum_line_width: f64 = 0.00390625;
+    let polygons = stroke_plotter::plot(
+        nodes,
+        stroke_plotter::PlotterOptions {
+            cap_mode: if opts.line_width >= 2.0 {
+                opts.line_cap_mode
+            } else {
+                CapMode::Butt
+            },
+            ctm: opts.transformation,
+            dashes: opts.dashes.clone(),
+            dash_offset: opts.dash_offset,
+            join_mode: if opts.line_width >= 2.0 {
+                opts.line_join_mode
+            } else {
+                JoinMode::Miter
+            },
+            miter_limit: if opts.line_width >= 2.0 {
+                opts.miter_limit
+            } else {
+                10.0
+            },
+            scale,
+            thickness: if opts.line_width >= minimum_line_width {
+                opts.line_width
+            } else {
+                minimum_line_width
+            },
+            tolerance: opts.tolerance.max(0.001),
+        },
+    )?;
+
+    match aa_mode {
+        AntiAliasMode::None => {
+            direct::run(
+                surface,
+                pattern,
+                &polygons,
+                FillRule::NonZero,
+                opts.operator,
+                opts.precision,
+            );
+        }
+        AntiAliasMode::Default | AntiAliasMode::Multisample4x => {
+            multisample::run(
+                surface,
+                pattern,
+                &polygons,
+                FillRule::NonZero,
+                opts.operator,
+                opts.precision,
+            );
+        }
+        AntiAliasMode::Supersample4x => {
+            unimplemented!(
+                "anti-aliased stroke (supersample) is not part of the initial z2d subset"
+            );
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

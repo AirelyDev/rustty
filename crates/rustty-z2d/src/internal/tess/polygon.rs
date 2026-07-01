@@ -5,9 +5,16 @@
 // (R3 vendored dep).
 //
 // SUBSET NOTE (rustty): `Contour` / `addEdgesFromContour` (used by the stroke
-// tessellator) are NOT part of the fill subset and are not ported. The Zig
-// `WorkingEdgeSet` re-orders the *shared* polygon edge list in place through a
-// const pointer; here it owns a copy of the edge list instead. This is
+// tessellator) ARE ported here (they were previously out of the fill-only
+// subset). The Zig `Contour` is a `std.DoublyLinkedList` of heap `Corner` nodes
+// spliced via `@fieldParentPtr`; the Rust port models it as an index-arena
+// doubly-linked list (`nodes: Vec<Node>` with `prev`/`next` indices). Nodes are
+// never removed individually — only the whole contour is dropped or moved — so
+// the arena indices are stable and the model is faithful (and raw-pointer-free,
+// which keeps the Miri gate clean).
+//
+// The Zig `WorkingEdgeSet` re-orders the *shared* polygon edge list in place
+// through a const pointer; here it owns a copy of the edge list instead. This is
 // behavior-equivalent for the rasterizer because the active edge set is
 // re-selected on every breakpoint and re-sorted by x before winding — so the
 // persistent reordering is unobservable in the output (and the copy is
@@ -129,6 +136,32 @@ impl Polygon {
         }
 
         self.edges.push(edge);
+    }
+
+    /// Iterate over the supplied contour and add each individual line as an edge.
+    ///
+    /// Note this does not de-initialize the contour, so deinit needs to be called
+    /// after it if that's the intent.
+    pub fn add_edges_from_contour(&mut self, contour: &Contour) {
+        let mut node_ = contour.first;
+        let mut initial_point_: Option<crate::internal::point::Point> = None;
+        let mut last_point_: Option<crate::internal::point::Point> = None;
+        while let Some(node) = node_ {
+            let current_point = contour.nodes[node].point;
+            if initial_point_.is_none() {
+                initial_point_ = Some(current_point);
+            }
+            if let Some(last_point) = last_point_ {
+                self.add_edge(last_point, current_point);
+            }
+            last_point_ = Some(current_point);
+            node_ = contour.nodes[node].next;
+        }
+        if let Some(initial_point) = initial_point_ {
+            if let Some(last_point) = last_point_ {
+                self.add_edge(last_point, initial_point);
+            }
+        }
     }
 
     /// Returns true if our polygon list is somewhere within the box starting at
@@ -310,6 +343,158 @@ impl WorkingEdgeSet {
                 &self.x_values[0..to]
             }
         }
+    }
+}
+
+/// A node in a `Contour`'s index-arena doubly-linked list. See the module note
+/// for how this models the Zig `std.DoublyLinkedList` of `Corner` nodes.
+#[derive(Debug, Clone, Copy)]
+struct Node {
+    point: crate::internal::point::Point,
+    prev: Option<usize>,
+    next: Option<usize>,
+}
+
+/// Represents a polyline (contour) that will be later assembled into a
+/// polygon, or converted to a set of edges to be added to a larger
+/// polygon/edge collection.
+#[derive(Debug, Clone)]
+pub struct Contour {
+    nodes: Vec<Node>,
+    first: Option<usize>,
+    last: Option<usize>,
+    pub len: usize,
+    pub scale: f64,
+}
+
+impl Contour {
+    pub fn new(scale: f64) -> Contour {
+        Contour {
+            nodes: Vec::new(),
+            first: None,
+            last: None,
+            len: 0,
+            scale,
+        }
+    }
+
+    /// The arena index of the first corner, for use as a `before` handle in
+    /// `plot`. Mirrors reading `corners.first` in the Zig original.
+    pub fn corners_first(&self) -> Option<usize> {
+        self.first
+    }
+
+    /// Plots a point on the contour. If `before` is specified, the point is
+    /// plotted before it.
+    pub fn plot(&mut self, point: crate::internal::point::Point, before_: Option<usize>) {
+        debug_assert!(point.x.is_finite() && point.y.is_finite());
+        let scaled = crate::internal::point::Point {
+            x: point.x * self.scale,
+            y: point.y * self.scale,
+        };
+
+        let idx = self.nodes.len();
+        self.nodes.push(Node {
+            point: scaled,
+            prev: None,
+            next: None,
+        });
+        match before_ {
+            Some(before) => self.insert_before(before, idx),
+            None => self.append(idx),
+        }
+        self.len += 1;
+    }
+
+    /// Like `plot`, but adds points in the reverse direction (i.e., at the start
+    /// of the polygon instead of the end).
+    pub fn plot_reverse(&mut self, point: crate::internal::point::Point) {
+        debug_assert!(point.x.is_finite() && point.y.is_finite());
+        let scaled = crate::internal::point::Point {
+            x: point.x * self.scale,
+            y: point.y * self.scale,
+        };
+
+        let idx = self.nodes.len();
+        self.nodes.push(Node {
+            point: scaled,
+            prev: None,
+            next: None,
+        });
+        self.prepend(idx);
+        self.len += 1;
+    }
+
+    fn append(&mut self, idx: usize) {
+        self.nodes[idx].prev = self.last;
+        self.nodes[idx].next = None;
+        match self.last {
+            Some(li) => self.nodes[li].next = Some(idx),
+            None => self.first = Some(idx),
+        }
+        self.last = Some(idx);
+    }
+
+    fn prepend(&mut self, idx: usize) {
+        self.nodes[idx].next = self.first;
+        self.nodes[idx].prev = None;
+        match self.first {
+            Some(fi) => self.nodes[fi].prev = Some(idx),
+            None => self.last = Some(idx),
+        }
+        self.first = Some(idx);
+    }
+
+    fn insert_before(&mut self, before: usize, idx: usize) {
+        let p = self.nodes[before].prev;
+        self.nodes[idx].prev = p;
+        self.nodes[idx].next = Some(before);
+        self.nodes[before].prev = Some(idx);
+        match p {
+            Some(pi) => self.nodes[pi].next = Some(idx),
+            None => self.first = Some(idx),
+        }
+    }
+
+    /// Concatenates a contour into this one and detaches its contours from its
+    /// linked list.
+    pub fn concat(&mut self, other: &mut Contour) {
+        if other.len == 0 {
+            // Nothing to move; still reset the (already empty) other to mirror
+            // `concatByMoving` resetting the source list.
+            other.first = None;
+            other.last = None;
+            other.nodes.clear();
+            return;
+        }
+        // Copy `other`'s nodes into our arena, rebasing their indices by our
+        // current length (arena indices are stable, so this is a faithful splice
+        // of the two doubly-linked lists).
+        let offset = self.nodes.len();
+        for n in &other.nodes {
+            self.nodes.push(Node {
+                point: n.point,
+                prev: n.prev.map(|i| i + offset),
+                next: n.next.map(|i| i + offset),
+            });
+        }
+        let other_first = other.first.unwrap() + offset;
+        let other_last = other.last.unwrap() + offset;
+        match self.last {
+            Some(li) => {
+                self.nodes[li].next = Some(other_first);
+                self.nodes[other_first].prev = Some(li);
+            }
+            None => self.first = Some(other_first),
+        }
+        self.last = Some(other_last);
+        self.len += other.len;
+
+        // Reset the other list to empty.
+        other.first = None;
+        other.last = None;
+        other.len = 0;
+        other.nodes.clear();
     }
 }
 

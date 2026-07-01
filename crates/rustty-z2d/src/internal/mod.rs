@@ -3,6 +3,7 @@
 //
 // Internal (non-public-API) modules for the rustty z2d subset port.
 
+pub mod arc;
 pub mod error;
 pub mod path_nodes;
 pub mod point;
