@@ -188,6 +188,17 @@ image.zig, shadertoy custom shaders) → R-d — the GPU draw path (Metal/OpenGL
 backends, generic.zig, glslang/spirv-cross/wuffs/libpng/zlib-sys). On the embedded-first
 milestone path, **apprt-api** (D5 partition) is the next headless deliverable.
 
+## Stage R-b/R-c + oniguruma + apprt-api + -sys backlog: ✅ DONE (2026-07-01)
+- **oniguruma**: oniguruma-sys (6.9.9, generated config.h) + rustty-oniguruma (`oni` safe wrapper) + vt `oniguruma` feature wired. Closed 4 deferrals: vt StringMap (3 tests), config url regex (90 cases), input Link, renderer link. `onig_initialize` made thread-safe via OnceLock (see below).
+- **renderer R-b/R-c**: shadertoy.rs (4t, glslang+spirv-cross FFI), link.rs (3t, oniguruma), + renderer::Health (1t). renderer now 19 tests. R-d GPU (Metal/OpenGL/generic.zig, image.zig) = Phase 3, no unit gate.
+- **apprt-api KEYSTONE** (D5): rustty-apprt-api filled — action/surface/structs/runtime/ipc, 20 tests, the `App`/`Surface`/`CoreSurfaceHandle`/`Target` GENERIC (not dyn) trait seam that BREAKS core↔apprt (acyclic green). PORT_PLAN A5 resolved (apprt-api 20 / apprt 47→27, global 3234 unchanged). Deferred (additive): gtk `getGObjectType` GObject impls → apprt gtk backend; CValue byte-exact C-ABI pinning → embedded milestone (vt-c D2 pattern); newConfig + mailbox Timeout/Size → land with core.
+- **-sys**: wuffs/glslang/spirv-cross (renderer) + libpng/sentry/dcimgui (backlog) all vendored + KAT-green. dcimgui uses freetype-sys's bundled libpng (no dup). **DEFERRED: fontconfig-sys + libxml2-sys** (new-dep pair; Linux font discovery; off the macOS embedding critical path).
+- **MEMORY-SAFETY FIX**: the torn-`BufNode.data` corruption under parallel `cargo test` was root-caused (NOT the arena — a downstream victim) to concurrent non-thread-safe `onig_initialize()` (reference `ensureInit` never wrote its `initialized` flag → re-init every call). Fixed with OnceLock; test-serialization lock removed; 0/60 stable at 48 threads. See DEFERRALS.md + memory parallel-cargo-test-exposes-c-init-races.
+
+## INTEGRATION TIER — the critical path to the libghostty embedding milestone (NEXT focused effort)
+Dependency-ordered, apprt-api now unblocks it:
+**quirks** (57 loc, tiny leaf, imports font — needs a crate-placement decision) + **Command** (911 loc/10t, now unblocked by apprt-api — placement decision) + **crash** (sentry-sys ready) → **termio** (pty/exec/thread, 30 tests — the "run a real shell" layer; pty.rs already ported in rustty-os) → **core** (Surface.zig/App.zig — the big one; fills apprt-api's growth-point trait methods + the mailbox/queue seam) → **apprt/embedded** (2250 loc, 71 C-ABI exports — THE libghostty embedding milestone, via vt-c cbindgen+pinned-padding+const-size-assert) + **none.zig** (headless). Then **cli** + **bin**. Crown-jewel-adjacent — needs design + careful review (not background dispatch).
+
 ## Stage D — heavy tier (later)
 rest of font (faces/shapers: freetype/harfbuzz/fontconfig/CoreText -sys, ~10.7k loc) →
 input (completes key_mods once config lands) → config (oniguruma-sys) → renderer
