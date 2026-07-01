@@ -18,6 +18,7 @@
 pub mod atlas;
 pub mod codepoint_map;
 pub mod embedded;
+pub mod glyf_rasterize;
 pub mod glyph;
 pub mod metrics;
 pub mod nerd_font_attributes;

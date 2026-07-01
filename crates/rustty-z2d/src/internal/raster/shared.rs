@@ -41,6 +41,39 @@ pub fn composite_opaque(
     }
 }
 
+/// Composites pixels with opacity, fast-pathing if the operator reduces to the
+/// source pixel.
+//
+// PORT NOTE: faithful port of `compositeOpacity`. In the ghostty sprite/glyf
+// fill subset the pattern is always an opaque `alpha8` source and the operator
+// is `src_over`, which reduces to the source, so this always takes the
+// `composite_stride` fast path. The non-fast-path (full `StrideCompositor`
+// dst_in/operator two-op pipeline) is not part of this subset.
+#[allow(clippy::too_many_arguments)]
+pub fn composite_opacity(
+    operator: Operator,
+    surface: &mut Surface,
+    pattern: &Pattern,
+    x: i32,
+    y: i32,
+    len: usize,
+    _precision: Precision,
+    opacity: u8,
+) {
+    if operator == Operator::Clear {
+        surface.clear_stride(x, y, len);
+    } else {
+        let Pattern::OpaquePattern(op) = pattern;
+        if fill_reduces_to_source(operator, op.pixel) {
+            surface.composite_stride(x, y, len, op.pixel, operator, opacity);
+        } else {
+            unimplemented!(
+                "composite_opacity non-fast-path requires the full StrideCompositor (not in the z2d subset)"
+            );
+        }
+    }
+}
+
 /// Returns true if the operator can be fast-pathed on the source by writing the
 /// source pixel directly to the surface.
 ///

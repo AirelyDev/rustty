@@ -3,22 +3,23 @@
 //
 // Ported to Rust for rustty from z2d 0.10.0 `src/painter.zig` (R3 vendored dep).
 //
-// SUBSET NOTE (rustty): the FILL operation is ported for the non-anti-aliased
-// (`.none`) rasterizer (`internal/raster/direct.rs`), which is the pixel-
-// producing core. The anti-aliased fill rasterizers (`.default` /
-// `.multisample_4x` / `.supersample_4x`, backed by `internal/raster/*` +
-// the full SIMD compositor) and the entire STROKE tessellation pipeline
-// (`internal/tess/stroke_plotter.zig` + `Pen`/`Face`/`Slope`/`Dasher` + hairline)
-// are NOT part of this initial subset; those code paths are `unimplemented!`
-// (and reported as blockers). `stroke`'s leading uninvertible-matrix check is
-// ported so its error semantics are preserved.
+// SUBSET NOTE (rustty): the FILL operation is ported for both the non-anti-
+// aliased (`.none`) rasterizer (`internal/raster/direct.rs`) and the default
+// anti-aliased (`.default` / `.multisample_4x`) rasterizer
+// (`internal/raster/multisample.rs` + `sparse_coverage.rs` + the scalar integer
+// compositor), which together are the pixel-producing core ghostty's glyf/sprite
+// fills use. The `.supersample_4x` fill rasterizer and the entire STROKE
+// tessellation pipeline (`internal/tess/stroke_plotter.zig` + `Pen`/`Face`/
+// `Slope`/`Dasher` + hairline) are NOT part of this subset; those code paths are
+// `unimplemented!` (and reported as blockers). `stroke`'s leading uninvertible-
+// matrix check is ported so its error semantics are preserved.
 
 //! Contains unmanaged painter functions for filling and stroking.
 
 use crate::compositor::{Operator, Precision};
 use crate::internal::error::InternalError;
 use crate::internal::path_nodes::PathNode;
-use crate::internal::raster::direct;
+use crate::internal::raster::{direct, multisample};
 use crate::internal::tess::fill_plotter;
 use crate::options::{self, AntiAliasMode, CapMode, FillRule, JoinMode};
 use crate::pattern::Pattern;
@@ -109,10 +110,18 @@ pub fn fill(
                 opts.precision,
             );
         }
-        AntiAliasMode::Supersample4x | AntiAliasMode::Default | AntiAliasMode::Multisample4x => {
-            unimplemented!(
-                "anti-aliased fill (multisample/supersample) is not part of the initial z2d subset"
+        AntiAliasMode::Default | AntiAliasMode::Multisample4x => {
+            multisample::run(
+                surface,
+                pattern,
+                &polygons,
+                opts.fill_rule,
+                opts.operator,
+                opts.precision,
             );
+        }
+        AntiAliasMode::Supersample4x => {
+            unimplemented!("anti-aliased fill (supersample) is not part of the initial z2d subset");
         }
     }
 

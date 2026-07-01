@@ -255,6 +255,51 @@ impl<T: SurfacePixel> ImageSurface<T> {
             *e = v;
         }
     }
+
+    /// Composites a single pixel using the specified operation, with an optional
+    /// opacity, to the range starting at `(x, y)` for `len`.
+    //
+    // PORT NOTE: faithful port of `ImageSurface(T).compositeStride`. `RGBA` is
+    // the base intermediary pixel for the source; if opacity < 255 the source is
+    // pre-multiplied via a `dst_in` against an `Alpha8` mask. Each destination
+    // pixel is then composited with `operator` via the scalar integer
+    // `run_pixel_t`. See `compositor.rs` for why routing through `Pixel` is
+    // equivalent to the Zig `runPixelT(T, ...)`.
+    pub fn composite_stride(
+        &mut self,
+        x: i32,
+        y: i32,
+        len: usize,
+        px: Pixel,
+        operator: Operator,
+        opacity: u8,
+    ) {
+        if x < 0 || y < 0 || x >= self.width || y >= self.height {
+            return;
+        }
+        let w_usize = self.width.max(0) as usize;
+        let y_usize = y.max(0) as usize;
+        let x_usize = x.max(0) as usize;
+        let start = w_usize * y_usize + x_usize;
+
+        // We use RGBA as our base intermediary pixel for the source.
+        let mut src: Rgba = Rgba::from_pixel(px);
+        if opacity < 255 {
+            src = Rgba::from_pixel(crate::compositor::run_pixel_t(
+                src.as_pixel(),
+                Pixel::Alpha8(Alpha8 { a: opacity }),
+                Operator::DstIn,
+            ));
+        }
+
+        for idx in start..start + len {
+            self.buf[idx] = T::from_pixel(crate::compositor::run_pixel_t(
+                self.buf[idx].as_pixel(),
+                src.as_pixel(),
+                operator,
+            ));
+        }
+    }
 }
 
 /// Represents an interface as an enum of the (memory-backed) pixel formats.
@@ -417,21 +462,20 @@ impl Surface {
 
     /// Composites a single pixel using the specified operation, with an
     /// optional opacity, to the range starting at `(x, y)` for `len`.
-    ///
-    /// SUBSET: backed by the full compositor; not part of the ghostty fill
-    /// subset (only reached by inner-stroke). Unimplemented.
+    //
+    // PORT NOTE: dispatches to the concrete `ImageSurface(T).composite_stride`.
+    // This is the partial-coverage write path used by the multisample fill
+    // rasterizer for anti-aliased spans.
     pub fn composite_stride(
         &mut self,
-        _x: i32,
-        _y: i32,
-        _len: usize,
-        _px: Pixel,
-        _operator: Operator,
-        _opacity: u8,
+        x: i32,
+        y: i32,
+        len: usize,
+        px: Pixel,
+        operator: Operator,
+        opacity: u8,
     ) {
-        unimplemented!(
-            "Surface::composite_stride requires the full compositor (not in the z2d subset)"
-        )
+        dispatch!(self, s => s.composite_stride(x, y, len, px, operator, opacity));
     }
 
     /// Runs the single compositor operation described by `operator`.

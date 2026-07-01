@@ -37,6 +37,16 @@ rustty-os = { workspace = true }
 rustty-datastruct = { workspace = true }
 rustty-util = { workspace = true }
 rustty-render-types = { workspace = true }
+# Pure-Rust port of the z2d 0.10.0 subset (2D vector graphics) used by the glyf
+# rasterizer to turn a decoded outline into an alpha8 bitmap (R3 vendored dep).
+rustty-z2d = { workspace = true }
 # Stable polyfill of `core::alloc::Allocator` — the faithful Rust map of Zig's
 # `std.mem.Allocator` threaded through Atlas/CodepointMap (`Global` == `std.alloc`).
 allocator-api2 = { workspace = true }
+
+[dev-dependencies]
+# Pure-Rust PNG decoder, used ONLY by the glyf_rasterize PNG known-answer test to
+# decode ghostty's checked-in reference image (`res/glyf_rasterize.png`) for a
+# pixel-exact comparison. This replaces ghostty's runtime `wuffs.png.decode`
+# (wuffs-sys is ghostty's separate emoji-decode path and is NOT pulled in here).
+png = "0.18"

@@ -23,16 +23,21 @@
 //! * [`pixel`] — `Format`/`Pixel` with the RGB(A) family + `Alpha8` (full).
 //! * [`surface::Surface`] — memory-backed `ImageSurface` (argb/xrgb/rgb/rgba/
 //!   alpha8); putPixel/paintStride/clearStride/getPixel/init/initPixel.
-//! * [`painter::fill`] — the FILL operation for the non-AA (`.none`) scanline
-//!   rasterizer (the pixel-producing core), via [`internal::tess::fill_plotter`]
-//!   + [`internal::tess::polygon`] + [`internal::raster::direct`].
-//! * [`pattern`], [`options`], [`compositor`] (`Operator`/`Precision`), and a
-//!   minimal [`context::Context`].
+//! * [`painter::fill`] — the FILL operation for both the non-AA (`.none`)
+//!   scanline rasterizer ([`internal::raster::direct`]) and the default
+//!   anti-aliased (`.default`/`.multisample_4x`) rasterizer
+//!   ([`internal::raster::multisample`] + [`internal::raster::sparse_coverage`]),
+//!   via [`internal::tess::fill_plotter`] + [`internal::tess::polygon`].
+//! * [`compositor`] — `Operator`/`Precision` plus the scalar integer single-pixel
+//!   core (`run_pixel_t` + `IntegerOps`) used by `Surface::composite_stride` for
+//!   anti-aliased partial-coverage spans.
+//! * [`pattern`], [`options`], and a minimal [`context::Context`].
 //!
 //! ## NOT yet ported (blockers for full ghostty pixel-parity)
 //!
-//! * The anti-aliased fill rasterizers (`.default`/`.multisample_4x`/
-//!   `.supersample_4x`) and the full SIMD `compositor` (`color`/`color_vector`).
+//! * The `.supersample_4x` fill rasterizer, and the SIMD-vectorized
+//!   `StrideCompositor` / `RGBA16Vec` / `RGBAFloat` (`color`/`color_vector`)
+//!   pipelines. Only the scalar integer single-pixel compositor is ported.
 //! * The entire STROKE tessellation pipeline (`stroke_plotter` + `Pen`/`Face`/
 //!   `Slope`/`Spline`-stroke/`Dasher` + `hairline`).
 //! * `PackedImageSurface` (sub-8-bit alpha), gradients, dithering, PNG export.
