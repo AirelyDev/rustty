@@ -1,0 +1,31 @@
+# rustty-z2d — pure-Rust port of the `vancluever/z2d` 0.10.0 subset (R3 vendored dep).
+#
+# Crate IDENTITY is `rustty-z2d` (R4). z2d is a DEPENDENCY of ghostty (MPL-2.0,
+# pure-Zig 2D vector graphics), NOT ghostty source; therefore its own `test {}`
+# blocks are not part of the 3234-test parity contract and this crate is absent
+# from the test-contract crate_map. Its rasterization must nonetheless be
+# PIXEL-EXACT so the ghostty sprite/glyf PNG known-answer tests (ported into
+# rustty-font) pass byte-for-byte.
+#
+# This crate ports the SUBSET ghostty's font/sprite/canvas.zig and
+# font/glyf_rasterize.zig use: Context / Path / StaticPath / Surface /
+# Transformation / painter.fill(+stroke) plus the transitive pixel-producing
+# core (path flattener + polygon rasterizer). Pure Rust, NO dependencies (R3).
+# A leaf: it depends on nothing in the workspace.
+#
+# The leak/UB gate is Miri (R6, pure-Rust crate).
+[package]
+name = "rustty-z2d"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
