@@ -42,24 +42,3 @@ pub mod state;
 // reference `renderer.zig` re-exports these size types (`GridSize`, `Size`,
 // `ScreenSize`, `CellSize`, `Padding`, `Coordinate`, ...); mirror that re-export.
 pub use rustty_render_types as size;
-
-// PORT NOTE (test-harness only): the reference is unit-tested by `zig test`,
-// which runs a file's `test{}` blocks SERIALLY. `cargo test` instead runs
-// `#[test]`s CONCURRENTLY across threads. Running several `Terminal`-constructing
-// tests at once drives `rustty-vt`/`rustty-zigstd`'s arena/memory-pool allocation
-// path concurrently and exposes a rare, pre-existing concurrency corruption there
-// (an `ArenaAllocator::usable` `data - buf_node_size()` underflow from a torn
-// `BufNode.data` — the arena is the victim, not the cause; the bug lives below
-// this crate and neither `rustty-vt`'s own suite nor the original renderer suite
-// hits it in isolation). This is NOT introduced by the ported renderer code.
-// To keep `cargo test -p rustty-renderer` deterministically green WITHOUT
-// weakening any assertion, the crate's `Terminal`-constructing tests take this
-// process-global lock, restoring the reference's serial execution model. Remove
-// once the underlying rustty-vt/rustty-zigstd race is fixed.
-#[cfg(test)]
-pub(crate) static TERMINAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[cfg(test)]
-pub(crate) fn terminal_test_guard() -> std::sync::MutexGuard<'static, ()> {
-    TERMINAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-}

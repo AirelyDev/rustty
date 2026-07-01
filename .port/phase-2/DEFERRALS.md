@@ -447,20 +447,57 @@ raw `glslang-sys`), byte-faithful to pkg/glslang/{init,shader,program,test}.zig.
   milestone) — this is part of the already-tracked GPU-draw-path deferral, not a
   new one.
 
-### KNOWN ISSUE (pre-existing, below this crate): parallel `Terminal::init` corruption
+### RESOLVED: parallel `Terminal::init` corruption — root cause was concurrent `onig_initialize()`, NOT the arena/pool
 
-`cargo test -p rustty-renderer` runs `#[test]`s CONCURRENTLY (whereas the reference
-`zig test` runs a file's tests SERIALLY). Running several `Terminal`-constructing
-renderer tests at once drives `rustty-vt`/`rustty-zigstd`'s arena/memory-pool
-allocation concurrently and exposes a rare (~1/25 at full-suite level) PRE-EXISTING
-concurrency corruption there — surfacing as an `ArenaAllocator::usable`
-`data - buf_node_size()` underflow from a torn `BufNode.data` (the arena is the
-victim, not the cause). This is NOT introduced by the ported renderer code:
-`rustty-vt`'s own suite, the original 11-test renderer suite, and the link-only /
-shadertoy-only subsets are each stable in isolation; only the *combination* of the
-added `Terminal`-heavy tests trips it. As a reference-faithful, no-assertion-weakening
-workaround, the crate's `Terminal`-constructing tests (`cell_constraint_widths`, the
-4 `cursor_*`, the 3 `render_cell_map*`) take a process-global `TERMINAL_TEST_LOCK`
-(`lib.rs`), restoring the serial execution model — 0 crashes in 50 consecutive full
-runs. **Target:** remove the lock once the underlying rustty-vt/rustty-zigstd race is
-root-caused and fixed (out of scope for the renderer port).
+**Symptom.** `cargo test -p rustty-renderer` runs `#[test]`s CONCURRENTLY (whereas the
+reference `zig test` runs a file's tests SERIALLY). At full-suite level a rare
+(~1/25) crash appeared — a process-wide SIGTRAP heap-corruption abort, and
+occasionally an `ArenaAllocator::usable` `data - buf_node_size()` underflow from a
+torn `BufNode.data`. This was originally masked with a process-global
+`TERMINAL_TEST_LOCK` serializing the 8 `Terminal`-constructing tests, on the
+hypothesis of a latent race in `rustty-vt`/`rustty-zigstd`'s arena/memory-pool.
+
+**Actual root cause (proven by bisection, not the arena).** The corruption is in
+`rustty-oniguruma`, not the terminal allocator layer:
+
+- `oni::testing::ensure_init()` (`crates/rustty-oniguruma/src/testing.rs`) was a
+  faithful port of the Zig reference's `ensureInit`, which reads a
+  `var initialized: bool = false` that it **never writes back** — so
+  `onig_initialize()` ran on *every* call. Harmless under Zig's serial `zig test`;
+  broken under `cargo test`'s parallel runner.
+- `onig_initialize()` is **not thread-safe**: it initializes Oniguruma's
+  process-global tables (encodings, default syntax, shared char-class table)
+  non-atomically. The 3 `render_cell_map*` link tests each call `ensure_init()`
+  before compiling a regex, so running them concurrently invoked
+  `onig_initialize()` *simultaneously*, racing on those global tables and
+  corrupting the C heap. When the clobbered bytes happened to land next to a
+  terminal memory-pool arena node, the downstream symptom was the
+  `ArenaAllocator::usable` underflow — i.e. **the arena was the victim, not the
+  cause**, exactly as the old `lib.rs` note suspected but mislocated.
+
+**Evidence.**
+- Bisection over test subsets (`--test-threads=24`): removing the link tests →
+  **0 crashes**; the link tests *alone* crashed at a *higher* rate (3/24) than the
+  full suite (1/24); skipping `shadertoy` had no effect. A homogeneous
+  `Terminal::init`+`RenderState::update`+`deinit` stress with NO Oniguruma never
+  crashed in ~2.9M single-thread and ~1.4M multi-thread iterations, ruling out a
+  per-instance arena/pool UAF (a single-threaded latent UAF would have surfaced).
+- Instrumenting `ArenaAllocator::usable` to abort-with-backtrace on a torn `data`
+  showed the SIGTRAP fired *first* (libmalloc/global-table corruption), before any
+  arena read — the arena underflow is a secondary manifestation.
+
+**Fix (one change, at the source).** `ensure_init()` now calls `onig_initialize()`
+**exactly once per process, thread-safely**, via `std::sync::OnceLock` (concurrent
+callers block until the one-time init completes; the `Copy` result is cached). This
+is the documented, correct usage of the C library — a real correctness fix, not
+serialization of the tests. It is a deliberate, documented divergence from the Zig
+reference, required because Rust's test harness is concurrent.
+
+**Proof.** With the fix and `TERMINAL_TEST_LOCK` **removed**: the previously
+crash-prone `link`-only subset went 3/24 → **0/60**, the full suite 1/24 →
+**0/120** (plus 0/40 at `--test-threads=48`). `rustty-vt` (2019 passed), `-zigstd`,
+`-os`, and `-oniguruma` suites remain green.
+
+The `TERMINAL_TEST_LOCK` + `terminal_test_guard()` + the 8 `let _terminal_guard`
+call sites have been deleted. The unrelated `SHADER_FFI_LOCK` (glslang/spirv-cross
+ARE genuinely non-reentrant) is intentionally retained.

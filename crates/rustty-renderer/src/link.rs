@@ -314,8 +314,6 @@ mod tests {
     // test "renderCellMap"
     #[test]
     fn render_cell_map() {
-        // Serialize `Terminal`-constructing tests (see crate lib.rs TERMINAL_TEST_LOCK).
-        let _terminal_guard = crate::terminal_test_guard();
         let alloc = Global;
         // PORT NOTE: the rust `oni` wrapper requires an explicit `onig_initialize`
         // before `Regex::init` (the reference relies on ghostty's global oni.init);
@@ -377,8 +375,6 @@ mod tests {
     // test "renderCellMap hover links"
     #[test]
     fn render_cell_map_hover_links() {
-        // Serialize `Terminal`-constructing tests (see crate lib.rs TERMINAL_TEST_LOCK).
-        let _terminal_guard = crate::terminal_test_guard();
         let alloc = Global;
         oni::testing::ensure_init().unwrap();
 
@@ -452,8 +448,6 @@ mod tests {
     // test "renderCellMap mods no match"
     #[test]
     fn render_cell_map_mods_no_match() {
-        // Serialize `Terminal`-constructing tests (see crate lib.rs TERMINAL_TEST_LOCK).
-        let _terminal_guard = crate::terminal_test_guard();
         let alloc = Global;
         oni::testing::ensure_init().unwrap();
 
