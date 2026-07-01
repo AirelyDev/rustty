@@ -40,6 +40,10 @@ members = [
     # ABOVE both rustty-vt and rustty-font (backend `Face` selector + CoreText/
     # FreeType faces + HarfBuzz shaping). rustty-font stays PURE below vt.
     "crates/rustty-font-shaper",
+    # R1 safe wrapper over the vendored Oniguruma (`oni::*`): the regex binding
+    # `rustty-vt`'s `string_map.rs` consumes behind the off-by-default
+    # `oniguruma` feature. Depends only on `oniguruma-sys` (a -sys leaf).
+    "crates/rustty-oniguruma",
     "crates/rustty-input",         # 18
     "crates/rustty-inspector",     # 19
     "crates/rustty-renderer",      # 20
@@ -117,6 +121,8 @@ rustty-args = { path = "crates/rustty-args" }
 rustty-apprt-api = { path = "crates/rustty-apprt-api" }
 rustty-font = { path = "crates/rustty-font" }
 rustty-font-shaper = { path = "crates/rustty-font-shaper" }
+# R1 safe wrapper (`oni::*`) over the vendored Oniguruma regex engine.
+rustty-oniguruma = { path = "crates/rustty-oniguruma" }
 rustty-input = { path = "crates/rustty-input" }
 rustty-inspector = { path = "crates/rustty-inspector" }
 rustty-renderer = { path = "crates/rustty-renderer" }
@@ -133,6 +139,9 @@ rustty-z2d = { path = "crates/rustty-z2d" }
 # R3: vendored zlib 1.3.1 (the SAME C library the reference links). Provides the
 # inflate (DEFLATE decompression) surface the Kitty graphics image port needs.
 zlib-sys = { path = "crates-sys/zlib-sys" }
+# R3: vendored Oniguruma 6.9.9 (the SAME C the reference links). The FFI leaf the
+# `rustty-oniguruma` safe wrapper builds the `oni::*` API on top of.
+oniguruma-sys = { path = "crates-sys/oniguruma-sys" }
 # Stable polyfill of the unstable `core::alloc::Allocator` trait. This is the
 # faithful Rust map of Zig's `std.mem.Allocator`: `Allocator::allocate(Layout)`
 # / `deallocate` map to Zig `rawAlloc`/`rawFree`. `Global` == the current

@@ -1,0 +1,34 @@
+# rustty-oniguruma — R1 safe wrapper over the vendored Oniguruma regex engine.
+#
+# This is the safe `oni::*` binding layer the reference exposes as
+# `pkg/oniguruma/*.zig`: a thin, hand-written wrapper over the raw FFI symbols
+# of `oniguruma-sys` (R3: the SAME vendored Oniguruma 6.9.9 C, built standalone).
+# It ports the reference wrapper faithfully (R1) — `Regex`/`Region`/`MatchParam`/
+# `Error`/`Encoding`/`Syntax`/`RegexOptions`/`SearchOptions` + `init`/`deinit`/
+# `testing::ensure_init` — to the FROZEN `oni::*` API that `rustty-vt`'s
+# `string_map.rs` (off-by-default `oniguruma` feature) compiles against.
+#
+# The library artifact is named `oni` so downstream crates `use oni::…` exactly
+# as the reference `@import("oniguruma")` binds the module name `oni`.
+[package]
+name = "rustty-oniguruma"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+# Importable as `oni` (matches the reference module binding used by vt).
+name = "oni"
+# All tests live in `#[test]` blocks; the faithful doc-comment ports are not Rust
+# examples, so doctests are disabled (mirrors the sibling wrapper crates).
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# R3: the raw FFI surface over the vendored Oniguruma C (`links = "onig"`).
+oniguruma-sys = { workspace = true }

@@ -358,6 +358,10 @@ dependencies = [
 [[package]]
 name = "oniguruma-sys"
 version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "cc",
+]
 
 [[package]]
 name = "png"
@@ -627,6 +631,13 @@ dependencies = [
 [[package]]
 name = "rustty-lib"
 version = "0.1.0"
+
+[[package]]
+name = "rustty-oniguruma"
+version = "0.1.0"
+dependencies = [
+ "oniguruma-sys",
+]
 
 [[package]]
 name = "rustty-os"
