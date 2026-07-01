@@ -269,6 +269,17 @@ impl Collection {
         self.get_face_from_entry(entry)
     }
 
+    /// Number of faces registered for a given style.
+    //
+    // PORT NOTE (glue accessor): the reference `discovery.zig`'s `discoverCodepoint`
+    // reads `collection.faces.get(style).count()` directly (the `font` module has
+    // access to the file-struct `faces` field). rustty keeps `faces` private, so
+    // this crate-visible accessor exposes exactly that count for the `discovery`
+    // sibling module. No reference logic is added.
+    pub(crate) fn style_face_count(&self, style: Style) -> usize {
+        self.faces.get(style).count()
+    }
+
     /// Get the unaliased entry from an index
     // pub fn getEntry(self, index) EntryError!*Entry {
     pub fn get_entry(&mut self, index: Index) -> Result<*mut Entry, Error> {

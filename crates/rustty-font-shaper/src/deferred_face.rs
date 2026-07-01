@@ -121,7 +121,7 @@ pub struct DeferredFace {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
-pub use coretext_payload::{new_cfstring, CoreTextData};
+pub use coretext_payload::{new_cfstring, new_cfstring_bytes, CoreTextData};
 
 #[cfg(target_os = "macos")]
 mod coretext_payload {
@@ -181,6 +181,22 @@ mod coretext_payload {
                 None,
                 s.as_ptr(),
                 s.len() as isize,
+                CFStringBuiltInEncodings::EncodingUTF8.0,
+                false,
+            )
+        }
+    }
+
+    /// Create a UTF-8 `CFString` from raw bytes.
+    // PORT: `macos.foundation.String.createWithBytes(bytes, .utf8, false)` — the
+    // `discovery.Descriptor` family/style/codepoint strings are byte slices
+    // (`[:0]const u8`), not necessarily valid `str`.
+    pub fn new_cfstring_bytes(bytes: &[u8]) -> Option<CFRetained<CFString>> {
+        unsafe {
+            CFString::with_bytes(
+                None,
+                bytes.as_ptr(),
+                bytes.len() as isize,
                 CFStringBuiltInEncodings::EncodingUTF8.0,
                 false,
             )

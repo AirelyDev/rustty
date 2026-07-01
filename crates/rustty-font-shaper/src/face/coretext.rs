@@ -1255,7 +1255,9 @@ fn fourcc(v: &[u8; 4]) -> u32 {
 
 /// Copy the raw font-table `CFData` for `tag`, or `None` if absent.
 // PORT: `ct_font.copyTable(FontTableTag.init(tag))`.
-fn copy_table_data(font: &CTFont, tag: &[u8; 4]) -> Option<CFRetained<CFData>> {
+// (crate-visible: `discovery`'s `Score.score` reads the 'head'/'OS/2' tables the
+// same way.)
+pub(crate) fn copy_table_data(font: &CTFont, tag: &[u8; 4]) -> Option<CFRetained<CFData>> {
     unsafe { font.table(fourcc(tag), CTFontTableOptions::NoOptions) }
 }
 
