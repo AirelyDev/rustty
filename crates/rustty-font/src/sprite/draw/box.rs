@@ -64,18 +64,21 @@ use rustty_z2d::painter::{StrokeError, StrokeOptions};
 // PORT NOTE: the reference packs four `Style`s into a `u8`; the Rust port carries
 // them as four `Style` fields (default `.none`), which preserves the semantics
 // used at every call site. `Style` is a file-private (`const Style`) enum in the
-// reference, so the Rust enum is module-private, and the `Lines` fields are kept
-// module-private too — every construction/read site lives in this module.
+// reference. In Zig the fields of the `pub` `Lines` struct (and `Style`-literal
+// coercion) are package-visible, so the legacy-computing draw modules construct
+// `Lines` literals directly (e.g. `.{ .up = .heavy, .down = .heavy }`); to keep
+// those cross-module construction sites faithful, `Style` and the `Lines` fields
+// are `pub(crate)`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Lines {
-    up: Style,
-    right: Style,
-    down: Style,
-    left: Style,
+    pub(crate) up: Style,
+    pub(crate) right: Style,
+    pub(crate) down: Style,
+    pub(crate) left: Style,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-enum Style {
+pub(crate) enum Style {
     #[default]
     None,
     Light,

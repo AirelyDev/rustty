@@ -168,19 +168,22 @@ pub struct Canvas {
     sfc: Surface,
 
     // PORT NOTE: the reference fields are package-visible; `special.zig` reads
-    // `canvas.padding_y` from a sibling `draw/` module, so both padding fields
-    // are `pub(crate)` here to keep that cross-module access faithful.
+    // `canvas.padding_y` from a sibling `draw/` module, and the legacy-computing
+    // draw modules (`symbols_for_legacy_computing.zig` /
+    // `symbols_for_legacy_computing_supplement.zig`) set `canvas.clip_*` from
+    // sibling `draw/` modules, so the padding AND clip fields are `pub(crate)`
+    // here to keep that cross-module access faithful.
     pub(crate) padding_x: u32,
     pub(crate) padding_y: u32,
 
     // clip_top: u32 = 0,
-    clip_top: u32,
+    pub(crate) clip_top: u32,
     // clip_left: u32 = 0,
-    clip_left: u32,
+    pub(crate) clip_left: u32,
     // clip_right: u32 = 0,
-    clip_right: u32,
+    pub(crate) clip_right: u32,
     // clip_bottom: u32 = 0,
-    clip_bottom: u32,
+    pub(crate) clip_bottom: u32,
     // alloc: Allocator,
 }
 

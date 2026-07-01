@@ -20,3 +20,5 @@ pub mod common;
 pub mod geometric_shapes;
 pub mod powerline;
 pub mod special;
+pub mod symbols_for_legacy_computing;
+pub mod symbols_for_legacy_computing_supplement;
