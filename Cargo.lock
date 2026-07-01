@@ -797,6 +797,10 @@ dependencies = [
 [[package]]
 name = "sentry-sys"
 version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "cc",
+]
 
 [[package]]
 name = "shlex"

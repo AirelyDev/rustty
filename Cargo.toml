@@ -158,6 +158,11 @@ glslang-sys = { path = "crates-sys/glslang-sys" }
 # reference links; C API 0.59). The FFI leaf the renderer's Metal path builds on
 # to cross-compile SPIR-V into MSL/GLSL (spirv_cross_c C interface).
 spirv-cross-sys = { path = "crates-sys/spirv-cross-sys" }
+# R3: vendored sentry-native 0.7.8 (the SAME `getsentry/sentry-native` release
+# the reference links via pkg/sentry). The FFI leaf backing the crash-reporting
+# path, built with ghostty's fixed `backend = .inproc` / `transport = .none`
+# options. KAT-only today (no consumer yet).
+sentry-sys = { path = "crates-sys/sentry-sys" }
 # Stable polyfill of the unstable `core::alloc::Allocator` trait. This is the
 # faithful Rust map of Zig's `std.mem.Allocator`: `Allocator::allocate(Layout)`
 # / `deallocate` map to Zig `rawAlloc`/`rawFree`. `Global` == the current

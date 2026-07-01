@@ -1,9 +1,17 @@
 # sentry-sys — vendored C dependency (R3: self-contained, no ghostty dep)
 #
-# This crate will vendor copied C sources from the SAME upstream library the
-# reference uses (Sentry/Breakpad crash reporting) and build them standalone via `cc` + `bindgen`.
+# This crate vendors the SAME upstream library the reference uses —
+# sentry-native 0.7.8 (getsentry/sentry-native), the crash-reporting SDK —
+# copied in-tree under `vendor/` and built standalone via `cc` + `bindgen`. It
+# mirrors the reference's pkg/sentry/build.zig with ghostty's fixed options
+# (`backend = .inproc`, `transport = .none`): the same `srcs` translation-unit
+# list, the same per-target path/symbolizer/unwinder/modulefinder selection, and
+# the same `-D` flags (`-DSENTRY_WITH_UNWINDER_LIBBACKTRACE` off-Windows /
+# `-DSENTRY_WITH_UNWINDER_DBGHELP` on Windows; `-DSENTRY_BACKEND_INPROC`). The
+# unused backends (crashpad/breakpad), transports (curl/winhttp), the Qt
+# integration, the AIX modulefinder and the Android libunwindstack unwinder are
+# NOT vendored (the reference build.zig does not compile them for this config).
 # `links` declares the native lib so Cargo enforces one-version linking.
-# STUB: no C is compiled yet (see build.rs).
 [package]
 name = "sentry-sys"
 version.workspace = true
@@ -15,10 +23,20 @@ authors.workspace = true
 links = "sentry"
 build = "build.rs"
 
+[lib]
+# The FFI is bindgen-generated: the "doctests" harvested from sentry.h's C
+# documentation comments are not Rust and must not be compiled/run. (This
+# crate's real test is the KAT in the unit-test harness.)
+doctest = false
+
 [lints]
 workspace = true
 
 [dependencies]
 
 [build-dependencies]
-# TODO(R3): add `cc` and `bindgen` here when the vendored C source lands.
+# R3: compile the vendored sentry-native C standalone (`cc`) with the
+# reference's flags, and auto-generate the FFI (`bindgen`) from the same public
+# header the reference's `c.zig` @cImports (`sentry.h`).
+cc = "1"
+bindgen = "0.72"
