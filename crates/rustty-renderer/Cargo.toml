@@ -24,3 +24,14 @@ rustty-util = { workspace = true }
 rustty-crash = { workspace = true }
 rustty-font = { workspace = true }
 rustty-render-types = { workspace = true }
+# rustty-font-shaper supplies the `SharedGrid` of rendered glyphs that the
+# renderer's cell-vertex assembly reads from (per the R-a task scope). The
+# headless cell/cursor/link/State/size logic ported in this milestone does not
+# yet touch the shaper directly; the edge is wired now so the glyph-consuming
+# draw path (R-d/Phase 3) has it available. The edge is acyclic.
+rustty-font-shaper = { workspace = true }
+
+[dev-dependencies]
+# The cell/cursor tests drive a real `Terminal`/`RenderState`, whose `alloc`
+# parameter is `allocator_api2::alloc::Global` (matching rustty-vt's Allocator).
+allocator-api2 = { workspace = true }
