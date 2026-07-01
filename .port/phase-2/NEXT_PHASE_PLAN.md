@@ -163,6 +163,31 @@ workspace regression (vt 2019, font 74).
 **renderer now UNBLOCKED**: consumes SharedGrid (full init/deinit/RwLock/metrics/atlas
 grids) + the `Shaper` selector.
 
+## Stage R-a — renderer headless slice: ✅ DONE (2026-07-01) — rustty-renderer R-a
+The unit-portable, GPU-free renderer leaves (memory heavy-tier-strategy R-a). Ported:
+cell.rs (renderer/cell.zig, 5 tests — the per-cell `CellText` fg-glyph + `CellBg`
+vertex assembly from the Screen + font SharedGrid: `Contents` add/clear/setCursor/
+getCursorGlyph, constraintWidth, symbol/graphics-element classification), cursor.rs
+(renderer/cursor.zig, 4 tests — the renderer `Style` + `style()` guard chain), state.rs
+(renderer/State.zig, 2 tests — the render `State`/`Preedit` range/width), and shaders.rs
+(the CPU-side `CellText`/`CellBg`/`Uniforms` repr(C) vertex-data structs from
+renderer/opengl/shaders.zig that cell.zig fills — struct defs only, NOT the GPU
+pipeline machinery). renderer/size.zig (6 tests) already lives in the rustty-render-types
+leaf (A1 hoist) and is re-exported. check_test_counts.py extended: renderer_cell (5/5),
+renderer_cursor (4/4), renderer_state (2/2), renderer_size (6/6 → render-types lib.rs),
+renderer_link (3, apc_deferred=3). 11 rustty-renderer tests pass; Miri clean (11 pass, 0
+UB/leak — headless, pure vt path); clippy -D/fmt/acyclic green (rustty-font STILL no vt
+edge; font-shaper edge acyclic); whole count gate GREEN (count_ok); scoped G3b
+cell.zig+cursor.zig+State.zig missing=0; no workspace regression (vt 2019, font-shaper 110).
+**DEFERRED**: renderer/link.zig (3 tests — link/hover highlight rects) blocked on
+Oniguruma (`oni.Regex` unported tree-wide; `Set.fromConfig` compiles a regex,
+`renderCellMap` runs `regex.search`), a SkipZigTest-style defer mirroring config
+url-regex + input Link.zig (DEFERRALS.md). Lands with oniguruma-sys.
+**NEXT (heavy tier, sequenced)**: R-b/R-c — the shader/image tier (renderer/shaders/,
+image.zig, shadertoy custom shaders) → R-d — the GPU draw path (Metal/OpenGL/WebGL
+backends, generic.zig, glslang/spirv-cross/wuffs/libpng/zlib-sys). On the embedded-first
+milestone path, **apprt-api** (D5 partition) is the next headless deliverable.
+
 ## Stage D — heavy tier (later)
 rest of font (faces/shapers: freetype/harfbuzz/fontconfig/CoreText -sys, ~10.7k loc) →
 input (completes key_mods once config lands) → config (oniguruma-sys) → renderer

@@ -61,6 +61,21 @@ RSCG = "/Users/gael/projects/rustty/crates/rustty-config/src"
 GHI = "/Users/gael/projects/ghostty/src/input"
 RSI = "/Users/gael/projects/rustty/crates/rustty-input/src"
 
+# rustty-renderer: the R-a headless renderer slice (heavy-tier, R-a of memory
+# heavy-tier-strategy). GH base = src/renderer. The unit-portable, GPU-free
+# modules: cell.zig (per-cell CellText fg glyph + CellBg vertex assembly from the
+# Screen + font SharedGrid), cursor.zig (cursor rects/style), State.zig (the
+# renderer State/mailbox), and size.zig (GridSize/ScreenSize/CellSize/padding).
+# size.zig already landed in the rustty-render-types leaf (the A1 hoist) and is
+# re-exported by rustty-renderer, so it maps to the render-types file. link.zig
+# (link/hover highlight rects) is DEFERRED behind Oniguruma (oni.Regex is not yet
+# ported anywhere; mirrors the config url-regex + input Link.zig deferrals —
+# DEFERRALS.md), so apc_deferred=3 -> need=0. The GPU draw path (Metal/OpenGL/
+# generic/image/custom shaders) is R-d/Phase 3.
+GHR = "/Users/gael/projects/ghostty/src/renderer"
+RSR = "/Users/gael/projects/rustty/crates/rustty-renderer/src"
+RSRT = "/Users/gael/projects/rustty/crates/rustty-render-types/src"
+
 # rustty-vt-c: the C-ABI projection crate (Stage B). GH base = src/terminal/c
 # (the `c/*.zig` ABI wrappers behind lib_vt.zig's @export lines). All test bodies
 # live in the rustty-vt-c crate (`crates/rustty-vt-c/src/**/*.rs`, incl. the
@@ -338,6 +353,25 @@ MAP = {
     "font_shaper_shared_grid":   ([f"{GHF}/SharedGrid.zig"], [f"{RSFS}/shared_grid.rs"], 0),
     # SharedGridSet.zig: SharedGridSet (named) + 3 quoted = 4 -> shared_grid_set.rs.
     "font_shaper_shared_grid_set":([f"{GHF}/SharedGridSet.zig"], [f"{RSFS}/shared_grid_set.rs"], 0),
+    # rustty-renderer R-a — the headless renderer slice (heavy-tier R-a).
+    # cell.zig: 4 quoted + 1 named-unquoted (`test Contents {`, real body) = 5 zig
+    # -> cell.rs (the CellText fg-glyph + CellBg per-cell vertex assembly). rust=5.
+    "renderer_cell":     ([f"{GHR}/cell.zig"], [f"{RSR}/cell.rs"], 0),
+    # cursor.zig: 4 quoted tests (the renderer Style + style() cursor rects) ->
+    # cursor.rs. rust=4.
+    "renderer_cursor":   ([f"{GHR}/cursor.zig"], [f"{RSR}/cursor.rs"], 0),
+    # State.zig: 2 quoted tests (the render State/Preedit) -> state.rs. rust=2.
+    "renderer_state":    ([f"{GHR}/State.zig"], [f"{RSR}/state.rs"], 0),
+    # size.zig: 6 quoted tests (Size.balancePadding x2 + Padding balanced + GridSize
+    # update x2 + coordinate conversion). Already ported in the rustty-render-types
+    # leaf (A1 hoist) and re-exported by rustty-renderer; maps to render-types
+    # lib.rs (the 6 size.zig tests). rust=6.
+    "renderer_size":     ([f"{GHR}/size.zig"], [f"{RSRT}/lib.rs"], 0),
+    # link.zig: 3 quoted tests -> DEFERRED behind Oniguruma (Set.fromConfig compiles
+    # an oni.Regex; renderCellMap runs regex.search — no honest port without the
+    # binding, which is unported tree-wide; mirrors config url-regex + input Link
+    # deferrals, DEFERRALS.md). apc_deferred=3 -> need=0, rust=0 (no link.rs yet).
+    "renderer_link":     ([f"{GHR}/link.zig"], [], 3),
 }
 
 def expand(globs):
