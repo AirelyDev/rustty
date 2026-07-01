@@ -167,8 +167,11 @@ pub struct Canvas {
     // sfc: z2d.Surface,
     sfc: Surface,
 
-    padding_x: u32,
-    padding_y: u32,
+    // PORT NOTE: the reference fields are package-visible; `special.zig` reads
+    // `canvas.padding_y` from a sibling `draw/` module, so both padding fields
+    // are `pub(crate)` here to keep that cross-module access faithful.
+    pub(crate) padding_x: u32,
+    pub(crate) padding_y: u32,
 
     // clip_top: u32 = 0,
     clip_top: u32,
