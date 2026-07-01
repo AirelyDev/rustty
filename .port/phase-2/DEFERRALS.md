@@ -303,16 +303,24 @@ follows (R4 — break crate cycles with minimal glue, never weaken):
   `test{}` blocks** are ported assertion-for-assertion and pass (parseCLI,
   formatConfig empty/single/multiple, parseCLI commas, cval, cval cleared).
 
-- **`RepeatableCodepointMap` (Config.zig) — font-blocked (UNRESOLVED, scheduled).**
+- **`RepeatableCodepointMap` (Config.zig) — RESOLVED.**
   `RepeatableCodepointMap` wraps `fontpkg.CodepointMap` (`font/CodepointMap.zig`),
-  which is **not yet ported** in `rustty-font` (modeled here as the `CodepointMap`
-  unit-struct placeholder). Its `parseCLI`/`clone`/`equal`/`formatEntry` all
-  operate on that font map's `add`/`list`/`descriptor` API, so the font-map-coupled
-  bodies stay `unimplemented!()` (clearly surfaced, NOT a stub-to-pass) with a
-  verbatim PORT NOTE. The shared `UnicodeRangeParser` IS ported (module-scope,
-  consumed by `RepeatableClipboardCodepointMap`). Its `parseCLI` `test{}` blocks
-  are likewise deferred. **Target: when `font/CodepointMap.zig` lands in
-  rustty-font.** (Analogous to the apc font-block pattern.)
+  now ported **PURE** in `rustty-font` (`crates/rustty-font/src/codepoint_map.rs`).
+  The discovery-descriptor seam (`Descriptor`) was extended from `family`-only to
+  carry `family` + `monospace` (the two fields config's `parseCLI` sets:
+  `.{ .family = valueZ, .monospace = false }`), faithful to `discovery.Descriptor`
+  (discovery.zig:43,63). rustty-font stays pure — the full fontconfig/CoreText
+  discovery lands later in the shaper tier; no C/vt edge was pulled in. Config's
+  `parseCLI`/`clone`/`equal`/`formatEntry` are now filled against the map's
+  `add`/`entries`/`descriptor` API (the map gained pure `len`/`is_empty`/`entries`
+  read-accessors mirroring the reference's public `list` field). The 4 `test{}`
+  blocks ("parseCLI", "formatConfig single/range/multiple", Config.zig:8160-8241)
+  are ported assertion-for-assertion in `value_types.rs`; `check_test_counts.py`
+  `config_struct` apc_deferred dropped 4 → 0. NOTE: `equal` compares `family` by
+  CONTENT (not `std.meta.eql`'s slice pointer+len identity) — a deliberate,
+  documented divergence (pointer identity is neither reproducible nor meaningful
+  across the port; content equality is the intended `changed`/`deepEqual`
+  semantics).
 
 - **`theme.zig` `.resources` arm — `internal_os.ResourcesDir`: dependency is REAL.**
   Confirmed for the Machinery phase: `rustty_os::{resourcesDir, ResourcesDir}`

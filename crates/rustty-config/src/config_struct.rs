@@ -4092,7 +4092,8 @@ impl Config {
         cv!(font_variation_bold);
         cv!(font_variation_italic);
         cv!(font_variation_bold_italic);
-        cv!(font_codepoint_map);
+        // RepeatableCodepointMap (no derived `Clone`; `@hasDecl(T, "clone")`)
+        ci!(font_codepoint_map);
         // RepeatableClipboardCodepointMap (no derived `Clone`)
         ci!(clipboard_codepoint_map);
         cv!(font_thicken);

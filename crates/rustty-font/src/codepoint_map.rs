@@ -16,13 +16,18 @@
 // `discovery.zig`, which imports fontconfig/macos/CoreText; the real discovery
 // surface lands later in the rustty-font-shaper tier (F3). CodepointMap only
 // depends on the *type* `Descriptor` for storage, `clone`, and `hash`, so here
-// we SEAM a thin local `Descriptor` carrying the single field CodepointMap
-// actually exercises (`family`). The full discovery.Descriptor (style/codepoint/
-// size/bold/italic/monospace/variations/toFcPattern) supersedes this seam when
-// discovery is ported; nothing here pulls a C/vt edge.
+// we SEAM a thin local `Descriptor` carrying the two fields CodepointMap and
+// config's `RepeatableCodepointMap.parseCLI` actually exercise (`family` and
+// `monospace`). The full discovery.Descriptor (style/codepoint/size/bold/italic/
+// variations/toFcPattern) supersedes this seam when discovery is ported; nothing
+// here pulls a C/vt edge.
 #![allow(non_snake_case)]
 
-use allocator_api2::alloc::{Allocator, Global};
+use allocator_api2::alloc::Allocator;
+// PORT NOTE: re-export the default allocator so downstream PURE crates (e.g.
+// rustty-config's `RepeatableCodepointMap`) can name it when adding to a
+// `CodepointMap<Global>` without taking a direct `allocator_api2` dependency.
+pub use allocator_api2::alloc::Global;
 use allocator_api2::vec::Vec;
 use core::hash::Hasher;
 use rustty_util::quirks::inlineAssert as assert;
@@ -32,8 +37,9 @@ use rustty_util::quirks::inlineAssert as assert;
 pub struct OutOfMemory;
 
 /// Thin discovery-descriptor seam (see the discovery-seam PORT NOTE above).
-/// In the reference this is `discovery.Descriptor`; here it carries only the
-/// `family` field that CodepointMap stores, clones, and hashes.
+/// In the reference this is `discovery.Descriptor`; here it carries the
+/// `family` and `monospace` fields that CodepointMap stores, clones, and hashes
+/// (the two fields config's `RepeatableCodepointMap.parseCLI` sets).
 // PORT NOTE: `?[:0]const u8` becomes `Option<Vec<u8>>` — the byte-slice fidelity
 // rule maps Zig byte slices to `Vec<u8>`, never a lossy `String`.
 #[derive(Clone, Default, Debug)]
@@ -42,6 +48,13 @@ pub struct Descriptor {
     // PORT NOTE: this seam's owned byte string is `Global`-backed (`std::vec::
     // Vec<u8>`), distinct from the `allocator_api2::vec::Vec` used for `list`.
     pub family: Option<std::vec::Vec<u8>>,
+
+    /// True if we want to search specifically for a font that supports
+    /// specific styles (here: monospace).
+    // PORT NOTE: `discovery.Descriptor.monospace: bool = false` (discovery.zig:63).
+    // Config's `RepeatableCodepointMap.parseCLI` sets this to `false` ("we allow
+    // any font"). Defaults to `false`, mirroring the reference default.
+    pub monospace: bool,
 }
 
 impl Descriptor {
@@ -54,16 +67,22 @@ impl Descriptor {
     pub fn clone<A: Allocator>(&self, _alloc: A) -> Result<Descriptor, OutOfMemory> {
         Ok(Descriptor {
             family: self.family.clone(),
+            // copy.monospace is a plain scalar copied by `var copy = self.*`.
+            monospace: self.monospace,
         })
     }
 
     /// Hash the descriptor with the given hasher.
     // PORT NOTE: seam of `discovery.Descriptor.hash`; mirrors `autoHashStrat(.Deep)`
-    // over the `family` byte slice. Only `family` is present in this seam.
-    // `clippy::should_implement_trait` flags the name collision with
-    // `std::hash::Hash::hash`, allowed to keep the faithful method name.
+    // over the `family` byte slice, then `autoHash(hasher, self.monospace)`. Only
+    // `family` and `monospace` are present in this seam (the reference hashes the
+    // intermediate style/codepoint/size/bold/italic fields between them; the seam
+    // omits them, which is self-consistent since this hash is never oracle-compared
+    // — see `hashcode`). `clippy::should_implement_trait` flags the name collision
+    // with `std::hash::Hash::hash`, allowed to keep the faithful method name.
     #[allow(clippy::should_implement_trait)]
     pub fn hash<H: Hasher>(&self, hasher: &mut H) {
+        // autoHashStrat(hasher, self.family, .Deep);
         match &self.family {
             Some(f) => {
                 hasher.write_u8(1);
@@ -71,11 +90,13 @@ impl Descriptor {
             }
             None => hasher.write_u8(0),
         }
+        // autoHash(hasher, self.monospace);
+        hasher.write_u8(self.monospace as u8);
     }
 }
 
 /// pub const Entry = struct { ... };
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Entry {
     /// Unicode codepoint range. Asserts range[0] <= range[1].
     // range: [2]u21,
@@ -103,6 +124,7 @@ pub struct Entry {
 // (array-of-structs). The linear-search *behavior* is identical — only the
 // (unobservable) memory layout differs. The allocator is carried as a generic
 // `A: Allocator` (defaulting to `Global`) so `add`/`clone`/`deinit` thread it.
+#[derive(Debug)]
 pub struct CodepointMap<A: Allocator = Global> {
     list: Vec<Entry, A>,
 }
@@ -165,6 +187,27 @@ impl<A: Allocator> CodepointMap<A> {
         self.list.try_reserve(1).map_err(|_| OutOfMemory)?;
         self.list.push(entry);
         Ok(())
+    }
+
+    /// The number of entries in the map.
+    // PORT NOTE: read-view of the reference's public `list` field (`self.list.len`).
+    // Config's `RepeatableCodepointMap.equal`/`formatEntry` read this.
+    pub fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    /// Whether the map has no entries.
+    // PORT NOTE: `self.list.len == 0`.
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+
+    /// Read-only view of the entries (range + descriptor per entry).
+    // PORT NOTE: the reference exposes `list` as a public `MultiArrayList` field;
+    // this is the array-of-structs read-view consumed by config's `formatEntry`
+    // (`items(.range)`/`items(.descriptor)`) and `equal` (`slice().get(i)`).
+    pub fn entries(&self) -> &[Entry] {
+        &self.list
     }
 
     /// Get a descriptor for a codepoint.
@@ -263,6 +306,7 @@ mod tests {
                 range: [1, 1],
                 descriptor: Descriptor {
                     family: Some(b"A".to_vec()),
+                    monospace: false,
                 },
             },
         )
@@ -282,6 +326,7 @@ mod tests {
                 range: [1, 2],
                 descriptor: Descriptor {
                     family: Some(b"B".to_vec()),
+                    monospace: false,
                 },
             },
         )
@@ -306,6 +351,7 @@ mod tests {
                 range: [3, 4],
                 descriptor: Descriptor {
                     family: Some(b"C".to_vec()),
+                    monospace: false,
                 },
             },
         )
@@ -317,6 +363,7 @@ mod tests {
                 range: [5, 6],
                 descriptor: Descriptor {
                     family: Some(b"D".to_vec()),
+                    monospace: false,
                 },
             },
         )

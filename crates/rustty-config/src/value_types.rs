@@ -126,26 +126,12 @@ fn face_variation_id_str(id: u32) -> [u8; 4] {
     ]
 }
 
-// PORT NOTE: `fontpkg.CodepointMap` is not yet ported in rustty-font. Skeleton
-// placeholder for `font/CodepointMap.zig`. Wired when CodepointMap.zig lands.
-#[derive(Debug, Clone, Default)]
-pub struct CodepointMap;
-
-impl CodepointMap {
-    /// `self.list.len == 0` — the placeholder holds no entries (always empty
-    /// until `font/CodepointMap.zig` lands), so this is always `true`. Used by
-    /// `RepeatableCodepointMap.formatEntry`'s ported empty branch.
-    pub fn is_empty(&self) -> bool {
-        true
-    }
-
-    /// `self.list.len` — the placeholder holds no entries (always empty until
-    /// `font/CodepointMap.zig` lands), so this is always `0`. Used by
-    /// `RepeatableCodepointMap.equal`'s ported length comparison.
-    pub fn len(&self) -> usize {
-        0
-    }
-}
+// PORT NOTE: `fontpkg.CodepointMap` (`font/CodepointMap.zig`) is ported PURE in
+// rustty-font; re-export it under the reference name. Its discovery-descriptor
+// seam (`Descriptor`) carries `family` + `monospace` (the two fields config's
+// `RepeatableCodepointMap.parseCLI` sets); the full fontconfig/CoreText discovery
+// lands later in the shaper tier — rustty-font stays pure (no C/vt edge).
+pub use rustty_font::codepoint_map::CodepointMap;
 
 // ===========================================================================
 // Bare-enum name maps (the PARSE/FORMAT name tables).
@@ -4988,42 +4974,87 @@ fn format_entries_into<W: Writer>(
 }
 
 // pub const RepeatableCodepointMap = struct { map: fontpkg.CodepointMap };
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct RepeatableCodepointMap {
     pub map: CodepointMap,
 }
 
-// PORT NOTE (DEFERRED SEAM, R4): `RepeatableCodepointMap` wraps `fontpkg.CodepointMap`
-// (`font/CodepointMap.zig`), which is not yet ported in rustty-font (modeled here
-// as the `CodepointMap` unit-struct placeholder). Its `parseCLI`/`clone`/`equal`/
-// `formatEntry` all operate on that font map's `add`/`list`/`descriptor` API. The
-// shared `UnicodeRangeParser` IS ported (module-scope, consumed by
-// `RepeatableClipboardCodepointMap`); only the font-map-coupled bodies are
-// deferred until `font/CodepointMap.zig` lands. Each is a clearly surfaced
-// deferral (NOT a stub-to-pass).
+// PORT NOTE (R4): `RepeatableCodepointMap` wraps `fontpkg.CodepointMap`
+// (`font/CodepointMap.zig`), ported PURE in rustty-font. Its `parseCLI`/`clone`/
+// `equal`/`formatEntry` operate on that font map's `add`/`entries`/`descriptor`
+// API. The shared `UnicodeRangeParser` is hoisted to module scope (also consumed
+// by `RepeatableClipboardCodepointMap`). rustty-font's `CodepointMap` carries no
+// C/vt edge (the fontconfig/CoreText discovery lands later in the shaper tier);
+// the discovery-descriptor seam here only stores `family` + `monospace`.
 impl RepeatableCodepointMap {
     // pub fn parseCLI(self: *Self, alloc: Allocator, input_: ?[]const u8) !void
-    pub fn parse_cli(&mut self, _input: Option<&[u8]>) -> Result<(), ParseError> {
-        unimplemented!(
-            "RepeatableCodepointMap.parseCLI — deferred until font/CodepointMap.zig lands"
-        )
+    pub fn parse_cli(&mut self, input_: Option<&[u8]>) -> Result<(), ParseError> {
+        use rustty_font::codepoint_map::{Descriptor, Entry, Global};
+        // const input = input_ orelse return error.ValueRequired;
+        let input = input_.ok_or(Error::ValueRequired)?;
+        // const eql_idx = std.mem.indexOf(u8, input, "=") orelse return error.InvalidValue;
+        let eql_idx = index_of(input, b'=').ok_or(Error::InvalidValue)?;
+        // const whitespace = " \t";
+        // const key = std.mem.trim(u8, input[0..eql_idx], whitespace);
+        let key = trim_ws(&input[0..eql_idx]);
+        // const value = std.mem.trim(u8, input[eql_idx + 1 ..], whitespace);
+        let value = trim_ws(&input[eql_idx + 1..]);
+        // const valueZ = try alloc.dupeZ(u8, value);
+        //
+        // PORT NOTE: the reference dupes `value` once and shares the SAME `valueZ`
+        // pointer across every range's descriptor. The seam's `family` is an owned
+        // `Vec<u8>` (byte-slice fidelity — no sentinel), so each entry gets its own
+        // content-identical copy; the shared-pointer identity is unobservable here
+        // (it only fed `std.meta.eql`'s pointer compare in `equal`, ported by
+        // content below).
+        let value_z: std::vec::Vec<u8> = value.to_vec();
+
+        // var p: UnicodeRangeParser = .{ .input = key };
+        let mut p = UnicodeRangeParser { input: key, i: 0 };
+        // while (try p.next()) |range| {
+        while let Some(range) = p.next()? {
+            // try self.map.add(alloc, .{
+            //     .range = range,
+            //     .descriptor = .{ .family = valueZ, .monospace = false },
+            // });
+            //
+            // PORT NOTE: `add` returns `OutOfMemory`; per the config allocation
+            // model (Global aborts on OOM — `OutOfMemory` is not a recoverable
+            // config error), this is `.expect`-ed rather than surfaced.
+            self.map
+                .add(
+                    Global,
+                    Entry {
+                        range,
+                        descriptor: Descriptor {
+                            family: Some(value_z.clone()),
+                            // we allow any font
+                            monospace: false,
+                        },
+                    },
+                )
+                .expect("CodepointMap.add: Global allocator aborts on OOM");
+        }
+        Ok(())
     }
 
     // pub fn clone(self: *const Self, alloc: Allocator) Allocator.Error!Self {
     //     return .{ .map = try self.map.clone(alloc) };
     // }
     //
-    // PORT NOTE (PARTIAL — empty placeholder ported; font body DEFERRED): the
-    // reference returns a copy of `self.map` (the font `CodepointMap`). The
-    // placeholder `CodepointMap` is always empty (it cannot hold entries until
-    // `font/CodepointMap.zig` lands), so its `Clone` faithfully reproduces the
-    // only state it can represent. The real font-map clone (the `add`/`list`/
-    // `descriptor` deep copy) is the clearly surfaced deferral. Required by
-    // `Config.clone` (`cloneValue`).
+    // PORT NOTE: the reference returns a deep copy of `self.map` (the font
+    // `CodepointMap`). Required by `Config.clone` (`cloneValue`, dispatched via
+    // the `ci!`/`@hasDecl(T, "clone")` arm). The font map's `clone` returns
+    // `OutOfMemory`; per the config allocation model (Global aborts on OOM) it is
+    // `.expect`-ed, matching every other infallible `clone_in`.
     pub fn clone_in(&self) -> RepeatableCodepointMap {
+        use rustty_font::codepoint_map::Global;
         // return .{ .map = try self.map.clone(alloc) };
         RepeatableCodepointMap {
-            map: self.map.clone(),
+            map: self
+                .map
+                .clone(Global)
+                .expect("CodepointMap.clone: Global allocator aborts on OOM"),
         }
     }
 
@@ -5038,48 +5069,45 @@ impl RepeatableCodepointMap {
     //     } else return true;
     // }
     //
-    // PORT NOTE (PARTIAL — empty placeholder ported; font body DEFERRED): the
-    // reference compares the two maps' entry lists (length, then `std.meta.eql`
-    // per entry). The placeholder `CodepointMap` is always empty, so the length
-    // comparison (`0 != 0` is false) short-circuits to the `for ... else` `true`
-    // path — the only state the placeholder can represent — and the per-entry
-    // `std.meta.eql` loop never runs (it is the font-coupled deferral). Required
-    // by `Config.changed` (`deepEqual`).
+    // PORT NOTE: the reference compares the two maps' entry lists (length, then
+    // `std.meta.eql` per entry). Required by `Config.changed` (`deepEqual`).
+    //
+    // std.meta.eql on the `Entry`/`Descriptor` structs compares `range` element-
+    // wise, `descriptor.monospace` directly, and `descriptor.family` (a slice) by
+    // POINTER+LEN identity — NOT by content. Reproducing Zig's slice-pointer
+    // identity across the port is neither possible nor meaningful (the seam's
+    // `family` is an owned `Vec<u8>`); we compare `family` by CONTENT, which is the
+    // semantically-intended equality for `changed`/`deepEqual` (two configs with
+    // the same codepoint map should compare equal). This is a deliberate,
+    // documented divergence from `std.meta.eql`'s pointer semantics.
     pub fn equal(&self, other: &RepeatableCodepointMap) -> bool {
         // const itemsA = self.map.list.slice();
         // const itemsB = other.map.list.slice();
+        let items_a = self.map.entries();
+        let items_b = other.map.entries();
         // if (itemsA.len != itemsB.len) return false;
-        if self.map.len() != other.map.len() {
+        if items_a.len() != items_b.len() {
             return false;
         }
         // for (0..itemsA.len) |i| {
-        //     const a = itemsA.get(i); const b = itemsB.get(i);
-        //     if (!std.meta.eql(a, b)) return false;
-        // } else return true;
-        //
-        // The per-entry `std.meta.eql` body is the font-coupled deferral; the
-        // always-empty placeholder makes this loop empty, so it falls to `else`
-        // (`never_loop` is expected — the loop body is the surfaced deferral).
-        #[allow(clippy::never_loop)]
-        for _i in 0..self.map.len() {
-            unreachable!(
-                "RepeatableCodepointMap.equal per-entry compare — deferred until font/CodepointMap.zig lands"
-            );
+        for i in 0..items_a.len() {
+            // const a = itemsA.get(i);
+            // const b = itemsB.get(i);
+            let a = &items_a[i];
+            let b = &items_b[i];
+            // if (!std.meta.eql(a, b)) return false;
+            if a.range != b.range
+                || a.descriptor.family != b.descriptor.family
+                || a.descriptor.monospace != b.descriptor.monospace
+            {
+                return false;
+            }
         }
+        // } else return true;
         true
     }
 
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void
-    //
-    // PORT NOTE (PARTIAL — empty branch ported; non-empty branch DEFERRED): the
-    // reference first checks `self.map.list.len == 0` and, if empty, formats the
-    // bare `name = \n` line (`formatter.formatEntry(void, {})`); only the
-    // non-empty iteration touches `fontpkg.CodepointMap`'s `list`/`descriptor`
-    // API. The empty branch is ported here verbatim — the `CodepointMap`
-    // placeholder holds no entries (it is always empty until `font/CodepointMap.
-    // zig` lands), so this faithfully reproduces the only state it can represent.
-    // The non-empty `U+{X:0>4}[-U+{X:0>4}]={s}` emission is the clearly surfaced
-    // deferral (NOT a stub-to-pass) and is `unreachable!()` here.
     pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
         // if (self.map.list.len == 0) {
         if self.map.is_empty() {
@@ -5088,11 +5116,37 @@ impl RepeatableCodepointMap {
             return format_entry_void(name, writer);
         }
 
-        // var buf: [1024]u8 = undefined; ... (the non-empty per-entry iteration
-        // over `self.map.list` ranges/replacements) — deferred (font-blocked).
-        unreachable!(
-            "RepeatableCodepointMap.formatEntry non-empty branch — deferred until font/CodepointMap.zig lands"
-        )
+        // var buf: [1024]u8 = undefined;
+        // const ranges = self.map.list.items(.range);
+        // const descriptors = self.map.list.items(.descriptor);
+        // for (ranges, descriptors) |range, descriptor| {
+        for entry in self.map.entries() {
+            let range = entry.range;
+            // descriptor.family orelse ""
+            let family: &[u8] = entry.descriptor.family.as_deref().unwrap_or(b"");
+
+            // if (range[0] == range[1]) {
+            //     try formatter.formatEntry([]const u8, std.fmt.bufPrint(&buf, "U+{X:0>4}={s}", .{ range[0], descriptor.family orelse "" }) catch ...);
+            // } else {
+            //     try formatter.formatEntry([]const u8, std.fmt.bufPrint(&buf, "U+{X:0>4}-U+{X:0>4}={s}", .{ range[0], range[1], descriptor.family orelse "" }) catch ...);
+            // }
+            let mut s: Vec<u8> = Vec::new();
+            if range[0] == range[1] {
+                s.extend_from_slice(format!("U+{:04X}=", range[0]).as_bytes());
+                s.extend_from_slice(family);
+            } else {
+                s.extend_from_slice(format!("U+{:04X}-U+{:04X}=", range[0], range[1]).as_bytes());
+                s.extend_from_slice(family);
+            }
+            format_entry_string(name, &s, writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl FormatEntry for RepeatableCodepointMap {
+    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        RepeatableCodepointMap::format_entry(self, name, writer)
     }
 }
 
@@ -6750,10 +6804,11 @@ impl FormatEntry for WindowPadding {
 // inside each value type's struct; here they are collected in one module and
 // named with the reference test's slug, prefixed by the type, to disambiguate.
 //
-// DEFERRED (not ported in this sub-batch): the `Keybinds` and
-// `RepeatableCodepointMap` value-type tests, whose impls are deferred DI/infra
-// seams (see the PORT NOTEs on those types). `RepeatableCommand`'s tests ARE
-// ported below (the `Command: AutoStruct` seam is now resolved).
+// DEFERRED (not ported in this sub-batch): the `Keybinds` value-type tests, whose
+// impl is a deferred DI/infra seam (see the PORT NOTE on that type).
+// `RepeatableCommand`'s tests ARE ported below (the `Command: AutoStruct` seam is
+// resolved); `RepeatableCodepointMap`'s tests ARE ported below (its
+// `fontpkg.CodepointMap` seam is now ported PURE in rustty-font).
 // ===========================================================================
 #[cfg(test)]
 mod tests {
@@ -7548,6 +7603,121 @@ mod tests {
         f.format_entry(&list).unwrap();
         // try std.testing.expectEqualSlices(u8, "a = U+03A3=SUM\n", buf.written());
         assert_eq!(b"a = U+03A3=SUM\n".as_slice(), buf.written());
+    }
+
+    // -----------------------------------------------------------------------
+    // RepeatableCodepointMap
+    // -----------------------------------------------------------------------
+
+    // test "parseCLI"
+    #[test]
+    fn repeatable_codepoint_map_parse_cli() {
+        // var list: Self = .{};
+        let mut list = RepeatableCodepointMap::default();
+        // try list.parseCLI(alloc, "U+ABCD=Comic Sans");
+        list.parse_cli(Some(b"U+ABCD=Comic Sans")).unwrap();
+        // try list.parseCLI(alloc, "U+0001 - U+0005=Verdana");
+        list.parse_cli(Some(b"U+0001 - U+0005=Verdana")).unwrap();
+        // try list.parseCLI(alloc, "U+0006-U+0009, U+ABCD=Courier");
+        list.parse_cli(Some(b"U+0006-U+0009, U+ABCD=Courier"))
+            .unwrap();
+
+        // try testing.expectEqual(@as(usize, 4), list.map.list.len);
+        assert_eq!(4usize, list.map.entries().len());
+        {
+            // const entry = list.map.list.get(0);
+            let entry = &list.map.entries()[0];
+            // try testing.expectEqual([2]u21{ 0xABCD, 0xABCD }, entry.range);
+            assert_eq!([0xABCDu32, 0xABCDu32], entry.range);
+            // try testing.expectEqualStrings("Comic Sans", entry.descriptor.family.?);
+            assert_eq!(
+                b"Comic Sans".as_slice(),
+                entry.descriptor.family.as_deref().unwrap()
+            );
+        }
+        {
+            // const entry = list.map.list.get(1);
+            let entry = &list.map.entries()[1];
+            // try testing.expectEqual([2]u21{ 1, 5 }, entry.range);
+            assert_eq!([1u32, 5u32], entry.range);
+            // try testing.expectEqualStrings("Verdana", entry.descriptor.family.?);
+            assert_eq!(
+                b"Verdana".as_slice(),
+                entry.descriptor.family.as_deref().unwrap()
+            );
+        }
+        {
+            // const entry = list.map.list.get(2);
+            let entry = &list.map.entries()[2];
+            // try testing.expectEqual([2]u21{ 6, 9 }, entry.range);
+            assert_eq!([6u32, 9u32], entry.range);
+            // try testing.expectEqualStrings("Courier", entry.descriptor.family.?);
+            assert_eq!(
+                b"Courier".as_slice(),
+                entry.descriptor.family.as_deref().unwrap()
+            );
+        }
+        {
+            // const entry = list.map.list.get(3);
+            let entry = &list.map.entries()[3];
+            // try testing.expectEqual([2]u21{ 0xABCD, 0xABCD }, entry.range);
+            assert_eq!([0xABCDu32, 0xABCDu32], entry.range);
+            // try testing.expectEqualStrings("Courier", entry.descriptor.family.?);
+            assert_eq!(
+                b"Courier".as_slice(),
+                entry.descriptor.family.as_deref().unwrap()
+            );
+        }
+    }
+
+    // test "formatConfig single"
+    #[test]
+    fn repeatable_codepoint_map_format_config_single() {
+        // var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+        let mut buf = AllocatingWriter::init();
+        // var list: Self = .{};
+        let mut list = RepeatableCodepointMap::default();
+        // try list.parseCLI(alloc, "U+ABCD=Comic Sans");
+        list.parse_cli(Some(b"U+ABCD=Comic Sans")).unwrap();
+        // try list.formatEntry(formatterpkg.entryFormatter("a", &buf.writer));
+        let mut f = entry_formatter(b"a", &mut buf);
+        f.format_entry(&list).unwrap();
+        // try std.testing.expectEqualSlices(u8, "a = U+ABCD=Comic Sans\n", buf.written());
+        assert_eq!(b"a = U+ABCD=Comic Sans\n".as_slice(), buf.written());
+    }
+
+    // test "formatConfig range"
+    #[test]
+    fn repeatable_codepoint_map_format_config_range() {
+        let mut buf = AllocatingWriter::init();
+        let mut list = RepeatableCodepointMap::default();
+        // try list.parseCLI(alloc, "U+0001 - U+0005=Verdana");
+        list.parse_cli(Some(b"U+0001 - U+0005=Verdana")).unwrap();
+        let mut f = entry_formatter(b"a", &mut buf);
+        f.format_entry(&list).unwrap();
+        // try std.testing.expectEqualSlices(u8, "a = U+0001-U+0005=Verdana\n", buf.written());
+        assert_eq!(b"a = U+0001-U+0005=Verdana\n".as_slice(), buf.written());
+    }
+
+    // test "formatConfig multiple"
+    #[test]
+    fn repeatable_codepoint_map_format_config_multiple() {
+        let mut buf = AllocatingWriter::init();
+        let mut list = RepeatableCodepointMap::default();
+        // try list.parseCLI(alloc, "U+0006-U+0009, U+ABCD=Courier");
+        list.parse_cli(Some(b"U+0006-U+0009, U+ABCD=Courier"))
+            .unwrap();
+        let mut f = entry_formatter(b"a", &mut buf);
+        f.format_entry(&list).unwrap();
+        // try std.testing.expectEqualSlices(u8,
+        //     \\a = U+0006-U+0009=Courier
+        //     \\a = U+ABCD=Courier
+        //     \\
+        // , buf.written());
+        assert_eq!(
+            b"a = U+0006-U+0009=Courier\na = U+ABCD=Courier\n".as_slice(),
+            buf.written()
+        );
     }
 
     // -----------------------------------------------------------------------

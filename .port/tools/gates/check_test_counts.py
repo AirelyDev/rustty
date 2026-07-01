@@ -221,13 +221,14 @@ MAP = {
     # in-file value-type tests (the `pub const X = enum/struct/union` types the
     # Config struct composes, each with its own `test{}`) live in value_types.rs.
     # BOTH map against Config.zig (the value types are defined inside Config.zig).
-    # apc_deferred=4: the four `RepeatableCodepointMap` tests ("parseCLI",
-    # "formatConfig single/range/multiple", Config.zig:8160-8224) are font-blocked
-    # (wraps font/CodepointMap.zig, not yet in rustty-font — see DEFERRALS.md).
-    # NOTE: the 5 `RepeatableClipboardCodepointMap` tests (8352-8415) ARE ported
-    # (ClipboardCodepointMap is a landed C1 leaf type). need = 113-4 = 109; rust
-    # = config_struct.rs + value_types.rs (>= 109, with rustty round-trip margin).
-    "config_struct":     ([f"{GHCFG}/Config.zig"], [f"{RSCG}/config_struct.rs", f"{RSCG}/value_types.rs"], 4),
+    # apc_deferred=0: the four `RepeatableCodepointMap` tests ("parseCLI",
+    # "formatConfig single/range/multiple", Config.zig:8160-8224) are now ported in
+    # value_types.rs — font/CodepointMap.zig landed PURE in rustty-font (its
+    # discovery-descriptor seam carries `family` + `monospace`; see DEFERRALS.md).
+    # The 5 `RepeatableClipboardCodepointMap` tests (8352-8415) are also ported
+    # (ClipboardCodepointMap is a landed C1 leaf type). need = 113; rust
+    # = config_struct.rs + value_types.rs (>= 113, with rustty round-trip margin).
+    "config_struct":     ([f"{GHCFG}/Config.zig"], [f"{RSCG}/config_struct.rs", f"{RSCG}/value_types.rs"], 0),
     # rustty-config C2 — key.zig (the `Key` enum derived FROM the Config fields).
     # 1 quoted test ("Value", key.zig:52), ported in config_struct.rs (the `value`
     # test) alongside the `Key` enum it exercises.
