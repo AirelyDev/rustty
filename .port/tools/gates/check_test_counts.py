@@ -87,6 +87,18 @@ RSRT = "/Users/gael/projects/rustty/crates/rustty-render-types/src"
 GHVC = "/Users/gael/projects/ghostty/src/terminal/c"
 RSVC = "/Users/gael/projects/rustty/crates/rustty-vt-c/src"
 
+# rustty-apprt-api: the A5 keystone interface crate (break #8, breaks apprt<->core).
+# GH base = src/apprt (the action.zig types + surface/ipc/runtime/structs seam).
+# Only the 5 interface files are carved here; the bulk of src/apprt/ (gtk/embedded
+# backends, newConfig, GObject registrations, byte-exact C-ABI projection) stays
+# for the future rustty-apprt crate. renderer.Health (a 2-variant enum(c_int) with
+# zero GPU dep) is hoisted into the rustty-renderer crate root (like the
+# render-types A1 size hoist) and mapped by `renderer_health` below.
+GHAP = "/Users/gael/projects/ghostty/src/apprt"
+RSAP = "/Users/gael/projects/rustty/crates/rustty-apprt-api/src"
+# renderer.zig is at src/renderer.zig (crate root), one level above GHR (src/renderer).
+GHSRC = "/Users/gael/projects/ghostty/src"
+
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
@@ -383,6 +395,21 @@ MAP = {
     # (oni.Regex/Region landed via rustty-oniguruma), so apc_deferred flips 3 -> 0
     # and rust=3 (>= zig=3).
     "renderer_link":     ([f"{GHR}/link.zig"], [f"{RSR}/link.rs"], 0),
+    # renderer.zig crate root: `Health` (1 quoted test) + a refAllDecls anon test
+    # (skipped by zig_count) -> zig=1. Ported into rustty-renderer/src/lib.rs. rust=1.
+    "renderer_health":   ([f"{GHSRC}/renderer.zig"], [f"{RSR}/lib.rs"], 0),
+    # rustty-apprt-api A5 keystone. action.zig: 16 quoted checkGhosttyHEnum tests +
+    # a refAllDecls anon (skipped) -> zig=16; ported into action.rs (types) +
+    # action_tests.rs (17 rust: 16 henum + the refAllDecls smoke). rust=17 >= 16.
+    "apprt_api_action":  ([f"{GHAP}/action.zig"], [f"{RSAP}/action.rs", f"{RSAP}/action_tests.rs"], 0),
+    # ipc.zig: 2 quoted tests (Target.Key / Action.Key henum) -> ipc.rs. rust=2.
+    "apprt_api_ipc":     ([f"{GHAP}/ipc.zig"], [f"{RSAP}/ipc.rs"], 0),
+    # runtime.zig: `test { _ = Runtime; }` anon reify (skipped by zig_count) -> zig=0;
+    # ported as runtime.rs's reify_runtime smoke. rust=1 >= 0.
+    "apprt_api_runtime": ([f"{GHAP}/runtime.zig"], [f"{RSAP}/runtime.rs"], 0),
+    # surface.zig / structs.zig: no test{} blocks -> zig=0 each (0 >= 0).
+    "apprt_api_surface": ([f"{GHAP}/surface.zig"], [f"{RSAP}/surface.rs"], 0),
+    "apprt_api_structs": ([f"{GHAP}/structs.zig"], [f"{RSAP}/structs.rs"], 0),
 }
 
 def expand(globs):

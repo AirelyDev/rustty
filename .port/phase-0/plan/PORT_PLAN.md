@@ -263,18 +263,34 @@ per-crate Definition-of-Done.
 - **DoD:** 3 files ported; 64 ported tests pass (args 36, CommaSplitter 28);
   config can depend on args without pulling cli (`cycle_check.py` clean).
 
-### 16. rustty-apprt-api — Tests: **0** (interface crate; trait extraction)
-- **Files:** the apprt **interface** surface only — the `action.zig` *types* and
-  the surface target/message **traits** extracted from `apprt/` (the bulk of
-  `apprt/` stays in crate 25). No whole reference file is *moved* here intact;
-  this is the trait seam.
-- **Deps:** none (pure interface).
+### 16. rustty-apprt-api — Tests: **20** (interface crate; trait extraction) — A5 RESOLVED (LANDED)
+- **Files:** the apprt **interface** surface — `apprt/{action,ipc,runtime,
+  surface,structs}.zig` carved out of `apprt/` (the bulk of `apprt/` stays in
+  crate 25). No whole reference file is *moved* here intact; this is the trait
+  seam. `action.zig` `Target`/`Action` + all payloads (action.rs) + its 17
+  tests (action_tests.rs); `ipc.zig` (2 tests); `runtime.zig` re-export of
+  `rustty_build_config::Runtime` + its 1 reify test; `surface.zig` `Message`/
+  `ReportTitleStyle`/`ChildExited`/`NewSurfaceContext`/
+  `shouldInheritWorkingDirectory` + the `AppMailbox`/`SurfaceMessageEnvelope`
+  seam (0 tests); `structs.zig` value types (0 tests).
+- **Deps:** rustty-{lib,build-config,config,vt,input,datastruct,renderer},
+  allocator-api2 — ALL downstream (the acyclicity guarantee). `rustty-renderer`
+  supplies `renderer::Health` (hoisted to the renderer crate root, like the
+  render-types A1 `size` hoist) for `Action::renderer_health`; the edge is
+  acyclic (nothing renderer deps reaches apprt-api). **No** edge to core/apprt.
 - **Breaks:** **#8 apprt iface → `rustty-apprt-api` trait** (core depends on the
-  iface, not on apprt).
-- **DoD:** the trait/types compile standalone; `core` (24) depends on
-  apprt-api with **no** edge to `apprt` (25); `cycle_check.py` shows apprt↔core
-  cycle broken. **Flag A5** (exact file/symbol partition of the apprt iface is
-  the least-pinned mapping in this plan).
+  iface, not on apprt). The seam: `CoreSurfaceHandle` (implemented by core's
+  `Surface`) lets `Target::cval` reach the opaque `rt_surface` without naming
+  core; `App`/`Surface` traits with a GENERIC `perform_action` (comptime
+  single-backend monomorphization, NOT `dyn`).
+- **DoD:** trait/types compile standalone (`cargo build -p rustty-apprt-api`,
+  which Cargo refuses on a cycle — the cycle-break witness); `check_acyclic.sh`
+  GREEN; 20 tests pass. **Flag A5 RESOLVED**: apprt-api owns 20 test_blocks
+  (action 17, ipc 2, runtime 1); crate 25 `apprt` keeps the remaining **27**
+  (47 − 20). Global test contract unchanged (**3234**). C-ABI byte-exact pinning
+  of the `CValue` unions + the GObject `getGObjectType` registrations are
+  DEFERRED to the apprt embedded C-API / gtk-backend milestones (documented in
+  the crate; additive, R1-safe).
 
 ### 17. rustty-font — Tests: **178**
 - **Files (50):** `font/` (Atlas, Collection, SharedGrid, SharedGridSet,
@@ -467,12 +483,21 @@ per-crate Definition-of-Done.
   xtask/cli completion-generation; the design DAG does not enumerate them.
   Confirm placement.
 
-- **A5 — `rustty-apprt-api` exact file/symbol partition (least pinned).** No
-  whole reference file moves intact; it is the trait+types *seam* carved out of
-  `apprt/` (break #8). The precise split of `apprt/action.zig` types and the
-  surface target/message traits between `apprt-api` (crate 16) and `apprt`
-  (crate 25) is determined when the break lands. Flagged as the highest-residual-
-  ambiguity mapping.
+- **A5 — `rustty-apprt-api` exact file/symbol partition — RESOLVED (LANDED).**
+  The break landed by carving `apprt/{action,ipc,runtime,surface,structs}.zig`
+  into `apprt-api` (crate 16). Partition of test_blocks: **apprt-api = 20**
+  (action.zig 17, ipc.zig 2, runtime.zig 1; surface/structs 0), **apprt (crate
+  25) = 27** (47 − 20); global test contract unchanged (**3234**). The seam is
+  three traits — `CoreSurfaceHandle` (the cycle-break bridge to the opaque
+  `rt_surface`, implemented by core's `Surface`), and `App`/`Surface` with a
+  GENERIC (comptime-monomorphized, NOT `dyn`) `perform_action` — plus the
+  `AppMailbox`/`SurfaceMessageEnvelope` replacement for `apprt.surface.Mailbox`.
+  The concrete gtk/embedded backends, `newConfig`, the GObject `getGObjectType`
+  registrations, and the byte-exact `CValue` C-ABI projection stay for crate 25 /
+  the embedded C-API milestone (documented deferrals, verbatim-preserved).
+  Crate deps: rustty-{lib,build-config,config,vt,input,datastruct,renderer} +
+  allocator-api2 (all downstream — acyclic, `check_acyclic.sh` GREEN). The
+  renderer dep is for `renderer::Health` (crate-root hoist).
 
 - **A6 — fallback group `renderer+inspector+termio`.** Breaks #11–#13 are the
   hardest seams; `reach_scc.py` round-2 SCC#1 = **45 files** (renderer 20,

@@ -1142,10 +1142,6 @@
      "test_blocks": 1
     },
     {
-     "file": "apprt/action.zig",
-     "test_blocks": 17
-    },
-    {
      "file": "apprt/browser.zig",
      "test_blocks": 0
     },
@@ -1366,12 +1362,22 @@
      "test_blocks": 0
     },
     {
-     "file": "apprt/ipc.zig",
-     "test_blocks": 2
-    },
-    {
      "file": "apprt/none.zig",
      "test_blocks": 0
+    }
+   ],
+   "test_blocks": 27,
+   "file_count": 57
+  },
+  "apprt-api": {
+   "files": [
+    {
+     "file": "apprt/action.zig",
+     "test_blocks": 17
+    },
+    {
+     "file": "apprt/ipc.zig",
+     "test_blocks": 2
     },
     {
      "file": "apprt/runtime.zig",
@@ -1386,8 +1392,8 @@
      "test_blocks": 0
     }
    ],
-   "test_blocks": 47,
-   "file_count": 62
+   "test_blocks": 20,
+   "file_count": 5
   },
   "args": {
    "files": [
@@ -3361,6 +3367,7 @@
  "unmapped": [],
  "unmapped_count": 0,
  "_amendments": [
-  "A1-hoist: moved terminal/size.zig (5 tests) from crate 'vt' to 'render-types' so render-types is a leaf (->util) and the vt<->render-types size cycle is broken. Total test_blocks unchanged (3234). Documented in PORT_PLAN A1."
+  "A1-hoist: moved terminal/size.zig (5 tests) from crate 'vt' to 'render-types' so render-types is a leaf (->util) and the vt<->render-types size cycle is broken. Total test_blocks unchanged (3234). Documented in PORT_PLAN A1.",
+  "A5-resolution: split crate 'apprt' (was 47) into 'apprt' (27) + 'apprt-api' (20) \u2014 the break #8 interface crate carves apprt/{action,ipc,runtime,surface,structs}.zig (20 test_blocks: action 17, ipc 2, runtime 1) out of apprt. Total test_blocks unchanged (3234). Documented in PORT_PLAN A5."
  ]
 }

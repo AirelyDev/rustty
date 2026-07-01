@@ -16,3 +16,21 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# The acyclicity guarantee (break #8): apprt-api depends ONLY on downstream
+# crates — never on rustty-core or rustty-apprt. This is what lets rustty-core
+# depend on the iface (apprt-api) instead of the concrete apprt, breaking the
+# apprt<->core cycle. `check_acyclic.sh` is the hard proof.
+rustty-lib = { workspace = true }              # checkGhosttyHEnum / enum_type
+rustty-build-config = { workspace = true }     # apprt.Runtime (runtime.zig re-export)
+rustty-config = { workspace = true }           # Config, Config.Duration
+rustty-vt = { workspace = true }               # Scrollbar, MouseShape, osc ProgressReport/ColoredTarget
+rustty-input = { workspace = true }            # input.Trigger (+ Trigger.C) for KeySequence
+rustty-datastruct = { workspace = true }       # MessageData (surface WriteReq)
+# renderer.Health (Action::renderer_health / Message::renderer_health). renderer
+# is BELOW apprt-api (nothing renderer deps reaches apprt-api), so the edge is
+# acyclic — confirmed by check_acyclic.sh. rustty-config already deps renderer,
+# so apprt-api -> config -> renderer AND apprt-api -> renderer are both downward.
+rustty-renderer = { workspace = true }
+# ipc Action.cval / NewWindow.cval take a std.mem.Allocator; modeled with the
+# allocator-api2 Allocator trait (matching the rest of the workspace).
+allocator-api2 = { workspace = true }

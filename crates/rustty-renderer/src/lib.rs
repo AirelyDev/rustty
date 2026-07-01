@@ -18,6 +18,11 @@
 //! - `link` — renderer/link.zig (3 tests): the `oni.Regex`-backed renderer link
 //!   `Set`/`renderCellMap` (Oniguruma deferral now RESOLVED).
 //!
+//! - `Health` — the crate-root `renderer.zig` `Health` enum (1 test): a
+//!   2-variant `enum(c_int)` with zero GPU dependency, hoisted to the crate root
+//!   (like the render-types A1 `size` hoist) so `rustty-apprt-api`'s
+//!   `Action::renderer_health` can name it without a GPU-renderer edge.
+//!
 //! renderer/size.zig (6 tests) is already ported in the `rustty-render-types`
 //! leaf (the A1 hoist) and re-exported below.
 //!
@@ -42,3 +47,63 @@ pub mod state;
 // reference `renderer.zig` re-exports these size types (`GridSize`, `Size`,
 // `ScreenSize`, `CellSize`, `Padding`, `Coordinate`, ...); mirror that re-export.
 pub use rustty_render_types as size;
+
+/// The health status of a renderer. These must be shared across all
+/// renderers even if some states aren't reachable so that our API users
+/// can use the same enum for all renderers.
+//
+// PORT NOTE: reference `src/renderer.zig` crate-root `pub const Health =
+// enum(c_int) { healthy, unhealthy }`. Hoisted into the rustty-renderer crate
+// root here (mirroring the render-types A1 `size` hoist precedent) so that
+// `rustty-apprt-api`'s `Action::renderer_health` variant can name it WITHOUT
+// pulling in the GPU renderer. `enum(c_int)` -> `#[repr(i32)]` (C `int`) so the
+// discriminants match the C ABI ordering used by the `checkGhosttyHEnum` test.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(i32)]
+pub enum Health {
+    Healthy,
+    Unhealthy,
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::Health;
+    use rustty_lib::r#enum::{check_ghostty_henum, enum_type, EnumType};
+    use rustty_lib::target::Target;
+
+    /// PORT NOTE: models the reference `enum(c_int)` `Health` as an [`EnumType`]
+    /// (C target) so the `checkGhosttyHEnum` test can reflect over its keys and
+    /// backing int. The keys are the snake_case forms of the variants, in
+    /// declaration order: healthy, unhealthy.
+    fn health_enum_descriptor() -> EnumType {
+        // Touch `Health` so the enum participates like the reference's
+        // `refAllDeclsRecursive` reach (`Health::Healthy`/`Health::Unhealthy`).
+        let _ = (Health::Healthy, Health::Unhealthy);
+        enum_type(Target::C, &[Some("healthy"), Some("unhealthy")])
+    }
+
+    // test "ghostty.h Health" {
+    //     try lib.checkGhosttyHEnum(Health, "GHOSTTY_RENDERER_HEALTH_");
+    // }
+    #[test]
+    fn ghostty_h_health() {
+        // PORT NOTE: `try lib.checkGhosttyHEnum(Health, "GHOSTTY_RENDERER_HEALTH_");`,
+        // retargeted to `RUSTTY_RENDERER_HEALTH_` per R2. The
+        // `rustty_renderer_health_e` C enum declares every `Health` key with the
+        // same sequential `c_int` value as the enum field, so the lookup closure
+        // returns each field's own backing int.
+        let t = health_enum_descriptor();
+        let fields = t.fields.clone();
+        check_ghostty_henum(&t, "RUSTTY_RENDERER_HEALTH_", |name| {
+            fields.iter().find_map(|(n, v)| {
+                let expected = format!("RUSTTY_RENDERER_HEALTH_{}", n.to_ascii_uppercase());
+                if expected == name {
+                    Some(*v as i64)
+                } else {
+                    None
+                }
+            })
+        })
+        .unwrap();
+    }
+}

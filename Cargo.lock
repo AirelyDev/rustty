@@ -470,6 +470,16 @@ dependencies = [
 [[package]]
 name = "rustty-apprt-api"
 version = "0.1.0"
+dependencies = [
+ "allocator-api2",
+ "rustty-build-config",
+ "rustty-config",
+ "rustty-datastruct",
+ "rustty-input",
+ "rustty-lib",
+ "rustty-renderer",
+ "rustty-vt",
+]
 
 [[package]]
 name = "rustty-args"
@@ -682,6 +692,7 @@ dependencies = [
  "rustty-font",
  "rustty-font-shaper",
  "rustty-input",
+ "rustty-lib",
  "rustty-oniguruma",
  "rustty-os",
  "rustty-render-types",

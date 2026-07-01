@@ -51,3 +51,10 @@ spirv-cross-sys = { workspace = true }
 # so allocator-api2 is a NORMAL dependency (not dev-only). It also backs the
 # cell/cursor tests, which drive a real `Terminal`/`RenderState`.
 allocator-api2 = { workspace = true }
+
+[dev-dependencies]
+# The crate-root `Health` enum (hoisted from `renderer.zig`) carries the
+# `ghostty.h Health` -> `checkGhosttyHEnum` test, which uses the `enum_type`/
+# `check_ghostty_henum` helpers from `rustty-lib`. Test-only, so a dev-dep; the
+# edge is acyclic (rustty-lib is a FIRM leaf, nothing it deps reaches renderer).
+rustty-lib = { workspace = true }
