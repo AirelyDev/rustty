@@ -134,6 +134,15 @@ MAP = {
     # into pure rustty-font (the real discovery surface lands in the F3 shaper tier).
     "font_atlas":        ([f"{GHF}/Atlas.zig"], [f"{RSF}/atlas.rs"], 1),
     "font_codepoint_map":([f"{GHF}/CodepointMap.zig"], [f"{RSF}/codepoint_map.rs"], 0),
+    # Stage F0.1 — glyf_rasterize.zig (the z2d-backed glyf-outline rasterizer:
+    # flatten contours -> z2d fill -> alpha8 bitmap, with cell-constraint /
+    # design-metric placement). 13 quoted tests in glyf_rasterize.zig +
+    # glyf_rasterize_png_test.zig's 1 `test "..."` (the bubbletea known-answer
+    # PNG compare, decoded via the pure-Rust `png` dev-dep) = 14 zig. Rust:
+    # glyf_rasterize.rs (13 mapped raster tests + 1 `reference_import_*` marker
+    # mirroring the reference `test { _ = @import(png_test) }` inclusion) +
+    # glyf_rasterize/glyf_rasterize_png_test.rs (1) = 15 -> 15 >= 14.
+    "font_glyf_rasterize":([f"{GHF}/glyf_rasterize.zig", f"{GHF}/glyf_rasterize_png_test.zig"], [f"{RSF}/glyf_rasterize.rs", f"{RSF}/glyf_rasterize/glyf_rasterize_png_test.rs"], 0),
     # Stage C — rustty-args CLI arg parser (GH base = src/cli, not src/terminal).
     # args.zig (36t) tests live in src/args/tests.rs (module include from args.rs).
     # diagnostics.zig has 0 tests (ported as a sibling required by args.zig).
