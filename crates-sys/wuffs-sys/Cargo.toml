@@ -1,9 +1,18 @@
 # wuffs-sys — vendored C dependency (R3: self-contained, no ghostty dep)
 #
-# This crate will vendor copied C sources from the SAME upstream library the
-# reference uses (Wuffs image codecs) and build them standalone via `cc` + `bindgen`.
-# `links` declares the native lib so Cargo enforces one-version linking.
-# STUB: no C is compiled yet (see build.rs).
+# This crate vendors the SAME upstream library the reference uses — Wuffs
+# 0.4.0-alpha.9, Google's "Wrangling Untrusted File Formats Safely" image codec
+# library — copied in-tree under `vendor/` and built standalone via `cc` +
+# `bindgen`. Wuffs ships as a SINGLE-FILE C library (`release/c/wuffs-v0.4.c`,
+# the stb-style header/implementation combo). It mirrors the reference's
+# pkg/wuffs/build.zig `build`: the same single translation unit compiled with
+# `-DWUFFS_IMPLEMENTATION` and the exact `WUFFS_CONFIG__MODULE__*` define list
+# from pkg/wuffs/src/c.zig (MODULES + AUX__BASE/AUX__IMAGE + BASE + ADLER32/
+# CRC32/DEFLATE/JPEG/PNG/ZLIB — only the modules ghostty uses), and the same
+# include dir (`release/c`). The AUX modules are C++-only (`#if defined
+# (__cplusplus)`-guarded); the file is compiled as C (like the reference's
+# `addCSourceFile`), so those defines are inert. `links` declares the native lib
+# so Cargo enforces a single linkage.
 [package]
 name = "wuffs-sys"
 version.workspace = true
@@ -15,10 +24,20 @@ authors.workspace = true
 links = "wuffs"
 build = "build.rs"
 
+[lib]
+# The FFI is bindgen-generated over the giant single-file Wuffs header; the
+# documentation-comment "doctests" harvested from it are not Rust and must not
+# be compiled/run. (This crate's real test is the KAT in the unit-test harness.)
+doctest = false
+
 [lints]
 workspace = true
 
 [dependencies]
 
 [build-dependencies]
-# TODO(R3): add `cc` and `bindgen` here when the vendored C source lands.
+# R3: compile the vendored single-file Wuffs C standalone (`cc`) with the
+# reference's flags, and auto-generate the FFI (`bindgen`) from the same header
+# the reference's `c.zig` @cIncludes (`wuffs-v0.4.c`, declarations only).
+cc = "1"
+bindgen = "0.72"

@@ -142,6 +142,10 @@ zlib-sys = { path = "crates-sys/zlib-sys" }
 # R3: vendored Oniguruma 6.9.9 (the SAME C the reference links). The FFI leaf the
 # `rustty-oniguruma` safe wrapper builds the `oni::*` API on top of.
 oniguruma-sys = { path = "crates-sys/oniguruma-sys" }
+# R3: vendored Wuffs 0.4.0-alpha.9 (the SAME single-file C image-codec library
+# the reference links). The FFI leaf the PNG/JPEG image decode + pixel-swizzle
+# port builds on (ghostty's ADLER32/CRC32/DEFLATE/JPEG/PNG/ZLIB module subset).
+wuffs-sys = { path = "crates-sys/wuffs-sys" }
 # Stable polyfill of the unstable `core::alloc::Allocator` trait. This is the
 # faithful Rust map of Zig's `std.mem.Allocator`: `Allocator::allocate(Layout)`
 # / `deallocate` map to Zig `rawAlloc`/`rawFree`. `Global` == the current
