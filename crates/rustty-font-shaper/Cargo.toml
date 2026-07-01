@@ -1,0 +1,62 @@
+# rustty-font-shaper — port crate (the D1 three-tier split: shaper tier)
+#
+# Crate IDENTITY is `rustty-font-shaper` (R4). This is NOT the published artifact
+# name; the library artifacts are renamed to the `rustty` product identity later
+# (R2). NO dependency on the ghostty tree (R3) — reference is an external oracle
+# only.
+#
+# LAYERING (memory `apc-glyf-font-layering-d1`, D1 signed off): `rustty-font` is
+# a PURE parsing/sprite leaf BELOW `rustty-vt` (font must NEVER have a vt edge;
+# `rustty-vt`'s apc/glyph deps `rustty-font` directly). This crate is the SHAPER
+# tier ABOVE both `rustty-vt` and `rustty-font`: it hosts the backend `Face`
+# selector (`face.zig`), the CoreText/FreeType faces, and HarfBuzz shaping, so it
+# may depend on `rustty-vt` + `rustty-font` + the `-sys`/objc2 backends. Nothing
+# depends back on it, so the graph stays acyclic (G7).
+[package]
+name = "rustty-font-shaper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+# PORT NOTE: doc comments in this crate are verbatim ports of the reference Zig
+# doc comments (R1), including spec prose and external links (e.g. the MDN
+# `font-variation-settings` citation on `Variation`). This crate defines no
+# intended doc examples — all tests live in `#[test]` blocks — so doctests are
+# disabled rather than risk rustdoc misparsing the faithful comment text.
+[lib]
+doctest = false
+
+[dependencies]
+# The crown-jewel terminal crate: the shaper tier sits ABOVE vt (D1). vt's
+# apc/glyph deps `rustty-font` below; this tier consumes vt types for shaping.
+rustty-vt = { workspace = true }
+# The PURE font leaf (Atlas/opentype/sprite/Metrics/glyph). Owns the shared face
+# types (`Metrics`, glyph `RenderOptions`) this tier re-exports.
+rustty-font = { workspace = true }
+# Size types leaf (renderer/terminal size), depended on across font/renderer/vt-c.
+rustty-render-types = { workspace = true }
+# Base utilities leaf.
+rustty-util = { workspace = true }
+# R3: bindings to the SAME C libraries the reference links — NOT reimplementations.
+# FreeType 2.13.2 (glyph rasterization for the freetype backend) and HarfBuzz
+# 11.0.0 (text shaping; the `hb_ft` bridge works against freetype-sys). Referenced
+# by path (the `-sys` crates are not in `[workspace.dependencies]`).
+freetype-sys = { path = "../../crates-sys/freetype-sys" }
+harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys" }
+
+# macOS: the CoreText backend (font discovery + rendering + shaping) and its
+# CoreGraphics rasterization surface. R3/objc2: the crates.io objc2 framework
+# crates REPLACE ghostty's `pkg/macos` bindings — `macos.text.*` -> objc2-core-text
+# (CTFont/CTFontDescriptor), `macos.graphics.*` -> objc2-core-graphics
+# (CGContext/CGBitmapContext), `macos.foundation.*` -> objc2-foundation
+# (CFString/CFArray). Bindings to the SAME system frameworks, not reimplementations.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation = "0.3"
+objc2-core-graphics = "0.3"
+objc2-core-text = "0.3"

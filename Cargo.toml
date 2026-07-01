@@ -36,6 +36,10 @@ members = [
     "crates/rustty-args",          # 15
     "crates/rustty-apprt-api",     # 16
     "crates/rustty-font",          # 17
+    # D1 three-tier split (memory `apc-glyf-font-layering-d1`): the SHAPER tier
+    # ABOVE both rustty-vt and rustty-font (backend `Face` selector + CoreText/
+    # FreeType faces + HarfBuzz shaping). rustty-font stays PURE below vt.
+    "crates/rustty-font-shaper",
     "crates/rustty-input",         # 18
     "crates/rustty-inspector",     # 19
     "crates/rustty-renderer",      # 20
@@ -112,6 +116,7 @@ rustty-cfg-fmt = { path = "crates/rustty-cfg-fmt" }
 rustty-args = { path = "crates/rustty-args" }
 rustty-apprt-api = { path = "crates/rustty-apprt-api" }
 rustty-font = { path = "crates/rustty-font" }
+rustty-font-shaper = { path = "crates/rustty-font-shaper" }
 rustty-input = { path = "crates/rustty-input" }
 rustty-inspector = { path = "crates/rustty-inspector" }
 rustty-renderer = { path = "crates/rustty-renderer" }
