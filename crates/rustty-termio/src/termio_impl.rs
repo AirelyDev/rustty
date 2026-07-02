@@ -43,9 +43,9 @@
 //
 // PORT NOTE: `assert`/`EnvMap`/`posix`/`windows` are imported by the reference
 // but only used by paths deferred with the bodies below (or not at all in this
-// file); no `use` is bound for them. `StreamHandler` is stage 4 (see the
-// placeholder below). `ProcessInfo` maps to the rustty-os `pty.rs` split (see
-// `getForegroundPid`/`getTtyName`).
+// file); no `use` is bound for them. `StreamHandler` landed with stage 4 (see
+// the `StreamHandlerStream` alias below). `ProcessInfo` maps to the rustty-os
+// `pty.rs` split (see `getForegroundPid`/`getTtyName`).
 use allocator_api2::alloc::Global as Allocator;
 use rustty_apprt_api::surface::AppMailbox;
 use rustty_config::conditional;
@@ -73,13 +73,12 @@ use crate::Error;
 // PORT: routed through named log helpers below that preserve the reference's
 // messages verbatim (rustty-os cf_release_thread precedent).
 
-/// PORT NOTE (DEFERRED, integration-tier stage 4): placeholder for the
-/// reference `terminal_stream` field type `StreamHandler.Stream`
-/// (= `terminal.Stream(StreamHandler)`, src/termio/stream_handler.zig — 0
-/// tests). stream_handler.zig ports in the "termio testable logic" stage; until
-/// then this uninhabited placeholder keeps the field shape faithful (precedent:
-/// rustty-renderer `state::Inspector`).
-pub enum StreamHandlerStream {}
+/// PORT: the reference `terminal_stream` field type `StreamHandler.Stream`
+/// (= `terminal.Stream(StreamHandler)`, src/termio/stream_handler.zig — landed
+/// stage 4). The vt Stream's OSC-parser allocator lifetime is `'static` here
+/// (the field owns its handler for the Termio lifetime; only the deferred
+/// `Termio::init` constructs it — `.initAlloc(alloc, handler)`).
+pub type StreamHandlerStream<M> = crate::stream_handler::Stream<'static, M>;
 
 /// Mutex state argument for queueMessage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,7 +137,7 @@ pub struct Termio<M: AppMailbox> {
 
     /// The stream parser. This parses the stream of escape codes and so on
     /// from the child process and calls callbacks in the stream handler.
-    pub terminal_stream: StreamHandlerStream,
+    pub terminal_stream: StreamHandlerStream<M>,
 
     /// Last time the cursor was reset. This is used to prevent message
     /// flooding with cursor resets.
@@ -453,8 +452,7 @@ impl<M: AppMailbox> Termio<M> {
 
         // Clear any StreamHandler state
         // self.terminal_stream.deinit();
-        // (PORT NOTE, stage 4: `terminal_stream` is the StreamHandler
-        // placeholder — its deinit lands with stream_handler.zig.)
+        self.terminal_stream.deinit();
 
         // Clear any initial state if we have it
         if let Some(v) = self.thread_enter_state.take() {

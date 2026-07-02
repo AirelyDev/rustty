@@ -3,13 +3,11 @@
 //!
 //! PORTS: ghostty src/termio/backend.zig (0 `test{}` blocks).
 //!
-//! PORT STATUS: struct shapes ported (integration-tier stage 2). The one
-//! backend implementation, `termio.Exec` (src/termio/Exec.zig, 10 tests), is
-//! stage 4 of the integration-tier blueprint; until it lands the `exec`
-//! payload types are uninhabited placeholders (precedent: rustty-renderer
-//! `state::Inspector`), which makes every delegation arm below statically
-//! unreachable — the verbatim delegation is preserved in comments and becomes
-//! live when Exec lands.
+//! PORT STATUS: ported (integration-tier stages 2+4). Stage 4 replaced the
+//! stage-2 uninhabited `Exec` placeholders with the real `termio.Exec` types
+//! (src/termio/Exec.zig — crate::exec), making the delegation arms live; the
+//! Exec methods that are themselves D6-deferred (threadEnter/threadExit/
+//! focusGained/queueWrite) delegate into their documented deferral markers.
 
 // PARITY: the reference's identifiers are camelCase (`initTerminal`,
 // `threadEnter`, `queueWrite`, ...); preserved verbatim per R1/R2.
@@ -31,6 +29,7 @@ use rustty_apprt_api::surface::AppMailbox;
 use rustty_renderer::size::{GridSize, ScreenSize};
 use rustty_vt::terminal::Terminal;
 
+use crate::exec;
 use crate::termio_impl::{self, Termio};
 use crate::Error;
 
@@ -38,21 +37,10 @@ use crate::Error;
 // enough to satisfy most write requests. It must be a power of 2.
 //
 // PORT NOTE: reference `const WRITE_REQ_PREALLOC = std.math.pow(usize, 2, 5);`
-// (file-private; consumed by Exec's write pool — stage 4).
+// (file-private and unreferenced in backend.zig — Exec.zig's ThreadData
+// carries its own copy, `exec::ThreadData::WRITE_REQ_PREALLOC`).
 #[allow(dead_code)]
 pub(crate) const WRITE_REQ_PREALLOC: usize = usize::pow(2, 5);
-
-// PORT NOTE (DEFERRED, integration-tier stage 4): the reference `exec` union
-// payloads are `termio.Exec` / `termio.Exec.Config` / `termio.Exec.ThreadData`
-// (src/termio/Exec.zig — the posix exec/pty backend, ported in the "termio
-// testable logic" stage). These uninhabited placeholders keep the union shapes
-// faithful without fabricating Exec; they are REPLACED by the real types when
-// Exec lands (DEFERRALS.md).
-pub enum Exec {}
-/// Placeholder for the reference `termio.Exec.Config`.
-pub enum ExecConfig {}
-/// Placeholder for the reference `termio.Exec.ThreadData`.
-pub enum ExecThreadData {}
 
 /// The kinds of backends.
 //
@@ -67,34 +55,32 @@ pub enum Kind {
 // PORT NOTE: reference `pub const Config = union(Kind)`.
 pub enum Config {
     /// Exec uses posix exec to run a command with a pty.
-    Exec(ExecConfig),
+    // exec: termio.Exec.Config,
+    Exec(exec::Config),
 }
 
 /// Backend implementations. A backend is responsible for owning the pty
 /// behavior and providing read/write capabilities.
 //
 // PORT NOTE: reference `pub const Backend = union(Kind)`. Each method is the
-// reference's exhaustive `switch (self.*)` delegation; with the stage-4 `Exec`
-// placeholder uninhabited, each arm is expressed as the (statically
-// unreachable) empty match on the payload, with the delegation call preserved
-// verbatim in the comment above it.
+// reference's exhaustive `switch (self.*)` delegation.
 pub enum Backend {
-    Exec(Exec),
+    // exec: termio.Exec,
+    Exec(exec::Exec),
 }
 
 impl Backend {
     pub fn deinit(&mut self) {
         match self {
             // .exec => |*exec| exec.deinit(),
-            Backend::Exec(exec) => match *exec {},
+            Backend::Exec(exec) => exec.deinit(),
         }
     }
 
     pub fn initTerminal(&mut self, t: &mut Terminal) {
-        let _ = t;
         match self {
             // .exec => |*exec| exec.initTerminal(t),
-            Backend::Exec(exec) => match *exec {},
+            Backend::Exec(exec) => exec.initTerminal(t),
         }
     }
 
@@ -104,18 +90,16 @@ impl Backend {
         io: &mut Termio<M>,
         td: &mut termio_impl::ThreadData<M>,
     ) -> Result<(), Error> {
-        let _ = (alloc, io, td);
         match self {
             // .exec => |*exec| try exec.threadEnter(alloc, io, td),
-            Backend::Exec(exec) => match *exec {},
+            Backend::Exec(exec) => exec.threadEnter(alloc, io, td),
         }
     }
 
     pub fn threadExit<M: AppMailbox>(&mut self, td: &mut termio_impl::ThreadData<M>) {
-        let _ = td;
         match self {
             // .exec => |*exec| exec.threadExit(td),
-            Backend::Exec(exec) => match *exec {},
+            Backend::Exec(exec) => exec.threadExit(td),
         }
     }
 
@@ -124,18 +108,16 @@ impl Backend {
         td: &mut termio_impl::ThreadData<M>,
         focused: bool,
     ) -> Result<(), Error> {
-        let _ = (td, focused);
         match self {
             // .exec => |*exec| try exec.focusGained(td, focused),
-            Backend::Exec(exec) => match *exec {},
+            Backend::Exec(exec) => exec.focusGained(td, focused),
         }
     }
 
     pub fn resize(&mut self, grid_size: GridSize, screen_size: ScreenSize) -> Result<(), Error> {
-        let _ = (grid_size, screen_size);
         match self {
             // .exec => |*exec| try exec.resize(grid_size, screen_size),
-            Backend::Exec(exec) => match *exec {},
+            Backend::Exec(exec) => exec.resize(grid_size, screen_size),
         }
     }
 
@@ -146,13 +128,35 @@ impl Backend {
         data: &[u8],
         linefeed: bool,
     ) -> Result<(), Error> {
-        let _ = (alloc, td, data, linefeed);
         match self {
             // .exec => |*exec| try exec.queueWrite(alloc, td, data, linefeed),
-            Backend::Exec(exec) => match *exec {},
+            Backend::Exec(exec) => exec.queueWrite(alloc, td, data, linefeed),
         }
     }
 
+    // PORT NOTE (Zig lazy compilation): the reference delegates to
+    // `exec.childExitedAbnormally(...)` — a method `termio.Exec` does NOT
+    // declare at this reference version; `Backend.childExitedAbnormally` has
+    // no callers, so Zig never instantiates (or type-checks) it. The
+    // delegation is preserved verbatim; the marker fires if a future caller
+    // appears before the reference regrows the Exec method:
+    //
+    // pub fn childExitedAbnormally(
+    //     self: *Backend,
+    //     gpa: Allocator,
+    //     t: *terminal.Terminal,
+    //     exit_code: u32,
+    //     runtime_ms: u64,
+    // ) !void {
+    //     switch (self.*) {
+    //         .exec => |*exec| try exec.childExitedAbnormally(
+    //             gpa,
+    //             t,
+    //             exit_code,
+    //             runtime_ms,
+    //         ),
+    //     }
+    // }
     pub fn childExitedAbnormally(
         &mut self,
         gpa: Allocator,
@@ -162,13 +166,9 @@ impl Backend {
     ) -> Result<(), Error> {
         let _ = (gpa, t, exit_code, runtime_ms);
         match self {
-            // .exec => |*exec| try exec.childExitedAbnormally(
-            //     gpa,
-            //     t,
-            //     exit_code,
-            //     runtime_ms,
-            // ),
-            Backend::Exec(exec) => match *exec {},
+            Backend::Exec(_exec) => unimplemented!(
+                "Backend.childExitedAbnormally: uninstantiated in the reference (Zig lazy compilation; termio.Exec declares no childExitedAbnormally)"
+            ),
         }
     }
 
@@ -185,7 +185,7 @@ impl Backend {
     pub fn getForegroundPid(&mut self) -> Option<u64> {
         match self {
             // .exec => |*exec| exec.getProcessInfo(info),
-            Backend::Exec(exec) => match *exec {},
+            Backend::Exec(exec) => exec.getForegroundPid(),
         }
     }
 
@@ -194,7 +194,7 @@ impl Backend {
     pub fn getTtyName(&mut self) -> Option<&std::ffi::CStr> {
         match self {
             // .exec => |*exec| exec.getProcessInfo(info),
-            Backend::Exec(exec) => match *exec {},
+            Backend::Exec(exec) => exec.getTtyName(),
         }
     }
 }
@@ -203,15 +203,15 @@ impl Backend {
 //
 // PORT NOTE: reference `pub const ThreadData = union(Kind)`.
 pub enum ThreadData {
-    Exec(ExecThreadData),
+    // exec: termio.Exec.ThreadData,
+    Exec(exec::ThreadData),
 }
 
 impl ThreadData {
     pub fn deinit(&mut self, alloc: Allocator) {
-        let _ = alloc;
         match self {
             // .exec => |*exec| exec.deinit(alloc),
-            ThreadData::Exec(exec) => match *exec {},
+            ThreadData::Exec(exec) => exec.deinit(alloc),
         }
     }
 

@@ -74,3 +74,34 @@ impl Timer {
         unimplemented!("xev backend deferred seam (R4/D6): rustty-xev tier")
     }
 }
+
+/// PORT: `xev.Stream` (the pty write stream — `xev.Stream.initFd(pty_fds.
+/// write)` in Exec's threadEnter; stage 4).
+pub struct Stream {}
+
+impl Stream {
+    pub fn deinit(&mut self) {
+        unimplemented!("xev backend deferred seam (R4/D6): rustty-xev tier")
+    }
+}
+
+/// PORT: `xev.Process` (the subprocess exit watcher — `xev.Process.init(pid)`
+/// in Exec's threadEnter; stage 4).
+pub struct Process {}
+
+impl Process {
+    pub fn deinit(&mut self) {
+        unimplemented!("xev backend deferred seam (R4/D6): rustty-xev tier")
+    }
+}
+
+/// PORT: `xev.WriteRequest` (the pooled stream-write request — Exec's
+/// `write_req_pool: SegmentedPool(xev.WriteRequest, ...)`; default-initialized
+/// by the pool).
+#[derive(Default)]
+pub struct WriteRequest {}
+
+/// PORT: `xev.WriteQueue` (default-initialized `.{}` in the reference — Exec's
+/// `write_queue` field).
+#[derive(Default)]
+pub struct WriteQueue {}

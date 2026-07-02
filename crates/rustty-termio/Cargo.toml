@@ -37,6 +37,15 @@ rustty-config = { workspace = true }
 rustty-renderer = { workspace = true }
 rustty-apprt-api = { workspace = true }
 rustty-global = { workspace = true }
+# Integration-tier stage 4 dep wiring (both leaf crates, downward-safe):
+# - rustty-build-config: `build_config.version_string`/`build_config.flatpak`
+#   (reference `build_config = @import("../build_config.zig")` in Exec.zig /
+#   stream_handler.zig).
+# - rustty-identity: the R2 product-identity source for the `GHOSTTY_*` env
+#   names + shell-integration script/module names (rustty-os resourcesdir
+#   precedent).
+rustty-build-config = { workspace = true }
+rustty-identity = { workspace = true }
 # `alloc: Allocator` fields/params mirror rustty-vt's Terminal convention
 # (`allocator_api2::alloc::Global as Allocator`).
 allocator-api2 = { workspace = true }

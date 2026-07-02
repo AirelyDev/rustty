@@ -1107,17 +1107,20 @@ fn posix_dup2(old_fd: RawFd, new_fd: RawFd) -> Result<(), Error> {
 
 /// PORT (Zig-std shim): `std.posix.WaitPidResult` — the `{ pid, status }`
 /// pair `waitpid` yields.
+//
+// (pub(crate): Exec.zig's killPid calls the same `posix.waitpid` shim —
+// stage 4.)
 #[cfg(not(windows))]
-struct WaitPidResult {
-    pid: libc::pid_t,
-    status: u32,
+pub(crate) struct WaitPidResult {
+    pub(crate) pid: libc::pid_t,
+    pub(crate) status: u32,
 }
 
 /// PORT (Zig-std shim): `posix.waitpid` — loops on EINTR; ECHILD/EINVAL are
 /// unreachable per the Zig std contract (the process exists and is ours; the
 /// flags are valid).
 #[cfg(not(windows))]
-fn posix_waitpid(pid: libc::pid_t, flags: u32) -> WaitPidResult {
+pub(crate) fn posix_waitpid(pid: libc::pid_t, flags: u32) -> WaitPidResult {
     loop {
         let mut status: libc::c_int = 0;
         let rc = unsafe { libc::waitpid(pid, &mut status, flags as libc::c_int) };

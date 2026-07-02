@@ -577,12 +577,12 @@ with an `unimplemented!()` marker (NOT fabricated logic).
     `std::sync::Mutex` cannot express from the callee frame; the renderer
     `State.mutex` modeling is decided ONCE when the threads go live (D6 /
     core tier), not fabricated now. Ported REAL: `initSPSC`/`deinit`/`notify`.
-- **Stage-4 placeholders (rustty-termio):** `backend::{Exec, ExecConfig,
-  ExecThreadData}` (Exec.zig, 10 tests) — uninhabited payload placeholders;
-  the `Backend`/`ThreadData` delegation arms are statically unreachable until
-  Exec lands (verbatim delegation preserved in comments).
-  `termio_impl::StreamHandlerStream` (stream_handler.zig `StreamHandler.
-  Stream`, 0 tests) — uninhabited field placeholder.
+- **Stage-4 placeholders (rustty-termio) — RESOLVED (stage 4):**
+  `backend::{Exec, ExecConfig, ExecThreadData}` are now the REAL
+  `exec::{Exec, Config, ThreadData}` types (Exec.zig ported, 10 tests) and
+  the `Backend`/`ThreadData` delegation arms are live;
+  `termio_impl::StreamHandlerStream` is now the real
+  `stream_handler::Stream<'static, M>` alias (stream_handler.zig ported).
 - **rustty-renderer:** `message::Message::initChangeConfig` — takes
   `*const configpkg.Config`, but config already deps renderer (G7 cycle, same
   wall as `shadertoy::loadFromFile`); verbatim body preserved. The two
@@ -637,3 +637,87 @@ ported LIVE (R1; `termio_command` MAP entry). Notes:
   None heap-allocate: the reference's allocation-after-fork prohibition is
   preserved (all allocation happens before `fork()`; the child touches only
   stack buffers + syscalls).
+
+## rustty-termio stage 4 (integration tier) — Exec / shell_integration / stream_handler testable logic
+
+Stage 4 ports the termio testable logic: termio/Exec.zig (10 `test{}` blocks,
+all LIVE — `termio_exec` MAP entry), termio/shell_integration.zig (21 blocks,
+all LIVE, byte-exact per-shell strings — `termio_shell_integration`), and
+termio/stream_handler.zig (0 blocks — the `StreamHandler` vt-`Handler` impl,
+`termio_stream_handler`), completing the crate's R1 contract of 44 tests
+(Exec 10 + shell_integration 21 + message 2 + root 1 + Command 10). All
+deferrals below are untested-only (0 reference `test{}` blocks — R1-safe);
+every deferred body is preserved VERBATIM in comments at its Rust signature
+with an `unimplemented!()` marker (NOT fabricated logic).
+
+- **Exec.zig D6 xev wiring (exec.rs).** `threadEnter` (xev.Process/Stream/
+  Timer + read-thread spawn), `threadExit` (quit-pipe write + join-by-value —
+  the D6 thread-lifecycle modeling owns the JoinHandle), `focusGained`
+  (termios timer state), `processExitCommon`/`processExit`/`flatpakExit`/
+  `termiosTimer` (xev callbacks; surface pushes at the opaque-Timeout
+  AppMailbox seam), `queueWrite`/`ttyWrite` (xev write stream/pools), and
+  `ReadThread.threadMainPosix`/`threadMainWindows` (spawned only by
+  threadEnter; drive the deferred `Termio.processOutput` + the crash-sentry
+  `thread_state` whose `surface` reads the reference Mailbox's surface
+  pointer). The xev_seam gains the `Stream`/`Process`/`WriteRequest`/
+  `WriteQueue` handle types (same dependency-marker contract as stage 2).
+- **`Subprocess.start` (exec.rs).** Everything up to the spawn is expressible,
+  but the final `self.process = .{ .fork_exec = cmd }` stores a Command whose
+  path/args/env are the reference's raw ARENA POINTERS into the subprocess's
+  own fields (env is even freed on successful start — Zig tolerates the
+  dangling pointer because the stored Command only ever reads `.pid`).
+  As Rust references that storage is exactly the strongly-protected-reference
+  UB the port forbids (memory `rust-mut-args-strongly-protected`). The
+  stored-process modeling (raw-ptr Command variant or a pid-only handle) is
+  decided WITH the D6 live-thread wiring — `threadEnter` (itself deferred) is
+  start's only caller. Verbatim body preserved. Ported REAL: `Subprocess.init`
+  (the full argv+env assembly), `execCommand` (+ its `comptime passwdpkg`
+  parameter as the `PasswdPkg` trait with inferred-error associated type),
+  `deinit`/`externalExit`/`stop`/`resize`/`killCommand`/`killPid`/`getpgid`/
+  `childPreExec`, the `getProcessInfo` split, `Config`, `ThreadData` (+
+  `deinit`), and `ArgsFormatter`.
+- **Flatpak comptime-false branches (exec.rs).** `build_config.flatpak` is
+  const `false` (rustty-build-config), so `FlatpakHostCommand` resolves to the
+  reference's zero-size fallback; the flatpak-gated arms (`stop`'s `.flatpak`,
+  `start`'s host-command spawn, `killCommandFlatpak`) are compiled out exactly
+  as Zig's lazy compilation leaves them unanalyzed — bodies verbatim; they
+  re-bind to rustty-os's FlatpakHostCommand with the Linux/flatpak tier.
+- **`Backend.childExitedAbnormally` (backend.rs) — Zig lazy compilation.** The
+  reference delegates to `exec.childExitedAbnormally(...)`, a method
+  `termio.Exec` does NOT declare at this reference version; the Backend method
+  has no callers so Zig never instantiates it. Ported as the verbatim
+  delegation comment + an `unimplemented!()` marker (fires only if a caller
+  appears before the reference regrows the Exec method).
+- **stream_handler.zig cross-thread writers (stream_handler.rs).**
+  `surfaceMessageWriter` (fast path constructs the OPAQUE core
+  `App.Mailbox.Queue.Timeout` — the AppMailbox associated type filled when
+  core lands; slow path unlocks/relocks the caller-held renderer mutex) and
+  `rendererMessageWriter` (same manual-mutex slow path; the reference
+  declaration is itself uncalled in this file) — both follow the stage-2
+  `mailbox::send` deferral precedent, bodies verbatim. Every OTHER handler
+  path is LIVE (the full `vtFallible` dispatch as the vt `Handler` trait impl,
+  `setMode`, `dcsHook/Put/Unhook` + DECRQSS/XTGETTCAP, `apcEnd` kitty/glyph,
+  OSC 4/7/10-12/21/52/133/777, kitty keyboard/color, mode/size/DA/DSR
+  reports); the writer calls inside them compile and defer at the call
+  boundary (Termio.queueMessage precedent).
+- **`dcsCommand` tmux arm (stream_handler.rs).** Deferred WITH rustty-vt
+  dcs.rs's `TmuxCommand = ()` stub (the vt-side control-mode DCS enter/exit
+  wiring is a documented vt deferral): the payload carries no notification to
+  route into the viewer yet. Body verbatim; the `tmux_viewer` field and its
+  `deinit` block are live (`TMUX_ENABLED` = `options::TMUX_CONTROL_MODE`).
+- **Zig-std shims (Rust-only glue, R1 no-loss).** exec.rs:
+  `std.fs.path.dirname`, the `[:0]` `cstring` sentinel model, `posix.errno`;
+  killPid reuses command.rs's `posix.waitpid` shim. stream_handler.rs:
+  `std.Uri.getHost`/`host_name_max` (over rustty-os uri `Component::toRaw`),
+  fixed-buffer `std.Io.Writer` (`write_fixed`/`FixedFmt`), Vec-backed
+  fmt/os-Writer adapters, and `terminfo.ghostty.xtgettcapMap()` as a
+  process-lifetime `OnceLock` (comptime-static analogue — the `write_stable`
+  `'static` contract).
+- **EnvMap boundary (shell_integration.rs/exec.rs).** The crate's `EnvMap`
+  models `std.process.EnvMap` with Rust `String`s (the stage-3 Command
+  decision); the reference's `[]const u8` env values convert at the put
+  boundary (`env_string`) — non-UTF-8 panics, matching rustty-os `getEnvMap`'s
+  `std::env::vars` behavior. R2 identity: the `GHOSTTY_*` env names and the
+  shell-integration script/module names derive from rustty-identity
+  (`env_name`, resourcesdir precedent); the tests compare against the same
+  identity-derived strings.

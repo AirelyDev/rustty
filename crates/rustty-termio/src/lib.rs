@@ -20,14 +20,15 @@
 //! rustty-termio
 //!
 //! PORTS: ghostty src/termio.zig (this file) + termio/{Options.zig, Termio.zig,
-//! Thread.zig, backend.zig, mailbox.zig, message.zig} + the RELOCATED
+//! Thread.zig, backend.zig, mailbox.zig, message.zig, Exec.zig,
+//! shell_integration.zig, stream_handler.zig} + the RELOCATED
 //! src/Command.zig (break #13b: Command-in-core would cycle — termio/Exec
-//! constructs+starts Command while core already deps termio); termio/{Exec.zig,
-//! shell_integration.zig, stream_handler.zig} land in the stage-4
-//! testable-logic stage.
+//! constructs+starts Command while core already deps termio).
 //!
-//! PORT STATUS: in progress (integration-tier stages 2-3 — dep wiring + struct
-//! shapes + the message module + the relocated Command):
+//! PORT STATUS: ported (integration-tier stages 2-4), R1 contract 44 tests
+//! (Exec 10 + shell_integration 21 + message 2 + root 1 + Command 10); the
+//! xev-loop/live-thread paths are D6-deferred with verbatim bodies
+//! (DEFERRALS.md):
 //!
 //! - `message` — termio/message.zig (2 tests): the IO-thread `Message` union.
 //! - `options` — termio/Options.zig (0 tests): the `Options` struct shape.
@@ -35,7 +36,7 @@
 //!   `DerivedConfig`/`ThreadEnterState`/`ThreadData`/`MutexState` + pure
 //!   delegation; the live IO-thread bodies are deferred verbatim (DEFERRALS.md).
 //! - `backend` — termio/backend.zig (0 tests): the `Kind`/`Config`/`Backend`/
-//!   `ThreadData` delegating unions (Exec payloads are stage-4 placeholders).
+//!   `ThreadData` delegating unions over the stage-4 `exec` payloads.
 //! - `mailbox` — termio/mailbox.zig (0 tests): the SPSC `Mailbox` (+ the
 //!   deferred `send` slow path).
 //! - `thread` — termio/Thread.zig (0 tests): the writer-thread struct shape +
@@ -44,15 +45,21 @@
 //!   `@import("../global.zig").xev` (rustty-os cf_release_thread precedent).
 //! - `command` — the RELOCATED src/Command.zig (10 tests, all ported): the
 //!   fork/exec subprocess spawner (integration-tier stage 3, break #13b).
+//! - `exec` — termio/Exec.zig (10 tests, all ported): the posix exec/pty
+//!   backend — Subprocess argv+env assembly + execCommand LIVE; the xev
+//!   wiring + Subprocess.start deferred verbatim (stage 4, DEFERRALS.md).
+//! - `shell_integration` — termio/shell_integration.zig (21 tests, all
+//!   ported): the byte-exact per-shell command/env generation (stage 4).
+//! - `stream_handler` — termio/stream_handler.zig (0 tests): the vt-Stream
+//!   `StreamHandler` (the `Handler` trait impl); the cross-thread writer slow
+//!   paths deferred verbatim (stage 4, DEFERRALS.md).
 //!
 //! SEAMS: `apprt.surface.Mailbox` -> `rustty_apprt_api::surface::AppMailbox`
 //! (termio is a generic consumer, `M: AppMailbox`); `renderer.Size`/`State`/
 //! `Thread.Mailbox` -> rustty-renderer; `xev` -> `xev_seam` (D6 deferred).
 
 // const stream_handler = @import("termio/stream_handler.zig");
-// (PORT, stage 4: stream_handler.zig lands with the termio testable-logic
-// stage; its `StreamHandler.Stream` field type is the `termio_impl::
-// StreamHandlerStream` placeholder until then.)
+pub mod stream_handler;
 
 // const message = @import("termio/message.zig");
 // (PORT: Zig-private file imports widen to `pub mod` — the R1/G3b gates and
@@ -64,8 +71,12 @@ pub mod backend;
 // pub const mailbox = @import("termio/mailbox.zig");
 pub mod mailbox;
 // pub const Exec = @import("termio/Exec.zig");
-// (PORT, stage 4: Exec.zig — the posix exec/pty backend, 10 tests — lands with
-// the termio testable-logic stage; see `backend::Exec`'s placeholder.)
+pub mod exec;
+pub use exec::Exec;
+// (PORT: shell_integration.zig is file-private to the reference — imported
+// only by Exec.zig and the root reify test; `pub mod` per the Zig-private
+// widening rule above.)
+pub mod shell_integration;
 // pub const Options = @import("termio/Options.zig");
 pub mod options;
 pub use options::Options;
@@ -84,7 +95,7 @@ pub use mailbox::Mailbox;
 // pub const Message = message.Message;
 pub use message::Message;
 // pub const StreamHandler = stream_handler.StreamHandler;
-// (PORT, stage 4: re-exported when stream_handler.zig lands.)
+pub use stream_handler::StreamHandler;
 
 // (No reference import line here: src/Command.zig is a src-ROOT file —
 // termio/Exec.zig imports it as `@import("../Command.zig")` and core's
@@ -123,8 +134,9 @@ impl std::error::Error for Error {}
 #[cfg(test)]
 mod tests {
     // PORT NOTE: the `_ = @import("termio/shell_integration.zig")` half of the
-    // reference test reifies shell_integration.zig, which lands in stage 4 with
-    // its own 21 tests; the refAllDecls half is ported here.
+    // reference test reifies shell_integration.zig — landed (stage 4) as the
+    // `shell_integration` module above with its own 21 tests; the refAllDecls
+    // half is ported here.
     #[test]
     fn ref_all_decls() {
         // Reify the crate's public re-export surface (the refAllDecls analogue).
@@ -148,6 +160,16 @@ mod tests {
         let _ = std::any::type_name::<crate::xev_seam::Async>();
         let _ = std::any::type_name::<crate::Command<'static>>();
         let _ = std::any::type_name::<crate::Error>();
+        // (stage 4: the Exec/shell_integration/StreamHandler surface.)
+        let _ = std::any::type_name::<crate::Exec>();
+        let _ = std::any::type_name::<crate::exec::Config>();
+        let _ = std::any::type_name::<crate::exec::ThreadData>();
+        let _ = std::any::type_name::<crate::exec::Subprocess>();
+        let _ = std::any::type_name::<crate::shell_integration::Shell>();
+        let _ = std::any::type_name::<crate::shell_integration::ShellIntegration>();
+        // (`StreamHandler<M>` is generic over the AppMailbox seam and is
+        // reified by its module's signatures; the module const stands in.)
+        let _ = crate::stream_handler::TMUX_ENABLED;
         // Options/Termio/ThreadData are generic over the AppMailbox seam and
         // are reified by their modules' signatures.
         let _ = (
