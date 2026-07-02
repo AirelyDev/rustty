@@ -1014,3 +1014,55 @@ stays the deferred cli seam). Deferral ledger:
   `#[allow(dead_code)]` on `surfaceMailbox`/`queueIo` (first live callsites
   C7 `handleMessage`; the deferred inspector bodies name `queueIo`
   meanwhile) — each allow is removed when its first consumer lands.
+
+## rustty-core C7 (core tier) — handleMessage / childExited / search callbacks
+
+Chunk C7 of CORE_BLUEPRINT §6 lands Surface.zig:958-1523 in
+`crates/rustty-core/src/surface.rs`: `handleMessage` (all 22 apprt surface
+`Message` arms, checked exhaustively against the reference switch),
+`selectionScrollTick`, `childExited` + `childExitedAbnormally`,
+`passwordInput`, and `searchCallback`/`searchCallback_` (fully REAL per
+blueprint §5 — the vt search thread is ported; the three `wakeup.notify`
+sites are the xev D6 leaves, runtime panics confined there). NO new
+deferral was created and none resolved. Ledger:
+
+- **Ported ahead of its row (not a deferral):** `queueRender`
+  (Surface.zig:2461-2465, C8's range) — the one-line xev-blocked leaf
+  (`renderer_thread.wakeup.notify()`); selectionScrollTick/passwordInput in
+  THIS range call it, so the real body (typed `Result<(),
+  rustty_xev::NotifyError>`) lands now instead of a stub.
+- **Growth point realized (documented in-file, not a deferral):**
+  `surface::Error` grew from the opaque unit marker into the typed union of
+  the concrete sources C7's bodies reach — `Apprt(ApprtError)` (performAction
+  / getCursorPos), `Xev(NotifyError)` (the notify leaves), `OutOfMemory`
+  (vt `Flattened.clone`); later chunks keep growing it.
+  `childExitedAbnormally` is typed precisely as `Result<(),
+  terminal::pagelist::OutOfMemory>` (its inferred set is Allocator.Error-only
+  after the join/allocPrint OOM collapse).
+- **Documented shape mappings (not deferrals):** the guard-less zigstd-Mutex
+  `defer unlock`s realized explicitly at every exit (selectionScrollTick /
+  passwordInput / childExited's terminal block), and via the
+  immediately-invoked-closure error scoping for childExitedAbnormally's
+  ~20-`try` locked tail (the vt search/screen.rs precedent,
+  `#[allow(clippy::redundant_closure_call)]`); `std.mem.sliceTo(..., 0)` ->
+  the `iter().position(|&b| b == 0).unwrap_or(len)` slice (rustty-os pty.rs
+  precedent) at set_title/desktop_notification; the searchCallback userdata
+  `?*anyopaque`/`ud.?` -> the vt seam's bare `*mut c_void` (unwrap collapses
+  into the non-null registration contract); `alloc.dupe + in-place clone` ->
+  one clone-into-Vec pass (searchCallback_ viewport matches, same failure
+  points); R2 identity in childExitedAbnormally's user-facing "Ghostty failed
+  to launch..." -> `rustty_identity::APP_NAME`.
+- **Additive growth (upstream crate, Rust-only glue):** rustty-xev
+  `NotifyError` gained `Clone/Copy/PartialEq/Eq` derives (required by the
+  `surface::Error` union's derives; faithful — Zig error sets are trivially
+  copyable/comparable, survives the real libxev fill).
+- **SEQUENCING STUBS (not deferrals; later chunks fill IN PLACE):**
+  `updateRendererHealth`/`updateScrollbar`/`updateConfig` (C8,
+  Surface.zig:1677/1689/1714), `clipboardWrite`/`setSelection` (C9,
+  :2162/:2335), `posToViewport` (C13, :4726), `startClipboardRequest`/
+  `showDesktopNotification`/`presentSurface` (C15, :5822/:5968/:6023) —
+  `unimplemented!()` stubs carrying the reference doc comments and exact
+  signatures; C7's arms are their first callsites. The C6
+  `#[allow(dead_code)]`s on `surfaceMailbox`/`queueIo` are removed (first
+  consumers landed); `searchCallback`/`searchCallback_` carry the allow until
+  the C14 search registration names them.

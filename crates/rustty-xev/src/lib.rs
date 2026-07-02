@@ -56,7 +56,12 @@ pub struct Timer {}
 pub struct Error;
 
 /// PORT: `xev.Async.NotifyError` (the error set of `Async.notify`).
-#[derive(Debug)]
+//
+// PORT NOTE: the extra derives are required by rustty-core's `surface::Error`
+// union (core C7), which embeds this error and itself derives
+// `Copy`/`PartialEq` (Zig error sets are trivially copyable/comparable
+// values, so the derives are faithful and survive the real libxev fill).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotifyError;
 
 impl Loop {

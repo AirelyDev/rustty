@@ -24,9 +24,15 @@
 //! xev handles, `Termio.init` — runtime panics confined there), with
 //! `activateInspector`/`deactivateInspector` the ONLY verbatim-comment
 //! deferrals (CORE_BLUEPRINT §4 — they construct the uninhabited Phase-3
-//! `Inspector`); CORE_BLUEPRINT §6 rows C7..C15 fill the remaining function
-//! bodies IN PLACE — the C4-declared method stubs below are owned by C7/C8/
-//! C14).
+//! `Inspector`); chunk C7 landed Surface.zig:958-1523 — `handleMessage` (all
+//! 22 Message arms, checked exhaustively against the reference)/
+//! `selectionScrollTick`/`childExited`(+`Abnormally`)/`passwordInput`/
+//! `searchCallback`(`_`) LIVE (the search-thread callbacks are fully real —
+//! blueprint §5; the 3 `wakeup.notify` sites are the xev leaves) plus
+//! `queueRender` (:2461, ahead of its C8 row — one-line xev leaf this range
+//! calls); CORE_BLUEPRINT §6 rows C8..C15 fill the remaining function bodies
+//! IN PLACE — the declared method stubs below are owned by C8/C9/C13/C14/
+//! C15).
 
 // PARITY: the reference's identifiers are camelCase (`needsConfirmQuit`,
 // `handleMessage`, `performBindingAction`, `scaledPadding`,
@@ -133,12 +139,30 @@ use rustty_inspector as inspectorpkg;
 use rustty_apprt_api::surface::AppMailbox;
 use rustty_datastruct::blocking_queue::{Size as QueueSize, Timeout};
 
-// The apprt action payloads init sends (`performAction` — cell_size /
-// size_limit / set_title), and the `Surface` seam trait for the typed
-// `rt_surface.*` method edges (aliased per the C0 DECISION note — core's own
-// struct is also named `Surface`).
-use rustty_apprt_api::action::{CellSize, SetTitle, SizeLimit};
+// The apprt action payloads init/handleMessage send (`performAction` —
+// cell_size / size_limit / set_title / color_change / pwd / secure_input /
+// show_child_exited / command_finished / search_total / search_selected),
+// and the `Surface` seam trait for the typed `rt_surface.*` method edges
+// (aliased per the C0 DECISION note — core's own struct is also named
+// `Surface`).
+use rustty_apprt_api::action::{
+    CellSize, ColorChange, ColorKind, CommandFinished, Pwd, SearchSelected, SearchTotal,
+    SecureInput, SetTitle, SizeLimit,
+};
 use rustty_apprt_api::Surface as ApprtSurface;
+
+// The apprt WriteReq payload arms (`Message.clipboard_write`/`pwd_change` are
+// `MessageData(u8, 255)` unions) + the termio `write_alloc` payload
+// (handleMessage's report_title arm) — C7.
+use rustty_datastruct::message_data::Alloc;
+use rustty_datastruct::MessageData;
+
+// The vt search-thread event type (`terminal.search.Thread.Event`) —
+// searchCallback(_)'s dispatch (C7) — and the vt `Terminal` the reference
+// names as `terminal.Terminal` under the renderer mutex (the renderer
+// state.rs / termio_impl.rs import precedent).
+use rustty_vt::search::thread::Event as SearchThreadEvent;
+use rustty_vt::terminal::Terminal;
 
 // const log = std.log.scoped(.surface);
 // PORT NOTE: the reference `log.debug/info/warn/err` sites are preserved
@@ -1056,18 +1080,53 @@ fn font_shared_grid_set_derived_config(
     }
 }
 
-/// PORT NOTE (GROWTH POINT, Rust-only glue): the Surface methods App reaches
-/// today (`handleMessage`/`performBindingAction`) return `!void`/`!bool` —
-/// error unions whose error SETS are *inferred* from the (C6/C7/C14-owned)
-/// bodies. Until those chunks land, this opaque marker types the seam
-/// (precedent: `rustty_termio::Error`, `rustty_apprt_api::ApprtError`); it
-/// gains the real error sets at the growth point.
+/// PORT NOTE (GROWTH POINT, Rust-only glue): the shared *inferred*-error
+/// union of the Surface method family — the reference methods App reaches
+/// (`handleMessage`/`performBindingAction`) and the chunk-owned helpers they
+/// call return `!void`/`!bool` with error sets inferred from the bodies.
+/// The C7 fill grew the former opaque unit marker into the union of the
+/// concrete sources its bodies reach (the app.rs `Error` union precedent);
+/// the remaining chunk-owned bodies (C8/C9/C14/C15) keep growing it at each
+/// growth point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Error;
+pub enum Error {
+    /// The apprt seam edges (`rt_app.performAction`, `rt_surface.
+    /// getCursorPos`) — the opaque apprt-api growth-point marker.
+    Apprt(apprt::ApprtError),
+    /// The xev `Async.notify` leaves (`searchCallback_`'s renderer wakeups,
+    /// `queueRender`) — the D6 placeholder seam.
+    Xev(rustty_xev::NotifyError),
+    /// vt terminal/highlight storage failures (`searchCallback_`'s
+    /// `Flattened.clone`) — Zig `Allocator.Error` surfaced as vt
+    /// `OutOfMemory` (the vt convention).
+    OutOfMemory(terminal::pagelist::OutOfMemory),
+}
+
+impl From<apprt::ApprtError> for Error {
+    fn from(err: apprt::ApprtError) -> Error {
+        Error::Apprt(err)
+    }
+}
+
+impl From<rustty_xev::NotifyError> for Error {
+    fn from(err: rustty_xev::NotifyError) -> Error {
+        Error::Xev(err)
+    }
+}
+
+impl From<terminal::pagelist::OutOfMemory> for Error {
+    fn from(err: terminal::pagelist::OutOfMemory) -> Error {
+        Error::OutOfMemory(err)
+    }
+}
 
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "core surface operation failed")
+        match self {
+            Error::Apprt(err) => err.fmt(f),
+            Error::Xev(err) => write!(f, "core surface operation failed: {err:?}"),
+            Error::OutOfMemory(err) => write!(f, "core surface operation failed: {err:?}"),
+        }
     }
 }
 
@@ -2288,10 +2347,7 @@ impl<A: apprt::App + 'static> Surface<A> {
     /// Returns a mailbox that can be used to send messages to this surface.
     // inline fn surfaceMailbox(self: *Surface) Mailbox {
     //
-    // PORT NOTE: reference `inline fn` -> `#[inline]`; the C7+ callsites
-    // (`handleMessage` etc.) land later — the allow is removed when the first
-    // one does.
-    #[allow(dead_code)]
+    // PORT NOTE: reference `inline fn` -> `#[inline]`.
     #[inline]
     fn surfaceMailbox(&mut self) -> Mailbox<A> {
         // return .{
@@ -2318,10 +2374,7 @@ impl<A: apprt::App + 'static> Surface<A> {
     // ) void {
     //
     // PORT NOTE: `Message<'static>` — the queued instantiation (the termio
-    // cross-thread-queue precedent). The C7+ callsites (`handleMessage` etc.)
-    // land later — the allow is removed when the first one does (the deferred
-    // activate/deactivateInspector bodies below name it meanwhile).
-    #[allow(dead_code)]
+    // cross-thread-queue precedent).
     fn queueIo(&mut self, msg: termio::Message<'static>, mutex: termio::termio_impl::MutexState) {
         // In readonly mode, we don't allow any writes through to the pty.
         // if (self.readonly) {
@@ -2481,14 +2534,1129 @@ impl<A: apprt::App + 'static> Surface<A> {
     /// Called from the app thread to handle mailbox messages to our specific
     /// surface.
     //
-    // PORT NOTE (STUB — chunk C7 fills): `pub fn handleMessage(self:
-    // *Surface, msg: Message) !void` — Surface.zig:960. `Message<'_>` (not
-    // `'static`): the one borrowed variant, `ChangeConfig(&Config)`, is
-    // DIRECT-dispatched by `App.updateConfig`, never queued (apprt-api
-    // `AppMailbox` note).
+    // pub fn handleMessage(self: *Surface, msg: Message) !void {
+    //
+    // PORT NOTE: `Message<'_>` (not `'static`): the one borrowed variant,
+    // `ChangeConfig(&Config)`, is DIRECT-dispatched by `App.updateConfig`,
+    // never queued (apprt-api `AppMailbox` note). The inferred `!void` is the
+    // [`Error`] union.
     pub fn handleMessage(&mut self, msg: Message<'_>) -> Result<(), Error> {
-        let _ = msg;
-        unimplemented!("Surface.handleMessage lands with core chunk C7 (Surface.zig:960)")
+        // switch (msg) {
+        match msg {
+            // .change_config => |config| try self.updateConfig(config),
+            Message::ChangeConfig(config) => self.updateConfig(config)?,
+
+            // .set_title => |*v| {
+            Message::SetTitle(v) => {
+                // We ignore the message in case the title was set via config.
+                // if (self.config.title != null) {
+                if self.config.title.is_some() {
+                    // log.debug("ignoring title change request since static title is set via config", .{});
+                    return Ok(());
+                }
+
+                // The ptrCast just gets sliceTo to return the proper type.
+                // We know that our title should end in 0.
+                // const slice = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(v)), 0);
+                let slice = &v[..v.iter().position(|&b| b == 0).unwrap_or(v.len())];
+                // log.debug("changing title \"{s}\"", .{slice});
+                // _ = try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .set_title,
+                //     .{ .title = slice },
+                // );
+                let _ = unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::SetTitle(SetTitle { title: slice }),
+                )?;
+            }
+
+            // .report_title => |style| report_title: {
+            Message::ReportTitle(style) => 'report_title: {
+                // if (!self.config.title_report) {
+                if !self.config.title_report {
+                    // log.info("report_title requested, but disabled via config", .{});
+                    break 'report_title;
+                }
+
+                // const title: ?[:0]const u8 = self.rt_surface.getTitle();
+                let title: Option<&std::ffi::CStr> = unsafe { &*self.rt_surface }.get_title();
+                // const data = switch (style) {
+                //     .csi_21_t => try std.fmt.allocPrint(
+                //         self.alloc,
+                //         "\x1b]l{s}\x1b\\",
+                //         .{title orelse ""},
+                //     ),
+                // };
+                //
+                // PORT NOTE: `allocPrint` over the raw title bytes -> an owned
+                // byte Vec (the title is a raw C string — never a lossy
+                // String); the OOM-only `try` collapses (infallible Rust
+                // allocation).
+                let data: Vec<u8> = match style {
+                    apprt::ReportTitleStyle::Csi21t => {
+                        let mut data = Vec::new();
+                        data.extend_from_slice(b"\x1b]l");
+                        // (`title orelse ""`)
+                        data.extend_from_slice(match title {
+                            Some(v) => v.to_bytes(),
+                            None => &[],
+                        });
+                        data.extend_from_slice(b"\x1b\\");
+                        data
+                    }
+                };
+
+                // We always use an allocating message because we don't know
+                // the length of the title and this isn't a performance critical
+                // path.
+                // self.queueIo(.{
+                //     .write_alloc = .{
+                //         .alloc = self.alloc,
+                //         .data = data,
+                //     },
+                // }, .unlocked);
+                //
+                // (the `.alloc` field collapses into the `Alloc` payload's Box
+                // ownership — the datastruct message_data PORT NOTE.)
+                self.queueIo(
+                    termio::Message::WriteAlloc(Alloc {
+                        data: data.into_boxed_slice(),
+                    }),
+                    termio::termio_impl::MutexState::Unlocked,
+                );
+            }
+
+            // .color_change => |change| color_change: {
+            Message::ColorChange(change) => 'color_change: {
+                // Notify our apprt, but don't send a mode 2031 DSR report
+                // because VT sequences were used to change the color.
+                // _ = try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .color_change,
+                //     .{ ... },
+                // );
+                let _ = unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::ColorChange(ColorChange {
+                        // .kind = switch (change.target) {
+                        kind: match change.target {
+                            // .palette => |v| @enumFromInt(v),
+                            terminal::osc::color::Target::Palette(v) => ColorKind(i32::from(v)),
+                            // .dynamic => |dyn| switch (dyn) {
+                            terminal::osc::color::Target::Dynamic(dynamic) => match dynamic {
+                                // .foreground => .foreground,
+                                terminal::color::Dynamic::Foreground => ColorKind::FOREGROUND,
+                                // .background => .background,
+                                terminal::color::Dynamic::Background => ColorKind::BACKGROUND,
+                                // .cursor => .cursor,
+                                terminal::color::Dynamic::Cursor => ColorKind::CURSOR,
+                                // Unsupported dynamic color change notification type
+                                // else => break :color_change,
+                                _ => break 'color_change,
+                            },
+                            // Special colors aren't supported for change notification
+                            // .special => break :color_change,
+                            terminal::osc::color::Target::Special(_) => break 'color_change,
+                        },
+                        // .r = change.color.r,
+                        r: change.color.r,
+                        // .g = change.color.g,
+                        g: change.color.g,
+                        // .b = change.color.b,
+                        b: change.color.b,
+                    }),
+                )?;
+            }
+
+            // .set_mouse_shape => |shape| {
+            Message::SetMouseShape(shape) => {
+                // log.debug("changing mouse shape: {}", .{shape});
+                // _ = try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .mouse_shape,
+                //     shape,
+                // );
+                let _ = unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::MouseShape(shape),
+                )?;
+            }
+
+            // .clipboard_read => |clipboard| {
+            Message::ClipboardRead(clipboard) => {
+                // if (self.config.clipboard_read == .deny) {
+                if self.config.clipboard_read == configpkg::value_types::ClipboardAccess::Deny {
+                    // log.info("application attempted to read clipboard, but 'clipboard-read' is set to deny", .{});
+                    return Ok(());
+                }
+
+                // _ = try self.startClipboardRequest(.standard, .{ .osc_52_read = clipboard });
+                let _ = self.startClipboardRequest(
+                    apprt::Clipboard::Standard,
+                    apprt::ClipboardRequest::Osc52Read(clipboard),
+                )?;
+            }
+
+            // .clipboard_write => |w| switch (w.req) {
+            Message::ClipboardWrite {
+                clipboard_type,
+                req,
+            } => match req {
+                // .small => |v| try self.clipboardWrite(v.data[0..v.len], w.clipboard_type),
+                MessageData::Small(v) => self.clipboardWrite(&v.data[0..v.len], clipboard_type)?,
+                // .stable => |v| try self.clipboardWrite(v, w.clipboard_type),
+                MessageData::Stable(v) => self.clipboardWrite(v, clipboard_type)?,
+                // .alloc => |v| {
+                MessageData::Alloc(v) => {
+                    // defer v.alloc.free(v.data);
+                    // (ownership drop at arm scope end — the collapsed
+                    // `Alloc.alloc` Box ownership.)
+                    // try self.clipboardWrite(v.data, w.clipboard_type);
+                    self.clipboardWrite(&v.data, clipboard_type)?;
+                }
+            },
+
+            // .pwd_change => |w| {
+            Message::PwdChange(w) => {
+                // defer w.deinit();
+                // (`WriteReq.deinit` — the alloc-variant free — is Drop in
+                // rustty; runs at arm scope end, the datastruct precedent.)
+
+                // We always allocate for this because we need to null-terminate.
+                // const str = try self.alloc.dupeZ(u8, w.slice());
+                // defer self.alloc.free(str);
+                //
+                // PORT NOTE: the apprt-api `Pwd` payload carries raw bytes
+                // (`&[u8]`); the reference's NUL-termination (`dupeZ`) is part
+                // of the deferred C-ABI pinning (the action.rs `PwdC` PORT
+                // NOTE). The owned dupe + scope-end drop realize the
+                // alloc/free pair (Zig defer LIFO == Rust reverse-declaration
+                // drop: `str` before `w`).
+                let str_ = w.slice().to_vec();
+
+                // _ = try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .pwd,
+                //     .{ .pwd = str },
+                // );
+                let _ = unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::Pwd(Pwd { pwd: &str_ }),
+                )?;
+            }
+
+            // .close => self.close(),
+            Message::Close => self.close(),
+
+            // .child_exited => |v| self.childExited(v),
+            Message::ChildExited(v) => self.childExited(v),
+
+            // .desktop_notification => |notification| {
+            Message::DesktopNotification { title, body } => {
+                // if (!self.config.desktop_notifications) {
+                if !self.config.desktop_notifications {
+                    // log.info("application attempted to display a desktop notification, but 'desktop-notifications' is disabled", .{});
+                    return Ok(());
+                }
+
+                // const title = std.mem.sliceTo(&notification.title, 0);
+                let title = &title[..title.iter().position(|&b| b == 0).unwrap_or(title.len())];
+                // const body = std.mem.sliceTo(&notification.body, 0);
+                let body = &body[..body.iter().position(|&b| b == 0).unwrap_or(body.len())];
+                // try self.showDesktopNotification(title, body);
+                self.showDesktopNotification(title, body)?;
+            }
+
+            // .renderer_health => |health| self.updateRendererHealth(health),
+            Message::RendererHealth(health) => self.updateRendererHealth(health),
+
+            // .scrollbar => |scrollbar| self.updateScrollbar(scrollbar),
+            Message::Scrollbar(scrollbar) => self.updateScrollbar(scrollbar),
+
+            // .present_surface => try self.presentSurface(),
+            Message::PresentSurface => self.presentSurface()?,
+
+            // .password_input => |v| try self.passwordInput(v),
+            Message::PasswordInput(v) => self.passwordInput(v)?,
+
+            // .ring_bell => bell: {
+            Message::RingBell => 'bell: {
+                // const now = std.time.Instant.now() catch unreachable;
+                //
+                // (Rust `Instant::now` is infallible — the `catch unreachable`
+                // collapses.)
+                let now = std::time::Instant::now();
+                // if (self.last_bell_time) |last| {
+                if let Some(last) = self.last_bell_time {
+                    // if (now.since(last) < 100 * std.time.ns_per_ms) break :bell;
+                    //
+                    // (`Instant.since` -> `duration_since` nanoseconds; the
+                    // config_struct.rs NS_PER_MS precedent.)
+                    const NS_PER_MS: u128 = 1_000_000;
+                    if now.duration_since(last).as_nanos() < 100 * NS_PER_MS {
+                        break 'bell;
+                    }
+                }
+                // self.last_bell_time = now;
+                self.last_bell_time = Some(now);
+                // _ = self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .ring_bell,
+                //     {},
+                // ) catch |err| {
+                //     log.warn("apprt failed to ring bell={}", .{err});
+                // };
+                if let Err(_err) = unsafe { &*self.rt_app }
+                    .perform_action(apprt::Target::Surface(&*self), apprt::Action::RingBell)
+                {
+                    // log.warn("apprt failed to ring bell={}", .{err});
+                }
+            }
+
+            // .progress_report => |v| {
+            Message::ProgressReport(v) => {
+                // _ = self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .progress_report,
+                //     v,
+                // ) catch |err| {
+                //     log.warn("apprt failed to report progress err={}", .{err});
+                // };
+                if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::ProgressReport(v),
+                ) {
+                    // log.warn("apprt failed to report progress err={}", .{err});
+                }
+            }
+
+            // .selection_scroll_tick => |active| {
+            Message::SelectionScrollTick(active) => {
+                // self.selection_scroll_active = active;
+                self.selection_scroll_active = active;
+                // try self.selectionScrollTick();
+                self.selectionScrollTick()?;
+            }
+
+            // .start_command => {
+            Message::StartCommand => {
+                // self.command_timer = try .now();
+                //
+                // (Rust `Instant::now` is infallible — the `try` collapses.)
+                self.command_timer = Some(std::time::Instant::now());
+            }
+
+            // .stop_command => |v| timer: {
+            Message::StopCommand(v) => 'timer: {
+                // const end: std.time.Instant = try .now();
+                let end: std::time::Instant = std::time::Instant::now();
+                // const start = self.command_timer orelse break :timer;
+                let start = match self.command_timer {
+                    Some(start) => start,
+                    None => break 'timer,
+                };
+                // self.command_timer = null;
+                self.command_timer = None;
+
+                // const duration: Duration = .{ .duration = end.since(start) };
+                let duration: Duration = Duration {
+                    duration: end.duration_since(start).as_nanos() as u64,
+                };
+                // log.debug("command took {f}", .{duration});
+
+                // _ = self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .command_finished,
+                //     .{
+                //         .exit_code = v,
+                //         .duration = duration,
+                //     },
+                // ) catch |err| {
+                //     log.warn("apprt failed to notify command finish={}", .{err});
+                // };
+                if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::CommandFinished(CommandFinished {
+                        exit_code: v,
+                        duration,
+                    }),
+                ) {
+                    // log.warn("apprt failed to notify command finish={}", .{err});
+                }
+            }
+
+            // .search_total => |v| {
+            Message::SearchTotal(v) => {
+                // _ = try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .search_total,
+                //     .{ .total = v },
+                // );
+                let _ = unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::SearchTotal(SearchTotal { total: v }),
+                )?;
+            }
+
+            // .search_selected => |v| {
+            Message::SearchSelected(v) => {
+                // _ = try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .search_selected,
+                //     .{ .selected = v },
+                // );
+                let _ = unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::SearchSelected(SearchSelected { selected: v }),
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
+    // fn selectionScrollTick(self: *Surface) !void {
+    fn selectionScrollTick(&mut self) -> Result<(), Error> {
+        // If we're no longer active then we don't do anything.
+        // if (!self.selection_scroll_active) return;
+        if !self.selection_scroll_active {
+            return Ok(());
+        }
+
+        // If our gesture doesn't want autoscrolling then disable it.
+        // const was_autoscrolling = self.mouse.selection_gesture.left_drag_autoscroll != .none;
+        let was_autoscrolling = self.mouse.selection_gesture.left_drag_autoscroll
+            != terminal::selection_gesture::Autoscroll::None;
+        // if (!was_autoscrolling) {
+        if !was_autoscrolling {
+            // self.queueIo(
+            //     .{ .selection_scroll = false },
+            //     .unlocked,
+            // );
+            self.queueIo(
+                termio::Message::SelectionScroll(false),
+                termio::termio_impl::MutexState::Unlocked,
+            );
+            return Ok(());
+        }
+
+        // const pos = try self.rt_surface.getCursorPos();
+        let pos = unsafe { &*self.rt_surface }.get_cursor_pos()?;
+        // const pos_vp = self.posToViewport(pos.x, pos.y);
+        //
+        // (Zig widens the f32 cursor coordinates to the f64 params.)
+        let pos_vp = self.posToViewport(f64::from(pos.x), f64::from(pos.y));
+
+        // We need our locked state for the remainder
+        // self.renderer_state.mutex.lock();
+        // defer self.renderer_state.mutex.unlock();
+        //
+        // (guard-less zigstd Mutex — CORE_BLUEPRINT §3; the defer is the
+        // explicit unlock at every exit below.)
+        unsafe { (*self.renderer_state.mutex).lock() };
+        // const t: *terminal.Terminal = self.renderer_state.terminal;
+        let t: *mut Terminal = self.renderer_state.terminal;
+
+        // const selection = self.mouse.selection_gesture.autoscrollTick(t, .{
+        //     .viewport = pos_vp,
+        //     .xpos = pos.x,
+        //     .ypos = pos.y,
+        //     .rectangle = SurfaceMouse.isRectangleSelectState(self.mouse.mods),
+        //     .word_boundary_codepoints = self.config.selection_word_chars,
+        //     .geometry = .{
+        //         .columns = @intCast(self.size.grid().columns),
+        //         .cell_width = self.size.cell.width,
+        //         .padding_left = self.size.padding.left,
+        //         .screen_height = self.size.screen.height,
+        //     },
+        // });
+        let selection = self.mouse.selection_gesture.autoscroll_tick(
+            unsafe { &mut *t },
+            terminal::selection_gesture::AutoscrollTick {
+                viewport: pos_vp,
+                xpos: f64::from(pos.x),
+                ypos: f64::from(pos.y),
+                rectangle: crate::surface_mouse::SurfaceMouse::is_rectangle_select_state(
+                    self.mouse.mods,
+                ),
+                word_boundary_codepoints: &self.config.selection_word_chars,
+                geometry: terminal::selection_gesture::Geometry {
+                    columns: u32::from(self.size.grid().columns),
+                    cell_width: self.size.cell.width,
+                    padding_left: self.size.padding.left,
+                    screen_height: self.size.screen.height,
+                },
+            },
+        );
+
+        // If we're no longer autoscrolling for whatever reason, disable it.
+        // if (self.mouse.selection_gesture.left_drag_autoscroll == .none) {
+        if self.mouse.selection_gesture.left_drag_autoscroll
+            == terminal::selection_gesture::Autoscroll::None
+        {
+            // self.queueIo(
+            //     .{ .selection_scroll = false },
+            //     .locked,
+            // );
+            self.queueIo(
+                termio::Message::SelectionScroll(false),
+                termio::termio_impl::MutexState::Locked,
+            );
+        }
+
+        // If our left click was invalidated, ignore the result. This isn't
+        // strictly necessary but its a nice to have.
+        // if (self.mouse.selection_gesture.left_click_count == 0) return;
+        if self.mouse.selection_gesture.left_click_count == 0 {
+            // (the deferred mutex unlock)
+            unsafe { (*self.renderer_state.mutex).unlock() };
+            return Ok(());
+        }
+
+        // We modified our viewport and selection so we need to queue
+        // a render.
+        // try self.setSelection(selection);
+        if let Err(err) = self.setSelection(selection) {
+            // (the deferred mutex unlock — the error exit)
+            unsafe { (*self.renderer_state.mutex).unlock() };
+            return Err(err);
+        }
+        // try self.queueRender();
+        if let Err(err) = self.queueRender() {
+            // (the deferred mutex unlock — the error exit)
+            unsafe { (*self.renderer_state.mutex).unlock() };
+            return Err(err.into());
+        }
+
+        // (the deferred mutex unlock — the normal exit)
+        unsafe { (*self.renderer_state.mutex).unlock() };
+        Ok(())
+    }
+
+    // fn childExited(self: *Surface, info: apprt.surface.Message.ChildExited) void {
+    //
+    // PARITY: not `.unwrap_or(false)` on the two performAction results —
+    // each Err arm IS the reference's labeled `catch |err| gui:` block with
+    // its log site (the init conditional-state precedent).
+    #[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]
+    fn childExited(&mut self, info: apprt::surface::ChildExited) {
+        // Mark our flag that we exited immediately
+        // self.child_exited = true;
+        self.child_exited = true;
+
+        // If our runtime was below some threshold then we assume that this
+        // was an abnormal exit and we show an error message.
+        // if (info.runtime_ms <= self.config.abnormal_command_exit_runtime_ms) runtime: {
+        if info.runtime_ms <= u64::from(self.config.abnormal_command_exit_runtime_ms) {
+            'runtime: {
+                // On macOS, our exit code detection doesn't work, possibly
+                // because of our `login` wrapper. More investigation required.
+                // if (comptime !builtin.target.os.tag.isDarwin()) {
+                if !cfg!(target_vendor = "apple") {
+                    // If the exit code is 0 then it was a good exit.
+                    // if (info.exit_code == 0) break :runtime;
+                    if info.exit_code == 0 {
+                        break 'runtime;
+                    }
+                }
+
+                // log.warn("abnormal process exit detected, showing error message", .{});
+
+                // Try and show a GUI message. If it returns true, don't do anything else.
+                // if (self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .show_child_exited,
+                //     info,
+                // ) catch |err| gui: {
+                //     log.err("error trying to show native child exited GUI err={}", .{err});
+                //     break :gui false;
+                // }) return;
+                if match unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::ShowChildExited(info),
+                ) {
+                    Ok(shown) => shown,
+                    Err(_err) => {
+                        // log.err("error trying to show native child exited GUI err={}", .{err});
+                        // break :gui false;
+                        false
+                    }
+                } {
+                    return;
+                }
+
+                // If a native GUI notification was not shown, update our terminal to
+                // note the abnormal exit.
+                // self.childExitedAbnormally(info) catch |err| {
+                //     log.err("error handling abnormal child exit err={}", .{err});
+                //     return;
+                // };
+                if let Err(_err) = self.childExitedAbnormally(info) {
+                    // log.err("error handling abnormal child exit err={}", .{err});
+                    return;
+                }
+
+                return;
+            }
+        }
+
+        // We output a message so that the user knows what's going on and
+        // doesn't think their terminal just froze. We show this unconditionally
+        // on close even if `wait_after_command` is false and the surface closes
+        // immediately because if a user does an `undo` to restore a closed
+        // surface then they will see this message and know the process has
+        // completed.
+        // terminal: {
+        'terminal: {
+            // First try and show a native GUI message.
+            // if (self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .show_child_exited,
+            //     info,
+            // ) catch |err| gui: {
+            //     log.err("error trying to show native child exited GUI err={}", .{err});
+            //     break :gui false;
+            // }) break :terminal;
+            if match unsafe { &*self.rt_app }.perform_action(
+                apprt::Target::Surface(&*self),
+                apprt::Action::ShowChildExited(info),
+            ) {
+                Ok(shown) => shown,
+                Err(_err) => {
+                    // log.err("error trying to show native child exited GUI err={}", .{err});
+                    // break :gui false;
+                    false
+                }
+            } {
+                break 'terminal;
+            }
+
+            // If the native GUI can't be shown, display a text message in the
+            // terminal.
+            // self.renderer_state.mutex.lock();
+            // defer self.renderer_state.mutex.unlock();
+            //
+            // (guard-less zigstd Mutex — the defer is the explicit unlock at
+            // every exit of this block.)
+            unsafe { (*self.renderer_state.mutex).lock() };
+            // const t: *terminal.Terminal = self.renderer_state.terminal;
+            let t: *mut Terminal = self.renderer_state.terminal;
+            // t.carriageReturn();
+            unsafe { (*t).carriage_return() };
+            // t.linefeed() catch break :terminal;
+            if unsafe { (*t).linefeed() }.is_err() {
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                break 'terminal;
+            }
+            // t.printString("Process exited. Press any key to close the terminal.") catch
+            //     break :terminal;
+            if unsafe { (*t).print_string(b"Process exited. Press any key to close the terminal.") }
+                .is_err()
+            {
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                break 'terminal;
+            }
+            // t.modes.set(.cursor_visible, false);
+            unsafe { (*t).modes.set(terminal::modes::Mode::CursorVisible, false) };
+
+            // We also want to ensure that normal keyboard encoding is on
+            // so that we can close the terminal. We close the terminal on
+            // any key press that encodes a character.
+            // t.modes.set(.disable_keyboard, false);
+            unsafe {
+                (*t).modes
+                    .set(terminal::modes::Mode::DisableKeyboard, false)
+            };
+            // t.screens.active.kitty_keyboard.set(.set, .disabled);
+            unsafe {
+                (*(*t).screens.active).kitty_keyboard.set(
+                    terminal::kitty::key::SetMode::Set,
+                    terminal::kitty::KeyFlags::DISABLED,
+                )
+            };
+
+            // (the deferred mutex unlock — the normal exit of the block)
+            unsafe { (*self.renderer_state.mutex).unlock() };
+        }
+
+        // Waiting after command we stop here. The terminal is updated, our
+        // state is updated, and now its up to the user to decide what to do.
+        // if (self.config.wait_after_command) return;
+        if self.config.wait_after_command {
+            return;
+        }
+
+        // If we aren't waiting after the command, then we exit immediately
+        // with no confirmation.
+        // self.close();
+        self.close();
+    }
+
+    /// Called when the child process exited abnormally.
+    //
+    // fn childExitedAbnormally(
+    //     self: *Surface,
+    //     info: apprt.surface.Message.ChildExited,
+    // ) !void {
+    //
+    // PORT NOTE: the inferred `!void` error set is the vt terminal storage
+    // failures (`setAttribute`/`plainString`/`linefeed`/`print`/`printString`
+    // — Zig `Allocator.Error` surfaced as vt `OutOfMemory`); the
+    // join/allocPrint OOMs collapse (infallible Rust allocation).
+    #[allow(clippy::redundant_closure_call)]
+    fn childExitedAbnormally(
+        &mut self,
+        info: apprt::surface::ChildExited,
+    ) -> Result<(), terminal::pagelist::OutOfMemory> {
+        // var arena = ArenaAllocator.init(self.alloc);
+        // defer arena.deinit();
+        // const alloc = arena.allocator();
+        //
+        // PORT NOTE (collapsed arena): the allocations below are owned values
+        // that free on drop (the C5 DerivedConfig arena-collapse precedent);
+        // the arena's allocator maps to the surface allocator.
+        let alloc = self.alloc;
+
+        // Build up our command for the error message
+        // const command = try std.mem.join(alloc, " ", switch (self.io.backend) {
+        //     .exec => |*exec| exec.subprocess.args,
+        // });
+        let command: Vec<u8> = match &self.io.backend {
+            termio::Backend::Exec(exec) => exec
+                .subprocess
+                .args
+                .iter()
+                .map(|arg| arg.to_bytes().to_vec())
+                .collect::<Vec<Vec<u8>>>()
+                .join(&b' '),
+        };
+        // const runtime_str = try std.fmt.allocPrint(alloc, "{d} ms", .{info.runtime_ms});
+        let runtime_str = format!("{} ms", info.runtime_ms);
+
+        // self.renderer_state.mutex.lock();
+        // defer self.renderer_state.mutex.unlock();
+        //
+        // (guard-less zigstd Mutex — the deferred unlock is realized ONCE at
+        // the single exit below; the `?`-propagating body is scoped in an
+        // immediately-invoked closure so the unlock also runs on the error
+        // paths — the vt search/screen.rs error-scoping precedent.)
+        unsafe { (*self.renderer_state.mutex).lock() };
+        // const t: *terminal.Terminal = self.renderer_state.terminal;
+        let t: *mut Terminal = self.renderer_state.terminal;
+
+        let result = (|| -> Result<(), terminal::pagelist::OutOfMemory> {
+            unsafe {
+                // No matter what move the cursor back to the column 0.
+                // t.carriageReturn();
+                (*t).carriage_return();
+
+                // Reset styles
+                // try t.setAttribute(.{ .unset = {} });
+                (*t).set_attribute(terminal::sgr::Attribute::Unset)?;
+
+                // If there is data in the viewport, we want to scroll down
+                // a little bit and write a horizontal rule before writing
+                // our message. This lets the use see the error message the
+                // command may have output.
+                // const viewport_str = try t.plainString(alloc);
+                let viewport_str = (*t).plain_string(alloc)?;
+                // if (viewport_str.len > 0) {
+                if !viewport_str.is_empty() {
+                    // try t.linefeed();
+                    (*t).linefeed()?;
+                    // for (0..t.cols) |_| try t.print(0x2501);
+                    for _ in 0..(*t).cols {
+                        (*t).print(0x2501)?;
+                    }
+                    // t.carriageReturn();
+                    (*t).carriage_return();
+                    // try t.linefeed();
+                    (*t).linefeed()?;
+                    // try t.linefeed();
+                    (*t).linefeed()?;
+                }
+
+                // Output our error message
+                // try t.setAttribute(.{ .@"8_fg" = .bright_red });
+                (*t).set_attribute(terminal::sgr::Attribute::Color8Fg(
+                    terminal::color::Name::BrightRed,
+                ))?;
+                // try t.setAttribute(.{ .bold = {} });
+                (*t).set_attribute(terminal::sgr::Attribute::Bold)?;
+                // try t.printString("Ghostty failed to launch the requested command:");
+                //
+                // PORT (R2 identity): the product name in the user-facing
+                // message — `rustty_identity::APP_NAME`.
+                (*t).print_string(
+                    format!(
+                        "{} failed to launch the requested command:",
+                        rustty_identity::APP_NAME
+                    )
+                    .as_bytes(),
+                )?;
+                // try t.setAttribute(.{ .unset = {} });
+                (*t).set_attribute(terminal::sgr::Attribute::Unset)?;
+
+                // t.carriageReturn();
+                (*t).carriage_return();
+                // try t.linefeed();
+                (*t).linefeed()?;
+                // try t.linefeed();
+                (*t).linefeed()?;
+                // try t.printString(command);
+                (*t).print_string(&command)?;
+                // try t.setAttribute(.{ .unset = {} });
+                (*t).set_attribute(terminal::sgr::Attribute::Unset)?;
+
+                // t.carriageReturn();
+                (*t).carriage_return();
+                // try t.linefeed();
+                (*t).linefeed()?;
+                // try t.linefeed();
+                (*t).linefeed()?;
+                // try t.printString("Runtime: ");
+                (*t).print_string(b"Runtime: ")?;
+                // try t.setAttribute(.{ .@"8_fg" = .red });
+                (*t).set_attribute(terminal::sgr::Attribute::Color8Fg(
+                    terminal::color::Name::Red,
+                ))?;
+                // try t.printString(runtime_str);
+                (*t).print_string(runtime_str.as_bytes())?;
+                // try t.setAttribute(.{ .unset = {} });
+                (*t).set_attribute(terminal::sgr::Attribute::Unset)?;
+
+                // We don't print this on macOS because the exit code is always 0
+                // due to the way we launch the process.
+                // if (comptime !builtin.target.os.tag.isDarwin()) {
+                if !cfg!(target_vendor = "apple") {
+                    // const exit_code_str = try std.fmt.allocPrint(alloc, "{d}", .{info.exit_code});
+                    let exit_code_str = format!("{}", info.exit_code);
+                    // t.carriageReturn();
+                    (*t).carriage_return();
+                    // try t.linefeed();
+                    (*t).linefeed()?;
+                    // try t.printString("Exit Code: ");
+                    (*t).print_string(b"Exit Code: ")?;
+                    // try t.setAttribute(.{ .@"8_fg" = .red });
+                    (*t).set_attribute(terminal::sgr::Attribute::Color8Fg(
+                        terminal::color::Name::Red,
+                    ))?;
+                    // try t.printString(exit_code_str);
+                    (*t).print_string(exit_code_str.as_bytes())?;
+                    // try t.setAttribute(.{ .unset = {} });
+                    (*t).set_attribute(terminal::sgr::Attribute::Unset)?;
+                }
+
+                // t.carriageReturn();
+                (*t).carriage_return();
+                // try t.linefeed();
+                (*t).linefeed()?;
+                // try t.linefeed();
+                (*t).linefeed()?;
+                // try t.printString("Press any key to close the window.");
+                (*t).print_string(b"Press any key to close the window.")?;
+
+                // Hide the cursor
+                // t.modes.set(.cursor_visible, false);
+                (*t).modes.set(terminal::modes::Mode::CursorVisible, false);
+            }
+
+            Ok(())
+        })();
+
+        // (the deferred mutex unlock — runs on both the Ok and Err paths)
+        unsafe { (*self.renderer_state.mutex).unlock() };
+        result
+    }
+
+    /// Called when the terminal detects there is a password input prompt.
+    // fn passwordInput(self: *Surface, v: bool) !void {
+    fn passwordInput(&mut self, v: bool) -> Result<(), Error> {
+        {
+            // self.renderer_state.mutex.lock();
+            // defer self.renderer_state.mutex.unlock();
+            //
+            // (guard-less zigstd Mutex — the defer is the explicit unlock at
+            // both exits of this block.)
+            unsafe { (*self.renderer_state.mutex).lock() };
+
+            // If our password input state is unchanged then we don't
+            // waste time doing anything more.
+            // const old = self.io.terminal.flags.password_input;
+            let old = self.io.terminal.flags.password_input;
+            // if (old == v) return;
+            if old == v {
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return Ok(());
+            }
+
+            // self.io.terminal.flags.password_input = v;
+            self.io.terminal.flags.password_input = v;
+
+            unsafe { (*self.renderer_state.mutex).unlock() };
+        }
+
+        // Notify our apprt so it can do whatever it wants.
+        // _ = self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .secure_input,
+        //     if (v) .on else .off,
+        // ) catch |err| {
+        //     // We ignore this error because we don't want to fail this
+        //     // entire operation just because the apprt failed to set
+        //     // the secure input state.
+        //     log.warn("apprt failed to set secure input state err={}", .{err});
+        // };
+        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+            apprt::Target::Surface(&*self),
+            apprt::Action::SecureInput(if v { SecureInput::On } else { SecureInput::Off }),
+        ) {
+            // We ignore this error because we don't want to fail this
+            // entire operation just because the apprt failed to set
+            // the secure input state.
+            // log.warn("apprt failed to set secure input state err={}", .{err});
+        }
+
+        // try self.queueRender();
+        self.queueRender()?;
+        Ok(())
+    }
+
+    // fn searchCallback(event: terminal.search.Thread.Event, ud: ?*anyopaque) void {
+    //
+    // PORT NOTE: the C14 `performBindingAction` search arm registers this as
+    // the vt `search::thread::Options.event_cb` fn pointer (`?*anyopaque` ->
+    // the seam's bare `*mut c_void`) — the allow is removed when that
+    // callsite lands.
+    #[allow(dead_code)]
+    fn searchCallback(event: SearchThreadEvent<'_>, ud: *mut core::ffi::c_void) {
+        // IMPORTANT: This function is run on the SEARCH THREAD! It is NOT SAFE
+        // to access anything other than values that never change on the surface.
+        // The surface is guaranteed to be valid for the lifetime of the search
+        // thread.
+        // const self: *Surface = @ptrCast(@alignCast(ud.?));
+        //
+        // (`ud.?` — the vt seam models the userdata as a bare pointer, so the
+        // unwrap collapses into the non-null registration contract.)
+        let self_: *mut Surface<A> = ud.cast();
+        // self.searchCallback_(event) catch |err| {
+        //     log.warn("error in search callback err={}", .{err});
+        // };
+        if let Err(_err) = unsafe { &mut *self_ }.searchCallback_(event) {
+            // log.warn("error in search callback err={}", .{err});
+        }
+    }
+
+    // fn searchCallback_(
+    //     self: *Surface,
+    //     event: terminal.search.Thread.Event,
+    // ) !void {
+    //
+    // (reached only via `searchCallback` above until the C14 registration —
+    // same allow.)
+    #[allow(dead_code)]
+    fn searchCallback_(&mut self, event: SearchThreadEvent<'_>) -> Result<(), Error> {
+        // NOTE: This runs on the search thread.
+
+        // switch (event) {
+        match event {
+            // .viewport_matches => |matches_unowned| {
+            SearchThreadEvent::ViewportMatches(matches_unowned) => {
+                // var arena: ArenaAllocator = .init(self.alloc);
+                // errdefer arena.deinit();
+                // const alloc = arena.allocator();
+                //
+                // PORT NOTE (collapsed arena): the renderer `SearchMatches`
+                // payload owns its Vec (the renderer message.rs arena-collapse
+                // note); the errdefer is the Vec drop on the `?` unwind.
+
+                // const matches = try alloc.dupe(terminal.highlight.Flattened, matches_unowned);
+                // for (matches) |*m| m.* = try m.clone(alloc);
+                //
+                // (the shallow dupe + in-place deep clone collapse into one
+                // clone-into-Vec pass — same elements, same failure points.)
+                let mut matches: Vec<terminal::highlight::Flattened> =
+                    Vec::with_capacity(matches_unowned.len());
+                for m in matches_unowned {
+                    matches.push(m.clone()?);
+                }
+
+                // _ = self.renderer_thread.mailbox.push(
+                //     .{ .search_viewport_matches = .{
+                //         .arena = arena,
+                //         .matches = matches,
+                //     } },
+                //     .forever,
+                // );
+                let _ = unsafe { &*self.renderer_thread.mailbox }.push(
+                    rendererpkg::Message::SearchViewportMatches(
+                        rendererpkg::message::SearchMatches { matches },
+                    ),
+                    Timeout::Forever,
+                );
+                // try self.renderer_thread.wakeup.notify();
+                self.renderer_thread.wakeup.notify()?;
+            }
+
+            // .selected_match => |selected_| {
+            SearchThreadEvent::SelectedMatch(selected_) => {
+                // if (selected_) |sel| {
+                if let Some(sel) = selected_ {
+                    // Copy the flattened match.
+                    // var arena: ArenaAllocator = .init(self.alloc);
+                    // errdefer arena.deinit();
+                    // const alloc = arena.allocator();
+                    // const match = try sel.highlight.clone(alloc);
+                    //
+                    // (same collapsed arena as above; `match` is a Rust
+                    // keyword — the renderer message.rs `r#match` note.)
+                    let match_ = sel.highlight.clone()?;
+
+                    // _ = self.renderer_thread.mailbox.push(
+                    //     .{ .search_selected_match = .{
+                    //         .arena = arena,
+                    //         .match = match,
+                    //     } },
+                    //     .forever,
+                    // );
+                    let _ = unsafe { &*self.renderer_thread.mailbox }.push(
+                        rendererpkg::Message::SearchSelectedMatch(Some(
+                            rendererpkg::message::SearchMatch { r#match: match_ },
+                        )),
+                        Timeout::Forever,
+                    );
+
+                    // Send the selected index to the surface mailbox
+                    // _ = self.surfaceMailbox().push(
+                    //     .{ .search_selected = sel.idx },
+                    //     .forever,
+                    // );
+                    let _ = self
+                        .surfaceMailbox()
+                        .push(Message::SearchSelected(Some(sel.idx)), Timeout::Forever);
+                } else {
+                    // Reset our selected match
+                    // _ = self.renderer_thread.mailbox.push(
+                    //     .{ .search_selected_match = null },
+                    //     .forever,
+                    // );
+                    let _ = unsafe { &*self.renderer_thread.mailbox }.push(
+                        rendererpkg::Message::SearchSelectedMatch(None),
+                        Timeout::Forever,
+                    );
+
+                    // Reset the selected index
+                    // _ = self.surfaceMailbox().push(
+                    //     .{ .search_selected = null },
+                    //     .forever,
+                    // );
+                    let _ = self
+                        .surfaceMailbox()
+                        .push(Message::SearchSelected(None), Timeout::Forever);
+                }
+
+                // try self.renderer_thread.wakeup.notify();
+                self.renderer_thread.wakeup.notify()?;
+            }
+
+            // .total_matches => |total| {
+            SearchThreadEvent::TotalMatches(total) => {
+                // _ = self.surfaceMailbox().push(
+                //     .{ .search_total = total },
+                //     .forever,
+                // );
+                //
+                // (Zig coerces the `usize` into the `?usize` payload.)
+                let _ = self
+                    .surfaceMailbox()
+                    .push(Message::SearchTotal(Some(total)), Timeout::Forever);
+            }
+
+            // When we quit, tell our renderer to reset any search state.
+            // .quit => {
+            SearchThreadEvent::Quit => {
+                // _ = self.renderer_thread.mailbox.push(
+                //     .{ .search_selected_match = null },
+                //     .forever,
+                // );
+                let _ = unsafe { &*self.renderer_thread.mailbox }.push(
+                    rendererpkg::Message::SearchSelectedMatch(None),
+                    Timeout::Forever,
+                );
+                // _ = self.renderer_thread.mailbox.push(
+                //     .{ .search_viewport_matches = .{
+                //         .arena = .init(self.alloc),
+                //         .matches = &.{},
+                //     } },
+                //     .forever,
+                // );
+                let _ = unsafe { &*self.renderer_thread.mailbox }.push(
+                    rendererpkg::Message::SearchViewportMatches(
+                        rendererpkg::message::SearchMatches {
+                            matches: Vec::new(),
+                        },
+                    ),
+                    Timeout::Forever,
+                );
+                // try self.renderer_thread.wakeup.notify();
+                self.renderer_thread.wakeup.notify()?;
+
+                // Reset search totals in the surface
+                // _ = self.surfaceMailbox().push(
+                //     .{ .search_total = null },
+                //     .forever,
+                // );
+                let _ = self
+                    .surfaceMailbox()
+                    .push(Message::SearchTotal(None), Timeout::Forever);
+                // _ = self.surfaceMailbox().push(
+                //     .{ .search_selected = null },
+                //     .forever,
+                // );
+                let _ = self
+                    .surfaceMailbox()
+                    .push(Message::SearchSelected(None), Timeout::Forever);
+            }
+
+            // Unhandled, so far.
+            // .complete => {},
+            SearchThreadEvent::Complete => {}
+        }
+
+        Ok(())
+    }
+
+    /// Called when our renderer health state changes.
+    //
+    // PORT NOTE (STUB — chunk C8 fills): `fn updateRendererHealth(self:
+    // *Surface, health: rendererpkg.Health) void` — Surface.zig:1677
+    // (handleMessage's :1090 callsite lands with C7).
+    fn updateRendererHealth(&mut self, health: rendererpkg::Health) {
+        let _ = health;
+        unimplemented!("Surface.updateRendererHealth lands with core chunk C8 (Surface.zig:1677)")
+    }
+
+    /// Called when the scrollbar state changes.
+    //
+    // PORT NOTE (STUB — chunk C8 fills): `fn updateScrollbar(self: *Surface,
+    // scrollbar: terminal.Scrollbar) void` — Surface.zig:1689
+    // (handleMessage's :1092 callsite lands with C7).
+    fn updateScrollbar(&mut self, scrollbar: terminal::pagelist::grow::Scrollbar) {
+        let _ = scrollbar;
+        unimplemented!("Surface.updateScrollbar lands with core chunk C8 (Surface.zig:1689)")
+    }
+
+    /// Update our configuration at runtime. This can be called by the apprt
+    /// to set a surface-specific configuration that differs from the app
+    /// or other surfaces.
+    //
+    // PORT NOTE (STUB — chunk C8 fills): `pub fn updateConfig(self: *Surface,
+    // original: *const configpkg.Config) !void` — Surface.zig:1714
+    // (handleMessage's :962 callsite lands with C7).
+    pub fn updateConfig(&mut self, original: &configpkg::Config) -> Result<(), Error> {
+        let _ = original;
+        unimplemented!("Surface.updateConfig lands with core chunk C8 (Surface.zig:1714)")
     }
 
     /// Recalculate the initial size of the window based on the
@@ -2503,6 +3671,45 @@ impl<A: apprt::App + 'static> Surface<A> {
         unimplemented!("Surface.recomputeInitialSize lands with core chunk C8 (Surface.zig:1826)")
     }
 
+    // PORT NOTE (STUB — chunk C9 fills): `fn clipboardWrite(self: *const
+    // Surface, data: []const u8, loc: apprt.Clipboard) !void` —
+    // Surface.zig:2162 (handleMessage's clipboard_write callsites land with
+    // C7).
+    fn clipboardWrite(&self, data: &[u8], loc: apprt::Clipboard) -> Result<(), Error> {
+        let _ = (data, loc);
+        unimplemented!("Surface.clipboardWrite lands with core chunk C9 (Surface.zig:2162)")
+    }
+
+    /// Set the active selection and notify the apprt on a genuine state
+    /// transition. All selection mutations route through here rather than
+    /// `screen.select` directly so the notification fires consistently. To
+    /// also copy per `copy_on_select`, use `setSelectionAndCopy`.
+    ///
+    /// This must be called with the renderer mutex held.
+    //
+    // PORT NOTE (STUB — chunk C9 fills): `fn setSelection(self: *Surface,
+    // sel_: ?terminal.Selection) !void` — Surface.zig:2335
+    // (selectionScrollTick's :1220 callsite lands with C7).
+    fn setSelection(&mut self, sel_: Option<terminal::selection::Selection>) -> Result<(), Error> {
+        let _ = sel_;
+        unimplemented!("Surface.setSelection lands with core chunk C9 (Surface.zig:2335)")
+    }
+
+    /// This queues a render operation with the renderer thread. The render
+    /// isn't guaranteed to happen immediately but it will happen as soon as
+    /// practical.
+    //
+    // fn queueRender(self: *Surface) !void {
+    //
+    // PORT NOTE (ported with C7, ahead of its C8 row — Surface.zig:2461-2465;
+    // selectionScrollTick/passwordInput call it): the inferred `!void` is the
+    // xev notify error (the CORE_BLUEPRINT §5 xev-blocked one-line leaf).
+    fn queueRender(&mut self) -> Result<(), rustty_xev::NotifyError> {
+        // try self.renderer_thread.wakeup.notify();
+        self.renderer_thread.wakeup.notify()?;
+        Ok(())
+    }
+
     // PORT NOTE (STUB — chunk C8 fills): `fn resize(self: *Surface, size:
     // rendererpkg.ScreenSize) !void` — Surface.zig:2485 (init's :708 callsite
     // lands with C6; the sizeCallback/setFontSize callsites with C8/C11; the
@@ -2511,6 +3718,15 @@ impl<A: apprt::App + 'static> Surface<A> {
     fn resize(&mut self, size: rendererpkg::size::ScreenSize) -> Result<(), Error> {
         let _ = size;
         unimplemented!("Surface.resize lands with core chunk C8 (Surface.zig:2485)")
+    }
+
+    // PORT NOTE (STUB — chunk C13 fills): `pub fn posToViewport(self: Surface,
+    // xpos: f64, ypos: f64) terminal.point.Coordinate` — Surface.zig:4726
+    // (note the reference's BY-VALUE receiver — read-only, `&self` here;
+    // selectionScrollTick's :1185 callsite lands with C7).
+    pub fn posToViewport(&self, xpos: f64, ypos: f64) -> terminal::point::Coordinate {
+        let _ = (xpos, ypos);
+        unimplemented!("Surface.posToViewport lands with core chunk C13 (Surface.zig:4726)")
     }
 
     /// Perform a binding action. A binding is a keybinding. This function
@@ -2529,6 +3745,47 @@ impl<A: apprt::App + 'static> Surface<A> {
     pub fn performBindingAction(&mut self, action: binding::Action) -> Result<bool, Error> {
         let _ = action;
         unimplemented!("Surface.performBindingAction lands with core chunk C14 (Surface.zig:4775)")
+    }
+
+    /// This starts a clipboard request, with some basic validation. For example,
+    /// an OSC 52 request is not actually requested if OSC 52 is disabled.
+    ///
+    /// Returns true if the request was started, false if it was not (e.g., clipboard
+    /// doesn't contain text for paste requests). This allows performable keybinds
+    /// to pass through when the action cannot be performed.
+    //
+    // PORT NOTE (STUB — chunk C15 fills): `fn startClipboardRequest(self:
+    // *Surface, loc: apprt.Clipboard, req: apprt.ClipboardRequest) !bool` —
+    // Surface.zig:5822 (handleMessage's clipboard_read callsite lands with
+    // C7; the `!bool` is load-bearing — [ADV-FIX 1]).
+    fn startClipboardRequest(
+        &mut self,
+        loc: apprt::Clipboard,
+        req: apprt::ClipboardRequest,
+    ) -> Result<bool, Error> {
+        let _ = (loc, req);
+        unimplemented!("Surface.startClipboardRequest lands with core chunk C15 (Surface.zig:5822)")
+    }
+
+    // PORT NOTE (STUB — chunk C15 fills): `fn showDesktopNotification(self:
+    // *Surface, title: [:0]const u8, body: [:0]const u8) !void` —
+    // Surface.zig:5968 (handleMessage's desktop_notification callsite lands
+    // with C7; the `[:0]const u8` params are raw bytes — `&[u8]`).
+    fn showDesktopNotification(&mut self, title: &[u8], body: &[u8]) -> Result<(), Error> {
+        let _ = (title, body);
+        unimplemented!(
+            "Surface.showDesktopNotification lands with core chunk C15 (Surface.zig:5968)"
+        )
+    }
+
+    /// Tell the surface to present itself to the user. This may involve raising the
+    /// window and switching tabs.
+    //
+    // PORT NOTE (STUB — chunk C15 fills): `fn presentSurface(self: *Surface)
+    // !void` — Surface.zig:6023 (handleMessage's present_surface callsite
+    // lands with C7).
+    fn presentSurface(&mut self) -> Result<(), Error> {
+        unimplemented!("Surface.presentSurface lands with core chunk C15 (Surface.zig:6023)")
     }
 }
 
