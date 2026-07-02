@@ -99,6 +99,15 @@ RSAP = "/Users/gael/projects/rustty/crates/rustty-apprt-api/src"
 # renderer.zig is at src/renderer.zig (crate root), one level above GHR (src/renderer).
 GHSRC = "/Users/gael/projects/ghostty/src"
 
+# rustty-crash: the crash tier (integration-tier blueprint stage 1). GH base =
+# src/crash. The `pkg/sentry` Zig binding package is hosted in-crate as the
+# `sentry_pkg` module (dep-glue over the vendored sentry-sys) and counted with
+# crash_sentry (its only anon `test { refAllDecls }` is skipped by zig_count;
+# the Rust side adds reify/seam helper tests — rust >= zig holds).
+GHCR = "/Users/gael/projects/ghostty/src/crash"
+GHPKGS = "/Users/gael/projects/ghostty/pkg/sentry"
+RSCR = "/Users/gael/projects/rustty/crates/rustty-crash/src"
+
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
@@ -410,6 +419,18 @@ MAP = {
     # surface.zig / structs.zig: no test{} blocks -> zig=0 each (0 >= 0).
     "apprt_api_surface": ([f"{GHAP}/surface.zig"], [f"{RSAP}/surface.rs"], 0),
     "apprt_api_structs": ([f"{GHAP}/structs.zig"], [f"{RSAP}/structs.rs"], 0),
+    # rustty-crash (integration-tier stage 1). dir.zig: no test{} -> zig=0.
+    "crash_dir":         ([f"{GHCR}/dir.zig"], [f"{RSCR}/dir.rs"], 0),
+    # sentry.zig: no test{} -> zig=0; the pkg/sentry binding package files are
+    # counted here too (main.zig's anon refAllDecls is skipped by zig_count).
+    # Rust adds the sentry_pkg reify + the ThreadStateSurface seam tests.
+    "crash_sentry":      ([f"{GHCR}/sentry.zig"] + glob.glob(f"{GHPKGS}/*.zig"), [f"{RSCR}/sentry.rs", f"{RSCR}/sentry_pkg/*.rs"], 0),
+    # sentry_envelope.zig: 8 quoted tests -> sentry_envelope.rs (8, R1 contract).
+    "crash_sentry_envelope": ([f"{GHCR}/sentry_envelope.zig"], [f"{RSCR}/sentry_envelope.rs"], 0),
+    # main.zig: 1 anon refAllDecls test (skipped by zig_count -> zig=0); ported
+    # as lib.rs's ref_all_decls reify smoke. rust=1 >= 0 (the "main 1 reify" of
+    # the blueprint's crash=9 accounting: envelope 8 + main 1).
+    "crash_main":        ([f"{GHCR}/main.zig"], [f"{RSCR}/lib.rs"], 0),
 }
 
 def expand(globs):

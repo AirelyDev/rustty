@@ -174,6 +174,15 @@ dcimgui-sys = { path = "crates-sys/dcimgui-sys" }
 # / `deallocate` map to Zig `rawAlloc`/`rawFree`. `Global` == the current
 # `std::alloc` path, so threading it as the child allocator is behavior-preserving.
 allocator-api2 = "0.2"
+# Zig `std.json` equivalent for the crash-envelope port (rustty-crash): the
+# reference's `std.json.ObjectMap` is a `StringArrayHashMap(Value)` — an
+# INSERTION-ORDER-preserving string map — so `serde_json` is pinned with the
+# `preserve_order` feature (IndexMap-backed `Map`) to reproduce that ordering;
+# envelope header serialization must round-trip byte-for-byte (R1). Like the
+# std-lib shims in rustty-zigstd, this maps a Zig *stdlib* facility, not
+# ghostty code (R3 concerns C libraries; pure-Rust bindings to stdlib-level
+# functionality are fine).
+serde_json = { version = "1", features = ["preserve_order"] }
 
 # Workspace-wide lints. Kept conservative for the scaffold phase; tightened as
 # real ported code lands. R1/R5: never weaken to pass — lint exceptions must be

@@ -16,5 +16,25 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# `internal_os = @import("../os/main.zig")` — xdg state/cache dirs + the macOS
+# NSCachesDirectory / pthread_setname_np paths.
 rustty-os = { workspace = true }
-rustty-util = { workspace = true }
+# `build_config = @import("../build_config.zig")` — version_string + the
+# setTag build-mode/app-runtime/font-backend/renderer values.
+rustty-build-config = { workspace = true }
+# R2: the app-name segment of the reference's `"ghostty/crash"`/`"ghostty/sentry"`
+# XDG subdirs (and the `.ghosttycrash` report extension) comes from the identity
+# source-of-truth crate instead of being hardcoded.
+rustty-identity = { workspace = true }
+# R3: the vendored sentry-native 0.7.8 (ghostty's fixed `backend = .inproc`,
+# `transport = .none` build) behind the ported pkg/sentry wrapper (`sentry_pkg`).
+sentry-sys = { workspace = true }
+# Zig `std.json` equivalent (ObjectMap == insertion-order-preserving map; see
+# the workspace manifest note). Used by the sentry_envelope port.
+serde_json = { workspace = true }
+
+# NOTE (R4, integration-tier blueprint): `rustty-global` stays INJECTED (break #1
+# — the reference's `state = &@import("../global.zig").state` allocator read is a
+# DI seam, not a hard dep), and rustty-crash must NOT depend on rustty-renderer
+# (renderer already deps crash — the reverse edge would cycle), which is why the
+# `ThreadStateSurface` seam uses plain `(u32, u32)` tuples.

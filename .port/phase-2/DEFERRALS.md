@@ -501,3 +501,33 @@ crash-prone `link`-only subset went 3/24 → **0/60**, the full suite 1/24 →
 The `TERMINAL_TEST_LOCK` + `terminal_test_guard()` + the 8 `let _terminal_guard`
 call sites have been deleted. The unrelated `SHADER_FFI_LOCK` (glslang/spirv-cross
 ARE genuinely non-reentrant) is intentionally retained.
+
+## rustty-crash (integration-tier stage 1) — `ThreadStateSurface` seam; concrete `ThreadState` impl deferred
+
+`src/crash/` is ported in full (dir.zig + main.zig + sentry.zig +
+sentry_envelope.zig; the `pkg/sentry` Zig binding package is hosted in-crate as
+the `sentry_pkg` module over the vendored `sentry-sys`). One seam, per the
+integration-tier blueprint:
+
+- **Seam (landed):** the reference `ThreadState.surface` field is a concrete
+  `*Surface` (src/Surface.zig — the core tier ABOVE crash) and `beforeSend`
+  reads `surface.size.{screen, grid(), cell}` off it LIVE at crash time. That
+  read surface is seamed behind the crash-local trait
+  `sentry::ThreadStateSurface { screen_size/grid_size/cell_size -> (u32, u32) }`;
+  `ThreadState<S: ThreadStateSurface>` holds a raw `*const S`, preserving the
+  reference's live (possibly-torn) read semantics (the Zig comment calls it
+  "likely unsafe... most likely fine"; a snapshot would change semantics, so
+  none is taken). Plain `(u32, u32)` tuples are acyclicity-REQUIRED:
+  rustty-renderer already deps rustty-crash, so crash must NOT dep renderer for
+  its size types. This is deliberately NOT apprt-api's `CoreSurfaceHandle`
+  (different concern).
+- **DEFERRED (untested-only, 0 tests — R1-safe):** the concrete
+  `ThreadStateSurface` impl. rustty-core's `Surface` implements the trait when
+  the core tier lands (`Surface.crashThreadState()` + the
+  `crash.sentry.thread_state = ...` call sites in Surface.zig, renderer
+  Thread.zig, termio Thread.zig/Exec.zig — each ports with its owning file via
+  `sentry::setThreadState`/`clearThreadState`).
+- Note: tests never call the real `sentry_init` (the reference gates init on
+  build options and threading; the vendored build is `transport = .none`) —
+  the sentry tests exercise `beforeSend` + the seam through the PURE value API
+  only, and `sentry_pkg`'s reify test mirrors the sentry-sys KAT idiom.
