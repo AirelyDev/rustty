@@ -60,9 +60,17 @@
 //! trailing cluster; focusCallback's comptime modifier-release loop is a
 //! local-macro unroll; six more [ADV 6.1] guard sites) with STUBS for
 //! `isMouseReporting`/`mouseReport` (C12) and `completeClipboardPaste`
-//! (C15) — their first callsites are this tier;
-//! CORE_BLUEPRINT §6 rows C12..C15 fill the remaining function bodies IN
-//! PLACE — the declared method stubs below are owned by C12/C13/C14/C15).
+//! (C15) — their first callsites are this tier; chunk C12 landed the mouse
+//! tier, Surface.zig:3640-4278 — `isMouseReporting`/`mouseReport`/
+//! `mouseShiftCapture`/`mouseCaptured`/`mouseButtonCallback`/
+//! `maybePromptClick` LIVE (one more [ADV 6.1] guard site; the
+//! defer-unlock blocks realize the explicit unlock at every exit — the
+//! C7..C11 convention — including the right-click paste arms' inverted
+//! unlock→`defer` relock replayed in LIFO order) with STUBS added for the
+//! C13 helpers its bodies call (`cursorPosCallback`/`linkAtPin`/
+//! `processLinks`);
+//! CORE_BLUEPRINT §6 rows C13..C15 fill the remaining function bodies IN
+//! PLACE — the declared method stubs below are owned by C13/C14/C15).
 
 // PARITY: the reference's identifiers are camelCase (`needsConfirmQuit`,
 // `handleMessage`, `performBindingAction`, `scaledPadding`,
@@ -107,7 +115,8 @@ use allocator_api2::alloc::Global as Allocator;
 // PORT NOTE: first reached by C8 (`crash.sentry.thread_state` in
 // sizeCallback/preeditCallback + `crashThreadState`, ahead of its C10 row —
 // [ADV 6.1]); the C10 key tier added its keyCallback site; the C11 callback
-// tier added its six sites; the remaining sites land with C12-C13.
+// tier added its six sites; the C12 mouse tier added its mouseButtonCallback
+// site; the last site (cursorPosCallback) lands with C13.
 use rustty_crash as crash;
 // const unicode = @import("unicode/main.zig");
 //
@@ -162,6 +171,9 @@ use rustty_vt::input::key::KeyEvent;
 use rustty_vt::input::key_encode;
 use rustty_vt::input::key_mods::Mods;
 use rustty_vt::input::mouse as input_mouse;
+// PORT NOTE (D1 vt slice): `input.mouse_encode` lives in rustty-vt (the
+// mouse encoder is VT-protocol logic) — `mouseReport` (C12).
+use rustty_vt::input::mouse_encode;
 // const App = @import("App.zig");
 use crate::app::App;
 // const internal_os = @import("os/main.zig");
@@ -1155,6 +1167,10 @@ pub enum Error {
     /// `std.unicode.Utf8View.init`'s `error.InvalidUtf8`
     /// (`preeditCallback` — C8).
     Utf8(std::str::Utf8Error),
+    /// `std.fmt.bufPrint`'s fixed-buffer write (`maybePromptClick` — C12) —
+    /// the reference `error.NoSpaceLeft` surfaced as io's `WriteZero` (the
+    /// encodeKey fixed-Cursor mapping).
+    Io(std::io::Error),
 }
 
 impl From<apprt::ApprtError> for Error {
@@ -1193,6 +1209,12 @@ impl From<std::str::Utf8Error> for Error {
     }
 }
 
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Error {
+        Error::Io(err)
+    }
+}
+
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -1202,6 +1224,7 @@ impl core::fmt::Display for Error {
             Error::FontGrid(err) => write!(f, "core surface operation failed: {err:?}"),
             Error::InitChangeConfig(err) => write!(f, "core surface operation failed: {err:?}"),
             Error::Utf8(err) => err.fmt(f),
+            Error::Io(err) => err.fmt(f),
         }
     }
 }
@@ -3799,9 +3822,9 @@ where
     /// The renderer state mutex MUST NOT be held.
     // fn modsChanged(self: *Surface, mods: input.Mods) void {
     //
-    // PORT NOTE: the C10 keyCallback (:2720) callsite is live; the C12
-    // mouseButtonCallback (:3774) / C13 cursorPosCallback (:4558) callsites
-    // land later.
+    // PORT NOTE: the C10 keyCallback (:2720) / C12 mouseButtonCallback
+    // (:3774) callsites are live; the C13 cursorPosCallback (:4558) callsite
+    // lands later.
     fn modsChanged(&mut self, mods: Mods) {
         // The only place we keep track of mods currently is on the mouse.
         // if (!self.mouse.mods.equal(mods)) {
@@ -5290,10 +5313,8 @@ where
     /// This must be called with the renderer mutex held.
     // fn setSelectionAndCopy(self: *Surface, sel: terminal.Selection) !void {
     //
-    // PORT NOTE: the C12 mouseButtonCallback (:3866) / C13 cursorPosCallback
-    // (:4086/:4092) callsites land later; the allow is removed when the
-    // first one does.
-    #[allow(dead_code)]
+    // PORT NOTE: the C12 mouseButtonCallback (:3866) callsites are live; the
+    // C13 cursorPosCallback (:4086/:4092) callsites land later.
     fn setSelectionAndCopy(&mut self, sel: terminal::selection::Selection) -> Result<(), Error> {
         // try self.setSelection(sel);
         self.setSelection(Some(sel))?;
@@ -7550,18 +7571,23 @@ where
 
     /// Returns true if mouse reporting is enabled both in the config and
     /// the terminal state.
+    // fn isMouseReporting(self: *const Surface) bool {
     //
-    // PORT NOTE (STUB — chunk C12 fills): `fn isMouseReporting(self: *const
-    // Surface) bool` — Surface.zig:3640 (scrollCallback's :3525/:3568
-    // callsites land with C11; `*const` receiver -> `&self`).
+    // (`*const` receiver -> `&self`.)
     fn isMouseReporting(&self) -> bool {
-        unimplemented!("Surface.isMouseReporting lands with core chunk C12 (Surface.zig:3640)")
+        // return self.config.mouse_reporting and
+        //     self.io.terminal.flags.mouse_event != .none;
+        self.config.mouse_reporting
+            && self.io.terminal.flags.mouse_event != terminal::mouse::Event::None
     }
 
-    // PORT NOTE (STUB — chunk C12 fills): `fn mouseReport(self: *Surface,
-    // button: ?input.MouseButton, action: input.MouseAction, mods:
-    // input.Mods, pos: apprt.CursorPos) void` — Surface.zig:3646
-    // (scrollCallback's :3571/:3579 callsites land with C11).
+    // fn mouseReport(
+    //     self: *Surface,
+    //     button: ?input.MouseButton,
+    //     action: input.MouseAction,
+    //     mods: input.Mods,
+    //     pos: apprt.CursorPos,
+    // ) void {
     fn mouseReport(
         &mut self,
         button: Option<input_mouse::Button>,
@@ -7569,8 +7595,109 @@ where
         mods: Mods,
         pos: apprt::CursorPos,
     ) {
-        let _ = (button, action, mods, pos);
-        unimplemented!("Surface.mouseReport lands with core chunk C12 (Surface.zig:3646)")
+        // Mouse reporting must be enabled by both config and terminal state
+        // assert(self.config.mouse_reporting);
+        debug_assert!(self.config.mouse_reporting);
+        // assert(self.io.terminal.flags.mouse_event != .none);
+        debug_assert!(self.io.terminal.flags.mouse_event != terminal::mouse::Event::None);
+
+        // Build our encoding options.
+        // const encoding_opts: input.mouse_encode.Options = opts: {
+        let encoding_opts: mouse_encode::Options<'_> = 'opts: {
+            // Terminal and size state.
+            // var opts: input.mouse_encode.Options = .fromTerminal(
+            //     &self.io.terminal,
+            //     self.size,
+            // );
+            //
+            // (the ported `from_terminal` takes the two terminal-flags reads
+            // directly — the mouse_encode.rs constructor-seam note.)
+            let mut opts: mouse_encode::Options<'_> = mouse_encode::Options::from_terminal(
+                self.io.terminal.flags.mouse_event,
+                self.io.terminal.flags.mouse_format,
+                self.size,
+            );
+
+            // Whether any button is pressed at all.
+            // opts.any_button_pressed = pressed: {
+            opts.any_button_pressed = 'pressed: {
+                // for (self.mouse.click_state) |state| {
+                for state in self.mouse.click_state {
+                    // if (state != .release) break :pressed true;
+                    if state != input_mouse::ButtonState::Release {
+                        break 'pressed true;
+                    }
+                }
+
+                // break :pressed false;
+                false
+            };
+
+            // Keep track of our last reported viewport cell for event
+            // deduplication.
+            // opts.last_cell = &self.mouse.event_point;
+            opts.last_cell = Some(&mut self.mouse.event_point);
+
+            // break :opts opts;
+            break 'opts opts;
+        };
+
+        // var data: termio.Message.WriteReq.Small.Array = undefined;
+        // var writer: std.Io.Writer = .fixed(&data);
+        //
+        // PORT NOTE: `Small.Array` == `[u8; WriteReq::MAX]`; Zig `undefined`
+        // -> zeroed (the tail past `len` is never read). The `.fixed` writer
+        // is a Cursor over the stack array — a write past the end is io's
+        // `WriteZero`, the reference's `error.WriteFailed` (the encodeKey
+        // precedent).
+        let mut data = [0u8; termio::message::WriteReq::MAX];
+        let mut writer = std::io::Cursor::new(&mut data[..]);
+        // input.mouse_encode.encode(&writer, .{
+        //     .button = button,
+        //     .action = action,
+        //     .mods = mods,
+        //     .pos = .{
+        //         .x = pos.x,
+        //         .y = pos.y,
+        //     },
+        // }, encoding_opts) catch |err| switch (err) {
+        //     error.WriteFailed => { ... },
+        // };
+        if let Err(_err) = mouse_encode::encode(
+            &mut writer,
+            mouse_encode::Event {
+                button,
+                action,
+                mods,
+                pos: mouse_encode::Pos { x: pos.x, y: pos.y },
+            },
+            encoding_opts,
+        ) {
+            // This should never happen since mouse events should never
+            // be able to overflow the size of our small array. But if it
+            // does, let's log it and return. No need to crash upstreams.
+            // In the future we may want to fall back to allocation.
+            // log.warn("failed to encode mouse event err={}", .{err});
+            return;
+        }
+        // const written = writer.buffered();
+        let written_len = writer.position() as usize;
+        // if (written.len == 0) return;
+        if written_len == 0 {
+            return;
+        }
+
+        // self.queueIo(.{ .write_small = .{
+        //     .data = data,
+        //     .len = @intCast(written.len),
+        // } }, .locked);
+        self.queueIo(
+            termio::Message::WriteSmall(Small {
+                data,
+                len: written_len,
+            }),
+            termio::termio_impl::MutexState::Locked,
+        );
     }
 
     /// Returns the link at the given cursor position, if any.
@@ -7586,16 +7713,1244 @@ where
         unimplemented!("Surface.linkAtPos lands with core chunk C13 (Surface.zig:4279)")
     }
 
+    // PORT NOTE (STUB — chunk C13 fills): `fn linkAtPin(self: *Surface,
+    // mouse_pin: terminal.Pin, mouse_mods: ?input.Mods) !?Link` —
+    // Surface.zig:4316 (the C12 mouseButtonCallback :3993 callsite is live).
+    fn linkAtPin(
+        &mut self,
+        mouse_pin: terminal::pagelist::Pin,
+        mouse_mods: Option<Mods>,
+    ) -> Result<Option<Link>, Error> {
+        let _ = (mouse_pin, mouse_mods);
+        unimplemented!("Surface.linkAtPin lands with core chunk C13 (Surface.zig:4316)")
+    }
+
     /// Returns true if the shift modifier is allowed to be captured by modifier
     /// events. It is up to the caller to still verify it is a situation in which
     /// shift capture makes sense (i.e. left button, mouse click, etc.)
+    // fn mouseShiftCapture(self: *const Surface, lock: bool) bool {
     //
-    // PORT NOTE (STUB — chunk C12 fills): `fn mouseShiftCapture(self: *const
-    // Surface, lock: bool) bool` — Surface.zig:3712 (keyCallback's :2727
-    // callsite lands with C10; `*const` receiver -> `&self`).
+    // (`*const` receiver -> `&self`.)
     fn mouseShiftCapture(&self, lock: bool) -> bool {
-        let _ = lock;
-        unimplemented!("Surface.mouseShiftCapture lands with core chunk C12 (Surface.zig:3712)")
+        // Handle our never/always case where we don't need a lock.
+        // switch (self.config.mouse_shift_capture) {
+        match self.config.mouse_shift_capture {
+            // .never => return false,
+            configpkg::value_types::MouseShiftCapture::Never => return false,
+            // .always => return true,
+            configpkg::value_types::MouseShiftCapture::Always => return true,
+            // .false, .true => {},
+            configpkg::value_types::MouseShiftCapture::False
+            | configpkg::value_types::MouseShiftCapture::True => {}
+        }
+
+        // if (lock) self.renderer_state.mutex.lock();
+        if lock {
+            unsafe { (*self.renderer_state.mutex).lock() };
+        }
+        // defer if (lock) self.renderer_state.mutex.unlock();
+        //
+        // (guard-less zigstd Mutex — the defer is the conditional explicit
+        // unlock at every exit below.)
+
+        // If the terminal explicitly requests it then we always allow it
+        // since we processed never/always at this point.
+        // switch (self.io.terminal.flags.mouse_shift_capture) {
+        match self.io.terminal.flags.mouse_shift_capture {
+            // .false => return false,
+            terminal::terminal::MouseShiftCapture::False => {
+                // (the deferred conditional unlock — the false return)
+                if lock {
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                }
+                return false;
+            }
+            // .true => return true,
+            terminal::terminal::MouseShiftCapture::True => {
+                // (the deferred conditional unlock — the true return)
+                if lock {
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                }
+                return true;
+            }
+            // .null => {},
+            terminal::terminal::MouseShiftCapture::Null => {}
+        }
+
+        // Otherwise, go with the user's preference
+        // return switch (self.config.mouse_shift_capture) {
+        let result = match self.config.mouse_shift_capture {
+            // .false => false,
+            configpkg::value_types::MouseShiftCapture::False => false,
+            // .true => true,
+            configpkg::value_types::MouseShiftCapture::True => true,
+            // .never, .always => unreachable, // handled earlier
+            configpkg::value_types::MouseShiftCapture::Never
+            | configpkg::value_types::MouseShiftCapture::Always => unreachable!(), // handled earlier
+        };
+        // (the deferred conditional unlock)
+        if lock {
+            unsafe { (*self.renderer_state.mutex).unlock() };
+        }
+        result
+    }
+
+    /// Returns true if the mouse is currently captured by the terminal
+    /// (i.e. reporting events).
+    // pub fn mouseCaptured(self: *Surface) bool {
+    pub fn mouseCaptured(&mut self) -> bool {
+        // self.renderer_state.mutex.lock();
+        unsafe { (*self.renderer_state.mutex).lock() };
+        // defer self.renderer_state.mutex.unlock();
+        //
+        // (guard-less zigstd Mutex — the defer is the explicit unlock below.)
+        // return self.io.terminal.flags.mouse_event != .none;
+        let result = self.io.terminal.flags.mouse_event != terminal::mouse::Event::None;
+        // (the deferred mutex unlock)
+        unsafe { (*self.renderer_state.mutex).unlock() };
+        result
+    }
+
+    /// Called for mouse button press/release events. This will return true
+    /// if the mouse event was consumed in some way (i.e. the program is capturing
+    /// mouse events). If the event was not consumed, then false is returned.
+    // pub fn mouseButtonCallback(
+    //     self: *Surface,
+    //     action: input.MouseButtonState,
+    //     button: input.MouseButton,
+    //     mods: input.Mods,
+    // ) !bool {
+    //
+    // (the inferred `!bool` is the [`Error`] union.)
+    pub fn mouseButtonCallback(
+        &mut self,
+        action: input_mouse::ButtonState,
+        button: input_mouse::Button,
+        mods: Mods,
+    ) -> Result<bool, Error> {
+        // Crash metadata in case we crash in here
+        // crash.sentry.thread_state = self.crashThreadState();
+        crash::sentry::setThreadState(self.crashThreadState());
+        // defer crash.sentry.thread_state = null;
+        // ([ADV 6.1] — the Drop guard clears at every exit below.)
+        let _thread_state = ThreadStateGuard;
+
+        // log.debug("mouse action={} button={} mods={}", .{ action, button, mods });
+
+        // If we have an inspector, we always queue a render
+        // if (self.inspector != null) {
+        //     defer self.queueRender() catch {};
+        // }
+        //
+        // PORT NOTE: the reference `defer` is scoped to the `if` BLOCK, so it
+        // fires at the block's closing brace — immediately.
+        if self.inspector.is_some() {
+            let _ = self.queueRender();
+        }
+
+        // Always record our latest mouse state
+        // self.mouse.click_state[@intCast(@intFromEnum(button))] = action;
+        self.mouse.click_state[button as usize] = action;
+
+        // Always show the mouse again if it is hidden
+        // if (self.mouse.hidden) self.showMouse();
+        if self.mouse.hidden {
+            self.showMouse();
+        }
+
+        // Update our modifiers if they changed
+        // self.modsChanged(mods);
+        self.modsChanged(mods);
+
+        // This is set to true if the terminal is allowed to capture the shift
+        // modifier. Note we can do this more efficiently probably with less
+        // locking/unlocking but clicking isn't that frequent enough to be a
+        // bottleneck.
+        // const shift_capture = self.mouseShiftCapture(true);
+        let shift_capture = self.mouseShiftCapture(true);
+
+        // Shift-click continues the previous mouse state if we have a selection.
+        // cursorPosCallback will also do a mouse report so we don't need to do any
+        // of the logic below.
+        // if (button == .left and action == .press) {
+        //
+        // PARITY: the reference deliberately splits the two `if`s ("more
+        // readable as a human"); clippy's `collapsible_if` is allowed rather
+        // than rewriting the control flow (the mouse_encode.rs precedent).
+        #[allow(clippy::collapsible_if)]
+        if button == input_mouse::Button::Left && action == input_mouse::ButtonState::Press {
+            // We could do all the conditionals in one but I find it more
+            // readable as a human to break this one up.
+            // if (mods.shift and
+            //     self.mouse.selection_gesture.left_click_count > 0 and
+            //     !shift_capture)
+            // extend_selection: {
+            if mods.shift && self.mouse.selection_gesture.left_click_count > 0 && !shift_capture {
+                'extend_selection: {
+                    // We split this conditional out on its own because this is the
+                    // only one that requires a renderer mutex grab which is VERY
+                    // expensive because it could block all our threads.
+                    // if (!self.hasSelection()) break :extend_selection;
+                    if !self.hasSelection() {
+                        break 'extend_selection;
+                    }
+
+                    // If we are within the interval that the click would register
+                    // an increment then we do not extend the selection.
+                    // if (std.time.Instant.now()) |now| {
+                    //
+                    // (Rust `Instant::now` is infallible — the `|now|` arm is
+                    // live; the reference `else |err|` arm is preserved
+                    // verbatim below.)
+                    let now = std::time::Instant::now();
+                    // const click_time = self.mouse.selection_gesture.left_click_time orelse
+                    //     break :extend_selection;
+                    let click_time = match self.mouse.selection_gesture.left_click_time {
+                        Some(v) => v,
+                        None => break 'extend_selection,
+                    };
+                    // const since = now.since(click_time);
+                    //
+                    // (`Instant.since` is nanoseconds — the selection_gesture
+                    // `time_since` mapping.)
+                    let since = now.duration_since(click_time).as_nanos() as u64;
+                    // if (since <= self.config.mouse_interval) {
+                    if since <= self.config.mouse_interval {
+                        // Click interval very short, we may be increasing
+                        // click counts so we don't extend the selection.
+                        // break :extend_selection;
+                        break 'extend_selection;
+                    }
+                    // } else |err| {
+                    //     // This is a weird behavior, I think either behavior is actually
+                    //     // fine. This failure should be exceptionally rare anyways.
+                    //     // My thinking here is that we can't be sure if we should extend
+                    //     // the selection or not so we just don't.
+                    //     log.warn("failed to get time, not extending selection err={}", .{err});
+                    //     break :extend_selection;
+                    // }
+
+                    // const pos = try self.rt_surface.getCursorPos();
+                    let pos = unsafe { &*self.rt_surface }.get_cursor_pos()?;
+                    // try self.cursorPosCallback(pos, null);
+                    self.cursorPosCallback(pos, None)?;
+                    // return true;
+                    return Ok(true);
+                }
+            }
+        }
+
+        // if (button == .left and action == .release) {
+        if button == input_mouse::Button::Left && action == input_mouse::ButtonState::Release {
+            // self.renderer_state.mutex.lock();
+            // defer self.renderer_state.mutex.unlock();
+            //
+            // (guard-less zigstd Mutex — the defer is the explicit unlock at
+            // every exit below.)
+            unsafe { (*self.renderer_state.mutex).lock() };
+
+            // The selection gesture tracks whether a press became a drag by
+            // comparing the release cell to the original press cell. Resolve the
+            // release position and pin before notifying the gesture so later
+            // release handling can query that state.
+            // const release_pos: ?apprt.CursorPos = self.rt_surface.getCursorPos() catch |err| pos: {
+            //     log.warn("error reading cursor position for mouse release err={}", .{err});
+            //     break :pos null;
+            // };
+            //
+            // PARITY: not `.ok()` — the Err arm IS the reference's labeled
+            // `catch |err| pos:` block with its log site (the childExited
+            // precedent).
+            #[allow(clippy::manual_ok_err)]
+            let release_pos: Option<apprt::CursorPos> =
+                match unsafe { &*self.rt_surface }.get_cursor_pos() {
+                    Ok(v) => Some(v),
+                    Err(_err) => {
+                        // log.warn("error reading cursor position for mouse release err={}", .{err});
+                        None
+                    }
+                };
+
+            // If we can't map the release position to a cell, pass null so the
+            // gesture can conservatively treat the release as having moved away
+            // from the pressed cell.
+            // const release_pin: ?terminal.Pin = if (release_pos) |pos| pin: {
+            //     const release_vp = self.posToViewport(pos.x, pos.y);
+            //     break :pin self.io.terminal.screens.active.pages.pin(.{ .viewport = .{
+            //         .x = release_vp.x,
+            //         .y = release_vp.y,
+            //     } });
+            // } else null;
+            let release_pin: Option<terminal::pagelist::Pin> =
+                if let Some(pos) = release_pos {
+                    let release_vp = self.posToViewport(f64::from(pos.x), f64::from(pos.y));
+                    unsafe {
+                        (*self.io.terminal.screens.active).pages.pin(
+                            terminal::point::Point::Viewport(terminal::point::Coordinate {
+                                x: release_vp.x,
+                                y: release_vp.y,
+                            }),
+                        )
+                    }
+                } else {
+                    None
+                };
+            // self.mouse.selection_gesture.release(
+            //     self.renderer_state.terminal,
+            //     .{ .pin = release_pin },
+            // );
+            self.mouse.selection_gesture.release(
+                unsafe { &mut *self.renderer_state.terminal },
+                terminal::selection_gesture::Release { pin: release_pin },
+            );
+
+            // Stop selection scrolling when releasing the left mouse button
+            // but only when selection scrolling is active.
+            // if (self.selection_scroll_active) {
+            if self.selection_scroll_active {
+                // self.queueIo(
+                //     .{ .selection_scroll = false },
+                //     .locked,
+                // );
+                self.queueIo(
+                    termio::Message::SelectionScroll(false),
+                    termio::termio_impl::MutexState::Locked,
+                );
+            }
+
+            // The selection clipboard is only updated for left-click drag when
+            // the left button is released. This is to avoid the clipboard
+            // being updated on every mouse move which would be noisy.
+            // if (self.config.copy_on_select != .false) {
+            if self.config.copy_on_select != configpkg::value_types::CopyOnSelect::False {
+                // const prev_ = self.io.terminal.screens.active.selection;
+                let prev_ = unsafe { (*self.io.terminal.screens.active).selection };
+                // if (prev_) |prev| {
+                if let Some(prev) = prev_ {
+                    // try self.setSelectionAndCopy(terminal.Selection.init(
+                    //     prev.start(),
+                    //     prev.end(),
+                    //     prev.rectangle,
+                    // ));
+                    if let Err(err) =
+                        self.setSelectionAndCopy(terminal::selection::Selection::init(
+                            prev.start(),
+                            prev.end(),
+                            prev.rectangle,
+                        ))
+                    {
+                        // (the deferred mutex unlock — the error exit)
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Err(err);
+                    }
+                }
+            }
+
+            // Handle link clicking. We want to do this before we do mouse
+            // reporting or any other mouse handling because a successfully
+            // clicked link will swallow the event.
+            // if (self.mouse.over_link and !self.mouse.selection_gesture.left_click_dragged) {
+            if self.mouse.over_link && !self.mouse.selection_gesture.left_click_dragged {
+                // We are holding the renderer lock, but this should just be
+                // a cached value.
+                // const pos = release_pos orelse try self.rt_surface.getCursorPos();
+                let pos = match release_pos {
+                    Some(v) => v,
+                    None => match unsafe { &*self.rt_surface }.get_cursor_pos() {
+                        Ok(v) => v,
+                        Err(err) => {
+                            // (the deferred mutex unlock — the error exit)
+                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            return Err(err.into());
+                        }
+                    },
+                };
+                // if (self.processLinks(pos)) |processed| {
+                //     if (processed) return true;
+                // } else |err| {
+                //     log.warn("error processing links err={}", .{err});
+                // }
+                match self.processLinks(pos) {
+                    Ok(processed) => {
+                        if processed {
+                            // (the deferred mutex unlock — the consumed return)
+                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            return Ok(true);
+                        }
+                    }
+                    Err(_err) => {
+                        // log.warn("error processing links err={}", .{err});
+                    }
+                }
+            }
+
+            // Handle prompt clicking. If we released our mouse on a prompt
+            // and we support some kind of click events, then we need to
+            // move to it.
+            // if (self.maybePromptClick()) |handled| {
+            //     if (handled) return true;
+            // } else |err| {
+            //     log.warn("error processing prompt click err={}", .{err});
+            // }
+            match self.maybePromptClick() {
+                Ok(handled) => {
+                    if handled {
+                        // (the deferred mutex unlock — the handled return)
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Ok(true);
+                    }
+                }
+                Err(_err) => {
+                    // log.warn("error processing prompt click err={}", .{err});
+                }
+            }
+
+            // (the deferred mutex unlock — the block end)
+            unsafe { (*self.renderer_state.mutex).unlock() };
+        }
+
+        // Report mouse events if enabled
+        {
+            // self.renderer_state.mutex.lock();
+            // defer self.renderer_state.mutex.unlock();
+            //
+            // (guard-less zigstd Mutex — the defer is the explicit unlock at
+            // every exit below.)
+            unsafe { (*self.renderer_state.mutex).lock() };
+            // if (self.isMouseReporting()) report: {
+            if self.isMouseReporting() {
+                'report: {
+                    // If we have shift-pressed and we aren't allowed to capture it,
+                    // then we do not do a mouse report.
+                    // if (mods.shift and !shift_capture) break :report;
+                    if mods.shift && !shift_capture {
+                        break 'report;
+                    }
+
+                    // In any other mouse button scenario without shift pressed we
+                    // clear the selection since the underlying application can handle
+                    // that in any way (i.e. "scrolling").
+                    // try self.setSelection(null);
+                    if let Err(err) = self.setSelection(None) {
+                        // (the deferred mutex unlock — the error exit)
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Err(err);
+                    }
+
+                    // We also set the left click count to 0 so that if mouse reporting
+                    // is disabled in the middle of press (before release) we don't
+                    // suddenly start selecting text.
+                    // self.mouse.selection_gesture.reset(self.renderer_state.terminal);
+                    self.mouse
+                        .selection_gesture
+                        .reset(unsafe { &mut *self.renderer_state.terminal });
+
+                    // const pos = try self.rt_surface.getCursorPos();
+                    let pos = match unsafe { &*self.rt_surface }.get_cursor_pos() {
+                        Ok(v) => v,
+                        Err(err) => {
+                            // (the deferred mutex unlock — the error exit)
+                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            return Err(err.into());
+                        }
+                    };
+
+                    // const report_action: input.MouseAction = switch (action) {
+                    //     .press => .press,
+                    //     .release => .release,
+                    // };
+                    let report_action: input_mouse::Action = match action {
+                        input_mouse::ButtonState::Press => input_mouse::Action::Press,
+                        input_mouse::ButtonState::Release => input_mouse::Action::Release,
+                    };
+
+                    // self.mouseReport(
+                    //     button,
+                    //     report_action,
+                    //     self.mouse.mods,
+                    //     pos,
+                    // );
+                    self.mouseReport(Some(button), report_action, self.mouse.mods, pos);
+
+                    // If we're doing mouse reporting, we do not support any other
+                    // selection or highlighting.
+                    // return true;
+                    // (the deferred mutex unlock — the reporting return)
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    return Ok(true);
+                }
+            }
+            // (the deferred mutex unlock — the block end)
+            unsafe { (*self.renderer_state.mutex).unlock() };
+        }
+
+        // For left button clicks we always record some information for
+        // selection/highlighting purposes.
+        // if (button == .left and action == .press) click: {
+        if button == input_mouse::Button::Left && action == input_mouse::ButtonState::Press {
+            'click: {
+                // self.renderer_state.mutex.lock();
+                // defer self.renderer_state.mutex.unlock();
+                //
+                // (guard-less zigstd Mutex — the defer is the explicit unlock
+                // at every exit below.)
+                unsafe { (*self.renderer_state.mutex).lock() };
+                // const t: *terminal.Terminal = self.renderer_state.terminal;
+                let t: *mut Terminal = self.renderer_state.terminal;
+                // const screen: *terminal.Screen = self.renderer_state.terminal.screens.active;
+                let screen: *mut terminal::screen::Screen =
+                    unsafe { (*self.renderer_state.terminal).screens.active };
+
+                // const pos = try self.rt_surface.getCursorPos();
+                let pos = match unsafe { &*self.rt_surface }.get_cursor_pos() {
+                    Ok(v) => v,
+                    Err(err) => {
+                        // (the deferred mutex unlock — the error exit)
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Err(err.into());
+                    }
+                };
+                // const pin = pin: {
+                let pin = 'pin: {
+                    // const pt_viewport = self.posToViewport(pos.x, pos.y);
+                    let pt_viewport = self.posToViewport(f64::from(pos.x), f64::from(pos.y));
+                    // const pin = screen.pages.pin(.{
+                    //     .viewport = .{
+                    //         .x = pt_viewport.x,
+                    //         .y = pt_viewport.y,
+                    //     },
+                    // }) orelse {
+                    let pin = match unsafe {
+                        (*screen).pages.pin(terminal::point::Point::Viewport(
+                            terminal::point::Coordinate {
+                                x: pt_viewport.x,
+                                y: pt_viewport.y,
+                            },
+                        ))
+                    } {
+                        Some(v) => v,
+                        None => {
+                            // Weird... our viewport x/y that we just converted isn't
+                            // found in our pages. This is probably a bug but we don't
+                            // want to crash in releases because its harmless. So, we
+                            // only assert in debug mode.
+                            // if (comptime std.debug.runtime_safety) unreachable;
+                            if cfg!(debug_assertions) {
+                                unreachable!();
+                            }
+                            // break :click;
+                            // (the deferred mutex unlock — the break exit)
+                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            break 'click;
+                        }
+                    };
+
+                    // break :pin pin;
+                    break 'pin pin;
+                };
+
+                // const time = std.time.Instant.now() catch |err| time: {
+                //     log.err("error reading time, mouse multi-click won't work err={}", .{err});
+                //     break :time null;
+                // };
+                //
+                // (Rust `Instant::now` is infallible — the catch arm
+                // collapses.)
+                let time = Some(std::time::Instant::now());
+                // var press_selection = try self.mouse.selection_gesture.press(t, .{
+                //     .time = time,
+                //     .pin = pin,
+                //     .xpos = pos.x,
+                //     .ypos = pos.y,
+                //     .max_distance = @floatFromInt(self.size.cell.width),
+                //     .repeat_interval = self.config.mouse_interval,
+                //     .word_boundary_codepoints = self.config.selection_word_chars,
+                //     .behaviors = &.{
+                //         .cell,
+                //         .word,
+                //         if (mods.ctrlOrSuper()) .output else .line,
+                //     },
+                // });
+                let mut press_selection = match self.mouse.selection_gesture.press(
+                    unsafe { &mut *t },
+                    terminal::selection_gesture::Press {
+                        time,
+                        pin,
+                        xpos: f64::from(pos.x),
+                        ypos: f64::from(pos.y),
+                        max_distance: f64::from(self.size.cell.width),
+                        repeat_interval: self.config.mouse_interval,
+                        word_boundary_codepoints: &self.config.selection_word_chars,
+                        behaviors: &[
+                            terminal::selection_gesture::Behavior::Cell,
+                            terminal::selection_gesture::Behavior::Word,
+                            if mods.ctrl_or_super() {
+                                terminal::selection_gesture::Behavior::Output
+                            } else {
+                                terminal::selection_gesture::Behavior::Line
+                            },
+                        ],
+                    },
+                ) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        // (the deferred mutex unlock — the error exit)
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Err(err.into());
+                    }
+                };
+
+                // The gesture owns the standard single/double/triple-click selection
+                // behavior. Surface keeps terminal-surface-specific overrides here.
+                // switch (self.mouse.selection_gesture.left_click_count) {
+                match self.mouse.selection_gesture.left_click_count {
+                    // 1 => {},
+                    1 => {}
+
+                    // Double click on a URL selects the entire URL instead of the
+                    // standard word selection returned by the gesture.
+                    // 2 => {
+                    2 => {
+                        // Try link detection without requiring modifier keys.
+                        // if (self.linkAtPin(
+                        //     pin,
+                        //     null,
+                        // )) |result_| {
+                        match self.linkAtPin(pin, None) {
+                            Ok(result_) => {
+                                // if (result_) |result| {
+                                if let Some(result) = result_ {
+                                    // press_selection = result.selection;
+                                    press_selection = Some(result.selection);
+                                }
+                            }
+                            // } else |_| {
+                            Err(_) => {
+                                // Ignore any errors, likely regex errors.
+                            }
+                        }
+                    }
+
+                    // 3 => {},
+                    3 => {}
+
+                    // We should be bounded by 1 to 3
+                    // else => unreachable,
+                    _ => unreachable!(),
+                }
+
+                // Use `setSelection` (not `setSelectionAndCopy`) here to avoid
+                // touching the selection clipboard: for left mouse clicks we only
+                // copy on release.
+                // if (press_selection) |selection| {
+                if let Some(selection) = press_selection {
+                    // try self.setSelection(selection);
+                    if let Err(err) = self.setSelection(Some(selection)) {
+                        // (the deferred mutex unlock — the error exit)
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Err(err);
+                    }
+                    // try self.queueRender();
+                    if let Err(err) = self.queueRender() {
+                        // (the deferred mutex unlock — the error exit)
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Err(err.into());
+                    }
+                // } else if (self.mouse.selection_gesture.left_click_count == 1 and
+                //     self.io.terminal.screens.active.selection != null)
+                // {
+                } else if self.mouse.selection_gesture.left_click_count == 1
+                    && unsafe { (*self.io.terminal.screens.active).selection }.is_some()
+                {
+                    // try self.setSelection(null);
+                    if let Err(err) = self.setSelection(None) {
+                        // (the deferred mutex unlock — the error exit)
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Err(err);
+                    }
+                    // try self.queueRender();
+                    if let Err(err) = self.queueRender() {
+                        // (the deferred mutex unlock — the error exit)
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Err(err.into());
+                    }
+                }
+
+                // (the deferred mutex unlock — the block end)
+                unsafe { (*self.renderer_state.mutex).unlock() };
+            }
+        }
+
+        // Middle-click paste source follows copy-on-select: when copy-on-select
+        // targets the selection clipboard, middle-click reads from it; when
+        // copy-on-select targets the system clipboard, middle-click reads from
+        // that instead. Falls back to the standard clipboard on platforms that
+        // do not support the selection clipboard.
+        // if (button == .middle and action == .press) switch (self.config.middle_click_action) {
+        if button == input_mouse::Button::Middle && action == input_mouse::ButtonState::Press {
+            match self.config.middle_click_action {
+                // .ignore => {},
+                configpkg::value_types::MiddleClickAction::Ignore => {}
+                // .@"primary-paste" => {
+                configpkg::value_types::MiddleClickAction::PrimaryPaste => {
+                    // const clipboard: apprt.Clipboard = switch (self.config.copy_on_select) {
+                    //     .clipboard => .standard,
+                    //     .true, .false => if (self.rt_surface.supportsClipboard(.selection))
+                    //         .selection
+                    //     else
+                    //         .standard,
+                    // };
+                    let clipboard: apprt::Clipboard = match self.config.copy_on_select {
+                        configpkg::value_types::CopyOnSelect::Clipboard => {
+                            apprt::Clipboard::Standard
+                        }
+                        configpkg::value_types::CopyOnSelect::True
+                        | configpkg::value_types::CopyOnSelect::False => {
+                            if unsafe { &*self.rt_surface }
+                                .supports_clipboard(apprt::Clipboard::Selection)
+                            {
+                                apprt::Clipboard::Selection
+                            } else {
+                                apprt::Clipboard::Standard
+                            }
+                        }
+                    };
+                    // _ = try self.startClipboardRequest(clipboard, .{ .paste = {} });
+                    let _ =
+                        self.startClipboardRequest(clipboard, apprt::ClipboardRequest::Paste)?;
+                }
+            }
+        }
+
+        // Right-click down selects word for context menus. If the apprt
+        // doesn't implement context menus this can be a bit weird but they
+        // are supported by our two main apprts so we always do this. If we
+        // want to be careful in the future we can add a function to apprts
+        // that let's us know.
+        // if (button == .right and action == .press) sel: {
+        if button == input_mouse::Button::Right && action == input_mouse::ButtonState::Press {
+            'sel: {
+                // self.renderer_state.mutex.lock();
+                // defer self.renderer_state.mutex.unlock();
+                //
+                // (guard-less zigstd Mutex — the defer is the explicit unlock
+                // at every exit below.)
+                unsafe { (*self.renderer_state.mutex).lock() };
+
+                // Get our viewport pin
+                // const screen: *terminal.Screen = self.renderer_state.terminal.screens.active;
+                let screen: *mut terminal::screen::Screen =
+                    unsafe { (*self.renderer_state.terminal).screens.active };
+                // const pos = try self.rt_surface.getCursorPos();
+                let pos = match unsafe { &*self.rt_surface }.get_cursor_pos() {
+                    Ok(v) => v,
+                    Err(err) => {
+                        // (the deferred mutex unlock — the error exit)
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Err(err.into());
+                    }
+                };
+                // const pin = pin: {
+                let pin = 'pin: {
+                    // const pt_viewport = self.posToViewport(pos.x, pos.y);
+                    let pt_viewport = self.posToViewport(f64::from(pos.x), f64::from(pos.y));
+                    // const pin = screen.pages.pin(.{
+                    //     .viewport = .{
+                    //         .x = pt_viewport.x,
+                    //         .y = pt_viewport.y,
+                    //     },
+                    // }) orelse {
+                    let pin = match unsafe {
+                        (*screen).pages.pin(terminal::point::Point::Viewport(
+                            terminal::point::Coordinate {
+                                x: pt_viewport.x,
+                                y: pt_viewport.y,
+                            },
+                        ))
+                    } {
+                        Some(v) => v,
+                        None => {
+                            // if (comptime std.debug.runtime_safety) unreachable;
+                            if cfg!(debug_assertions) {
+                                unreachable!();
+                            }
+                            // break :sel;
+                            // (the deferred mutex unlock — the break exit)
+                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            break 'sel;
+                        }
+                    };
+
+                    // break :pin pin;
+                    break 'pin pin;
+                };
+
+                // switch (self.config.right_click_action) {
+                match self.config.right_click_action {
+                    // .ignore => {},
+                    configpkg::value_types::RightClickAction::Ignore => {}
+                    // .@"context-menu" => {
+                    configpkg::value_types::RightClickAction::ContextMenu => {
+                        // If we already have a selection and the selection contains
+                        // where we clicked then we don't want to modify the selection.
+                        // if (self.io.terminal.screens.active.selection) |prev_sel| {
+                        if let Some(prev_sel) =
+                            unsafe { (*self.io.terminal.screens.active).selection }
+                        {
+                            // if (prev_sel.contains(screen, pin)) break :sel;
+                            if prev_sel.contains(unsafe { &*screen }, pin) {
+                                // (the deferred mutex unlock — the break exit)
+                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                break 'sel;
+                            }
+
+                            // The selection doesn't contain our pin, so we create a new
+                            // word selection where we clicked.
+                        }
+
+                        // If there is a link at this position, we want to
+                        // select the link. Otherwise, select the word.
+                        // if (try self.linkAtPos(pos)) |link| {
+                        let link_ = match self.linkAtPos(pos) {
+                            Ok(v) => v,
+                            Err(err) => {
+                                // (the deferred mutex unlock — the error exit)
+                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                return Err(err);
+                            }
+                        };
+                        if let Some(link) = link_ {
+                            // try self.setSelectionAndCopy(link.selection);
+                            if let Err(err) = self.setSelectionAndCopy(link.selection) {
+                                // (the deferred mutex unlock — the error exit)
+                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                return Err(err);
+                            }
+                        } else {
+                            // const sel = screen.selectWord(
+                            //     pin,
+                            //     self.config.selection_word_chars,
+                            // ) orelse break :sel;
+                            let sel = match unsafe { &*screen }
+                                .select_word(pin, &self.config.selection_word_chars)
+                            {
+                                Some(v) => v,
+                                None => {
+                                    // (the deferred mutex unlock — the break
+                                    // exit)
+                                    unsafe { (*self.renderer_state.mutex).unlock() };
+                                    break 'sel;
+                                }
+                            };
+                            // try self.setSelectionAndCopy(sel);
+                            if let Err(err) = self.setSelectionAndCopy(sel) {
+                                // (the deferred mutex unlock — the error exit)
+                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                return Err(err);
+                            }
+                        }
+                        // try self.queueRender();
+                        if let Err(err) = self.queueRender() {
+                            // (the deferred mutex unlock — the error exit)
+                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            return Err(err.into());
+                        }
+
+                        // Don't consume so that we show the context menu in apprt.
+                        // return false;
+                        // (the deferred mutex unlock — the context-menu return)
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Ok(false);
+                    }
+                    // .copy => {
+                    configpkg::value_types::RightClickAction::Copy => {
+                        // if (self.io.terminal.screens.active.selection) |sel| {
+                        if let Some(sel) = unsafe { (*self.io.terminal.screens.active).selection } {
+                            // try self.copySelectionToClipboards(
+                            //     sel,
+                            //     &.{.standard},
+                            //     .mixed,
+                            // );
+                            if let Err(err) = self.copySelectionToClipboards(
+                                sel,
+                                &[apprt::Clipboard::Standard],
+                                binding::CopyToClipboard::Mixed,
+                            ) {
+                                // (the deferred mutex unlock — the error exit)
+                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                return Err(err);
+                            }
+                        }
+
+                        // try self.setSelection(null);
+                        if let Err(err) = self.setSelection(None) {
+                            // (the deferred mutex unlock — the error exit)
+                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            return Err(err);
+                        }
+                        // try self.queueRender();
+                        if let Err(err) = self.queueRender() {
+                            // (the deferred mutex unlock — the error exit)
+                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            return Err(err.into());
+                        }
+                    }
+                    // .@"copy-or-paste" => if (self.io.terminal.screens.active.selection) |sel| {
+                    configpkg::value_types::RightClickAction::CopyOrPaste => {
+                        if let Some(sel) = unsafe { (*self.io.terminal.screens.active).selection } {
+                            // try self.copySelectionToClipboards(
+                            //     sel,
+                            //     &.{.standard},
+                            //     .mixed,
+                            // );
+                            if let Err(err) = self.copySelectionToClipboards(
+                                sel,
+                                &[apprt::Clipboard::Standard],
+                                binding::CopyToClipboard::Mixed,
+                            ) {
+                                // (the deferred mutex unlock — the error exit)
+                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                return Err(err);
+                            }
+                            // try self.setSelection(null);
+                            if let Err(err) = self.setSelection(None) {
+                                // (the deferred mutex unlock — the error exit)
+                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                return Err(err);
+                            }
+                            // try self.queueRender();
+                            if let Err(err) = self.queueRender() {
+                                // (the deferred mutex unlock — the error exit)
+                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                return Err(err.into());
+                            }
+                        } else {
+                            // Pasting can trigger a lock grab in complete clipboard
+                            // request so we need to unlock.
+                            // self.renderer_state.mutex.unlock();
+                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            // defer self.renderer_state.mutex.lock();
+                            //
+                            // (the inverted defer — the explicit relock at
+                            // every exit of this arm below.)
+                            // _ = try self.startClipboardRequest(.standard, .paste);
+                            match self.startClipboardRequest(
+                                apprt::Clipboard::Standard,
+                                apprt::ClipboardRequest::Paste,
+                            ) {
+                                Ok(_) => {}
+                                Err(err) => {
+                                    // (the LIFO defers on the error exit —
+                                    // the arm's relock, then the outer
+                                    // unlock)
+                                    unsafe { (*self.renderer_state.mutex).lock() };
+                                    unsafe { (*self.renderer_state.mutex).unlock() };
+                                    return Err(err);
+                                }
+                            }
+                            // (the deferred relock — the arm end)
+                            unsafe { (*self.renderer_state.mutex).lock() };
+
+                            // We don't need to clear selection because we didn't have
+                            // one to begin with.
+                        }
+                    }
+                    // .paste => {
+                    configpkg::value_types::RightClickAction::Paste => {
+                        // Before we yield the lock, clear our selection if we have
+                        // one.
+                        // try self.setSelection(null);
+                        if let Err(err) = self.setSelection(None) {
+                            // (the deferred mutex unlock — the error exit)
+                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            return Err(err);
+                        }
+                        // try self.queueRender();
+                        if let Err(err) = self.queueRender() {
+                            // (the deferred mutex unlock — the error exit)
+                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            return Err(err.into());
+                        }
+
+                        // Pasting can trigger a lock grab in complete clipboard
+                        // request so we need to unlock.
+                        // self.renderer_state.mutex.unlock();
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        // defer self.renderer_state.mutex.lock();
+                        //
+                        // (the inverted defer — the explicit relock at every
+                        // exit of this arm below.)
+                        // _ = try self.startClipboardRequest(.standard, .paste);
+                        match self.startClipboardRequest(
+                            apprt::Clipboard::Standard,
+                            apprt::ClipboardRequest::Paste,
+                        ) {
+                            Ok(_) => {}
+                            Err(err) => {
+                                // (the LIFO defers on the error exit — the
+                                // arm's relock, then the outer unlock)
+                                unsafe { (*self.renderer_state.mutex).lock() };
+                                unsafe { (*self.renderer_state.mutex).unlock() };
+                                return Err(err);
+                            }
+                        }
+                        // (the deferred relock — the arm end)
+                        unsafe { (*self.renderer_state.mutex).lock() };
+                    }
+                }
+
+                // Consume the event such that the context menu is not displayed.
+                // return true;
+                // (the deferred mutex unlock — the consumed return)
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return Ok(true);
+            }
+        }
+
+        // return false;
+        Ok(false)
+    }
+
+    /// Requires the renderer state mutex is held.
+    // fn maybePromptClick(self: *Surface) !bool {
+    //
+    // (the inferred `!bool` is the [`Error`] union.)
+    fn maybePromptClick(&mut self) -> Result<bool, Error> {
+        // const t: *terminal.Terminal = self.renderer_state.terminal;
+        let t: *mut Terminal = self.renderer_state.terminal;
+        // const screen: *terminal.Screen = t.screens.active;
+        let screen: *mut terminal::screen::Screen = unsafe { (*t).screens.active };
+
+        // If our screen doesn't handle any prompt clicks, then we never
+        // do anything.
+        // if (screen.semantic_prompt.click == .none) return false;
+        if unsafe { (*screen).semantic_prompt.click } == terminal::screen::SemanticClick::None {
+            return Ok(false);
+        }
+
+        // If cursor-click-to-move is disabled, we don't do any prompt clicking.
+        // if (!self.config.cursor_click_to_move) return false;
+        if !self.config.cursor_click_to_move {
+            return Ok(false);
+        }
+
+        // If our cursor isn't currently at a prompt then we don't handle
+        // prompt clicks because we can't move if we're not in a prompt!
+        // if (!t.cursorIsAtPrompt()) return false;
+        if !unsafe { (*t).cursor_is_at_prompt() } {
+            return Ok(false);
+        }
+
+        // If the left click moved away from its pressed cell then releasing the
+        // mouse completes the drag gesture and we don't do prompt moving.
+        // if (self.mouse.selection_gesture.left_click_dragged) return false;
+        if self.mouse.selection_gesture.left_click_dragged {
+            return Ok(false);
+        }
+
+        // If we have a selection currently, then releasing the mouse completes
+        // the selection and we don't do prompt moving.
+        // if (screen.selection != null) return false;
+        if unsafe { (*screen).selection }.is_some() {
+            return Ok(false);
+        }
+
+        // Get the pin for our mouse click.
+        // const pos = try self.rt_surface.getCursorPos();
+        let pos = unsafe { &*self.rt_surface }.get_cursor_pos()?;
+        // const pos_vp = self.posToViewport(pos.x, pos.y);
+        let pos_vp = self.posToViewport(f64::from(pos.x), f64::from(pos.y));
+        // const click_pin: terminal.Pin = pin: {
+        let click_pin: terminal::pagelist::Pin = 'pin: {
+            // const pin = screen.pages.pin(.{
+            //     .viewport = .{
+            //         .x = pos_vp.x,
+            //         .y = pos_vp.y,
+            //     },
+            // }) orelse {
+            let pin = match unsafe {
+                (*screen).pages.pin(terminal::point::Point::Viewport(
+                    terminal::point::Coordinate {
+                        x: pos_vp.x,
+                        y: pos_vp.y,
+                    },
+                ))
+            } {
+                Some(v) => v,
+                None => {
+                    // See mouseButtonCallback for explanation
+                    // if (comptime std.debug.runtime_safety) unreachable;
+                    if cfg!(debug_assertions) {
+                        unreachable!();
+                    }
+                    // return false;
+                    return Ok(false);
+                }
+            };
+
+            // break :pin pin;
+            break 'pin pin;
+        };
+
+        // Get our cursor's most current prompt.
+        // const prompt_pin: terminal.Pin = prompt_pin: {
+        let prompt_pin: terminal::pagelist::Pin = 'prompt_pin: {
+            // var it = screen.cursor.page_pin.promptIterator(
+            //     .left_up,
+            //     null,
+            // );
+            let mut it = unsafe {
+                (*(*screen).cursor.page_pin)
+                    .prompt_iterator(terminal::pagelist::iter::Direction::LeftUp, None)
+            };
+            // break :prompt_pin it.next() orelse {
+            match it.next() {
+                Some(v) => break 'prompt_pin v,
+                None => {
+                    // This shouldn't be possible because we asserted we're at
+                    // a prompt above, so we MUST find some prompt in a left_up search.
+                    // log.warn("cursor is at prompt but no prompt found", .{});
+                    // if (comptime std.debug.runtime_safety) unreachable;
+                    if cfg!(debug_assertions) {
+                        unreachable!();
+                    }
+                    // return false;
+                    return Ok(false);
+                }
+            }
+        };
+
+        // If our mouse click is before the prompt, we don't move.
+        // We DO ALLOW clicks AFTER the prompt, specifically with Kitty's
+        // click_events=1 since we rely on the shell to validate out of
+        // bounds clicks. This matches Kitty's logic as best I can tell.
+        // if (click_pin.before(prompt_pin)) return false;
+        if click_pin.before(prompt_pin) {
+            return Ok(false);
+        }
+
+        // At this point we've established:
+        // - Screen supports prompt clicks
+        // - Cursor is at a prompt
+        // - Click is at or below our prompt
+        // switch (screen.semantic_prompt.click) {
+        match unsafe { (*screen).semantic_prompt.click } {
+            // Guarded at the start of this function
+            // .none => unreachable,
+            terminal::screen::SemanticClick::None => unreachable!(),
+
+            // .click_events => |v| {
+            terminal::screen::SemanticClick::ClickEvents(v) => {
+                // For the event, we always send a left-click press event.
+                // This matches what Kitty sends.
+                // const key: u8, const y: u32 = switch (v) {
+                //     .absolute => .{ 1, pos_vp.y +| 1 },
+                //     .relative => .{ 2, pos_vp.y -| prompt_pin.y +| 1 },
+                // };
+                let (key, y): (u8, u32) = match v {
+                    terminal::osc::semantic_prompt::ClickEvents::Absolute => {
+                        (1, pos_vp.y.saturating_add(1))
+                    }
+                    terminal::osc::semantic_prompt::ClickEvents::Relative => (
+                        2,
+                        pos_vp
+                            .y
+                            .saturating_sub(u32::from(prompt_pin.y))
+                            .saturating_add(1),
+                    ),
+                };
+                // var data: termio.Message.WriteReq.Small.Array = undefined;
+                // const resp = try std.fmt.bufPrint(
+                //     &data,
+                //     "\x1B[<0;{d};{d}M",
+                //     .{ pos_vp.x + 1, y },
+                // );
+                //
+                // PORT NOTE: the fixed Cursor over the Small array is
+                // `bufPrint` (the encodeKey precedent); its buffer-full error
+                // is io's `WriteZero` — the reference's `error.NoSpaceLeft`,
+                // `try`-propagated ([`Error::Io`]).
+                let mut data = [0u8; termio::message::WriteReq::MAX];
+                let resp_len = {
+                    use std::io::Write as _;
+                    let mut writer = std::io::Cursor::new(&mut data[..]);
+                    write!(writer, "\x1B[<0;{};{}M", pos_vp.x + 1, y)?;
+                    writer.position() as usize
+                };
+
+                // Not that noisy since this only happens on prompt clicks.
+                // log.debug(
+                //     "sending click_events={} event=ESC{s}",
+                //     .{ key, resp[1..] },
+                // );
+                //
+                // (`key` feeds only the log line above — the alloc_gpa
+                // consume precedent.)
+                let _ = key;
+
+                // Ask our IO thread to write the data
+                // self.queueIo(.{ .write_small = .{
+                //     .data = data,
+                //     .len = @intCast(resp.len),
+                // } }, .locked);
+                self.queueIo(
+                    termio::Message::WriteSmall(Small {
+                        data,
+                        len: resp_len,
+                    }),
+                    termio::termio_impl::MutexState::Locked,
+                );
+            }
+
+            // .cl => {
+            terminal::screen::SemanticClick::Cl(_) => {
+                // const left_arrow = if (t.modes.get(.cursor_keys)) "\x1bOD" else "\x1b[D";
+                let left_arrow: &'static [u8] =
+                    if unsafe { (*t).modes.get(terminal::modes::Mode::CursorKeys) } {
+                        b"\x1bOD"
+                    } else {
+                        b"\x1b[D"
+                    };
+                // const right_arrow = if (t.modes.get(.cursor_keys)) "\x1bOC" else "\x1b[C";
+                let right_arrow: &'static [u8] =
+                    if unsafe { (*t).modes.get(terminal::modes::Mode::CursorKeys) } {
+                        b"\x1bOC"
+                    } else {
+                        b"\x1b[C"
+                    };
+
+                // const move = screen.promptClickMove(click_pin);
+                //
+                // (`move` is a Rust keyword — the raw identifier keeps the
+                // reference name.)
+                let r#move = unsafe { (*screen).prompt_click_move(click_pin) };
+                // for (0..move.left) |_| {
+                for _ in 0..r#move.left {
+                    // self.queueIo(
+                    //     .{ .write_stable = left_arrow },
+                    //     .locked,
+                    // );
+                    self.queueIo(
+                        termio::Message::WriteStable(left_arrow),
+                        termio::termio_impl::MutexState::Locked,
+                    );
+                }
+                // for (0..move.right) |_| {
+                for _ in 0..r#move.right {
+                    // self.queueIo(
+                    //     .{ .write_stable = right_arrow },
+                    //     .locked,
+                    // );
+                    self.queueIo(
+                        termio::Message::WriteStable(right_arrow),
+                        termio::termio_impl::MutexState::Locked,
+                    );
+                }
+            }
+        }
+
+        // return true;
+        Ok(true)
     }
 
     /// This returns the mouse mods to consider for link highlighting or
@@ -7612,6 +8967,19 @@ where
         unimplemented!("Surface.mouseModsWithCapture lands with core chunk C13 (Surface.zig:4368)")
     }
 
+    /// Attempt to invoke the action of any link that is under the
+    /// given position.
+    ///
+    /// Requires the renderer state mutex is held.
+    //
+    // PORT NOTE (STUB — chunk C13 fills): `fn processLinks(self: *Surface,
+    // pos: apprt.CursorPos) !bool` — Surface.zig:4386 (the C12
+    // mouseButtonCallback :3881 callsite is live).
+    fn processLinks(&mut self, pos: apprt::CursorPos) -> Result<bool, Error> {
+        let _ = pos;
+        unimplemented!("Surface.processLinks lands with core chunk C13 (Surface.zig:4386)")
+    }
+
     /// Return the URI for an OSC8 hyperlink at the given position or null
     /// if there is no hyperlink.
     //
@@ -7622,6 +8990,18 @@ where
     fn osc8URI(&self, pin: terminal::pagelist::Pin) -> Option<&[u8]> {
         let _ = pin;
         unimplemented!("Surface.osc8URI lands with core chunk C13 (Surface.zig:4439)")
+    }
+
+    // PORT NOTE (STUB — chunk C13 fills): `pub fn cursorPosCallback(self:
+    // *Surface, pos: apprt.CursorPos, mods: ?input.Mods) !void` —
+    // Surface.zig:4512 (the C12 mouseButtonCallback :3818 callsite is live).
+    pub fn cursorPosCallback(
+        &mut self,
+        pos: apprt::CursorPos,
+        mods: Option<Mods>,
+    ) -> Result<(), Error> {
+        let _ = (pos, mods);
+        unimplemented!("Surface.cursorPosCallback lands with core chunk C13 (Surface.zig:4512)")
     }
 
     // PORT NOTE (STUB — chunk C13 fills): `pub fn posToViewport(self: Surface,
@@ -7640,7 +9020,8 @@ where
     }
 
     // PORT NOTE (STUB — chunk C13 fills): `fn showMouse(self: *Surface) void`
-    // — Surface.zig:4753 (updateConfig's :1745 callsite lands with C8).
+    // — Surface.zig:4753 (the C8 updateConfig :1745 and C12
+    // mouseButtonCallback :3771 callsites are live).
     fn showMouse(&mut self) {
         unimplemented!("Surface.showMouse lands with core chunk C13 (Surface.zig:4753)")
     }

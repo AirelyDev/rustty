@@ -1217,3 +1217,62 @@ deferral resolved. Ledger:
   caller. `keyboardLayout` needed NO new work: the apprt-api
   `App::keyboard_layout` growth method's only core callsite (encodeKeyOpts,
   Surface.zig:3271) landed with C10.
+
+## rustty-core C12 (core tier) — mouse report/button tier
+
+Chunk C12 of CORE_BLUEPRINT §6 lands Surface.zig:3640-4278 in
+`crates/rustty-core/src/surface.rs`: `isMouseReporting`, `mouseReport`,
+`mouseShiftCapture`, `mouseCaptured`, `mouseButtonCallback`,
+`maybePromptClick` — all LIVE (the C11-declared `isMouseReporting`/
+`mouseReport` stubs filled IN PLACE). NO new verbatim-comment deferral was
+created; NO deferral resolved. Ledger:
+
+- **mouse_encode seam:** `mouseReport` is the first core caller of
+  vt's `input.mouse_encode` — the ported `Options::from_terminal` takes the
+  two terminal-flags reads (`mouse_event`/`mouse_format`) directly (the
+  mouse_encode.rs constructor-seam note); `opts.last_cell =
+  &self.mouse.event_point` realizes the reference `?*?point.Coordinate` as
+  the `Option<&mut Option<Coordinate>>` borrow. The fixed `.fixed(&data)`
+  writer over `WriteReq.Small.Array` is a `std::io::Cursor` (the encodeKey
+  precedent); its buffer-full failure is io's `WriteZero` — the reference's
+  `error.WriteFailed` log-and-return arm.
+- **Error growth point:** `maybePromptClick`'s `try std.fmt.bufPrint`
+  (`error.NoSpaceLeft`) grows the core `Error` union with `Io(std::io::
+  Error)` (the documented C7-precedent growth; the click_events response is
+  written through the same fixed-Cursor mapping).
+- **Zig defer scoped to an `if` block:** mouseButtonCallback's
+  `if (self.inspector != null) { defer self.queueRender() catch {}; }`
+  fires at the block's closing brace — immediately; ported as the direct
+  discarded call with a PORT NOTE stating the scope semantics.
+- **Mutex fidelity:** the four `defer unlock` regions (left-release,
+  report, left-press click, right-click sel) realize the explicit unlock at
+  EVERY exit (the C7..C11 convention) — 39 unlock sites total, including
+  the `break :click`/`break :sel` early exits. The right-click
+  `copy-or-paste`/`paste` arms' inverted `unlock(); defer lock();` is
+  replayed verbatim: relock at the arm end on success, and on the
+  startClipboardRequest error exit the LIFO defer order (arm relock, then
+  outer unlock) is replayed as the paired lock();unlock() before the
+  `return Err` — observable-behavior faithful (the brief reacquire is what
+  Zig executes). `mouseShiftCapture`'s CONDITIONAL `defer if (lock)
+  unlock()` is the `if lock { unlock }` at each of its four exits.
+- **Instant collapse:** the two `std.time.Instant.now()` error arms
+  (extend_selection's `else |err| break`, the click block's
+  `catch |err| time: null`) collapse — Rust `Instant::now` is infallible;
+  both arms preserved verbatim as comments. `now.since(click_time)` maps to
+  `duration_since(..).as_nanos() as u64` (the selection_gesture
+  `time_since` mapping).
+- **runtime-safety unreachable:** the four
+  `if (comptime std.debug.runtime_safety) unreachable;` sites map to
+  `if cfg!(debug_assertions) { unreachable!(); }` (debug crash, release
+  fall-through — the vt screen.rs precedent).
+- **Keyword collision:** maybePromptClick's `const move =` local is the
+  raw identifier `r#move` (keeps the reference name; the `r#ref`/`r#match`
+  precedent). The log-only `key` half of the click_events destructure is
+  consumed via `let _ = key;` at its log-comment site (the alloc_gpa
+  precedent).
+- **Ported ahead / stubs:** STUBS added for the C13 helpers this range
+  calls — `cursorPosCallback` (:4512, the extend_selection callsite),
+  `linkAtPin` (:4316, the double-click URL callsite), `processLinks`
+  (:4386, the release link-click callsite). `setSelectionAndCopy`'s
+  C9-landed `#[allow(dead_code)]` removed (mouseButtonCallback :3866 is its
+  first live caller); `showMouse` (C13 stub) gained its :3771 callsite.
