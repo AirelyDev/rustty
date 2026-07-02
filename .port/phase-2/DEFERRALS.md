@@ -866,3 +866,42 @@ Owner of the fill: the Phase-3 R-d GPU renderer tier + the D6 libxev port.
   names it). Both carry manual no-`A`-bound `Clone`/`Copy` ([ADV-FIX 6a]).
   rustty-core gained the `rustty-font-shaper` dep (Options.zig `font_grid:
   *font.SharedGrid` — the D1 shaper-tier type).
+
+## rustty-core C4 (core tier) — App.zig full port (mailbox, dispatch, seam tests)
+
+Chunk C4 of CORE_BLUEPRINT §6 lands ALL of App.zig (604 loc, 0 `test {}`
+blocks) in `crates/rustty-core/src/app.rs` (`App<A>`, `Message<A>` +
+documented `unsafe impl Send`, `NewWindow<A>`, `Queue<A>`, `Mailbox<A>` with
+manual no-`A: Copy` `Clone`/`Copy` [ADV-FIX 6], create..performAllAction)
+plus the §7 rustty-only `#[cfg(test)] mod test_runtime` (TestApp/TestSurface
+recording `perform_action` in a `Mutex<Vec<_>>`, counting `wakeup`s — test
+glue, NOT a port) with 13 seam tests. Deferral ledger:
+
+- **DEFERRED (documented, in-file): the App.zig Wasm block** (App.zig:579
+  `pub const Wasm = if (!builtin.target.isWasm()) ...`) — wasm-target-gated
+  in the reference and its entire body (beyond two imports) is commented out
+  IN the reference; preserved verbatim as comments at the bottom of app.rs
+  (config `wasm.rs` precedent). Joins the rustty wasm app-runtime
+  (off-by-default `wasm` feature family). 0 tests, R1-safe.
+- **RESOLVED in part: input `Binding.Action.Scoped`/`scoped`** (Binding.zig:
+  1436/1474, previously wholly deferred at the binding.rs PORT NOTE): the
+  `Scoped(.app)` instantiation now lands in rustty-input as the hand-written
+  `ScopedApp` fieldless enum (Action-declaration-order fields; all app-scoped
+  actions are void) + `Action::scoped_app`, WITH its first consumer
+  (App.performAction/keyEvent). **Still deferred: `Scoped(.surface)`** — it
+  lands with ITS consumer, core C14 `Surface.performBindingAction`
+  (Surface.zig:4775). 0 tests either way.
+- **SEQUENCING STUBS (not deferrals; later chunks fill IN PLACE):** the four
+  core-`Surface` methods App dispatches into — `close` (C6, Surface.zig:842),
+  `needsConfirmQuit` (C6, :938), `handleMessage` (C7, :960),
+  `performBindingAction` (C14, :4775) — are `unimplemented!()` stubs in
+  surface.rs with the reference doc comments + an opaque `surface::Error`
+  growth marker (termio `Error` precedent); C4 also added the minimal
+  Surface fields App touches (`id`, `rt_surface`) and the landed
+  `CoreSurfaceHandle` impl (§1).
+- **Ported live (additive growth, not deferred):** apprt-api `Surface` trait
+  gained `deinit(&mut self)` (embedded.zig:597) — the §2 growth mechanism;
+  App.zig:107 (`App.deinit` shutdown sweep) is a callsite the blueprint's
+  Surface.zig-scoped grep predates. rustty-datastruct `BlockingQueue` gained
+  the by-value `.{}` constructor as a manual `Default` (App.zig:99
+  `.mailbox = .{}` embeds the queue by value; `create()` now wraps it).

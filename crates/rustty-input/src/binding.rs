@@ -2155,6 +2155,43 @@ pub enum Scope {
     Surface,
 }
 
+/// Returns a union type that only contains actions that are scoped to
+/// the given scope.
+//
+// PORT NOTE (core C4): the reference is the comptime type function
+// `Action.Scoped(comptime s: Scope) type` (Binding.zig:1436) —
+//
+//     @setEvalBranchQuota(100_000);
+//     const all_fields = @typeInfo(Action).@"union".fields;
+//     // Find all fields that are app-scoped
+//     ...
+//     // Build our union
+//     return @Type(.{ .@"union" = ... });
+//
+// Rust has no comptime type generation, so this is the HAND-WRITTEN
+// `Scoped(.app)` instantiation: exactly the fields whose `scope() == .app`, in
+// the `Action` union's declaration order (the order the comptime loop
+// preserves). Every app-scoped action is a void field, so the union collapses
+// to a fieldless enum. `Scoped(.surface)` is hand-written the same way with
+// its consumer (core C14 `performBindingAction`); see the note at
+// [`Action::scoped_app`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScopedApp {
+    Ignore,
+    Unbind,
+    NewWindow,
+    ShowGtkInspector,
+    OpenConfig,
+    ReloadConfig,
+    CloseAllWindows,
+    ToggleQuickTerminal,
+    ToggleVisibility,
+    CheckForUpdates,
+    Undo,
+    Redo,
+    Quit,
+}
+
 impl Action {
     /// Returns the scope of an action.
     pub fn scope(&self) -> Scope {
@@ -2256,28 +2293,52 @@ impl Action {
         }
     }
 
-    // Returns a union type that only contains actions that are scoped to
-    // the given scope.
+    // PORT NOTE (core C4): `Scoped(comptime s: Scope) type` + `scoped(self,
+    // comptime s) ?Scoped(s)` build, at comptime, a union containing ONLY the
+    // actions whose `scope() == s`, and project the current action into it (or
+    // null). These produce comptime-generated TYPES consumed by the apprt/core
+    // dispatch layer; there are no `test {}` blocks for them in this file. Rust
+    // has no comptime type generation, so each scope's union is written out BY
+    // HAND, in the `Action` declaration order the comptime field loop preserves.
+    // `Scoped(.app)` is [`ScopedApp`] below (all app-scoped actions are
+    // void-payload, so it is a fieldless enum) + [`Action::scoped_app`] — landed
+    // WITH its first consumer (core `App.performAction`/`keyEvent`, App.zig:420/
+    // 371). `Scoped(.surface)` still lands with ITS consumer (core C14
+    // `Surface.performBindingAction`, Surface.zig:4775) — the scoped-union types
+    // live with their consumers. The scope partition itself is fully ported
+    // above as `scope()`.
+
+    /// Returns the scoped version of this action. If the action is not
+    /// scoped to the given scope then this returns null.
+    ///
+    /// The benefit of this function is that it allows us to use Zig's
+    /// exhaustive switch safety to ensure we always properly handle certain
+    /// scoped actions.
     //
-    //   // Find all fields that are app-scoped
-    //
-    // Returns the scoped version of this action. If the action is not
-    // scoped to the given scope then this returns null.
-    //
-    // The benefit of this function is that it allows us to use Zig's
-    // exhaustive switch safety to ensure we always properly handle certain
-    // scoped actions.
-    //
-    //   // Use comptime to prune out non-app actions
-    //
-    // PORT NOTE: `Scoped(comptime s: Scope) type` + `scoped(self, comptime s)
-    // ?Scoped(s)` build, at comptime, a union containing ONLY the actions whose
-    // `scope() == s`, and project the current action into it (or null). These
-    // produce comptime-generated TYPES consumed by the apprt/core dispatch layer;
-    // there are no `test {}` blocks for them in this file. Rust has no comptime
-    // type generation, and the scoped-union types live with their (deferred)
-    // apprt/core consumers, so `Scoped`/`scoped` are DEFERRED to that layer. The
-    // scope partition itself is fully ported above as `scope()`.
+    // PORT NOTE: `scoped(self, comptime s)` monomorphizes per scope; this is
+    // the `s = .app` instantiation (see the note above).
+    pub fn scoped_app(&self) -> Option<ScopedApp> {
+        // switch (self) { inline else => |v, tag| { ... } }
+        match self {
+            // Use comptime to prune out non-app actions
+            //
+            // Initialize our app action
+            Action::Ignore => Some(ScopedApp::Ignore),
+            Action::Unbind => Some(ScopedApp::Unbind),
+            Action::NewWindow => Some(ScopedApp::NewWindow),
+            Action::ShowGtkInspector => Some(ScopedApp::ShowGtkInspector),
+            Action::OpenConfig => Some(ScopedApp::OpenConfig),
+            Action::ReloadConfig => Some(ScopedApp::ReloadConfig),
+            Action::CloseAllWindows => Some(ScopedApp::CloseAllWindows),
+            Action::ToggleQuickTerminal => Some(ScopedApp::ToggleQuickTerminal),
+            Action::ToggleVisibility => Some(ScopedApp::ToggleVisibility),
+            Action::CheckForUpdates => Some(ScopedApp::CheckForUpdates),
+            Action::Undo => Some(ScopedApp::Undo),
+            Action::Redo => Some(ScopedApp::Redo),
+            Action::Quit => Some(ScopedApp::Quit),
+            _ => None,
+        }
+    }
 
     /// Implements the formatter for the fmt package. This encodes the
     /// action back into the format used by parse.

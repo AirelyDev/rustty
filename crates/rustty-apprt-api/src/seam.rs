@@ -157,6 +157,18 @@ pub trait Surface: Sized {
     // — embedded.zig:641.
     fn close(&self, process_alive: bool);
 
+    /// Deinitialize the runtime surface.
+    //
+    // PORT NOTE (§2 growth, core C4): `pub fn deinit(self: *Surface) void` —
+    // embedded.zig:597 (frees the inspector + stored title, removes the surface
+    // from the core app, deinits the core surface). Reached by core's
+    // `App.deinit` shutdown sweep, App.zig:107
+    // `for (self.surfaces.items) |surface| surface.deinit();` — a callsite the
+    // blueprint's Surface.zig grep list predates. `&mut self` because the
+    // backend genuinely tears itself down (unlike the [ADV-FIX 2.4] read-only
+    // `getTitle` case).
+    fn deinit(&mut self);
+
     /// The content scale (DPI ratio) of the surface.
     //
     // PORT NOTE: `pub fn getContentScale(self: *const Surface) !apprt.ContentScale`

@@ -77,17 +77,18 @@ pub struct BlockingQueue<T, const CAPACITY: usize> {
     cond_not_full: Condvar,
 }
 
-impl<T, const CAPACITY: usize> BlockingQueue<T, CAPACITY> {
-    // The bounds of this queue. We recast this to Size so we can do math.
-    const BOUNDS: Size = CAPACITY as Size;
-
-    /// Allocate the blocking queue on the heap.
-    pub fn create() -> Box<Self> {
+// PORT NOTE (core C4): the Zig reference also embeds queues BY VALUE and
+// zero-inits them with `.{}` (App.zig:99 `.mailbox = .{}`, field
+// `mailbox: Mailbox.Queue`) — `create`/`destroy` are only the heap pair.
+// `Default` is that `.{}` value constructor. MANUAL impl (a derive would
+// wrongly demand `T: Default`; the slots start empty regardless of `T`).
+impl<T, const CAPACITY: usize> Default for BlockingQueue<T, CAPACITY> {
+    fn default() -> Self {
         let mut data: Vec<Option<T>> = Vec::with_capacity(CAPACITY);
         for _ in 0..CAPACITY {
             data.push(None);
         }
-        Box::new(BlockingQueue {
+        BlockingQueue {
             mutex: Mutex::new(State {
                 data,
                 len: 0,
@@ -96,7 +97,17 @@ impl<T, const CAPACITY: usize> BlockingQueue<T, CAPACITY> {
                 not_full_waiters: 0,
             }),
             cond_not_full: Condvar::new(),
-        })
+        }
+    }
+}
+
+impl<T, const CAPACITY: usize> BlockingQueue<T, CAPACITY> {
+    // The bounds of this queue. We recast this to Size so we can do math.
+    const BOUNDS: Size = CAPACITY as Size;
+
+    /// Allocate the blocking queue on the heap.
+    pub fn create() -> Box<Self> {
+        Box::new(Self::default())
     }
 
     /// Free all the resources for this queue. This should only be
