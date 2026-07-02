@@ -255,9 +255,8 @@ pub const MIN_WINDOW_HEIGHT_CELLS: u32 = 4;
 /// given time. `activate_key_table` calls after this are ignored.
 // const max_active_key_tables = 8;
 //
-// PORT NOTE: the C14a `performBindingAction` arm (Surface.zig:5495) is the
-// only consumer; the allow is removed when it lands.
-#[allow(dead_code)]
+// PORT NOTE: the C14b `performBindingAction` `activate_key_table` arm
+// (Surface.zig:5495) is the only consumer — landed with C14b.
 const MAX_ACTIVE_KEY_TABLES: usize = 8;
 
 /// Surface represents a single terminal "surface" (see the module doc; the
@@ -10878,19 +10877,905 @@ where
                 self.queueRender()?;
             }
 
-            // PORT NOTE (chunk C14b): the second half of the switch
-            // (`.scroll_to_selection` onward, Surface.zig:5204-5625) lands
-            // with C14b. This arm is replaced by the remaining explicit arms
-            // there (restoring the reference's exhaustive `Scoped(.surface)`
-            // switch safety).
-            _ => unimplemented!(
-                "Surface.performBindingAction second half lands with core chunk C14b \
-                 (Surface.zig:5204)"
-            ),
+            // .scroll_to_selection => {
+            binding::ScopedSurface::ScrollToSelection => {
+                // {
+                //     self.renderer_state.mutex.lock();
+                //     defer self.renderer_state.mutex.unlock();
+                //     const sel = self.io.terminal.screens.active.selection orelse return false;
+                //     const tl = sel.topLeft(self.io.terminal.screens.active);
+                //     self.io.terminal.screens.active.scroll(.{ .pin = tl });
+                // }
+                {
+                    unsafe { (*self.renderer_state.mutex).lock() };
+                    let sel = match unsafe { (*self.io.terminal.screens.active).selection } {
+                        Some(sel) => sel,
+                        None => {
+                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            return Ok(false);
+                        }
+                    };
+                    let tl = sel.top_left(unsafe { &*self.io.terminal.screens.active });
+                    unsafe {
+                        (*self.io.terminal.screens.active).scroll(terminal::screen::Scroll::Pin(tl))
+                    };
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                }
+
+                // try self.queueRender();
+                self.queueRender()?;
+            }
+
+            // .scroll_page_up => {
+            binding::ScopedSurface::ScrollPageUp => {
+                // const rows: isize = @intCast(self.size.grid().rows);
+                let rows: isize = self.size.grid().rows as isize;
+                // self.queueIo(.{
+                //     .scroll_viewport = .{ .delta = -1 * rows },
+                // }, .unlocked);
+                //
+                // (`-1 * rows` -> `-rows`; clippy rejects the literal-multiply.)
+                self.queueIo(
+                    termio::Message::ScrollViewport(terminal::terminal::ScrollViewport::Delta(
+                        -rows,
+                    )),
+                    termio::termio_impl::MutexState::Unlocked,
+                );
+            }
+
+            // .scroll_page_down => {
+            binding::ScopedSurface::ScrollPageDown => {
+                // const rows: isize = @intCast(self.size.grid().rows);
+                let rows: isize = self.size.grid().rows as isize;
+                // self.queueIo(.{
+                //     .scroll_viewport = .{ .delta = rows },
+                // }, .unlocked);
+                self.queueIo(
+                    termio::Message::ScrollViewport(terminal::terminal::ScrollViewport::Delta(
+                        rows,
+                    )),
+                    termio::termio_impl::MutexState::Unlocked,
+                );
+            }
+
+            // .scroll_page_fractional => |fraction| {
+            binding::ScopedSurface::ScrollPageFractional(fraction) => {
+                // const rows: f32 = @floatFromInt(self.size.grid().rows);
+                let rows: f32 = f32::from(self.size.grid().rows);
+                // const delta: isize = @intFromFloat(@trunc(fraction * rows));
+                let delta: isize = (fraction * rows).trunc() as isize;
+                // self.queueIo(.{
+                //     .scroll_viewport = .{ .delta = delta },
+                // }, .unlocked);
+                self.queueIo(
+                    termio::Message::ScrollViewport(terminal::terminal::ScrollViewport::Delta(
+                        delta,
+                    )),
+                    termio::termio_impl::MutexState::Unlocked,
+                );
+            }
+
+            // .scroll_page_lines => |lines| {
+            binding::ScopedSurface::ScrollPageLines(lines) => {
+                // self.queueIo(.{
+                //     .scroll_viewport = .{ .delta = lines },
+                // }, .unlocked);
+                //
+                // (`lines: i16` widens to the `delta: isize` field.)
+                self.queueIo(
+                    termio::Message::ScrollViewport(terminal::terminal::ScrollViewport::Delta(
+                        isize::from(lines),
+                    )),
+                    termio::termio_impl::MutexState::Unlocked,
+                );
+            }
+
+            // .jump_to_prompt => |delta| {
+            binding::ScopedSurface::JumpToPrompt(delta) => {
+                // self.queueIo(.{
+                //     .jump_to_prompt = @intCast(delta),
+                // }, .unlocked);
+                self.queueIo(
+                    termio::Message::JumpToPrompt(isize::from(delta)),
+                    termio::termio_impl::MutexState::Unlocked,
+                );
+            }
+
+            // .write_screen_file => |v| try self.writeScreenFile(
+            //     .screen,
+            //     v,
+            // ),
+            binding::ScopedSurface::WriteScreenFile(v) => {
+                self.writeScreenFile(WriteScreenLoc::Screen, v)?
+            }
+
+            // .write_scrollback_file => |v| try self.writeScreenFile(
+            //     .history,
+            //     v,
+            // ),
+            binding::ScopedSurface::WriteScrollbackFile(v) => {
+                self.writeScreenFile(WriteScreenLoc::History, v)?
+            }
+
+            // .write_selection_file => |v| try self.writeScreenFile(
+            //     .selection,
+            //     v,
+            // ),
+            binding::ScopedSurface::WriteSelectionFile(v) => {
+                self.writeScreenFile(WriteScreenLoc::Selection, v)?
+            }
+
+            // .new_tab => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .new_tab,
+            //     {},
+            // ),
+            binding::ScopedSurface::NewTab => {
+                return Ok(unsafe { &*self.rt_app }
+                    .perform_action(apprt::Target::Surface(&*self), apprt::Action::NewTab)?);
+            }
+
+            // .close_tab => |v| return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .close_tab,
+            //     switch (v) {
+            //         .this => .this,
+            //         .other => .other,
+            //         .right => .right,
+            //     },
+            // ),
+            binding::ScopedSurface::CloseTab(v) => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::CloseTab(match v {
+                        binding::CloseTabMode::This => apprt::action::CloseTabMode::This,
+                        binding::CloseTabMode::Other => apprt::action::CloseTabMode::Other,
+                        binding::CloseTabMode::Right => apprt::action::CloseTabMode::Right,
+                    }),
+                )?);
+            }
+
+            // inline .previous_tab,
+            // .next_tab,
+            // .last_tab,
+            // .goto_tab,
+            // => |v, tag| return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .goto_tab,
+            //     switch (tag) {
+            //         .previous_tab => .previous,
+            //         .next_tab => .next,
+            //         .last_tab => .last,
+            //         .goto_tab => @enumFromInt(v),
+            //         else => comptime unreachable,
+            //     },
+            // ),
+            //
+            // (the `inline` capture's `v` payload + `tag` — the ScopedSurface
+            // value is re-projected to recover both, mirroring `|v, tag|`.)
+            sfc @ (binding::ScopedSurface::PreviousTab
+            | binding::ScopedSurface::NextTab
+            | binding::ScopedSurface::LastTab
+            | binding::ScopedSurface::GotoTab(_)) => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::GotoTab(match sfc {
+                        binding::ScopedSurface::PreviousTab => apprt::action::GotoTab::PREVIOUS,
+                        binding::ScopedSurface::NextTab => apprt::action::GotoTab::NEXT,
+                        binding::ScopedSurface::LastTab => apprt::action::GotoTab::LAST,
+                        binding::ScopedSurface::GotoTab(v) => apprt::action::GotoTab(v as i32),
+                        // else => comptime unreachable,
+                        _ => unreachable!(),
+                    }),
+                )?);
+            }
+
+            // .move_tab => |position| return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .move_tab,
+            //     .{ .amount = position },
+            // ),
+            binding::ScopedSurface::MoveTab(position) => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::MoveTab(apprt::action::MoveTab { amount: position }),
+                )?);
+            }
+
+            // .new_split => |direction| return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .new_split,
+            //     switch (direction) {
+            //         .right => .right,
+            //         .left => .left,
+            //         .down => .down,
+            //         .up => .up,
+            //         .auto => if (self.size.screen.width > self.size.screen.height)
+            //             .right
+            //         else
+            //             .down,
+            //     },
+            // ),
+            binding::ScopedSurface::NewSplit(direction) => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::NewSplit(match direction {
+                        binding::SplitDirection::Right => apprt::action::SplitDirection::Right,
+                        binding::SplitDirection::Left => apprt::action::SplitDirection::Left,
+                        binding::SplitDirection::Down => apprt::action::SplitDirection::Down,
+                        binding::SplitDirection::Up => apprt::action::SplitDirection::Up,
+                        binding::SplitDirection::Auto => {
+                            if self.size.screen.width > self.size.screen.height {
+                                apprt::action::SplitDirection::Right
+                            } else {
+                                apprt::action::SplitDirection::Down
+                            }
+                        }
+                    }),
+                )?);
+            }
+
+            // .goto_split => |direction| return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .goto_split,
+            //     switch (direction) {
+            //         inline else => |tag| @field(
+            //             apprt.action.GotoSplit,
+            //             @tagName(tag),
+            //         ),
+            //     },
+            // ),
+            //
+            // (`inline else => @field(GotoSplit, @tagName(tag))` maps each
+            // binding tag onto the same-named apprt `GotoSplit` variant.)
+            binding::ScopedSurface::GotoSplit(direction) => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::GotoSplit(match direction {
+                        binding::SplitFocusDirection::Previous => {
+                            apprt::action::GotoSplit::Previous
+                        }
+                        binding::SplitFocusDirection::Next => apprt::action::GotoSplit::Next,
+                        binding::SplitFocusDirection::Up => apprt::action::GotoSplit::Up,
+                        binding::SplitFocusDirection::Left => apprt::action::GotoSplit::Left,
+                        binding::SplitFocusDirection::Down => apprt::action::GotoSplit::Down,
+                        binding::SplitFocusDirection::Right => apprt::action::GotoSplit::Right,
+                    }),
+                )?);
+            }
+
+            // .goto_window => |direction| return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .goto_window,
+            //     switch (direction) {
+            //         .previous => .previous,
+            //         .next => .next,
+            //     },
+            // ),
+            binding::ScopedSurface::GotoWindow(direction) => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::GotoWindow(match direction {
+                        binding::GotoWindow::Previous => apprt::action::GotoWindow::Previous,
+                        binding::GotoWindow::Next => apprt::action::GotoWindow::Next,
+                    }),
+                )?);
+            }
+
+            // .resize_split => |value| return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .resize_split,
+            //     .{
+            //         .amount = value[1],
+            //         .direction = switch (value[0]) {
+            //             inline else => |tag| @field(
+            //                 apprt.action.ResizeSplit.Direction,
+            //                 @tagName(tag),
+            //             ),
+            //         },
+            //     },
+            // ),
+            binding::ScopedSurface::ResizeSplit(value) => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::ResizeSplit(apprt::action::ResizeSplit {
+                        amount: value.1,
+                        direction: match value.0 {
+                            binding::SplitResizeDirection::Up => {
+                                apprt::action::ResizeSplitDirection::Up
+                            }
+                            binding::SplitResizeDirection::Down => {
+                                apprt::action::ResizeSplitDirection::Down
+                            }
+                            binding::SplitResizeDirection::Left => {
+                                apprt::action::ResizeSplitDirection::Left
+                            }
+                            binding::SplitResizeDirection::Right => {
+                                apprt::action::ResizeSplitDirection::Right
+                            }
+                        },
+                    }),
+                )?);
+            }
+
+            // .equalize_splits => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .equalize_splits,
+            //     {},
+            // ),
+            binding::ScopedSurface::EqualizeSplits => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::EqualizeSplits,
+                )?);
+            }
+
+            // .toggle_split_zoom => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .toggle_split_zoom,
+            //     {},
+            // ),
+            binding::ScopedSurface::ToggleSplitZoom => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::ToggleSplitZoom,
+                )?);
+            }
+
+            // .toggle_readonly => {
+            binding::ScopedSurface::ToggleReadonly => {
+                // self.readonly = !self.readonly;
+                self.readonly = !self.readonly;
+                // _ = try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .readonly,
+                //     if (self.readonly) .on else .off,
+                // );
+                let _ = unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::Readonly(if self.readonly {
+                        apprt::action::Readonly::On
+                    } else {
+                        apprt::action::Readonly::Off
+                    }),
+                )?;
+                // return true;
+                return Ok(true);
+            }
+
+            // .reset_window_size => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .reset_window_size,
+            //     {},
+            // ),
+            binding::ScopedSurface::ResetWindowSize => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::ResetWindowSize,
+                )?);
+            }
+
+            // .toggle_maximize => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .toggle_maximize,
+            //     {},
+            // ),
+            binding::ScopedSurface::ToggleMaximize => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::ToggleMaximize,
+                )?);
+            }
+
+            // .toggle_fullscreen => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .toggle_fullscreen,
+            //     switch (self.config.macos_non_native_fullscreen) {
+            //         .false => .native,
+            //         .true => .macos_non_native,
+            //         .@"visible-menu" => .macos_non_native_visible_menu,
+            //         .@"padded-notch" => .macos_non_native_padded_notch,
+            //     },
+            // ),
+            binding::ScopedSurface::ToggleFullscreen => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::ToggleFullscreen(
+                        match self.config.macos_non_native_fullscreen {
+                            configpkg::value_types::NonNativeFullscreen::False => {
+                                apprt::action::Fullscreen::Native
+                            }
+                            configpkg::value_types::NonNativeFullscreen::True => {
+                                apprt::action::Fullscreen::MacosNonNative
+                            }
+                            configpkg::value_types::NonNativeFullscreen::VisibleMenu => {
+                                apprt::action::Fullscreen::MacosNonNativeVisibleMenu
+                            }
+                            configpkg::value_types::NonNativeFullscreen::PaddedNotch => {
+                                apprt::action::Fullscreen::MacosNonNativePaddedNotch
+                            }
+                        },
+                    ),
+                )?);
+            }
+
+            // .toggle_window_decorations => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .toggle_window_decorations,
+            //     {},
+            // ),
+            binding::ScopedSurface::ToggleWindowDecorations => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::ToggleWindowDecorations,
+                )?);
+            }
+
+            // .toggle_tab_overview => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .toggle_tab_overview,
+            //     {},
+            // ),
+            binding::ScopedSurface::ToggleTabOverview => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::ToggleTabOverview,
+                )?);
+            }
+
+            // .toggle_window_float_on_top => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .float_window,
+            //     .toggle,
+            // ),
+            binding::ScopedSurface::ToggleWindowFloatOnTop => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::FloatWindow(apprt::action::FloatWindow::Toggle),
+                )?);
+            }
+
+            // .toggle_secure_input => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .secure_input,
+            //     .toggle,
+            // ),
+            binding::ScopedSurface::ToggleSecureInput => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::SecureInput(SecureInput::Toggle),
+                )?);
+            }
+
+            // .toggle_mouse_reporting => {
+            binding::ScopedSurface::ToggleMouseReporting => {
+                // self.config.mouse_reporting = !self.config.mouse_reporting;
+                self.config.mouse_reporting = !self.config.mouse_reporting;
+                // log.debug("mouse reporting toggled: {}", .{self.config.mouse_reporting});
+            }
+
+            // .toggle_command_palette => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .toggle_command_palette,
+            //     {},
+            // ),
+            binding::ScopedSurface::ToggleCommandPalette => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::ToggleCommandPalette,
+                )?);
+            }
+
+            // .toggle_background_opacity => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .toggle_background_opacity,
+            //     {},
+            // ),
+            binding::ScopedSurface::ToggleBackgroundOpacity => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::ToggleBackgroundOpacity,
+                )?);
+            }
+
+            // .show_on_screen_keyboard => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .show_on_screen_keyboard,
+            //     {},
+            // ),
+            binding::ScopedSurface::ShowOnScreenKeyboard => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::ShowOnScreenKeyboard,
+                )?);
+            }
+
+            // .select_all => {
+            binding::ScopedSurface::SelectAll => {
+                // self.renderer_state.mutex.lock();
+                // defer self.renderer_state.mutex.unlock();
+                unsafe { (*self.renderer_state.mutex).lock() };
+
+                // const sel = self.io.terminal.screens.active.selectAll();
+                let sel = unsafe { (*self.io.terminal.screens.active).select_all() };
+                // if (sel) |s| {
+                if let Some(s) = sel {
+                    // try self.setSelectionAndCopy(s);
+                    if let Err(err) = self.setSelectionAndCopy(s) {
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Err(err);
+                    }
+                    // try self.queueRender();
+                    if let Err(err) = self.queueRender() {
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Err(err.into());
+                    }
+                }
+                unsafe { (*self.renderer_state.mutex).unlock() };
+            }
+
+            // .inspector => |mode| return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .inspector,
+            //     switch (mode) {
+            //         inline else => |tag| @field(
+            //             apprt.action.Inspector,
+            //             @tagName(tag),
+            //         ),
+            //     },
+            // ),
+            binding::ScopedSurface::Inspector(mode) => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::Inspector(match mode {
+                        binding::InspectorMode::Toggle => apprt::action::Inspector::Toggle,
+                        binding::InspectorMode::Show => apprt::action::Inspector::Show,
+                        binding::InspectorMode::Hide => apprt::action::Inspector::Hide,
+                    }),
+                )?);
+            }
+
+            // .close_surface => self.close(),
+            binding::ScopedSurface::CloseSurface => self.close(),
+
+            // .close_window => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .close_window,
+            //     {},
+            // ),
+            binding::ScopedSurface::CloseWindow => {
+                return Ok(unsafe { &*self.rt_app }
+                    .perform_action(apprt::Target::Surface(&*self), apprt::Action::CloseWindow)?);
+            }
+
+            // inline .activate_key_table,
+            // .activate_key_table_once,
+            // => |name, tag| {
+            //
+            // (the `inline` capture's `name` payload + `tag` — recovered by
+            // re-projecting the ScopedSurface value, mirroring `|name, tag|`.)
+            sfc @ (binding::ScopedSurface::ActivateKeyTable(_)
+            | binding::ScopedSurface::ActivateKeyTableOnce(_)) => {
+                let (name, is_once): (&[u8], bool) = match sfc {
+                    binding::ScopedSurface::ActivateKeyTable(name) => (name, false),
+                    // tag == .activate_key_table_once
+                    binding::ScopedSurface::ActivateKeyTableOnce(name) => (name, true),
+                    _ => unreachable!(),
+                };
+
+                // Look up the table in our config
+                // const set = self.config.keybind.tables.getPtr(name) orelse {
+                //     log.debug("key table not found: {s}", .{name});
+                //     return false;
+                // };
+                //
+                // PORT NOTE: `getPtr` (`?*Set`) -> `get` (`?&Set` cast to a
+                // raw `*const Set`) — the stack only STORES and compares the
+                // pointer, never mutates through it, so the shared borrow is
+                // sufficient. The `Vec<u8>`-keyed map takes `&Vec<u8>`; the
+                // `[]const u8` name is copied into a lookup key (a small
+                // temporary, behavior-preserving).
+                let set: *const binding::Set = match self.config.keybind.tables.get(&name.to_vec())
+                {
+                    Some(s) => s as *const binding::Set,
+                    None => {
+                        // log.debug("key table not found: {s}", .{name});
+                        return Ok(false);
+                    }
+                };
+
+                // If this is the same table as is currently active, then
+                // do nothing.
+                // if (self.keyboard.table_stack.items.len > 0) {
+                if !self.keyboard.table_stack.is_empty() {
+                    // const items = self.keyboard.table_stack.items;
+                    // const active = items[items.len - 1].set;
+                    let active = self.keyboard.table_stack[self.keyboard.table_stack.len() - 1].set;
+                    // if (active == set) {
+                    //     log.debug("ignoring duplicate activate table: {s}", .{name});
+                    //     return false;
+                    // }
+                    if std::ptr::eq(active, set) {
+                        // log.debug("ignoring duplicate activate table: {s}", .{name});
+                        return Ok(false);
+                    }
+                }
+
+                // If we're already at the max, ignore it.
+                // if (self.keyboard.table_stack.items.len >= max_active_key_tables) {
+                //     log.info(
+                //         "ignoring activate table, max depth reached: {s}",
+                //         .{name},
+                //     );
+                //     return false;
+                // }
+                if self.keyboard.table_stack.len() >= MAX_ACTIVE_KEY_TABLES {
+                    // log.info("ignoring activate table, max depth reached: {s}", .{name});
+                    return Ok(false);
+                }
+
+                // Add the table to the stack.
+                // try self.keyboard.table_stack.append(self.alloc, .{
+                //     .set = set,
+                //     .once = tag == .activate_key_table_once,
+                // });
+                self.keyboard
+                    .table_stack
+                    .push(TableStackEntry { set, once: is_once });
+
+                // Notify the UI.
+                // _ = self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .key_table,
+                //     .{ .activate = name },
+                // ) catch |err| {
+                //     log.warn(
+                //         "failed to notify app of key table err={}",
+                //         .{err},
+                //     );
+                // };
+                if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::KeyTable(KeyTable::Activate(name)),
+                ) {
+                    // log.warn("failed to notify app of key table err={}", .{err});
+                }
+
+                // log.debug("key table activated: {s}", .{name});
+            }
+
+            // .deactivate_key_table => {
+            binding::ScopedSurface::DeactivateKeyTable => {
+                // switch (self.keyboard.table_stack.items.len) {
+                match self.keyboard.table_stack.len() {
+                    // No key table active. This does nothing.
+                    // 0 => return false,
+                    0 => return Ok(false),
+
+                    // Final key table active, clear our state.
+                    // 1 => self.keyboard.table_stack.clearAndFree(self.alloc),
+                    //
+                    // (`clearAndFree` — drop the storage too, the deinit
+                    // mem::take precedent.)
+                    1 => drop(std::mem::take(&mut self.keyboard.table_stack)),
+
+                    // Restore the prior key table. We don't free any memory in
+                    // this case because we assume it will be freed later when
+                    // we finish our key table.
+                    // else => _ = self.keyboard.table_stack.pop(),
+                    _ => {
+                        let _ = self.keyboard.table_stack.pop();
+                    }
+                }
+
+                // Notify the UI.
+                // _ = self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .key_table,
+                //     .deactivate,
+                // ) catch |err| {
+                //     log.warn(
+                //         "failed to notify app of key table err={}",
+                //         .{err},
+                //     );
+                // };
+                if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::KeyTable(KeyTable::Deactivate),
+                ) {
+                    // log.warn("failed to notify app of key table err={}", .{err});
+                }
+            }
+
+            // .deactivate_all_key_tables => {
+            //     return try self.deactivateAllKeyTables();
+            // },
+            binding::ScopedSurface::DeactivateAllKeyTables => {
+                return self.deactivateAllKeyTables();
+            }
+
+            // .end_key_sequence => {
+            binding::ScopedSurface::EndKeySequence => {
+                // End the key sequence and flush queued keys to the terminal,
+                // but don't encode the key that triggered this action. This
+                // will do that because leaf keys (keys with bindings) aren't
+                // in the queued encoding list.
+                // self.endKeySequence(.flush, .retain);
+                self.endKeySequence(KeySequenceQueued::Flush, KeySequenceMemory::Retain);
+            }
+
+            // .crash => |location| switch (location) {
+            binding::ScopedSurface::Crash(location) => match location {
+                // .main => @panic("crash binding action, crashing intentionally"),
+                binding::CrashThread::Main => {
+                    panic!("crash binding action, crashing intentionally")
+                }
+
+                // .render => {
+                binding::CrashThread::Render => {
+                    // _ = self.renderer_thread.mailbox.push(.{ .crash = {} }, .{ .forever = {} });
+                    let _ = unsafe { &*self.renderer_thread.mailbox }
+                        .push(rendererpkg::Message::Crash, Timeout::Forever);
+                    // self.queueRender() catch |err| {
+                    //     // Not a big deal if this fails.
+                    //     log.warn("failed to notify renderer of crash message err={}", .{err});
+                    // };
+                    if let Err(_err) = self.queueRender() {
+                        // Not a big deal if this fails.
+                        // log.warn("failed to notify renderer of crash message err={}", .{err});
+                    }
+                }
+
+                // .io => self.queueIo(.{ .crash = {} }, .unlocked),
+                binding::CrashThread::Io => self.queueIo(
+                    termio::Message::Crash,
+                    termio::termio_impl::MutexState::Unlocked,
+                ),
+            },
+
+            // .adjust_selection => |direction| {
+            binding::ScopedSurface::AdjustSelection(direction) => {
+                // self.renderer_state.mutex.lock();
+                // defer self.renderer_state.mutex.unlock();
+                unsafe { (*self.renderer_state.mutex).lock() };
+
+                // const screen: *terminal.Screen = self.io.terminal.screens.active;
+                let screen: *mut terminal::screen::Screen = self.io.terminal.screens.active;
+                // const sel = if (screen.selection) |*sel| sel else {
+                //     // If we don't have a selection we do not perform this
+                //     // action, allowing the keybind to fall through to the
+                //     // terminal.
+                //     return false;
+                // };
+                //
+                // PORT NOTE: the reference `sel` is a `*Selection` aliasing
+                // `screen.selection` which `sel.adjust(screen, ...)` mutates
+                // in place while ALSO passing `screen` as `&Screen` — a
+                // `&mut`-field / `&`-parent overlap that is UB in Rust
+                // (rust-mut-args memory). We copy the selection out
+                // (`Selection: Copy`), adjust the independent copy against
+                // `&*screen`, then write it back — behavior-identical because
+                // `adjust` reads only `s.pages`, never `s.selection`.
+                let mut sel = match unsafe { (*screen).selection } {
+                    Some(sel) => sel,
+                    None => {
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Ok(false);
+                    }
+                };
+                // sel.adjust(screen, switch (direction) {
+                //     .left => .left,
+                //     .right => .right,
+                //     .up => .up,
+                //     .down => .down,
+                //     .page_up => .page_up,
+                //     .page_down => .page_down,
+                //     .home => .home,
+                //     .end => .end,
+                //     .beginning_of_line => .beginning_of_line,
+                //     .end_of_line => .end_of_line,
+                // });
+                sel.adjust(
+                    unsafe { &*screen },
+                    match direction {
+                        binding::AdjustSelection::Left => terminal::selection::Adjustment::Left,
+                        binding::AdjustSelection::Right => terminal::selection::Adjustment::Right,
+                        binding::AdjustSelection::Up => terminal::selection::Adjustment::Up,
+                        binding::AdjustSelection::Down => terminal::selection::Adjustment::Down,
+                        binding::AdjustSelection::PageUp => terminal::selection::Adjustment::PageUp,
+                        binding::AdjustSelection::PageDown => {
+                            terminal::selection::Adjustment::PageDown
+                        }
+                        binding::AdjustSelection::Home => terminal::selection::Adjustment::Home,
+                        binding::AdjustSelection::End => terminal::selection::Adjustment::End,
+                        binding::AdjustSelection::BeginningOfLine => {
+                            terminal::selection::Adjustment::BeginningOfLine
+                        }
+                        binding::AdjustSelection::EndOfLine => {
+                            terminal::selection::Adjustment::EndOfLine
+                        }
+                    },
+                );
+                // (write the adjusted copy back — the reference `*Selection`
+                // mutated `screen.selection` in place.)
+                unsafe { (*screen).selection = Some(sel) };
+
+                // If the selection endpoint is outside of the current viewpoint,
+                // scroll it in to view. Note we always specifically use sel.end
+                // because that is what adjust modifies.
+                // scroll: {
+                'scroll: {
+                    // const viewport_tl = screen.pages.getTopLeft(.viewport);
+                    let viewport_tl =
+                        unsafe { (*screen).pages.get_top_left(terminal::point::Tag::Viewport) };
+                    // const viewport_br = screen.pages.getBottomRight(.viewport).?;
+                    let viewport_br = unsafe {
+                        (*screen)
+                            .pages
+                            .get_bottom_right(terminal::point::Tag::Viewport)
+                    }
+                    .unwrap();
+                    // if (sel.end().isBetween(viewport_tl, viewport_br))
+                    //     break :scroll;
+                    if sel.end().is_between(viewport_tl, viewport_br) {
+                        break 'scroll;
+                    }
+
+                    // Our end point is not within the viewport. If the end
+                    // point is after the br then we need to adjust the end so
+                    // that it is at the bottom right of the viewport.
+                    // const target = if (sel.end().before(viewport_tl))
+                    //     sel.end()
+                    // else
+                    //     sel.end().up(screen.pages.rows - 1) orelse sel.end();
+                    let target = if sel.end().before(viewport_tl) {
+                        sel.end()
+                    } else {
+                        sel.end()
+                            .up(usize::from(unsafe { (*screen).pages.rows }) - 1)
+                            .unwrap_or(sel.end())
+                    };
+
+                    // screen.scroll(.{ .pin = target });
+                    unsafe { (*screen).scroll(terminal::screen::Scroll::Pin(target)) };
+                }
+
+                // Queue a render so its shown
+                // screen.dirty.selection = true;
+                unsafe { (*screen).dirty.selection = true };
+                // try self.queueRender();
+                if let Err(err) = self.queueRender() {
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    return Err(err.into());
+                }
+                unsafe { (*self.renderer_state.mutex).unlock() };
+            }
         }
 
         // return true;
         Ok(true)
+    }
+
+    // fn writeScreenFile(
+    //     self: *Surface,
+    //     loc: WriteScreenLoc,
+    //     write_screen: input.Binding.Action.WriteScreen,
+    // ) !void {
+    //
+    // PORT NOTE (chunk C14b forward-declaration): the `writeScreenFile`
+    // skeleton + the file-scope [`WriteScreenLoc`] land HERE so C14b's
+    // `.write_screen_file` / `.write_scrollback_file` / `.write_selection_file`
+    // binding arms (Surface.zig:5250-5263) compile against a real callee. The
+    // BODY (Surface.zig:5651-5777 — TempDir / ScreenFormatter / openUrl file
+    // I/O) is C15's row (5651-6036); C15 fills this skeleton IN PLACE (the C3
+    // skeleton precedent). Tracked in DEFERRALS.md "core C14b".
+    fn writeScreenFile(
+        &mut self,
+        loc: WriteScreenLoc,
+        write_screen: binding::WriteScreen,
+    ) -> Result<(), Error> {
+        let _ = (loc, write_screen);
+        unimplemented!("Surface.writeScreenFile body lands with core chunk C15 (Surface.zig:5651)")
     }
 
     /// This starts a clipboard request, with some basic validation. For example,
@@ -11055,6 +11940,30 @@ impl ScrollAmount {
     }
 }
 
+/// The portion of the screen to write for writeScreenFile.
+// const WriteScreenLoc = enum {
+//     screen, // Full screen
+//     history, // History (scrollback)
+//     selection, // Selected text
+// };
+//
+// PORT NOTE (chunk C14b forward-declaration): a file-scope enum (the
+// reference declares it at file scope between `closingAction` and
+// `writeScreenFile`, Surface.zig:5644 — a Rust `enum` cannot live inside the
+// `impl` block). Consumed by C14b's `performBindingAction` write arms and the
+// forward-declared `Surface::writeScreenFile` skeleton; C15 fills the body
+// (which uses `@tagName(loc)` for the file name). Tracked in DEFERRALS.md
+// "core C14b".
+#[derive(Clone, Copy)]
+enum WriteScreenLoc {
+    Screen,    // Full screen
+    History,   // History (scrollback)
+    Selection, // Selected text
+}
+
+/// Returns true if performing the given action result in closing
+/// the surface. This is used to determine if our self pointer is
+/// still valid after performing some binding action.
 // fn closingAction(action: input.Binding.Action) bool {
 //
 // PORT NOTE (ported ahead of its C14 row — Surface.zig:5633;

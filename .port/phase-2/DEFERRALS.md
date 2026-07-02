@@ -1437,3 +1437,63 @@ Every OTHER search-related first-half arm ports LIVE: `.start_search` /
 on an existing search). With `.search` deferred, `self.search` is always `None`,
 so those arms' Some-branches are faithfully present but dormant until `.search`
 lands.
+
+## rustty-core C14b (core tier) — performBindingAction second half + closingAction
+
+Chunk C14b of CORE_BLUEPRINT §6 lands Surface.zig:5204-5642 in
+`crates/rustty-core/src/surface.rs`: the surface-scoped switch arms
+`.scroll_to_selection` through `.adjust_selection` (the second half of
+`performBindingAction`), completing the switch. `closingAction` (:5633) was
+already ported ahead of its row in C14a (this chunk restored its dropped `///`
+doc comment). **Arm-count diff (mechanical):** the reference
+`switch (action.scoped(.surface).?)` has 67 case-label groups (26 first-half +
+41 second-half; `.csi,.esc` / the `inline` tab group / the `inline` key-table
+group each count once); the Rust `match action.scoped_surface().unwrap()` has
+67 arms (26 C14a + 41 C14b, mirroring the same three combined arms) and is
+EXHAUSTIVE with no `_` wildcard — restoring the reference's exhaustive-switch
+safety. `performBindingAction` is now arm-complete. Every dispatch arm was
+checked against the CORE_BLUEPRINT §2 [ADV-FIX 4] Action checklist
+(`new_split`/`goto_split`/`goto_window`/`resize_split`/`inspector`/`key_table`/
+`float_window`/`secure_input`/`readonly`/`toggle_fullscreen`/`goto_tab`/
+`close_tab`/`move_tab` all live). Scoped Surface.zig:5204-5642 G3b → 28
+distinctive comments, missing=0. No new tests (0 in the reference; `Surface<A>`
+is untested-by-construction). `#[allow(dead_code)]` on `MAX_ACTIVE_KEY_TABLES`
+removed — the `.activate_key_table` arm (:5495) is now its live consumer.
+
+- **SEQUENCING STUB (not a deferral; C15 fills IN PLACE): `writeScreenFile` +
+  the file-scope `WriteScreenLoc` enum.** The three write arms
+  (`.write_screen_file`/`.write_scrollback_file`/`.write_selection_file`,
+  Surface.zig:5250-5263) call `self.writeScreenFile(loc, v)`, but the callee
+  body (Surface.zig:5651-5777 — `internal_os.TempDir` + `terminal.formatter`
+  `ScreenFormatter` + `openUrl` file I/O) is C15's row (5651-6036). C14b
+  forward-declares the `writeScreenFile` method as an `unimplemented!()`
+  skeleton (the C3/C6 skeleton precedent — startClipboardRequest/
+  showDesktopNotification are the same pattern) plus `WriteScreenLoc` at file
+  scope (a Rust `enum` cannot live in the `impl` block; the reference declares
+  it at file scope between `closingAction` and `writeScreenFile`, :5644). C15
+  fills the body IN PLACE (all deps — TempDir, ScreenFormatter, openUrl — are
+  already ported, so it is a straight port, not a deferral). The three write
+  arms THEMSELVES are fully ported (they are in C14b's range).
+- **`get_ptr` -> `get` for the key-table lookup (`.activate_key_table`,
+  :5478):** the reference `self.config.keybind.tables.getPtr(name)` returns a
+  mutable `*Set`; the stack only STORES and compares the pointer, never mutates
+  through it, so the shared `get` (`?&Set` cast to a raw `*const Set`, matching
+  `TableStackEntry.set`) is sufficient. The `Vec<u8>`-keyed `AutoArrayHashMap`
+  takes `&Vec<u8>`, so the `[]const u8` name is copied into a lookup key (a
+  small temporary, behavior-preserving).
+- **`.adjust_selection` copy-out/write-back (:5577):** the reference `sel` is a
+  `*Selection` aliasing `screen.selection` that `sel.adjust(screen, ...)`
+  mutates in place while ALSO passing `screen` as `&Screen` — a `&mut`-field /
+  `&`-parent overlap that is UB in Rust (rust-mut-args memory). The port copies
+  the selection out (`Selection: Copy`), adjusts the independent copy against
+  `&*screen`, then writes it back — behavior-identical because `adjust` reads
+  only `s.pages`, never `s.selection`. The subsequent `scroll:` labeled block
+  and `dirty.selection = true` read the (written-back) adjusted value.
+- **Mutex fidelity:** the four `defer unlock` regions (`.scroll_to_selection`
+  inner block, `.select_all`, `.adjust_selection`) realize the explicit unlock
+  at EVERY exit — the C9..C14a convention; the fallible `setSelectionAndCopy`/
+  `queueRender` calls unlock before propagating. `.scroll_to_selection`'s
+  `orelse return false` unlocks the inner block before returning.
+- **`-1 * rows` -> `-rows` (`.scroll_page_up`, :5219):** clippy `neg_multiply`
+  rejects the literal-multiply; the negation is semantically identical (the
+  reference comment preserves `-1 * rows`).
