@@ -183,14 +183,16 @@ fn os_str_as_bytes(s: &std::ffi::OsStr) -> std::borrow::Cow<'_, [u8]> {
     std::borrow::Cow::Owned(s.to_string_lossy().into_owned().into_bytes())
 }
 
+// (pub(crate): shared with `open.rs` — the `open(url: []const u8)` argv
+// bytes take the same POSIX bytes-are-OsStr mapping.)
 #[cfg(not(windows))]
-fn os_str_from_bytes(b: &[u8]) -> &std::ffi::OsStr {
+pub(crate) fn os_str_from_bytes(b: &[u8]) -> &std::ffi::OsStr {
     use std::os::unix::ffi::OsStrExt;
     std::ffi::OsStr::from_bytes(b)
 }
 
 #[cfg(windows)]
-fn os_str_from_bytes(b: &[u8]) -> &std::ffi::OsStr {
+pub(crate) fn os_str_from_bytes(b: &[u8]) -> &std::ffi::OsStr {
     std::ffi::OsStr::new(std::str::from_utf8(b).unwrap_or(""))
 }
 

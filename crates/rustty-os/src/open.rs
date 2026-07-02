@@ -52,19 +52,26 @@ pub enum OpenError {
 /// This function is purposely simple for the sake of providing some portable
 /// way to open URLs. If you are implementing an apprt for Rustty, you should
 /// consider doing something special-cased for your platform.
+// PORT NOTE (R3): the reference is `url: []const u8` — raw bytes, never a
+// lossy `String`. Landed originally as `&str`; retyped to `&[u8]` when core
+// C13's `Surface.openUrl` (the first caller) arrived with byte URLs (OSC8
+// URIs are arbitrary bytes). POSIX argv takes the bytes as `OsStr` directly
+// (the `path.rs` `os_str_from_bytes` mapping; the Zig argv is the same raw
+// bytes). The collapsed `alloc` param is the Rust `Command` ownership.
 #[allow(unused_variables)]
-pub fn open(kind: Kind, url: &str) -> Result<(), OpenError> {
+pub fn open(kind: Kind, url: &[u8]) -> Result<(), OpenError> {
     let mut exe: std::process::Command = {
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
             let mut c = std::process::Command::new("xdg-open");
-            c.arg(url);
+            c.arg(crate::path::os_str_from_bytes(url));
             c
         }
         #[cfg(target_os = "windows")]
         {
             let mut c = std::process::Command::new("rundll32");
-            c.args(["url.dll,FileProtocolHandler", url]);
+            c.arg("url.dll,FileProtocolHandler");
+            c.arg(crate::path::os_str_from_bytes(url));
             c
         }
         #[cfg(target_os = "macos")]
@@ -72,12 +79,13 @@ pub fn open(kind: Kind, url: &str) -> Result<(), OpenError> {
             match kind {
                 Kind::Text => {
                     let mut c = std::process::Command::new("open");
-                    c.args(["-t", url]);
+                    c.arg("-t");
+                    c.arg(crate::path::os_str_from_bytes(url));
                     c
                 }
                 Kind::Html | Kind::Unknown => {
                     let mut c = std::process::Command::new("open");
-                    c.arg(url);
+                    c.arg(crate::path::os_str_from_bytes(url));
                     c
                 }
             }

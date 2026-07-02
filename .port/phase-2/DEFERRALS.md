@@ -1276,3 +1276,81 @@ created; NO deferral resolved. Ledger:
   (:4386, the release link-click callsite). `setSelectionAndCopy`'s
   C9-landed `#[allow(dead_code)]` removed (mouseButtonCallback :3866 is its
   first live caller); `showMouse` (C13 stub) gained its :3771 callsite.
+
+## rustty-core C13 (core tier) — link/cursor-pos/color-scheme tier
+
+Chunk C13 of CORE_BLUEPRINT §6 lands Surface.zig:4279-4774 in
+`crates/rustty-core/src/surface.rs`: `linkAtPos`, `linkAtPin`,
+`mouseModsWithCapture`, `processLinks`, `openUrl`, `osc8URI`,
+`mousePressureCallback`, `cursorPosCallback`, `colorSchemeCallback`,
+`posToViewport`, `scrollToBottom`, `hideMouse`, `showMouse` — all LIVE (the
+C12-declared stubs filled IN PLACE, relocated to their reference order:
+`linkAtPos`/`linkAtPin` sit after `maybePromptClick` where the reference
+declares them). NO new verbatim-comment deferral was created; NO deferral
+resolved. Ledger:
+
+- **vt oniguruma feature turned ON for core:** `linkAtPin`'s
+  `strmap.searchIterator(link.regex)` is vt's `build_options.oniguruma`-gated
+  StringMap search surface. The reference build compiles Ghostty WITH
+  oniguruma, so rustty-core (the reference-binary tier) deps
+  `rustty-vt = { features = ["oniguruma"] }`. Per-crate
+  `cargo test -p rustty-vt` still runs the default feature set (2019 —
+  unchanged; the 3 gated string_map tests stay feature-gated, faithful to the
+  Zig `SkipZigTest` arms, and pass under `--features oniguruma`).
+- **Zig value-copy handles (searchIterator):** the reference copies BOTH the
+  `StringMap` slice headers and the `oni.Regex` handle by value into the
+  iterator (shallow, non-owning). The vt `search_iterator` takes both by
+  value, so the regex copy is the aliasing handle struct
+  (`oni::Regex { value: link.regex.value }` — only `DerivedConfig`'s explicit
+  deinit chain frees the OnigRegex; no `Drop`) and the map MOVES through the
+  iterator, recovered after each link's scan (`strmap = it.map`); the
+  reference `defer strmap.deinit` is the ownership drop at every exit
+  (including the moved-into-iterator error/return paths). `defer
+  match.deinit()` is explicit at both iteration exits.
+- **rustty-os `open` retyped to the reference byte URL (R3):** the landed
+  `os::open(kind, url: &str)` had narrowed the reference's
+  `url: []const u8`; `openUrl`'s fallback (`try internal_os.open(...)`) is
+  its first caller, so `open` is retyped to `url: &[u8]` (POSIX argv takes
+  the bytes as `OsStr` via the path.rs `os_str_from_bytes` mapping, now
+  `pub(crate)`; OSC8 URIs are arbitrary bytes — never a lossy `String`).
+  Zero external callers existed; rustty-os tests unchanged. The apprt
+  `OpenUrlKind` maps arm-for-arm onto the os-local R4-seam `Kind` (the
+  os/open.rs break-#14 parity image).
+- **Error growth points:** `linkAtPin`'s `try it.next()` grows the core
+  `Error` union with `Oni(oni::Error)`; `openUrl`'s fallback grows it with
+  `OsOpen(internal_os::open::OpenError)` (the documented C7-precedent
+  growth).
+- **osc8URI unbound-lifetime return:** the reference returns a slice into
+  the pin's PAGE memory (`entry.uri.slice(page.memory)`) and literally
+  discards `self` (`_ = self;`). The port states that contract with an
+  explicit caller-chosen lifetime (`fn osc8URI<'a>(&self, ..) -> Option<&'a
+  [u8]>` — vt's `OffsetSlice::slice` is itself caller-lifetime): valid while
+  the renderer mutex is held and the page node is alive. This is what lets
+  `processLinks` pass the borrowed URI to `openUrl(&mut self, ..)` exactly as
+  the reference does.
+- **Inspector Some-arm (CORE_BLUEPRINT §4):** cursorPosCallback's
+  `if (self.inspector) |insp| { insp.mouse.last_* = ..; }` block writes the
+  Phase-3 `Inspector.mouse` state — the pointee is uninhabited, so the arm is
+  preserved verbatim above `unreachable!()` (the C6 deinit teardown-arm
+  precedent). Resolved by the Phase-3 inspector fill.
+- **[ADV 6.1] completion:** mousePressureCallback/cursorPosCallback/
+  colorSchemeCallback add the LAST three `crash.sentry.thread_state`
+  guard sites — all 13 reference sites are now live (`ThreadStateGuard`).
+- **Mutex fidelity:** the four `defer unlock` regions (mousePressure's
+  deep-press select block, cursorPos's negative-pos block, cursorPos's
+  function-scope remainder incl. the mouse-report early `return` and the
+  runtime-safety `return`, scrollToBottom's caller-held precondition) realize
+  the explicit unlock at EVERY exit — the C7..C12 convention.
+- **`@enumFromInt(i)` (cursorPos button scan):** the click_state indices ARE
+  the `Button` discriminants (0..=10; the array length is `Button.max`) —
+  realized as the exhaustive index match, `unreachable!()` past 10.
+- **Keyword collision:** mouseModsWithCapture's `var final` local is the raw
+  identifier `r#final` (the C12 `r#move` precedent).
+- **Stale-note fixes:** `notifyConfigConditionalState`/`resolvePathForOpening`
+  `#[allow(dead_code)]` removed (colorSchemeCallback :4720 / processLinks
+  :4396 are their first live callers); the C9 `setSelectionAndCopy` note
+  misattributed :4086/:4092 to C13 — they are C12 mouseButtonCallback sites
+  (live); the C14 (:5450) callsite is the one that lands later.
+  `scrollToBottom` carries the only NEW `#[allow(dead_code)]` (its
+  :4829/:4856/:4872 performBindingAction and :5891 completeClipboardPaste
+  callsites are C14a/C15).

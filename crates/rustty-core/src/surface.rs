@@ -68,9 +68,18 @@
 //! C7..C11 convention — including the right-click paste arms' inverted
 //! unlock→`defer` relock replayed in LIFO order) with STUBS added for the
 //! C13 helpers its bodies call (`cursorPosCallback`/`linkAtPin`/
-//! `processLinks`);
-//! CORE_BLUEPRINT §6 rows C13..C15 fill the remaining function bodies IN
-//! PLACE — the declared method stubs below are owned by C13/C14/C15).
+//! `processLinks`); chunk C13 landed the link/cursor-pos/color-scheme tier,
+//! Surface.zig:4279-4774 — `linkAtPos`/`linkAtPin`/`mouseModsWithCapture`/
+//! `processLinks`/`openUrl`/`osc8URI`/`mousePressureCallback`/
+//! `cursorPosCallback`/`colorSchemeCallback`/`posToViewport`/
+//! `scrollToBottom`/`hideMouse`/`showMouse` LIVE (the C12-declared stubs
+//! filled IN PLACE at their reference positions; `linkAtPin` is the first
+//! core user of vt's oniguruma-gated `StringMap.searchIterator` — the
+//! Zig value-copied map/regex handles move-through/alias, see its PORT
+//! NOTEs; `openUrl`'s fallback retyped rustty-os `open` to the reference's
+//! byte URL; the last three [ADV 6.1] guard sites land here);
+//! CORE_BLUEPRINT §6 rows C14..C15 fill the remaining function bodies IN
+//! PLACE — the declared method stubs below are owned by C14/C15).
 
 // PARITY: the reference's identifiers are camelCase (`needsConfirmQuit`,
 // `handleMessage`, `performBindingAction`, `scaledPadding`,
@@ -116,7 +125,8 @@ use allocator_api2::alloc::Global as Allocator;
 // sizeCallback/preeditCallback + `crashThreadState`, ahead of its C10 row —
 // [ADV 6.1]); the C10 key tier added its keyCallback site; the C11 callback
 // tier added its six sites; the C12 mouse tier added its mouseButtonCallback
-// site; the last site (cursorPosCallback) lands with C13.
+// site; the C13 tier added the last three (mousePressureCallback/
+// cursorPosCallback/colorSchemeCallback) — all 13 reference sites live.
 use rustty_crash as crash;
 // const unicode = @import("unicode/main.zig");
 //
@@ -195,13 +205,14 @@ use rustty_datastruct::blocking_queue::{Size as QueueSize, Timeout};
 // cell_size / size_limit / set_title / color_change / pwd / secure_input /
 // show_child_exited / command_finished / search_total / search_selected) plus
 // the C8 tier's (config_change / initial_size / mouse_over_link /
-// reload_config — the [ADV-FIX 4] dispatch-arm list), and the `Surface` seam
-// trait for the typed `rt_surface.*` method edges (aliased per the C0
-// DECISION note — core's own struct is also named `Surface`).
+// reload_config — the [ADV-FIX 4] dispatch-arm list) and the C13 tier's
+// (mouse_visibility / open_url), and the `Surface` seam trait for the typed
+// `rt_surface.*` method edges (aliased per the C0 DECISION note — core's own
+// struct is also named `Surface`).
 use rustty_apprt_api::action::{
     CellSize, ColorChange, ColorKind, CommandFinished, ConfigChange, InitialSize, KeySequence,
-    KeyTable, MouseOverLink, Pwd, ReloadConfig, SearchSelected, SearchTotal, SecureInput, SetTitle,
-    SizeLimit,
+    KeyTable, MouseOverLink, MouseVisibility, OpenUrl, OpenUrlKind, Pwd, ReloadConfig,
+    SearchSelected, SearchTotal, SecureInput, SetTitle, SizeLimit,
 };
 use rustty_apprt_api::Surface as ApprtSurface;
 
@@ -1171,6 +1182,10 @@ pub enum Error {
     /// the reference `error.NoSpaceLeft` surfaced as io's `WriteZero` (the
     /// encodeKey fixed-Cursor mapping).
     Io(std::io::Error),
+    /// The oniguruma regex search (`linkAtPin`'s `it.next()` — C13).
+    Oni(oni::Error),
+    /// `internal_os.open`'s spawn failures (`openUrl` — C13).
+    OsOpen(internal_os::open::OpenError),
 }
 
 impl From<apprt::ApprtError> for Error {
@@ -1215,6 +1230,18 @@ impl From<std::io::Error> for Error {
     }
 }
 
+impl From<oni::Error> for Error {
+    fn from(err: oni::Error) -> Error {
+        Error::Oni(err)
+    }
+}
+
+impl From<internal_os::open::OpenError> for Error {
+    fn from(err: internal_os::open::OpenError) -> Error {
+        Error::OsOpen(err)
+    }
+}
+
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -1225,6 +1252,8 @@ impl core::fmt::Display for Error {
             Error::InitChangeConfig(err) => write!(f, "core surface operation failed: {err:?}"),
             Error::Utf8(err) => err.fmt(f),
             Error::Io(err) => err.fmt(f),
+            Error::Oni(err) => write!(f, "core surface operation failed: {err:?}"),
+            Error::OsOpen(err) => write!(f, "core surface operation failed: {err:?}"),
         }
     }
 }
@@ -3823,8 +3852,7 @@ where
     // fn modsChanged(self: *Surface, mods: input.Mods) void {
     //
     // PORT NOTE: the C10 keyCallback (:2720) / C12 mouseButtonCallback
-    // (:3774) callsites are live; the C13 cursorPosCallback (:4558) callsite
-    // lands later.
+    // (:3774) / C13 cursorPosCallback (:4558) callsites are live.
     fn modsChanged(&mut self, mods: Mods) {
         // The only place we keep track of mods currently is on the mouse.
         // if (!self.mouse.mods.equal(mods)) {
@@ -3880,9 +3908,9 @@ where
     //     over_link: bool,
     // ) !void {
     //
-    // PORT NOTE: the C10 keyCallback (:2733) callsite is live; the C13
-    // cursorPosCallback (:4609) callsite lands later (both call with the
-    // renderer mutex held). The inferred `!void` is the [`Error`] union.
+    // PORT NOTE: the C10 keyCallback (:2733) and C13 cursorPosCallback
+    // (:4609) callsites are live (both call with the renderer mutex held).
+    // The inferred `!void` is the [`Error`] union.
     fn mouseRefreshLinks(
         &mut self,
         pos: apprt::CursorPos,
@@ -4135,9 +4163,7 @@ where
     /// so that the apprt can reload the configuration.
     // fn notifyConfigConditionalState(self: *Surface) void {
     //
-    // PORT NOTE: the C13 colorSchemeCallback (:4720) callsite lands later;
-    // the allow is removed when it does.
-    #[allow(dead_code)]
+    // PORT NOTE: the C13 colorSchemeCallback (:4720) callsite is live.
     fn notifyConfigConditionalState(&mut self) {
         // _ = self.rt_app.performAction(
         //     .{ .surface = self },
@@ -4770,9 +4796,7 @@ where
     //
     // PORT NOTE: the `Allocator.Error!` collapses (infallible Rust
     // allocation); raw path bytes in and out (`&[u8]`/`Vec<u8>`, never a
-    // lossy `String`). The C13 processLinks callsite (:4396) lands later;
-    // the allow is removed when it does.
-    #[allow(dead_code)]
+    // lossy `String`). The C13 processLinks callsite (:4396) is live.
     fn resolvePathForOpening(&mut self, path: &[u8]) -> Option<Vec<u8>> {
         // if (!std.fs.path.isAbsolute(path)) {
         if !is_absolute(path) {
@@ -5313,8 +5337,8 @@ where
     /// This must be called with the renderer mutex held.
     // fn setSelectionAndCopy(self: *Surface, sel: terminal.Selection) !void {
     //
-    // PORT NOTE: the C12 mouseButtonCallback (:3866) callsites are live; the
-    // C13 cursorPosCallback (:4086/:4092) callsites land later.
+    // PORT NOTE: the C12 mouseButtonCallback (:3866/:4086/:4092) callsites
+    // are live; the C14 performBindingAction (:5450) callsite lands later.
     fn setSelectionAndCopy(&mut self, sel: terminal::selection::Selection) -> Result<(), Error> {
         // try self.setSelection(sel);
         self.setSelection(Some(sel))?;
@@ -7700,31 +7724,6 @@ where
         );
     }
 
-    /// Returns the link at the given cursor position, if any.
-    ///
-    /// Requires the renderer mutex is held.
-    //
-    // PORT NOTE (STUB — chunk C13 fills): `fn linkAtPos(self: *Surface, pos:
-    // apprt.CursorPos) !?Link` — Surface.zig:4279 (mouseRefreshLinks' :1606
-    // callsite lands with C8; the file-scope `Link` return type is ported
-    // below).
-    fn linkAtPos(&mut self, pos: apprt::CursorPos) -> Result<Option<Link>, Error> {
-        let _ = pos;
-        unimplemented!("Surface.linkAtPos lands with core chunk C13 (Surface.zig:4279)")
-    }
-
-    // PORT NOTE (STUB — chunk C13 fills): `fn linkAtPin(self: *Surface,
-    // mouse_pin: terminal.Pin, mouse_mods: ?input.Mods) !?Link` —
-    // Surface.zig:4316 (the C12 mouseButtonCallback :3993 callsite is live).
-    fn linkAtPin(
-        &mut self,
-        mouse_pin: terminal::pagelist::Pin,
-        mouse_mods: Option<Mods>,
-    ) -> Result<Option<Link>, Error> {
-        let _ = (mouse_pin, mouse_mods);
-        unimplemented!("Surface.linkAtPin lands with core chunk C13 (Surface.zig:4316)")
-    }
-
     /// Returns true if the shift modifier is allowed to be captured by modifier
     /// events. It is up to the caller to still verify it is a situation in which
     /// shift capture makes sense (i.e. left button, mouse click, etc.)
@@ -8953,77 +8952,1062 @@ where
         Ok(true)
     }
 
+    // (the file-scope `const Link` the reference declares HERE, Surface.zig:
+    // 4271, lives in this file's trailing type cluster — see [`Link`].)
+
+    /// Returns the link at the given cursor position, if any.
+    ///
+    /// Requires the renderer mutex is held.
+    // fn linkAtPos(
+    //     self: *Surface,
+    //     pos: apprt.CursorPos,
+    // ) !?Link {
+    //
+    // (the inferred `!?Link` is the [`Error`] union.)
+    fn linkAtPos(&mut self, pos: apprt::CursorPos) -> Result<Option<Link>, Error> {
+        // Convert our cursor position to a screen point.
+        // const screen: *terminal.Screen = self.renderer_state.terminal.screens.active;
+        let screen: *mut terminal::screen::Screen =
+            unsafe { (*self.renderer_state.terminal).screens.active };
+        // const mouse_pin: terminal.Pin = mouse_pin: {
+        let mouse_pin: terminal::pagelist::Pin = 'mouse_pin: {
+            // const point = self.posToViewport(pos.x, pos.y);
+            //
+            // (Zig widens the f32 cursor coordinates to the f64 params.)
+            let point = self.posToViewport(f64::from(pos.x), f64::from(pos.y));
+            // const pin = screen.pages.pin(.{ .viewport = point }) orelse {
+            //     log.warn("failed to get pin for clicked point", .{});
+            //     return null;
+            // };
+            let pin = match unsafe { (*screen).pages.pin(terminal::point::Point::Viewport(point)) }
+            {
+                Some(v) => v,
+                None => {
+                    // log.warn("failed to get pin for clicked point", .{});
+                    return Ok(None);
+                }
+            };
+            // break :mouse_pin pin;
+            break 'mouse_pin pin;
+        };
+
+        // Get our comparison mods
+        // const mouse_mods = self.mouseModsWithCapture(self.mouse.mods);
+        let mouse_mods = self.mouseModsWithCapture(self.mouse.mods);
+
+        // If we have the proper modifiers set then we can check for OSC8 links.
+        // if (mouse_mods.equal(input.ctrlOrSuper(.{}))) hyperlink: {
+        if mouse_mods.equal(key::ctrl_or_super(Mods::default())) {
+            'hyperlink: {
+                // const rac = mouse_pin.rowAndCell();
+                let rac = mouse_pin.row_and_cell();
+                // const cell = rac.cell;
+                let cell = rac.cell;
+                // if (!cell.hyperlink) break :hyperlink;
+                if !unsafe { (*cell).hyperlink() } {
+                    break 'hyperlink;
+                }
+                // const sel = terminal.Selection.init(mouse_pin, mouse_pin, false);
+                let sel = terminal::selection::Selection::init(mouse_pin, mouse_pin, false);
+                // return .{ .action = ._open_osc8, .selection = sel };
+                return Ok(Some(Link {
+                    action: link::Action::OpenOsc8,
+                    selection: sel,
+                }));
+            }
+        }
+
+        // Fall back to configured links
+        // return try self.linkAtPin(mouse_pin, mouse_mods);
+        //
+        // (the non-optional `mouse_mods` coerces to the `?input.Mods` param.)
+        self.linkAtPin(mouse_pin, Some(mouse_mods))
+    }
+
+    /// Detects if a link is present at the given pin.
+    ///
+    /// If mouse mods is null then mouse mod requirements are ignored (all
+    /// configured links are checked).
+    ///
+    /// Requires the renderer state mutex is held.
+    // fn linkAtPin(
+    //     self: *Surface,
+    //     mouse_pin: terminal.Pin,
+    //     mouse_mods: ?input.Mods,
+    // ) !?Link {
+    //
+    // (the inferred `!?Link` is the [`Error`] union — the `it.next()` regex
+    // search is its `Oni` growth point.)
+    fn linkAtPin(
+        &mut self,
+        mouse_pin: terminal::pagelist::Pin,
+        mouse_mods: Option<Mods>,
+    ) -> Result<Option<Link>, Error> {
+        // if (self.config.links.len == 0) return null;
+        if self.config.links.is_empty() {
+            return Ok(None);
+        }
+
+        // const screen: *terminal.Screen = self.renderer_state.terminal.screens.active;
+        let screen: *mut terminal::screen::Screen =
+            unsafe { (*self.renderer_state.terminal).screens.active };
+        // const line = screen.selectLine(.{
+        //     .pin = mouse_pin,
+        //     .whitespace = null,
+        //     // Respect semantic prompt boundaries so link/path matching doesn't
+        //     // merge shell prompt content with the text beside it.
+        //     .semantic_prompt_boundary = true,
+        // }) orelse return null;
+        let line = match unsafe { &*screen }.select_line(terminal::screen::SelectLine {
+            pin: mouse_pin,
+            whitespace: None,
+            // Respect semantic prompt boundaries so link/path matching doesn't
+            // merge shell prompt content with the text beside it.
+            semantic_prompt_boundary: true,
+        }) {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        // var strmap: terminal.StringMap = undefined;
+        //
+        // (Zig `undefined` -> the empty map the `selectionString` `map`
+        // out-param overwrites — the vt string_map test convention.)
+        let mut strmap: terminal::string_map::StringMap = terminal::string_map::StringMap {
+            string: Vec::new(),
+            map: Vec::new(),
+        };
+        // self.alloc.free(try screen.selectionString(self.alloc, .{
+        //     .sel = line,
+        //     .trim = false,
+        //     .map = &strmap,
+        // }));
+        //
+        // (the freed return is the immediately-dropped temporary — only the
+        // `strmap` out-param is kept.)
+        drop(unsafe { &mut *screen }.selection_string(
+            self.alloc,
+            terminal::screen::SelectionString {
+                sel: line,
+                trim: false,
+                map: Some(&mut strmap),
+            },
+        )?);
+        // defer strmap.deinit(self.alloc);
+        //
+        // PORT NOTE: the owned map frees on drop at every exit below — either
+        // as the local itself or moved into the live iterator (see the
+        // searchIterator note in the loop).
+
+        // for (self.config.links) |link| {
+        for link in &self.config.links {
+            // Skip highlight/mods check when mouse_mods is null (double-click mode)
+            // if (mouse_mods) |mods| switch (link.highlight) {
+            //     .always, .hover => {},
+            //     .always_mods, .hover_mods => |v| if (!v.equal(mods)) continue,
+            // };
+            if let Some(mods) = mouse_mods {
+                match link.highlight {
+                    link::Highlight::Always | link::Highlight::Hover => {}
+                    link::Highlight::AlwaysMods(v) | link::Highlight::HoverMods(v) => {
+                        if !v.equal(mods) {
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // var it = strmap.searchIterator(link.regex);
+            //
+            // PORT NOTE (Zig value-copies): the reference `searchIterator`
+            // copies BOTH the `StringMap` slice headers and the `oni.Regex`
+            // handle by value — shallow, non-owning copies aliasing the same
+            // backing data. The vt `search_iterator` takes both by value, so
+            // the regex copy is the aliasing handle struct (`link.regex`
+            // stays owned by `DerivedConfig`; only its explicit deinit chain
+            // frees the OnigRegex — the struct has no `Drop`) and the map
+            // moves through the iterator, recovered after each link's scan.
+            let mut it = strmap.search_iterator(oni::Regex {
+                value: link.regex.value,
+            });
+            // while (true) {
+            //
+            // PARITY: clippy's `while_let_loop` fold would hide the
+            // reference's explicit `while (true)` + `orelse break` control
+            // flow (the vt string_map.rs precedent, verbatim).
+            #[allow(clippy::while_let_loop)]
+            loop {
+                // var match = (try it.next()) orelse break;
+                let mut match_ = match it.next()? {
+                    Some(v) => v,
+                    None => break,
+                };
+                // defer match.deinit();
+                //
+                // (explicit at every exit of this iteration below.)
+                // const sel = match.selection();
+                let sel = match_.selection();
+                // if (!sel.contains(screen, mouse_pin)) continue;
+                if !sel.contains(unsafe { &*screen }, mouse_pin) {
+                    // (the deferred match.deinit — the continue)
+                    match_.deinit();
+                    continue;
+                }
+                // return .{
+                //     .action = link.action,
+                //     .selection = sel,
+                // };
+                //
+                // (the deferred match.deinit — the return)
+                match_.deinit();
+                return Ok(Some(Link {
+                    action: link.action,
+                    selection: sel,
+                }));
+            }
+            // (the map moves back out of the finished iterator — the
+            // searchIterator PORT NOTE above.)
+            strmap = it.map;
+        }
+
+        // return null;
+        Ok(None)
+    }
+
     /// This returns the mouse mods to consider for link highlighting or
     /// other purposes taking into account when shift is pressed for releasing
     /// the mouse from capture.
     ///
     /// The renderer state mutex must be held.
-    //
-    // PORT NOTE (STUB — chunk C13 fills): `fn mouseModsWithCapture(self:
-    // *Surface, mods: input.Mods) input.Mods` — Surface.zig:4368
-    // (modsChanged's :1544 callsite lands with C8).
+    // fn mouseModsWithCapture(self: *Surface, mods: input.Mods) input.Mods {
     fn mouseModsWithCapture(&mut self, mods: Mods) -> Mods {
-        let _ = mods;
-        unimplemented!("Surface.mouseModsWithCapture lands with core chunk C13 (Surface.zig:4368)")
+        // In any of these scenarios, whatever mods are set (even shift)
+        // are preserved.
+        // if (self.io.terminal.flags.mouse_event == .none) return mods;
+        if self.io.terminal.flags.mouse_event == terminal::mouse::Event::None {
+            return mods;
+        }
+        // if (!mods.shift) return mods;
+        if !mods.shift {
+            return mods;
+        }
+        // if (self.mouseShiftCapture(false)) return mods;
+        if self.mouseShiftCapture(false) {
+            return mods;
+        }
+
+        // We have mouse capture, shift set, and we're not allowed to capture
+        // shift, so we can clear shift.
+        // var final = mods;
+        //
+        // (`final` is a Rust reserved keyword — the raw identifier keeps the
+        // reference name, the `r#move` precedent.)
+        let mut r#final = mods;
+        // final.shift = false;
+        r#final.shift = false;
+        // return final;
+        r#final
     }
 
     /// Attempt to invoke the action of any link that is under the
     /// given position.
     ///
     /// Requires the renderer state mutex is held.
-    //
-    // PORT NOTE (STUB — chunk C13 fills): `fn processLinks(self: *Surface,
-    // pos: apprt.CursorPos) !bool` — Surface.zig:4386 (the C12
-    // mouseButtonCallback :3881 callsite is live).
+    // fn processLinks(self: *Surface, pos: apprt.CursorPos) !bool {
     fn processLinks(&mut self, pos: apprt::CursorPos) -> Result<bool, Error> {
-        let _ = pos;
-        unimplemented!("Surface.processLinks lands with core chunk C13 (Surface.zig:4386)")
+        // const link = try self.linkAtPos(pos) orelse return false;
+        let link = match self.linkAtPos(pos)? {
+            Some(v) => v,
+            None => return Ok(false),
+        };
+        // switch (link.action) {
+        match link.action {
+            // .open => {
+            link::Action::Open => {
+                // const str = try self.io.terminal.screens.active.selectionString(self.alloc, .{
+                //     .sel = link.selection,
+                //     .trim = false,
+                // });
+                let str_ = unsafe { &mut *self.io.terminal.screens.active }.selection_string(
+                    self.alloc,
+                    terminal::screen::SelectionString {
+                        sel: link.selection,
+                        trim: false,
+                        map: None,
+                    },
+                )?;
+                // defer self.alloc.free(str);
+                //
+                // (owned bytes — freed on drop at every exit.)
+
+                // const resolved_path = try self.resolvePathForOpening(str);
+                let resolved_path = self.resolvePathForOpening(&str_);
+                // defer if (resolved_path) |p| self.alloc.free(p);
+                //
+                // (owned bytes — freed on drop at every exit.)
+
+                // const url_to_open = resolved_path orelse str;
+                let url_to_open: &[u8] = match &resolved_path {
+                    Some(p) => p,
+                    None => &str_,
+                };
+                // try self.openUrl(.{ .kind = .unknown, .url = url_to_open });
+                self.openUrl(OpenUrl {
+                    kind: OpenUrlKind::Unknown,
+                    url: url_to_open,
+                })?;
+            }
+
+            // ._open_osc8 => {
+            link::Action::OpenOsc8 => {
+                // const uri = self.osc8URI(link.selection.start()) orelse {
+                //     log.warn("failed to get URI for OSC8 hyperlink", .{});
+                //     return false;
+                // };
+                let uri = match self.osc8URI(link.selection.start()) {
+                    Some(v) => v,
+                    None => {
+                        // log.warn("failed to get URI for OSC8 hyperlink", .{});
+                        return Ok(false);
+                    }
+                };
+                // try self.openUrl(.{ .kind = .unknown, .url = uri });
+                self.openUrl(OpenUrl {
+                    kind: OpenUrlKind::Unknown,
+                    url: uri,
+                })?;
+            }
+        }
+
+        // return true;
+        Ok(true)
+    }
+
+    // fn openUrl(
+    //     self: *Surface,
+    //     action: apprt.action.OpenUrl,
+    // ) !void {
+    //
+    // (the inferred `!void` is the [`Error`] union — the fallback opener is
+    // its `OsOpen` growth point.)
+    fn openUrl(&mut self, action: OpenUrl<'_>) -> Result<(), Error> {
+        // If the apprt handles it then we're done.
+        // if (try self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .open_url,
+        //     action,
+        // )) return;
+        if unsafe { &*self.rt_app }.perform_action(
+            apprt::Target::Surface(&*self),
+            apprt::Action::OpenUrl(action),
+        )? {
+            return Ok(());
+        }
+
+        // apprt didn't handle it, fallback to our simple cross-platform
+        // URL opener. We log a warning because we want well-behaved
+        // apprts to handle this themselves.
+        // log.warn("apprt did not handle open URL action, falling back to default opener", .{});
+        // try internal_os.open(
+        //     self.alloc,
+        //     action.kind,
+        //     action.url,
+        // );
+        //
+        // PORT NOTE: the ported `internal_os::open` collapses the allocator
+        // param (Rust `Command` ownership) and takes the os-local R4-seam
+        // `Kind` — the parity image of `apprt.action.OpenUrl.Kind` (the
+        // os/open.rs break-#14 note) — so the enum maps arm-for-arm.
+        internal_os::open::open(
+            match action.kind {
+                OpenUrlKind::Unknown => internal_os::open::Kind::Unknown,
+                OpenUrlKind::Text => internal_os::open::Kind::Text,
+                OpenUrlKind::Html => internal_os::open::Kind::Html,
+            },
+            action.url,
+        )?;
+        Ok(())
     }
 
     /// Return the URI for an OSC8 hyperlink at the given position or null
     /// if there is no hyperlink.
+    // fn osc8URI(self: *Surface, pin: terminal.Pin) ?[]const u8 {
     //
-    // PORT NOTE (STUB — chunk C13 fills): `fn osc8URI(self: *Surface, pin:
-    // terminal.Pin) ?[]const u8` — Surface.zig:4439 (mouseRefreshLinks' :1622
-    // callsite lands with C8; the return borrows the pin's page memory — raw
-    // bytes `&[u8]`, never a lossy String).
-    fn osc8URI(&self, pin: terminal::pagelist::Pin) -> Option<&[u8]> {
-        let _ = pin;
-        unimplemented!("Surface.osc8URI lands with core chunk C13 (Surface.zig:4439)")
+    // PORT NOTE: the returned slice borrows the pin's PAGE memory (the
+    // reference `entry.uri.slice(page.memory)`), NOT `self` — the body
+    // discards `self` (`_ = self`). The explicit `'a` states that contract
+    // (the raw-ptr discipline; vt's `OffsetSlice::slice` is itself
+    // caller-lifetime): the bytes are valid while the renderer state mutex is
+    // held and the page node is alive — exactly the reference's implicit
+    // contract. Raw bytes (`&[u8]`), never a lossy String.
+    //
+    // PARITY: clippy's `question_mark` fold of the `orelse return null` match
+    // is allowed rather than rewriting the reference's explicit early return
+    // (the collapsible_if precedent).
+    #[allow(clippy::question_mark)]
+    fn osc8URI<'a>(&self, pin: terminal::pagelist::Pin) -> Option<&'a [u8]> {
+        // _ = self;
+        //
+        // (the receiver is kept for signature parity.)
+        // const page = &pin.node.data;
+        let page: *mut terminal::page::Page = unsafe { core::ptr::addr_of_mut!((*pin.node).data) };
+        // const cell = pin.rowAndCell().cell;
+        let cell = pin.row_and_cell().cell;
+        // const link_id = page.lookupHyperlink(cell) orelse return null;
+        let link_id = match unsafe { (*page).lookup_hyperlink(cell) } {
+            Some(v) => v,
+            None => return None,
+        };
+        // const entry = page.hyperlink_set.get(page.memory, link_id);
+        let entry = unsafe { (*page).hyperlink_set.get((*page).memory_ptr(), link_id) };
+        // return entry.uri.slice(page.memory);
+        Some(unsafe { (*entry).uri.slice((*page).memory_ptr()) })
     }
 
-    // PORT NOTE (STUB — chunk C13 fills): `pub fn cursorPosCallback(self:
-    // *Surface, pos: apprt.CursorPos, mods: ?input.Mods) !void` —
-    // Surface.zig:4512 (the C12 mouseButtonCallback :3818 callsite is live).
+    // pub fn mousePressureCallback(
+    //     self: *Surface,
+    //     stage: input.MousePressureStage,
+    //     pressure: f64,
+    // ) !void {
+    //
+    // (the inferred `!void` is the [`Error`] union.)
+    pub fn mousePressureCallback(
+        &mut self,
+        stage: input_mouse::PressureStage,
+        pressure: f64,
+    ) -> Result<(), Error> {
+        // Crash metadata in case we crash in here
+        // crash.sentry.thread_state = self.crashThreadState();
+        crash::sentry::setThreadState(self.crashThreadState());
+        // defer crash.sentry.thread_state = null;
+        // ([ADV 6.1] — the Drop guard clears at every exit below.)
+        let _thread_state = ThreadStateGuard;
+
+        // We don't currently use the pressure value for anything. In the
+        // future, we could report this to applications using new mouse
+        // events or utilize it for some custom UI.
+        // _ = pressure;
+        let _ = pressure;
+
+        // If the pressure stage is the same as what we already have do nothing
+        // if (self.mouse.pressure_stage == stage) return;
+        if self.mouse.pressure_stage == stage {
+            return Ok(());
+        }
+
+        // Update our pressure stage.
+        // self.mouse.pressure_stage = stage;
+        self.mouse.pressure_stage = stage;
+
+        // A deep press is pressure-sensitive pointer input, such as macOS force
+        // click / deep click on a trackpad, that occurs while the left mouse
+        // button is already down. Treat it as the platform text-selection
+        // affordance: select the pressed word, then consume the active gesture so
+        // further cursor motion doesn't drag the selection.
+        // const left_idx = @intFromEnum(input.MouseButton.left);
+        let left_idx = input_mouse::Button::Left as usize;
+        // if (self.mouse.click_state[left_idx] == .press and
+        //     stage == .deep)
+        // select: {
+        if self.mouse.click_state[left_idx] == input_mouse::ButtonState::Press
+            && stage == input_mouse::PressureStage::Deep
+        {
+            'select: {
+                // self.renderer_state.mutex.lock();
+                // defer self.renderer_state.mutex.unlock();
+                //
+                // (guard-less zigstd Mutex — the defer is the explicit unlock
+                // at every exit below.)
+                unsafe { (*self.renderer_state.mutex).lock() };
+
+                // const sel = self.mouse.selection_gesture.deepPress(
+                //     self.renderer_state.terminal,
+                //     .{ .word_boundary_codepoints = self.config.selection_word_chars },
+                // );
+                let sel = self.mouse.selection_gesture.deep_press(
+                    unsafe { &mut *self.renderer_state.terminal },
+                    terminal::selection_gesture::DeepPress {
+                        word_boundary_codepoints: &self.config.selection_word_chars,
+                    },
+                );
+
+                // Deep press consumes the active drag gesture, so stop any pending
+                // selection autoscroll timer that may have been started by the drag.
+                // if (self.selection_scroll_active) {
+                if self.selection_scroll_active {
+                    // self.queueIo(
+                    //     .{ .selection_scroll = false },
+                    //     .locked,
+                    // );
+                    self.queueIo(
+                        termio::Message::SelectionScroll(false),
+                        termio::termio_impl::MutexState::Locked,
+                    );
+                }
+
+                // try self.setSelection(sel orelse break :select);
+                let sel = match sel {
+                    Some(v) => v,
+                    None => {
+                        // (the deferred mutex unlock — the labeled break)
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        break 'select;
+                    }
+                };
+                if let Err(err) = self.setSelection(Some(sel)) {
+                    // (the deferred mutex unlock — the error exit)
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    return Err(err);
+                }
+                // try self.queueRender();
+                if let Err(err) = self.queueRender() {
+                    // (the deferred mutex unlock — the error exit)
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    return Err(err.into());
+                }
+
+                // (the deferred mutex unlock — the block end)
+                unsafe { (*self.renderer_state.mutex).unlock() };
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Cursor position callback.
+    ///
+    /// Send negative x or y values to indicate the cursor is outside the
+    /// viewport. The magnitude of the negative values are meaningless;
+    /// they are only used to indicate the cursor is outside the viewport.
+    /// It's important to do this to ensure hover states are cleared.
+    ///
+    /// The mods parameter is optional because some apprts do not provide
+    /// modifier information on cursor position events. If mods is null then
+    /// we'll use the last known mods. This is usually accurate since mod events
+    /// will trigger key press events but on some platforms we don't get them.
+    /// For example, on macOS, unfocused surfaces don't receive key events but
+    /// do receive mouse events so we have to rely on updated mods.
+    // pub fn cursorPosCallback(
+    //     self: *Surface,
+    //     pos: apprt.CursorPos,
+    //     mods: ?input.Mods,
+    // ) !void {
+    //
+    // (the inferred `!void` is the [`Error`] union.)
     pub fn cursorPosCallback(
         &mut self,
         pos: apprt::CursorPos,
         mods: Option<Mods>,
     ) -> Result<(), Error> {
-        let _ = (pos, mods);
-        unimplemented!("Surface.cursorPosCallback lands with core chunk C13 (Surface.zig:4512)")
+        // Crash metadata in case we crash in here
+        // crash.sentry.thread_state = self.crashThreadState();
+        crash::sentry::setThreadState(self.crashThreadState());
+        // defer crash.sentry.thread_state = null;
+        // ([ADV 6.1] — the Drop guard clears at every exit below.)
+        let _thread_state = ThreadStateGuard;
+
+        // log.debug("cursor pos x={} y={} mods={?}", .{ pos.x, pos.y, mods });
+
+        // If the position is negative, it is outside our viewport and
+        // we need to clear any hover states.
+        // if (pos.x < 0 or pos.y < 0) {
+        if pos.x < 0.0 || pos.y < 0.0 {
+            // Reset our hyperlink state
+            // self.mouse.link_point = null;
+            self.mouse.link_point = None;
+            // if (self.mouse.over_link) {
+            if self.mouse.over_link {
+                // self.mouse.over_link = false;
+                self.mouse.over_link = false;
+                // _ = try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .mouse_shape,
+                //     self.io.terminal.mouse_shape,
+                // );
+                let _ = unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::MouseShape(self.io.terminal.mouse_shape),
+                )?;
+                // _ = try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .mouse_over_link,
+                //     .{ .url = "" },
+                // );
+                let _ = unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::MouseOverLink(MouseOverLink { url: b"" }),
+                )?;
+                // try self.queueRender();
+                self.queueRender()?;
+            }
+
+            // self.renderer_state.mutex.lock();
+            // defer self.renderer_state.mutex.unlock();
+            //
+            // (guard-less zigstd Mutex — the defer is the explicit unlock at
+            // this if-block's end.)
+            unsafe { (*self.renderer_state.mutex).lock() };
+
+            // No mouse point so we don't highlight links
+            // self.renderer_state.mouse.point = null;
+            self.renderer_state.mouse.point = None;
+
+            // Mark the link's row as dirty, but continue with updating the
+            // mouse state below so we can scroll when our position is negative.
+            // self.renderer_state.terminal.screens.active.dirty.hyperlink_hover = true;
+            unsafe {
+                (*(*self.renderer_state.terminal).screens.active)
+                    .dirty
+                    .hyperlink_hover = true;
+            }
+
+            // (the deferred mutex unlock — the block end)
+            unsafe { (*self.renderer_state.mutex).unlock() };
+        }
+
+        // Always show the mouse again if it is hidden
+        // if (self.mouse.hidden) self.showMouse();
+        if self.mouse.hidden {
+            self.showMouse();
+        }
+
+        // Update our modifiers if they changed
+        // if (mods) |v| self.modsChanged(v);
+        if let Some(v) = mods {
+            self.modsChanged(v);
+        }
+
+        // The mouse position in the viewport
+        // const pos_vp = self.posToViewport(pos.x, pos.y);
+        let pos_vp = self.posToViewport(f64::from(pos.x), f64::from(pos.y));
+
+        // We always reset the over link status because it will be reprocessed
+        // below. But we need the old value to know if we need to undo mouse
+        // shape changes.
+        // const over_link = self.mouse.over_link;
+        let over_link = self.mouse.over_link;
+        // self.mouse.over_link = false;
+        self.mouse.over_link = false;
+
+        // We are reading/writing state for the remainder
+        // self.renderer_state.mutex.lock();
+        // defer self.renderer_state.mutex.unlock();
+        //
+        // (guard-less zigstd Mutex — the defer is the explicit unlock at
+        // every exit below.)
+        unsafe { (*self.renderer_state.mutex).lock() };
+
+        // Update our mouse state. We set this to null initially because we only
+        // want to set it when we're not selecting or doing any other mouse
+        // event.
+        // self.renderer_state.mouse.point = null;
+        self.renderer_state.mouse.point = None;
+
+        // If we have an inspector, we need to always record position information
+        // if (self.inspector) |insp| {
+        //     insp.mouse.last_xpos = pos.x;
+        //     insp.mouse.last_ypos = pos.y;
+        //
+        //     const screen: *terminal.Screen = self.renderer_state.terminal.screens.active;
+        //     insp.mouse.last_point = screen.pages.pin(.{ .viewport = .{
+        //         .x = pos_vp.x,
+        //         .y = pos_vp.y,
+        //     } });
+        //     try self.queueRender();
+        // }
+        //
+        // PORT NOTE (CORE_BLUEPRINT §4): the Some-arm writes the Phase-3
+        // `Inspector.mouse` state — the pointee is uninhabited, so the arm
+        // (preserved verbatim above) is unreachable-by-construction until the
+        // Phase-3 fill (the deinit teardown-arm precedent).
+        if self.inspector.is_some() {
+            unreachable!("inspector is unconstructible until Phase 3 (mouse position record)");
+        }
+
+        // Handle link hovering
+        // We refresh links when
+        // 1. we were previously over a link
+        // OR
+        // 2. the cursor position has changed (either we have no previous state, or the state has
+        //    changed)
+        // AND
+        // 1. mouse reporting is off
+        // OR
+        // 2. mouse reporting is on and we are not reporting shift to the terminal
+        // if ((over_link or
+        //     self.mouse.link_point == null or
+        //     (self.mouse.link_point != null and !self.mouse.link_point.?.eql(pos_vp))) and
+        //     (self.io.terminal.flags.mouse_event == .none or
+        //         (self.mouse.mods.shift and !self.mouseShiftCapture(false))))
+        // {
+        //
+        // PARITY: the `!= null and ... .?.eql` pair keeps the reference's
+        // explicit two-step null test; clippy's `unnecessary_unwrap` fold is
+        // allowed rather than restructuring (the collapsible_if precedent).
+        #[allow(clippy::unnecessary_unwrap)]
+        if (over_link
+            || self.mouse.link_point.is_none()
+            || (self.mouse.link_point.is_some() && !self.mouse.link_point.unwrap().eql(pos_vp)))
+            && (self.io.terminal.flags.mouse_event == terminal::mouse::Event::None
+                || (self.mouse.mods.shift && !self.mouseShiftCapture(false)))
+        {
+            // If we were previously over a link, we always update. We do this so that if the text
+            // changed underneath us, even if the mouse didn't move, we update the URL hints and state
+            // try self.mouseRefreshLinks(pos, pos_vp, over_link);
+            if let Err(err) = self.mouseRefreshLinks(pos, pos_vp, over_link) {
+                // (the deferred mutex unlock — the error exit)
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return Err(err);
+            }
+        }
+
+        // Do a mouse report
+        // if (self.isMouseReporting()) report: {
+        if self.isMouseReporting() {
+            'report: {
+                // Shift overrides mouse "grabbing" in the window, taken from Kitty.
+                // This only applies if there is a mouse button pressed so that
+                // movement reports are not affected.
+                // if (self.mouse.mods.shift and !self.mouseShiftCapture(false)) {
+                if self.mouse.mods.shift && !self.mouseShiftCapture(false) {
+                    // for (self.mouse.click_state) |state| {
+                    for state in self.mouse.click_state {
+                        // if (state != .release) break :report;
+                        if state != input_mouse::ButtonState::Release {
+                            break 'report;
+                        }
+                    }
+                }
+
+                // We use the first mouse button we find pressed in order to report
+                // since the spec (afaict) does not say...
+                // const button: ?input.MouseButton = button: for (self.mouse.click_state, 0..) |state, i| {
+                //     if (state == .press)
+                //         break :button @enumFromInt(i);
+                // } else null;
+                let button: Option<input_mouse::Button> = 'button: {
+                    for (i, state) in self.mouse.click_state.iter().enumerate() {
+                        if *state == input_mouse::ButtonState::Press {
+                            // (`@enumFromInt(i)` — the click_state indices ARE
+                            // the `Button` discriminants; realized as the
+                            // exhaustive index match.)
+                            break 'button Some(match i {
+                                0 => input_mouse::Button::Unknown,
+                                1 => input_mouse::Button::Left,
+                                2 => input_mouse::Button::Right,
+                                3 => input_mouse::Button::Middle,
+                                4 => input_mouse::Button::Four,
+                                5 => input_mouse::Button::Five,
+                                6 => input_mouse::Button::Six,
+                                7 => input_mouse::Button::Seven,
+                                8 => input_mouse::Button::Eight,
+                                9 => input_mouse::Button::Nine,
+                                10 => input_mouse::Button::Ten,
+                                // (the array length is `Button.max` = 11 —
+                                // indices stop at 10.)
+                                _ => unreachable!(),
+                            });
+                        }
+                    }
+                    // } else null;
+                    None
+                };
+
+                // self.mouseReport(button, .motion, self.mouse.mods, pos);
+                self.mouseReport(button, input_mouse::Action::Motion, self.mouse.mods, pos);
+
+                // If we're doing mouse motion tracking, we do not support text
+                // selection.
+                // return;
+                //
+                // (the deferred mutex unlock — the return)
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return Ok(());
+            }
+        }
+
+        // Handle cursor position for text selection
+        // if (self.mouse.click_state[@intFromEnum(input.MouseButton.left)] == .press) select: {
+        if self.mouse.click_state[input_mouse::Button::Left as usize]
+            == input_mouse::ButtonState::Press
+        {
+            'select: {
+                // Left click pressed but count zero can happen if mouse reporting is on.
+                // In this scenario, we mark the click state because we need that to
+                // properly make some mouse reports, but we don't keep track of the
+                // count because we don't want to handle selection.
+                // if (self.mouse.selection_gesture.left_click_count == 0) break :select;
+                if self.mouse.selection_gesture.left_click_count == 0 {
+                    break 'select;
+                }
+
+                // If our left-click pin no longer belongs to the active screen then we
+                // don't process this. We don't invalidate our pin or mouse state
+                // because if the same screen switches back then we can continue our
+                // selection.
+                // const t: *terminal.Terminal = self.renderer_state.terminal;
+                let t: *mut Terminal = self.renderer_state.terminal;
+                // if (self.mouse.activeLeftClickPin(&t.screens) == null) break :select;
+                if self
+                    .mouse
+                    .activeLeftClickPin(unsafe { &(*t).screens })
+                    .is_none()
+                {
+                    break 'select;
+                }
+
+                // All roads lead to requiring a re-render at this point.
+                // try self.queueRender();
+                if let Err(err) = self.queueRender() {
+                    // (the deferred mutex unlock — the error exit)
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    return Err(err.into());
+                }
+
+                // Convert to points
+                // const screen: *terminal.Screen = t.screens.active;
+                let screen: *mut terminal::screen::Screen = unsafe { (*t).screens.active };
+                // const pin = screen.pages.pin(.{
+                //     .viewport = .{
+                //         .x = pos_vp.x,
+                //         .y = pos_vp.y,
+                //     },
+                // }) orelse {
+                //     if (comptime std.debug.runtime_safety) unreachable;
+                //     return;
+                // };
+                let pin = match unsafe {
+                    (*screen).pages.pin(terminal::point::Point::Viewport(
+                        terminal::point::Coordinate {
+                            x: pos_vp.x,
+                            y: pos_vp.y,
+                        },
+                    ))
+                } {
+                    Some(v) => v,
+                    None => {
+                        // if (comptime std.debug.runtime_safety) unreachable;
+                        if cfg!(debug_assertions) {
+                            unreachable!();
+                        }
+                        // return;
+                        //
+                        // (the deferred mutex unlock — the return)
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Ok(());
+                    }
+                };
+
+                // Perform our drag behavior in our gesture handler.
+                // const drag_selection = self.mouse.selection_gesture.drag(t, .{
+                //     .pin = pin,
+                //     .xpos = pos.x,
+                //     .ypos = pos.y,
+                //     .rectangle = SurfaceMouse.isRectangleSelectState(self.mouse.mods),
+                //     .word_boundary_codepoints = self.config.selection_word_chars,
+                //     .geometry = .{
+                //         .columns = @intCast(self.size.grid().columns),
+                //         .cell_width = self.size.cell.width,
+                //         .padding_left = self.size.padding.left,
+                //         .screen_height = self.size.screen.height,
+                //     },
+                // });
+                let drag_selection = self.mouse.selection_gesture.drag(
+                    unsafe { &mut *t },
+                    terminal::selection_gesture::Drag {
+                        pin,
+                        xpos: f64::from(pos.x),
+                        ypos: f64::from(pos.y),
+                        rectangle: SurfaceMouse::is_rectangle_select_state(self.mouse.mods),
+                        word_boundary_codepoints: &self.config.selection_word_chars,
+                        geometry: terminal::selection_gesture::Geometry {
+                            columns: u32::from(self.size.grid().columns),
+                            cell_width: self.size.cell.width,
+                            padding_left: self.size.padding.left,
+                            screen_height: self.size.screen.height,
+                        },
+                    },
+                );
+
+                // Update our autoscroll timer based on the gesture state
+                // switch (self.mouse.selection_gesture.left_drag_autoscroll) {
+                match self.mouse.selection_gesture.left_drag_autoscroll {
+                    // .none => if (self.selection_scroll_active) {
+                    terminal::selection_gesture::Autoscroll::None => {
+                        if self.selection_scroll_active {
+                            // self.queueIo(
+                            //     .{ .selection_scroll = false },
+                            //     .locked,
+                            // );
+                            self.queueIo(
+                                termio::Message::SelectionScroll(false),
+                                termio::termio_impl::MutexState::Locked,
+                            );
+                        }
+                    }
+                    // .up, .down => if (!self.selection_scroll_active) {
+                    terminal::selection_gesture::Autoscroll::Up
+                    | terminal::selection_gesture::Autoscroll::Down => {
+                        if !self.selection_scroll_active {
+                            // self.queueIo(
+                            //     .{ .selection_scroll = true },
+                            //     .locked,
+                            // );
+                            self.queueIo(
+                                termio::Message::SelectionScroll(true),
+                                termio::termio_impl::MutexState::Locked,
+                            );
+                        }
+                    }
+                }
+
+                // Update our selection based on the gesture state
+                // try self.setSelection(drag_selection);
+                if let Err(err) = self.setSelection(drag_selection) {
+                    // (the deferred mutex unlock — the error exit)
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    return Err(err);
+                }
+            }
+        }
+
+        // (the deferred mutex unlock — the function end)
+        unsafe { (*self.renderer_state.mutex).unlock() };
+        Ok(())
     }
 
-    // PORT NOTE (STUB — chunk C13 fills): `pub fn posToViewport(self: Surface,
-    // xpos: f64, ypos: f64) terminal.point.Coordinate` — Surface.zig:4726
-    // (note the reference's BY-VALUE receiver — read-only, `&self` here;
-    // selectionScrollTick's :1185 callsite lands with C7).
+    /// Call to notify Ghostty that the color scheme for the terminal has
+    /// changed.
+    // pub fn colorSchemeCallback(self: *Surface, scheme: apprt.ColorScheme) !void {
+    //
+    // (the inferred `!void` is the [`Error`] union.)
+    pub fn colorSchemeCallback(&mut self, scheme: apprt::ColorScheme) -> Result<(), Error> {
+        // Crash metadata in case we crash in here
+        // crash.sentry.thread_state = self.crashThreadState();
+        crash::sentry::setThreadState(self.crashThreadState());
+        // defer crash.sentry.thread_state = null;
+        // ([ADV 6.1] — the Drop guard clears at every exit below.)
+        let _thread_state = ThreadStateGuard;
+
+        // const new_scheme: configpkg.ConditionalState.Theme = switch (scheme) {
+        //     .light => .light,
+        //     .dark => .dark,
+        // };
+        let new_scheme: configpkg::conditional::Theme = match scheme {
+            apprt::ColorScheme::Light => configpkg::conditional::Theme::Light,
+            apprt::ColorScheme::Dark => configpkg::conditional::Theme::Dark,
+        };
+
+        // If our scheme didn't change, then we don't do anything.
+        // if (self.config_conditional_state.theme == new_scheme) return;
+        if self.config_conditional_state.theme == new_scheme {
+            return Ok(());
+        }
+
+        // Setup our conditional state which has the current color theme.
+        // self.config_conditional_state.theme = new_scheme;
+        self.config_conditional_state.theme = new_scheme;
+        // self.notifyConfigConditionalState();
+        self.notifyConfigConditionalState();
+
+        // If mode 2031 is on, then we report the change live.
+        // self.queueIo(.{ .color_scheme_report = .{ .force = false } }, .unlocked);
+        self.queueIo(
+            termio::Message::ColorSchemeReport { force: false },
+            termio::termio_impl::MutexState::Unlocked,
+        );
+
+        Ok(())
+    }
+
+    // pub fn posToViewport(self: Surface, xpos: f64, ypos: f64) terminal.point.Coordinate {
+    //
+    // (the reference's BY-VALUE receiver is a read-only copy — `&self`.)
     pub fn posToViewport(&self, xpos: f64, ypos: f64) -> terminal::point::Coordinate {
-        let _ = (xpos, ypos);
-        unimplemented!("Surface.posToViewport lands with core chunk C13 (Surface.zig:4726)")
+        // Get our grid cell
+        // const coord: rendererpkg.Coordinate = .{ .surface = .{ .x = xpos, .y = ypos } };
+        let coord: rendererpkg::size::Coordinate =
+            rendererpkg::size::Coordinate::Surface(rendererpkg::size::CoordinateSurface {
+                x: xpos,
+                y: ypos,
+            });
+        // const grid = coord.convert(.grid, self.size).grid;
+        //
+        // (the `.grid` union-field read — the tag is known post-convert.)
+        let grid = match coord.convert(rendererpkg::size::CoordinateTag::Grid, self.size) {
+            rendererpkg::size::Coordinate::Grid(v) => v,
+            _ => unreachable!(),
+        };
+        // return .{ .x = grid.x, .y = grid.y };
+        terminal::point::Coordinate {
+            x: grid.x,
+            y: u32::from(grid.y),
+        }
     }
 
-    // PORT NOTE (STUB — chunk C13 fills): `fn hideMouse(self: *Surface) void`
-    // — Surface.zig:4741 (keyCallback's :2713 callsite lands with C10).
+    /// Scroll to the bottom of the viewport.
+    ///
+    /// Precondition: the render_state mutex must be held.
+    // fn scrollToBottom(self: *Surface) !void {
+    //
+    // PORT NOTE: the C14 performBindingAction (:4829/:4856/:4872) and C15
+    // completeClipboardPaste (:5891) callsites land later; the allow is
+    // removed when they do. The inferred `!void` is the [`Error`] union.
+    #[allow(dead_code)]
+    fn scrollToBottom(&mut self) -> Result<(), Error> {
+        // self.io.terminal.scrollViewport(.{ .bottom = {} });
+        self.io
+            .terminal
+            .scroll_viewport(terminal::terminal::ScrollViewport::Bottom);
+        // try self.queueRender();
+        self.queueRender()?;
+        Ok(())
+    }
+
+    // fn hideMouse(self: *Surface) void {
     fn hideMouse(&mut self) {
-        unimplemented!("Surface.hideMouse lands with core chunk C13 (Surface.zig:4741)")
+        // if (self.mouse.hidden) return;
+        if self.mouse.hidden {
+            return;
+        }
+        // self.mouse.hidden = true;
+        self.mouse.hidden = true;
+        // _ = self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .mouse_visibility,
+        //     .hidden,
+        // ) catch |err| {
+        //     log.warn("apprt failed to set mouse visibility err={}", .{err});
+        // };
+        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+            apprt::Target::Surface(&*self),
+            apprt::Action::MouseVisibility(MouseVisibility::Hidden),
+        ) {
+            // log.warn("apprt failed to set mouse visibility err={}", .{err});
+        }
     }
 
-    // PORT NOTE (STUB — chunk C13 fills): `fn showMouse(self: *Surface) void`
-    // — Surface.zig:4753 (the C8 updateConfig :1745 and C12
-    // mouseButtonCallback :3771 callsites are live).
+    // fn showMouse(self: *Surface) void {
     fn showMouse(&mut self) {
-        unimplemented!("Surface.showMouse lands with core chunk C13 (Surface.zig:4753)")
+        // if (!self.mouse.hidden) return;
+        if !self.mouse.hidden {
+            return;
+        }
+        // self.mouse.hidden = false;
+        self.mouse.hidden = false;
+        // _ = self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .mouse_visibility,
+        //     .visible,
+        // ) catch |err| {
+        //     log.warn("apprt failed to set mouse visibility err={}", .{err});
+        // };
+        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+            apprt::Target::Surface(&*self),
+            apprt::Action::MouseVisibility(MouseVisibility::Visible),
+        ) {
+            // log.warn("apprt failed to set mouse visibility err={}", .{err});
+        }
     }
 
     /// Perform a binding action. A binding is a keybinding. This function
@@ -9287,9 +10271,11 @@ impl Text {
     }
 }
 
-/// PORT: the file-scope `Link` returned by `linkAtPos` (Surface.zig:4270,
-/// ported ahead of its C13 row — mouseRefreshLinks names it). NOT the
-/// `DerivedConfig.Link` sibling ([`DerivedConfigLink`]).
+/// PORT: the file-scope `Link` returned by `linkAtPos` (Surface.zig:4271 —
+/// declared between `maybePromptClick` and `linkAtPos`; Rust impl blocks
+/// cannot hold type items, so it lives in this trailing cluster with a
+/// position pointer at the reference site). NOT the `DerivedConfig.Link`
+/// sibling ([`DerivedConfigLink`]).
 // const Link = struct {
 struct Link {
     // action: input.Link.Action,

@@ -16,7 +16,13 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-rustty-vt = { workspace = true }
+# Core C13 (`linkAtPin`, Surface.zig:4347): `strmap.searchIterator(link.regex)`
+# is vt's `build_options.oniguruma`-gated StringMap search surface — the
+# reference build compiles Ghostty WITH oniguruma, so core (the reference
+# binary tier) turns the feature on. Per-crate `cargo test -p rustty-vt` still
+# runs the default feature set (the 3 gated string_map tests stay
+# feature-gated, faithful to the Zig `SkipZigTest` arms).
+rustty-vt = { workspace = true, features = ["oniguruma"] }
 rustty-config = { workspace = true }
 rustty-renderer = { workspace = true }
 rustty-font = { workspace = true }
