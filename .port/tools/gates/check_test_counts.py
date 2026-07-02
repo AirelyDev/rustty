@@ -446,10 +446,16 @@ MAP = {
     # treatment as the other 0-test files). none.zig: performIpc-only App + empty
     # Surface -> none.rs. browser.zig: empty App/Window structs -> browser.rs.
     # rust >= zig always holds (rustty-only helper #[test]s add freely). The
-    # embedded backend + the 71 libghostty C ABI exports (rustty-apprt-c) map in
-    # as chunks E1..E11 land their content.
+    # embedded backend maps in as chunks E1..E10 land their content (embedded.zig
+    # is itself 0-test); the 71 libghostty C ABI exports (rustty-apprt-c) map in as
+    # E5..E11 land theirs.
     "apprt_none":        ([f"{GHAP}/none.zig"], [f"{RSAPPRT}/none.rs"], 0),
     "apprt_browser":     ([f"{GHAP}/browser.zig"], [f"{RSAPPRT}/browser.rs"], 0),
+    # embedded.zig: 0 test{} -> zig=0 (documented 0-test module, EMBEDDED_BLUEPRINT
+    # §6.5). E1 lands the `App` backend + `impl apprt_api::App` (+ the E1->E2
+    # Surface sequencing stub) in embedded.rs; E2..E10 fill the rest of the same
+    # file. rust >= zig always holds.
+    "apprt_embedded":    ([f"{GHAP}/embedded.zig"], [f"{RSAPPRT}/embedded.rs"], 0),
     # rustty-crash (integration-tier stage 1). dir.zig: no test{} -> zig=0.
     "crash_dir":         ([f"{GHCR}/dir.zig"], [f"{RSCR}/dir.rs"], 0),
     # sentry.zig: no test{} -> zig=0; the pkg/sentry binding package files are

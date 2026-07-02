@@ -1784,3 +1784,63 @@ fmt, acyclic G7 with apprt-c a clean TOP SINK, test-counts G-gate); scoped-G3b o
 none.zig/browser.zig **missing=0** (none's 1 distinctive comment matched; browser
 has none). No regression (vt 2019, core 15, apprt-api 20, renderer 19, crash 12,
 termio 44).
+
+## rustty-apprt embedded E1 (App backend) — `impl apprt_api::App` + E1→E2 Surface stub
+
+Chunk E1 of the libghostty C-ABI milestone (EMBEDDED_BLUEPRINT §2/§7): ports
+`embedded.zig:29-342` into `crates/rustty-apprt/src/embedded.rs` — the
+`embedded::App` struct + `Options` (the `#[repr(C)]` host-callback config) +
+`KeyEvent`/`KeyTarget` + every `App` method (init/terminate/hasGlobalKeybinds/
+focusEvent/keyEvent/reloadKeymap/keyboardLayout/wakeup/wait/newSurface/
+closeSurface/redrawInspector/performAction/performPreAction/performIpc) + the
+first-concrete `impl apprt_api::App for App` (the seam is now inhabited by a REAL
+backend). Deferred out of E1:
+
+1. **The E1→E2 `Surface` SEQUENCING STUB.** `impl apprt_api::App` binds
+   `type Surface = Surface`, which forces `Surface: apprt_api::Surface` to exist
+   NOW. E1 therefore carries a MINIMAL `Surface`/`SurfaceOptions` stub whose
+   `init`/`queueInspectorRender` and every `apprt_api::Surface` method
+   (`core`/`rt_app`/`close`/`deinit`/`get_content_scale`/`get_size`/`get_title`/
+   `supports_clipboard`/`clipboard_request`/`set_clipboard`/`get_cursor_pos`/
+   `default_termio_env`) are `unimplemented!()` leaves, and only the two E1-read
+   fields (`core_surface`, `title`) are present. These are NOT permanent
+   GPU/xev/objc leaves — they are replaced wholesale by the faithful port in
+   **E2** (Surface struct + `init`/`deinit` + `impl apprt_api::Surface`, the §2
+   growth-point table), **E3** (surface event callbacks), and **E4**
+   (`queueInspectorRender` = Inspector, Phase-3 dcimgui/Metal). `App::newSurface`
+   reaches `Surface::init` (the stub), so it panics until E2 — no E1 gate exercises
+   it. **Targets: E2/E3/E4, EMBEDDED_BLUEPRINT §7.** (This is a chunk-sequencing
+   stub, per the constitution's "faithful sequencing stub" rule, not a Phase-3
+   runtime leaf.)
+
+2. **`Options.write_clipboard`'s `ClipboardContent` hoist.** The reference nests
+   the `ghostty_clipboard_content_s` extern struct in the `CAPI` namespace (which
+   the blueprint maps to `rustty-apprt-c`, E5), but `Options` — a BACKEND field —
+   references it, so E1 defines it in `rustty-apprt::embedded` (apprt-c deps apprt,
+   not the reverse). **E5/apprt-c hand-pins / re-exports this exact struct** for
+   the generated header (ADV-FIX 9). Likewise, `Options`'s callback signatures
+   carry apprt-api's `ActionC`/`TargetC`, whose byte-exact-C FFI-safety is the
+   apprt-api "C-ABI PROJECTION (deferred pinning)" — `improper_ctypes_definitions`
+   is silenced on `Options` pending the **E5** D2 const-asserts + cbindgen.
+
+3. **`config` interior mutability.** `embedded::App.config` is an
+   `UnsafeCell<Config>` (not the reference bare `config: Config`) so the reference's
+   `performPreAction` `config_change` reassign (`self.config = …`, embedded.zig:313,
+   taking a mutable `self: *App`) is expressible under the apprt-api
+   `App::perform_action(&self)` shared-ref trait. Sound because the app is
+   heap-owned + single-threaded via the C-ABI; mirrors Zig's `*App` mutability. No
+   deferral — a faithful `&self`↔`*App` reconciliation.
+
+**Prerequisite (cross-crate, faithful port):** `rustty_input::Keymap` — the
+`input.zig:39-44` `pub const Keymap = switch (os) { .macos => KeymapDarwin, else =>
+KeymapNoop }` platform alias — was added to `rustty-input/src/lib.rs` (its first
+consumer, `embedded::App.keymap`, has landed). Additive alias; no behavior/test
+change.
+
+**Gate deltas (E1):** `embedded.rs` grows from the E0 shell to the `App` backend
+(+ E1→E2 Surface stub). MAP row `apprt_embedded` added (embedded.zig 0-test →
+embedded.rs, GREEN). `rustty-input` gains the `Keymap` alias. Whole-workspace gates
+green (build, touched-crate tests — input 113, apprt 0; clippy `-D warnings`, fmt,
+acyclic G7 with apprt-c still a clean TOP SINK, test-counts G-gate); scoped-G3b on
+embedded.zig **1-342 missing=0 review=0**. No regression (vt 2019, core 15,
+apprt-api 20, renderer 19, crash 12, termio 44).

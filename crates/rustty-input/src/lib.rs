@@ -30,6 +30,25 @@ pub mod keymap_darwin;
 pub mod keymap_noop;
 pub mod link;
 
+// PORT: `input.zig:39-44` —
+//   // Keymap is only available on macOS right now. We could implement it
+//   // in theory for XKB too on Linux but we don't as of writing this.
+//   pub const Keymap = switch (builtin.os.tag) {
+//       .macos => @import("input/KeymapDarwin.zig"),
+//       else => @import("input/KeymapNoop.zig"),
+//   };
+// The platform-selected keymap type (`input.Keymap`). macOS uses the
+// Carbon-backed [`keymap_darwin::Keymap`]; every other target uses the
+// [`keymap_noop::KeymapNoop`]. This single `input.zig` public decl is ported here
+// at the input-package surface ahead of the full `input.zig` carve because the
+// first `input.Keymap` consumer — the `apprt/embedded` `App.keymap` field
+// (embedded.zig:122) — has landed (same rationale as the `ctrlOrSuper` re-export
+// above).
+#[cfg(target_os = "macos")]
+pub use keymap_darwin::Keymap;
+#[cfg(not(target_os = "macos"))]
+pub use keymap_noop::KeymapNoop as Keymap;
+
 // PORT NOTE: `input.zig:18` — `pub const ctrlOrSuper = key.ctrlOrSuper;`. The
 // `input.zig`/`key.zig` files are not yet carved into this crate; this single
 // re-exported public decl (the `Mods`-valued `ctrlOrSuper`, key.zig:862) is the
