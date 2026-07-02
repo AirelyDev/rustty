@@ -78,8 +78,19 @@
 //! Zig value-copied map/regex handles move-through/alias, see its PORT
 //! NOTEs; `openUrl`'s fallback retyped rustty-os `open` to the reference's
 //! byte URL; the last three [ADV 6.1] guard sites land here);
-//! CORE_BLUEPRINT §6 rows C14..C15 fill the remaining function bodies IN
-//! PLACE — the declared method stubs below are owned by C14/C15).
+//! CORE_BLUEPRINT §6 row C14 filled `performBindingAction`/`closingAction`;
+//! chunk C15 landed the tail, Surface.zig:5651-6036 — `writeScreenFile`
+//! (TempDir/ScreenFormatter/openUrl file I/O — the `TmpDirGuard` Drop-guard
+//! reproduces errdefer + the null-selection deinit; the `.mode = 0o600` bit is
+//! re-applied via fchmod)/`completeClipboardRequest`/`startClipboardRequest`
+//! (the `!bool` [ADV-FIX 1] pass-through)/`completeClipboardPaste` (input.paste
+//! encode split, the guard-less mutex block)/`completeClipboardReadOSC52` (the
+//! std.base64 STANDARD Encoder added to `zig_base64`)/`showDesktopNotification`
+//! (Wyhash de-dup -> `DefaultHasher`) LIVE, with `error.UnsafePaste`/
+//! `error.UnauthorizedPaste` grown onto the [`Error`] union (load-bearing —
+//! apprt catches them for confirmation); `crashThreadState`/`presentSurface`/
+//! `getProcessInfo` had landed with C8/C10 — the Surface.zig file body is now
+//! COMPLETE).
 
 // PARITY: the reference's identifiers are camelCase (`needsConfirmQuit`,
 // `handleMessage`, `performBindingAction`, `scaledPadding`,
@@ -184,6 +195,9 @@ use rustty_vt::input::mouse as input_mouse;
 // PORT NOTE (D1 vt slice): `input.mouse_encode` lives in rustty-vt (the
 // mouse encoder is VT-protocol logic) — `mouseReport` (C12).
 use rustty_vt::input::mouse_encode;
+// PORT NOTE (D1 vt slice): `input.paste` lives in rustty-vt (paste encoding is
+// VT-protocol logic — bracketed-paste framing) — `completeClipboardPaste` (C15).
+use rustty_vt::input::paste;
 // const App = @import("App.zig");
 use crate::app::App;
 // const internal_os = @import("os/main.zig");
@@ -210,9 +224,10 @@ use rustty_datastruct::blocking_queue::{Size as QueueSize, Timeout};
 // `rt_surface.*` method edges (aliased per the C0 DECISION note — core's own
 // struct is also named `Surface`).
 use rustty_apprt_api::action::{
-    CellSize, ColorChange, ColorKind, CommandFinished, ConfigChange, InitialSize, KeySequence,
-    KeyTable, MouseOverLink, MouseVisibility, OpenUrl, OpenUrlKind, PromptTitle, Pwd, ReloadConfig,
-    SearchSelected, SearchTotal, SecureInput, SetTitle, SizeLimit, StartSearch,
+    CellSize, ColorChange, ColorKind, CommandFinished, ConfigChange, DesktopNotification,
+    InitialSize, KeySequence, KeyTable, MouseOverLink, MouseVisibility, OpenUrl, OpenUrlKind,
+    PromptTitle, Pwd, ReloadConfig, SearchSelected, SearchTotal, SecureInput, SetTitle, SizeLimit,
+    StartSearch,
 };
 use rustty_apprt_api::Surface as ApprtSurface;
 
@@ -1185,6 +1200,15 @@ pub enum Error {
     Oni(oni::Error),
     /// `internal_os.open`'s spawn failures (`openUrl` — C13).
     OsOpen(internal_os::open::OpenError),
+    /// `error.UnsafePaste` — `completeClipboardPaste` rejects a potentially
+    /// unsafe paste until confirmation (Surface.zig:5886, [ADV-FIX 1] family).
+    /// Load-bearing: apprt catches it to show a confirmation prompt rather than
+    /// log it (embedded.zig:714), so it must stay a distinguishable variant.
+    UnsafePaste,
+    /// `error.UnauthorizedPaste` — `completeClipboardReadOSC52` rejects an
+    /// unconfirmed clipboard read when `clipboard-read = ask` (Surface.zig:5935);
+    /// apprt catches it alongside `UnsafePaste` (embedded.zig:715).
+    UnauthorizedPaste,
 }
 
 impl From<apprt::ApprtError> for Error {
@@ -1268,6 +1292,10 @@ impl core::fmt::Display for Error {
             Error::Io(err) => err.fmt(f),
             Error::Oni(err) => write!(f, "core surface operation failed: {err:?}"),
             Error::OsOpen(err) => write!(f, "core surface operation failed: {err:?}"),
+            Error::UnsafePaste => write!(f, "core surface operation failed: UnsafePaste"),
+            Error::UnauthorizedPaste => {
+                write!(f, "core surface operation failed: UnauthorizedPaste")
+            }
         }
     }
 }
@@ -11762,20 +11790,382 @@ where
     //     write_screen: input.Binding.Action.WriteScreen,
     // ) !void {
     //
-    // PORT NOTE (chunk C14b forward-declaration): the `writeScreenFile`
-    // skeleton + the file-scope [`WriteScreenLoc`] land HERE so C14b's
-    // `.write_screen_file` / `.write_scrollback_file` / `.write_selection_file`
-    // binding arms (Surface.zig:5250-5263) compile against a real callee. The
-    // BODY (Surface.zig:5651-5777 — TempDir / ScreenFormatter / openUrl file
-    // I/O) is C15's row (5651-6036); C15 fills this skeleton IN PLACE (the C3
-    // skeleton precedent). Tracked in DEFERRALS.md "core C14b".
+    // PORT NOTE (chunk C14b forward-declared this skeleton + the file-scope
+    // [`WriteScreenLoc`] so C14b's `.write_screen_file`/`.write_scrollback_file`/
+    // `.write_selection_file` binding arms compile against a real callee; C15
+    // fills the BODY IN PLACE, Surface.zig:5651-5777).
     fn writeScreenFile(
         &mut self,
         loc: WriteScreenLoc,
         write_screen: binding::WriteScreen,
     ) -> Result<(), Error> {
-        let _ = (loc, write_screen);
-        unimplemented!("Surface.writeScreenFile body lands with core chunk C15 (Surface.zig:5651)")
+        // Create a temporary directory to store our scrollback.
+        // var tmp_dir = try internal_os.TempDir.init();
+        // errdefer tmp_dir.deinit();
+        //
+        // PORT NOTE: `internal_os.TempDir` is the struct-file `os/TempDir.zig`,
+        // ported to the `tempdir` module (`internal_os::tempdir::TempDir`).
+        // Zig's `errdefer tmp_dir.deinit()` + the null-selection explicit
+        // `deinit` (below) are realized by [`TmpDirGuard`]: its `Drop` deinits
+        // the TempDir (deleting the tree) UNLESS `armed` is cleared. Only the
+        // success-with-data path disarms it — the reference leaves the temp file
+        // on disk for the copy/open/paste consumer; every `?` error exit and the
+        // null-selection exit leave it armed, exactly reproducing errdefer +
+        // the explicit deinit (the [`ThreadStateGuard`] Drop-guard precedent).
+        struct TmpDirGuard {
+            td: internal_os::tempdir::TempDir,
+            armed: bool,
+        }
+        impl Drop for TmpDirGuard {
+            fn drop(&mut self) {
+                if self.armed {
+                    self.td.deinit();
+                }
+            }
+        }
+        let mut tmp_dir = TmpDirGuard {
+            td: internal_os::tempdir::TempDir::init()?,
+            armed: true,
+        };
+
+        // var filename_buf: [std.fs.max_path_bytes]u8 = undefined;
+        // const filename = try std.fmt.bufPrint(
+        //     &filename_buf,
+        //     "{s}.{s}",
+        //     .{
+        //         @tagName(loc),
+        //         switch (write_screen.emit) {
+        //             .plain, .vt => "txt",
+        //             .html => "html",
+        //         },
+        //     },
+        // );
+        //
+        // (`bufPrint` into a fixed [max_path_bytes]u8 -> an owned `String`; the
+        // SURFACE_ID `bufPrint` precedent. `@tagName(loc)` is the lowercase
+        // enum-tag name.)
+        let filename = format!(
+            "{}.{}",
+            match loc {
+                WriteScreenLoc::Screen => "screen",
+                WriteScreenLoc::History => "history",
+                WriteScreenLoc::Selection => "selection",
+            },
+            match write_screen.emit {
+                binding::WriteScreenFormat::Plain | binding::WriteScreenFormat::Vt => "txt",
+                binding::WriteScreenFormat::Html => "html",
+            },
+        );
+
+        // Open our scrollback file
+        // var file = try tmp_dir.dir.createFile(
+        //     filename,
+        //     switch (builtin.os.tag) {
+        //         .windows => .{},
+        //         else => .{ .mode = 0o600 },
+        //     },
+        // );
+        // defer file.close();
+        //
+        // (the rustty-os `createFile(sub_path, read)` collapses the reference
+        // `CreateFlags` to `read` — `read = false` in BOTH reference arms; the
+        // `.mode = 0o600` security bit is re-applied via `set_permissions`
+        // (fchmod on the open handle) on unix — the reference's non-windows
+        // `else` arm; file modes are a no-op concept on windows. Byte-identical
+        // END state for a fresh temp file (`cfg(unix)` gates the unix-only
+        // `PermissionsExt`, matching the `path_to_bytes`/`os_str_from_bytes`
+        // helpers). `file.close()` -> the `File` drops at scope end, closing it
+        // — BEFORE `tmp_dir` (reverse-declaration drop == Zig defer LIFO).)
+        let file = tmp_dir.td.dir().createFile(&filename, false)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+
+        // Screen.dumpString writes byte-by-byte, so buffer it
+        // var buf: [4096]u8 = undefined;
+        // var file_writer = file.writer(&buf);
+        // var buf_writer = &file_writer.interface;
+        //
+        // (Zig 0.15's buffered `Writer` -> a 4096-capacity `BufWriter`.)
+        let mut buf_writer = std::io::BufWriter::with_capacity(4096, file);
+
+        // Write the scrollback contents. This requires a lock.
+        // {
+        {
+            // self.renderer_state.mutex.lock();
+            // defer self.renderer_state.mutex.unlock();
+            //
+            // (guard-less zigstd Mutex — the defer is the explicit unlock at
+            // every exit below.)
+            unsafe { (*self.renderer_state.mutex).lock() };
+
+            // We only dump history if we have history. We still keep
+            // the file and write the empty file to the pty so that this
+            // command always works on the primary screen.
+            // const pages = &self.io.terminal.screens.active.pages;
+            let pages = unsafe { &(*self.io.terminal.screens.active).pages };
+            // const sel_: ?terminal.Selection = switch (loc) {
+            let sel_: Option<terminal::selection::Selection> = match loc {
+                // .history => history: {
+                WriteScreenLoc::History => 'history: {
+                    // We do not support this for alternate screens
+                    // because they don't have scrollback anyways.
+                    // if (self.io.terminal.screens.active_key == .alternate) {
+                    //     break :history null;
+                    // }
+                    if self.io.terminal.screens.active_key == terminal::screen_set::Key::Alternate {
+                        break 'history None;
+                    }
+
+                    // break :history terminal.Selection.init(
+                    //     pages.getTopLeft(.history),
+                    //     pages.getBottomRight(.history) orelse
+                    //         break :history null,
+                    //     false,
+                    // );
+                    let br = match pages.get_bottom_right(terminal::point::Tag::History) {
+                        Some(v) => v,
+                        None => break 'history None,
+                    };
+                    Some(terminal::selection::Selection::init(
+                        pages.get_top_left(terminal::point::Tag::History),
+                        br,
+                        false,
+                    ))
+                }
+
+                // .screen => screen: {
+                WriteScreenLoc::Screen => 'screen: {
+                    // break :screen terminal.Selection.init(
+                    //     pages.getTopLeft(.screen),
+                    //     pages.getBottomRight(.screen) orelse
+                    //         break :screen null,
+                    //     false,
+                    // );
+                    let br = match pages.get_bottom_right(terminal::point::Tag::Screen) {
+                        Some(v) => v,
+                        None => break 'screen None,
+                    };
+                    Some(terminal::selection::Selection::init(
+                        pages.get_top_left(terminal::point::Tag::Screen),
+                        br,
+                        false,
+                    ))
+                }
+
+                // .selection => self.io.terminal.screens.active.selection,
+                WriteScreenLoc::Selection => unsafe {
+                    (*self.io.terminal.screens.active).selection
+                },
+            };
+
+            // const sel = sel_ orelse {
+            //     // If we have no selection we have no data so we do nothing.
+            //     tmp_dir.deinit();
+            //     return;
+            // };
+            let sel = match sel_ {
+                Some(v) => v,
+                None => {
+                    // If we have no selection we have no data so we do nothing.
+                    // (the null-selection exit: unlock, then return — `tmp_dir`
+                    // stays armed so its `Drop` deinits the TempDir, exactly the
+                    // reference's explicit `tmp_dir.deinit()`.)
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    return Ok(());
+                }
+            };
+
+            // const ScreenFormatter = terminal.formatter.ScreenFormatter;
+            use rustty_vt::formatter::ScreenFormatter;
+            // var formatter: ScreenFormatter = .init(self.io.terminal.screens.active, .{
+            let mut formatter: ScreenFormatter = ScreenFormatter::init(
+                self.io.terminal.screens.active,
+                terminal::formatter::Options {
+                    // .emit = switch (write_screen.emit) {
+                    //     .plain => .plain,
+                    //     .vt => .vt,
+                    //     .html => .html,
+                    // },
+                    emit: match write_screen.emit {
+                        binding::WriteScreenFormat::Plain => terminal::formatter::Format::Plain,
+                        binding::WriteScreenFormat::Vt => terminal::formatter::Format::Vt,
+                        binding::WriteScreenFormat::Html => terminal::formatter::Format::Html,
+                    },
+                    // .unwrap = true,
+                    unwrap: true,
+                    // .trim = false,
+                    trim: false,
+                    // (the reference omits `codepoint_map`, i.e. the field
+                    // default `.{}` = present-but-empty — the formatter.rs
+                    // `Options::base` note.)
+                    codepoint_map: Some(Vec::new()),
+                    // .background = self.io.terminal.colors.background.get(),
+                    background: self.io.terminal.colors.background.get(),
+                    // .foreground = self.io.terminal.colors.foreground.get(),
+                    foreground: self.io.terminal.colors.foreground.get(),
+                    // .palette = &self.io.terminal.colors.palette.current,
+                    palette: Some(&raw const self.io.terminal.colors.palette.current),
+                },
+            );
+            // formatter.content = .{ .selection = sel.ordered(
+            //     self.io.terminal.screens.active,
+            //     .forward,
+            // ) };
+            formatter.content = terminal::formatter::Content::Selection(Some(sel.ordered(
+                unsafe { &*self.io.terminal.screens.active },
+                terminal::selection::Order::Forward,
+            )));
+            // try formatter.format(buf_writer);
+            if let Err(err) = formatter.format(&mut buf_writer) {
+                // (the deferred mutex unlock — the error exit; `tmp_dir` stays
+                // armed so its `Drop` reproduces `errdefer tmp_dir.deinit()`.)
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return Err(err.into());
+            }
+
+            // (the deferred mutex unlock — the normal block exit.)
+            unsafe { (*self.renderer_state.mutex).unlock() };
+        }
+        // try buf_writer.flush();
+        {
+            use std::io::Write as _;
+            buf_writer.flush()?;
+        }
+
+        // Get the final path
+        // var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        // const path = try tmp_dir.dir.realpath(filename, &path_buf);
+        //
+        // (rustty-os `realpath` returns an owning `PathBuf`; `path` is its raw
+        // bytes — never a lossy String, R3.)
+        let path_buf = tmp_dir.td.dir().realpath(&filename)?;
+        let path: &[u8] = path_to_bytes(&path_buf);
+
+        // switch (write_screen.action) {
+        match write_screen.action {
+            // .copy => {
+            binding::WriteScreenAction::Copy => {
+                // const pathZ = try self.alloc.dupeZ(u8, path);
+                // defer self.alloc.free(pathZ);
+                //
+                // PORT NOTE: `dupeZ` NUL-terminates for the C-ABI; rustty
+                // `ClipboardContent` borrows `&[u8]` and `setClipboard` copies
+                // synchronously ("The data is immediately copied"), so `path` is
+                // passed directly (the `PwdC` deferred-pinning precedent).
+                // try self.rt_surface.setClipboard(.standard, &.{.{
+                //     .mime = "text/plain",
+                //     .data = pathZ,
+                // }}, false);
+                unsafe { &*self.rt_surface }.set_clipboard(
+                    apprt::Clipboard::Standard,
+                    &[apprt::ClipboardContent {
+                        mime: b"text/plain",
+                        data: path,
+                    }],
+                    false,
+                )?;
+            }
+
+            // .open => try self.openUrl(.{
+            //     .kind = switch (write_screen.emit) {
+            //         .plain, .vt => .text,
+            //         .html => .html,
+            //     },
+            //     .url = path,
+            // }),
+            binding::WriteScreenAction::Open => {
+                self.openUrl(OpenUrl {
+                    kind: match write_screen.emit {
+                        binding::WriteScreenFormat::Plain | binding::WriteScreenFormat::Vt => {
+                            OpenUrlKind::Text
+                        }
+                        binding::WriteScreenFormat::Html => OpenUrlKind::Html,
+                    },
+                    url: path,
+                })?;
+            }
+
+            // .paste => self.queueIo(try termio.Message.writeReq(
+            //     self.alloc,
+            //     path,
+            // ), .unlocked),
+            binding::WriteScreenAction::Paste => {
+                self.queueIo(
+                    termio::Message::writeReq(path),
+                    termio::termio_impl::MutexState::Unlocked,
+                );
+            }
+        }
+
+        // (the success-with-data exit: disarm the errdefer guard — the reference
+        // does NOT `deinit` `tmp_dir` here, leaving the temp file on disk for the
+        // copy/open/paste consumer.)
+        tmp_dir.armed = false;
+        Ok(())
+    }
+
+    /// Call this to complete a clipboard request sent to apprt. This should
+    /// only be called once for each request. The data is immediately copied so
+    /// it is safe to free the data after this call.
+    ///
+    /// If `confirmed` is true then any clipboard confirmation prompts are skipped:
+    ///
+    ///   - For "regular" pasting this means that unsafe pastes are allowed. Unsafe
+    ///     data is defined as data that contains newlines, though this definition
+    ///     may change later to detect other scenarios.
+    ///
+    ///   - For OSC 52 reads and writes no prompt is shown to the user if
+    ///     `confirmed` is true.
+    ///
+    /// If `confirmed` is false then this may return either an UnsafePaste or
+    /// UnauthorizedPaste error, depending on the type of clipboard request.
+    // pub fn completeClipboardRequest(
+    //     self: *Surface,
+    //     req: apprt.ClipboardRequest,
+    //     data: [:0]const u8,
+    //     confirmed: bool,
+    // ) !void {
+    //
+    // (`data: [:0]const u8` -> raw bytes `&[u8]`, never a lossy String — R3.)
+    pub fn completeClipboardRequest(
+        &mut self,
+        req: apprt::ClipboardRequest,
+        data: &[u8],
+        confirmed: bool,
+    ) -> Result<(), Error> {
+        // switch (req) {
+        match req {
+            // .paste => try self.completeClipboardPaste(data, confirmed),
+            apprt::ClipboardRequest::Paste => self.completeClipboardPaste(data, confirmed)?,
+
+            // .osc_52_read => |clipboard| try self.completeClipboardReadOSC52(
+            //     data,
+            //     clipboard,
+            //     confirmed,
+            // ),
+            apprt::ClipboardRequest::Osc52Read(clipboard) => {
+                self.completeClipboardReadOSC52(data, clipboard, confirmed)?
+            }
+
+            // .osc_52_write => |clipboard| try self.rt_surface.setClipboard(clipboard, &.{.{
+            //     .mime = "text/plain",
+            //     .data = data,
+            // }}, !confirmed),
+            apprt::ClipboardRequest::Osc52Write(clipboard) => {
+                unsafe { &*self.rt_surface }.set_clipboard(
+                    clipboard,
+                    &[apprt::ClipboardContent {
+                        mime: b"text/plain",
+                        data,
+                    }],
+                    !confirmed,
+                )?;
+            }
+        }
+        Ok(())
     }
 
     /// This starts a clipboard request, with some basic validation. For example,
@@ -11785,39 +12175,365 @@ where
     /// doesn't contain text for paste requests). This allows performable keybinds
     /// to pass through when the action cannot be performed.
     //
-    // PORT NOTE (STUB — chunk C15 fills): `fn startClipboardRequest(self:
-    // *Surface, loc: apprt.Clipboard, req: apprt.ClipboardRequest) !bool` —
-    // Surface.zig:5822 (handleMessage's clipboard_read callsite lands with
-    // C7; the `!bool` is load-bearing — [ADV-FIX 1]).
+    // fn startClipboardRequest(
+    //     self: *Surface,
+    //     loc: apprt.Clipboard,
+    //     req: apprt.ClipboardRequest,
+    // ) !bool {
+    //
+    // (the `!bool` is load-bearing — it passes the `rt_surface.clipboardRequest`
+    // "did the request start?" result through to performable keybinds, [ADV-FIX 1].)
     fn startClipboardRequest(
         &mut self,
         loc: apprt::Clipboard,
         req: apprt::ClipboardRequest,
     ) -> Result<bool, Error> {
-        let _ = (loc, req);
-        unimplemented!("Surface.startClipboardRequest lands with core chunk C15 (Surface.zig:5822)")
+        // switch (req) {
+        match req {
+            // .paste => {}, // always allowed
+            apprt::ClipboardRequest::Paste => {} // always allowed
+            // .osc_52_read => if (self.config.clipboard_read == .deny) {
+            apprt::ClipboardRequest::Osc52Read(_) => {
+                if self.config.clipboard_read == configpkg::value_types::ClipboardAccess::Deny {
+                    // log.info(
+                    //     "application attempted to read clipboard, but 'clipboard-read' is set to deny",
+                    //     .{},
+                    // );
+                    // return false;
+                    return Ok(false);
+                }
+            }
+
+            // No clipboard write code paths travel through this function
+            // .osc_52_write => unreachable,
+            apprt::ClipboardRequest::Osc52Write(_) => unreachable!(),
+        }
+
+        // return try self.rt_surface.clipboardRequest(loc, req);
+        Ok(unsafe { &*self.rt_surface }.clipboard_request(loc, req)?)
     }
 
-    // PORT NOTE (STUB — chunk C15 fills): `fn completeClipboardPaste(self:
-    // *Surface, data: []const u8, allow_unsafe: bool) !void` —
-    // Surface.zig:5844 (textCallback's :3287 callsite lands with C11; raw
-    // bytes `&[u8]`, never a lossy String).
+    // fn completeClipboardPaste(
+    //     self: *Surface,
+    //     data: []const u8,
+    //     allow_unsafe: bool,
+    // ) !void {
+    //
+    // (`data: []const u8` -> raw bytes `&[u8]`, never a lossy String — R3.)
     fn completeClipboardPaste(&mut self, data: &[u8], allow_unsafe: bool) -> Result<(), Error> {
-        let _ = (data, allow_unsafe);
-        unimplemented!(
-            "Surface.completeClipboardPaste lands with core chunk C15 (Surface.zig:5844)"
-        )
+        // if (data.len == 0) return;
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        // const encode_opts: input.paste.Options = encode_opts: {
+        let encode_opts: paste::Options = {
+            // self.renderer_state.mutex.lock();
+            // defer self.renderer_state.mutex.unlock();
+            //
+            // (guard-less zigstd Mutex — the defer is the explicit unlock at
+            // every exit below.)
+            unsafe { (*self.renderer_state.mutex).lock() };
+            // const opts: input.paste.Options = .fromTerminal(&self.io.terminal);
+            let opts: paste::Options = paste::Options::from_terminal(&self.io.terminal);
+
+            // If we have paste protection enabled, we detect unsafe pastes and return
+            // an error. The error approach allows apprt to attempt to complete the paste
+            // before falling back to requesting confirmation.
+            //
+            // We do not do this for bracketed pastes because bracketed pastes are
+            // by definition safe since they're framed.
+            // const unsafe = unsafe: {
+            let unsafe_ = 'unsafe_blk: {
+                // If we've disabled paste protection then we always allow the paste.
+                // if (!self.config.clipboard_paste_protection) break :unsafe false;
+                if !self.config.clipboard_paste_protection {
+                    break 'unsafe_blk false;
+                }
+
+                // If we're allowed to paste unsafe data then we always allow the paste.
+                // This is set during confirmation usually.
+                // if (allow_unsafe) break :unsafe false;
+                if allow_unsafe {
+                    break 'unsafe_blk false;
+                }
+
+                // if (opts.bracketed) {
+                if opts.bracketed {
+                    // If we're bracketed and the paste contains and ending
+                    // bracket then something naughty might be going on and we
+                    // never trust it.
+                    // if (std.mem.indexOf(u8, data, "\x1B[201~") != null) break :unsafe true;
+                    //
+                    // (`std.mem.indexOf(..) != null` -> a subslice scan — the
+                    // paste.rs `index_of` precedent.)
+                    if data.windows(6).any(|w| w == b"\x1b[201~") {
+                        break 'unsafe_blk true;
+                    }
+
+                    // If we are bracketed and configured to trust that then the
+                    // paste is not unsafe.
+                    // if (self.config.clipboard_paste_bracketed_safe) break :unsafe false;
+                    if self.config.clipboard_paste_bracketed_safe {
+                        break 'unsafe_blk false;
+                    }
+                }
+
+                // break :unsafe !input.paste.isSafe(data);
+                !paste::is_safe(data)
+            };
+
+            // if (unsafe) {
+            if unsafe_ {
+                // log.info("potentially unsafe paste detected, rejecting until confirmation", .{});
+                // return error.UnsafePaste;
+                //
+                // (unlock before propagating — the explicit-unlock convention.)
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return Err(Error::UnsafePaste);
+            }
+
+            // With the lock held, we must scroll to the bottom.
+            // We always scroll to the bottom for these inputs.
+            // self.scrollToBottom() catch |err| {
+            //     log.warn("error scrolling to bottom err={}", .{err});
+            // };
+            if let Err(_err) = self.scrollToBottom() {
+                // log.warn("error scrolling to bottom err={}", .{err});
+            }
+
+            // break :encode_opts opts;
+            unsafe { (*self.renderer_state.mutex).unlock() };
+            opts
+        };
+
+        // Encode the data. In most cases this doesn't require any
+        // copies, so we optimize for that case.
+        // var data_duped: ?[]u8 = null;
+        let mut data_duped: Option<Vec<u8>> = None;
+        // const vecs = input.paste.encode(data, encode_opts) catch |err| switch (err) {
+        //     error.MutableRequired => vecs: {
+        //         const buf: []u8 = try self.alloc.dupe(u8, data);
+        //         errdefer self.alloc.free(buf);
+        //         data_duped = buf;
+        //         break :vecs input.paste.encode(buf, encode_opts);
+        //     },
+        // };
+        // defer if (data_duped) |v| {
+        //     // This code path means the data did require a copy and mutation.
+        //     // We must free it.
+        //     self.alloc.free(v);
+        // };
+        //
+        // PORT NOTE: the reference `encode` is comptime-dispatched on slice
+        // mutability — const `data` may return `error.MutableRequired`; the
+        // mutable retry over the duped `buf` cannot. rustty splits this into
+        // `paste::encode` (const, may err) and `paste::encode_mut` (mutable,
+        // infallible), exactly the two `@TypeOf(data)` branches (the paste.rs
+        // split note). `data_duped` is declared BEFORE `vecs` so it outlives the
+        // borrow (`encode_mut`'s output aliases the duped buffer); the `defer
+        // free` == its `Vec` dropping at scope end. `Option::insert` fuses the
+        // reference's `data_duped = buf` store with the `encode(buf, ...)` call
+        // (it returns `&mut` to the just-stored buffer).
+        let vecs: [&[u8]; 3] = match paste::encode(data, encode_opts) {
+            Ok(v) => v,
+            Err(paste::Error::MutableRequired) => {
+                // const buf: []u8 = try self.alloc.dupe(u8, data);
+                // data_duped = buf;
+                // break :vecs input.paste.encode(buf, encode_opts);
+                paste::encode_mut(data_duped.insert(data.to_vec()), encode_opts)
+            }
+        };
+        // (the reference `defer if (data_duped) |v| self.alloc.free(v);` == the
+        // owned `data_duped: Option<Vec<u8>>` dropping at scope end below.)
+
+        // for (vecs) |vec| if (vec.len > 0) {
+        for vec in vecs {
+            if !vec.is_empty() {
+                // self.queueIo(try termio.Message.writeReq(
+                //     self.alloc,
+                //     vec,
+                // ), .unlocked);
+                self.queueIo(
+                    termio::Message::writeReq(vec),
+                    termio::termio_impl::MutexState::Unlocked,
+                );
+            }
+        }
+
+        Ok(())
     }
 
-    // PORT NOTE (STUB — chunk C15 fills): `fn showDesktopNotification(self:
-    // *Surface, title: [:0]const u8, body: [:0]const u8) !void` —
-    // Surface.zig:5968 (handleMessage's desktop_notification callsite lands
-    // with C7; the `[:0]const u8` params are raw bytes — `&[u8]`).
+    // fn completeClipboardReadOSC52(
+    //     self: *Surface,
+    //     data: []const u8,
+    //     clipboard_type: apprt.Clipboard,
+    //     confirmed: bool,
+    // ) !void {
+    //
+    // (`data: []const u8` -> raw bytes `&[u8]`, never a lossy String — R3.)
+    fn completeClipboardReadOSC52(
+        &mut self,
+        data: &[u8],
+        clipboard_type: apprt::Clipboard,
+        confirmed: bool,
+    ) -> Result<(), Error> {
+        // We should never get here if clipboard-read is set to deny
+        // assert(self.config.clipboard_read != .deny);
+        debug_assert!(self.config.clipboard_read != configpkg::value_types::ClipboardAccess::Deny);
+
+        // If clipboard-read is set to ask and we haven't confirmed with the user,
+        // do that now
+        // if (self.config.clipboard_read == .ask and !confirmed) {
+        //     return error.UnauthorizedPaste;
+        // }
+        if self.config.clipboard_read == configpkg::value_types::ClipboardAccess::Ask && !confirmed
+        {
+            return Err(Error::UnauthorizedPaste);
+        }
+
+        // Even if the clipboard data is empty we reply, since presumably
+        // the client app is expecting a reply. We first allocate our buffer.
+        // This must hold the base64 encoded data PLUS the OSC code surrounding it.
+        // const enc = std.base64.standard.Encoder;
+        // const size = enc.calcSize(data.len);
+        let size = zig_base64::calc_size(data.len());
+        // var buf = try self.alloc.alloc(u8, size + 9); // const for OSC
+        // defer self.alloc.free(buf);
+        //
+        // (the owned `buf` drops on every exit below.)
+        let mut buf: Vec<u8> = vec![0u8; size + 9]; // const for OSC
+
+        // const kind: u8 = switch (clipboard_type) {
+        let kind: u8 = match clipboard_type {
+            // .standard => 'c',
+            apprt::Clipboard::Standard => b'c',
+            // .selection => 's',
+            apprt::Clipboard::Selection => b's',
+            // .primary => 'p',
+            apprt::Clipboard::Primary => b'p',
+        };
+
+        // Wrap our data with the OSC code
+        // const prefix = try std.fmt.bufPrint(buf, "\x1b]52;{c};", .{kind});
+        // assert(prefix.len == 7);
+        //
+        // (the fixed `bufPrint` format `\x1b]52;{c};` is 7 bytes — written
+        // directly, the SURFACE_ID `bufPrint` precedent.)
+        buf[0] = 0x1b;
+        buf[1] = b']';
+        buf[2] = b'5';
+        buf[3] = b'2';
+        buf[4] = b';';
+        buf[5] = kind;
+        buf[6] = b';';
+        let prefix_len = 7;
+        debug_assert!(prefix_len == 7);
+        // buf[buf.len - 2] = '\x1b';
+        // buf[buf.len - 1] = '\\';
+        let n = buf.len();
+        buf[n - 2] = 0x1b;
+        buf[n - 1] = b'\\';
+
+        // Do the base64 encoding
+        // const encoded = enc.encode(buf[prefix.len..], data);
+        // assert(encoded.len == size);
+        let encoded_len = zig_base64::encode(&mut buf[prefix_len..], data).len();
+        debug_assert!(encoded_len == size);
+
+        // self.queueIo(try termio.Message.writeReq(
+        //     self.alloc,
+        //     buf,
+        // ), .unlocked);
+        self.queueIo(
+            termio::Message::writeReq(&buf),
+            termio::termio_impl::MutexState::Unlocked,
+        );
+
+        Ok(())
+    }
+
+    // fn showDesktopNotification(self: *Surface, title: [:0]const u8, body: [:0]const u8) !void {
+    //
+    // (the `[:0]const u8` params are raw bytes — `&[u8]`, never a lossy String.)
     fn showDesktopNotification(&mut self, title: &[u8], body: &[u8]) -> Result<(), Error> {
-        let _ = (title, body);
-        unimplemented!(
-            "Surface.showDesktopNotification lands with core chunk C15 (Surface.zig:5968)"
-        )
+        // Wyhash is used to hash the contents of the desktop notification to limit
+        // how fast identical notifications can be sent sequentially.
+        // const hash_algorithm = std.hash.Wyhash;
+        //
+        // PORT NOTE: rustty uses the stdlib `DefaultHasher` (the font-shaper
+        // `shared_grid_set::Key::hashcode` precedent). The digest is an internal
+        // de-dup key compared only against the previous notification within the
+        // same process (never serialized/observed cross-implementation), so the
+        // exact algorithm is not part of the parity contract; SipHash's `write`
+        // is unframed, so `write(title); write(body)` streams `title++body`
+        // exactly as Wyhash's `update; update`.
+
+        // const now = try std.time.Instant.now();
+        //
+        // (Rust `Instant::now` is infallible — the `try` collapses; the RingBell
+        // precedent.)
+        let now = std::time::Instant::now();
+
+        // PARITY: std.time.ns_per_s = 1_000_000_000 (the config_struct.rs / RingBell
+        // NS_PER_S precedent). `Instant.since` -> `saturating_duration_since` (ns).
+        const NS_PER_S: u128 = 1_000_000_000;
+
+        // Set a limit of one desktop notification per second so that the OS
+        // doesn't kill us when we run out of resources.
+        // if (self.app.last_notification_time) |last| {
+        if let Some(last) = unsafe { (*self.app).last_notification_time } {
+            // if (now.since(last) < 1 * std.time.ns_per_s) {
+            if now.saturating_duration_since(last).as_nanos() < NS_PER_S {
+                // log.warn("rate limiting desktop notifications", .{});
+                return Ok(());
+            }
+        }
+
+        // const new_digest = d: {
+        let new_digest = {
+            use core::hash::Hasher;
+            // var hash = hash_algorithm.init(0);
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            // hash.update(title);
+            hash.write(title);
+            // hash.update(body);
+            hash.write(body);
+            // break :d hash.final();
+            hash.finish()
+        };
+
+        // Set a limit of one notification per five seconds for desktop
+        // notifications with identical content.
+        // if (self.app.last_notification_time) |last| {
+        if let Some(last) = unsafe { (*self.app).last_notification_time } {
+            // if (self.app.last_notification_digest == new_digest) {
+            if unsafe { (*self.app).last_notification_digest } == new_digest {
+                // if (now.since(last) < 5 * std.time.ns_per_s) {
+                if now.saturating_duration_since(last).as_nanos() < 5 * NS_PER_S {
+                    // log.warn("suppressing identical desktop notification", .{});
+                    return Ok(());
+                }
+            }
+        }
+
+        // self.app.last_notification_time = now;
+        unsafe { (*self.app).last_notification_time = Some(now) };
+        // self.app.last_notification_digest = new_digest;
+        unsafe { (*self.app).last_notification_digest = new_digest };
+        // _ = try self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .desktop_notification,
+        //     .{
+        //         .title = title,
+        //         .body = body,
+        //     },
+        // );
+        let _ = unsafe { &*self.rt_app }.perform_action(
+            apprt::Target::Surface(&*self),
+            apprt::Action::DesktopNotification(DesktopNotification { title, body }),
+        )?;
+        Ok(())
     }
 
     // fn crashThreadState(self: *Surface) crash.sentry.ThreadState {
@@ -12228,6 +12944,23 @@ fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
     std::ffi::OsStr::new(std::str::from_utf8(bytes).unwrap_or(""))
 }
 
+/// Raw bytes of a `Path` (the inverse of [`os_str_from_bytes`]): the reference
+/// `std.fs.Dir.realpath` returns a `[]const u8` path slice; the rustty port
+/// returns an owning `PathBuf` and `writeScreenFile` recovers its bytes here
+/// (POSIX paths are bytes directly — R3/fidelity, never a lossy round-trip).
+#[cfg(unix)]
+fn path_to_bytes(path: &std::path::Path) -> &[u8] {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_os_str().as_bytes()
+}
+
+#[cfg(not(unix))]
+fn path_to_bytes(path: &std::path::Path) -> &[u8] {
+    // PORT NOTE: on non-unix the path is UTF-8 (lossy fallback); the
+    // scrollback-file flow is primarily exercised on POSIX.
+    path.to_str().unwrap_or("").as_bytes()
+}
+
 /// PORT NOTE (Zig value-copy): `terminal.formatter.Options` is a Zig value
 /// type freely copied at each `.init(..., opts)` / `var copy = opts` site
 /// (`copySelectionToClipboards`); Rust `Options` owns its `codepoint_map`
@@ -12247,13 +12980,15 @@ fn copy_options(opts: &terminal::formatter::Options) -> terminal::formatter::Opt
 }
 
 /// PORTS: the Zig `std.base64` STANDARD codec's `Decoder` surface used by
-/// `clipboardWrite` (`calcSizeForSlice` + `decode`) — semantics reproduced
-/// bit-for-bit from lib/std/base64.zig (Zig 0.15.2), including the error
-/// split the reference branches on (`InvalidPadding` vs `InvalidCharacter`).
-/// The Zig decoder's 16-/4-char SIMD-ish fast loops are accelerative only
-/// (pad bytes never reach them — the final 4-char group always falls through
-/// to the scalar tail); the scalar tail below IS the semantic core, ported
-/// verbatim (the rustty-os file.rs `b64_encoder` precedent).
+/// `clipboardWrite` (`calcSizeForSlice` + `decode`) AND its `Encoder` surface
+/// (`calcSize` + `encode`) used by `completeClipboardReadOSC52` (the OSC 52
+/// reply) — semantics reproduced bit-for-bit from lib/std/base64.zig
+/// (Zig 0.15.2), including the error split the reference branches on
+/// (`InvalidPadding` vs `InvalidCharacter`). The Zig decoder's 16-/4-char and
+/// the encoder's 128-/32-bit `readInt` SIMD-ish fast loops are accelerative
+/// only (they read a lookahead byte / the final 4-char group always falls
+/// through to the scalar tail); the scalar tails below ARE the semantic core,
+/// ported verbatim (the rustty-os file.rs `b64_encoder` precedent).
 mod zig_base64 {
     // pub const Error = error{ InvalidCharacter, InvalidPadding, NoSpaceLeft };
     //
@@ -12431,5 +13166,105 @@ mod zig_base64 {
             }
         }
         Ok(())
+    }
+
+    // ---- Base64Encoder (std.base64.standard.Encoder) ----
+
+    /// Compute the encoded length.
+    // pub fn calcSize(encoder: *const Base64Encoder, source_len: usize) usize {
+    //     if (encoder.pad_char != null) {
+    //         return @divTrunc(source_len + 2, 3) * 4;
+    //     } else { ... }
+    // }
+    //
+    // (the standard codec HAS a pad char — the no-pad arm is dead for this
+    // codec and elided, matching the decoder's dead-arm elisions above.)
+    //
+    // PARITY: clippy suggests `.div_ceil(3)` for `(source_len + 2) / 3`, but
+    // rewriting would diverge from the reference `@divTrunc` expression; kept
+    // as-is for fidelity (the rustty-os file.rs `b64_encoder::calc_size`
+    // precedent).
+    #[allow(clippy::manual_div_ceil)]
+    pub const fn calc_size(source_len: usize) -> usize {
+        // return @divTrunc(source_len + 2, 3) * 4;
+        (source_len + 2) / 3 * 4
+    }
+
+    /// dest.len must at least be what you get from ::calcSize.
+    // pub fn encode(encoder: *const Base64Encoder, dest: []u8, source: []const u8) []const u8 {
+    pub fn encode<'a>(dest: &'a mut [u8], source: &[u8]) -> &'a [u8] {
+        // const out_len = encoder.calcSize(source.len);
+        let out_len = calc_size(source.len());
+        // assert(dest.len >= out_len);
+        debug_assert!(dest.len() >= out_len);
+
+        // var idx: usize = 0;
+        let mut idx: usize = 0;
+        // var out_idx: usize = 0;
+        let mut out_idx: usize = 0;
+        // (the 128-bit big-endian `readInt` fast loop is accelerative only — it
+        // requires a 4-byte-aligned lookahead and produces output identical to
+        // the scalar 3-byte grouping below; elided as with the decoder's fast
+        // loops. The 32-bit `readInt` loop below is scalarized: `readInt(u32,
+        // .big)` reads a lookahead 4th byte whose low 8 bits are unused, so the
+        // four 6-bit fields it extracts equal the byte-shuffle here.)
+        // while (idx + 3 < source.len) : (idx += 3) {
+        while idx + 3 < source.len() {
+            // dest[out_idx] = alphabet[(bits >> 26) & 0x3f];   (= source[idx] >> 2)
+            dest[out_idx] = ALPHABET_CHARS[(source[idx] >> 2) as usize];
+            // dest[out_idx + 1] = alphabet[(bits >> 20) & 0x3f];
+            dest[out_idx + 1] =
+                ALPHABET_CHARS[(((source[idx] & 0x3) << 4) | (source[idx + 1] >> 4)) as usize];
+            // dest[out_idx + 2] = alphabet[(bits >> 14) & 0x3f];
+            dest[out_idx + 2] =
+                ALPHABET_CHARS[(((source[idx + 1] & 0xf) << 2) | (source[idx + 2] >> 6)) as usize];
+            // dest[out_idx + 3] = alphabet[(bits >> 8) & 0x3f];   (= source[idx+2] & 0x3f)
+            dest[out_idx + 3] = ALPHABET_CHARS[(source[idx + 2] & 0x3f) as usize];
+            // out_idx += 4;
+            out_idx += 4;
+            idx += 3;
+        }
+        // if (idx + 2 < source.len) {
+        if idx + 2 < source.len() {
+            // dest[out_idx] = alphabet[source[idx] >> 2];
+            dest[out_idx] = ALPHABET_CHARS[(source[idx] >> 2) as usize];
+            // dest[out_idx + 1] = alphabet[((source[idx] & 0x3) << 4) | (source[idx + 1] >> 4)];
+            dest[out_idx + 1] =
+                ALPHABET_CHARS[(((source[idx] & 0x3) << 4) | (source[idx + 1] >> 4)) as usize];
+            // dest[out_idx + 2] = alphabet[(source[idx + 1] & 0xf) << 2 | (source[idx + 2] >> 6)];
+            dest[out_idx + 2] =
+                ALPHABET_CHARS[(((source[idx + 1] & 0xf) << 2) | (source[idx + 2] >> 6)) as usize];
+            // dest[out_idx + 3] = alphabet[source[idx + 2] & 0x3f];
+            dest[out_idx + 3] = ALPHABET_CHARS[(source[idx + 2] & 0x3f) as usize];
+            // out_idx += 4;
+            out_idx += 4;
+        // } else if (idx + 1 < source.len) {
+        } else if idx + 1 < source.len() {
+            // dest[out_idx] = alphabet[source[idx] >> 2];
+            dest[out_idx] = ALPHABET_CHARS[(source[idx] >> 2) as usize];
+            // dest[out_idx + 1] = alphabet[((source[idx] & 0x3) << 4) | (source[idx + 1] >> 4)];
+            dest[out_idx + 1] =
+                ALPHABET_CHARS[(((source[idx] & 0x3) << 4) | (source[idx + 1] >> 4)) as usize];
+            // dest[out_idx + 2] = alphabet[(source[idx + 1] & 0xf) << 2];
+            dest[out_idx + 2] = ALPHABET_CHARS[((source[idx + 1] & 0xf) << 2) as usize];
+            // out_idx += 3;
+            out_idx += 3;
+        // } else if (idx < source.len) {
+        } else if idx < source.len() {
+            // dest[out_idx] = alphabet[source[idx] >> 2];
+            dest[out_idx] = ALPHABET_CHARS[(source[idx] >> 2) as usize];
+            // dest[out_idx + 1] = alphabet[(source[idx] & 0x3) << 4];
+            dest[out_idx + 1] = ALPHABET_CHARS[((source[idx] & 0x3) << 4) as usize];
+            // out_idx += 2;
+            out_idx += 2;
+        }
+        // if (encoder.pad_char) |pad_char| {
+        //     for (dest[out_idx..out_len]) |*pad| pad.* = pad_char;
+        // }
+        for pad in &mut dest[out_idx..out_len] {
+            *pad = PAD_CHAR;
+        }
+        // return dest[0..out_len];
+        &dest[0..out_len]
     }
 }

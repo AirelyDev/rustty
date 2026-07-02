@@ -1497,3 +1497,85 @@ removed — the `.activate_key_table` arm (:5495) is now its live consumer.
 - **`-1 * rows` -> `-rows` (`.scroll_page_up`, :5219):** clippy `neg_multiply`
   rejects the literal-multiply; the negation is semantically identical (the
   reference comment preserves `-1 * rows`).
+
+## rustty-core C15 (core tier) — clipboard completions / screen-file / notifications
+
+Chunk C15 of CORE_BLUEPRINT §6 lands the Surface.zig file TAIL (5651-6036) in
+`crates/rustty-core/src/surface.rs`: `writeScreenFile`, `completeClipboardRequest`,
+`startClipboardRequest`, `completeClipboardPaste`, `completeClipboardReadOSC52`,
+`showDesktopNotification` — all LIVE (no GPU/xev leaf in this range).
+`crashThreadState`/`presentSurface`/`getProcessInfo` had already landed with
+C8/C10 (the 6014-end tail). With this chunk the Surface.zig body is COMPLETE.
+Scoped Surface.zig:5651-6036 G3b → 65 distinctive comment lines + 176 distinctive
+code lines, missing=0. No new tests (0 in the reference; `Surface<A>` is
+untested-by-construction). NO new deferral was created. RESOLVED: the C14b
+`writeScreenFile` + `WriteScreenLoc` SEQUENCING STUB and the C7 SEQUENCING STUBS
+`startClipboardRequest`/`showDesktopNotification` (`completeClipboardPaste`,
+declared as a C11 stub, is filled here too) — all filled IN PLACE. Ledger:
+
+- **`error.UnsafePaste` / `error.UnauthorizedPaste` grown onto the `surface::Error`
+  union** — the two are LOAD-BEARING: apprt (embedded.zig:714-716) catches them
+  specifically to show a clipboard-confirmation prompt rather than logging, so
+  they must stay distinguishable variants (not collapsed into a generic error).
+  Unit variants (no wrapped payload, no `From` impl); constructed directly at
+  `completeClipboardPaste` (:5886) / `completeClipboardReadOSC52` (:5935). The
+  exhaustive `Display` impl gained arms for both.
+- **`writeScreenFile` errdefer/defer → `TmpDirGuard` Drop guard.** The reference
+  `errdefer tmp_dir.deinit()` PLUS the null-selection explicit `tmp_dir.deinit()`
+  are realized by a local `struct TmpDirGuard { td, armed }` whose `Drop` deinits
+  the TempDir (deleting the tree) unless `armed` is cleared. Only the
+  success-WITH-DATA path disarms it — the reference deliberately leaves the temp
+  file on disk for the copy/open/paste consumer; every `?` error exit and the
+  null-selection early-return leave it armed, exactly reproducing errdefer + the
+  explicit deinit (the `ThreadStateGuard` Drop-guard precedent). `defer
+  file.close()` == the `BufWriter<File>` dropping BEFORE `tmp_dir` (reverse-
+  declaration drop == Zig defer LIFO). Minor, unix-safe reordering documented at
+  the null-selection exit: the guard's deinit runs AFTER the mutex unlock / file
+  close, vs the reference's explicit-deinit-first; deleting an open file is fine
+  on POSIX and the resources are independent.
+- **`.mode = 0o600` re-applied via fchmod.** rustty-os `Dir::createFile(sub_path,
+  read)` collapsed the reference `CreateFlags` to just `read`; the security bit
+  `.mode = 0o600` (non-windows) is re-applied with `File::set_permissions`
+  (fchmod on the open handle) right after creation — byte-identical END state for
+  a freshly-created temp file (the transient window is inside a private temp dir).
+  `read = false` in both the reference `.{}`/`.{ .mode = 0o600 }` arms.
+- **`std.fs.max_path_bytes` bufPrint → owned String / PathBuf.** The `filename`
+  fixed-buffer `bufPrint("{s}.{s}", .{@tagName(loc), ext})` → a `format!` String
+  (the SURFACE_ID precedent; `@tagName(loc)` = the lowercase enum-tag match).
+  `tmp_dir.dir.realpath(filename, &path_buf)` → the rustty-os `realpath` returns
+  an owning `PathBuf`; its raw bytes are recovered by the new file-scope
+  `path_to_bytes` helper (POSIX paths are bytes — R3, never a lossy String).
+- **`input.paste.encode` comptime-mutability split.** The reference `encode` is
+  comptime-dispatched on `@TypeOf(data)`: const `[]const u8` may return
+  `error.MutableRequired`, the mutable `[]u8` retry cannot. rustty-vt's paste.rs
+  already splits this into `encode` (const, fallible) + `encode_mut` (mutable,
+  infallible); `completeClipboardPaste` uses both exactly as the two branches.
+  `data_duped: Option<Vec<u8>>` is declared before `vecs` so it outlives the
+  borrow (`encode_mut`'s output aliases the duped buffer); `Option::insert` fuses
+  the reference `data_duped = buf` store with the `encode(buf, ...)` call (and
+  sidesteps the `unused_assignments` on a `= Some(..)` reassignment). The `defer
+  if (data_duped) |v| free` == the owned `Vec` dropping at scope end.
+- **`std.base64.standard.Encoder` added to `mod zig_base64`.** C9 ported only the
+  Decoder surface; `completeClipboardReadOSC52` needs the Encoder (`calcSize` +
+  `encode`), added bit-for-bit from lib/std/base64.zig 0.15.2 (standard alphabet
+  + `=` pad, reusing the module's `ALPHABET_CHARS`/`PAD_CHAR`). The 128-bit
+  big-endian `readInt` fast loop is elided (accelerative-only, needs an aligned
+  lookahead); the 32-bit `readInt` loop is scalarized to the identical byte
+  shuffle (its 4th read byte's low 8 bits are unused) — the three tail branches
+  (3/2/1 leftover bytes) + pad fill are ported verbatim. The OSC-52 `bufPrint`
+  prefix `"\x1b]52;{c};"` (7 bytes) is written directly (the SURFACE_ID / encodeKey
+  bufPrint precedent).
+- **`std.hash.Wyhash` → `std::collections::hash_map::DefaultHasher`
+  (`showDesktopNotification` de-dup digest).** The digest is an internal
+  rate-limit key compared only against the previous notification within the same
+  process (never serialized/observed cross-implementation), so the exact
+  algorithm is not part of the parity contract (the font-shaper
+  `shared_grid_set::Key::hashcode` precedent). SipHash's `write` is unframed, so
+  `write(title); write(body)` streams `title++body` exactly as Wyhash's
+  `update; update`. `std.time.Instant.now()` → infallible `Instant::now` (the
+  RingBell `catch unreachable` collapse); `now.since(last)` →
+  `saturating_duration_since(..).as_nanos()` vs `NS_PER_S` (the config_struct.rs
+  precedent). `self.app.*` is written through the `*mut App<A>` raw pointer.
+- **`getProcessInfo` comptime split** had already landed with C10
+  (`getForegroundPid`/`getTtyName` — the rustty-os pty.rs comptime-return
+  precedent); `crashThreadState`/`presentSurface` with C8/C10.
