@@ -1,7 +1,8 @@
 //! rustty-zigstd
 //!
 //! PORTS: Zig stdlib types AS THE PORT USES THEM — std.heap.ArenaAllocator,
-//! std.heap.MemoryPool / MemoryPoolAligned, std.array_hash_map.AutoArrayHashMap.
+//! std.heap.MemoryPool / MemoryPoolAligned, std.array_hash_map.AutoArrayHashMap,
+//! std.Thread.Mutex.
 //!
 //! PORT STATUS: done (infra; Zig stdlib equivalents; not in the 3234 contract)
 //!
@@ -16,6 +17,9 @@
 //!     and `MemoryPoolAligned` (page-aligned items).
 //!   * array_hash_map — `AutoArrayHashMap` with INSERTION-ORDER iteration and
 //!     `getOrPut`/`put`/`swapRemove`/`orderedRemove`/`count`/`keys`/`values`.
+//!   * thread — `std.Thread.Mutex`: the GUARD-LESS manual lock/try_lock/unlock
+//!     mutex (no RAII guard, no poisoning) the core-tier mutex model requires
+//!     (CORE_BLUEPRINT §3; renderer `State.mutex`).
 //!
 //! Backing memory is the Rust system allocator (`std::alloc`), the faithful map
 //! of Zig's `gpa`/`page_allocator`. This crate is unsafe-heavy; its UB/leak gate
@@ -27,6 +31,7 @@
 pub mod arena_allocator;
 pub mod array_hash_map;
 pub mod memory_pool;
+pub mod thread;
 
 // TEST-ONLY leak-counting allocator (scoped faithful equivalent of Zig's
 // `std.testing.allocator`). Compiled under `cfg(test)` for this crate's own unit

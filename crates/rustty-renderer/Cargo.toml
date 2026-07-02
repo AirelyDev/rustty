@@ -39,6 +39,11 @@ rustty-font-shaper = { workspace = true }
 # check_leaks.sh FFI_CRATES).
 rustty-input = { workspace = true }
 rustty-oniguruma = { workspace = true }
+# `State.mutex` (`*std.Thread.Mutex`) is a raw pointer to the guard-less
+# Zig-shaped `rustty_zigstd::thread::Mutex` — the core-tier mutex-model
+# decision (CORE_BLUEPRINT §3, landed in C0). rustty-zigstd is a leaf over
+# rustty-util (downward-safe).
+rustty-zigstd = { workspace = true }
 # renderer/shadertoy.zig imports `glslang` + `spirv_cross` for the custom-shader
 # transpile path (GLSL -> SPIR-V -> MSL/GLSL). These are the vendored FFI sys
 # crates. (shadertoy.zig also imports `../config.zig` for `RepeatablePath`, but

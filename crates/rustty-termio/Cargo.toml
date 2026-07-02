@@ -37,6 +37,16 @@ rustty-config = { workspace = true }
 rustty-renderer = { workspace = true }
 rustty-apprt-api = { workspace = true }
 rustty-global = { workspace = true }
+# Core-tier C0 dep wiring (both downward-safe leaves):
+# - rustty-xev: the SHARED xev handle placeholder types (`Async`/`Loop`/...),
+#   hoisted from the termio-local `xev_seam` module (CORE_BLUEPRINT §5 "xev
+#   handle unification"); `src/xev_seam.rs` re-exports them so in-crate paths
+#   are unchanged. Also libxev's future home (D6).
+rustty-xev = { workspace = true }
+# - rustty-zigstd: the guard-less Zig-shaped `thread::Mutex` behind renderer
+#   `State.mutex` (`mailbox::send`'s caller-held-mutex parameter — the mutex
+#   model DECIDED by CORE_BLUEPRINT §3, landed in C0).
+rustty-zigstd = { workspace = true }
 # Integration-tier stage 4 dep wiring (both leaf crates, downward-safe):
 # - rustty-build-config: `build_config.version_string`/`build_config.flatpak`
 #   (reference `build_config = @import("../build_config.zig")` in Exec.zig /

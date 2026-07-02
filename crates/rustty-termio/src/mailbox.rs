@@ -5,8 +5,10 @@
 //! PORT STATUS: struct shapes + xev-free logic ported (integration-tier stage
 //! 2). `send` is deferred with its verbatim body below: its slow path unlocks
 //! and relocks a caller-held `std.Thread.Mutex`, a manual lock/unlock pattern
-//! Rust's guard-based `std::sync::Mutex` cannot express — the mutex modeling is
-//! decided once, when the threads become live (D6 / core tier; DEFERRALS.md).
+//! Rust's guard-based `std::sync::Mutex` cannot express. The mutex MODEL is
+//! now decided (core C0, CORE_BLUEPRINT §3): the guard-less Zig-shaped
+//! `rustty_zigstd::thread::Mutex` — `send`'s parameter carries it; the body
+//! un-defers with the core-tier termio pass (C-T; DEFERRALS.md).
 
 // PARITY: the reference's identifiers are camelCase (`initSPSC`); preserved
 // verbatim per R1/R2.
@@ -104,12 +106,12 @@ impl Mailbox {
     /// lock it again. This handles an edge case where queues are full.
     /// This may not apply to all writer types.
     //
-    // DEFERRED (D6 / core-tier mutex modeling, 0 tests — R1-safe): the body
-    // unlocks and relocks the caller-held renderer-state mutex
-    // (`m.unlock()` ... `defer m.lock()`), Zig `std.Thread.Mutex`'s manual
-    // lock/unlock API that guard-based `std::sync::Mutex` cannot express from
-    // this stack frame. The reference body is preserved verbatim; the
-    // implementation lands with the live-thread wiring (see DEFERRALS.md):
+    // DEFERRED (core-tier C-T un-defer, 0 tests — R1-safe): the body unlocks
+    // and relocks the caller-held renderer-state mutex (`m.unlock()` ... `defer
+    // m.lock()`), Zig `std.Thread.Mutex`'s manual lock/unlock API. The mutex
+    // MODEL landed in C0 (guard-less `rustty_zigstd::thread::Mutex` — the
+    // parameter below); the reference body is preserved verbatim and the
+    // implementation lands with the core-tier termio pass (see DEFERRALS.md):
     //
     // pub fn send(
     //     self: *Mailbox,
@@ -146,11 +148,13 @@ impl Mailbox {
     //         },
     //     }
     // }
-    pub fn send(&mut self, msg: Message<'static>, mutex: Option<*mut std::sync::Mutex<()>>) {
+    pub fn send(
+        &mut self,
+        msg: Message<'static>,
+        mutex: Option<*mut rustty_zigstd::thread::Mutex>,
+    ) {
         let _ = (msg, mutex);
-        unimplemented!(
-            "termio.Mailbox.send deferred (D6 / core-tier mutex modeling); verbatim body above"
-        )
+        unimplemented!("termio.Mailbox.send deferred (core-tier C-T un-defer); verbatim body above")
     }
 
     /// Notify that there are new messages. This may be a noop depending

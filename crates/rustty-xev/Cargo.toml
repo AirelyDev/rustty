@@ -1,0 +1,33 @@
+# rustty-xev — the libxev event-loop crate (D6): TODAY a placeholder-type home,
+# LATER the faithful libxev port.
+#
+# Crate IDENTITY is `rustty-xev` (R4). This is NOT the published artifact name; the
+# library/binary artifacts are renamed to the `rustty` product identity later (R2).
+# NO dependency on the ghostty tree (R3) — reference is an external oracle only.
+#
+# libxev is Zig SOURCE (a dependency package, not ghostty src/ and not a C
+# library), so per the integration-tier D6 decision it will be ported faithfully
+# as its own low crate when a real "run a shell end-to-end" milestone forces it
+# (vendored Zig-source precedent: rustty-z2d). Until then this crate hosts the
+# SHARED xev handle TYPES (`Async`/`Loop`/`Completion`/`Timer`/...): core hands
+# `render_thread.wakeup` (an `xev.Async`) to `termio::Options.renderer_wakeup`,
+# so the placeholder types must be one crate both consumers name
+# (CORE_BLUEPRINT §5, "xev handle unification"). Filled IN PLACE when the real
+# port lands — downstream `use` paths never change.
+[package]
+name = "rustty-xev"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The ONLY dependency (downward-safe leaf edge): the `xev =
+# @import("../global.zig").xev` seam anchor — `rustty_global::seam::Xev` is the
+# deferred backend package exactly as `global.zig`'s `pub const xev` is.
+rustty-global = { workspace = true }

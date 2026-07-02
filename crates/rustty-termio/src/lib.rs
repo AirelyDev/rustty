@@ -41,8 +41,10 @@
 //!   deferred `send` slow path).
 //! - `thread` — termio/Thread.zig (0 tests): the writer-thread struct shape +
 //!   init/deinit; the run loop is deferred verbatim (D6).
-//! - `xev_seam` — the termio-local D6 placeholder surface for
-//!   `@import("../global.zig").xev` (rustty-os cf_release_thread precedent).
+//! - `xev_seam` — the D6 placeholder surface for
+//!   `@import("../global.zig").xev`; the handle types are hosted by the shared
+//!   `rustty-xev` crate since core C0 (re-exported here so in-crate paths are
+//!   unchanged; rustty-os cf_release_thread precedent).
 //! - `command` — the RELOCATED src/Command.zig (10 tests, all ported): the
 //!   fork/exec subprocess spawner (integration-tier stage 3, break #13b).
 //! - `exec` — termio/Exec.zig (10 tests, all ported): the posix exec/pty
@@ -106,7 +108,8 @@ pub use stream_handler::StreamHandler;
 pub mod command;
 pub use command::Command;
 
-// The termio-local D6 xev placeholder seam (see its module doc).
+// The D6 xev placeholder seam (see its module doc) — since core C0 a re-export
+// of the shared `rustty-xev` crate.
 pub mod xev_seam;
 
 /// PORT NOTE (GROWTH POINT, Rust-only glue): the reference termio methods

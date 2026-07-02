@@ -41,8 +41,10 @@
 //! - Byte-exact C-ABI pinning of the `CValue` unions to `rustty.h` (the vt-c D2
 //!   cbindgen + pinned-padding pattern) is deferred to the apprt embedded C-API
 //!   milestone; the `const _` size-asserts here pin the ACTUAL Rust layout only.
-//! - `surface.newConfig` + the concrete `AppMailbox` queue types (`Timeout`/
-//!   `Size`) trace to rustty-core and land when core does.
+//! - `surface.newConfig` traces to rustty-core and lands when core does. (The
+//!   `AppMailbox` queue types `Timeout`/`Size` were RESOLVED concrete by core
+//!   C0 — CORE_BLUEPRINT §3: they are rustty-datastruct's module-level
+//!   `blocking_queue::{Timeout, Size}`.)
 
 pub mod action;
 pub mod ipc;

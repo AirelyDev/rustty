@@ -5,12 +5,14 @@
 # NO dependency on the ghostty tree (R3) — reference is an external oracle only.
 #
 # This crate ports ZIG STDLIB types (std.heap.ArenaAllocator, std.heap.MemoryPool /
-# MemoryPoolAligned, std.array_hash_map.AutoArrayHashMap) AS THE PORT USES THEM.
+# MemoryPoolAligned, std.array_hash_map.AutoArrayHashMap, std.Thread.Mutex) AS
+# THE PORT USES THEM.
 # These types are NOT in ghostty src/, so they are NOT in the 3234-test contract and
 # this crate is intentionally absent from the test-contract crate_map. It is
 # necessary glue (R1 allows necessary additions) and is faithful to the EXACT
 # observable semantics of the Zig stdlib types (arena reset modes; memory-pool
-# LIFO free-list reuse; insertion-order hash map). Backing memory is the Rust
+# LIFO free-list reuse; insertion-order hash map; guard-less manual-unlock
+# mutex). Backing memory is the Rust
 # system allocator (std::alloc) — the faithful map of Zig's gpa/page_allocator.
 #
 # unsafe-heavy: the leak/UB gate is Miri (R6) — `check_leaks.sh --crate rustty-zigstd`.

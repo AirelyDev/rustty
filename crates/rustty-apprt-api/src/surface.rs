@@ -181,15 +181,15 @@ pub struct SurfaceMessageEnvelope<'a, S> {
 // (`{ surface: *Surface, app: App.Mailbox }`), which names rustty-core. The send
 // path is exposed as a trait implemented BY core so apprt-api never depends on
 // core. The `Timeout`/`Size` types trace to core's queue module (`App.Mailbox.
-// Queue.Timeout`/`.Size`), not among the 5 apprt interface files, so they are
-// opaque associated types filled when core lands.
+// Queue.Timeout`/`.Size`); they were opaque associated-type growth placeholders
+// until core C0 RESOLVED them concrete (CORE_BLUEPRINT §3): `App.Mailbox.Queue
+// = BlockingQueue(App.Message, 64)`, and rustty-datastruct defines
+// `blocking_queue::Timeout`/`Size` at MODULE level (not per-instantiation), so
+// the faithful `Queue.Timeout`/`Queue.Size` ARE the concrete datastruct types —
+// which also lets generic termio code CONSTRUCT timeouts (`.{ .instant = {} }`).
 pub trait AppMailbox {
     /// Core's `*Surface` handle (opaque here).
     type Surface;
-    /// Reference `App.Mailbox.Queue.Timeout` (core's queue module).
-    type Timeout;
-    /// Reference `App.Mailbox.Queue.Size` (core's queue module).
-    type Size;
 
     /// Send a message to the surface.
     //
@@ -199,7 +199,19 @@ pub trait AppMailbox {
     //   pointer and send it to the app thread.
     // i.e. the impl rewraps `msg` into a [`SurfaceMessageEnvelope`] with its own
     // surface pointer and pushes it via `self.app.push(.{ .surface_message = ... })`.
-    fn push(&self, msg: Message<'_>, timeout: Self::Timeout) -> Self::Size;
+    //
+    // PORT NOTE (`Message<'static>`): a STORING push cannot accept an arbitrary
+    // borrow lifetime — the cross-thread queue stores the `'static`
+    // instantiation (termio `mailbox::Queue` precedent; every queued payload is
+    // owned). The one borrowed variant, `ChangeConfig(&Config)`, is only ever
+    // DIRECT-dispatched (`App.updateConfig` -> `surface.core().handleMessage`),
+    // never queued, so `handleMessage` keeps `Message<'_>` while pushes are
+    // `'static`.
+    fn push(
+        &self,
+        msg: Message<'static>,
+        timeout: rustty_datastruct::blocking_queue::Timeout,
+    ) -> rustty_datastruct::blocking_queue::Size;
 }
 
 // DEFERRED (needs rustty-core `App`/`Surface`; see module doc). The reference

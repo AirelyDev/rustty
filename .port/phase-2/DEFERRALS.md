@@ -549,10 +549,16 @@ with an `unimplemented!()` marker (NOT fabricated logic).
   `@import("../global.zig").xev` (libxev, `xev.Dynamic`). Per the blueprint's
   D6 decision, libxev ports later as its own low crate (`rustty-xev`,
   Zig-source precedent: rustty-z2d). Until then the handle TYPES
-  (`Async`/`Loop`/`Completion`/`Timer` + error sets) are termio-local
-  placeholders whose methods are `unimplemented!()` *dependency* markers
-  (rustty-os cf_release_thread `xev_seam` precedent), anchored to
-  `rustty_global::xev`.
+  (`Async`/`Loop`/`Completion`/`Timer` + error sets) are placeholders whose
+  methods are `unimplemented!()` *dependency* markers (rustty-os
+  cf_release_thread `xev_seam` precedent), anchored to `rustty_global::xev`.
+  [UPDATED core C0: the types moved verbatim FROM the termio-local module INTO
+  the new shared `crates/rustty-xev` (CORE_BLUEPRINT §5 "xev handle
+  unification" — core hands `render_thread.wakeup` to
+  `termio::Options.renderer_wakeup`, so both must name ONE type; `Async`
+  gained `Clone`/`Copy`, the reference copies the handle by value);
+  `termio::xev_seam` is now a `pub use rustty_xev::*` re-export. Still
+  D6-deferred — the crate is libxev's future home, filled in place.]
 - **Deferred with verbatim bodies (rustty-termio):**
   - `Termio.zig`: `init` (constructs the stage-4 `StreamHandler`),
     `threadEnter` (builds `ThreadData` around the live loop; `.backend =
@@ -577,6 +583,10 @@ with an `unimplemented!()` marker (NOT fabricated logic).
     `std::sync::Mutex` cannot express from the callee frame; the renderer
     `State.mutex` modeling is decided ONCE when the threads go live (D6 /
     core tier), not fabricated now. Ported REAL: `initSPSC`/`deinit`/`notify`.
+    [UPDATED core C0: the mutex MODEL is now decided — renderer `State.mutex`
+    retyped to `*mut rustty_zigstd::thread::Mutex` (guard-less Zig-shaped
+    lock/try_lock/unlock, CORE_BLUEPRINT §3) and `send`'s parameter carries
+    it; the body itself stays deferred until the core-tier termio pass (C-T).]
 - **Stage-4 placeholders (rustty-termio) — RESOLVED (stage 4):**
   `backend::{Exec, ExecConfig, ExecThreadData}` are now the REAL
   `exec::{Exec, Config, ThreadData}` types (Exec.zig ported, 10 tests) and
@@ -594,6 +604,15 @@ with an `unimplemented!()` marker (NOT fabricated logic).
   unreachable. renderer/Thread.zig itself is ported ONLY as the minimal
   cross-thread surface (`Mailbox` + `DerivedConfig`); its event loop defers
   with D6 + the GPU tier (0 tests).
+  [UPDATED core C0: `thread::DerivedConfig` RETYPED uninhabited `enum {}` ->
+  INHABITED field-less struct with `unimplemented!()` `init<C>` (CORE_BLUEPRINT
+  §5 [ADV-FIX 2] — core's renderer thread seam embeds it BY VALUE; an
+  uninhabited field would make core `Surface<A>` uninhabited). Its
+  `custom_shader_animation` field + real `init` body stay deferred with the
+  config-side placement. `Message::initChangeConfig` gained its generic-`C`
+  placeholder SIGNATURE (+ `InitChangeConfigError` opaque marker); body still
+  deferred verbatim. `RendererDerivedConfig` stays uninhabited, so
+  `Message::ChangeConfig` remains unconstructible.]
 - **Adjusted-constant note (R1):** termio message.zig's anonymous
   `@sizeOf(Message) == 40` anti-growth test is pinned at the equivalent
   Rust-layout constant (56) with the mapping documented at the assertion
@@ -694,7 +713,11 @@ with an `unimplemented!()` marker (NOT fabricated logic).
   core lands; slow path unlocks/relocks the caller-held renderer mutex) and
   `rendererMessageWriter` (same manual-mutex slow path; the reference
   declaration is itself uncalled in this file) — both follow the stage-2
-  `mailbox::send` deferral precedent, bodies verbatim. Every OTHER handler
+  `mailbox::send` deferral precedent, bodies verbatim. [UPDATED core C0: both
+  blockers are now RESOLVED at the type level — `AppMailbox::push` takes the
+  concrete `rustty_datastruct::blocking_queue::{Timeout, Size}` and the mutex
+  model is `rustty_zigstd::thread::Mutex` — so the two bodies UN-DEFER with
+  the core-tier termio pass (C-T), per CORE_BLUEPRINT §3.] Every OTHER handler
   path is LIVE (the full `vtFallible` dispatch as the vt `Handler` trait impl,
   `setMode`, `dcsHook/Put/Unhook` + DECRQSS/XTGETTCAP, `apcEnd` kitty/glyph,
   OSC 4/7/10-12/21/52/133/777, kitty keyboard/color, mode/size/DA/DSR
@@ -721,3 +744,44 @@ with an `unimplemented!()` marker (NOT fabricated logic).
   shell-integration script/module names derive from rustty-identity
   (`env_name`, resourcesdir precedent); the tests compare against the same
   identity-derived strings.
+
+## rustty-core C0 (core tier) — seam prep: xev crate, zigstd Mutex, apprt-api growth, type-Core decision
+
+C0 of CORE_BLUEPRINT §6 lands the seams the core chunks build on. It creates
+NO new verbatim-body deferrals; it RESOLVES/OWNS the following:
+
+- **RESOLVED (moved): D6 xev handle types -> `crates/rustty-xev`.** The
+  termio-local `xev_seam` placeholder types moved verbatim into the new shared
+  leaf crate (deps `rustty-global` only); `termio::xev_seam` re-exports them.
+  `Async` gained `Clone`/`Copy` (the reference copies the handle by value at
+  `.renderer_wakeup = render_thread.wakeup`). The D6 deferral itself is
+  UNCHANGED — rustty-xev is the crate the libxev port fills in place.
+- **RESOLVED (decision): the renderer-state mutex model.** New
+  `rustty_zigstd::thread::Mutex` — the guard-less Zig-shaped
+  `std.Thread.Mutex` (lock/try_lock/unlock, no RAII guard, no poisoning; std
+  `Mutex<bool>`+`Condvar`; 3 rustty-only unit tests). Renderer `State.mutex`
+  retyped `*mut std::sync::Mutex<()>` -> `*mut rustty_zigstd::thread::Mutex`;
+  `termio::Mailbox::send`'s parameter follows. Unblocks (at C-T, not yet
+  un-deferred): `mailbox::send`, `surfaceMessageWriter`,
+  `rendererMessageWriter`, `Termio.queueMessage` locked path + the mutex-only
+  Termio method family. xev-blocked Termio paths stay D6.
+- **RESOLVED (growth points): apprt-api `App`/`Surface`/`AppMailbox`.**
+  `App` gained `config`/`keyboard_layout`; `Surface` gained `type Core` +
+  `core`/`rt_app`/`close`/`get_content_scale`/`get_size`/`get_title`/
+  `supports_clipboard`/`clipboard_request` (returns `Result<bool, _>`,
+  [ADV-FIX 1])/`set_clipboard`/`get_cursor_pos`/`default_termio_env`
+  (CORE_BLUEPRINT §2 signatures, embedded.zig line comments). `AppMailbox`
+  dropped its opaque `type Timeout`/`type Size` growth placeholders for the
+  concrete `rustty_datastruct::blocking_queue::{Timeout, Size}`, and `push`
+  now takes `Message<'static>` (all queued payloads verified owned;
+  `ChangeConfig(&Config)` is only ever direct-dispatched).
+- **RETYPED placeholder: renderer `thread::DerivedConfig`** uninhabited
+  `enum {}` -> inhabited field-less struct + `unimplemented!()` `init<C>`
+  ([ADV-FIX 2]); `Message::initChangeConfig<C>` placeholder signature added
+  (body still deferred verbatim — config G7 cycle). See the annotated stage-2
+  entries above.
+- **DECIDED: `type Core` = OPTION 1** (self-referential bound) — prototype
+  compiled + runtime-tested in `rustty-core/src/lib.rs
+  type_core_prototype`; see CORE_BLUEPRINT.md "## C0 DECISION".
+- **[ADV-FIX 5]:** rustty-core Cargo deps completed (rustty-util/-unicode/
+  -oniguruma/-datastruct/-zigstd/-xev + allocator-api2).

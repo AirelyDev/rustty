@@ -27,3 +27,26 @@ rustty-crash = { workspace = true }
 rustty-inspector = { workspace = true }
 rustty-apprt-api = { workspace = true }
 rustty-global = { workspace = true }
+# Core C0 dep completion (CORE_BLUEPRINT §6 [ADV-FIX 5] — all leaves/
+# downward-safe; the acyclic gate is the backstop):
+# - rustty-util: `crash` scoped logging helpers etc. (reference `@import("util")`
+#   surface reached throughout Surface.zig).
+# - rustty-unicode: Surface.zig:23 `const unicode = @import("unicode/main.zig")`.
+# - rustty-oniguruma: Surface.zig:24 `const oni = @import("oniguruma")` — a
+#   DIRECT import (linkAtPos regex search), not via rustty-input.
+# - rustty-datastruct: `App.Mailbox.Queue = BlockingQueue(Message, 64)` +
+#   `blocking_queue::{Timeout, Size}` (App.zig:560).
+# - rustty-zigstd: the guard-less `thread::Mutex` behind renderer `State.mutex`
+#   (Surface owns the mutex the renderer state points at; CORE_BLUEPRINT §3).
+# - rustty-xev: the shared xev handle placeholder types for the renderer thread
+#   seam (`wakeup: xev.Async` handed to `termio::Options.renderer_wakeup`;
+#   CORE_BLUEPRINT §5).
+rustty-util = { workspace = true }
+rustty-unicode = { workspace = true }
+rustty-oniguruma = { workspace = true }
+rustty-datastruct = { workspace = true }
+rustty-zigstd = { workspace = true }
+rustty-xev = { workspace = true }
+# `alloc: Allocator` fields/params mirror the termio/vt convention
+# (`allocator_api2::alloc::Global as Allocator`).
+allocator-api2 = { workspace = true }

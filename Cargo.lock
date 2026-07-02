@@ -589,17 +589,24 @@ dependencies = [
 name = "rustty-core"
 version = "0.1.0"
 dependencies = [
+ "allocator-api2",
  "rustty-apprt-api",
  "rustty-config",
  "rustty-crash",
+ "rustty-datastruct",
  "rustty-font",
  "rustty-global",
  "rustty-input",
  "rustty-inspector",
+ "rustty-oniguruma",
  "rustty-os",
  "rustty-renderer",
  "rustty-termio",
+ "rustty-unicode",
+ "rustty-util",
  "rustty-vt",
+ "rustty-xev",
+ "rustty-zigstd",
 ]
 
 [[package]]
@@ -740,6 +747,7 @@ dependencies = [
  "rustty-unicode",
  "rustty-util",
  "rustty-vt",
+ "rustty-zigstd",
  "spirv-cross-sys",
 ]
 
@@ -787,6 +795,8 @@ dependencies = [
  "rustty-terminfo",
  "rustty-util",
  "rustty-vt",
+ "rustty-xev",
+ "rustty-zigstd",
 ]
 
 [[package]]
@@ -824,6 +834,13 @@ dependencies = [
  "rustty-lib",
  "rustty-render-types",
  "rustty-vt",
+]
+
+[[package]]
+name = "rustty-xev"
+version = "0.1.0"
+dependencies = [
+ "rustty-global",
 ]
 
 [[package]]

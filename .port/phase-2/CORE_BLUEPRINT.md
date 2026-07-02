@@ -495,3 +495,53 @@ agent-days. 6k loc never lands in one pass.
 10. **Scope creep via C-T** (termio mutex-family un-defers): time-box it; anything beyond
     send/queueMessage/the two writers + mechanically-unblocked methods stays in DEFERRALS.md
     with the xev family (0 tests, R1-safe either way).
+
+---
+
+## C0 DECISION
+
+**`type Core`: OPTION 1 ADOPTED — the self-referential associated-type bound.
+Later chunks (C4+) follow it; option 2 (`core_ptr()` void* cast) is NOT used.**
+
+Prototype (C0, 2026-07-02): `crates/rustty-core/src/lib.rs`,
+`#[cfg(test)] mod type_core_prototype` — a stand-in `CoreSurface<A>` (field
+`rt_surface: *mut A::Surface`) with the §1 impl-block constraint verbatim:
+
+```rust
+impl<A> CoreSurface<A>
+where
+    A: apprt::App + 'static,
+    A::Surface: apprt::Surface<App = A, Core = CoreSurface<A>>,
+{
+    fn core_of(rt: &A::Surface) -> *mut CoreSurface<A> { rt.core() }
+    fn rt_app_of(rt: &A::Surface) -> *mut A { rt.rt_app() }
+}
+```
+
+plus a dummy backend (`TestApp`/`TestSurface` with
+`type Core = CoreSurface<TestApp>`) instantiating the bound concretely.
+
+Evidence (rustc 1.93, the workspace toolchain):
+
+- The trait solver ACCEPTS the bound: `cargo build`/`clippy -D warnings` clean,
+  no recursion-overflow or normalization diagnostics anywhere in the chain
+  `App::Surface: Surface<App = Self>` + the where-clause
+  `A::Surface: Surface<App = A, Core = CoreSurface<A>>`.
+- The recursive equality NORMALIZES at instantiation: the
+  `option1_self_referential_core_bound` test monomorphizes the generic block at
+  `A = TestApp` and round-trips real pointers through the TYPED `core()` /
+  `rt_app()` edges (1/1 green).
+- The only friction encountered was ordinary trait-method scoping (E0599 until
+  `use rustty_apprt_api::Surface as ...` is in scope) — not a solver issue.
+  Consequence for C4+: bring the `Surface` trait into scope (aliased; core's
+  own struct is also named `Surface`).
+
+C0 also landed the seams later chunks assume (details in DEFERRALS.md
+"rustty-core C0"): the shared `rustty-xev` crate (termio `xev_seam` types moved
+verbatim; `Async: Copy`); `rustty_zigstd::thread::Mutex` (guard-less, §3) with
+renderer `State.mutex` + `termio::Mailbox::send` retyped; the §2 apprt-api
+`App`/`Surface` growth methods; `AppMailbox` with concrete
+`blocking_queue::{Timeout, Size}` + `push(Message<'static>, ...)`;
+`thread::DerivedConfig` inhabited ([ADV-FIX 2]) +
+`Message::initChangeConfig<C>` placeholder; core's Cargo deps completed
+([ADV-FIX 5]).

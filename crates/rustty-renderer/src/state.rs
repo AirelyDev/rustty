@@ -32,16 +32,19 @@ pub enum Inspector {}
 /// state (i.e. the terminal, devmode, etc. values).
 //
 // PORT NOTE: the reference is a top-level file-struct (`State.zig`); the Rust
-// port names it `State`. `mutex: *std.Thread.Mutex` maps to a raw pointer to a
-// `std::sync::Mutex<()>` (the mutex guards external members, so the unit payload
-// mirrors Zig's payload-less `std.Thread.Mutex`). The struct is constructed by
-// the caller supplying `mutex`/`terminal`; the reference field defaults
-// (`inspector = null`, `preedit = null`, `mouse = .{}`) are documented at each
-// field.
+// port names it `State`. `mutex: *std.Thread.Mutex` maps to a raw pointer to
+// the GUARD-LESS `rustty_zigstd::thread::Mutex` (the Zig-shaped manual
+// `lock`/`try_lock`/`unlock` mutex — the core-tier mutex-model decision,
+// CORE_BLUEPRINT §3/C0: Surface.zig and the termio writers unlock/relock this
+// mutex across function boundaries, patterns a guard-based `std::sync::Mutex`
+// cannot express; every lock/unlock pairs verbatim with a reference line). The
+// struct is constructed by the caller supplying `mutex`/`terminal`; the
+// reference field defaults (`inspector = null`, `preedit = null`,
+// `mouse = .{}`) are documented at each field.
 pub struct State {
     /// The mutex that must be held while reading any of the data in the
     /// members of this state.
-    pub mutex: *mut std::sync::Mutex<()>,
+    pub mutex: *mut rustty_zigstd::thread::Mutex,
 
     /// The terminal data.
     pub terminal: *mut Terminal,
