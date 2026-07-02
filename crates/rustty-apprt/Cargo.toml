@@ -25,6 +25,11 @@ rustty-inspector = { workspace = true }
 rustty-config = { workspace = true }
 rustty-input = { workspace = true }
 rustty-os = { workspace = true }
+# `zig_string_escape` (the rustty port of `std.zig.stringEscape`) — used by
+# `embedded::Surface::init` to escape `initial_input` for the config `raw` field
+# (embedded.zig:561). Reused, not reimplemented (R3/R5). Acyclic: rustty-args deps
+# only {os, util, build-config}, none of which reach apprt.
+rustty-args = { workspace = true }
 # allocator-api2 Allocator trait (the workspace's `std.mem.Allocator` map): the
 # `none::App::perform_ipc` static fn takes a passed-in allocator (reference
 # none.zig `performIpc(_: Allocator, ...)`), matching `rustty_apprt_api::ipc`.

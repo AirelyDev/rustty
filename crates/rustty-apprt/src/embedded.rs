@@ -10,29 +10,30 @@
 //! concrete apprt backend — it proves the `apprt_api` generic trait seam against a
 //! real `A = embedded::App` (EMBEDDED_BLUEPRINT §2).
 //!
-//! PORT STATUS: in-progress (chunk E1 — `App` backend). This chunk ports
-//! `embedded.zig:29-342` — the `App` struct with its `Options` (the `#[repr(C)]`
-//! host-callback config), `KeyEvent`, `KeyTarget`, and every `App` method
-//! (init/terminate/hasGlobalKeybinds/focusEvent/keyEvent/reloadKeymap/
-//! keyboardLayout/wakeup/wait/newSurface/closeSurface/redrawInspector/
-//! performAction/performPreAction/performIpc) — plus `impl apprt_api::App for App`
-//! (the first concrete backend to inhabit the seam). Later chunks fill the rest
+//! PORT STATUS: in-progress (chunks E1+E2 landed). E1 ported `embedded.zig:29-342`
+//! — the `App` struct with its `Options` (the `#[repr(C)]` host-callback config),
+//! `KeyEvent`, `KeyTarget`, and every `App` method (init/terminate/
+//! hasGlobalKeybinds/focusEvent/keyEvent/reloadKeymap/keyboardLayout/wakeup/wait/
+//! newSurface/closeSurface/redrawInspector/performAction/performPreAction/
+//! performIpc) — plus `impl apprt_api::App for App` (the first concrete backend to
+//! inhabit the seam). E2 ports `embedded.zig:343-609` — `Platform`/`PlatformTag`/
+//! `EnvVar` (raw `*mut c_void` nsview/uiview, NO objc dep — blueprint §5/§8.1) +
+//! the full `Surface` struct + `SurfaceOptions` + `init`/`deinit` + the faithful
+//! `impl apprt_api::Surface for Surface` growth-point table (§2). This proves the
+//! self-referential `type Core = rustty_core::Surface<embedded::App>` bound against
+//! a REAL backend (core's C0 gate used a dummy `A`). Later chunks fill the rest
 //! (EMBEDDED_BLUEPRINT §7):
 //!
-//! E2 (343-609): `Platform`/`PlatformTag`/`EnvVar` + the full `Surface` struct +
-//! `Surface.Options`/`init`/`deinit`; `impl apprt_api::Surface for Surface`.
-//!
 //! E3 (610-990): surface event callbacks (refresh/draw/updateSize/mouse/…;
-//! draw/refresh reach the Phase-3 GPU leaf at runtime).
+//! draw/refresh reach the Phase-3 GPU leaf at runtime) + `completeClipboardRequest`
+//! + `newSurfaceOptions` + `cursorPosToPixels`.
 //!
 //! E4 (992-1243): `Inspector` (dcimgui+Metal) — a Phase-3 inhabited placeholder
-//! with `unimplemented!()` leaves. Deferrable/parallel.
-//!
-//! To make `impl apprt_api::App` typecheck NOW (its `type Surface = Surface`
-//! binding forces `Surface: apprt_api::Surface`), this chunk carries a MINIMAL
-//! `Surface`/`SurfaceOptions` E1->E2 SEQUENCING STUB (see the block near the end
-//! of this file) — every apprt-api trait method + `init`/`queueInspectorRender`
-//! is an `unimplemented!()` placeholder leaf; E2 replaces the block wholesale.
+//! with `unimplemented!()` leaves. Deferrable/parallel. E2 carries a MINIMAL
+//! `Inspector` E2->E4 SEQUENCING STUB (an opaque type + an `unimplemented!()`
+//! `deinit` leaf) so `Surface::deinit`/`freeInspector` and the `inspector` field
+//! typecheck; E4 replaces it with the real struct. `queueInspectorRender` likewise
+//! stays an `unimplemented!()` E3/E4 leaf (it reaches the render-inspector action).
 //!
 //! [ADV-FIX 8] PINNING INVARIANT (correctness-critical, for E2): `embedded::Surface`
 //! holds `core_surface: rustty_core::Surface<App>` BY VALUE, and core
@@ -55,6 +56,7 @@
 
 use core::ffi::{c_char, c_int, c_void};
 use std::cell::UnsafeCell;
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::mem::{ManuallyDrop, MaybeUninit};
 
@@ -65,8 +67,15 @@ use rustty_apprt_api::ipc;
 use rustty_apprt_api::structs::{
     Clipboard, ClipboardRequest, ClipboardRequestType, ContentScale, CursorPos, SurfaceSize,
 };
-use rustty_apprt_api::{App as ApprtApp, ApprtError, CoreSurfaceHandle, Surface as ApprtSurface};
+use rustty_apprt_api::{
+    App as ApprtApp, ApprtError, CoreSurfaceHandle, NewSurfaceContext, Surface as ApprtSurface,
+};
 
+use rustty_args::args::zig_string_escape;
+
+use rustty_config::command::Command;
+use rustty_config::io::ReadableIO;
+use rustty_config::value_types::WorkingDirectory;
 use rustty_config::Config;
 
 use rustty_input::binding;
@@ -632,131 +641,845 @@ impl ApprtApp for App {
 }
 
 // =====================================================================
-// [E1 -> E2 SEQUENCING STUB] embedded::Surface
-//
-// The full `embedded::Surface` (reference `pub const Surface = struct { ... }`,
-// embedded.zig:410-609 — its field set, `Surface.Options`, `init`/`deinit`, the
-// surface event callbacks, and the `impl apprt_api::Surface` growth-point bodies)
-// lands in chunk E2/E3 (EMBEDDED_BLUEPRINT §7). This MINIMAL stub exists ONLY so
-// E1's `impl apprt_api::App for App` (which binds `type Surface = Surface`,
-// forcing `Surface: apprt_api::Surface`) and the App methods that name `Surface`
-// (`newSurface`/`closeSurface`/`redrawInspector`, `keyEvent`'s surface arm,
-// `performPreAction`'s `set_title` arm) compile and gate green now. Every
-// apprt-api trait method + `init`/`queueInspectorRender` is an `unimplemented!()`
-// placeholder leaf; the fields are the exact reference subset those E1 sites read.
-// E2 replaces this whole block with the faithful port.
+// embedded::Surface backend — chunk E2 (embedded.zig 343-609)
 // =====================================================================
 
+/// Platform-specific configuration for libghostty.
+//
+// PORT NOTE (blueprint §5/§8.1): the reference `MacOS`/`IOS` wrap the host view in
+// an `objc.Object` (`nsview: objc.Object`); rustty stores the RAW `*mut c_void`
+// instead — the view is never *messaged* until Phase-3 rendering, so the embedded
+// milestone needs NO objc2/coretext dependency (the Darwin metal/quicklook block
+// that WOULD need it is a deferred Phase-3 `#[cfg]` leaf). The reference
+// `if isDarwin() struct {…} else void` gating is preserved via
+// `#[cfg(any(target_os = "macos", target_os = "ios"))]` (the rustty-os `file.rs`
+// isDarwin precedent).
+//
+// reference `pub const Platform = union(PlatformTag) { macos: MacOS, ios: IOS }`.
+pub enum Platform {
+    // macos: MacOS,
+    MacOS(MacOS),
+    // ios: IOS,
+    IOS(IOS),
+}
+
+// If our build target for libghostty is not darwin then we do
+// not include macos support at all.
+//
+// pub const MacOS = if (builtin.target.os.tag.isDarwin()) struct {
+//     /// The view to render the surface on.
+//     nsview: objc.Object,
+// } else void;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub struct MacOS {
+    /// The view to render the surface on.
+    //
+    // reference `nsview: objc.Object`; the raw view pointer (blueprint §5/§8.1 —
+    // never messaged pre-render, so no objc wrap).
+    pub nsview: *mut c_void,
+}
+/// reference `MacOS = … else void` (non-darwin).
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+pub struct MacOS;
+
+// pub const IOS = if (builtin.target.os.tag.isDarwin()) struct {
+//     /// The view to render the surface on.
+//     uiview: objc.Object,
+// } else void;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub struct IOS {
+    /// The view to render the surface on.
+    //
+    // reference `uiview: objc.Object`; the raw view pointer (blueprint §5/§8.1).
+    pub uiview: *mut c_void,
+}
+/// reference `IOS = … else void` (non-darwin).
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+pub struct IOS;
+
+// The C ABI compatible version of this union. The tag is expected
+// to be stored elsewhere.
+//
+// PORT NOTE: the reference nests this as `Platform.C`; a top-level `PlatformC`
+// here (Rust cannot nest a type in an enum's namespace). Modeled as a `#[repr(C)]`
+// union mirroring the reference `extern union` (the apprt-api `TargetCValue`/
+// `ActionCValue` D2 precedent), pinned by the size/align const-asserts below; both
+// members are a single pointer, so no explicit `_padding` field is required.
+//
+// pub const C = extern union {
+//     macos: extern struct { nsview: ?*anyopaque },
+//     ios: extern struct { uiview: ?*anyopaque },
+// };
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union PlatformC {
+    pub macos: PlatformCMacOS,
+    pub ios: PlatformCIOS,
+}
+
+/// reference `Platform.C.macos` — `extern struct { nsview: ?*anyopaque }`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PlatformCMacOS {
+    // nsview: ?*anyopaque,
+    pub nsview: *mut c_void,
+}
+
+/// reference `Platform.C.ios` — `extern struct { uiview: ?*anyopaque }`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PlatformCIOS {
+    // uiview: ?*anyopaque,
+    pub uiview: *mut c_void,
+}
+
+// D2 const-asserts (blueprint §3): the `Platform.C` union crosses the C ABI, so
+// its size/align are pinned. Both members are one pointer wide → the union is
+// exactly pointer-sized (width-portable assert; cf. apprt-api `ActionCValue`).
+const _: () = assert!(core::mem::size_of::<PlatformC>() == core::mem::size_of::<*mut c_void>());
+const _: () = assert!(core::mem::align_of::<PlatformC>() == core::mem::align_of::<*mut c_void>());
+
+/// The error set of [`Platform::init`].
+//
+// PORT NOTE: the reference `Platform.init` returns `!Platform` with an inferred
+// error set — `std.meta.intToEnum`'s `InvalidEnumTag`, plus `NSViewMustBeSet` /
+// `UIViewMustBeSet` / `UnsupportedPlatform`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlatformError {
+    // std.meta.intToEnum failure
+    InvalidEnumTag,
+    // error.NSViewMustBeSet
+    NSViewMustBeSet,
+    // error.UIViewMustBeSet
+    UIViewMustBeSet,
+    // error.UnsupportedPlatform
+    UnsupportedPlatform,
+}
+
+impl Platform {
+    /// Initialize a Platform a tag and configuration from the C ABI.
+    //
+    // reference `pub fn init(tag_int: c_int, c_platform: C) !Platform`.
+    pub fn init(tag_int: c_int, c_platform: PlatformC) -> Result<Platform, PlatformError> {
+        // On non-darwin both branches are `UnsupportedPlatform` and never read
+        // `c_platform`; mark it used so `-D warnings` stays green there (on darwin
+        // the union is read below).
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        let _ = &c_platform;
+
+        // const tag = try std.meta.intToEnum(PlatformTag, tag_int);
+        let tag = match tag_int {
+            // macos = 1,
+            1 => PlatformTag::MacOS,
+            // ios = 2,
+            2 => PlatformTag::IOS,
+            // std.meta.intToEnum → error.InvalidEnumTag on an out-of-range value.
+            _ => return Err(PlatformError::InvalidEnumTag),
+        };
+
+        // return switch (tag) {
+        match tag {
+            // .macos => if (MacOS != void) macos: { ... } else error.UnsupportedPlatform,
+            PlatformTag::MacOS => {
+                #[cfg(any(target_os = "macos", target_os = "ios"))]
+                {
+                    // const config = c_platform.macos;
+                    let config = unsafe { c_platform.macos };
+                    // const nsview = objc.Object.fromId(config.nsview orelse
+                    //     break :macos error.NSViewMustBeSet);
+                    //
+                    // PORT NOTE: no objc wrap (blueprint §5); the raw pointer is
+                    // stored directly. `?*anyopaque orelse error` → null-check.
+                    if config.nsview.is_null() {
+                        return Err(PlatformError::NSViewMustBeSet);
+                    }
+                    // break :macos .{ .macos = .{ .nsview = nsview } };
+                    Ok(Platform::MacOS(MacOS {
+                        nsview: config.nsview,
+                    }))
+                }
+                #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+                {
+                    // else error.UnsupportedPlatform
+                    Err(PlatformError::UnsupportedPlatform)
+                }
+            }
+
+            // .ios => if (IOS != void) ios: { ... } else error.UnsupportedPlatform,
+            PlatformTag::IOS => {
+                #[cfg(any(target_os = "macos", target_os = "ios"))]
+                {
+                    // const config = c_platform.ios;
+                    let config = unsafe { c_platform.ios };
+                    // const uiview = objc.Object.fromId(config.uiview orelse
+                    //     break :ios error.UIViewMustBeSet);
+                    if config.uiview.is_null() {
+                        return Err(PlatformError::UIViewMustBeSet);
+                    }
+                    // break :ios .{ .ios = .{ .uiview = uiview } };
+                    Ok(Platform::IOS(IOS {
+                        uiview: config.uiview,
+                    }))
+                }
+                #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+                {
+                    // else error.UnsupportedPlatform
+                    Err(PlatformError::UnsupportedPlatform)
+                }
+            }
+        }
+    }
+}
+
+// pub const PlatformTag = enum(c_int) { ... };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(i32)] // enum(c_int)
+pub enum PlatformTag {
+    // "0" is reserved for invalid so we can detect unset values
+    // from the C API.
+
+    // macos = 1,
+    MacOS = 1,
+    // ios = 2,
+    IOS = 2,
+}
+
+// pub const EnvVar = extern struct { ... };
+#[repr(C)]
+pub struct EnvVar {
+    /// The name of the environment variable.
+    // key: [*:0]const u8,
+    pub key: *const c_char,
+
+    /// The value of the environment variable.
+    // value: [*:0]const u8,
+    pub value: *const c_char,
+}
+
+// pub const Surface = struct { ... };
+//
+// PORT NOTE (ADV-FIX 9): the reference fields are file-private; the apprt-c C-ABI
+// wrappers reach them, so they are `pub` here.
 pub struct Surface {
-    // reference `core_surface: CoreSurface` (embedded.zig:414) — read by
-    // `App::keyEvent`'s surface arm (`surface.core_surface.keyCallback`). E2 adds
-    // the full field set (app/platform/userdata/content_scale/size/cursor_pos/
-    // inspector/…).
+    // app: *App,
+    pub app: *mut App,
+    // platform: Platform,
+    pub platform: Platform,
+    // userdata: ?*anyopaque = null,
+    pub userdata: *mut c_void,
+    // core_surface: CoreSurface,
     pub core_surface: CoreSurface,
+    // content_scale: apprt.ContentScale,
+    pub content_scale: ContentScale,
+    // size: apprt.SurfaceSize,
+    pub size: SurfaceSize,
+    // cursor_pos: apprt.CursorPos,
+    pub cursor_pos: CursorPos,
+    // inspector: ?*Inspector = null,
+    pub inspector: Option<*mut Inspector>,
 
     /// The current title of the surface. The embedded apprt saves this so
     /// that getTitle works without the implementer needing to save it.
     //
-    // reference `title: ?[:0]const u8 = null` (embedded.zig:422) — written by
-    // `performPreAction`'s `set_title` arm (`surface.rt_surface.title = ...`).
+    // title: ?[:0]const u8 = null,
+    //
+    // PORT NOTE: `?[:0]const u8` → an owned NUL-terminated `Option<CString>`
+    // (written by `App::performPreAction`'s `set_title` arm via `rt_surface`).
     pub title: Option<CString>,
 }
 
-/// [E1 -> E2 SEQUENCING STUB] reference `Surface.Options` — the
-/// `ghostty_surface_config_s` extern struct (embedded.zig:425-465). The faithful
-/// field-for-field extern struct lands in E2; this empty placeholder only types
-/// [`App::newSurface`]'s `opts` parameter so E1 compiles.
-pub struct SurfaceOptions;
+/// Surface initialization options.
+//
+// PORT NOTE: the reference nests this as `Surface.Options` (the
+// `ghostty_surface_config_s` extern struct, embedded.zig:425); a top-level
+// `#[repr(C)] SurfaceOptions` here (ADV-FIX 9: reached by the apprt-c wrappers /
+// backend `App::newSurface`). Field defaults (Zig `= …`) are not expressible on a
+// Rust struct — the C host (or `ghostty_surface_config_new`, E6) supplies a
+// fully-zeroed/populated value. The `?[*:0]const u8` / `?[*]EnvVar` / `?*anyopaque`
+// nullable pointers map to nullable raw pointers; `callconv`-free, so no lint.
+#[repr(C)]
+pub struct SurfaceOptions {
+    /// The platform that this surface is being initialized for and
+    /// the associated platform-specific configuration.
+    // platform_tag: c_int = 0,
+    pub platform_tag: c_int,
+    // platform: Platform.C = undefined,
+    pub platform: PlatformC,
+
+    /// Userdata passed to some of the callbacks.
+    // userdata: ?*anyopaque = null,
+    pub userdata: *mut c_void,
+
+    /// The scale factor of the screen.
+    // scale_factor: f64 = 1,
+    pub scale_factor: f64,
+
+    /// The font size to inherit. If 0, default font size will be used.
+    // font_size: f32 = 0,
+    pub font_size: f32,
+
+    /// The working directory to load into.
+    // working_directory: ?[*:0]const u8 = null,
+    pub working_directory: *const c_char,
+
+    /// The command to run in the new surface. If this is set then
+    /// the "wait-after-command" option is also automatically set to true,
+    /// since this is used for scripting.
+    ///
+    /// This command always run in a shell (e.g. via `/bin/sh -c`),
+    /// despite Ghostty allowing directly executed commands via config.
+    /// This is a legacy thing and we should probably change it in the
+    /// future once we have a concrete use case.
+    // command: ?[*:0]const u8 = null,
+    pub command: *const c_char,
+
+    /// Extra environment variables to set for the surface.
+    // env_vars: ?[*]EnvVar = null,
+    pub env_vars: *const EnvVar,
+    // env_var_count: usize = 0,
+    pub env_var_count: usize,
+
+    /// Input to send to the command after it is started.
+    // initial_input: ?[*:0]const u8 = null,
+    pub initial_input: *const c_char,
+
+    /// Wait after the command exits
+    // wait_after_command: bool = false,
+    pub wait_after_command: bool,
+
+    /// Context for the new surface
+    // context: apprt.surface.NewSurfaceContext = .window,
+    pub context: NewSurfaceContext,
+}
 
 impl Surface {
     /// reference `pub fn init(self: *Surface, app: *App, opts: Options) !void`
-    /// (embedded.zig:467) — chunk E2. Out-pointer form (`surface` is the
-    /// uninitialized heap allocation) preserving the reference placement-init +
-    /// [ADV-FIX 8] PINNING (core `Surface::init` writes
-    /// `core_surface.rt_surface = &*surface`, so the embedded Surface is
-    /// heap-boxed and NEVER moved after init).
+    /// (embedded.zig:467). Out-pointer form (`surface` is the uninitialized heap
+    /// allocation from [`App::newSurface`]) preserving the reference placement-init
+    /// and [ADV-FIX 8] PINNING: core `Surface::init` writes
+    /// `core_surface.rt_surface = &*surface`, so the embedded Surface is heap-boxed
+    /// and NEVER moved after init.
     ///
     /// # Safety
     ///
-    /// `surface` must point at a live, uninitialized `Surface`-sized allocation
-    /// and `app` at a live, pinned [`App`].
+    /// `surface` must point at a live, uninitialized `Surface`-sized allocation and
+    /// `app` at a live, pinned [`App`].
     pub unsafe fn init(
-        _surface: *mut Surface,
-        _app: *mut App,
-        _opts: SurfaceOptions,
+        surface: *mut Surface,
+        app: *mut App,
+        opts: SurfaceOptions,
     ) -> Result<(), ApprtError> {
-        unimplemented!("embedded::Surface::init — chunk E2 (embedded.zig 343-609)")
+        // self.* = .{
+        //     .app = app,
+        //     .platform = try .init(opts.platform_tag, opts.platform),
+        //     ...
+        // };
+        //
+        // [ADV-FIX 8] out-pointer placement-init: the fallible `platform` is
+        // computed FIRST so a `Platform.init` error returns before ANY field is
+        // written (mirroring the reference struct-literal, where `try .init` runs
+        // before the `self.* = .{…}` store commits). `core_surface` is left
+        // uninitialized and written in place by `core_surface.init` below
+        // (self-referential — the core `Surface::init` ptr::write idiom).
+        let platform = Platform::init(opts.platform_tag, opts.platform).map_err(|_| ApprtError)?;
+
+        unsafe {
+            // .app = app,
+            std::ptr::write(&raw mut (*surface).app, app);
+            // .platform = try .init(...),
+            std::ptr::write(&raw mut (*surface).platform, platform);
+            // .userdata = opts.userdata,
+            std::ptr::write(&raw mut (*surface).userdata, opts.userdata);
+            // .core_surface = undefined,  (written in place by core_surface.init)
+            // .content_scale = .{ .x = @floatCast(opts.scale_factor), .y = @floatCast(opts.scale_factor) },
+            std::ptr::write(
+                &raw mut (*surface).content_scale,
+                ContentScale {
+                    x: opts.scale_factor as f32,
+                    y: opts.scale_factor as f32,
+                },
+            );
+            // .size = .{ .width = 800, .height = 600 },
+            std::ptr::write(
+                &raw mut (*surface).size,
+                SurfaceSize {
+                    width: 800,
+                    height: 600,
+                },
+            );
+            // .cursor_pos = .{ .x = -1, .y = -1 },
+            std::ptr::write(
+                &raw mut (*surface).cursor_pos,
+                CursorPos { x: -1.0, y: -1.0 },
+            );
+            // (field defaults) inspector: ?*Inspector = null, title: ?[:0]const u8 = null
+            std::ptr::write(&raw mut (*surface).inspector, None);
+            std::ptr::write(&raw mut (*surface).title, None);
+        }
+
+        // Add ourselves to the list of surfaces on the app.
+        // try app.core_app.addSurface(self);
+        // (PORT: rustty `addSurface` is infallible — no `try`.)
+        unsafe { (*(*app).core_app).addSurface(surface) };
+        // errdefer app.core_app.deleteSurface(self);
+        // (an errdefer — realized manually on the fallible paths below.)
+
+        // Shallow copy the config so that we can modify it.
+        // var config = try apprt.surface.newConfig(app.core_app, &app.config, opts.context);
+        // defer config.deinit();
+        //
+        // (PORT: rustty `new_config` is infallible; `config` has an explicit
+        // `deinit` — no Drop — realized on the success and error paths below.)
+        let mut config = rustty_core::app::new_config(
+            unsafe { &*(*app).core_app },
+            unsafe { &*(*app).config.get() },
+            opts.context,
+        );
+
+        // If we have a working directory from the options then we set it.
+        // if (opts.working_directory) |c_wd| {
+        if !opts.working_directory.is_null() {
+            // const wd = std.mem.sliceTo(c_wd, 0);
+            let wd = unsafe { CStr::from_ptr(opts.working_directory) }.to_bytes();
+            // if (wd.len > 0) wd: {
+            if !wd.is_empty() {
+                'wd: {
+                    // var dir = std.fs.openDirAbsolute(wd, .{}) catch |err| {
+                    //     log.warn("error opening requested working directory dir={s} err={}", .{ wd, err });
+                    //     break :wd;
+                    // };
+                    // defer dir.close();
+                    // const stat = dir.stat() catch |err| {
+                    //     log.warn("failed to stat requested working directory dir={s} err={}", .{ wd, err });
+                    //     break :wd;
+                    // };
+                    //
+                    // PORT NOTE: `openDirAbsolute` + `dir.stat()` collapse to one
+                    // `std::fs::metadata` (follows symlinks; opens+stats atomically),
+                    // so the separate stat-error `break :wd` cannot occur once
+                    // metadata succeeds — the single error maps to the open-error
+                    // arm. `wd` is a byte path → `OsStr::from_bytes` (rustty-os
+                    // `path.rs` precedent).
+                    use std::os::unix::ffi::OsStrExt;
+                    let stat = match std::fs::metadata(std::ffi::OsStr::from_bytes(wd)) {
+                        Ok(md) => md,
+                        Err(_err) => break 'wd,
+                    };
+
+                    // if (stat.kind != .directory) {
+                    //     log.warn("requested working directory is not a directory dir={s}", .{wd});
+                    //     break :wd;
+                    // }
+                    if !stat.is_dir() {
+                        break 'wd;
+                    }
+
+                    // var wd_val: configpkg.WorkingDirectory = .{ .path = wd };
+                    let mut wd_val = WorkingDirectory::Path(wd.to_vec());
+                    // if (wd_val.finalize(config.arenaAlloc())) |_| {
+                    //     config.@"working-directory" = wd_val;
+                    // } else |err| {
+                    //     log.warn("error finalizing working directory config dir={s} err={}", .{ wd_val.path, err });
+                    // }
+                    //
+                    // PORT NOTE: rustty `WorkingDirectory::finalize` is infallible
+                    // (owned allocation; `arenaAlloc` collapses), so the reference
+                    // `else |err|` log arm is unreachable and elided.
+                    wd_val.finalize();
+                    // config.@"working-directory" = wd_val;
+                    config.working_directory = Some(wd_val);
+                }
+            }
+        }
+
+        // If we have a command from the options then we set it.
+        // if (opts.command) |c_command| {
+        if !opts.command.is_null() {
+            // const cmd = std.mem.sliceTo(c_command, 0);
+            let cmd = unsafe { CStr::from_ptr(opts.command) }.to_bytes();
+            // if (cmd.len > 0) {
+            if !cmd.is_empty() {
+                // config.command = .{ .shell = cmd };
+                config.command = Some(Command::Shell(cmd.to_vec()));
+                // config.@"wait-after-command" = true;
+                config.wait_after_command = true;
+            }
+        }
+
+        // Apply any environment variables that were requested.
+        // if (opts.env_var_count > 0) {
+        if opts.env_var_count > 0 {
+            // const alloc = config.arenaAlloc();  (collapses — owned allocation)
+            // for (opts.env_vars.?[0..opts.env_var_count]) |env_var| {
+            let env_vars = unsafe { std::slice::from_raw_parts(opts.env_vars, opts.env_var_count) };
+            for env_var in env_vars {
+                // const key = std.mem.sliceTo(env_var.key, 0);
+                let key = unsafe { CStr::from_ptr(env_var.key) }.to_bytes();
+                // const value = std.mem.sliceTo(env_var.value, 0);
+                let value = unsafe { CStr::from_ptr(env_var.value) }.to_bytes();
+                // try config.env.map.put(alloc, try alloc.dupeZ(u8, key), try alloc.dupeZ(u8, value));
+                config.env.map.put(key.to_vec(), value.to_vec());
+            }
+        }
+
+        // If we have an initial input then we set it.
+        // if (opts.initial_input) |c_input| {
+        if !opts.initial_input.is_null() {
+            // const alloc = config.arenaAlloc();  (collapses — owned allocation)
+
+            // We need to escape the string because the "raw" field
+            // expects a Zig string.
+            // var buf: std.Io.Writer.Allocating = .init(alloc);
+            // defer buf.deinit();
+            // try std.zig.stringEscape(std.mem.sliceTo(c_input, 0), &buf.writer);
+            let mut buf: Vec<u8> = Vec::new();
+            zig_string_escape(
+                &mut buf,
+                unsafe { CStr::from_ptr(opts.initial_input) }.to_bytes(),
+            );
+
+            // config.input.list.clearRetainingCapacity();
+            config.input.list.clear();
+            // try config.input.list.append(alloc, .{ .raw = try buf.toOwnedSliceSentinel(0) });
+            // (PORT: rustty `ReadableIO::Raw` stores an owned `Vec<u8>` — no NUL
+            // sentinel; the Zig `toOwnedSliceSentinel(0)` sentinel is a storage
+            // detail with no rustty counterpart.)
+            config.input.list.push(ReadableIO::Raw(buf));
+        }
+
+        // Wait after command
+        // if (opts.wait_after_command) {
+        if opts.wait_after_command {
+            // config.@"wait-after-command" = true;
+            config.wait_after_command = true;
+        }
+
+        // Initialize our surface right away. We're given a view that is
+        // ready to use.
+        // try self.core_surface.init(app.core_app.alloc, &config, app.core_app, app, self);
+        let init_res = unsafe {
+            CoreSurface::init(
+                &raw mut (*surface).core_surface,
+                (*(*app).core_app).alloc,
+                &config,
+                (*app).core_app,
+                app,
+                surface,
+            )
+        };
+        if init_res.is_err() {
+            // errdefers (LIFO): `defer config.deinit()`, then
+            // `errdefer app.core_app.deleteSurface(self)`.
+            config.deinit();
+            unsafe { (*(*app).core_app).deleteSurface(surface) };
+            return Err(ApprtError);
+        }
+        // errdefer self.core_surface.deinit();
+        // (an errdefer — realized on the setFontSize failure path below.)
+
+        // If our options requested a specific font-size, set that.
+        // if (opts.font_size != 0) {
+        if opts.font_size != 0.0 {
+            // var font_size = self.core_surface.font_size;
+            let mut font_size = unsafe { (*surface).core_surface.font_size };
+            // font_size.points = opts.font_size;
+            font_size.points = opts.font_size;
+            // try self.core_surface.setFontSize(font_size);
+            if unsafe { (*surface).core_surface.setFontSize(font_size) }.is_err() {
+                // errdefers (LIFO): `errdefer self.core_surface.deinit()`, then
+                // `defer config.deinit()`, then
+                // `errdefer app.core_app.deleteSurface(self)`.
+                unsafe { (*surface).core_surface.deinit() };
+                config.deinit();
+                unsafe { (*(*app).core_app).deleteSurface(surface) };
+                return Err(ApprtError);
+            }
+        }
+
+        // defer config.deinit(); — the success-path realization.
+        config.deinit();
+        Ok(())
     }
 
-    /// reference `queueInspectorRender` — chunk E3/E4 (Inspector; Phase-3
-    /// dcimgui/Metal leaf). Called by [`App::redrawInspector`].
+    // pub fn freeInspector(self: *Surface) void { ... }
+    //
+    // PORT NOTE: `initInspector`'s inverse; `Inspector` create/deinit is a Phase-3
+    // dcimgui+Metal leaf (E4). Reached by [`deinit`]; a no-op while `inspector` is
+    // `None`, which it always is until E4's `initInspector` lands.
+    pub fn freeInspector(&mut self) {
+        // if (self.inspector) |v| {
+        if let Some(v) = self.inspector {
+            // v.deinit();
+            unsafe { (*v).deinit() };
+            // self.app.core_app.alloc.destroy(v);
+            //
+            // PORT NOTE: `Inspector` is heap-boxed by `initInspector` (E4); free the
+            // box WITHOUT re-running `Inspector`'s drop (the `deinit`-then-`destroy`
+            // contract — the `App::closeSurface` precedent).
+            unsafe { drop(Box::from_raw(v.cast::<ManuallyDrop<Inspector>>())) };
+            // self.inspector = null;
+            self.inspector = None;
+        }
+    }
+
+    /// reference `fn queueInspectorRender(self: *Surface) void` (embedded.zig:922)
+    /// — chunk E3/E4. It reaches the `render_inspector` action (dcimgui/Metal
+    /// Phase-3 leaf); called by [`App::redrawInspector`]. Kept an `unimplemented!()`
+    /// placeholder leaf here.
     pub fn queueInspectorRender(&mut self) {
         unimplemented!("embedded::Surface::queueInspectorRender — chunk E3/E4")
     }
 }
 
-// [E1 -> E2 SEQUENCING STUB] see the block header above. E2 fills these with the
-// faithful embedded.zig:597-990 bodies (the EMBEDDED_BLUEPRINT §2 growth-point
-// table).
+/// [E2 -> E4 SEQUENCING STUB] reference `Inspector` (embedded.zig:992-1243) — the
+/// dcimgui + Metal terminal inspector. A Phase-3 inhabited placeholder; E4 fills
+/// the real struct + methods. Only [`Surface::freeInspector`] (via
+/// [`Surface::deinit`]) and the `inspector` field name it in E2, and only while
+/// `inspector` is `None` — so `Inspector::deinit` never runs this milestone.
+#[allow(dead_code)]
+pub struct Inspector {
+    // E4: dcimgui context + Metal render state (Phase-3 leaves).
+    _e4: (),
+}
+
+impl Inspector {
+    /// reference `Inspector.deinit` — chunk E4 (dcimgui/Metal Phase-3 leaf).
+    fn deinit(&mut self) {
+        unimplemented!("embedded::Inspector::deinit — chunk E4 (embedded.zig 992-1243)")
+    }
+}
+
+// The EMBEDDED_BLUEPRINT §2 growth-point table: the exact set of methods core's
+// `Surface.zig`/`App.zig` call on `rt_surface`, ported faithfully from
+// embedded.zig:597-982. In the reference these are plain `pub fn`s on `Surface`;
+// Rust routes them through the `apprt_api::Surface` trait (the A5 seam). This is
+// the FIRST concrete backend to inhabit `type Core =
+// rustty_core::Surface<embedded::App>`.
 impl ApprtSurface for Surface {
     type App = App;
     type Core = CoreSurface;
 
+    // pub fn core(self: *Surface) *CoreSurface { return &self.core_surface; }
     fn core(&self) -> *mut Self::Core {
-        unimplemented!("embedded::Surface::core — chunk E2")
+        // The returned pointer is as stable as the backend's surface allocation
+        // (the embedded Surface is heap-boxed + pinned, ADV-FIX 8).
+        core::ptr::from_ref(&self.core_surface).cast_mut()
     }
 
+    // pub fn rtApp(self: *const Surface) *App { return self.app; }
     fn rt_app(&self) -> *mut Self::App {
-        unimplemented!("embedded::Surface::rt_app — chunk E2")
+        self.app
     }
 
-    fn close(&self, _process_alive: bool) {
-        unimplemented!("embedded::Surface::close — chunk E2")
+    // pub fn close(self: *const Surface, process_alive: bool) void { ... }
+    fn close(&self, process_alive: bool) {
+        // const func = self.app.opts.close_surface orelse {
+        //     log.info("runtime embedder does not support closing a surface", .{});
+        //     return;
+        // };
+        let func = match unsafe { (*self.app).opts.close_surface } {
+            Some(func) => func,
+            None => {
+                // log.info("runtime embedder does not support closing a surface", .{});
+                return;
+            }
+        };
+
+        // func(self.userdata, process_alive);
+        func(self.userdata, process_alive);
     }
 
+    // pub fn deinit(self: *Surface) void { ... }
     fn deinit(&mut self) {
-        unimplemented!("embedded::Surface::deinit — chunk E2")
+        // Shut down our inspector
+        // self.freeInspector();
+        self.freeInspector();
+
+        // Free our title
+        // if (self.title) |v| self.app.core_app.alloc.free(v);
+        // (PORT: drop the owned `CString`.)
+        self.title = None;
+
+        // Remove ourselves from the list of known surfaces in the app.
+        // self.app.core_app.deleteSurface(self);
+        //
+        // PORT NOTE: `self.app` (a raw `*mut App`) is captured BEFORE the raw
+        // `self` pointer so `deleteSurface(self_ptr)` uses only raw pointers (the
+        // `&mut`-args-strongly-protected discipline — Zig pointers are unprotected).
+        let app = self.app;
+        let self_ptr = core::ptr::from_mut(self);
+        unsafe { (*(*app).core_app).deleteSurface(self_ptr) };
+
+        // Clean up our core surface so that all the rendering and IO stop.
+        // self.core_surface.deinit();
+        unsafe { self.core_surface.deinit() };
     }
 
+    // pub fn getContentScale(self: *const Surface) !apprt.ContentScale { return self.content_scale; }
     fn get_content_scale(&self) -> Result<ContentScale, ApprtError> {
-        unimplemented!("embedded::Surface::get_content_scale — chunk E2")
+        Ok(self.content_scale)
     }
 
+    // pub fn getSize(self: *const Surface) !apprt.SurfaceSize { return self.size; }
     fn get_size(&self) -> Result<SurfaceSize, ApprtError> {
-        unimplemented!("embedded::Surface::get_size — chunk E2")
+        Ok(self.size)
     }
 
+    // pub fn getTitle(self: *Surface) ?[:0]const u8 { return self.title; }
     fn get_title(&self) -> Option<&CStr> {
-        unimplemented!("embedded::Surface::get_title — chunk E2")
+        self.title.as_deref()
     }
 
-    fn supports_clipboard(&self, _clipboard_type: Clipboard) -> bool {
-        unimplemented!("embedded::Surface::supports_clipboard — chunk E2")
+    // pub fn supportsClipboard(self: *const Surface, clipboard_type: apprt.Clipboard) bool { ... }
+    fn supports_clipboard(&self, clipboard_type: Clipboard) -> bool {
+        // return switch (clipboard_type) {
+        match clipboard_type {
+            // .standard => true,
+            Clipboard::Standard => true,
+            // .selection, .primary => self.app.opts.supports_selection_clipboard,
+            Clipboard::Selection | Clipboard::Primary => unsafe {
+                (*self.app).opts.supports_selection_clipboard
+            },
+        }
     }
 
+    // pub fn clipboardRequest(self: *Surface, clipboard_type, state) !bool { ... }
     fn clipboard_request(
         &self,
-        _clipboard_type: Clipboard,
-        _state: ClipboardRequest,
+        clipboard_type: Clipboard,
+        state: ClipboardRequest,
     ) -> Result<bool, ApprtError> {
-        unimplemented!("embedded::Surface::clipboard_request — chunk E2")
+        // We need to allocate to get a pointer to store our clipboard request
+        // so that it is stable until the read_clipboard callback and call
+        // complete_clipboard_request. This sucks but clipboard requests aren't
+        // high throughput so it's probably fine.
+        // const alloc = self.app.core_app.alloc;
+        // const state_ptr = try alloc.create(apprt.ClipboardRequest);
+        // errdefer alloc.destroy(state_ptr);
+        // state_ptr.* = state;
+        let state_ptr: *mut ClipboardRequest = Box::into_raw(Box::new(state));
+
+        // const started = self.app.opts.read_clipboard(
+        //     self.userdata,
+        //     @intCast(@intFromEnum(clipboard_type)),
+        //     state_ptr,
+        // );
+        let started = unsafe {
+            ((*self.app).opts.read_clipboard)(self.userdata, clipboard_type as c_int, state_ptr)
+        };
+        // if (!started) {
+        //     alloc.destroy(state_ptr);
+        //     return false;
+        // }
+        if !started {
+            unsafe { drop(Box::from_raw(state_ptr)) };
+            return Ok(false);
+        }
+
+        // return true;
+        // (On success `state_ptr` is intentionally leaked to the host — it owns the
+        // request until `complete_clipboard_request` frees it, E9.)
+        Ok(true)
     }
 
+    // pub fn setClipboard(self: *const Surface, clipboard_type, contents, confirm) !void { ... }
     fn set_clipboard(
         &self,
-        _clipboard_type: Clipboard,
-        _contents: &[rustty_apprt_api::structs::ClipboardContent<'_>],
-        _confirm: bool,
+        clipboard_type: Clipboard,
+        contents: &[rustty_apprt_api::structs::ClipboardContent<'_>],
+        confirm: bool,
     ) -> Result<(), ApprtError> {
-        unimplemented!("embedded::Surface::set_clipboard — chunk E2")
+        // const alloc = self.app.core_app.alloc;
+        // const array = try alloc.alloc(CAPI.ClipboardContent, contents.len);
+        // defer alloc.free(array);
+        // for (contents, 0..) |content, i| {
+        //     array[i] = .{ .mime = content.mime, .data = content.data };
+        // }
+        //
+        // PORT NOTE: `apprt.ClipboardContent.mime`/`.data` are `[:0]const u8`
+        // (NUL-terminated byte slices → `&[u8]` with a guaranteed trailing NUL); the
+        // CAPI `ClipboardContent` wants `[*:0]const u8` → `.as_ptr()`. The heap
+        // `alloc.alloc`/`defer free` pair is an owned `Vec` (dropped at scope end).
+        let array: Vec<ClipboardContent> = contents
+            .iter()
+            .map(|content| ClipboardContent {
+                mime: content.mime.as_ptr().cast(),
+                data: content.data.as_ptr().cast(),
+            })
+            .collect();
+
+        // self.app.opts.write_clipboard(
+        //     self.userdata,
+        //     @intCast(@intFromEnum(clipboard_type)),
+        //     array.ptr,
+        //     array.len,
+        //     confirm,
+        // );
+        unsafe {
+            ((*self.app).opts.write_clipboard)(
+                self.userdata,
+                clipboard_type as c_int,
+                array.as_ptr(),
+                array.len(),
+                confirm,
+            );
+        }
+
+        Ok(())
     }
 
+    // pub fn getCursorPos(self: *const Surface) !apprt.CursorPos { return self.cursor_pos; }
     fn get_cursor_pos(&self) -> Result<CursorPos, ApprtError> {
-        unimplemented!("embedded::Surface::get_cursor_pos — chunk E2")
+        Ok(self.cursor_pos)
     }
 
-    fn default_termio_env(&self) -> Result<std::collections::HashMap<String, String>, ApprtError> {
-        unimplemented!("embedded::Surface::default_termio_env — chunk E2")
+    // pub fn defaultTermioEnv(self: *const Surface) !std.process.EnvMap { ... }
+    fn default_termio_env(&self) -> Result<HashMap<String, String>, ApprtError> {
+        // const alloc = self.app.core_app.alloc;
+        // var env = try internal_os.getEnvMap(alloc);
+        // errdefer env.deinit();
+        //
+        // (PORT: rustty `getEnvMap` is infallible and returns an owned map; on
+        // non-darwin `env` is never mutated below — silence `unused_mut` there.)
+        #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(unused_mut))]
+        let mut env = rustty_os::env::getEnvMap();
+
+        // if (comptime builtin.target.os.tag.isDarwin()) {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            // if (env.get("__XCODE_BUILT_PRODUCTS_DIR_PATHS") != null) {
+            if env.contains_key("__XCODE_BUILT_PRODUCTS_DIR_PATHS") {
+                // env.remove("__XCODE_BUILT_PRODUCTS_DIR_PATHS");
+                env.remove("__XCODE_BUILT_PRODUCTS_DIR_PATHS");
+                env.remove("__XPC_DYLD_LIBRARY_PATH");
+                env.remove("DYLD_FRAMEWORK_PATH");
+                env.remove("DYLD_INSERT_LIBRARIES");
+                env.remove("DYLD_LIBRARY_PATH");
+                env.remove("LD_LIBRARY_PATH");
+                env.remove("SECURITYSESSIONID");
+                env.remove("XPC_SERVICE_NAME");
+            }
+
+            // Remove this so that running `rustty` within Rustty works.
+            // env.remove("GHOSTTY_MAC_LAUNCH_SOURCE");
+            //
+            // PORT (R2 identity): the launch-source env var is `RUSTTY_MAC_LAUNCH_SOURCE`
+            // (the rustty-os `desktop.rs` `launchedFromDesktop` precedent).
+            env.remove("RUSTTY_MAC_LAUNCH_SOURCE");
+
+            // If we were launched from the desktop then we want to
+            // remove the LANGUAGE env var so that we don't inherit
+            // our translation settings for Rustty. If we aren't from
+            // the desktop then we didn't set our LANGUAGE var so we
+            // don't need to remove it.
+            // if (internal_os.launchedFromDesktop()) env.remove("LANGUAGE");
+            if rustty_os::desktop::launchedFromDesktop() {
+                env.remove("LANGUAGE");
+            }
+        }
+
+        // return env;
+        Ok(env)
     }
 }
 

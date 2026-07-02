@@ -1844,3 +1844,69 @@ green (build, touched-crate tests — input 113, apprt 0; clippy `-D warnings`, 
 acyclic G7 with apprt-c still a clean TOP SINK, test-counts G-gate); scoped-G3b on
 embedded.zig **1-342 missing=0 review=0**. No regression (vt 2019, core 15,
 apprt-api 20, renderer 19, crash 12, termio 44).
+
+## rustty-apprt embedded E2 (Surface backend) — `impl apprt_api::Surface` (heap-pinned)
+
+Chunk E2 of the libghostty C-ABI milestone (EMBEDDED_BLUEPRINT §2/§7): ports
+`embedded.zig:343-609` into `crates/rustty-apprt/src/embedded.rs`, REPLACING the
+E1→E2 `Surface`/`SurfaceOptions` sequencing stub wholesale with the faithful port:
+`Platform`/`PlatformTag`/`EnvVar` + `PlatformC` (the C-ABI union) + the full
+`Surface` struct + `SurfaceOptions` (the `ghostty_surface_config_s` extern struct)
++ `init` (out-pointer, heap-pinned) + `deinit`/`freeInspector` + the faithful
+first-concrete `impl apprt_api::Surface for Surface` growth-point table
+(`core`/`rt_app`/`close`/`deinit`/`get_content_scale`/`get_size`/`get_title`/
+`supports_clipboard`/`clipboard_request`/`set_clipboard`/`get_cursor_pos`/
+`default_termio_env`). This proves the self-referential `type Core =
+rustty_core::Surface<embedded::App>` bound against a REAL backend (core's C0 gate
+used a dummy `A`). The E1 leaves at `core`/`rt_app`/… are now RESOLVED (real
+bodies). Deferred out of E2:
+
+1. **`Inspector` E2→E4 SEQUENCING STUB (Phase-3 dcimgui/Metal leaf).** `Surface`
+   carries `inspector: Option<*mut Inspector>` and `deinit` calls `freeInspector`,
+   so the `Inspector` type must exist NOW. E2 defines a MINIMAL opaque `Inspector`
+   (`#[allow(dead_code)]`) whose `deinit` is an `unimplemented!()` leaf; `deinit`/
+   `freeInspector` are ported faithfully but the `if let Some(v) = self.inspector`
+   arm is a no-op while `inspector` is always `None` (nothing constructs an
+   `Inspector` until **E4**'s `initInspector`, which needs the dcimgui/Metal
+   context). **Target: E4, EMBEDDED_BLUEPRINT §7** (`Inspector`, embedded.zig
+   992-1243). Chunk-sequencing + Phase-3 leaf, not a permanent gap.
+
+2. **`Surface::queueInspectorRender` — E3/E4 `unimplemented!()` leaf (carried from
+   E1).** Reaches the `render_inspector` action (dcimgui/Metal Phase-3). Called by
+   `App::redrawInspector`; kept an `unimplemented!()` placeholder. **Target: E3/E4.**
+
+3. **GPU/xev runtime leaves reachable THROUGH E2's `init`/`deinit`.**
+   `Surface::init` calls core `Surface::init` (surface.rs) which constructs the
+   `renderer_seam::{Renderer,Thread}` Phase-3 placeholder leaves (blueprint §1/§3),
+   and `deinit` calls the core `Surface::deinit` renderer/io-thread teardown. These
+   **compile + link now** but PANIC at the renderer leaf the moment a LIVE surface
+   is created — which requires `ghostty_surface_new` (**E7**) AND the renderer land
+   (**Phase-3 R-d + D6**). No E2 gate exercises a live surface (the smoke KAT, E11,
+   stays app-level per ADV-FIX 2/3). This is the milestone's documented honest line.
+
+4. **macOS objc / Platform messaging — NOT E2 (raw pointers only).** Per blueprint
+   §5/§8.1, `Platform`/`MacOS`/`IOS` store the RAW `*mut c_void` nsview/uiview
+   (reference `objc.Object`); the view is never *messaged* until Phase-3 rendering,
+   so E2 needs NO `objc2`/`coretext` dependency. The `if isDarwin() struct{…} else
+   void` gating is preserved via `#[cfg(any(target_os = "macos", target_os =
+   "ios"))]`. The Darwin metal/quicklook/CGS block that WOULD message objc is the
+   **E10** `#[cfg]` Phase-3 leaf. No deferral introduced here — a faithful
+   pointer-only Platform.
+
+**Identity (R2):** `defaultTermioEnv` removes `RUSTTY_MAC_LAUNCH_SOURCE` (reference
+`GHOSTTY_MAC_LAUNCH_SOURCE`), matching the rustty-os `desktop.rs`
+`launchedFromDesktop` precedent. Comment `ghostty`/`Ghostty` → `rustty`/`Rustty`
+per R1's identity-rename allowance.
+
+**Dep added:** `rustty-apprt` gains `rustty-args` (for `zig_string_escape`, the
+rustty port of `std.zig.stringEscape`, used by `init` to escape `initial_input`).
+Acyclic: rustty-args deps only {os, util, build-config}, none reach apprt; G7 stays
+green with apprt-c a clean TOP SINK. Reused, not reimplemented (R3/R5).
+
+**Gate deltas (E2):** `embedded.rs` grows the full Surface backend (E1→E2 stub
+gone). `apprt_embedded` MAP row unchanged (still embedded.zig 0-test → embedded.rs,
+GREEN — rust ≥ zig). Whole-workspace gates green (build, touched-crate tests —
+apprt 0, apprt-c 0; clippy `-D warnings`, fmt, acyclic G7 with apprt-c still a clean
+TOP SINK, test-counts G-gate); scoped-G3b on embedded.zig **343-609 distinctive=39
+missing=0 review=0**. No regression (vt 2019, core 15, apprt-api 20, renderer 19,
+crash 12, termio 44).
