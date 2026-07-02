@@ -202,8 +202,44 @@ Per INTEGRATION_TIER_BLUEPRINT.md, 4 commits (8f1fd89, e55d5b4, 6c46a0a, 61b8a52
 - **D6 deferrals** (all 0-test, verbatim bodies, DEFERRALS.md): xev event-loop wiring (Thread run/callbacks, Termio threadEnter/processOutput, Exec Subprocess.start arena self-ref, ReadThread), mailbox::send mutex pattern, surfaceMessageWriter/rendererMessageWriter (opaque core Timeout).
 Workspace ≈3282+ tests green.
 
-## CORE (Surface/App) — the next milestone (design-first; then apprt/embedded)
-Surface.zig 6036 loc / **0 tests**, App.zig 604 / 0, surface_mouse.zig 336 / 1. Weakly test-gated ⇒ G3b comment-coverage + per-chunk review carry the gate. Key design questions: apprt-api `A: App` genericity through 6k loc; filling the App/Surface growth-point trait methods; the App::Mailbox queue types (resolves apprt-api's opaque Timeout/Size); inspector seam (rustty-inspector is a stub; Surface imports inspector/main.zig); renderer-thread/GPU-coupled paths (Phase-3 defer); chunked skeleton→fill execution (cluster discipline).
+## CORE (Surface/App/surface_mouse): ✅ DONE (2026-07-02) — rustty-core COMPLETE
+Per CORE_BLUEPRINT.md (adversarially reviewed ACCEPT-WITH-FIXES), landed in 18
+chunks C0→C15 + C-T + C-F. All of **Surface.zig (6036) / App.zig (604) /
+surface_mouse.zig (336)** ported LIVE against the placeholder leaves — GPU
+Renderer / xev handles / uninhabited Inspector are the ONLY `unimplemented!()`
+production leaves (dependency placeholders, no reference logic stubbed), so ~95%
+compiles+reviews as real Rust; runtime panics are confined to those leaves.
+- **Tests: 15** (R1-owed **1** = surface_mouse `keyToMouseShape`, the sole
+  reference `test{}` across the 3 files). +14 rustty-only glue (§7): app.rs `mod
+  test_runtime` **13** App/mailbox seam tests (TestApp/TestSurface fake) + lib.rs
+  **1** `type_core_prototype` (the C0 self-referential `Core = Surface<A>` bound
+  proof). `Surface<A>` is untested-by-construction (init spawns pty/renderer/io
+  threads; ghostty has 0 Surface tests) ⇒ **G3b comment-coverage + per-chunk
+  review are the gate** — full-file G3b missing=0 (Surface.zig 1000 / App.zig 130
+  / surface_mouse.zig 39 distinctive comments, all matched).
+- **Design questions RESOLVED:** apprt-api `A: App` genericity threads once and
+  stops at the mailbox seam (§1); the growth-point `App`/`Surface` trait methods
+  filled (§2); App::Mailbox queue types = concrete `datastruct::blocking_queue::
+  {Timeout, Size}` (§3, resolves apprt-api's opaque assoc types); inspector seam
+  = pure-data `Event`/`EventRing` ported + `Inspector` uninhabited placeholder
+  (§4); renderer-thread/GPU + xev paths = core-local `renderer_seam.rs`
+  dependency placeholders (§5, dodges two Cargo cycles); `type Core` = OPTION 1
+  self-referential associated-type bound (C0 DECISION, trait solver accepts).
+- **Seams landed for lower tiers:** shared `rustty-xev` crate (D6 home);
+  guard-less `rustty_zigstd::thread::Mutex` (renderer `State.mutex` retyped);
+  crash `ThreadStateSurface for Surface<A>`; C-T un-defers the termio
+  mutex-family + `apprt.surface.newConfig` (`app::new_config`).
+- **Gates:** build + all crate tests + clippy `-D warnings` (workspace) + fmt +
+  acyclic (G7, core below apprt) + test-counts (G-gate) all GREEN; no workspace
+  regression. **OPEN deferrals** (all 0-test, R1-safe — DEFERRALS.md "rustty-core
+  C-F" is the consolidated ledger): activate/deactivateInspector (Phase-3
+  inspector), performBindingAction `.search` arm (search-thread mutex/spawn
+  unification), renderer_seam GPU/xev leaves + surface.rs xev `notify()` leaves
+  (Phase-3 R-d + D6 libxev), App.zig Wasm block (wasm feature).
+- **NEXT: apprt/embedded** — the libghostty embedding milestone (embedded.zig
+  2250 loc, 71 C-ABI exports via vt-c cbindgen + pinned-padding + const-size
+  assert) + none.zig headless; then cli + bin. core now fills apprt-api's
+  growth-point trait methods, so the embedded backend implements a known seam.
 
 ## INTEGRATION TIER — the critical path to the libghostty embedding milestone (original notes)
 Dependency-ordered, apprt-api now unblocks it:

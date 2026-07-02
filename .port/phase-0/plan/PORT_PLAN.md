@@ -372,7 +372,7 @@ per-crate Definition-of-Done.
 - **DoD:** 11 files ported; 44 ported tests pass; no hard apprt dep
   (apprt-api seam); `cycle_check.py` clean. **Flag A6** (fallback group member).
 
-### 24. rustty-core — Tests: **1**
+### 24. rustty-core — Tests: **15** (R1-owed 1) — ✅ DONE (2026-07-02)
 - **Files (3):** `App.zig, Surface.zig, surface_mouse.zig` (+ the
   high-level **wiring split from `global.zig`** per break #1 — additive glue,
   not a reference file). `Command.zig` is RELOCATED to rustty-termio (break
@@ -383,10 +383,23 @@ per-crate Definition-of-Done.
   apprt-api, global`.
 - **Breaks:** consumes **#1** (global wiring lands here), **#8** (apprt-api
   trait), **#12** (inspector by ref), **#13b** (Command moved out).
-- **DoD:** 3 files ported; 1 ported test passes (surface_mouse
-  `keyToMouseShape`; Command's 10 moved to rustty-termio); depends on
+- **Tests (actual 15):** R1 owes **1** (surface_mouse `keyToMouseShape`, the
+  only reference `test{}` across the 3 files — App.zig=0, Surface.zig=0). The
+  other **14** are rustty-only glue (CORE_BLUEPRINT §7): app.rs `mod
+  test_runtime` **13** App/mailbox seam tests (TestApp/TestSurface fake) +
+  lib.rs **1** `type_core_prototype` (the C0 self-referential `Core = Surface<A>`
+  bound proof). `Surface<A>` is untested-by-construction (init spawns pty/
+  renderer/io threads) — the full-file G3b comment-coverage sweep (missing=0
+  over Surface.zig/App.zig/surface_mouse.zig) + per-chunk review are its gate.
+- **DoD (met):** 3 files ported (Surface.zig 6036 + App.zig 604 +
+  surface_mouse.zig 336, LIVE against the placeholder leaves — GPU Renderer /
+  xev handles / uninhabited Inspector are the only `unimplemented!()`); the R1
+  surface_mouse test passes; Command's 10 moved to rustty-termio; depends on
   `apprt-api` (not `apprt`); global wiring reviewed (R1 additive); no edge to
-  `apprt`/`cli` (`cycle_check.py` confirms core is below apprt).
+  `apprt`/`cli` (`cycle_check.py`/`check_acyclic.sh` confirm core is below
+  apprt). Deferrals (all 0-test, R1-safe, DEFERRALS.md "rustty-core C-F"):
+  activate/deactivateInspector (Phase-3 inspector), performBindingAction
+  `.search` arm (search-thread mutex/spawn), renderer_seam GPU/xev leaves (D6).
 
 ### 25. rustty-apprt — Tests: **47**
 - **Files (62):** `apprt/` (gtk/ 40+, embedded, none, browser, action, surface,

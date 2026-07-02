@@ -518,11 +518,16 @@ MAP = {
     # sub-blocks) -> 1 #[test] in surface_mouse.rs (ported as ONE test
     # mirroring the single reference test{} block; rust >= zig).
     "core_surface_mouse": ([f"{GHSRC}/surface_mouse.zig"], [f"{RSCORE}/surface_mouse.rs"], 0),
-    # App.zig: no test{} -> zig=0. Pre-registered; app.rs lands in chunk C4
-    # (expand() drops the not-yet-existing rust path -> rust=0 >= 0 until then).
+    # App.zig: no test{} -> zig=0. LANDED (chunk C4): app.rs is the full App.zig
+    # port; its 13 #[test] are the §7 rustty-only `mod test_runtime` seam tests
+    # (TestApp/TestSurface fake, honest test glue — NOT ported reference tests),
+    # so rust=13 >= zig=0. (App.zig itself carries no reference test{}.)
     "core_app":          ([f"{GHSRC}/App.zig"], [f"{RSCORE}/app.rs"], 0),
-    # Surface.zig: no test{} -> zig=0. Pre-registered; surface.rs lands in
-    # chunks C5+ (same expand() behavior as core_app until it exists).
+    # Surface.zig: no test{} -> zig=0. LANDED (chunks C5-C15): surface.rs is the
+    # full 6036-loc Surface.zig port. Surface<A> is untested-by-construction (§7:
+    # init spawns pty/renderer/io threads; ghostty has zero Surface tests for the
+    # same reason), so rust=0 == zig=0; the G3b comment-coverage gate + per-chunk
+    # review carry Surface's quality (0 missing over the full file, C-F sweep).
     "core_surface":      ([f"{GHSRC}/Surface.zig"], [f"{RSCORE}/surface.rs"], 0),
 }
 

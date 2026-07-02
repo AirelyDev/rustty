@@ -1646,3 +1646,93 @@ reference `test{}`), datastruct **76→77** (the push_or_return test), core 15,
 apprt-api 20, renderer 19, crash 12 — all unchanged; workspace + clippy + fmt +
 acyclic + test-counts green; scoped G3b for Termio.zig/mailbox.zig/
 stream_handler.zig/apprt-surface.zig = 0 missing.
+
+## rustty-core C-F (core tier) — FINALE: CONSOLIDATED OPEN-DEFERRAL LEDGER
+
+Chunk C-F of CORE_BLUEPRINT §6 closes the core milestone. It creates NO new
+deferrals and RESOLVES none of the per-chunk entries above by CODE — it is the
+finale audit + roll-up. All of Surface.zig (6036) / App.zig (604) /
+surface_mouse.zig (336) is ported LIVE (C0..C-T). This section is the single
+authoritative list of what remains OPEN for core, so a future Phase-3/D6 sweep
+has one place to look. Everything below is **0-test, R1-safe** — the reference
+carries no `test{}` on any deferred surface.
+
+**Full-file G3b sweep (C-F, missing=0 all three files):**
+- `Surface.zig` ↔ `surface.rs`: distinctive ref comments **1000**, missing **0**.
+- `App.zig` ↔ `app.rs`: distinctive ref comments **130**, missing **0**.
+- `surface_mouse.zig` ↔ `surface_mouse.rs`: distinctive ref comments **39**,
+  missing **0**.
+
+**`unimplemented!()` audit (C-F, surface.rs + app.rs):** every production
+`unimplemented!()` is a documented placeholder leaf or a DEFERRALS entry below;
+NO stragglers.
+- `surface.rs` — **3**, all tracked here: `activateInspector` /
+  `deactivateInspector` (Phase-3 inspector, §4) + `performBindingAction .search`
+  arm (search-thread mutex/spawn, C14a).
+- `app.rs` — **8**, ALL inside `#[cfg(test)] mod test_runtime` (the §7
+  TestSurface fake methods the C4 seam tests do not drive — honest test glue,
+  NOT production leaves and NOT deferrals).
+- `renderer_seam.rs` — **15**, the C3 dependency-placeholder bodies (below).
+
+**OPEN core deferrals (roll-up — targets: Phase-3 inspector tier / Phase-3 R-d
+GPU renderer / D6 libxev port):**
+
+1. **Inspector activate/deactivate (verbatim-comment deferral, §4).**
+   `Surface.activateInspector` (Surface.zig:890) + `deactivateInspector` (:915)
+   `alloc.create`/`deinit` the UNINHABITED Phase-3 `inspectorpkg::Inspector`
+   placeholder; bodies verbatim above `unimplemented!()`; `deinit`'s inspector
+   teardown arm is `unreachable!()`-by-construction. **Target: Phase-3 inspector
+   tier** (fills `rustty_inspector::Inspector` from the uninhabited enum).
+   (The `keyCallback` inspector defer-block ports REAL — None-arm live, Some-arm
+   unreachable until Phase 3, per §4.)
+
+2. **`performBindingAction .search` arm (C14a, Surface.zig:4933).** The ONLY
+   unported switch arm, verbatim above `unimplemented!()`. Blocked on (a)
+   search-thread mutex-type unification — `terminal::search::thread::Options.mutex`
+   is still `*const std::sync::Mutex<()>` (ported pre-C0) and must retype to the
+   shared guard-less `rustty_zigstd::thread::Mutex` the reference passes as
+   `self.renderer_state.mutex`; and (b) the self-referential construct-then-spawn
+   order (store `Search` first with `.thread = undefined`, spawn with a stable
+   `&s.state`, then assign the handle). **Target: a focused rustty-vt search
+   follow-up.** Every OTHER search arm (`start_search`/`search_selection`/
+   `end_search`/`navigate_search`) ports LIVE; `self.search` is always `None`
+   until this lands, so their Some-branches are present but dormant.
+
+3. **`renderer_seam.rs` dependency placeholders (C3, §5).** Inhabited structs
+   with `unimplemented!()` bodies (termio `xev_seam` precedent; no reference
+   logic stubbed):
+   - `Renderer` (generic.zig GenericRenderer) — `surfaceInit`/`init`/
+     `finalizeSurfaceInit`/`threadEnter`/`drawFrame`/`deinit` + the
+     `Renderer.DerivedConfig` placeholder. **Target: Phase-3 R-d GPU tier.**
+   - `Thread<A>` run loop — faithful renderer/Thread.zig field shape (rustty-xev
+     handles + REAL state/mailbox); `init`/`threadMain`/`deinit` unimplemented.
+     **Target: Phase-3 R-d + D6.**
+   (`renderer_seam::Options<A>` is LIVE, not deferred.)
+
+4. **D6 xev leaves in surface.rs (live calls into the `rustty-xev`
+   placeholder).** These are COMPILED, real logic — they panic only at runtime
+   once the render/io threads spin up, exactly like the GPU leaves. They are NOT
+   commented-out code:
+   - `queueRender` xev `wakeup.notify()` (Surface.zig:2461) — the one-line leaf
+     transitively behind updateConfig/setFontSize/focus flows AT RUNTIME
+     (surface.rs:3756/3817/3860/5573).
+   - `searchCallback_` `state.wakeup.notify()` sites (surface.rs:10454/10483).
+   - `deinit`: `renderer_thread.stop.notify()` + `io_thread.stop.notify()`
+     (surface.rs:2489/2512) and `close`'s `state.stop.notify()` (:509).
+   - `init`: the renderer/termio `Thread.init` xev construction + `Termio.init`
+     (D6) — the runtime-panic leaves `init` is written LIVE against.
+   **Target: the D6 libxev port** (fills `rustty-xev` in place).
+
+5. **App.zig Wasm block (C4, in-file).** `App.zig:579 pub const Wasm` is
+   wasm-target-gated and commented out IN the reference; preserved verbatim at
+   the bottom of app.rs. **Target: the rustty wasm app-runtime** (off-by-default
+   `wasm` feature family).
+
+**Gate deltas (C-F): NONE** — no code changed; core stays **15** tests (R1-owed
+1 = surface_mouse `keyToMouseShape`; +13 app.rs `mod test_runtime` seam tests +
+1 lib.rs `type_core_prototype`). Whole-workspace gates green (build, all crate
+tests, clippy `-D warnings`, fmt, acyclic G7, test-counts G-gate); full-file G3b
+missing=0 on all three core files. Doc updates only: this ledger,
+`PORT_PLAN.md` crate-24 (Tests 1→15 actual, marked DONE),
+`check_test_counts.py` core_app/core_surface MAP comments (landed-state),
+`NEXT_PHASE_PLAN.md` CORE DONE checkpoint. **CORE MILESTONE COMPLETE.**
