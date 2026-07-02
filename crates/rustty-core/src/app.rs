@@ -74,7 +74,11 @@ type SurfaceList<A> = Vec<*mut <A as apprt::App>::Surface>;
 /// Surface method error sets ([`crate::surface::Error`], itself a growth
 /// marker). Typed as the union of the two sources so Zig `try` maps to `?`;
 /// the variants gain the real error sets as the Surface chunks (C5+) land.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+//
+// (C8 dropped the C4 `Clone`/`Copy`/`Eq` derives with the surface `Error`
+// growth — its new `FontGrid` payload is Debug-only, the InitError
+// precedent.)
+#[derive(Debug)]
 pub enum Error {
     Apprt(apprt::ApprtError),
     Surface(crate::surface::Error),

@@ -792,6 +792,28 @@ pub struct Key {
 // const StyleOffsets = [style_offsets_len]usize;
 type StyleOffsets = [usize; 4];
 
+// PORT NOTE (Rust-only glue): Zig value-copies `Key` (Surface.setFontSize's
+// `.old_key = self.font_grid_key` / `.new_key = font_grid_key` message
+// literal, Surface.zig:2443-2453 — SHALLOW copies whose backing memory
+// belongs to the set). The owned rustty `Key` realizes that value-copy as
+// `Clone` (deep; `CodepointMap.clone`'s OOM `Result` collapses — infallible
+// `Global` allocation, the established convention).
+impl Clone for Key {
+    fn clone(&self) -> Key {
+        Key {
+            descriptors: self.descriptors.clone(),
+            style_offsets: self.style_offsets,
+            codepoint_map: self
+                .codepoint_map
+                .clone(Global)
+                .unwrap_or_else(|_| unreachable!()),
+            metric_modifiers: self.metric_modifiers.clone(),
+            font_size: self.font_size,
+            freetype_load_flags: self.freetype_load_flags,
+        }
+    }
+}
+
 impl Key {
     // comptime { assert(@intFromEnum(Style.regular) == 0); ... }
     // (Verified in `Key::init` as `debug_assert!`s.)

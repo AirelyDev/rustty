@@ -521,12 +521,17 @@ integration-tier blueprint:
   rustty-renderer already deps rustty-crash, so crash must NOT dep renderer for
   its size types. This is deliberately NOT apprt-api's `CoreSurfaceHandle`
   (different concern).
-- **DEFERRED (untested-only, 0 tests — R1-safe):** the concrete
-  `ThreadStateSurface` impl. rustty-core's `Surface` implements the trait when
-  the core tier lands (`Surface.crashThreadState()` + the
-  `crash.sentry.thread_state = ...` call sites in Surface.zig, renderer
-  Thread.zig, termio Thread.zig/Exec.zig — each ports with its owning file via
-  `sentry::setThreadState`/`clearThreadState`).
+- **DEFERRED (untested-only, 0 tests — R1-safe) — PARTIALLY RESOLVED (core
+  C8):** the concrete `ThreadStateSurface` impl. **rustty-core's `Surface` now
+  implements the trait** (core C8, ahead of its C10 row: `impl
+  ThreadStateSurface for Surface<A>` + `Surface.crashThreadState()`
+  Surface.zig:6014 + the first two `crash.sentry.thread_state = ...` sites —
+  sizeCallback :2469 / preeditCallback :2530, via
+  `sentry::setThreadState`/`clearThreadState` and the [ADV 6.1] Drop guard
+  `ThreadStateGuard` mapping the paired `defer ... = null`). The remaining
+  Surface.zig sites port with their owning chunks (C10-C13); the renderer
+  Thread.zig / termio Thread.zig/Exec.zig sites stay with their owning files
+  (GPU/D6 deferrals).
 - Note: tests never call the real `sentry_init` (the reference gates init on
   build options and threading; the vendored build is `transport = .none`) —
   the sentry tests exercise `beforeSend` + the seam through the PURE value API

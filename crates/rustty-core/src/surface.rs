@@ -30,9 +30,16 @@
 //! `searchCallback`(`_`) LIVE (the search-thread callbacks are fully real —
 //! blueprint §5; the 3 `wakeup.notify` sites are the xev leaves) plus
 //! `queueRender` (:2461, ahead of its C8 row — one-line xev leaf this range
-//! calls); CORE_BLUEPRINT §6 rows C8..C15 fill the remaining function bodies
-//! IN PLACE — the declared method stubs below are owned by C8/C9/C13/C14/
-//! C15).
+//! calls); chunk C8 landed Surface.zig:1524-1866 + 2396-2604 —
+//! `modsChanged`/`mouseRefreshLinks`/`updateRendererHealth`/`updateScrollbar`/
+//! `notifyConfigConditionalState`/`updateConfig`/`recomputeInitialSize`
+//! (+`InitialSizeError`) and `setCellSize`/`setFontSize`/`sizeCallback`/
+//! `resize`/`balancePaddingIfNeeded`/`preeditCallback` LIVE, plus the crash
+//! thread-state seam AHEAD of its C10 row (`crashThreadState` :6014 +
+//! `impl ThreadStateSurface` — sizeCallback/preeditCallback are the first
+//! `crash.sentry.thread_state` sites, [ADV 6.1]); CORE_BLUEPRINT §6 rows
+//! C9..C15 fill the remaining function bodies IN PLACE — the declared method
+//! stubs below are owned by C9/C10/C13/C14/C15).
 
 // PARITY: the reference's identifiers are camelCase (`needsConfirmQuit`,
 // `handleMessage`, `performBindingAction`, `scaledPadding`,
@@ -73,11 +80,16 @@ use allocator_api2::alloc::Global as Allocator;
 // Cargo.toml `[lib] name`), so `oni::*` paths bind exactly as the reference
 // module name — no `use` needed (the rustty-input link.rs precedent).
 // const crash = @import("crash/main.zig");
-// PORT NOTE: `rustty_crash` — first reached by the C10 key tier
-// (setThreadState/clearThreadState un-defer); preserved as this comment.
+//
+// PORT NOTE: first reached by C8 (`crash.sentry.thread_state` in
+// sizeCallback/preeditCallback + `crashThreadState`, ahead of its C10 row —
+// [ADV 6.1]); the C10 key tier adds the remaining sites.
+use rustty_crash as crash;
 // const unicode = @import("unicode/main.zig");
-// PORT NOTE: `rustty_unicode` — first reached by C9 (selectionString word
-// chars); preserved as this comment.
+//
+// PORT NOTE: first reached by C8 (preeditCallback's
+// `unicode.table.get(cp).width`, Surface.zig:2572).
+use rustty_unicode as unicode;
 // const rendererpkg = @import("renderer.zig");
 //
 // PORT NOTE (CORE_BLUEPRINT §5): the renderer package splits — the REAL
@@ -141,13 +153,14 @@ use rustty_datastruct::blocking_queue::{Size as QueueSize, Timeout};
 
 // The apprt action payloads init/handleMessage send (`performAction` —
 // cell_size / size_limit / set_title / color_change / pwd / secure_input /
-// show_child_exited / command_finished / search_total / search_selected),
-// and the `Surface` seam trait for the typed `rt_surface.*` method edges
-// (aliased per the C0 DECISION note — core's own struct is also named
-// `Surface`).
+// show_child_exited / command_finished / search_total / search_selected) plus
+// the C8 tier's (config_change / initial_size / mouse_over_link /
+// reload_config — the [ADV-FIX 4] dispatch-arm list), and the `Surface` seam
+// trait for the typed `rt_surface.*` method edges (aliased per the C0
+// DECISION note — core's own struct is also named `Surface`).
 use rustty_apprt_api::action::{
-    CellSize, ColorChange, ColorKind, CommandFinished, Pwd, SearchSelected, SearchTotal,
-    SecureInput, SetTitle, SizeLimit,
+    CellSize, ColorChange, ColorKind, CommandFinished, ConfigChange, InitialSize, MouseOverLink,
+    Pwd, ReloadConfig, SearchSelected, SearchTotal, SecureInput, SetTitle, SizeLimit,
 };
 use rustty_apprt_api::Surface as ApprtSurface;
 
@@ -521,9 +534,8 @@ impl Mouse {
     /// Return the left-click pin only if it still belongs to the active screen.
     // fn activeLeftClickPin(self: *const Mouse, screens: *const terminal.ScreenSet) ?*terminal.Pin {
     //
-    // PORT NOTE: the C8 (:1594) / C13+ (:4650) callsites land later; the
-    // allow is removed when the first one does.
-    #[allow(dead_code)]
+    // (the C8 mouseRefreshLinks :1594 callsite is live; the C13+ :4650
+    // callsites land later.)
     fn activeLeftClickPin(
         &self,
         screens: &terminal::screen_set::ScreenSet,
@@ -1088,7 +1100,9 @@ fn font_shared_grid_set_derived_config(
 /// concrete sources its bodies reach (the app.rs `Error` union precedent);
 /// the remaining chunk-owned bodies (C8/C9/C14/C15) keep growing it at each
 /// growth point.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// (C8 dropped the C7 `Clone`/`Copy`/`Eq` derives: the new `FontGrid` payload
+// — `shared_grid_set::Error` — is Debug-only, the InitError precedent.)
+#[derive(Debug)]
 pub enum Error {
     /// The apprt seam edges (`rt_app.performAction`, `rt_surface.
     /// getCursorPos`) — the opaque apprt-api growth-point marker.
@@ -1097,9 +1111,17 @@ pub enum Error {
     /// `queueRender`) — the D6 placeholder seam.
     Xev(rustty_xev::NotifyError),
     /// vt terminal/highlight storage failures (`searchCallback_`'s
-    /// `Flattened.clone`) — Zig `Allocator.Error` surfaced as vt
-    /// `OutOfMemory` (the vt convention).
+    /// `Flattened.clone`, `mouseRefreshLinks`'s `selectionString`) — Zig
+    /// `Allocator.Error` surfaced as vt `OutOfMemory` (the vt convention).
     OutOfMemory(terminal::pagelist::OutOfMemory),
+    /// `font.SharedGridSet.ref` (`setFontSize` — C8).
+    FontGrid(shared_grid_set::Error),
+    /// `rendererpkg.Message.initChangeConfig` (`updateConfig` — C8) — the
+    /// renderer message.rs growth-point marker (config-coupled placeholder).
+    InitChangeConfig(rendererpkg::message::InitChangeConfigError),
+    /// `std.unicode.Utf8View.init`'s `error.InvalidUtf8`
+    /// (`preeditCallback` — C8).
+    Utf8(std::str::Utf8Error),
 }
 
 impl From<apprt::ApprtError> for Error {
@@ -1120,17 +1142,51 @@ impl From<terminal::pagelist::OutOfMemory> for Error {
     }
 }
 
+impl From<shared_grid_set::Error> for Error {
+    fn from(err: shared_grid_set::Error) -> Error {
+        Error::FontGrid(err)
+    }
+}
+
+impl From<rendererpkg::message::InitChangeConfigError> for Error {
+    fn from(err: rendererpkg::message::InitChangeConfigError) -> Error {
+        Error::InitChangeConfig(err)
+    }
+}
+
+impl From<std::str::Utf8Error> for Error {
+    fn from(err: std::str::Utf8Error) -> Error {
+        Error::Utf8(err)
+    }
+}
+
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Error::Apprt(err) => err.fmt(f),
             Error::Xev(err) => write!(f, "core surface operation failed: {err:?}"),
             Error::OutOfMemory(err) => write!(f, "core surface operation failed: {err:?}"),
+            Error::FontGrid(err) => write!(f, "core surface operation failed: {err:?}"),
+            Error::InitChangeConfig(err) => write!(f, "core surface operation failed: {err:?}"),
+            Error::Utf8(err) => err.fmt(f),
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+/// Errors from [`Surface::recomputeInitialSize`].
+// const InitialSizeError = error{
+//     ContentScaleUnavailable,
+//     AppActionFailed,
+// };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitialSizeError {
+    // ContentScaleUnavailable,
+    ContentScaleUnavailable,
+    // AppActionFailed,
+    AppActionFailed,
+}
 
 /// PORT NOTE (Rust-only glue): [`Surface::init`]'s reference return is `!void`
 /// with an *inferred* error union — the merge of every `try` source in the
@@ -1261,6 +1317,22 @@ struct IoThreadArgs<A: apprt::App + 'static> {
 
 // SAFETY: see the newtype doc — stable allocation, sole-user-until-join.
 unsafe impl<A: apprt::App + 'static> Send for IoThreadArgs<A> {}
+
+/// PORT NOTE ([ADV 6.1], Rust-only glue): the reference's paired
+/// `crash.sentry.thread_state = self.crashThreadState();
+/// defer crash.sentry.thread_state = null;` sites (13×, Surface.zig:2469..
+/// 4708 — sizeCallback/preeditCallback are C8's two) map the Zig `defer` onto
+/// `Drop` — the guard clears the crash thread-local on EVERY exit path (`?`
+/// propagation included), declared right after the set so it drops LAST at
+/// each site (the reference's LIFO defer position).
+struct ThreadStateGuard;
+
+impl Drop for ThreadStateGuard {
+    fn drop(&mut self) {
+        // defer crash.sentry.thread_state = null;
+        crash::sentry::clearThreadState();
+    }
+}
 
 impl<A: apprt::App + 'static> Surface<A> {
     /// Create a new surface. This must be called from the main thread. The
@@ -3627,48 +3699,614 @@ impl<A: apprt::App + 'static> Surface<A> {
         Ok(())
     }
 
-    /// Called when our renderer health state changes.
+    /// Call this when modifiers change. This is safe to call even if modifiers
+    /// match the previous state.
+    ///
+    /// This is not publicly exported because modifier changes happen implicitly
+    /// on mouse callbacks, key callbacks, etc.
+    ///
+    /// The renderer state mutex MUST NOT be held.
+    // fn modsChanged(self: *Surface, mods: input.Mods) void {
     //
-    // PORT NOTE (STUB — chunk C8 fills): `fn updateRendererHealth(self:
-    // *Surface, health: rendererpkg.Health) void` — Surface.zig:1677
-    // (handleMessage's :1090 callsite lands with C7).
+    // PORT NOTE: the C10 keyCallback (:2720) / C12 mouseButtonCallback
+    // (:3774) / C13 cursorPosCallback (:4558) callsites land later; the allow
+    // is removed when the first one does.
+    #[allow(dead_code)]
+    fn modsChanged(&mut self, mods: Mods) {
+        // The only place we keep track of mods currently is on the mouse.
+        // if (!self.mouse.mods.equal(mods)) {
+        if !self.mouse.mods.equal(mods) {
+            // The mouse mods only contain binding modifiers since we don't
+            // want caps/num lock or sided modifiers to affect the mouse.
+            // self.mouse.mods = mods.binding();
+            self.mouse.mods = mods.binding();
+
+            // We also need to update the renderer so it knows if it should
+            // highlight links. Additionally, mark the screen as dirty so
+            // that the highlight state of all links is properly updated.
+            {
+                // self.renderer_state.mutex.lock();
+                // defer self.renderer_state.mutex.unlock();
+                //
+                // (guard-less zigstd Mutex — CORE_BLUEPRINT §3; the defer is
+                // the explicit unlock at the block end.)
+                unsafe { (*self.renderer_state.mutex).lock() };
+                // self.renderer_state.mouse.mods = self.mouseModsWithCapture(self.mouse.mods);
+                self.renderer_state.mouse.mods = self.mouseModsWithCapture(self.mouse.mods);
+
+                // We use the clear screen dirty flag to force a rebuild of all
+                // rows because changing mouse mods can affect the highlight state
+                // of a link. If there is no link this seems very wasteful but
+                // its really only one frame so it's not so bad.
+                // self.renderer_state.terminal.flags.dirty.clear = true;
+                unsafe { (*self.renderer_state.terminal).flags.dirty.clear = true };
+
+                // (the deferred mutex unlock — block end)
+                unsafe { (*self.renderer_state.mutex).unlock() };
+            }
+
+            // self.queueRender() catch |err| {
+            //     // Not a big deal if this fails.
+            //     log.warn("failed to notify renderer of mods change err={}", .{err});
+            // };
+            if let Err(_err) = self.queueRender() {
+                // Not a big deal if this fails.
+                // log.warn("failed to notify renderer of mods change err={}", .{err});
+            }
+        }
+    }
+
+    /// Call this whenever the mouse moves or mods changed. The time
+    /// at which this is called may matter for the correctness of other
+    /// mouse events (see cursorPosCallback) but this is shared logic
+    /// for multiple events.
+    // fn mouseRefreshLinks(
+    //     self: *Surface,
+    //     pos: apprt.CursorPos,
+    //     pos_vp: terminal.point.Coordinate,
+    //     over_link: bool,
+    // ) !void {
+    //
+    // PORT NOTE: the C10 keyCallback (:2733) / C13 cursorPosCallback (:4609)
+    // callsites land later (both call with the renderer mutex held); the
+    // allow is removed when the first one does. The inferred `!void` is the
+    // [`Error`] union.
+    #[allow(dead_code)]
+    fn mouseRefreshLinks(
+        &mut self,
+        pos: apprt::CursorPos,
+        pos_vp: terminal::point::Coordinate,
+        over_link: bool,
+    ) -> Result<(), Error> {
+        // If the position is outside our viewport, do nothing
+        // if (pos.x < 0 or pos.y < 0) return;
+        if pos.x < 0.0 || pos.y < 0.0 {
+            return Ok(());
+        }
+
+        // Update the last point that we checked for links so we don't
+        // recheck if the mouse moves some pixels to the same point.
+        // self.mouse.link_point = pos_vp;
+        self.mouse.link_point = Some(pos_vp);
+
+        // We use an arena for everything below to make things easy to clean up.
+        // In the case we don't do any allocs this is very cheap to setup
+        // (effectively just struct init).
+        // var arena = ArenaAllocator.init(self.alloc);
+        // defer arena.deinit();
+        // const alloc = arena.allocator();
+        //
+        // PORT NOTE (collapsed arena): the allocations below are owned values
+        // that free on drop (the DerivedConfig arena-collapse precedent).
+        let alloc = self.alloc;
+
+        // Get our link at the current position. This returns null if there
+        // isn't a link OR if we shouldn't be showing links for some reason
+        // (see further comments for cases).
+        // const link_: ?apprt.action.MouseOverLink, const preview: bool = link: {
+        //
+        // PORT NOTE: the Zig multi-value labeled break is a Rust tuple; the
+        // `MouseOverLink` payload BORROWS (`url: &[u8]`), so the block yields
+        // the OWNED url bytes (the collapsed arena's allocation) and the
+        // `.{ .url = ... }` literal is realized at the performAction sites
+        // below.
+        let (link_, preview): (Option<Vec<u8>>, bool) = 'link: {
+            // If we clicked and our mouse moved cells then we never
+            // highlight links until the mouse is unclicked. This follows
+            // standard macOS and Linux behavior where a click and drag cancels
+            // mouse actions.
+            // const left_idx = @intFromEnum(input.MouseButton.left);
+            let left_idx = input_mouse::Button::Left as usize;
+            // if (self.mouse.click_state[left_idx] == .press) click: {
+            if self.mouse.click_state[left_idx] == input_mouse::ButtonState::Press {
+                'click: {
+                    // const pin = self.mouse.activeLeftClickPin(&self.io.terminal.screens) orelse break :click;
+                    let pin = match self.mouse.activeLeftClickPin(&self.io.terminal.screens) {
+                        Some(v) => v,
+                        None => break 'click,
+                    };
+                    // const click_pt = self.io.terminal.screens.active.pages.pointFromPin(
+                    //     .viewport,
+                    //     pin.*,
+                    // ) orelse break :click;
+                    let click_pt = match unsafe {
+                        (*self.io.terminal.screens.active)
+                            .pages
+                            .point_from_pin(terminal::point::Tag::Viewport, *pin)
+                    } {
+                        Some(v) => v,
+                        None => break 'click,
+                    };
+
+                    // if (!click_pt.coord().eql(pos_vp)) {
+                    if !click_pt.coord().eql(pos_vp) {
+                        // log.debug("mouse moved while left click held, ignoring link hover", .{});
+                        // break :link .{ null, false };
+                        break 'link (None, false);
+                    }
+                }
+            }
+
+            // const link = (try self.linkAtPos(pos)) orelse break :link .{ null, false };
+            let link = match self.linkAtPos(pos)? {
+                Some(v) => v,
+                None => break 'link (None, false),
+            };
+            // switch (link.action) {
+            match link.action {
+                // .open => {
+                link::Action::Open => {
+                    // const str = try self.io.terminal.screens.active.selectionString(alloc, .{
+                    //     .sel = link.selection,
+                    //     .trim = false,
+                    // });
+                    let str_ = unsafe { &mut *self.io.terminal.screens.active }.selection_string(
+                        alloc,
+                        terminal::screen::SelectionString {
+                            sel: link.selection,
+                            trim: false,
+                            map: None,
+                        },
+                    )?;
+                    // break :link .{
+                    //     .{ .url = str },
+                    //     self.config.link_previews == .true,
+                    // };
+                    break 'link (
+                        Some(str_),
+                        self.config.link_previews == configpkg::value_types::LinkPreviews::True,
+                    );
+                }
+
+                // ._open_osc8 => {
+                link::Action::OpenOsc8 => {
+                    // Show the URL in the status bar
+                    // const pin = link.selection.start();
+                    let pin = link.selection.start();
+                    // const uri = self.osc8URI(pin) orelse {
+                    //     log.warn("failed to get URI for OSC8 hyperlink", .{});
+                    //     break :link .{ null, false };
+                    // };
+                    let uri = match self.osc8URI(pin) {
+                        Some(v) => v,
+                        None => {
+                            // log.warn("failed to get URI for OSC8 hyperlink", .{});
+                            break 'link (None, false);
+                        }
+                    };
+                    // break :link .{
+                    //     .{ .url = try alloc.dupeZ(u8, uri) },
+                    //     self.config.link_previews != .false,
+                    // };
+                    //
+                    // (`dupeZ` — an owned copy of the raw URI bytes; the
+                    // OOM-only `try` collapses.)
+                    break 'link (
+                        Some(uri.to_vec()),
+                        self.config.link_previews != configpkg::value_types::LinkPreviews::False,
+                    );
+                }
+            }
+        };
+
+        // If we found a link, setup our internal state and notify the
+        // apprt so it can highlight it.
+        // if (link_) |link| {
+        if let Some(link) = link_ {
+            // self.renderer_state.mouse.point = pos_vp;
+            self.renderer_state.mouse.point = Some(pos_vp);
+            // self.mouse.over_link = true;
+            self.mouse.over_link = true;
+            // self.renderer_state.terminal.screens.active.dirty.hyperlink_hover = true;
+            unsafe {
+                (*(*self.renderer_state.terminal).screens.active)
+                    .dirty
+                    .hyperlink_hover = true;
+            }
+            // _ = try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .mouse_shape,
+            //     .pointer,
+            // );
+            let _ = unsafe { &*self.rt_app }.perform_action(
+                apprt::Target::Surface(&*self),
+                apprt::Action::MouseShape(terminal::mouse::Shape::Pointer),
+            )?;
+
+            // if (preview) {
+            if preview {
+                // _ = try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .mouse_over_link,
+                //     link,
+                // );
+                let _ = unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::MouseOverLink(MouseOverLink { url: &link }),
+                )?;
+            }
+
+            // try self.queueRender();
+            self.queueRender()?;
+            // return;
+            return Ok(());
+        }
+
+        // No link, if we're previously over a link then we need to clear
+        // the over-link apprt state.
+        // if (over_link) {
+        if over_link {
+            // _ = try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .mouse_shape,
+            //     self.io.terminal.mouse_shape,
+            // );
+            let _ = unsafe { &*self.rt_app }.perform_action(
+                apprt::Target::Surface(&*self),
+                apprt::Action::MouseShape(self.io.terminal.mouse_shape),
+            )?;
+            // _ = try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .mouse_over_link,
+            //     .{ .url = "" },
+            // );
+            let _ = unsafe { &*self.rt_app }.perform_action(
+                apprt::Target::Surface(&*self),
+                apprt::Action::MouseOverLink(MouseOverLink { url: b"" }),
+            )?;
+            // try self.queueRender();
+            self.queueRender()?;
+            // return;
+            return Ok(());
+        }
+
+        Ok(())
+    }
+
+    /// Called when our renderer health state changes.
+    // fn updateRendererHealth(self: *Surface, health: rendererpkg.Health) void {
     fn updateRendererHealth(&mut self, health: rendererpkg::Health) {
-        let _ = health;
-        unimplemented!("Surface.updateRendererHealth lands with core chunk C8 (Surface.zig:1677)")
+        // log.warn("renderer health status change status={}", .{health});
+        // _ = self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .renderer_health,
+        //     health,
+        // ) catch |err| {
+        //     log.warn("failed to notify app of renderer health change err={}", .{err});
+        // };
+        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+            apprt::Target::Surface(&*self),
+            apprt::Action::RendererHealth(health),
+        ) {
+            // log.warn("failed to notify app of renderer health change err={}", .{err});
+        }
     }
 
     /// Called when the scrollbar state changes.
-    //
-    // PORT NOTE (STUB — chunk C8 fills): `fn updateScrollbar(self: *Surface,
-    // scrollbar: terminal.Scrollbar) void` — Surface.zig:1689
-    // (handleMessage's :1092 callsite lands with C7).
+    // fn updateScrollbar(self: *Surface, scrollbar: terminal.Scrollbar) void {
     fn updateScrollbar(&mut self, scrollbar: terminal::pagelist::grow::Scrollbar) {
-        let _ = scrollbar;
-        unimplemented!("Surface.updateScrollbar lands with core chunk C8 (Surface.zig:1689)")
+        // _ = self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .scrollbar,
+        //     scrollbar,
+        // ) catch |err| {
+        //     log.warn("failed to notify app of scrollbar change err={}", .{err});
+        // };
+        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+            apprt::Target::Surface(&*self),
+            apprt::Action::Scrollbar(scrollbar),
+        ) {
+            // log.warn("failed to notify app of scrollbar change err={}", .{err});
+        }
+    }
+
+    /// This should be called anytime `config_conditional_state` changes
+    /// so that the apprt can reload the configuration.
+    // fn notifyConfigConditionalState(self: *Surface) void {
+    //
+    // PORT NOTE: the C13 colorSchemeCallback (:4720) callsite lands later;
+    // the allow is removed when it does.
+    #[allow(dead_code)]
+    fn notifyConfigConditionalState(&mut self) {
+        // _ = self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .reload_config,
+        //     .{ .soft = true },
+        // ) catch |err| {
+        //     log.warn("failed to notify app of config state change err={}", .{err});
+        // };
+        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+            apprt::Target::Surface(&*self),
+            apprt::Action::ReloadConfig(ReloadConfig { soft: true }),
+        ) {
+            // log.warn("failed to notify app of config state change err={}", .{err});
+        }
     }
 
     /// Update our configuration at runtime. This can be called by the apprt
     /// to set a surface-specific configuration that differs from the app
     /// or other surfaces.
-    //
-    // PORT NOTE (STUB — chunk C8 fills): `pub fn updateConfig(self: *Surface,
-    // original: *const configpkg.Config) !void` — Surface.zig:1714
-    // (handleMessage's :962 callsite lands with C7).
+    // pub fn updateConfig(
+    //     self: *Surface,
+    //     original: *const configpkg.Config,
+    // ) !void {
     pub fn updateConfig(&mut self, original: &configpkg::Config) -> Result<(), Error> {
-        let _ = original;
-        unimplemented!("Surface.updateConfig lands with core chunk C8 (Surface.zig:1714)")
+        // Apply our conditional state. If we fail to apply the conditional state
+        // then we log and attempt to move forward with the old config.
+        // var config_: ?configpkg.Config = original.changeConditionalState(
+        //     self.config_conditional_state,
+        // ) catch |err| err: {
+        //     log.warn("failed to apply conditional state to config err={}", .{err});
+        //     break :err null;
+        // };
+        //
+        // PARITY: not `.unwrap_or_default()` — the arm IS the reference's
+        // labeled catch block with its log site (the init precedent).
+        #[allow(clippy::manual_unwrap_or_default)]
+        let mut config_: Option<configpkg::Config> =
+            match original.change_conditional_state(self.config_conditional_state) {
+                Ok(v) => v,
+                Err(_err) => {
+                    // log.warn("failed to apply conditional state to config err={}", .{err});
+                    None
+                }
+            };
+        // defer if (config_) |*c| c.deinit();
+        //
+        // PORT NOTE: fired explicitly on the success path at the end of this
+        // fn; every early-return path maps to `config_`'s Drop (the init
+        // precedent).
+
+        // We want a config pointer for everything so we get that either
+        // based on our conditional state or the original config.
+        // const config: *const configpkg.Config = if (config_) |*c| c else original;
+        let config: &configpkg::Config = match config_.as_ref() {
+            Some(c) => c,
+            None => original,
+        };
+
+        // Update our new derived config immediately
+        // const derived = DerivedConfig.init(self.alloc, config) catch |err| {
+        //     // If the derivation fails then we just log and return. We don't
+        //     // hard fail in this case because we don't want to error the surface
+        //     // when config fails we just want to keep using the old config.
+        //     log.err("error updating configuration err={}", .{err});
+        //     return;
+        // };
+        let derived = match DerivedConfig::init(self.alloc, config) {
+            Ok(v) => v,
+            Err(_err) => {
+                // If the derivation fails then we just log and return. We don't
+                // hard fail in this case because we don't want to error the surface
+                // when config fails we just want to keep using the old config.
+                // log.err("error updating configuration err={}", .{err});
+                return Ok(());
+            }
+        };
+        // self.config.deinit();
+        self.config.deinit();
+        // self.config = derived;
+        //
+        // (the assignment drops the deinit-ed old value — the initErrdefers
+        // deinit-then-drop precedent.)
+        self.config = derived;
+
+        // If our mouse is hidden but we disabled mouse hiding, then show it again.
+        // if (!self.config.mouse_hide_while_typing and self.mouse.hidden) {
+        if !self.config.mouse_hide_while_typing && self.mouse.hidden {
+            // self.showMouse();
+            self.showMouse();
+        }
+
+        // If we are in the middle of a key sequence, clear it.
+        // self.endKeySequence(.drop, .free);
+        self.endKeySequence(KeySequenceQueued::Drop, KeySequenceMemory::Free);
+
+        // Deactivate all key tables since they may have changed. Importantly,
+        // we store pointers into the config as part of our table stack so
+        // we can't keep them active across config changes. But this behavior
+        // also matches key sequences.
+        // _ = self.deactivateAllKeyTables() catch |err| {
+        //     log.warn("failed to deactivate key tables err={}", .{err});
+        // };
+        if let Err(_err) = self.deactivateAllKeyTables() {
+            // log.warn("failed to deactivate key tables err={}", .{err});
+        }
+
+        // Before sending any other config changes, we give the renderer a new font
+        // grid. We could check to see if there was an actual change to the font,
+        // but this is easier and pretty rare so it's not a performance concern.
+        //
+        // (Calling setFontSize builds and sends a new font grid to the renderer.)
+        // try self.setFontSize(font_size: {
+        self.setFontSize('font_size: {
+            // If we have manually adjusted the font size, keep it that way.
+            // if (self.font_size_adjusted) {
+            if self.font_size_adjusted {
+                // log.info("font size manually adjusted, preserving previous size on config reload", .{});
+                // break :font_size self.font_size;
+                break 'font_size self.font_size;
+            }
+
+            // If we haven't, then we update to the configured font size.
+            // This allows config changes to update the font size. We used to
+            // never do this but it was a common source of confusion and people
+            // assumed that Ghostty was broken! This logic makes more sense.
+            // var size = self.font_size;
+            let mut size = self.font_size;
+            // size.points = std.math.clamp(config.@"font-size", 1.0, 255.0);
+            size.points = config.font_size.clamp(1.0, 255.0);
+            // break :font_size size;
+            size
+        })?;
+
+        // We need to store our configs in a heap-allocated pointer so that
+        // our messages aren't huge.
+        // var renderer_message = try rendererpkg.Message.initChangeConfig(self.alloc, config);
+        let renderer_message = rendererpkg::Message::initChangeConfig(self.alloc, config)?;
+        // errdefer renderer_message.deinit();
+        // var termio_config_ptr = try self.alloc.create(termio.Termio.DerivedConfig);
+        // errdefer self.alloc.destroy(termio_config_ptr);
+        // termio_config_ptr.* = try termio.Termio.DerivedConfig.init(self.alloc, config);
+        // errdefer termio_config_ptr.deinit();
+        //
+        // PORT NOTE: `alloc.create` + the out-write collapse into `Box::new`
+        // and the ported `termio::DerivedConfig::init` is infallible (its
+        // PORT NOTE), so no fallible site remains inside the errdefers' live
+        // ranges — all three collapse into ownership (message/Box drops).
+        let termio_config_ptr: Box<termio::DerivedConfig> =
+            Box::new(termio::DerivedConfig::init(config));
+
+        // _ = self.renderer_thread.mailbox.push(renderer_message, .{ .forever = {} });
+        let _ = unsafe { &*self.renderer_thread.mailbox }.push(renderer_message, Timeout::Forever);
+        // self.queueIo(.{
+        //     .change_config = .{
+        //         .alloc = self.alloc,
+        //         .ptr = termio_config_ptr,
+        //     },
+        // }, .unlocked);
+        //
+        // (the `.alloc` field collapses into the `ChangeConfig` Box ownership
+        // — the termio message.rs PORT NOTE.)
+        self.queueIo(
+            termio::Message::ChangeConfig {
+                ptr: termio_config_ptr,
+            },
+            termio::termio_impl::MutexState::Unlocked,
+        );
+
+        // With mailbox messages sent, we have to wake them up so they process it.
+        // self.queueRender() catch |err| {
+        //     log.warn("failed to notify renderer of config change err={}", .{err});
+        // };
+        if let Err(_err) = self.queueRender() {
+            // log.warn("failed to notify renderer of config change err={}", .{err});
+        }
+
+        // If we have a title set then we update our window to have the
+        // newly configured title.
+        // if (config.title) |title| _ = try self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .set_title,
+        //     .{ .title = title },
+        // );
+        if let Some(title) = &config.title {
+            let _ = unsafe { &*self.rt_app }.perform_action(
+                apprt::Target::Surface(&*self),
+                apprt::Action::SetTitle(SetTitle { title }),
+            )?;
+        }
+
+        // Notify the window
+        // _ = try self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .config_change,
+        //     .{ .config = config },
+        // );
+        let _ = unsafe { &*self.rt_app }.perform_action(
+            apprt::Target::Surface(&*self),
+            apprt::Action::ConfigChange(ConfigChange { config }),
+        )?;
+
+        // (the reference `defer if (config_) |*c| c.deinit();` — success
+        // path; see the PORT NOTE at the defer site above.)
+        if let Some(c) = config_.as_mut() {
+            c.deinit();
+        }
+
+        Ok(())
     }
 
     /// Recalculate the initial size of the window based on the
     /// configuration and invoke the apprt `initial_size` action if
     /// necessary.
-    //
-    // PORT NOTE (STUB — chunk C8 fills): `fn recomputeInitialSize(self:
-    // *Surface) InitialSizeError!void` — Surface.zig:1826 (init's caught
-    // callsite lands with C6; updateConfig's with C8; the `InitialSizeError`
-    // set lands with the body — the opaque [`Error`] marker meanwhile).
-    fn recomputeInitialSize(&mut self) -> Result<(), Error> {
-        unimplemented!("Surface.recomputeInitialSize lands with core chunk C8 (Surface.zig:1826)")
+    // fn recomputeInitialSize(
+    //     self: *Surface,
+    // ) InitialSizeError!void {
+    fn recomputeInitialSize(&mut self) -> Result<(), InitialSizeError> {
+        // Both width and height must be set for this to work, as
+        // documented on the config options.
+        // if (self.config.window_height <= 0 or
+        //     self.config.window_width <= 0) return;
+        //
+        // (`<= 0` on the unsigned reference fields is `== 0`.)
+        if self.config.window_height == 0 || self.config.window_width == 0 {
+            return Ok(());
+        }
+
+        // const scale = self.rt_surface.getContentScale() catch
+        //     return error.ContentScaleUnavailable;
+        let scale = match unsafe { &*self.rt_surface }.get_content_scale() {
+            Ok(v) => v,
+            Err(_) => return Err(InitialSizeError::ContentScaleUnavailable),
+        };
+        // const height = @max(
+        //     self.config.window_height,
+        //     min_window_height_cells,
+        // ) * self.size.cell.height;
+        let height = self.config.window_height.max(MIN_WINDOW_HEIGHT_CELLS) * self.size.cell.height;
+        // const width = @max(
+        //     self.config.window_width,
+        //     min_window_width_cells,
+        // ) * self.size.cell.width;
+        let width = self.config.window_width.max(MIN_WINDOW_WIDTH_CELLS) * self.size.cell.width;
+        // const width_f32: f32 = @floatFromInt(width);
+        let width_f32: f32 = width as f32;
+        // const height_f32: f32 = @floatFromInt(height);
+        let height_f32: f32 = height as f32;
+
+        // The final values are affected by content scale and we need to
+        // account for the padding so we get the exact correct grid size.
+        // const final_width: u32 =
+        //     @as(u32, @intFromFloat(@ceil(width_f32 / scale.x))) +
+        //     self.size.padding.left +
+        //     self.size.padding.right;
+        let final_width: u32 =
+            (width_f32 / scale.x).ceil() as u32 + self.size.padding.left + self.size.padding.right;
+        // const final_height: u32 =
+        //     @as(u32, @intFromFloat(@ceil(height_f32 / scale.y))) +
+        //     self.size.padding.top +
+        //     self.size.padding.bottom;
+        let final_height: u32 =
+            (height_f32 / scale.y).ceil() as u32 + self.size.padding.top + self.size.padding.bottom;
+
+        // _ = self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .initial_size,
+        //     .{ .width = final_width, .height = final_height },
+        // ) catch return error.AppActionFailed;
+        match unsafe { &*self.rt_app }.perform_action(
+            apprt::Target::Surface(&*self),
+            apprt::Action::InitialSize(InitialSize {
+                width: final_width,
+                height: final_height,
+            }),
+        ) {
+            Ok(_) => {}
+            Err(_) => return Err(InitialSizeError::AppActionFailed),
+        }
+
+        Ok(())
     }
 
     // PORT NOTE (STUB — chunk C9 fills): `fn clipboardWrite(self: *const
@@ -3695,6 +4333,131 @@ impl<A: apprt::App + 'static> Surface<A> {
         unimplemented!("Surface.setSelection lands with core chunk C9 (Surface.zig:2335)")
     }
 
+    /// Change the cell size for the terminal grid. This can happen as
+    /// a result of changing the font size at runtime.
+    // fn setCellSize(self: *Surface, size: rendererpkg.CellSize) !void {
+    fn setCellSize(&mut self, size: rendererpkg::size::CellSize) -> Result<(), Error> {
+        // Update our cell size within our size struct
+        // self.size.cell = size;
+        self.size.cell = size;
+        // self.balancePaddingIfNeeded();
+        self.balancePaddingIfNeeded();
+
+        // Notify the terminal
+        // self.queueIo(.{ .resize = self.size }, .unlocked);
+        self.queueIo(
+            termio::Message::Resize(self.size),
+            termio::termio_impl::MutexState::Unlocked,
+        );
+
+        // Update our terminal default size if necessary.
+        // self.recomputeInitialSize() catch |err| {
+        //     // We don't treat this as a fatal error because not setting
+        //     // an initial size shouldn't stop our terminal from working.
+        //     log.warn("unable to recompute initial window size: {}", .{err});
+        // };
+        if let Err(_err) = self.recomputeInitialSize() {
+            // We don't treat this as a fatal error because not setting
+            // an initial size shouldn't stop our terminal from working.
+            // log.warn("unable to recompute initial window size: {}", .{err});
+        }
+
+        // Notify the window
+        // _ = try self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .cell_size,
+        //     .{ .width = size.width, .height = size.height },
+        // );
+        let _ = unsafe { &*self.rt_app }.perform_action(
+            apprt::Target::Surface(&*self),
+            apprt::Action::CellSize(CellSize {
+                width: size.width,
+                height: size.height,
+            }),
+        )?;
+
+        Ok(())
+    }
+
+    /// Change the font size.
+    ///
+    /// This can only be called from the main thread.
+    // pub fn setFontSize(self: *Surface, size: font.face.DesiredSize) !void {
+    pub fn setFontSize(&mut self, size: DesiredSize) -> Result<(), Error> {
+        // log.debug("set font size size={}", .{size.points});
+
+        // Update our font size so future changes work
+        // self.font_size = size;
+        self.font_size = size;
+
+        // We need to build up a new font stack for this font size.
+        // const font_grid_key, const font_grid = try self.app.font_grid_set.ref(
+        //     &self.config.font,
+        //     self.font_size,
+        // );
+        let (font_grid_key, font_grid) = unsafe {
+            (*self.app)
+                .font_grid_set
+                .r#ref(&self.config.font, self.font_size)
+        }?;
+        // errdefer self.app.font_grid_set.deref(font_grid_key);
+        // (fired explicitly at the failure site below — the only fallible
+        // site in its live range.)
+
+        // Set our cell size
+        // try self.setCellSize(.{
+        //     .width = font_grid.metrics.cell_width,
+        //     .height = font_grid.metrics.cell_height,
+        // });
+        if let Err(err) = self.setCellSize(rendererpkg::size::CellSize {
+            width: unsafe { &*font_grid }.metrics.cell_width,
+            height: unsafe { &*font_grid }.metrics.cell_height,
+        }) {
+            // errdefer self.app.font_grid_set.deref(font_grid_key);
+            unsafe { (*self.app).font_grid_set.deref(font_grid_key) };
+            return Err(err);
+        }
+
+        // Notify our render thread of the new font stack. The renderer
+        // MUST accept the new font grid and deref the old.
+        // _ = self.renderer_thread.mailbox.push(.{
+        //     .font_grid = .{
+        //         .grid = font_grid,
+        //         .set = &self.app.font_grid_set,
+        //         .old_key = self.font_grid_key,
+        //         .new_key = font_grid_key,
+        //     },
+        // }, .{ .forever = {} });
+        //
+        // PORT NOTE (Rust ownership): the reference key copies are SHALLOW
+        // (Zig value-copies; the key memory belongs to the set's map). The
+        // rustty `Key` is OWNED (the shared_grid_set PORT NOTE), so the
+        // message's copies are `Clone`s (the Key `Clone` PORT NOTE) and the
+        // surface's old key value is dropped at the replacement below (a
+        // plain free the reference doesn't need).
+        let _ = unsafe { &*self.renderer_thread.mailbox }.push(
+            rendererpkg::Message::FontGrid {
+                grid: font_grid,
+                set: unsafe { &raw mut (*self.app).font_grid_set },
+                old_key: self.font_grid_key.clone(),
+                new_key: font_grid_key.clone(),
+            },
+            Timeout::Forever,
+        );
+
+        // Once we've sent the key we can replace our key
+        // self.font_grid_key = font_grid_key;
+        self.font_grid_key = font_grid_key;
+        // self.font_metrics = font_grid.metrics;
+        self.font_metrics = unsafe { &*font_grid }.metrics;
+
+        // Schedule render which also drains our mailbox
+        // self.queueRender() catch unreachable;
+        self.queueRender().unwrap_or_else(|_| unreachable!());
+
+        Ok(())
+    }
+
     /// This queues a render operation with the renderer thread. The render
     /// isn't guaranteed to happen immediately but it will happen as soon as
     /// practical.
@@ -3710,14 +4473,325 @@ impl<A: apprt::App + 'static> Surface<A> {
         Ok(())
     }
 
-    // PORT NOTE (STUB — chunk C8 fills): `fn resize(self: *Surface, size:
-    // rendererpkg.ScreenSize) !void` — Surface.zig:2485 (init's :708 callsite
-    // lands with C6; the sizeCallback/setFontSize callsites with C8/C11; the
-    // inferred error set lands with the body — the opaque [`Error`] marker
-    // meanwhile).
+    // pub fn sizeCallback(self: *Surface, size: apprt.SurfaceSize) !void {
+    //
+    // (the inferred `!void` is `resize`'s — the [`Error`] union.)
+    pub fn sizeCallback(&mut self, size: apprt::SurfaceSize) -> Result<(), Error> {
+        // Crash metadata in case we crash in here
+        // crash.sentry.thread_state = self.crashThreadState();
+        crash::sentry::setThreadState(self.crashThreadState());
+        // defer crash.sentry.thread_state = null;
+        // ([ADV 6.1] — the Drop guard clears at every exit below.)
+        let _thread_state = ThreadStateGuard;
+
+        // const new_screen_size: rendererpkg.ScreenSize = .{
+        //     .width = size.width,
+        //     .height = size.height,
+        // };
+        let new_screen_size: rendererpkg::size::ScreenSize = rendererpkg::size::ScreenSize {
+            width: size.width,
+            height: size.height,
+        };
+
+        // Update our screen size, but only if it actually changed. And if
+        // the screen size didn't change, then our grid size could not have
+        // changed, so we just return.
+        // if (self.size.screen.equals(new_screen_size)) return;
+        if self.size.screen.equals(new_screen_size) {
+            return Ok(());
+        }
+
+        // try self.resize(new_screen_size);
+        self.resize(new_screen_size)?;
+        Ok(())
+    }
+
+    // fn resize(self: *Surface, size: rendererpkg.ScreenSize) !void {
+    //
+    // (the reference body has no failing site — the inferred `!void` set is
+    // empty today; the `Result` shape carries the callers' `try`s.)
     fn resize(&mut self, size: rendererpkg::size::ScreenSize) -> Result<(), Error> {
-        let _ = size;
-        unimplemented!("Surface.resize lands with core chunk C8 (Surface.zig:2485)")
+        // Save our screen size
+        // self.size.screen = size;
+        self.size.screen = size;
+        // self.balancePaddingIfNeeded();
+        self.balancePaddingIfNeeded();
+
+        // Recalculate our grid size. Because Ghostty supports fluid resizing,
+        // its possible the grid doesn't change at all even if the screen size changes.
+        // We have to update the IO thread no matter what because we send
+        // pixel-level sizing to the subprocess.
+        // const grid_size = self.size.grid();
+        let grid_size = self.size.grid();
+        // if (grid_size.columns < 5 and (self.size.padding.left > 0 or self.size.padding.right > 0)) {
+        if grid_size.columns < 5 && (self.size.padding.left > 0 || self.size.padding.right > 0) {
+            // log.warn("WARNING: very small terminal grid detected with padding " ++
+            //     "set. Is your padding reasonable?", .{});
+        }
+        // if (grid_size.rows < 2 and (self.size.padding.top > 0 or self.size.padding.bottom > 0)) {
+        if grid_size.rows < 2 && (self.size.padding.top > 0 || self.size.padding.bottom > 0) {
+            // log.warn("WARNING: very small terminal grid detected with padding " ++
+            //     "set. Is your padding reasonable?", .{});
+        }
+
+        // Mail the IO thread
+        // self.queueIo(.{ .resize = self.size }, .unlocked);
+        self.queueIo(
+            termio::Message::Resize(self.size),
+            termio::termio_impl::MutexState::Unlocked,
+        );
+
+        Ok(())
+    }
+
+    /// Recalculate the balanced padding if needed.
+    // fn balancePaddingIfNeeded(self: *Surface) void {
+    fn balancePaddingIfNeeded(&mut self) {
+        // if (self.config.window_padding_balance == .false) return;
+        if self.config.window_padding_balance == configpkg::value_types::WindowPaddingBalance::False
+        {
+            return;
+        }
+        // const content_scale = try self.rt_surface.getContentScale();
+        //
+        // PORT NOTE: the reference `try` inside a `void` fn type-checks only
+        // because the comptime backend's `getContentScale` error set is EMPTY
+        // (an infallible field read — embedded.zig:650); the seam trait
+        // returns the opaque `ApprtError`, so the statically-empty `try` maps
+        // to the infallible unwrap (the catch-unreachable convention).
+        let content_scale = unsafe { &*self.rt_surface }
+            .get_content_scale()
+            .unwrap_or_else(|_| unreachable!());
+        // const x_dpi = content_scale.x * font.face.default_dpi;
+        let x_dpi = content_scale.x * f32::from(face::DEFAULT_DPI);
+        // const y_dpi = content_scale.y * font.face.default_dpi;
+        let y_dpi = content_scale.y * f32::from(face::DEFAULT_DPI);
+        // self.size.balancePadding(self.config.scaledPadding(x_dpi, y_dpi), self.config.window_padding_balance);
+        self.size.balance_padding(
+            self.config.scaledPadding(x_dpi, y_dpi),
+            self.config.window_padding_balance,
+        );
+    }
+
+    /// Called to set the preedit state for character input. Preedit is used
+    /// with dead key states, for example, when typing an accent character.
+    /// This should be called with null to reset the preedit state.
+    ///
+    /// The core surface will NOT reset the preedit state on charCallback or
+    /// keyCallback and we rely completely on the apprt implementation to track
+    /// the preedit state correctly.
+    ///
+    /// The preedit input must be UTF-8 encoded.
+    // pub fn preeditCallback(self: *Surface, preedit_: ?[]const u8) !void {
+    pub fn preeditCallback(&mut self, preedit_: Option<&[u8]>) -> Result<(), Error> {
+        // log.debug("text preeditCallback value={any}", .{preedit_});
+
+        // Crash metadata in case we crash in here
+        // crash.sentry.thread_state = self.crashThreadState();
+        crash::sentry::setThreadState(self.crashThreadState());
+        // defer crash.sentry.thread_state = null;
+        // ([ADV 6.1] — the Drop guard clears at every exit below, AFTER the
+        // explicit mutex unlocks: the reference's LIFO defer order.)
+        let _thread_state = ThreadStateGuard;
+
+        // self.renderer_state.mutex.lock();
+        // defer self.renderer_state.mutex.unlock();
+        //
+        // (guard-less zigstd Mutex — CORE_BLUEPRINT §3; the defer is the
+        // explicit unlock at every exit below.)
+        unsafe { (*self.renderer_state.mutex).lock() };
+
+        // We clear our selection when ANY OF:
+        // 1. We have an existing preedit
+        // 2. We have preedit text
+        // if (self.renderer_state.preedit != null or
+        //     preedit_ != null)
+        // {
+        if self.renderer_state.preedit.is_some() || preedit_.is_some() {
+            // if (self.config.selection_clear_on_typing) {
+            if self.config.selection_clear_on_typing {
+                // self.setSelection(null) catch {};
+                let _ = self.setSelection(None);
+            }
+        }
+
+        // We always clear our prior preedit
+        // if (self.renderer_state.preedit) |p| {
+        if let Some(p) = self.renderer_state.preedit.take() {
+            // self.alloc.free(p.codepoints);
+            drop(p.codepoints);
+            // self.renderer_state.preedit = null;
+            // (the `take()` above.)
+        }
+
+        // Mark preedit dirty flag
+        // self.io.terminal.flags.dirty.preedit = true;
+        self.io.terminal.flags.dirty.preedit = true;
+
+        // If we have no text, we're done. We queue a render in case we cleared
+        // a prior preedit (likely).
+        // const text = preedit_ orelse {
+        //     try self.queueRender();
+        //     return;
+        // };
+        let text = match preedit_ {
+            Some(v) => v,
+            None => {
+                let result = self.queueRender();
+                // (the deferred mutex unlock)
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return result.map_err(Error::from);
+            }
+        };
+
+        // We convert the UTF-8 text to codepoints.
+        // const view = try std.unicode.Utf8View.init(text);
+        // var it = view.iterator();
+        let view = match std::str::from_utf8(text) {
+            Ok(v) => v,
+            Err(err) => {
+                // (the deferred mutex unlock — the error exit)
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return Err(err.into());
+            }
+        };
+        let it = view.chars();
+
+        // Allocate the codepoints slice
+        // const Codepoint = rendererpkg.State.Preedit.Codepoint;
+        //
+        // (the reference nests it as `State.Preedit.Codepoint`; the port
+        // hoists it to `state::Codepoint` — the state.rs PORT NOTE.)
+        // var codepoints: std.ArrayListUnmanaged(Codepoint) = .{};
+        // defer codepoints.deinit(self.alloc);
+        //
+        // (the defer covers the toOwnedSlice-emptied list on every exit —
+        // Vec ownership: moved into the Preedit below or dropped.)
+        let mut codepoints: Vec<rendererpkg::state::Codepoint> = Vec::new();
+        // while (it.nextCodepoint()) |cp| {
+        for cp in it {
+            // const width: usize = @intCast(unicode.table.get(cp).width);
+            let width: usize = usize::from(unicode::table().get(cp as u32).width);
+
+            // I've never seen a preedit text with a zero-width character. In
+            // theory its possible but we can't really handle it right now.
+            // Let's just ignore it.
+            // if (width <= 0) continue;
+            //
+            // (`<= 0` on the unsigned width is `== 0`.)
+            if width == 0 {
+                continue;
+            }
+
+            // try codepoints.append(
+            //     self.alloc,
+            //     .{ .codepoint = cp, .wide = width >= 2 },
+            // );
+            codepoints.push(rendererpkg::state::Codepoint {
+                codepoint: cp as u32,
+                wide: width >= 2,
+            });
+        }
+
+        // If we have no codepoints, then we're done.
+        // if (codepoints.items.len == 0) {
+        if codepoints.is_empty() {
+            // try self.queueRender();
+            let result = self.queueRender();
+            // (the deferred mutex unlock)
+            unsafe { (*self.renderer_state.mutex).unlock() };
+            // return;
+            return result.map_err(Error::from);
+        }
+
+        // self.renderer_state.preedit = .{
+        //     .codepoints = try codepoints.toOwnedSlice(self.alloc),
+        // };
+        //
+        // (`toOwnedSlice` — the `Vec` IS the owned slice; the state.rs
+        // Preedit PORT NOTE.)
+        self.renderer_state.preedit = Some(rendererpkg::state::Preedit { codepoints });
+        // try self.queueRender();
+        let result = self.queueRender();
+        // (the deferred mutex unlock — the normal exit)
+        unsafe { (*self.renderer_state.mutex).unlock() };
+        result.map_err(Error::from)
+    }
+
+    // PORT NOTE (chunk C10 fills — Surface.zig:2605 `keyEventIsBinding`):
+    // the fn lands with the C10 key tier; its doc comment (:2597-2604)
+    // straddles the C8/C10 chunk-table boundary, preserved verbatim:
+    //
+    // /// Returns true if the given key event would trigger a keybinding
+    // /// if it were to be processed. This is useful for determining if
+    // /// a key event should be sent to the terminal or not.
+    // ///
+    // /// Note that this function does not check if the binding itself
+    // /// is performable, only if the key event would trigger a binding.
+    // /// If a performable binding is found and the event is not performable,
+    // /// then Ghosty will act as though the binding does not exist.
+
+    // PORT NOTE (STUB — chunk C10 fills): `fn deactivateAllKeyTables(self:
+    // *Surface) !bool` — Surface.zig:3075 (updateConfig's :1755 caught
+    // callsite lands with C8; the inferred error set lands with the body —
+    // the opaque [`Error`] marker meanwhile).
+    fn deactivateAllKeyTables(&mut self) -> Result<bool, Error> {
+        unimplemented!(
+            "Surface.deactivateAllKeyTables lands with core chunk C10 (Surface.zig:3075)"
+        )
+    }
+
+    /// End a key sequence. Safe to call if no key sequence is active.
+    ///
+    /// Action and mem determine the behavior of the queued inputs up to this
+    /// point.
+    //
+    // PORT NOTE (STUB — chunk C10 fills): `fn endKeySequence(self: *Surface,
+    // action: KeySequenceQueued, mem: KeySequenceMemory) void` —
+    // Surface.zig:3134 (updateConfig's :1749 callsite lands with C8; the
+    // param enums are the file-scope consts ported below).
+    fn endKeySequence(&mut self, action: KeySequenceQueued, mem: KeySequenceMemory) {
+        let _ = (action, mem);
+        unimplemented!("Surface.endKeySequence lands with core chunk C10 (Surface.zig:3134)")
+    }
+
+    /// Returns the link at the given cursor position, if any.
+    ///
+    /// Requires the renderer mutex is held.
+    //
+    // PORT NOTE (STUB — chunk C13 fills): `fn linkAtPos(self: *Surface, pos:
+    // apprt.CursorPos) !?Link` — Surface.zig:4279 (mouseRefreshLinks' :1606
+    // callsite lands with C8; the file-scope `Link` return type is ported
+    // below).
+    fn linkAtPos(&mut self, pos: apprt::CursorPos) -> Result<Option<Link>, Error> {
+        let _ = pos;
+        unimplemented!("Surface.linkAtPos lands with core chunk C13 (Surface.zig:4279)")
+    }
+
+    /// This returns the mouse mods to consider for link highlighting or
+    /// other purposes taking into account when shift is pressed for releasing
+    /// the mouse from capture.
+    ///
+    /// The renderer state mutex must be held.
+    //
+    // PORT NOTE (STUB — chunk C13 fills): `fn mouseModsWithCapture(self:
+    // *Surface, mods: input.Mods) input.Mods` — Surface.zig:4368
+    // (modsChanged's :1544 callsite lands with C8).
+    fn mouseModsWithCapture(&mut self, mods: Mods) -> Mods {
+        let _ = mods;
+        unimplemented!("Surface.mouseModsWithCapture lands with core chunk C13 (Surface.zig:4368)")
+    }
+
+    /// Return the URI for an OSC8 hyperlink at the given position or null
+    /// if there is no hyperlink.
+    //
+    // PORT NOTE (STUB — chunk C13 fills): `fn osc8URI(self: *Surface, pin:
+    // terminal.Pin) ?[]const u8` — Surface.zig:4439 (mouseRefreshLinks' :1622
+    // callsite lands with C8; the return borrows the pin's page memory — raw
+    // bytes `&[u8]`, never a lossy String).
+    fn osc8URI(&self, pin: terminal::pagelist::Pin) -> Option<&[u8]> {
+        let _ = pin;
+        unimplemented!("Surface.osc8URI lands with core chunk C13 (Surface.zig:4439)")
     }
 
     // PORT NOTE (STUB — chunk C13 fills): `pub fn posToViewport(self: Surface,
@@ -3727,6 +4801,12 @@ impl<A: apprt::App + 'static> Surface<A> {
     pub fn posToViewport(&self, xpos: f64, ypos: f64) -> terminal::point::Coordinate {
         let _ = (xpos, ypos);
         unimplemented!("Surface.posToViewport lands with core chunk C13 (Surface.zig:4726)")
+    }
+
+    // PORT NOTE (STUB — chunk C13 fills): `fn showMouse(self: *Surface) void`
+    // — Surface.zig:4753 (updateConfig's :1745 callsite lands with C8).
+    fn showMouse(&mut self) {
+        unimplemented!("Surface.showMouse lands with core chunk C13 (Surface.zig:4753)")
     }
 
     /// Perform a binding action. A binding is a keybinding. This function
@@ -3778,6 +4858,22 @@ impl<A: apprt::App + 'static> Surface<A> {
         )
     }
 
+    // fn crashThreadState(self: *Surface) crash.sentry.ThreadState {
+    //
+    // PORT NOTE (ported with C8, ahead of its C10 row — Surface.zig:6014;
+    // sizeCallback/preeditCallback are the first `crash.sentry.thread_state`
+    // sites, [ADV 6.1]).
+    fn crashThreadState(&self) -> crash::sentry::ThreadState<Surface<A>> {
+        // return .{
+        crash::sentry::ThreadState {
+            // .type = .main,
+            type_: crash::sentry::Type::Main,
+            // .surface = self,
+            surface: self,
+        }
+        // };
+    }
+
     /// Tell the surface to present itself to the user. This may involve raising the
     /// window and switching tabs.
     //
@@ -3789,12 +4885,74 @@ impl<A: apprt::App + 'static> Surface<A> {
     }
 }
 
+// PORT NOTE: the two file-scope param enums of `endKeySequence`
+// (Surface.zig:3128-3129, ported ahead of their C10 row — updateConfig's
+// `.drop`/`.free` callsite names them).
+// const KeySequenceQueued = enum { flush, drop };
+//
+// (the C10 `.flush`/`.retain` construction sites land later — the allows are
+// removed with them.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeySequenceQueued {
+    #[allow(dead_code)]
+    Flush,
+    Drop,
+}
+// const KeySequenceMemory = enum { retain, free };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeySequenceMemory {
+    #[allow(dead_code)]
+    Retain,
+    Free,
+}
+
+// PORT NOTE (chunk C9 fills — Surface.zig:1867 `pub const Text`): the struct
+// lands with C9 (Text/dumpText tier); its doc comment (:1865-1866) straddles
+// the C8/C9 chunk-table boundary, preserved verbatim:
+//
+// /// Represents text read from the terminal and some metadata about it
+// /// that is often useful to apprts.
+
+/// PORT: the file-scope `Link` returned by `linkAtPos` (Surface.zig:4270,
+/// ported ahead of its C13 row — mouseRefreshLinks names it). NOT the
+/// `DerivedConfig.Link` sibling ([`DerivedConfigLink`]).
+// const Link = struct {
+struct Link {
+    // action: input.Link.Action,
+    action: link::Action,
+    // selection: terminal.Selection,
+    selection: terminal::selection::Selection,
+}
+
 /// The already-landed A5 seam (CORE_BLUEPRINT §1): `Target.cval` reads
 /// `v.rt_surface` off the core `*CoreSurface` — rustty-core's `Surface`
 /// hands the opaque pointer out through the interface trait.
 impl<A: apprt::App + 'static> apprt::CoreSurfaceHandle for Surface<A> {
     fn rt_surface_ptr(&self) -> *mut core::ffi::c_void {
         self.rt_surface.cast()
+    }
+}
+
+/// The crash seam realized (CORE_BLUEPRINT §1; landed with C8's
+/// `crashThreadState`, ahead of its C10 row): `beforeSend`'s surface
+/// metadata reads — `surface.size.screen`, `surface.size.grid()`,
+/// `surface.size.cell` — as plain `(u32, u32)` tuples (crash must not dep
+/// rustty-renderer for the size types; the rustty-crash module doc).
+impl<A: apprt::App + 'static> crash::sentry::ThreadStateSurface for Surface<A> {
+    /// `surface.size.screen.{width, height}` (sentry.zig:217/221).
+    fn screen_size(&self) -> (u32, u32) {
+        (self.size.screen.width, self.size.screen.height)
+    }
+
+    /// `surface.size.grid().{columns, rows}` (sentry.zig:214).
+    fn grid_size(&self) -> (u32, u32) {
+        let g = self.size.grid();
+        (u32::from(g.columns), u32::from(g.rows))
+    }
+
+    /// `surface.size.cell.{width, height}` (sentry.zig:233/237).
+    fn cell_size(&self) -> (u32, u32) {
+        (self.size.cell.width, self.size.cell.height)
     }
 }
 
