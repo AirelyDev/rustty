@@ -1050,6 +1050,28 @@ mod test_runtime {
         app: *mut TestApp,
     }
 
+    /// rustty-only test glue (C5 follow-up): the full `Surface<A>` field set
+    /// landed with chunk C5, and a real `Surface` is untestable-by-
+    /// construction (CORE_BLUEPRINT §7 — init spawns pty/renderer/io
+    /// threads). The reference App is handed POINTERS to Surfaces whose
+    /// memory `Surface.init` populates in place (`self: *Surface` on
+    /// `undefined` memory); these seam tests need only the two fields App
+    /// reads (`id`, `rt_surface`), so they fabricate exactly that — a
+    /// `MaybeUninit<Surface>` with only those fields written (sound: field-
+    /// projected raw-pointer writes; the other fields are never read, and
+    /// `MaybeUninit` never drops).
+    fn fabricateSurface(
+        mu: &mut std::mem::MaybeUninit<Surface<TestApp>>,
+        id: u64,
+    ) -> *mut Surface<TestApp> {
+        let ptr = mu.as_mut_ptr();
+        unsafe {
+            std::ptr::addr_of_mut!((*ptr).id).write(id);
+            std::ptr::addr_of_mut!((*ptr).rt_surface).write(std::ptr::null_mut());
+        }
+        ptr
+    }
+
     impl apprt::Surface for TestSurface {
         type App = TestApp;
         type Core = Surface<TestApp>;
@@ -1258,15 +1280,13 @@ mod test_runtime {
         let mut rt_app = TestApp::new();
         let mut app = App::<TestApp>::init(Allocator).unwrap();
 
-        let mut core = Surface::<TestApp> {
-            id: 1,
-            rt_surface: std::ptr::null_mut(),
-        };
+        let mut core_mu = std::mem::MaybeUninit::<Surface<TestApp>>::uninit();
+        let core = fabricateSurface(&mut core_mu, 1);
         let mut rt_surface = TestSurface {
-            core: &mut core,
+            core,
             app: &mut rt_app,
         };
-        core.rt_surface = &mut rt_surface;
+        unsafe { std::ptr::addr_of_mut!((*core).rt_surface).write(&mut rt_surface) };
 
         app.addSurface(&mut rt_surface);
         assert_eq!(app.surfaces.len(), 1);
@@ -1276,7 +1296,7 @@ mod test_runtime {
         );
 
         // While registered, the surface resolves by its unique ID.
-        assert_eq!(app.findSurfaceByID(1), Some(std::ptr::addr_of_mut!(core)));
+        assert_eq!(app.findSurfaceByID(1), Some(core));
         assert!(app.findSurfaceByID(2).is_none());
 
         rt_app.actions.lock().unwrap().clear();
@@ -1298,24 +1318,22 @@ mod test_runtime {
         let mut rt_app = TestApp::new();
         let mut app = App::<TestApp>::init(Allocator).unwrap();
 
-        let mut core = Surface::<TestApp> {
-            id: 7,
-            rt_surface: std::ptr::null_mut(),
-        };
+        let mut core_mu = std::mem::MaybeUninit::<Surface<TestApp>>::uninit();
+        let core = fabricateSurface(&mut core_mu, 7);
         let mut rt_surface = TestSurface {
-            core: &mut core,
+            core,
             app: &mut rt_app,
         };
-        core.rt_surface = &mut rt_surface;
+        unsafe { std::ptr::addr_of_mut!((*core).rt_surface).write(&mut rt_surface) };
 
         // Unknown surfaces don't focus (hasSurface validation).
-        app.focusSurface(&mut core);
+        app.focusSurface(core);
         assert!(app.focused_surface.is_none());
 
         app.addSurface(&mut rt_surface);
-        app.focusSurface(&mut core);
-        assert_eq!(app.focused_surface, Some(std::ptr::addr_of_mut!(core)));
-        assert_eq!(app.focusedSurface(), Some(std::ptr::addr_of_mut!(core)));
+        app.focusSurface(core);
+        assert_eq!(app.focused_surface, Some(core));
+        assert_eq!(app.focusedSurface(), Some(core));
 
         app.deleteSurface(&mut rt_surface);
         assert!(app.focused_surface.is_none());

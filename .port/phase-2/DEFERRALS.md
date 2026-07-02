@@ -905,3 +905,50 @@ glue, NOT a port) with 13 seam tests. Deferral ledger:
   Surface.zig-scoped grep predates. rustty-datastruct `BlockingQueue` gained
   the by-value `.{}` constructor as a manual `Default` (App.zig:99
   `.mailbox = .{}` embeds the queue by value; `create()` now wraps it).
+
+## rustty-core C5 (core tier) — Surface skeleton + DerivedConfig (field-parity audit)
+
+Chunk C5 of CORE_BLUEPRINT §6 lands Surface.zig:1-456 in
+`crates/rustty-core/src/surface.rs`: the full `Surface<A>` field set (§1),
+`InputEffect`/`Search`/`Mouse` (+`activeLeftClickPin`)/`Keyboard`
+(+`TableStackEntry`, the anonymous `table_stack` element struct),
+`DerivedConfig` (+`DerivedConfigLink`, `init`, `deinit`, `scaledPadding`),
+the `Mailbox`/`Message` re-exports (Surface.zig:15-16), and the
+`SurfaceMailbox<A>` `push`/`AppMailbox` impl (apprt/surface.zig:135, §1/§3).
+Field-parity audit (config-cluster lesson): Surface 31==31, Mouse 10==10,
+Keyboard 4==4 (+2 TableStackEntry), Search 2==2, DerivedConfig 46==45+
+collapsed `arena` (documented), DerivedConfig.Link 3==3, Mailbox 2==2 —
+names and order 1:1. Deferral ledger:
+
+- **DEFERRED (pre-existing font-shaper scaffold, new callsite): freetype
+  load flags through the break-#9 DI bridge.** The `.font = try
+  font.SharedGridSet.DerivedConfig.init(alloc, config)` line (Surface.zig:
+  368) is realized as core-local glue (`font_shared_grid_set_derived_config`)
+  because the reference init is duck-typed over the GLOBAL config while
+  rustty-font-shaper's `DerivedConfig::init` takes its break-#9 subset type;
+  core is the first crate that sees both. All fields convert exactly (both
+  sides model the SAME reference config types; `Modifier`/`CodepointMap` are
+  literally shared rustty-font types) EXCEPT `freetype-load-flags`: on macOS
+  the shaper type is `()` (the reference `void` arm — exact); on freetype
+  targets the shaper still carries its `_private` scaffold (face/mod.rs), so
+  the config value flows only when the Linux freetype backend DI lands.
+  0 tests, R1-safe.
+- **SEQUENCING allows (not deferrals; later chunks consume IN PLACE):**
+  `#[allow(dead_code)]` on `MAX_ACTIVE_KEY_TABLES` (first consumer C14a,
+  Surface.zig:5495), `Mouse.activeLeftClickPin` (C8 :1594, C13+ :4650) and
+  `DerivedConfig.scaledPadding` (C6 :536, C8 :2514, C11 :3630) — each allow
+  is removed when its first callsite lands.
+- **Documented shape mappings (not deferrals):** `renderer_thr`/`io_thr`
+  `std.Thread`-undefined-until-spawn -> `Option<JoinHandle<()>>` (§8.5);
+  `Search.deinit` by-value receiver (`JoinHandle::join` consumes; callers
+  `take()` the `Option<Search>` — same drop point); `DerivedConfig.arena`
+  collapsed to owned fields (font-shaper precedent; `deinit` keeps the
+  explicit regex teardown, and the on-error regex-leak behavior of the
+  reference links loop is reproduced exactly by the `Vec` drop);
+  `DerivedConfig.title` owned clone of the reference's shallow slice copy.
+- **Rust-only test glue (app.rs, not a port):** the two C4 seam tests that
+  fabricated a 2-field `Surface` literal now use `fabricateSurface` — a
+  `MaybeUninit<Surface<TestApp>>` with ONLY the two App-read fields (`id`,
+  `rt_surface`) written via field-projected raw pointers (the reference
+  hands App pointers to `undefined` Surface memory; `Surface<A>` is
+  untestable-by-construction per §7).

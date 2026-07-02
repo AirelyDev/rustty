@@ -9,8 +9,12 @@
 //! decision gate below; chunk C2 landed `surface_mouse` in full — done; chunk
 //! C3 landed the `renderer_seam` dependency placeholders + the minimal
 //! `app`/`surface` module skeletons they name; chunk C4 landed ALL of App.zig
-//! in `app` (+ its rustty-only `test_runtime` seam tests); the full Surface
-//! port lands C5+ per CORE_BLUEPRINT §6).
+//! in `app` (+ its rustty-only `test_runtime` seam tests); chunk C5 landed
+//! Surface.zig:1-456 in `surface` — the full `Surface<A>` field set, the
+//! `InputEffect`/`Search`/`Mouse`/`Keyboard` types, `DerivedConfig`
+//! (+`scaledPadding`) under the field-parity audit, and the
+//! `SurfaceMailbox<A>` `AppMailbox` impl; the Surface function bodies land
+//! C6..C15 per CORE_BLUEPRINT §6).
 //!
 //! Carved incrementally (R1: every line/comment/test{} ported as the crate is
 //! carved, leaves-first, under the acyclicity gate per R4).
@@ -27,11 +31,13 @@ pub mod app;
 // `Options<A>` (chunk C3).
 pub mod renderer_seam;
 
-// PORT NOTE: Surface.zig — chunks C5+ own the full file; C3 landed the
-// `Surface<A>` shell + the `SurfaceMailbox<A>` (apprt.surface.Mailbox) field
-// shape (renderer_seam::Options<A> names it); C4 added the minimal slice
-// App.zig touches (`id`/`rt_surface`, the `CoreSurfaceHandle` impl, and the
-// C6/C7/C14 method stubs).
+// PORT NOTE: Surface.zig — C3 landed the `Surface<A>` shell + the
+// `SurfaceMailbox<A>` (apprt.surface.Mailbox) field shape (renderer_seam::
+// Options<A> names it); C4 added the minimal slice App.zig touches (the
+// `CoreSurfaceHandle` impl and the C6/C7/C14 method stubs); C5 landed the
+// full skeleton (Surface.zig:1-456 — struct fields, InputEffect/Search/
+// Mouse/Keyboard, DerivedConfig, the SurfaceMailbox AppMailbox impl); the
+// function bodies land C6..C15 IN PLACE.
 pub mod surface;
 
 // PORT NOTE: Surface.zig:38 `const SurfaceMouse = @import("surface_mouse.zig");`
