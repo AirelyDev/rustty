@@ -166,6 +166,12 @@ pub fn format_styled(fmt: Format) -> bool {
     }
 }
 
+// PORT NOTE (Rust-only glue): `Clone` realizes the Zig value-copies of
+// `Options` (and hence its map entries) at the reference's copy sites
+// (`var copy = opts;` — e.g. core `copySelectionToClipboards`); Zig copies
+// the MultiArrayList header shallowly, Rust clones the owned entries (same
+// observable content).
+#[derive(Clone)]
 pub struct CodepointMap {
     /// Unicode codepoint range to replace.
     /// Asserts: range[0] <= range[1]
@@ -175,6 +181,7 @@ pub struct CodepointMap {
     pub replacement: Replacement,
 }
 
+#[derive(Clone)]
 pub enum Replacement {
     /// A single replacement codepoint.
     Codepoint(u21),

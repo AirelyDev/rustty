@@ -37,9 +37,15 @@
 //! `resize`/`balancePaddingIfNeeded`/`preeditCallback` LIVE, plus the crash
 //! thread-state seam AHEAD of its C10 row (`crashThreadState` :6014 +
 //! `impl ThreadStateSurface` — sizeCallback/preeditCallback are the first
-//! `crash.sentry.thread_state` sites, [ADV 6.1]); CORE_BLUEPRINT §6 rows
-//! C9..C15 fill the remaining function bodies IN PLACE — the declared method
-//! stubs below are owned by C9/C10/C13/C14/C15).
+//! `crash.sentry.thread_state` sites, [ADV 6.1]); chunk C9 landed
+//! Surface.zig:1867-2395 — `Text`(+`TextViewport`)/`dumpText`(`Locked`)/
+//! `hasSelection`/`selectionString`/`pwd`/`resolvePathForOpening`/`imePoint`/
+//! `clipboardWrite`/`copySelectionToClipboards`/`setSelection`(`AndCopy`)
+//! LIVE — `imePoint`'s no-defer lock/unlock paired verbatim with the
+//! reference lines; the std.base64/std.fs.path analogues are the file-scope
+//! PORT helpers at the bottom; CORE_BLUEPRINT §6 rows C10..C15 fill the
+//! remaining function bodies IN PLACE — the declared method stubs below are
+//! owned by C10/C13/C14/C15).
 
 // PARITY: the reference's identifiers are camelCase (`needsConfirmQuit`,
 // `handleMessage`, `performBindingAction`, `scaledPadding`,
@@ -4309,13 +4315,838 @@ impl<A: apprt::App + 'static> Surface<A> {
         Ok(())
     }
 
-    // PORT NOTE (STUB — chunk C9 fills): `fn clipboardWrite(self: *const
-    // Surface, data: []const u8, loc: apprt.Clipboard) !void` —
-    // Surface.zig:2162 (handleMessage's clipboard_write callsites land with
-    // C7).
+    /// Grab the value of text at the given selection point. Note that the
+    /// selection structure is used as a way to determine the area of the
+    /// screen to read from, it doesn't have to match the user's current
+    /// selection state.
+    ///
+    /// The returned value contains allocated data and must be deinitialized.
+    // pub fn dumpText(
+    //     self: *Surface,
+    //     alloc: Allocator,
+    //     sel: terminal.Selection,
+    // ) !Text {
+    //
+    // (the inferred `!Text` error set is `dumpTextLocked`'s — the [`Error`]
+    // union.)
+    pub fn dumpText(
+        &mut self,
+        alloc: Allocator,
+        sel: terminal::selection::Selection,
+    ) -> Result<Text, Error> {
+        // self.renderer_state.mutex.lock();
+        unsafe { (*self.renderer_state.mutex).lock() };
+        // defer self.renderer_state.mutex.unlock();
+        //
+        // (guard-less zigstd Mutex — CORE_BLUEPRINT §3; the defer is the
+        // explicit unlock below.)
+        // return try self.dumpTextLocked(alloc, sel);
+        let result = self.dumpTextLocked(alloc, sel);
+        // (the deferred mutex unlock)
+        unsafe { (*self.renderer_state.mutex).unlock() };
+        result
+    }
+
+    /// Same as `dumpText` but assumes the renderer state mutex is already
+    /// held.
+    // pub fn dumpTextLocked(
+    //     self: *Surface,
+    //     alloc: Allocator,
+    //     sel: terminal.Selection,
+    // ) !Text {
+    pub fn dumpTextLocked(
+        &mut self,
+        alloc: Allocator,
+        sel: terminal::selection::Selection,
+    ) -> Result<Text, Error> {
+        // Read out the text
+        // const text = try self.io.terminal.screens.active.selectionString(alloc, .{
+        //     .sel = sel,
+        //     .trim = false,
+        // });
+        let text = unsafe { &mut *self.io.terminal.screens.active }.selection_string(
+            alloc,
+            terminal::screen::SelectionString {
+                sel,
+                trim: false,
+                map: None,
+            },
+        )?;
+        // errdefer alloc.free(text);
+        // (the owned `text` drops on any early error return.)
+
+        // Calculate our viewport info if we can.
+        // const vp: ?Text.Viewport = viewport: {
+        let vp: Option<TextViewport> = 'viewport: {
+            // If our bottom right pin is before the viewport, then we can't
+            // possibly have this text be within the viewport.
+            // const vp_tl_pin = self.io.terminal.screens.active.pages.getTopLeft(.viewport);
+            let vp_tl_pin = unsafe {
+                (*self.io.terminal.screens.active)
+                    .pages
+                    .get_top_left(terminal::point::Tag::Viewport)
+            };
+            // const br_pin = sel.bottomRight(self.io.terminal.screens.active);
+            let br_pin = sel.bottom_right(unsafe { &*self.io.terminal.screens.active });
+            // if (br_pin.before(vp_tl_pin)) break :viewport null;
+            if br_pin.before(vp_tl_pin) {
+                break 'viewport None;
+            }
+
+            // If our top-left pin is after the viewport, then we can't possibly
+            // have this text be within the viewport.
+            // const vp_br_pin = self.io.terminal.screens.active.pages.getBottomRight(.viewport) orelse {
+            let vp_br_pin = match unsafe {
+                (*self.io.terminal.screens.active)
+                    .pages
+                    .get_bottom_right(terminal::point::Tag::Viewport)
+            } {
+                Some(v) => v,
+                None => {
+                    // I don't think this is possible but I don't want to crash on
+                    // that assertion so let's just break out...
+                    // log.warn("viewport bottom-right pin not found, bug?", .{});
+                    break 'viewport None;
+                }
+            };
+            // const tl_pin = sel.topLeft(self.io.terminal.screens.active);
+            let tl_pin = sel.top_left(unsafe { &*self.io.terminal.screens.active });
+            // if (vp_br_pin.before(tl_pin)) break :viewport null;
+            if vp_br_pin.before(tl_pin) {
+                break 'viewport None;
+            }
+
+            // We established that our top-left somewhere before the viewport
+            // bottom-right and that our bottom-right is somewhere after
+            // the top-left. This means that at least some portion of our
+            // selection is within the viewport.
+
+            // Our top-left point. If it doesn't exist in the viewport it must
+            // be before and we can return (0,0).
+            // const tl_pt: terminal.Point = self.io.terminal.screens.active.pages.pointFromPin(
+            //     .viewport,
+            //     tl_pin,
+            // ) orelse tl: {
+            let tl_pt: terminal::point::Point = match unsafe {
+                (*self.io.terminal.screens.active)
+                    .pages
+                    .point_from_pin(terminal::point::Tag::Viewport, tl_pin)
+            } {
+                Some(v) => v,
+                None => {
+                    // if (comptime std.debug.runtime_safety) {
+                    //     assert(tl_pin.before(vp_tl_pin));
+                    // }
+                    //
+                    // (the runtime-safety-gated assert IS `debug_assert!` —
+                    // the established quirks.inlineAssert mapping.)
+                    debug_assert!(tl_pin.before(vp_tl_pin));
+
+                    // break :tl .{ .viewport = .{} };
+                    terminal::point::Point::Viewport(terminal::point::Coordinate { x: 0, y: 0 })
+                }
+            };
+
+            // Our bottom-right point. If it doesn't exist in the viewport
+            // it must be the bottom-right of the viewport.
+            // const br_pt = self.io.terminal.screens.active.pages.pointFromPin(
+            //     .viewport,
+            //     br_pin,
+            // ) orelse br: {
+            let br_pt = match unsafe {
+                (*self.io.terminal.screens.active)
+                    .pages
+                    .point_from_pin(terminal::point::Tag::Viewport, br_pin)
+            } {
+                Some(v) => v,
+                None => {
+                    // if (comptime std.debug.runtime_safety) {
+                    //     assert(vp_br_pin.before(br_pin));
+                    // }
+                    debug_assert!(vp_br_pin.before(br_pin));
+
+                    // break :br self.io.terminal.screens.active.pages.pointFromPin(
+                    //     .viewport,
+                    //     vp_br_pin,
+                    // ).?;
+                    unsafe {
+                        (*self.io.terminal.screens.active)
+                            .pages
+                            .point_from_pin(terminal::point::Tag::Viewport, vp_br_pin)
+                    }
+                    .unwrap()
+                }
+            };
+
+            // const tl_coord = tl_pt.coord();
+            let tl_coord = tl_pt.coord();
+            // const br_coord = br_pt.coord();
+            let br_coord = br_pt.coord();
+
+            // Our sizes are all scaled so we need to send the unscaled values back.
+            // const content_scale = self.rt_surface.getContentScale() catch .{ .x = 1, .y = 1 };
+            let content_scale = unsafe { &*self.rt_surface }
+                .get_content_scale()
+                .unwrap_or(apprt::ContentScale { x: 1.0, y: 1.0 });
+            // const x: f64 = x: {
+            let x: f64 = {
+                // Simple x * cell width gives the left
+                // var x: f64 = @floatFromInt(tl_coord.x * self.size.cell.width);
+                let mut x: f64 = f64::from(u32::from(tl_coord.x) * self.size.cell.width);
+
+                // Add padding
+                // x += @floatFromInt(self.size.padding.left);
+                x += f64::from(self.size.padding.left);
+
+                // Scale
+                // x /= content_scale.x;
+                x /= f64::from(content_scale.x);
+
+                // break :x x;
+                x
+            };
+            // const y: f64 = y: {
+            let y: f64 = {
+                // Simple y * cell height gives the top
+                // var y: f64 = @floatFromInt(tl_coord.y * self.size.cell.height);
+                let mut y: f64 = f64::from(tl_coord.y * self.size.cell.height);
+
+                // We want the text baseline
+                // y += @floatFromInt(self.size.cell.height);
+                y += f64::from(self.size.cell.height);
+                // y -= @floatFromInt(self.font_metrics.cell_baseline);
+                y -= f64::from(self.font_metrics.cell_baseline);
+
+                // Add padding
+                // y += @floatFromInt(self.size.padding.top);
+                y += f64::from(self.size.padding.top);
+
+                // Scale
+                // y /= content_scale.y;
+                y /= f64::from(content_scale.y);
+
+                // break :y y;
+                y
+            };
+
+            // Utilize viewport sizing to convert to offsets
+            // const start = tl_coord.y * self.io.terminal.screens.active.pages.cols + tl_coord.x;
+            let start = tl_coord.y
+                * u32::from(unsafe { (*self.io.terminal.screens.active).pages.cols })
+                + u32::from(tl_coord.x);
+            // const end = br_coord.y * self.io.terminal.screens.active.pages.cols + br_coord.x;
+            let end = br_coord.y
+                * u32::from(unsafe { (*self.io.terminal.screens.active).pages.cols })
+                + u32::from(br_coord.x);
+
+            // break :viewport .{
+            //     .tl_px_x = x,
+            //     .tl_px_y = y,
+            //     .offset_start = start,
+            //     .offset_len = end - start,
+            // };
+            break 'viewport Some(TextViewport {
+                tl_px_x: x,
+                tl_px_y: y,
+                offset_start: start,
+                offset_len: end - start,
+            });
+        };
+
+        // return .{
+        //     .text = text,
+        //     .viewport = vp,
+        // };
+        Ok(Text { text, viewport: vp })
+    }
+
+    /// Returns true if the terminal has a selection.
+    // pub fn hasSelection(self: *const Surface) bool {
+    pub fn hasSelection(&self) -> bool {
+        // self.renderer_state.mutex.lock();
+        unsafe { (*self.renderer_state.mutex).lock() };
+        // defer self.renderer_state.mutex.unlock();
+        //
+        // (guard-less zigstd Mutex — the defer is the explicit unlock below.)
+        // return self.io.terminal.screens.active.selection != null;
+        let result = unsafe { (*self.io.terminal.screens.active).selection }.is_some();
+        // (the deferred mutex unlock)
+        unsafe { (*self.renderer_state.mutex).unlock() };
+        result
+    }
+
+    /// Returns the selected text. This is allocated.
+    // pub fn selectionString(self: *Surface, alloc: Allocator) !?[:0]const u8 {
+    //
+    // (the return carries raw bytes — the vt `selectionString` `Vec<u8>`
+    // convention; the inferred `!` set is the screen's OOM.)
+    pub fn selectionString(&mut self, alloc: Allocator) -> Result<Option<Vec<u8>>, Error> {
+        // self.renderer_state.mutex.lock();
+        unsafe { (*self.renderer_state.mutex).lock() };
+        // defer self.renderer_state.mutex.unlock();
+        //
+        // (guard-less zigstd Mutex — the defer is the explicit unlock at
+        // every exit below.)
+        // const sel = self.io.terminal.screens.active.selection orelse return null;
+        let sel = match unsafe { (*self.io.terminal.screens.active).selection } {
+            Some(v) => v,
+            None => {
+                // (the deferred mutex unlock — the null exit)
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return Ok(None);
+            }
+        };
+        // return try self.io.terminal.screens.active.selectionString(alloc, .{
+        //     .sel = sel,
+        //     .trim = false,
+        // });
+        let result = unsafe { &mut *self.io.terminal.screens.active }.selection_string(
+            alloc,
+            terminal::screen::SelectionString {
+                sel,
+                trim: false,
+                map: None,
+            },
+        );
+        // (the deferred mutex unlock)
+        unsafe { (*self.renderer_state.mutex).unlock() };
+        match result {
+            Ok(v) => Ok(Some(v)),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Returns the pwd of the terminal, if any. This is always copied because
+    /// the pwd can change at any point from termio. If we are calling from the IO
+    /// thread you should just check the terminal directly.
+    // pub fn pwd(
+    //     self: *const Surface,
+    //     alloc: Allocator,
+    // ) Allocator.Error!?[]const u8 {
+    //
+    // PORT NOTE: the `Allocator.Error!` collapses (infallible Rust
+    // allocation — the app.rs precedent); the owned `Vec<u8>` carries the
+    // raw pwd bytes.
+    pub fn pwd(&self, alloc: Allocator) -> Option<Vec<u8>> {
+        // (the DerivedConfig.init precedent: the allocator param is carried
+        // for signature parity; the `Vec` below allocates via the global
+        // allocator.)
+        let _ = alloc;
+        // self.renderer_state.mutex.lock();
+        unsafe { (*self.renderer_state.mutex).lock() };
+        // defer self.renderer_state.mutex.unlock();
+        //
+        // (guard-less zigstd Mutex — the defer is the explicit unlock at
+        // every exit below.)
+        // const terminal_pwd = self.io.terminal.getPwd() orelse return null;
+        let terminal_pwd = match self.io.terminal.get_pwd() {
+            Some(v) => v,
+            None => {
+                // (the deferred mutex unlock — the null exit)
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return None;
+            }
+        };
+        // return try alloc.dupe(u8, terminal_pwd);
+        //
+        // (`dupe` — an owned copy of the raw pwd bytes; the OOM-only `try`
+        // collapses.)
+        let result = terminal_pwd.to_vec();
+        // (the deferred mutex unlock)
+        unsafe { (*self.renderer_state.mutex).unlock() };
+        Some(result)
+    }
+
+    /// Resolves a relative file path to an absolute path using the terminal's pwd.
+    // fn resolvePathForOpening(
+    //     self: *Surface,
+    //     path: []const u8,
+    // ) Allocator.Error!?[]const u8 {
+    //
+    // PORT NOTE: the `Allocator.Error!` collapses (infallible Rust
+    // allocation); raw path bytes in and out (`&[u8]`/`Vec<u8>`, never a
+    // lossy `String`). The C13 processLinks callsite (:4396) lands later;
+    // the allow is removed when it does.
+    #[allow(dead_code)]
+    fn resolvePathForOpening(&mut self, path: &[u8]) -> Option<Vec<u8>> {
+        // if (!std.fs.path.isAbsolute(path)) {
+        if !is_absolute(path) {
+            // const terminal_pwd = self.io.terminal.getPwd() orelse {
+            //     return null;
+            // };
+            let terminal_pwd = match self.io.terminal.get_pwd() {
+                Some(v) => v,
+                None => {
+                    return None;
+                }
+            };
+
+            // const resolved = try std.fs.path.resolve(self.alloc, &.{ terminal_pwd, path });
+            let resolved = resolve(&[terminal_pwd, path]);
+
+            // std.fs.accessAbsolute(resolved, .{}) catch {
+            //     self.alloc.free(resolved);
+            //     return null;
+            // };
+            //
+            // (the rustty-os resourcesdir `accessAbsolute` precedent; the
+            // reference's free is the owned `Vec`'s drop.)
+            if !std::path::Path::new(os_str_from_bytes(&resolved)).exists() {
+                return None;
+            }
+
+            // return resolved;
+            return Some(resolved);
+        }
+
+        // return null;
+        None
+    }
+
+    /// Returns the x/y coordinate of where the IME (Input Method Editor)
+    /// keyboard should be rendered.
+    // pub fn imePoint(self: *const Surface) apprt.IMEPos {
+    pub fn imePoint(&self) -> apprt::IMEPos {
+        // self.renderer_state.mutex.lock();
+        //
+        // (guard-less zigstd Mutex — CORE_BLUEPRINT §3; the reference locks
+        // and unlocks WITHOUT defer, and so does this body: the unlock below
+        // pairs with this lock, verbatim.)
+        unsafe { (*self.renderer_state.mutex).lock() };
+        // const cursor = self.renderer_state.terminal.screens.active.cursor;
+        //
+        // (`Cursor` is `Copy` — the Zig value-copy, read under the lock.)
+        let cursor = unsafe { (*(*self.renderer_state.terminal).screens.active).cursor };
+        // const preedit_width: usize = if (self.renderer_state.preedit) |preedit| preedit.width() else 0;
+        let preedit_width: usize = if let Some(preedit) = &self.renderer_state.preedit {
+            preedit.width()
+        } else {
+            0
+        };
+        // self.renderer_state.mutex.unlock();
+        unsafe { (*self.renderer_state.mutex).unlock() };
+
+        // TODO: need to handle when scrolling and the cursor is not
+        // in the visible portion of the screen.
+
+        // Our sizes are all scaled so we need to send the unscaled values back.
+        // const content_scale = self.rt_surface.getContentScale() catch .{ .x = 1, .y = 1 };
+        let content_scale = unsafe { &*self.rt_surface }
+            .get_content_scale()
+            .unwrap_or(apprt::ContentScale { x: 1.0, y: 1.0 });
+
+        // const x: f64 = x: {
+        let x: f64 = {
+            // Simple x * cell width gives the top-left corner, then add padding offset
+            // var x: f64 = @floatFromInt(cursor.x * self.size.cell.width + self.size.padding.left);
+            let mut x: f64 =
+                f64::from(u32::from(cursor.x) * self.size.cell.width + self.size.padding.left);
+
+            // We want the midpoint
+            // x += @as(f64, @floatFromInt(self.size.cell.width)) / 2;
+            x += f64::from(self.size.cell.width) / 2.0;
+
+            // And scale it
+            // x /= content_scale.x;
+            x /= f64::from(content_scale.x);
+
+            // break :x x;
+            x
+        };
+
+        // const y: f64 = y: {
+        let y: f64 = {
+            // Simple y * cell height gives the top-left corner, then add padding offset
+            // var y: f64 = @floatFromInt(cursor.y * self.size.cell.height + self.size.padding.top);
+            let mut y: f64 =
+                f64::from(u32::from(cursor.y) * self.size.cell.height + self.size.padding.top);
+
+            // We want the bottom
+            // y += @floatFromInt(self.size.cell.height);
+            y += f64::from(self.size.cell.height);
+
+            // And scale it
+            // y /= content_scale.y;
+            y /= f64::from(content_scale.y);
+
+            // break :y y;
+            y
+        };
+
+        // Our height for now is always just the cell height because our preedit
+        // rendering only renders in a single line.
+        // const height: f64 = height: {
+        let height: f64 = {
+            // var height: f64 = @floatFromInt(self.size.cell.height);
+            let mut height: f64 = f64::from(self.size.cell.height);
+            // height /= content_scale.y;
+            height /= f64::from(content_scale.y);
+            // break :height height;
+            height
+        };
+        // const width: f64 = width: {
+        let width: f64 = {
+            // var width: f64 = @floatFromInt(preedit_width * self.size.cell.width);
+            let mut width: f64 = (preedit_width * (self.size.cell.width as usize)) as f64;
+
+            // Our max width is the remaining screen width after the cursor.
+            // We don't have to deal with wrapping because the preedit doesn't
+            // wrap right now.
+            // const screen_width: f64 = @floatFromInt(self.size.terminal().width);
+            let screen_width: f64 = f64::from(self.size.terminal().width);
+            // const x_offset: f64 = @floatFromInt((cursor.x + 1) * self.size.cell.width);
+            let x_offset: f64 = f64::from((u32::from(cursor.x) + 1) * self.size.cell.width);
+            // const max = screen_width - x_offset;
+            let max = screen_width - x_offset;
+            // width = @min(width, max);
+            width = width.min(max);
+
+            // Note: we don't apply content scale here because it looks like
+            // for some reason in macOS its already scaled. I'm not sure why
+            // that is so I'm going to just leave this comment here so its known
+            // that I left this out on purpose pending more investigation.
+
+            // break :width width;
+            width
+        };
+
+        // return .{
+        //     .x = x,
+        //     .y = y,
+        //     .width = width,
+        //     .height = height,
+        // };
+        apprt::IMEPos {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    // fn clipboardWrite(self: *const Surface, data: []const u8, loc: apprt.Clipboard) !void {
+    //
+    // (the inferred `!void` is `allocSentinel`'s OOM — collapsed; the
+    // `Result` shape carries the handleMessage callers' `try`s.)
     fn clipboardWrite(&self, data: &[u8], loc: apprt::Clipboard) -> Result<(), Error> {
-        let _ = (data, loc);
-        unimplemented!("Surface.clipboardWrite lands with core chunk C9 (Surface.zig:2162)")
+        // if (self.config.clipboard_write == .deny) {
+        if self.config.clipboard_write == configpkg::value_types::ClipboardAccess::Deny {
+            // log.info("application attempted to write clipboard, but 'clipboard-write' is set to deny", .{});
+            return Ok(());
+        }
+
+        // const dec = std.base64.standard.Decoder;
+        //
+        // PORT NOTE: `zig_base64` (file scope below) is the minimal faithful
+        // port of the Zig std.base64 standard codec's Decoder surface (the
+        // rustty-os file.rs `b64_encoder` precedent).
+
+        // Build buffer
+        // const size = dec.calcSizeForSlice(data) catch |err| switch (err) {
+        let size = match zig_base64::calc_size_for_slice(data) {
+            Ok(v) => v,
+            Err(err) => match err {
+                // error.InvalidPadding => {
+                zig_base64::Error::InvalidPadding => {
+                    // log.info("application sent invalid base64 data for OSC 52", .{});
+                    return Ok(());
+                }
+
+                // Should not be reachable but don't want to risk it.
+                // else => return,
+                _ => return Ok(()),
+            },
+        };
+        // var buf = try self.alloc.allocSentinel(u8, size, 0);
+        //
+        // (`allocSentinel` — `size` bytes plus the NUL sentinel slot; the
+        // OOM-only `try` collapses.)
+        let mut buf: Vec<u8> = vec![0u8; size + 1];
+        // defer self.alloc.free(buf);
+        // (the owned `buf` drops on every exit below.)
+        // buf[buf.len] = 0;
+        //
+        // (`buf.len` is `size` — the sentinel-slot write.)
+        buf[size] = 0;
+
+        // Decode
+        // dec.decode(buf, data) catch |err| switch (err) {
+        match zig_base64::decode(&mut buf[0..size], data) {
+            Ok(()) => {}
+
+            // Ignore this. It is possible to actually have valid data and
+            // get this error, so we allow it.
+            // error.InvalidPadding => {},
+            Err(zig_base64::Error::InvalidPadding) => {}
+
+            // else => {
+            Err(_) => {
+                // log.info("application sent invalid base64 data for OSC 52", .{});
+                return Ok(());
+            }
+        }
+        // assert(buf[buf.len] == 0);
+        debug_assert!(buf[size] == 0);
+
+        // When clipboard-write is "ask" a prompt is displayed to the user asking
+        // them to confirm the clipboard access. Each app runtime handles this
+        // differently.
+        // const confirm = self.config.clipboard_write == .ask;
+        let confirm = self.config.clipboard_write == configpkg::value_types::ClipboardAccess::Ask;
+        // self.rt_surface.setClipboard(loc, &.{.{
+        //     .mime = "text/plain",
+        //     .data = buf,
+        // }}, confirm) catch |err| {
+        //     log.err("error setting clipboard string err={}", .{err});
+        //     return;
+        // };
+        if let Err(_err) = unsafe { &*self.rt_surface }.set_clipboard(
+            loc,
+            &[apprt::ClipboardContent {
+                mime: b"text/plain".as_slice(),
+                data: &buf[0..size],
+            }],
+            confirm,
+        ) {
+            // log.err("error setting clipboard string err={}", .{err});
+            return Ok(());
+        }
+
+        Ok(())
+    }
+
+    // fn copySelectionToClipboards(
+    //     self: *Surface,
+    //     sel: terminal.Selection,
+    //     clipboards: []const apprt.Clipboard,
+    //     format: input.Binding.Action.CopyToClipboard,
+    // ) !void {
+    //
+    // (the inferred `!void` set is the allocating-writer OOM — the [`Error`]
+    // union.)
+    fn copySelectionToClipboards(
+        &mut self,
+        sel: terminal::selection::Selection,
+        clipboards: &[apprt::Clipboard],
+        format: binding::CopyToClipboard,
+    ) -> Result<(), Error> {
+        // Create an arena to simplify memory management here.
+        // var arena = ArenaAllocator.init(self.alloc);
+        // defer arena.deinit();
+        // const alloc = arena.allocator();
+        //
+        // PORT NOTE (collapsed arena): the owned buffers below free on drop
+        // (the childExitedAbnormally precedent); the `Vec` sinks allocate
+        // via the global allocator, so the arena allocator is not
+        // materialized.
+
+        // The options we'll use for all formatting. We'll just override the
+        // emit format.
+        // const opts: terminal.formatter.Options = .{
+        let opts: terminal::formatter::Options = terminal::formatter::Options {
+            // .emit = .plain, // We'll override this below
+            emit: terminal::formatter::Format::Plain, // We'll override this below
+            // .unwrap = true,
+            unwrap: true,
+            // .trim = self.config.clipboard_trim_trailing_spaces,
+            trim: self.config.clipboard_trim_trailing_spaces,
+            // .codepoint_map = self.config.clipboard_codepoint_map.map.list,
+            //
+            // (Zig copies the MultiArrayList header shallowly; the owned
+            // `Options` clones the entries — the formatter.rs `CodepointMap`
+            // Clone PORT NOTE.)
+            codepoint_map: Some(self.config.clipboard_codepoint_map.map.list.clone()),
+            // .background = self.io.terminal.colors.background.get(),
+            background: self.io.terminal.colors.background.get(),
+            // .foreground = self.io.terminal.colors.foreground.get(),
+            foreground: self.io.terminal.colors.foreground.get(),
+            // .palette = &self.io.terminal.colors.palette.current,
+            palette: Some(&raw const self.io.terminal.colors.palette.current),
+        };
+
+        // const ScreenFormatter = terminal.formatter.ScreenFormatter;
+        use rustty_vt::formatter::ScreenFormatter;
+        // var aw: std.Io.Writer.Allocating = .init(alloc);
+        //
+        // (the `Vec<u8>` allocating-writer sink — the vt selectionString
+        // precedent; each `toOwnedSliceSentinel(0)` below is a `mem::take`,
+        // the length excluding the NUL sentinel.)
+        let mut aw: Vec<u8> = Vec::new();
+        // var contents: std.ArrayList(apprt.ClipboardContent) = .empty;
+        //
+        // PORT NOTE (arena ownership): `ClipboardContent` BORROWS its bytes;
+        // the reference arena-allocates each buffer. The owned (mime, data)
+        // pairs collected here are those arena allocations; the borrowed
+        // `ClipboardContent` view is materialized at the `setClipboard` loop
+        // below, once the buffers stop moving.
+        let mut contents: Vec<(&[u8], Vec<u8>)> = Vec::new();
+        // switch (format) {
+        match format {
+            // .plain => {
+            binding::CopyToClipboard::Plain => {
+                // var formatter: ScreenFormatter = .init(self.io.terminal.screens.active, opts);
+                let mut formatter: ScreenFormatter =
+                    ScreenFormatter::init(self.io.terminal.screens.active, copy_options(&opts));
+                // formatter.content = .{ .selection = sel };
+                formatter.content = terminal::formatter::Content::Selection(Some(sel));
+                // try formatter.format(&aw.writer);
+                //
+                // (allocating writer: a failed write is an OOM — the vt
+                // selectionString precedent.)
+                formatter
+                    .format(&mut aw)
+                    .map_err(|_| terminal::pagelist::OutOfMemory)?;
+                // try contents.append(alloc, .{
+                //     .mime = "text/plain",
+                //     .data = try aw.toOwnedSliceSentinel(0),
+                // });
+                contents.push((b"text/plain".as_slice(), std::mem::take(&mut aw)));
+            }
+
+            // .vt => {
+            binding::CopyToClipboard::Vt => {
+                // var formatter: ScreenFormatter = .init(self.io.terminal.screens.active, opts: {
+                //     var copy = opts;
+                //     copy.emit = .vt;
+                //     break :opts copy;
+                // });
+                let mut formatter: ScreenFormatter =
+                    ScreenFormatter::init(self.io.terminal.screens.active, {
+                        let mut copy = copy_options(&opts);
+                        copy.emit = terminal::formatter::Format::Vt;
+                        copy
+                    });
+                // formatter.content = .{ .selection = sel };
+                formatter.content = terminal::formatter::Content::Selection(Some(sel));
+                // try formatter.format(&aw.writer);
+                formatter
+                    .format(&mut aw)
+                    .map_err(|_| terminal::pagelist::OutOfMemory)?;
+
+                // Note: We don't apply codepoint mappings to VT format since it contains
+                // escape sequences that should be preserved as-is
+                // try contents.append(alloc, .{
+                //     .mime = "text/plain",
+                //     .data = try aw.toOwnedSliceSentinel(0),
+                // });
+                contents.push((b"text/plain".as_slice(), std::mem::take(&mut aw)));
+            }
+
+            // .html => {
+            binding::CopyToClipboard::Html => {
+                // var formatter: ScreenFormatter = .init(self.io.terminal.screens.active, opts: {
+                //     var copy = opts;
+                //     copy.emit = .html;
+                //     break :opts copy;
+                // });
+                let mut formatter: ScreenFormatter =
+                    ScreenFormatter::init(self.io.terminal.screens.active, {
+                        let mut copy = copy_options(&opts);
+                        copy.emit = terminal::formatter::Format::Html;
+                        copy
+                    });
+                // formatter.content = .{ .selection = sel };
+                formatter.content = terminal::formatter::Content::Selection(Some(sel));
+                // try formatter.format(&aw.writer);
+                formatter
+                    .format(&mut aw)
+                    .map_err(|_| terminal::pagelist::OutOfMemory)?;
+
+                // Note: We don't apply codepoint mappings to HTML format since HTML
+                // has its own character encoding and entity system
+                // try contents.append(alloc, .{
+                //     .mime = "text/html",
+                //     .data = try aw.toOwnedSliceSentinel(0),
+                // });
+                contents.push((b"text/html".as_slice(), std::mem::take(&mut aw)));
+            }
+
+            // .mixed => {
+            binding::CopyToClipboard::Mixed => {
+                // First, generate plain text with codepoint mappings applied
+                // var formatter: ScreenFormatter = .init(self.io.terminal.screens.active, opts);
+                let mut formatter: ScreenFormatter =
+                    ScreenFormatter::init(self.io.terminal.screens.active, copy_options(&opts));
+                // formatter.content = .{ .selection = sel };
+                formatter.content = terminal::formatter::Content::Selection(Some(sel));
+                // try formatter.format(&aw.writer);
+                formatter
+                    .format(&mut aw)
+                    .map_err(|_| terminal::pagelist::OutOfMemory)?;
+                // try contents.append(alloc, .{
+                //     .mime = "text/plain",
+                //     .data = try aw.toOwnedSliceSentinel(0),
+                // });
+                contents.push((b"text/plain".as_slice(), std::mem::take(&mut aw)));
+
+                // assert(aw.written().len == 0);
+                debug_assert!(aw.is_empty());
+                // Second, generate HTML without codepoint mappings
+                // formatter = .init(self.io.terminal.screens.active, opts: {
+                //     var copy = opts;
+                //     copy.emit = .html;
+                //
+                //     ...
+                //     break :opts copy;
+                // });
+                formatter = ScreenFormatter::init(self.io.terminal.screens.active, {
+                    let mut copy = copy_options(&opts);
+                    copy.emit = terminal::formatter::Format::Html;
+
+                    // We purposely don't emit background/foreground for mixed
+                    // mode because the HTML contents is often used for rich text
+                    // input and with trimmed spaces it looks pretty bad.
+                    // copy.background = null;
+                    copy.background = None;
+                    // copy.foreground = null;
+                    copy.foreground = None;
+
+                    copy
+                });
+                // formatter.content = .{ .selection = sel };
+                formatter.content = terminal::formatter::Content::Selection(Some(sel));
+                // try formatter.format(&aw.writer);
+                formatter
+                    .format(&mut aw)
+                    .map_err(|_| terminal::pagelist::OutOfMemory)?;
+
+                // Note: We don't apply codepoint mappings to HTML format
+                // try contents.append(alloc, .{
+                //     .mime = "text/html",
+                //     .data = try aw.toOwnedSliceSentinel(0),
+                // });
+                contents.push((b"text/html".as_slice(), std::mem::take(&mut aw)));
+            }
+        }
+
+        // assert(contents.items.len > 0);
+        debug_assert!(!contents.is_empty());
+        // (the borrowed `ClipboardContent` view over the owned pairs — the
+        // arena-ownership PORT NOTE above.)
+        let contents_items: Vec<apprt::ClipboardContent<'_>> = contents
+            .iter()
+            .map(|c| apprt::ClipboardContent {
+                mime: c.0,
+                data: &c.1,
+            })
+            .collect();
+        // for (clipboards) |clipboard| self.rt_surface.setClipboard(
+        //     clipboard,
+        //     contents.items,
+        //     false,
+        // ) catch |err| {
+        for clipboard in clipboards {
+            if let Err(_err) =
+                unsafe { &*self.rt_surface }.set_clipboard(*clipboard, &contents_items, false)
+            {
+                // log.err(
+                //     "error setting clipboard string clipboard={} err={}",
+                //     .{ clipboard, err },
+                // );
+            }
+        }
+
+        Ok(())
     }
 
     /// Set the active selection and notify the apprt on a genuine state
@@ -4324,13 +5155,114 @@ impl<A: apprt::App + 'static> Surface<A> {
     /// also copy per `copy_on_select`, use `setSelectionAndCopy`.
     ///
     /// This must be called with the renderer mutex held.
-    //
-    // PORT NOTE (STUB — chunk C9 fills): `fn setSelection(self: *Surface,
-    // sel_: ?terminal.Selection) !void` — Surface.zig:2335
-    // (selectionScrollTick's :1220 callsite lands with C7).
+    // fn setSelection(self: *Surface, sel_: ?terminal.Selection) !void {
     fn setSelection(&mut self, sel_: Option<terminal::selection::Selection>) -> Result<(), Error> {
-        let _ = sel_;
-        unimplemented!("Surface.setSelection lands with core chunk C9 (Surface.zig:2335)")
+        // Compute the transition before `select` below, which untracks (frees)
+        // the previous selection's tracked pins; reading them after would be a
+        // use-after-free.
+        // const prev_ = self.io.terminal.screens.active.selection;
+        let prev_ = unsafe { (*self.io.terminal.screens.active).selection };
+        // const changed = changed: {
+        //     const prev = prev_ orelse break :changed sel_ != null;
+        //     const sel = sel_ orelse break :changed true;
+        //     break :changed !sel.eql(prev);
+        // };
+        let changed = 'changed: {
+            let prev = match prev_ {
+                Some(v) => v,
+                None => break 'changed sel_.is_some(),
+            };
+            let sel = match sel_ {
+                Some(v) => v,
+                None => break 'changed true,
+            };
+            !sel.eql(prev)
+        };
+
+        // try self.io.terminal.screens.active.select(sel_);
+        unsafe { (*self.io.terminal.screens.active).select(sel_) }?;
+
+        // if (changed) {
+        if changed {
+            // _ = self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .selection_changed,
+            //     {},
+            // ) catch |err| {
+            //     log.warn("apprt failed selection_changed notification err={}", .{err});
+            // };
+            if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+                apprt::Target::Surface(&*self),
+                apprt::Action::SelectionChanged,
+            ) {
+                // log.warn("apprt failed selection_changed notification err={}", .{err});
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Set a selection and, per `copy_on_select`, copy it to the clipboard.
+    /// For committing selection gestures (mouse release, select-all binding).
+    ///
+    /// This must be called with the renderer mutex held.
+    // fn setSelectionAndCopy(self: *Surface, sel: terminal.Selection) !void {
+    //
+    // PORT NOTE: the C12 mouseButtonCallback (:3866) / C13 cursorPosCallback
+    // (:4086/:4092) callsites land later; the allow is removed when the
+    // first one does.
+    #[allow(dead_code)]
+    fn setSelectionAndCopy(&mut self, sel: terminal::selection::Selection) -> Result<(), Error> {
+        // try self.setSelection(sel);
+        self.setSelection(Some(sel))?;
+
+        // If copy on select is false then exit early.
+        // if (self.config.copy_on_select == .false) return;
+        if self.config.copy_on_select == configpkg::value_types::CopyOnSelect::False {
+            return Ok(());
+        }
+
+        // switch (self.config.copy_on_select) {
+        match self.config.copy_on_select {
+            // .false => unreachable, // handled above with an early exit
+            configpkg::value_types::CopyOnSelect::False => unreachable!(), // handled above with an early exit
+
+            // Both standard and selection clipboards are set.
+            // .clipboard => try self.copySelectionToClipboards(
+            //     sel,
+            //     &.{ .standard, .selection },
+            //     .mixed,
+            // ),
+            configpkg::value_types::CopyOnSelect::Clipboard => self.copySelectionToClipboards(
+                sel,
+                &[apprt::Clipboard::Standard, apprt::Clipboard::Selection],
+                binding::CopyToClipboard::Mixed,
+            )?,
+
+            // The selection clipboard is set if supported, otherwise the standard.
+            // .true => {
+            configpkg::value_types::CopyOnSelect::True => {
+                // const clipboard: apprt.Clipboard = if (self.rt_surface.supportsClipboard(.selection))
+                //     .selection
+                // else
+                //     .standard;
+                let clipboard: apprt::Clipboard = if unsafe { &*self.rt_surface }
+                    .supports_clipboard(apprt::Clipboard::Selection)
+                {
+                    apprt::Clipboard::Selection
+                } else {
+                    apprt::Clipboard::Standard
+                };
+                // try self.copySelectionToClipboards(
+                //     sel,
+                //     &.{clipboard},
+                //     .mixed,
+                // );
+                self.copySelectionToClipboards(sel, &[clipboard], binding::CopyToClipboard::Mixed)?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Change the cell size for the terminal grid. This can happen as
@@ -4906,12 +5838,62 @@ enum KeySequenceMemory {
     Free,
 }
 
-// PORT NOTE (chunk C9 fills — Surface.zig:1867 `pub const Text`): the struct
-// lands with C9 (Text/dumpText tier); its doc comment (:1865-1866) straddles
-// the C8/C9 chunk-table boundary, preserved verbatim:
-//
-// /// Represents text read from the terminal and some metadata about it
-// /// that is often useful to apprts.
+/// Represents text read from the terminal and some metadata about it
+/// that is often useful to apprts.
+// pub const Text = struct {
+pub struct Text {
+    /// The text that was read from the terminal.
+    // text: [:0]const u8,
+    //
+    // PORT NOTE: raw bytes (`Vec<u8>`, never a lossy `String`); the `[:0]`
+    // NUL-termination invariant is carried with the length excluding the
+    // sentinel (the vt `selectionString` return convention).
+    pub text: Vec<u8>,
+
+    /// The viewport information about this text, if it is visible in
+    /// the viewport.
+    // viewport: ?Viewport = null,
+    pub viewport: Option<TextViewport>,
+}
+
+/// PORT: the nested `Text.Viewport` (Surface.zig:1875), hoisted to a
+/// top-level name (the `DerivedConfigLink` precedent).
+// pub const Viewport = struct {
+pub struct TextViewport {
+    /// The top-left corner of the selection in pixels within the viewport.
+    // tl_px_x: f64,
+    // tl_px_y: f64,
+    pub tl_px_x: f64,
+    pub tl_px_y: f64,
+
+    /// The linear offset of the start of the selection and the length.
+    /// This is "linear" in the sense that it is the offset in the
+    /// flattened viewport as a single array of text.
+    ///
+    /// Note: these values are currently wrong if there is a partially
+    /// visible selection in the viewport (i.e. the top-left or
+    /// bottom-right of the selection is outside the viewport). But the
+    /// apprt usecase we have right now doesn't require these to be
+    /// correct so... let's fix this later. The wrong values will always
+    /// be within the text bounds so we aren't risking an overflow.
+    // offset_start: u32,
+    // offset_len: u32,
+    pub offset_start: u32,
+    pub offset_len: u32,
+}
+
+impl Text {
+    // pub fn deinit(self: *Text, alloc: Allocator) void {
+    //     alloc.free(self.text);
+    // }
+    //
+    // PORT NOTE: the owned bytes free on drop; the explicit free maps to
+    // clearing the field (the DerivedConfig deinit precedent — the alloc
+    // param collapses with the Rust ownership).
+    pub fn deinit(&mut self) {
+        self.text = Vec::new();
+    }
+}
 
 /// PORT: the file-scope `Link` returned by `linkAtPos` (Surface.zig:4270,
 /// ported ahead of its C13 row — mouseRefreshLinks names it). NOT the
@@ -5018,3 +6000,284 @@ impl<A: apprt::App + 'static> Clone for SurfaceMailbox<A> {
 }
 
 impl<A: apprt::App + 'static> Copy for SurfaceMailbox<A> {}
+
+// ===========================================================================
+// PORT helpers — std analogues used above (std.fs.path / std.fs.access /
+// std.base64 / the Zig `Options` value-copy). These add nothing the reference
+// doesn't already do (R1): they are the minimal Rust glue for the std calls
+// the reference makes inline (the rustty-config theme.rs / path.rs and
+// rustty-os file.rs precedents).
+// ===========================================================================
+
+/// `std.fs.path.isAbsolute` for the POSIX targets the parity harness runs
+/// (the rustty-config theme.rs/path.rs helper).
+fn is_absolute(path: &[u8]) -> bool {
+    !path.is_empty() && path[0] == b'/'
+}
+
+/// PORTS: `std.fs.path.resolve(alloc, &.{ base, path })` for the simple
+/// two-component POSIX case used by `resolvePathForOpening`.
+//
+// PORT NOTE: `resolve` joins the components and normalizes `.`/`..` against
+// the (absolute) base, yielding an absolute path WITHOUT touching the
+// filesystem (unlike `realpath`/`canonicalize`) — the rustty-config path.rs
+// helper, verbatim.
+fn resolve(components: &[&[u8]]) -> Vec<u8> {
+    let mut stack: Vec<Vec<u8>> = Vec::new();
+    let mut is_abs = false;
+    for comp in components {
+        if comp.is_empty() {
+            continue;
+        }
+        if comp[0] == b'/' {
+            // An absolute component resets the stack.
+            is_abs = true;
+            stack.clear();
+        }
+        for seg in comp.split(|&b| b == b'/') {
+            match seg {
+                b"" | b"." => {}
+                b".." => {
+                    stack.pop();
+                }
+                _ => stack.push(seg.to_vec()),
+            }
+        }
+    }
+
+    let mut out: Vec<u8> = Vec::new();
+    if is_abs {
+        out.push(b'/');
+    }
+    for (i, seg) in stack.iter().enumerate() {
+        if i > 0 {
+            out.push(b'/');
+        }
+        out.extend_from_slice(seg);
+    }
+    if out.is_empty() {
+        out.push(b'.');
+    }
+    out
+}
+
+/// Convert raw path bytes to an `OsStr` (POSIX bytes are `OsStr` directly;
+/// R3/fidelity: byte-slices stay bytes, never a lossy round-trip).
+#[cfg(unix)]
+fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::OsStr::from_bytes(bytes)
+}
+
+#[cfg(not(unix))]
+fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
+    // PORT NOTE: on non-unix the bytes are interpreted as UTF-8 (lossy
+    // fallback); the path-opening flow is primarily exercised on POSIX.
+    std::ffi::OsStr::new(std::str::from_utf8(bytes).unwrap_or(""))
+}
+
+/// PORT NOTE (Zig value-copy): `terminal.formatter.Options` is a Zig value
+/// type freely copied at each `.init(..., opts)` / `var copy = opts` site
+/// (`copySelectionToClipboards`); Rust `Options` owns its `codepoint_map`
+/// `Vec`, so this helper materializes each reference copy — unlike the vt
+/// formatter.rs `copy_options` (extras-only path), the map is KEPT (cloned;
+/// Zig's header copy borrows the same entries).
+fn copy_options(opts: &terminal::formatter::Options) -> terminal::formatter::Options {
+    terminal::formatter::Options {
+        emit: opts.emit,
+        unwrap: opts.unwrap,
+        trim: opts.trim,
+        codepoint_map: opts.codepoint_map.clone(),
+        background: opts.background,
+        foreground: opts.foreground,
+        palette: opts.palette,
+    }
+}
+
+/// PORTS: the Zig `std.base64` STANDARD codec's `Decoder` surface used by
+/// `clipboardWrite` (`calcSizeForSlice` + `decode`) — semantics reproduced
+/// bit-for-bit from lib/std/base64.zig (Zig 0.15.2), including the error
+/// split the reference branches on (`InvalidPadding` vs `InvalidCharacter`).
+/// The Zig decoder's 16-/4-char SIMD-ish fast loops are accelerative only
+/// (pad bytes never reach them — the final 4-char group always falls through
+/// to the scalar tail); the scalar tail below IS the semantic core, ported
+/// verbatim (the rustty-os file.rs `b64_encoder` precedent).
+mod zig_base64 {
+    // pub const Error = error{ InvalidCharacter, InvalidPadding, NoSpaceLeft };
+    //
+    // (`NoSpaceLeft` is encoder-only — unused by the decoder surface here.)
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Error {
+        InvalidCharacter,
+        InvalidPadding,
+    }
+
+    // pub const standard_alphabet_chars = "ABC...xyz0123456789+/".*;
+    const ALPHABET_CHARS: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    // .pad_char = '=',
+    const PAD_CHAR: u8 = b'=';
+    // const invalid_char: u8 = 0xff;
+    const INVALID_CHAR: u8 = 0xff;
+
+    /// `char_to_index`: e.g. 'A' => 0; `invalid_char` for any value not in
+    /// the 64 alphabet chars (the `Base64Decoder.init` table build).
+    const CHAR_TO_INDEX: [u8; 256] = build_char_to_index();
+
+    const fn build_char_to_index() -> [u8; 256] {
+        let mut table = [INVALID_CHAR; 256];
+        let mut i = 0;
+        while i < 64 {
+            table[ALPHABET_CHARS[i] as usize] = i as u8;
+            i += 1;
+        }
+        table
+    }
+
+    /// Return the maximum possible decoded size for a given input length - The actual length may be less if the input includes padding.
+    /// `InvalidPadding` is returned if the input length is not valid.
+    // pub fn calcSizeUpperBound(decoder: *const Base64Decoder, source_len: usize) Error!usize {
+    //
+    // PARITY: clippy suggests `.is_multiple_of(4)` for the `% 4 != 0` test,
+    // but rewriting would diverge from the reference expression; kept as-is
+    // for fidelity (the rustty-os `manual_div_ceil` precedent).
+    #[allow(clippy::manual_is_multiple_of)]
+    pub const fn calc_size_upper_bound(source_len: usize) -> Result<usize, Error> {
+        // var result = source_len / 4 * 3;
+        let result = source_len / 4 * 3;
+        // const leftover = source_len % 4;
+        let leftover = source_len % 4;
+        // if (decoder.pad_char != null) {
+        //     if (leftover % 4 != 0) return error.InvalidPadding;
+        // } else { ... }
+        //
+        // (the standard codec HAS a pad char — the no-pad arm is dead for
+        // this codec and elided.)
+        if leftover % 4 != 0 {
+            return Err(Error::InvalidPadding);
+        }
+        // return result;
+        Ok(result)
+    }
+
+    /// Return the exact decoded size for a slice.
+    /// `InvalidPadding` is returned if the input length is not valid.
+    // pub fn calcSizeForSlice(decoder: *const Base64Decoder, source: []const u8) Error!usize {
+    pub fn calc_size_for_slice(source: &[u8]) -> Result<usize, Error> {
+        // const source_len = source.len;
+        let source_len = source.len();
+        // var result = try decoder.calcSizeUpperBound(source_len);
+        let mut result = calc_size_upper_bound(source_len)?;
+        // if (decoder.pad_char) |pad_char| {
+        //     if (source_len >= 1 and source[source_len - 1] == pad_char) result -= 1;
+        //     if (source_len >= 2 and source[source_len - 2] == pad_char) result -= 1;
+        // }
+        if source_len >= 1 && source[source_len - 1] == PAD_CHAR {
+            result -= 1;
+        }
+        if source_len >= 2 && source[source_len - 2] == PAD_CHAR {
+            result -= 1;
+        }
+        // return result;
+        Ok(result)
+    }
+
+    /// dest.len must be what you get from ::calcSize.
+    /// Invalid characters result in `error.InvalidCharacter`.
+    /// Invalid padding results in `error.InvalidPadding`.
+    // pub fn decode(decoder: *const Base64Decoder, dest: []u8, source: []const u8) Error!void {
+    //
+    // PARITY: `% 4 != 0` kept verbatim over clippy's `.is_multiple_of(4)`
+    // (see `calc_size_upper_bound`).
+    #[allow(clippy::manual_is_multiple_of)]
+    pub fn decode(dest: &mut [u8], source: &[u8]) -> Result<(), Error> {
+        // if (decoder.pad_char != null and source.len % 4 != 0) return error.InvalidPadding;
+        if source.len() % 4 != 0 {
+            return Err(Error::InvalidPadding);
+        }
+        // var dest_idx: usize = 0;
+        let mut dest_idx: usize = 0;
+        // var acc: u12 = 0;
+        //
+        // (`u12` emulated as the low 12 bits of a `u16` — the shift below
+        // masks exactly as the Zig `u12` truncating `<<` does.)
+        let mut acc: u16 = 0;
+        // var acc_len: u4 = 0;
+        let mut acc_len: u32 = 0;
+        // var leftover_idx: ?usize = null;
+        let mut leftover_idx: Option<usize> = None;
+        // (the two `fast_char_to_index` fast loops are elided — accelerative
+        // only, see the module doc; this is the reference's scalar tail over
+        // `remaining`, applied to the whole source.)
+        // for (remaining, fast_src_idx..) |c, src_idx| {
+        for (src_idx, &c) in source.iter().enumerate() {
+            // const d = decoder.char_to_index[c];
+            let d = CHAR_TO_INDEX[c as usize];
+            // if (d == invalid_char) {
+            if d == INVALID_CHAR {
+                // if (decoder.pad_char == null or c != decoder.pad_char.?) return error.InvalidCharacter;
+                if c != PAD_CHAR {
+                    return Err(Error::InvalidCharacter);
+                }
+                // leftover_idx = src_idx;
+                leftover_idx = Some(src_idx);
+                // break;
+                break;
+            }
+            // acc = (acc << 6) + d;
+            acc = ((acc << 6) & 0xfff) + u16::from(d);
+            // acc_len += 6;
+            acc_len += 6;
+            // if (acc_len >= 8) {
+            if acc_len >= 8 {
+                // acc_len -= 8;
+                acc_len -= 8;
+                // dest[dest_idx] = @as(u8, @truncate(acc >> acc_len));
+                dest[dest_idx] = (acc >> acc_len) as u8;
+                // dest_idx += 1;
+                dest_idx += 1;
+            }
+        }
+        // if (acc_len > 4 or (acc & (@as(u12, 1) << acc_len) - 1) != 0) {
+        //     return error.InvalidPadding;
+        // }
+        if acc_len > 4 || (acc & ((1u16 << acc_len) - 1)) != 0 {
+            return Err(Error::InvalidPadding);
+        }
+        // if (leftover_idx == null) return;
+        let leftover_start = match leftover_idx {
+            Some(v) => v,
+            None => return Ok(()),
+        };
+        // const leftover = source[leftover_idx.?..];
+        let leftover = &source[leftover_start..];
+        // if (decoder.pad_char) |pad_char| {
+        //
+        // (the standard codec's pad char is '=' — the arm is always taken.)
+        {
+            // const padding_len = acc_len / 2;
+            let padding_len = (acc_len / 2) as usize;
+            // var padding_chars: usize = 0;
+            let mut padding_chars: usize = 0;
+            // for (leftover) |c| {
+            for &c in leftover {
+                // if (c != pad_char) {
+                if c != PAD_CHAR {
+                    // return if (c == Base64Decoder.invalid_char) error.InvalidCharacter else error.InvalidPadding;
+                    return Err(if c == INVALID_CHAR {
+                        Error::InvalidCharacter
+                    } else {
+                        Error::InvalidPadding
+                    });
+                }
+                // padding_chars += 1;
+                padding_chars += 1;
+            }
+            // if (padding_chars != padding_len) return error.InvalidPadding;
+            if padding_chars != padding_len {
+                return Err(Error::InvalidPadding);
+            }
+        }
+        Ok(())
+    }
+}

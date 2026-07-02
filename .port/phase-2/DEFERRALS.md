@@ -1064,10 +1064,53 @@ deferral was created and none resolved. Ledger:
 - **SEQUENCING STUBS (not deferrals; later chunks fill IN PLACE):**
   `updateRendererHealth`/`updateScrollbar`/`updateConfig` (C8,
   Surface.zig:1677/1689/1714), `clipboardWrite`/`setSelection` (C9,
-  :2162/:2335), `posToViewport` (C13, :4726), `startClipboardRequest`/
-  `showDesktopNotification`/`presentSurface` (C15, :5822/:5968/:6023) —
-  `unimplemented!()` stubs carrying the reference doc comments and exact
-  signatures; C7's arms are their first callsites. The C6
+  :2162/:2335 — **FILLED by C9**), `posToViewport` (C13, :4726),
+  `startClipboardRequest`/`showDesktopNotification`/`presentSurface` (C15,
+  :5822/:5968/:6023) — `unimplemented!()` stubs carrying the reference doc
+  comments and exact signatures; C7's arms are their first callsites. The C6
   `#[allow(dead_code)]`s on `surfaceMailbox`/`queueIo` are removed (first
   consumers landed); `searchCallback`/`searchCallback_` carry the allow until
   the C14 search registration names them.
+
+## rustty-core C9 (core tier) — text / selection / clipboard-write tier
+
+Chunk C9 of CORE_BLUEPRINT §6 lands Surface.zig:1867-2395 in
+`crates/rustty-core/src/surface.rs`: `Text` (+ hoisted `TextViewport`),
+`dumpText`/`dumpTextLocked`, `hasSelection`, `selectionString`, `pwd`,
+`resolvePathForOpening`, `imePoint`, `clipboardWrite`,
+`copySelectionToClipboards`, `setSelection`, `setSelectionAndCopy` — all
+LIVE (no GPU/xev leaf in this range; the C7 SEQUENCING STUBS
+`clipboardWrite`/`setSelection` above are filled). NO new deferral was
+created and none resolved. Ledger:
+
+- **Mutex fidelity:** `imePoint` locks/unlocks WITHOUT defer exactly as the
+  reference does — one lock line, cursor + preedit width read under it, one
+  unlock line, verbatim pairing. The `defer unlock`-shaped bodies
+  (`dumpText`/`hasSelection`/`selectionString`/`pwd`) realize the defer as
+  the explicit unlock at every exit (the C7/C8 convention).
+- **PORT helpers (Rust-only std glue, file scope, not deferrals):**
+  `mod zig_base64` — the Zig std.base64 STANDARD codec Decoder surface
+  (`calcSizeForSlice`/`decode`) reproduced bit-for-bit from lib/std/base64.zig
+  0.15.2 (u12 accumulator emulated masked; the 16-/4-char fast loops elided
+  as accelerative-only — pads never reach them, the scalar tail is the
+  semantic core; error split `InvalidPadding`/`InvalidCharacter` preserved —
+  the reference branches on it); `is_absolute`/`resolve`/`os_str_from_bytes`
+  (std.fs.path analogues — the rustty-config theme.rs/path.rs helpers,
+  verbatim); `copy_options` (the Zig `Options` value-copy realization,
+  map KEPT — unlike vt formatter.rs's extras-only `copy_options`).
+- **Additive growth (upstream crate, Rust-only glue):** rustty-vt
+  `formatter::CodepointMap`/`Replacement` gained `Clone` derives (Zig copies
+  the `Options` MultiArrayList header shallowly at `var copy = opts`; the
+  owned Rust `Options` clones the entries — same observable content).
+- **Documented shape mappings (not deferrals):** `ClipboardContent` BORROWS
+  its bytes, so `copySelectionToClipboards` collects owned `(mime, data)`
+  pairs (the collapsed arena's allocations) and materializes the borrowed
+  view at the `setClipboard` loop; `aw.toOwnedSliceSentinel(0)` ->
+  `mem::take(&mut aw)` on the `Vec<u8>` allocating-writer sink (vt
+  `selectionString` convention, length excludes the NUL sentinel);
+  `allocSentinel(u8, size, 0)` -> `vec![0u8; size + 1]` with the explicit
+  `buf[size] = 0` sentinel write; `pwd`/`resolvePathForOpening`
+  `Allocator.Error!` collapses (infallible Rust allocation, app.rs
+  precedent). `resolvePathForOpening` (C13 processLinks :4396) and
+  `setSelectionAndCopy` (C12 :3866 / C13 :4086) carry `#[allow(dead_code)]`
+  until their callsites land.
