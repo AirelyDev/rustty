@@ -195,7 +195,17 @@ milestone path, **apprt-api** (D5 partition) is the next headless deliverable.
 - **-sys**: wuffs/glslang/spirv-cross (renderer) + libpng/sentry/dcimgui (backlog) all vendored + KAT-green. dcimgui uses freetype-sys's bundled libpng (no dup). **DEFERRED: fontconfig-sys + libxml2-sys** (new-dep pair; Linux font discovery; off the macOS embedding critical path).
 - **MEMORY-SAFETY FIX**: the torn-`BufNode.data` corruption under parallel `cargo test` was root-caused (NOT the arena — a downstream victim) to concurrent non-thread-safe `onig_initialize()` (reference `ensureInit` never wrote its `initialized` flag → re-init every call). Fixed with OnceLock; test-serialization lock removed; 0/60 stable at 48 threads. See DEFERRALS.md + memory parallel-cargo-test-exposes-c-init-races.
 
-## INTEGRATION TIER — the critical path to the libghostty embedding milestone (NEXT focused effort)
+## INTEGRATION TIER prerequisites: ✅ DONE (2026-07-02) — crash + termio + Command
+Per INTEGRATION_TIER_BLUEPRINT.md, 4 commits (8f1fd89, e55d5b4, 6c46a0a, 61b8a52):
+- **crash**: rustty-crash filled (dir/sentry/sentry_envelope/main + pkg/sentry over sentry-sys) — 12 tests (9 owed + 3 extra), ThreadStateSurface seam as designed (tuples, live *const read), ASan green.
+- **termio**: rustty-termio filled — **44 tests** (Exec 10 + shell_integration 21 + message 2 + root 1 + Command 10). Command relocated per break #13b (PORT_PLAN crate 23/24 corrected). renderer gained message.rs + Thread::Mailbox (BlockingQueue, no xev/GPU). stream_handler = full vt Handler impl.
+- **D6 deferrals** (all 0-test, verbatim bodies, DEFERRALS.md): xev event-loop wiring (Thread run/callbacks, Termio threadEnter/processOutput, Exec Subprocess.start arena self-ref, ReadThread), mailbox::send mutex pattern, surfaceMessageWriter/rendererMessageWriter (opaque core Timeout).
+Workspace ≈3282+ tests green.
+
+## CORE (Surface/App) — the next milestone (design-first; then apprt/embedded)
+Surface.zig 6036 loc / **0 tests**, App.zig 604 / 0, surface_mouse.zig 336 / 1. Weakly test-gated ⇒ G3b comment-coverage + per-chunk review carry the gate. Key design questions: apprt-api `A: App` genericity through 6k loc; filling the App/Surface growth-point trait methods; the App::Mailbox queue types (resolves apprt-api's opaque Timeout/Size); inspector seam (rustty-inspector is a stub; Surface imports inspector/main.zig); renderer-thread/GPU-coupled paths (Phase-3 defer); chunked skeleton→fill execution (cluster discipline).
+
+## INTEGRATION TIER — the critical path to the libghostty embedding milestone (original notes)
 Dependency-ordered, apprt-api now unblocks it:
 **quirks** (57 loc, tiny leaf, imports font — needs a crate-placement decision) + **Command** (911 loc/10t, now unblocked by apprt-api — placement decision) + **crash** (sentry-sys ready) → **termio** (pty/exec/thread, 30 tests — the "run a real shell" layer; pty.rs already ported in rustty-os) → **core** (Surface.zig/App.zig — the big one; fills apprt-api's growth-point trait methods + the mailbox/queue seam) → **apprt/embedded** (2250 loc, 71 C-ABI exports — THE libghostty embedding milestone, via vt-c cbindgen+pinned-padding+const-size-assert) + **none.zig** (headless). Then **cli** + **bin**. Crown-jewel-adjacent — needs design + careful review (not background dispatch).
 
