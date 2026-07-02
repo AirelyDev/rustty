@@ -41,6 +41,7 @@ use allocator_api2::alloc::Global as Allocator;
 use rustty_apprt_api::structs::Clipboard;
 use rustty_apprt_api::surface::{AppMailbox, Message as SurfaceMessage, ReportTitleStyle};
 use rustty_config::value_types::{ClipboardAccess, OSCColorReportFormat};
+use rustty_datastruct::blocking_queue::Timeout;
 use rustty_renderer::size::Size;
 use rustty_renderer::state::State;
 use rustty_renderer::thread as renderer_thread;
@@ -239,28 +240,39 @@ impl<M: AppMailbox> StreamHandler<M> {
         self.messageWriter(Message::ColorSchemeReport { force: false });
     }
 
-    // DEFERRED (core-tier mailbox seam, 0 tests — R1-safe): the fast path
-    // constructs the opaque core `Timeout` (`.{ .instant = {} }` — the
-    // AppMailbox associated type filled when core lands) and the slow path
-    // unlocks/relocks the caller-held renderer mutex (`mailbox::send`
-    // deferral precedent — Zig's manual Mutex API). Preserved verbatim:
-    //
     // inline fn surfaceMessageWriter(
     //     self: *StreamHandler,
     //     msg: apprt.surface.Message,
     // ) void {
-    //     // See messageWriter which has similar logic and explains why
-    //     // we may have to do this.
-    //     if (self.surface_mailbox.push(msg, .{ .instant = {} }) == 0) {
-    //         self.renderer_state.mutex.unlock();
-    //         defer self.renderer_state.mutex.lock();
-    //         _ = self.surface_mailbox.push(msg, .{ .forever = {} });
-    //     }
-    // }
+    //
+    // PORT NOTE (core C-T un-defer): the opaque core `Timeout` is now concrete
+    // (`Timeout::Instant`/`Forever`) and the slow path unlocks/relocks the
+    // caller-held renderer mutex via the guard-less `rustty_zigstd::thread::
+    // Mutex` (the C0 model). The reference re-pushes its by-value `msg` copy on
+    // a failed instant push; Rust moves, so `push_or_return` hands `msg` back
+    // (the `AppMailbox` retain-on-failure primitive). `SurfaceMessage<'static>`
+    // because a storing push cannot take a borrow (mailbox `Queue` precedent).
     #[inline]
-    fn surfaceMessageWriter(&mut self, msg: SurfaceMessage<'_>) {
-        let _ = msg;
-        unimplemented!("termio.StreamHandler.surfaceMessageWriter deferred (core-tier mailbox seam); verbatim body above")
+    fn surfaceMessageWriter(&mut self, msg: SurfaceMessage<'static>) {
+        // See messageWriter which has similar logic and explains why
+        // we may have to do this.
+        // if (self.surface_mailbox.push(msg, .{ .instant = {} }) == 0) {
+        if let Err(msg) = self.surface_mailbox.push_or_return(msg, Timeout::Instant) {
+            // self.renderer_state.mutex.unlock();
+            //
+            // SAFETY: `renderer_state` points at the live shared render State
+            // for the handler's lifetime; its `mutex` is the guard-less lock
+            // held by the caller. The callee unlock/relock inversion is exactly
+            // what the guard-less design exists for (zigstd thread::Mutex doc).
+            unsafe { (*(*self.renderer_state).mutex).unlock() };
+            // defer self.renderer_state.mutex.lock();
+            // (guard-less zigstd Mutex — the `defer` relock is the explicit
+            // re-lock after the blocking push below, the sole exit.)
+            // _ = self.surface_mailbox.push(msg, .{ .forever = {} });
+            let _ = self.surface_mailbox.push(msg, Timeout::Forever);
+            // SAFETY: see the unlock above — we relock the caller's lock.
+            unsafe { (*(*self.renderer_state).mutex).lock() };
+        }
     }
 
     // inline fn messageWriter(self: *StreamHandler, msg: termio.Message) void {
@@ -278,43 +290,59 @@ impl<M: AppMailbox> StreamHandler<M> {
     ///
     /// This assumes the renderer state mutex is locked.
     //
-    // DEFERRED (core-tier mutex modeling, 0 tests — R1-safe; the reference
-    // declaration is itself uncalled in this file). The slow path
-    // unlocks/relocks the caller-held renderer mutex (`mailbox::send`
-    // precedent). Preserved verbatim:
-    //
     // inline fn rendererMessageWriter(
     //     self: *StreamHandler,
     //     msg: renderer.Message,
     // ) void {
-    //     // See termio.Mailbox.send for more details on how this works.
     //
-    //     // Try instant first. If it works then we can return.
-    //     if (self.renderer_mailbox.push(msg, .{ .instant = {} }) > 0) {
-    //         return;
-    //     }
-    //
-    //     // Instant would have blocked. Release the renderer mutex,
-    //     // wake up the renderer to allow it to process the message,
-    //     // and then try again.
-    //     self.renderer_state.mutex.unlock();
-    //     defer self.renderer_state.mutex.lock();
-    //     self.renderer_wakeup.notify() catch |err| {
-    //         // This is an EXTREMELY unlikely case. We still don't return
-    //         // and attempt to send the message because its most likely
-    //         // that everything is fine, but log in case a freeze happens.
-    //         log.warn(
-    //             "failed to notify renderer, may deadlock err={}",
-    //             .{err},
-    //         );
-    //     };
-    //     _ = self.renderer_mailbox.push(msg, .{ .forever = {} });
-    // }
+    // PORT NOTE (core C-T un-defer): the slow path unlocks/relocks the caller-
+    // held renderer mutex via the guard-less C0 `rustty_zigstd::thread::Mutex`,
+    // and re-pushes its by-value `msg` on a failed instant push — Rust moves,
+    // so `push_or_return` hands `msg` back. `#[allow(dead_code)]` retained: the
+    // reference declaration is itself uncalled in this file (every VT action
+    // routes through `messageWriter`/`surfaceMessageWriter`), so no caller is
+    // fabricated — the faithful body is preserved and compiled.
     #[inline]
     #[allow(dead_code)]
     fn rendererMessageWriter(&mut self, msg: rustty_renderer::message::Message) {
-        let _ = msg;
-        unimplemented!("termio.StreamHandler.rendererMessageWriter deferred (core-tier mutex modeling); verbatim body above")
+        // See termio.Mailbox.send for more details on how this works.
+
+        // Try instant first. If it works then we can return.
+        // if (self.renderer_mailbox.push(msg, .{ .instant = {} }) > 0) {
+        //     return;
+        // }
+        //
+        // SAFETY: `renderer_mailbox` points at the live shared renderer thread
+        // mailbox (`BlockingQueue<Message, 64>`) for the handler's lifetime.
+        let msg = match unsafe { &*self.renderer_mailbox }.push_or_return(msg, Timeout::Instant) {
+            Ok(_) => return,
+            Err(msg) => msg,
+        };
+
+        // Instant would have blocked. Release the renderer mutex,
+        // wake up the renderer to allow it to process the message,
+        // and then try again.
+        // self.renderer_state.mutex.unlock();
+        //
+        // SAFETY: the guard-less caller-held lock (see surfaceMessageWriter).
+        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        // defer self.renderer_state.mutex.lock();
+        // (guard-less zigstd Mutex — the `defer` relock is the explicit re-lock
+        // after the blocking push below, the sole exit.)
+        // self.renderer_wakeup.notify() catch |err| {
+        if self.renderer_wakeup.notify().is_err() {
+            // This is an EXTREMELY unlikely case. We still don't return
+            // and attempt to send the message because its most likely
+            // that everything is fine, but log in case a freeze happens.
+            // log.warn(
+            //     "failed to notify renderer, may deadlock err={}",
+            //     .{err},
+            // );
+        }
+        // _ = self.renderer_mailbox.push(msg, .{ .forever = {} });
+        let _ = unsafe { &*self.renderer_mailbox }.push(msg, Timeout::Forever);
+        // SAFETY: see the unlock above — we relock the caller's lock.
+        unsafe { (*(*self.renderer_state).mutex).lock() };
     }
 
     // pub fn vt(

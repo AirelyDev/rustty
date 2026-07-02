@@ -797,6 +797,66 @@ where
     }
 }
 
+/// Returns a new config for a surface for the given app that should be
+/// used for any new surfaces. The resulting config should be deinitialized
+/// after the surface is initialized.
+//
+// PORT NOTE (core C-T): the reference free function `apprt.surface.newConfig`
+// (src/apprt/surface.zig:175) — RESOLVED here per CORE_BLUEPRINT §6 because it
+// reads core's `App`/`Surface` (`app.focusedSurface()` + `Surface.pwd()`), so
+// it cannot live in the apprt-api interface crate (its verbatim body is
+// retained there for provenance). The `Allocator.Error!Config` return collapses
+// to `Config` (infallible Rust allocation — the App/DerivedConfig.init precedent);
+// `copy._arena.?.allocator()` collapses (the pwd `Vec<u8>` allocates via Global,
+// `app.alloc` carried for signature parity).
+//
+// pub fn newConfig(
+//     app: *const App,
+//     config: *const Config,
+//     context: NewSurfaceContext,
+// ) Allocator.Error!Config {
+pub fn new_config<A>(
+    app: &App<A>,
+    config: &Config,
+    context: apprt::surface::NewSurfaceContext,
+) -> Config
+where
+    A: apprt::App + 'static,
+    // The self-referential C0 bound (§1) that `App::focusedSurface` carries.
+    A::Surface: ApprtSurface<App = A, Core = Surface<A>>,
+{
+    // Create a shallow clone
+    // var copy = config.shallowClone(app.alloc);
+    let mut copy = config.shallow_clone();
+
+    // Our allocator is our config's arena
+    // const alloc = copy._arena.?.allocator();
+    // (PORT: collapses — `pwd` returns an owned `Vec<u8>` via the global
+    // allocator.)
+
+    // Get our previously focused surface for some inherited values.
+    // const prev = app.focusedSurface();
+    let prev = app.focusedSurface();
+    // if (prev) |p| {
+    if let Some(p) = prev {
+        // if (shouldInheritWorkingDirectory(context, config)) {
+        if apprt::surface::should_inherit_working_directory(context, config) {
+            // if (try p.pwd(alloc)) |pwd| {
+            //
+            // SAFETY: `focusedSurface` returned a pointer it just validated via
+            // `hasSurface`; it is a live core `Surface<A>` for this call.
+            if let Some(pwd) = unsafe { &*p }.pwd(app.alloc) {
+                // copy.@"working-directory" = .{ .path = pwd };
+                copy.working_directory =
+                    Some(rustty_config::value_types::WorkingDirectory::Path(pwd));
+            }
+        }
+    }
+
+    // return copy;
+    copy
+}
+
 /// The message types that can be sent to the app thread.
 //
 // PARITY: the reference is a Zig `union(enum)` stored BY VALUE in the
@@ -890,8 +950,29 @@ impl<A: apprt::App + 'static> Mailbox<A> {
     // (`Mailbox` is a two-pointer `Copy` handle) -> `&self` per the
     // CORE_BLUEPRINT §1 signature.
     pub fn push(&self, msg: Message<A>, timeout: Timeout) -> Size {
+        // On a failed push the message is dropped (the reference `push` returns
+        // the Size and never hands the value back). Delegate to the
+        // retain-on-failure primitive so `SurfaceMailbox` can retry.
+        self.push_or_return(msg, timeout).unwrap_or(0)
+    }
+
+    /// Like [`push`](Self::push) but returns the message BACK when the queue
+    /// push fails, so a caller can retry with a blocking timeout.
+    //
+    // PORT NOTE (core C-T): the reference `apprt.surface.Mailbox.push` retries
+    // via the app queue — `StreamHandler.surfaceMessageWriter` re-pushes its
+    // by-value message copy after a failed instant push. Rust `push` moves, so
+    // the surface writer needs the message handed back on failure; this
+    // primitive threads `BlockingQueue::push_or_return` up through the
+    // `AppMailbox` seam. The reference `wakeup()` fires on BOTH the storing and
+    // the failed push (App.Mailbox.push always wakes the app loop), preserved
+    // here (the wakeup is unconditional, exactly as the reference).
+    //
+    // The `Err` carries a full `Message<A>` (large); handing it back is the point.
+    #[allow(clippy::result_large_err)]
+    pub fn push_or_return(&self, msg: Message<A>, timeout: Timeout) -> Result<Size, Message<A>> {
         // const result = self.mailbox.push(msg, timeout);
-        let result = unsafe { &*self.mailbox }.push(msg, timeout);
+        let result = unsafe { &*self.mailbox }.push_or_return(msg, timeout);
 
         // Wake up our app loop
         unsafe { &*self.rt_app }.wakeup();

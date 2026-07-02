@@ -7,12 +7,13 @@
 //! the [`AppMailbox`] trait (implemented by rustty-core) + the
 //! [`SurfaceMessageEnvelope`] DTO — the surface half of core's `App.Message`.
 //!
-//! DEFERRED: `newConfig` (reference `pub fn newConfig(app, config, context)`)
-//! reads `app.focusedSurface()` and `Surface.pwd()`, i.e. it needs concrete
-//! rustty-core `App`/`Surface`. It is NOT part of the interface seam and lands in
-//! rustty-apprt/rustty-core when those crates arrive (its only apprt-api-visible
-//! dependency, [`should_inherit_working_directory`], IS ported here). This is an
-//! additive placement deferral, not a drop (R1-safe).
+//! RESOLVED (core C-T): `newConfig` (reference `pub fn newConfig(app, config,
+//! context)`) reads `app.focusedSurface()` and `Surface.pwd()`, i.e. it needs
+//! concrete rustty-core `App`/`Surface`, so it is NOT part of this interface
+//! seam. Per CORE_BLUEPRINT §6 (C-T) it now lands as `rustty_core::app::new_config`
+//! (core app glue), built on this crate's [`should_inherit_working_directory`]
+//! and [`NewSurfaceContext`]. The verbatim reference body is retained below for
+//! provenance. See .port/phase-2/DEFERRALS.md ("core C-T").
 
 use rustty_config::Config;
 use rustty_datastruct::MessageData;
@@ -207,11 +208,34 @@ pub trait AppMailbox {
     // DIRECT-dispatched (`App.updateConfig` -> `surface.core().handleMessage`),
     // never queued, so `handleMessage` keeps `Message<'_>` while pushes are
     // `'static`.
+    //
+    // PORT NOTE (`push_or_return`, core C-T): `StreamHandler.surfaceMessageWriter`
+    // (src/termio/stream_handler.zig) does the reference's by-COPY retry —
+    // `if (surface_mailbox.push(msg, .instant) == 0) { unlock; push(msg,
+    // .forever); }`. Rust's `push` MOVES `msg`, so the retry needs the message
+    // handed BACK on the failed instant push. [`push_or_return`] is that
+    // primitive (mirrors `rustty_datastruct::BlockingQueue::push_or_return`);
+    // the plain [`push`](Self::push) is the drop-on-failure default expressed
+    // in terms of it, so existing callers are unchanged.
+    //
+    // The `Err` carries a full `Message` (large); handing it back is the point.
+    #[allow(clippy::result_large_err)]
+    fn push_or_return(
+        &self,
+        msg: Message<'static>,
+        timeout: rustty_datastruct::blocking_queue::Timeout,
+    ) -> Result<rustty_datastruct::blocking_queue::Size, Message<'static>>;
+
+    /// Send a message to the surface, dropping it if the queue push fails.
     fn push(
         &self,
         msg: Message<'static>,
         timeout: rustty_datastruct::blocking_queue::Timeout,
-    ) -> rustty_datastruct::blocking_queue::Size;
+    ) -> rustty_datastruct::blocking_queue::Size {
+        // On failure the returned message is dropped (the plain `push`
+        // contract mirrors the reference's `_ = ...push(msg, ...)`).
+        self.push_or_return(msg, timeout).unwrap_or(0)
+    }
 }
 
 // DEFERRED (needs rustty-core `App`/`Surface`; see module doc). The reference

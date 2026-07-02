@@ -24,6 +24,7 @@
 // PORT NOTE: `renderer` is imported by the reference but not referenced by any
 // declaration in this file, so no `use` is bound for it. `xev` is the D6
 // deferred seam (crate::xev_seam).
+use rustty_datastruct::blocking_queue::Timeout;
 use rustty_datastruct::BlockingQueue;
 
 use crate::xev_seam as xev;
@@ -106,55 +107,79 @@ impl Mailbox {
     /// lock it again. This handles an edge case where queues are full.
     /// This may not apply to all writer types.
     //
-    // DEFERRED (core-tier C-T un-defer, 0 tests — R1-safe): the body unlocks
-    // and relocks the caller-held renderer-state mutex (`m.unlock()` ... `defer
-    // m.lock()`), Zig `std.Thread.Mutex`'s manual lock/unlock API. The mutex
-    // MODEL landed in C0 (guard-less `rustty_zigstd::thread::Mutex` — the
-    // parameter below); the reference body is preserved verbatim and the
-    // implementation lands with the core-tier termio pass (see DEFERRALS.md):
-    //
     // pub fn send(
     //     self: *Mailbox,
     //     msg: termio.Message,
     //     mutex: ?*std.Thread.Mutex,
     // ) void {
-    //     switch (self.*) {
-    //         .spsc => |*mb| send: {
-    //             // Try to write to the queue with an instant timeout. This is the
-    //             // fast path because we can queue without a lock.
-    //             if (mb.queue.push(msg, .{ .instant = {} }) > 0) break :send;
     //
-    //             // If we enter this conditional, the queue is full. We wake up
-    //             // the writer thread so that it can process messages to clear up
-    //             // space. However, the writer thread may require the renderer
-    //             // lock so we need to unlock.
-    //             mb.wakeup.notify() catch |err| {
-    //                 log.warn("failed to wake up writer, data will be dropped err={}", .{err});
-    //                 return;
-    //             };
-    //
-    //             // Unlock the renderer state so the writer thread can acquire it.
-    //             // Then try to queue our message before continuing. This is a very
-    //             // slow path because we are having a lot of contention for data.
-    //             // But this only gets triggered in certain pathological cases.
-    //             //
-    //             // Note that writes themselves don't require a lock, but there
-    //             // are other messages in the writer queue (resize, focus) that
-    //             // could acquire the lock. This is why we have to release our lock
-    //             // here.
-    //             if (mutex) |m| m.unlock();
-    //             defer if (mutex) |m| m.lock();
-    //             _ = mb.queue.push(msg, .{ .forever = {} });
-    //         },
-    //     }
-    // }
+    // PORT NOTE (core C-T un-defer): the mutex MODEL landed in C0 — the
+    // reference `?*std.Thread.Mutex` is the guard-less `rustty_zigstd::thread::
+    // Mutex` (raw pointer, so the callee can `unlock()`/`lock()` a lock owned
+    // by the caller's frame). The reference passes `msg` by COPY and re-pushes
+    // it after a failed instant push; Rust moves, so the failed instant push
+    // hands `msg` BACK via `push_or_return` (the retain-on-failure primitive).
     pub fn send(
         &mut self,
         msg: Message<'static>,
         mutex: Option<*mut rustty_zigstd::thread::Mutex>,
     ) {
-        let _ = (msg, mutex);
-        unimplemented!("termio.Mailbox.send deferred (core-tier C-T un-defer); verbatim body above")
+        // switch (self.*) {
+        match self {
+            // .spsc => |*mb| send: {
+            Mailbox::Spsc { queue, wakeup } => {
+                // Try to write to the queue with an instant timeout. This is the
+                // fast path because we can queue without a lock.
+                // if (mb.queue.push(msg, .{ .instant = {} }) > 0) break :send;
+                let msg = match queue.push_or_return(msg, Timeout::Instant) {
+                    // A nonzero size means the message was queued: `break :send`.
+                    Ok(_) => return,
+                    // The queue was full; the message is handed back for the
+                    // slow-path retry below.
+                    Err(msg) => msg,
+                };
+
+                // If we enter this conditional, the queue is full. We wake up
+                // the writer thread so that it can process messages to clear up
+                // space. However, the writer thread may require the renderer
+                // lock so we need to unlock.
+                // mb.wakeup.notify() catch |err| {
+                //     log.warn("failed to wake up writer, data will be dropped err={}", .{err});
+                //     return;
+                // };
+                if let Err(err) = wakeup.notify() {
+                    log_warn_wake_failed(&err);
+                    return;
+                }
+
+                // Unlock the renderer state so the writer thread can acquire it.
+                // Then try to queue our message before continuing. This is a very
+                // slow path because we are having a lot of contention for data.
+                // But this only gets triggered in certain pathological cases.
+                //
+                // Note that writes themselves don't require a lock, but there
+                // are other messages in the writer queue (resize, focus) that
+                // could acquire the lock. This is why we have to release our lock
+                // here.
+                // if (mutex) |m| m.unlock();
+                if let Some(m) = mutex {
+                    // SAFETY: `mutex`, when set, is `renderer_state.mutex`, the
+                    // shared guard-less lock held by the caller for its frame;
+                    // the callee-unlock/relock inversion is exactly what the
+                    // guard-less design exists for (zigstd thread::Mutex doc).
+                    unsafe { (*m).unlock() };
+                }
+                // defer if (mutex) |m| m.lock();
+                // (guard-less zigstd Mutex — the `defer` relock is the explicit
+                // re-lock after the blocking push below, the sole exit.)
+                // _ = mb.queue.push(msg, .{ .forever = {} });
+                let _ = queue.push(msg, Timeout::Forever);
+                if let Some(m) = mutex {
+                    // SAFETY: see the unlock above — we relock the caller's lock.
+                    unsafe { (*m).lock() };
+                }
+            }
+        }
     }
 
     /// Notify that there are new messages. This may be a noop depending
@@ -177,4 +202,9 @@ impl Mailbox {
 // log-helper precedent).
 fn log_warn_notify_failed(_err: &xev::NotifyError) {
     // log.warn("failed to notify writer, data will be dropped err={}", .{err});
+}
+
+// PORT: the `log.warn` call site in `send`'s slow path, preserved verbatim.
+fn log_warn_wake_failed(_err: &xev::NotifyError) {
+    // log.warn("failed to wake up writer, data will be dropped err={}", .{err});
 }

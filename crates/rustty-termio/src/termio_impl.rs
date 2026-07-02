@@ -8,15 +8,17 @@
 //! PORT STATUS: struct shapes + self-contained logic ported (integration-tier
 //! stage 2): the `Termio` struct, `MutexState`, `ThreadEnterState` (in full),
 //! `DerivedConfig` (in full), `ThreadData`, and the pure delegation methods.
-//! The live IO-thread execution paths (`init`/`threadEnter`/`changeConfig`/
-//! `resize`/`sizeReport*`/`resetSynchronizedOutput`/`clearScreen`/
-//! `scrollViewport`/`jumpToPrompt`/`focusGained`/`processOutput*`/
-//! `colorSchemeReport*`) are DEFERRED with faithful signatures + verbatim
-//! reference bodies in comments + `unimplemented!()` markers (0 reference
-//! tests — R1-safe): they execute on the termio thread against the live
-//! renderer mutex / xev loop / StreamHandler, i.e. the D6 xev decision, the
-//! renderer-mutex modeling, and stage-4 stream_handler.zig. NOT fabricated
-//! logic. See .port/phase-2/DEFERRALS.md ("rustty-termio stage 2").
+//! The mutex-only IO-thread methods (`changeConfig`/`resize`/`sizeReport*`/
+//! `resetSynchronizedOutput`/`clearScreen`/`scrollViewport`/`jumpToPrompt`/
+//! `focusGained`/`colorSchemeReport*`) are ported LIVE (core C-T) against the
+//! guard-less C0 `rustty_zigstd::thread::Mutex`; the xev `renderer_wakeup.
+//! notify()` in a few of them is the D6 placeholder leaf (live-now, panics only
+//! once the render thread runs). STILL DEFERRED with faithful signatures +
+//! verbatim reference bodies in comments + `unimplemented!()` markers (0
+//! reference tests — R1-safe): `init`/`threadEnter` and
+//! `processOutput`/`processOutputLocked` — they build/drive the live xev loop +
+//! read-thread inspector slow path (the D6 xev decision). NOT fabricated logic.
+//! See .port/phase-2/DEFERRALS.md ("rustty-termio stage 2" + "core C-T").
 
 // PARITY: the reference's identifiers are camelCase (`queueMessage`,
 // `threadEnter`, ...); preserved verbatim per R1/R2.
@@ -52,11 +54,17 @@ use rustty_config::conditional;
 use rustty_config::io::RepeatableReadableIO;
 use rustty_config::value_types::{ClipboardAccess, Color, OSCColorReportFormat, TerminalColor};
 use rustty_config::Config;
+use rustty_datastruct::blocking_queue::Timeout;
+use rustty_renderer::message::Message as RendererMessage;
 use rustty_renderer::size::Size;
 use rustty_renderer::state::State;
 use rustty_renderer::thread;
 use rustty_vt::color;
 use rustty_vt::cursor::Style as CursorStyle;
+use rustty_vt::focus;
+use rustty_vt::kitty::graphics_image::Limits;
+use rustty_vt::modes::Mode;
+use rustty_vt::size_report;
 use rustty_vt::terminal::Terminal;
 
 use crate::backend;
@@ -572,311 +580,456 @@ impl<M: AppMailbox> Termio<M> {
     }
 
     /// Update the configuration.
-    //
-    // DEFERRED (renderer-mutex modeling + stage-4 stream handler, 0 tests —
-    // R1-safe): the body swaps the config under the renderer lock and updates
-    // the stream handler (`self.terminal_stream.handler.changeConfig`, stage
-    // 4). Preserved verbatim:
-    //
     // pub fn changeConfig(self: *Termio, td: *ThreadData, config: *DerivedConfig) !void {
-    //     // The remainder of this function is modifying terminal state or
-    //     // the read thread data, all of which requires holding the renderer
-    //     // state lock.
-    //     self.renderer_state.mutex.lock();
-    //     defer self.renderer_state.mutex.unlock();
     //
-    //     // Deinit our old config. We do this in the lock because the
-    //     // stream handler may be referencing the old config (i.e. enquiry resp)
-    //     self.config.deinit();
-    //     self.config = config.*;
-    //
-    //     // Update our stream handler. The stream handler uses the same
-    //     // renderer mutex so this is safe to do despite being executed
-    //     // from another thread.
-    //     self.terminal_stream.handler.changeConfig(&self.config);
-    //     td.backend.changeConfig(&self.config);
-    //
-    //     // Update the configuration that we know about.
-    //     //
-    //     // Specific things we don't update:
-    //     //   - command, working-directory: we never restart the underlying
-    //     //   process so we don't care or need to know about these.
-    //
-    //     // Update the default palette.
-    //     self.terminal.colors.palette.changeDefault(config.palette);
-    //     self.terminal.flags.dirty.palette = true;
-    //
-    //     // Update all our other colors
-    //     self.terminal.colors.background.default = config.background.toTerminalRGB();
-    //     self.terminal.colors.foreground.default = config.foreground.toTerminalRGB();
-    //     self.terminal.colors.cursor.default = cursor: {
-    //         const color = config.cursor_color orelse break :cursor null;
-    //         break :cursor color.toTerminalRGB() orelse break :cursor null;
-    //     };
-    //
-    //     // Set the image limits
-    //     try self.terminal.setKittyGraphicsSizeLimit(self.alloc, config.image_storage_limit);
-    //     self.terminal.setKittyGraphicsLoadingLimits(.all);
-    // }
+    // PORT NOTE (core C-T un-defer): the reference `config: *DerivedConfig` is
+    // taken BY VALUE here — the reference does `self.config = config.*` (a value
+    // copy that moves the derived config's owned storage into `self`) and its
+    // caller (the deferred D6 drainMailbox) then frees the now-moved-from box;
+    // Rust models that move by consuming the value. Subsequent reads that the
+    // reference makes via the `config` pointer read the identical value through
+    // `self.config`. The renderer lock is the guard-less C0
+    // `rustty_zigstd::thread::Mutex`; its `defer unlock` is the explicit unlock
+    // before every return below.
     pub fn changeConfig(
         &mut self,
-        _td: &mut ThreadData<M>,
-        _config: &mut DerivedConfig,
+        td: &mut ThreadData<M>,
+        config: DerivedConfig,
     ) -> Result<(), Error> {
-        unimplemented!("termio.Termio.changeConfig deferred (renderer-mutex modeling + stage-4 stream handler); verbatim body above")
+        // The remainder of this function is modifying terminal state or
+        // the read thread data, all of which requires holding the renderer
+        // state lock.
+        // self.renderer_state.mutex.lock();
+        // defer self.renderer_state.mutex.unlock();
+        //
+        // SAFETY: `renderer_state` points at the live shared render State for
+        // the Termio's lifetime; `.mutex` is the guard-less shared lock.
+        unsafe { (*(*self.renderer_state).mutex).lock() };
+
+        // Deinit our old config. We do this in the lock because the
+        // stream handler may be referencing the old config (i.e. enquiry resp)
+        // self.config.deinit();
+        self.config.deinit();
+        // self.config = config.*;
+        self.config = config;
+
+        // Update our stream handler. The stream handler uses the same
+        // renderer mutex so this is safe to do despite being executed
+        // from another thread.
+        // self.terminal_stream.handler.changeConfig(&self.config);
+        self.terminal_stream.handler.changeConfig(&mut self.config);
+        // td.backend.changeConfig(&self.config);
+        td.backend.changeConfig(&mut self.config);
+
+        // Update the configuration that we know about.
+        //
+        // Specific things we don't update:
+        //   - command, working-directory: we never restart the underlying
+        //   process so we don't care or need to know about these.
+
+        // Update the default palette.
+        // self.terminal.colors.palette.changeDefault(config.palette);
+        self.terminal
+            .colors
+            .palette
+            .change_default(self.config.palette);
+        // self.terminal.flags.dirty.palette = true;
+        self.terminal.flags.dirty.palette = true;
+
+        // Update all our other colors
+        // self.terminal.colors.background.default = config.background.toTerminalRGB();
+        self.terminal.colors.background.default = Some(self.config.background.to_terminal_rgb());
+        // self.terminal.colors.foreground.default = config.foreground.toTerminalRGB();
+        self.terminal.colors.foreground.default = Some(self.config.foreground.to_terminal_rgb());
+        // self.terminal.colors.cursor.default = cursor: {
+        //     const color = config.cursor_color orelse break :cursor null;
+        //     break :cursor color.toTerminalRGB() orelse break :cursor null;
+        // };
+        self.terminal.colors.cursor.default = self
+            .config
+            .cursor_color
+            .and_then(|color| color.to_terminal_rgb());
+
+        // Set the image limits
+        // try self.terminal.setKittyGraphicsSizeLimit(self.alloc, config.image_storage_limit);
+        //
+        // (PORT: the reference `try` returns early on error, and the guard-less
+        // `defer unlock` still fires; `setKittyGraphicsLoadingLimits` below is
+        // only reached on success — mirrored by the `is_ok()` fall-through.)
+        let size_limit = self
+            .terminal
+            .set_kitty_graphics_size_limit(self.alloc, self.config.image_storage_limit);
+        if size_limit.is_ok() {
+            // self.terminal.setKittyGraphicsLoadingLimits(.all);
+            self.terminal.set_kitty_graphics_loading_limits(Limits::ALL);
+        }
+
+        // (the deferred renderer-state unlock)
+        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        size_limit.map_err(|_| Error)
     }
 
     /// Resize the terminal.
-    //
-    // DEFERRED (D6 xev wakeup + renderer-mutex modeling, 0 tests — R1-safe).
-    // Preserved verbatim:
-    //
     // pub fn resize(
     //     self: *Termio,
     //     td: *ThreadData,
     //     size: renderer.Size,
     // ) !void {
-    //     self.size = size;
-    //     const grid_size = size.grid();
     //
-    //     // Update the size of our pty.
-    //     try self.backend.resize(grid_size, size.terminal());
-    //
-    //     // Enter the critical area that we want to keep small
-    //     {
-    //         self.renderer_state.mutex.lock();
-    //         defer self.renderer_state.mutex.unlock();
-    //
-    //         // Update the size of our terminal state
-    //         try self.terminal.resize(
-    //             self.alloc,
-    //             grid_size.columns,
-    //             grid_size.rows,
-    //         );
-    //
-    //         // Update our pixel sizes
-    //         self.terminal.width_px = grid_size.columns * self.size.cell.width;
-    //         self.terminal.height_px = grid_size.rows * self.size.cell.height;
-    //
-    //         // Disable synchronized output mode so that we show changes
-    //         // immediately for a resize. This is allowed by the spec.
-    //         self.terminal.modes.set(.synchronized_output, false);
-    //
-    //         // If we have size reporting enabled we need to send a report.
-    //         if (self.terminal.modes.get(.in_band_size_reports)) {
-    //             try self.sizeReportLocked(td, .mode_2048);
-    //         }
-    //     }
-    //
-    //     // Mail the renderer so that it can update the GPU and re-render
-    //     _ = self.renderer_mailbox.push(.{ .resize = size }, .{ .forever = {} });
-    //     self.renderer_wakeup.notify() catch {};
-    // }
-    pub fn resize(&mut self, _td: &mut ThreadData<M>, _size: Size) -> Result<(), Error> {
-        unimplemented!(
-            "termio.Termio.resize deferred (D6 + renderer-mutex modeling); verbatim body above"
-        )
+    // PORT NOTE (core C-T un-defer): the renderer lock is the guard-less C0
+    // `rustty_zigstd::thread::Mutex`; the reference's `{ lock; defer unlock; ...
+    // try ...; }` critical block is a labeled block returning the fallible
+    // section's `Result`, unlocked once after (the `defer`), then propagated
+    // (`locked?`) — so a resize/size-report error unlocks and returns WITHOUT
+    // mailing the renderer, exactly as the reference `try` inside the block. The
+    // final `renderer_wakeup.notify()` is the xev placeholder leaf (D6): live
+    // now, runtime-panics only once the render thread runs (CORE_BLUEPRINT §5).
+    pub fn resize(&mut self, td: &mut ThreadData<M>, size: Size) -> Result<(), Error> {
+        // self.size = size;
+        self.size = size;
+        // const grid_size = size.grid();
+        let grid_size = size.grid();
+
+        // Update the size of our pty.
+        // try self.backend.resize(grid_size, size.terminal());
+        self.backend.resize(grid_size, size.terminal())?;
+
+        // Enter the critical area that we want to keep small
+        // {
+        //     self.renderer_state.mutex.lock();
+        //     defer self.renderer_state.mutex.unlock();
+        //
+        // SAFETY: `renderer_state` points at the live shared render State for
+        // the Termio's lifetime; `.mutex` is the guard-less shared lock.
+        unsafe { (*(*self.renderer_state).mutex).lock() };
+        let locked: Result<(), Error> = 'locked: {
+            // Update the size of our terminal state
+            // try self.terminal.resize(self.alloc, grid_size.columns, grid_size.rows);
+            if self
+                .terminal
+                .resize(self.alloc, grid_size.columns, grid_size.rows)
+                .is_err()
+            {
+                break 'locked Err(Error);
+            }
+
+            // Update our pixel sizes
+            // self.terminal.width_px = grid_size.columns * self.size.cell.width;
+            self.terminal.width_px = u32::from(grid_size.columns) * self.size.cell.width;
+            // self.terminal.height_px = grid_size.rows * self.size.cell.height;
+            self.terminal.height_px = u32::from(grid_size.rows) * self.size.cell.height;
+
+            // Disable synchronized output mode so that we show changes
+            // immediately for a resize. This is allowed by the spec.
+            // self.terminal.modes.set(.synchronized_output, false);
+            self.terminal.modes.set(Mode::SynchronizedOutput, false);
+
+            // If we have size reporting enabled we need to send a report.
+            // if (self.terminal.modes.get(.in_band_size_reports)) {
+            //     try self.sizeReportLocked(td, .mode_2048);
+            // }
+            if self.terminal.modes.get(Mode::InBandSizeReports) {
+                if let Err(e) = self.sizeReportLocked(td, size_report::Style::Mode2048) {
+                    break 'locked Err(e);
+                }
+            }
+
+            Ok(())
+        };
+        // }
+        // (the deferred renderer-state unlock)
+        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        locked?;
+
+        // Mail the renderer so that it can update the GPU and re-render
+        // _ = self.renderer_mailbox.push(.{ .resize = size }, .{ .forever = {} });
+        //
+        // SAFETY: `renderer_mailbox` points at the live renderer thread mailbox.
+        let _ = unsafe { &*self.renderer_mailbox }
+            .push(RendererMessage::Resize(size), Timeout::Forever);
+        // self.renderer_wakeup.notify() catch {};
+        let _ = self.renderer_wakeup.notify();
+        Ok(())
     }
 
     /// Make a size report.
-    //
-    // DEFERRED (renderer-mutex modeling, 0 tests — R1-safe). Preserved
-    // verbatim:
-    //
     // pub fn sizeReport(self: *Termio, td: *ThreadData, style: termio.Message.SizeReport) !void {
-    //     self.renderer_state.mutex.lock();
-    //     defer self.renderer_state.mutex.unlock();
-    //     try self.sizeReportLocked(td, style);
-    // }
     pub fn sizeReport(
         &mut self,
-        _td: &mut ThreadData<M>,
-        _style: crate::message::SizeReport,
+        td: &mut ThreadData<M>,
+        style: crate::message::SizeReport,
     ) -> Result<(), Error> {
-        unimplemented!(
-            "termio.Termio.sizeReport deferred (renderer-mutex modeling); verbatim body above"
-        )
+        // self.renderer_state.mutex.lock();
+        // defer self.renderer_state.mutex.unlock();
+        //
+        // SAFETY: guard-less shared renderer-state lock (see `changeConfig`).
+        unsafe { (*(*self.renderer_state).mutex).lock() };
+        // try self.sizeReportLocked(td, style);
+        let result = self.sizeReportLocked(td, style);
+        // (the deferred renderer-state unlock — fires on the `try` error too.)
+        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        result
     }
 
-    // DEFERRED (with sizeReport above). Preserved verbatim:
-    //
     // fn sizeReportLocked(self: *Termio, td: *ThreadData, style: termio.Message.SizeReport) !void {
-    //     const grid_size = self.size.grid();
-    //     const report_size: terminalpkg.size_report.Size = .{
-    //         .rows = grid_size.rows,
-    //         .columns = grid_size.columns,
-    //         .cell_width = self.size.cell.width,
-    //         .cell_height = self.size.cell.height,
-    //     };
-    //
-    //     // 1024 bytes should be enough for size report since report
-    //     // in columns and pixels.
-    //     var buf: [1024]u8 = undefined;
-    //     var writer: std.Io.Writer = .fixed(&buf);
-    //     try terminalpkg.size_report.encode(
-    //         &writer,
-    //         style,
-    //         report_size,
-    //     );
-    //
-    //     try self.queueWrite(td, writer.buffered(), false);
-    // }
-    // (dead_code: the only reference caller, `sizeReport`, is deferred above.)
-    #[allow(dead_code)]
     fn sizeReportLocked(
         &mut self,
-        _td: &mut ThreadData<M>,
-        _style: crate::message::SizeReport,
+        td: &mut ThreadData<M>,
+        style: crate::message::SizeReport,
     ) -> Result<(), Error> {
-        unimplemented!("termio.Termio.sizeReportLocked deferred (renderer-mutex modeling); verbatim body above")
+        // const grid_size = self.size.grid();
+        let grid_size = self.size.grid();
+        // const report_size: terminalpkg.size_report.Size = .{
+        //     .rows = grid_size.rows,
+        //     .columns = grid_size.columns,
+        //     .cell_width = self.size.cell.width,
+        //     .cell_height = self.size.cell.height,
+        // };
+        let report_size = size_report::Size {
+            rows: grid_size.rows,
+            columns: grid_size.columns,
+            cell_width: self.size.cell.width,
+            cell_height: self.size.cell.height,
+        };
+
+        // 1024 bytes should be enough for size report since report
+        // in columns and pixels.
+        // var buf: [1024]u8 = undefined;
+        // var writer: std.Io.Writer = .fixed(&buf);
+        let mut buf = [0u8; 1024];
+        let mut writer = FixedWriter::new(&mut buf);
+        // try terminalpkg.size_report.encode(&writer, style, report_size);
+        size_report::encode(&mut writer, style, report_size).map_err(|_| Error)?;
+
+        // try self.queueWrite(td, writer.buffered(), false);
+        self.queueWrite(td, writer.buffered(), false)
     }
 
     /// Reset the synchronized output mode. This is usually called by timer
     /// expiration from the termio thread.
-    //
-    // DEFERRED (D6 xev wakeup + renderer-mutex modeling, 0 tests — R1-safe).
-    // Preserved verbatim:
-    //
     // pub fn resetSynchronizedOutput(self: *Termio) void {
-    //     self.renderer_state.mutex.lock();
-    //     defer self.renderer_state.mutex.unlock();
-    //     self.terminal.modes.set(.synchronized_output, false);
-    //     self.renderer_wakeup.notify() catch {};
-    // }
+    //
+    // PORT NOTE (core C-T un-defer): guard-less C0 renderer lock; the final
+    // `renderer_wakeup.notify()` is the xev placeholder leaf (D6, live-now).
     pub fn resetSynchronizedOutput(&mut self) {
-        unimplemented!("termio.Termio.resetSynchronizedOutput deferred (D6 + renderer-mutex modeling); verbatim body above")
+        // self.renderer_state.mutex.lock();
+        // defer self.renderer_state.mutex.unlock();
+        //
+        // SAFETY: guard-less shared renderer-state lock (see `changeConfig`).
+        unsafe { (*(*self.renderer_state).mutex).lock() };
+        // self.terminal.modes.set(.synchronized_output, false);
+        self.terminal.modes.set(Mode::SynchronizedOutput, false);
+        // self.renderer_wakeup.notify() catch {};
+        let _ = self.renderer_wakeup.notify();
+        // (the deferred renderer-state unlock)
+        unsafe { (*(*self.renderer_state).mutex).unlock() };
     }
 
     /// Clear the screen.
-    //
-    // DEFERRED (renderer-mutex modeling + the Zig-aliasing kitty delete call,
-    // 0 tests — R1-safe; see memory `rust-mut-args-strongly-protected`).
-    // Preserved verbatim:
-    //
     // pub fn clearScreen(self: *Termio, td: *ThreadData, history: bool) !void {
-    //     {
-    //         self.renderer_state.mutex.lock();
-    //         defer self.renderer_state.mutex.unlock();
     //
-    //         // If we're on the alternate screen, we do not clear. Since this is an
-    //         // emulator-level screen clear, this messes up the running programs
-    //         // knowledge of where the cursor is and causes rendering issues. So,
-    //         // for alt screen, we do nothing.
-    //         if (self.terminal.screens.active_key == .alternate) return;
-    //
-    //         // Clear our selection
-    //         self.terminal.screens.active.clearSelection();
-    //
-    //         // Clear our scrollback
-    //         if (history) self.terminal.eraseDisplay(.scrollback, false);
-    //
-    //         // If we're not at a prompt, we just delete above the cursor.
-    //         if (!self.terminal.cursorIsAtPrompt()) {
-    //             if (self.terminal.screens.active.cursor.y > 0) {
-    //                 self.terminal.screens.active.eraseActive(
-    //                     self.terminal.screens.active.cursor.y - 1,
-    //                 );
-    //             }
-    //
-    //             // Clear all Kitty graphics state for this screen. This copies
-    //             // Kitty's behavior when Cmd+K deletes all Kitty graphics. I
-    //             // didn't spend time researching whether it only deletes Kitty
-    //             // graphics that are placed above the cursor or if it deletes
-    //             // all of them. We delete all of them for now but if this behavior
-    //             // isn't fully correct we should fix this later.
-    //             self.terminal.screens.active.kitty_images.delete(
-    //                 self.terminal.screens.active.alloc,
-    //                 &self.terminal,
-    //                 .{ .all = true },
-    //             );
-    //
-    //             return;
-    //         }
-    //
-    //         // At a prompt, we want to first fully clear the screen, and then after
-    //         // send a FF (0x0C) to the shell so that it can repaint the screen.
-    //         // Mark the current row as a not a prompt so we can properly
-    //         // clear the full screen in the next eraseDisplay call.
-    //         // TODO: fix this
-    //         // self.terminal.markSemanticPrompt(.command);
-    //         // assert(!self.terminal.cursorIsAtPrompt());
-    //         self.terminal.eraseDisplay(.complete, false);
-    //     }
-    //
-    //     // If we reached here it means we're at a prompt, so we send a form-feed.
-    //     try self.queueWrite(td, &[_]u8{0x0C}, false);
-    // }
-    pub fn clearScreen(&mut self, _td: &mut ThreadData<M>, _history: bool) -> Result<(), Error> {
-        unimplemented!(
-            "termio.Termio.clearScreen deferred (renderer-mutex modeling); verbatim body above"
-        )
+    // PORT NOTE (core C-T un-defer): the reference `{ lock; defer unlock; ...
+    // return; ... }` critical block is a labeled block computing whether to
+    // send the form-feed (its two `return`s become `break 'locked false` — the
+    // reference returns without the form-feed; the fall-through is `true`),
+    // unlocked once after (the `defer`). The Kitty `screens.active.kitty_images.
+    // delete(active.alloc, &self.terminal, ...)` aliases the storage (inside the
+    // terminal) with `&self.terminal`; as in vt's graphics_exec we MOVE the
+    // storage out, run `delete` against the borrowed terminal, then move it back
+    // (memory `rust-mut-args-strongly-protected`). Guard-less C0 renderer lock.
+    pub fn clearScreen(&mut self, td: &mut ThreadData<M>, history: bool) -> Result<(), Error> {
+        // {
+        //     self.renderer_state.mutex.lock();
+        //     defer self.renderer_state.mutex.unlock();
+        //
+        // SAFETY: guard-less shared renderer-state lock (see `changeConfig`).
+        unsafe { (*(*self.renderer_state).mutex).lock() };
+        let send_form_feed: bool = 'locked: {
+            // If we're on the alternate screen, we do not clear. Since this is an
+            // emulator-level screen clear, this messes up the running programs
+            // knowledge of where the cursor is and causes rendering issues. So,
+            // for alt screen, we do nothing.
+            // if (self.terminal.screens.active_key == .alternate) return;
+            if self.terminal.screens.active_key == rustty_vt::screen_set::Key::Alternate {
+                break 'locked false;
+            }
+
+            // Clear our selection
+            // self.terminal.screens.active.clearSelection();
+            //
+            // SAFETY: `screens.active` is the live active `*mut Screen` owned by
+            // the terminal's screen set; the deref is short-lived.
+            unsafe { &mut *self.terminal.screens.active }.clear_selection();
+
+            // Clear our scrollback
+            // if (history) self.terminal.eraseDisplay(.scrollback, false);
+            if history {
+                self.terminal
+                    .erase_display(rustty_vt::csi::EraseDisplay::Scrollback, false);
+            }
+
+            // If we're not at a prompt, we just delete above the cursor.
+            // if (!self.terminal.cursorIsAtPrompt()) {
+            if !self.terminal.cursor_is_at_prompt() {
+                // if (self.terminal.screens.active.cursor.y > 0) {
+                //     self.terminal.screens.active.eraseActive(
+                //         self.terminal.screens.active.cursor.y - 1,
+                //     );
+                // }
+                let cursor_y = unsafe { (*self.terminal.screens.active).cursor.y };
+                if cursor_y > 0 {
+                    unsafe { &mut *self.terminal.screens.active }.erase_active(cursor_y - 1);
+                }
+
+                // Clear all Kitty graphics state for this screen. This copies
+                // Kitty's behavior when Cmd+K deletes all Kitty graphics. I
+                // didn't spend time researching whether it only deletes Kitty
+                // graphics that are placed above the cursor or if it deletes
+                // all of them. We delete all of them for now but if this behavior
+                // isn't fully correct we should fix this later.
+                // self.terminal.screens.active.kitty_images.delete(
+                //     self.terminal.screens.active.alloc,
+                //     &self.terminal,
+                //     .{ .all = true },
+                // );
+                //
+                // SAFETY: `active` is the stable active `*mut Screen`; we move
+                // its `kitty_images` out (leaving a default), run `delete`
+                // against `&mut self.terminal` (no alias while the storage is
+                // moved out), then move the updated storage back.
+                let active = self.terminal.screens.active;
+                let alloc = unsafe { (*active).alloc };
+                let mut storage = core::mem::take(unsafe { &mut (*active).kitty_images });
+                storage.delete(
+                    alloc,
+                    &mut self.terminal,
+                    rustty_vt::kitty::graphics_command::Delete::All(true),
+                );
+                unsafe { (*active).kitty_images = storage };
+
+                // return;
+                break 'locked false;
+            }
+
+            // At a prompt, we want to first fully clear the screen, and then after
+            // send a FF (0x0C) to the shell so that it can repaint the screen.
+            // Mark the current row as a not a prompt so we can properly
+            // clear the full screen in the next eraseDisplay call.
+            // TODO: fix this
+            // self.terminal.markSemanticPrompt(.command);
+            // assert(!self.terminal.cursorIsAtPrompt());
+            // self.terminal.eraseDisplay(.complete, false);
+            self.terminal
+                .erase_display(rustty_vt::csi::EraseDisplay::Complete, false);
+
+            // (fall-through: at a prompt — send the form-feed below)
+            true
+        };
+        // }
+        // (the deferred renderer-state unlock)
+        unsafe { (*(*self.renderer_state).mutex).unlock() };
+
+        // If we reached here it means we're at a prompt, so we send a form-feed.
+        // try self.queueWrite(td, &[_]u8{0x0C}, false);
+        if send_form_feed {
+            self.queueWrite(td, &[0x0C], false)?;
+        }
+        Ok(())
     }
 
     /// Scroll the viewport
-    //
-    // DEFERRED (renderer-mutex modeling, 0 tests — R1-safe). Preserved
-    // verbatim:
-    //
     // pub fn scrollViewport(
     //     self: *Termio,
     //     scroll: terminalpkg.Terminal.ScrollViewport,
     // ) void {
-    //     self.renderer_state.mutex.lock();
-    //     defer self.renderer_state.mutex.unlock();
-    //     self.terminal.scrollViewport(scroll);
-    // }
-    pub fn scrollViewport(&mut self, _scroll: rustty_vt::terminal::ScrollViewport) {
-        unimplemented!(
-            "termio.Termio.scrollViewport deferred (renderer-mutex modeling); verbatim body above"
-        )
+    //
+    // PORT NOTE (core C-T un-defer): guard-less C0 renderer lock.
+    pub fn scrollViewport(&mut self, scroll: rustty_vt::terminal::ScrollViewport) {
+        // self.renderer_state.mutex.lock();
+        // defer self.renderer_state.mutex.unlock();
+        //
+        // SAFETY: guard-less shared renderer-state lock (see `changeConfig`).
+        unsafe { (*(*self.renderer_state).mutex).lock() };
+        // self.terminal.scrollViewport(scroll);
+        self.terminal.scroll_viewport(scroll);
+        // (the deferred renderer-state unlock)
+        unsafe { (*(*self.renderer_state).mutex).unlock() };
     }
 
     /// Jump the viewport to the prompt.
-    //
-    // DEFERRED (D6 xev wakeup + renderer-mutex modeling, 0 tests — R1-safe).
-    // Preserved verbatim:
-    //
     // pub fn jumpToPrompt(self: *Termio, delta: isize) !void {
-    //     {
-    //         self.renderer_state.mutex.lock();
-    //         defer self.renderer_state.mutex.unlock();
-    //         self.terminal.screens.active.scroll(.{ .delta_prompt = delta });
-    //     }
     //
-    //     try self.renderer_wakeup.notify();
-    // }
-    pub fn jumpToPrompt(&mut self, _delta: isize) -> Result<(), Error> {
-        unimplemented!("termio.Termio.jumpToPrompt deferred (D6 + renderer-mutex modeling); verbatim body above")
+    // PORT NOTE (core C-T un-defer): guard-less C0 renderer lock; the final
+    // `renderer_wakeup.notify()` is the xev placeholder leaf (D6, live-now).
+    pub fn jumpToPrompt(&mut self, delta: isize) -> Result<(), Error> {
+        // {
+        //     self.renderer_state.mutex.lock();
+        //     defer self.renderer_state.mutex.unlock();
+        //
+        // SAFETY: guard-less shared renderer-state lock (see `changeConfig`).
+        unsafe { (*(*self.renderer_state).mutex).lock() };
+        //     self.terminal.screens.active.scroll(.{ .delta_prompt = delta });
+        //
+        // SAFETY: `screens.active` is the live active `*mut Screen`.
+        unsafe { &mut *self.terminal.screens.active }
+            .scroll(rustty_vt::screen::Scroll::DeltaPrompt(delta));
+        // }
+        // (the deferred renderer-state unlock)
+        unsafe { (*(*self.renderer_state).mutex).unlock() };
+
+        // try self.renderer_wakeup.notify();
+        self.renderer_wakeup.notify().map_err(|_| Error)
     }
 
     /// Called when focus is gained or lost (when focus events are enabled)
-    //
-    // DEFERRED (renderer-mutex modeling, 0 tests — R1-safe). Preserved
-    // verbatim:
-    //
     // pub fn focusGained(self: *Termio, td: *ThreadData, focused: bool) !void {
-    //     self.renderer_state.mutex.lock();
-    //     const focus_event = self.renderer_state.terminal.modes.get(.focus_event);
-    //     self.renderer_state.mutex.unlock();
     //
-    //     // If we have focus events enabled, we send the focus event.
-    //     if (focus_event) {
-    //         var buf: [terminalpkg.focus.max_encode_size]u8 = undefined;
-    //         var writer: std.Io.Writer = .fixed(&buf);
-    //         terminalpkg.focus.encode(&writer, if (focused) .gained else .lost) catch |err| {
-    //             log.err("error encoding focus event err={}", .{err});
-    //             return;
-    //         };
-    //         try self.queueWrite(td, writer.buffered(), false);
-    //     }
-    //
-    //     // We always notify our backend of focus changes.
-    //     try self.backend.focusGained(td, focused);
-    // }
-    pub fn focusGained(&mut self, _td: &mut ThreadData<M>, _focused: bool) -> Result<(), Error> {
-        unimplemented!(
-            "termio.Termio.focusGained deferred (renderer-mutex modeling); verbatim body above"
-        )
+    // PORT NOTE (core C-T un-defer): guard-less C0 renderer lock; the mode is
+    // read through the shared `renderer_state.terminal` pointer (which aliases
+    // `self.terminal`), exactly as the reference. The `focus.encode` uses a
+    // stack `FixedWriter` (the `std.Io.Writer.fixed` analogue).
+    pub fn focusGained(&mut self, td: &mut ThreadData<M>, focused: bool) -> Result<(), Error> {
+        // self.renderer_state.mutex.lock();
+        //
+        // SAFETY: guard-less shared renderer-state lock (see `changeConfig`);
+        // `renderer_state.terminal` is the live terminal pointer.
+        unsafe { (*(*self.renderer_state).mutex).lock() };
+        // const focus_event = self.renderer_state.terminal.modes.get(.focus_event);
+        let focus_event = unsafe {
+            (*(*self.renderer_state).terminal)
+                .modes
+                .get(Mode::FocusEvent)
+        };
+        // self.renderer_state.mutex.unlock();
+        unsafe { (*(*self.renderer_state).mutex).unlock() };
+
+        // If we have focus events enabled, we send the focus event.
+        // if (focus_event) {
+        if focus_event {
+            // var buf: [terminalpkg.focus.max_encode_size]u8 = undefined;
+            // var writer: std.Io.Writer = .fixed(&buf);
+            let mut buf = [0u8; focus::MAX_ENCODE_SIZE];
+            let mut writer = FixedWriter::new(&mut buf);
+            // terminalpkg.focus.encode(&writer, if (focused) .gained else .lost) catch |err| {
+            //     log.err("error encoding focus event err={}", .{err});
+            //     return;
+            // };
+            let event = if focused {
+                focus::Event::Gained
+            } else {
+                focus::Event::Lost
+            };
+            if focus::encode(&mut writer, event).is_err() {
+                // log.err("error encoding focus event err={}", .{err});
+                return Ok(());
+            }
+            // try self.queueWrite(td, writer.buffered(), false);
+            self.queueWrite(td, writer.buffered(), false)?;
+        }
+
+        // We always notify our backend of focus changes.
+        // try self.backend.focusGained(td, focused);
+        self.backend.focusGained(td, focused)
     }
 
     /// Process output from the pty. This is the manual API that users can
@@ -957,42 +1110,53 @@ impl<M: AppMailbox> Termio<M> {
     }
 
     /// Sends a DSR response for the current color scheme to the pty.
-    //
-    // DEFERRED (renderer-mutex modeling, 0 tests — R1-safe). Preserved
-    // verbatim:
-    //
     // pub fn colorSchemeReport(self: *Termio, td: *ThreadData, force: bool) !void {
-    //     self.renderer_state.mutex.lock();
-    //     defer self.renderer_state.mutex.unlock();
     //
-    //     try self.colorSchemeReportLocked(td, force);
-    // }
-    pub fn colorSchemeReport(
-        &mut self,
-        _td: &mut ThreadData<M>,
-        _force: bool,
-    ) -> Result<(), Error> {
-        unimplemented!("termio.Termio.colorSchemeReport deferred (renderer-mutex modeling); verbatim body above")
+    // PORT NOTE (core C-T un-defer): guard-less C0 renderer lock.
+    pub fn colorSchemeReport(&mut self, td: &mut ThreadData<M>, force: bool) -> Result<(), Error> {
+        // self.renderer_state.mutex.lock();
+        // defer self.renderer_state.mutex.unlock();
+        //
+        // SAFETY: guard-less shared renderer-state lock (see `changeConfig`).
+        unsafe { (*(*self.renderer_state).mutex).lock() };
+        // try self.colorSchemeReportLocked(td, force);
+        let result = self.colorSchemeReportLocked(td, force);
+        // (the deferred renderer-state unlock — fires on the `try` error too.)
+        unsafe { (*(*self.renderer_state).mutex).unlock() };
+        result
     }
 
-    // DEFERRED (with colorSchemeReport above). Preserved verbatim:
-    //
     // pub fn colorSchemeReportLocked(self: *Termio, td: *ThreadData, force: bool) !void {
-    //     if (!force and !self.renderer_state.terminal.modes.get(.report_color_scheme)) {
-    //         return;
-    //     }
-    //     const output = switch (self.config.conditional_state.theme) {
-    //         .light => "\x1B[?997;2n",
-    //         .dark => "\x1B[?997;1n",
-    //     };
-    //     try self.queueWrite(td, output, false);
-    // }
     pub fn colorSchemeReportLocked(
         &mut self,
-        _td: &mut ThreadData<M>,
-        _force: bool,
+        td: &mut ThreadData<M>,
+        force: bool,
     ) -> Result<(), Error> {
-        unimplemented!("termio.Termio.colorSchemeReportLocked deferred (renderer-mutex modeling); verbatim body above")
+        // if (!force and !self.renderer_state.terminal.modes.get(.report_color_scheme)) {
+        //     return;
+        // }
+        //
+        // SAFETY: `renderer_state.terminal` is the live shared terminal pointer;
+        // the read happens under the caller-held lock (colorSchemeReport).
+        if !force
+            && !unsafe {
+                (*(*self.renderer_state).terminal)
+                    .modes
+                    .get(Mode::ReportColorScheme)
+            }
+        {
+            return Ok(());
+        }
+        // const output = switch (self.config.conditional_state.theme) {
+        //     .light => "\x1B[?997;2n",
+        //     .dark => "\x1B[?997;1n",
+        // };
+        let output: &[u8] = match self.config.conditional_state.theme {
+            conditional::Theme::Light => b"\x1B[?997;2n",
+            conditional::Theme::Dark => b"\x1B[?997;1n",
+        };
+        // try self.queueWrite(td, output, false);
+        self.queueWrite(td, output, false)
     }
 
     /// Get information about the process(es) attached to the backend. Returns
@@ -1048,6 +1212,41 @@ impl<M: AppMailbox> ThreadData<M> {
         // self.* = undefined;
         // (PORT: the reference poisons the struct; Rust ownership leaves the
         // value in place — callers must not reuse it after deinit.)
+    }
+}
+
+/// PORTS: `std.Io.Writer.fixed(&buf)` + `writer.buffered()` — a stack-buffered
+/// `core::fmt::Write` sink used by `sizeReportLocked`/`focusGained` to encode a
+/// small response WITHOUT heap allocation (the reference's `var buf: [N]u8 =
+/// undefined; var writer: std.Io.Writer = .fixed(&buf);`). Like `.fixed`,
+/// `write_str` ERRORS (rather than truncating) if the output would overflow the
+/// buffer, so the encoders' `try` propagates; `buffered()` is the written prefix.
+struct FixedWriter<'b> {
+    buf: &'b mut [u8],
+    len: usize,
+}
+
+impl<'b> FixedWriter<'b> {
+    fn new(buf: &'b mut [u8]) -> FixedWriter<'b> {
+        FixedWriter { buf, len: 0 }
+    }
+
+    // writer.buffered()
+    fn buffered(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
+}
+
+impl core::fmt::Write for FixedWriter<'_> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let bytes = s.as_bytes();
+        if bytes.len() > self.buf.len() - self.len {
+            // error.NoSpaceLeft — the reference `.fixed` writer's overflow error.
+            return Err(core::fmt::Error);
+        }
+        self.buf[self.len..self.len + bytes.len()].copy_from_slice(bytes);
+        self.len += bytes.len();
+        Ok(())
     }
 }
 

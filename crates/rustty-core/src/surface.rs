@@ -12836,7 +12836,20 @@ impl<A: apprt::App + 'static> AppMailbox for SurfaceMailbox<A> {
     // PORT NOTE: `&self` for the reference's by-value `self: Mailbox`
     // receiver (the type is `Copy`); `Message<'static>`/concrete
     // `Timeout`/`Size` per the CORE_BLUEPRINT §3 trait resolution.
-    fn push(&self, msg: Message<'static>, timeout: Timeout) -> QueueSize {
+    //
+    // PORT NOTE (core C-T): the reference `push` is realized as the retain-on-
+    // failure primitive `push_or_return` (the plain `AppMailbox::push` is the
+    // trait's drop-on-failure default over it). termio's
+    // `StreamHandler.surfaceMessageWriter` re-pushes its by-value message copy
+    // after a failed instant push; since Rust moves the message into the app
+    // queue, the failed push hands the App-level message back and we unwrap the
+    // surface envelope so the caller regains its original `SurfaceMessage`.
+    #[allow(clippy::result_large_err)]
+    fn push_or_return(
+        &self,
+        msg: Message<'static>,
+        timeout: Timeout,
+    ) -> Result<QueueSize, Message<'static>> {
         // Surface message sending is actually implemented on the app
         // thread, so we have to rewrap the message with our surface
         // pointer and send it to the app thread.
@@ -12846,13 +12859,21 @@ impl<A: apprt::App + 'static> AppMailbox for SurfaceMailbox<A> {
         //         .message = msg,
         //     },
         // }, timeout);
-        self.app.push(
+        match self.app.push_or_return(
             crate::app::Message::SurfaceMessage(apprt::SurfaceMessageEnvelope {
                 surface: self.surface,
                 message: msg,
             }),
             timeout,
-        )
+        ) {
+            Ok(size) => Ok(size),
+            // The app queue hands the App-level message back on failure; unwrap
+            // the surface envelope to return the caller's original message.
+            Err(crate::app::Message::SurfaceMessage(env)) => Err(env.message),
+            // Only `SurfaceMessage` is ever constructed above, so no other
+            // returned variant is possible.
+            Err(_) => unreachable!(),
+        }
     }
 }
 

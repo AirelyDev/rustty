@@ -579,6 +579,20 @@ with an `unimplemented!()` marker (NOT fabricated logic).
     full), `ThreadData::deinit`, `deinit`, `queueMessage`, `queueWrite`,
     `threadExit`, and the `getProcessInfo` comptime split
     (`getForegroundPid`/`getTtyName`, rustty-os pty.rs precedent).
+    [UPDATED core C-T — RESOLVED: the mutex-only method family
+    `changeConfig`/`resize`/`sizeReport`/`sizeReportLocked`/
+    `resetSynchronizedOutput`/`clearScreen`/`scrollViewport`/`jumpToPrompt`/
+    `focusGained`/`colorSchemeReport`/`colorSchemeReportLocked` is now ported
+    LIVE against the guard-less C0 `rustty_zigstd::thread::Mutex` (the `defer
+    unlock` is the explicit unlock before every return; `resize`/
+    `jumpToPrompt`/`resetSynchronizedOutput` end in the xev `renderer_wakeup.
+    notify()` placeholder leaf — live-now, runtime-panics only once the render
+    thread runs). `changeConfig` takes `DerivedConfig` BY VALUE (the reference
+    `self.config = config.*` move). `clearScreen`'s Kitty
+    `screens.active.kitty_images.delete(&self.terminal, ...)` uses the vt
+    graphics_exec move-out/move-back for the storage↔terminal alias. STILL
+    D6-deferred: `init`/`threadEnter`/`processOutput`/`processOutputLocked`
+    (xev loop + read-thread inspector slow path).]
   - `Thread.zig`: the run loop (`threadMain`/`threadMain_`/`CallbackData`/
     `drainMailbox`/`startSynchronizedOutput`/`handleResize`/`startScrollTimer`/
     `stopScrollTimer` + the five xev callbacks) — D6. Ported REAL: the struct
@@ -593,6 +607,11 @@ with an `unimplemented!()` marker (NOT fabricated logic).
     retyped to `*mut rustty_zigstd::thread::Mutex` (guard-less Zig-shaped
     lock/try_lock/unlock, CORE_BLUEPRINT §3) and `send`'s parameter carries
     it; the body itself stays deferred until the core-tier termio pass (C-T).]
+    [UPDATED core C-T — RESOLVED: `send` is ported LIVE; the instant→forever
+    retry uses the new `BlockingQueue::push_or_return` (Zig's by-COPY "keep
+    your copy" — Rust moves, so a failed instant push hands the message BACK)
+    and the guard-less mutex `unlock()`/`lock()` for the caller-held-lock
+    inversion. `wakeup.notify()` is the xev placeholder leaf.]
 - **Stage-4 placeholders (rustty-termio) — RESOLVED (stage 4):**
   `backend::{Exec, ExecConfig, ExecThreadData}` are now the REAL
   `exec::{Exec, Config, ThreadData}` types (Exec.zig ported, 10 tests) and
@@ -723,7 +742,14 @@ with an `unimplemented!()` marker (NOT fabricated logic).
   blockers are now RESOLVED at the type level — `AppMailbox::push` takes the
   concrete `rustty_datastruct::blocking_queue::{Timeout, Size}` and the mutex
   model is `rustty_zigstd::thread::Mutex` — so the two bodies UN-DEFER with
-  the core-tier termio pass (C-T), per CORE_BLUEPRINT §3.] Every OTHER handler
+  the core-tier termio pass (C-T), per CORE_BLUEPRINT §3.] [UPDATED core C-T —
+  RESOLVED: both ported LIVE. `surfaceMessageWriter` retries via the new
+  `AppMailbox::push_or_return` (the trait's `push` is now the drop-on-failure
+  default over it); `rendererMessageWriter` retries via
+  `BlockingQueue::push_or_return`; both do the guard-less-mutex unlock/relock
+  inversion. `rendererMessageWriter` keeps `#[allow(dead_code)]` (uncalled in
+  the reference too). `surfaceMessageWriter` takes `SurfaceMessage<'static>`
+  (a storing push cannot take a borrow).] Every OTHER handler
   path is LIVE (the full `vtFallible` dispatch as the vt `Handler` trait impl,
   `setMode`, `dcsHook/Put/Unhook` + DECRQSS/XTGETTCAP, `apcEnd` kitty/glyph,
   OSC 4/7/10-12/21/52/133/777, kitty keyboard/color, mode/size/DA/DSR
@@ -1579,3 +1605,44 @@ declared as a C11 stub, is filled here too) — all filled IN PLACE. Ledger:
 - **`getProcessInfo` comptime split** had already landed with C10
   (`getForegroundPid`/`getTtyName` — the rustty-os pty.rs comptime-return
   precedent); `crashThreadState`/`presentSurface` with C8/C10.
+
+## rustty-core C-T (core tier) — termio mutex-family un-defers + newConfig realized
+
+C-T of CORE_BLUEPRINT §6 (unblocked by C0's zigstd Mutex + concrete Timeout)
+un-defers the termio "mailbox / mutex-only" family and realizes apprt-api's
+`newConfig`. It creates NO new deferrals; it RESOLVES:
+
+- **RESOLVED: `termio::mailbox::send`** — LIVE. Instant→forever retry via the
+  new `BlockingQueue::push_or_return` (below); guard-less-mutex unlock/relock
+  for the caller-held-lock inversion; `wakeup.notify()` is the xev leaf.
+- **RESOLVED: `StreamHandler::{surfaceMessageWriter, rendererMessageWriter}`**
+  — LIVE (see the stage-4 stream_handler cross-thread-writers entry above).
+- **RESOLVED: the Termio mutex-only method family** — `changeConfig`, `resize`,
+  `sizeReport`/`sizeReportLocked`, `resetSynchronizedOutput`, `clearScreen`,
+  `scrollViewport`, `jumpToPrompt`, `focusGained`,
+  `colorSchemeReport`/`colorSchemeReportLocked` — LIVE against the guard-less
+  C0 renderer mutex (see the stage-2 Termio.zig entry above). STILL D6:
+  `init`/`threadEnter`/`processOutput`/`processOutputLocked` (xev loop + the
+  read-thread inspector slow path).
+- **RESOLVED: `apprt.surface.newConfig`** — realized as
+  `rustty_core::app::new_config` (core app glue; needs `App::focusedSurface` +
+  `Surface::pwd`, both landed). The apprt-api `surface.rs` module-doc deferral
+  note is updated to point here; the verbatim reference body is retained in
+  apprt-api/`surface.rs` for provenance (R1).
+- **NEW primitive (Rust-only glue, R1-additive — NOT a deferral):**
+  `BlockingQueue::push_or_return(value, timeout) -> Result<Size, T>` hands the
+  value BACK on a failed push. The reference passes messages BY COPY and
+  re-pushes its copy after a failed instant push; Rust MOVES, so the retry
+  needs the value returned rather than dropped (an unconditional clone would
+  double-allocate owned-payload messages and diverge from Zig's shallow copy).
+  The plain `push` is now the drop-on-failure wrapper over it; `AppMailbox`
+  (apprt-api) and `app::Mailbox` (core) gained the parallel `push_or_return`
+  (their `push` is the drop-on-failure default/delegate; `SurfaceMailbox`
+  unwraps the app envelope on failure to return the caller's `SurfaceMessage`).
+  +1 rustty-only datastruct unit test (`push_or_return_hands_back_on_failure`).
+
+Gate deltas: termio **44** (unchanged — Termio/mailbox/stream_handler have 0
+reference `test{}`), datastruct **76→77** (the push_or_return test), core 15,
+apprt-api 20, renderer 19, crash 12 — all unchanged; workspace + clippy + fmt +
+acyclic + test-counts green; scoped G3b for Termio.zig/mailbox.zig/
+stream_handler.zig/apprt-surface.zig = 0 missing.

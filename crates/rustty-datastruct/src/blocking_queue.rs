@@ -121,14 +121,44 @@ impl<T, const CAPACITY: usize> BlockingQueue<T, CAPACITY> {
     /// Push a value to the queue. This returns the total size of the
     /// queue (unread items) after the push. A return value of zero
     /// means that the push failed.
+    //
+    // PORT NOTE (rustty-only glue, R1-additive): the reference `push` takes
+    // the value by COPY, so a Zig caller retains its own copy after a failed
+    // push and can retry (`termio.Mailbox.send`'s instant->forever retry;
+    // `stream_handler`'s surface/renderer writers). Rust's `push` MOVES the
+    // value, so a failed push would DROP it — the caller could not retry. The
+    // faithful primitive is therefore [`push_or_return`], which hands the
+    // value BACK on failure (exactly Zig's "keep your copy"); `push` is the
+    // drop-on-failure convenience wrapper the existing callers already expect.
     pub fn push(&self, value: T, timeout: Timeout) -> Size {
+        // On failure the returned `value` is dropped (the historical `push`
+        // semantics: a failed push consumes and discards the value).
+        self.push_or_return(value, timeout).unwrap_or(0)
+    }
+
+    /// Like [`push`](Self::push) but, when the push fails (would-be return
+    /// value `0`), returns the value BACK to the caller instead of dropping
+    /// it, so the caller can retry with a different timeout.
+    ///
+    /// This mirrors the Zig reference's by-COPY `push`: a Zig caller that sees
+    /// a failed push still owns its message value and re-pushes it with a
+    /// blocking timeout (`termio.Mailbox.send`). Since Rust `push` moves the
+    /// value in, that "retain on failure" contract needs this explicit
+    /// hand-back rather than an unconditional clone (which would double the
+    /// allocation for owned-payload messages and diverge from Zig's shallow
+    /// copy).
+    //
+    // The `Err` variant carries a full `T` (messages can be large); the
+    // hand-back-on-failure is the whole point, so silence the lint.
+    #[allow(clippy::result_large_err)]
+    pub fn push_or_return(&self, value: T, timeout: Timeout) -> Result<Size, T> {
         let mut state = self.mutex.lock().unwrap();
 
         // The
         if Self::full(&state) {
             match timeout {
                 // If we're not waiting, then we failed to write.
-                Timeout::Instant => return 0,
+                Timeout::Instant => return Err(value),
 
                 Timeout::Forever => {
                     state.not_full_waiters += 1;
@@ -145,7 +175,7 @@ impl<T, const CAPACITY: usize> BlockingQueue<T, CAPACITY> {
                     state = s;
                     state.not_full_waiters -= 1;
                     if res.timed_out() {
-                        return 0;
+                        return Err(value);
                     }
                 }
             }
@@ -153,7 +183,7 @@ impl<T, const CAPACITY: usize> BlockingQueue<T, CAPACITY> {
             // If we're still full, then we failed to write. This can
             // happen in situations where we are interrupted.
             if Self::full(&state) {
-                return 0;
+                return Err(value);
             }
         }
 
@@ -166,7 +196,7 @@ impl<T, const CAPACITY: usize> BlockingQueue<T, CAPACITY> {
         }
         state.len += 1;
 
-        state.len
+        Ok(state.len)
     }
 
     /// Pop a value from the queue without blocking.
@@ -289,6 +319,46 @@ mod tests {
 
         // Verify we can still push
         assert_eq!(1 as Size, q.push(1, Timeout::Instant));
+
+        q.destroy();
+    }
+
+    // rustty-only (additive glue coverage): `push_or_return` stores on success
+    // and hands the value BACK on failure instead of dropping it — the Zig
+    // by-COPY "keep your copy" semantics that the port's `termio.Mailbox.send`
+    // and the surface/renderer message writers rely on to retry a failed
+    // instant push with a blocking one.
+    #[test]
+    fn push_or_return_hands_back_on_failure() {
+        // A non-Copy owned payload, so a value dropped on failure would be lost.
+        type Q = BlockingQueue<String, 2>;
+        let q = Q::create();
+
+        // Stores on success, returning the post-push queue size.
+        assert_eq!(
+            Ok(1 as Size),
+            q.push_or_return("a".to_string(), Timeout::Instant)
+        );
+        assert_eq!(
+            Ok(2 as Size),
+            q.push_or_return("b".to_string(), Timeout::Instant)
+        );
+
+        // Full: the value is handed BACK (not dropped) so the caller can retry.
+        match q.push_or_return("c".to_string(), Timeout::Instant) {
+            Err(v) => assert_eq!(v, "c"),
+            Ok(_) => panic!("expected the full queue to reject the push"),
+        }
+
+        // Free a slot, then the retained value queues successfully.
+        assert_eq!(q.pop().unwrap(), "a");
+        assert_eq!(
+            Ok(2 as Size),
+            q.push_or_return("c".to_string(), Timeout::Instant)
+        );
+
+        // `push` remains the drop-on-failure wrapper (returns 0 on failure).
+        assert_eq!(0 as Size, q.push("d".to_string(), Timeout::Instant));
 
         q.destroy();
     }
