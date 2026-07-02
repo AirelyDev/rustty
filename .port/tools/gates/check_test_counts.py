@@ -96,6 +96,10 @@ RSVC = "/Users/gael/projects/rustty/crates/rustty-vt-c/src"
 # render-types A1 size hoist) and mapped by `renderer_health` below.
 GHAP = "/Users/gael/projects/ghostty/src/apprt"
 RSAP = "/Users/gael/projects/rustty/crates/rustty-apprt-api/src"
+# rustty-apprt: the concrete apprt backends (embedded/none/browser), EMBEDDED_BLUEPRINT
+# §7. Same GH base = src/apprt as GHAP above (the backend files, not the seam). The
+# libghostty C ABI wrappers live in the separate rustty-apprt-c top-sink crate.
+RSAPPRT = "/Users/gael/projects/rustty/crates/rustty-apprt/src"
 # renderer.zig is at src/renderer.zig (crate root), one level above GHR (src/renderer).
 GHSRC = "/Users/gael/projects/ghostty/src"
 
@@ -437,6 +441,15 @@ MAP = {
     # surface.zig / structs.zig: no test{} blocks -> zig=0 each (0 >= 0).
     "apprt_api_surface": ([f"{GHAP}/surface.zig"], [f"{RSAP}/surface.rs"], 0),
     "apprt_api_structs": ([f"{GHAP}/structs.zig"], [f"{RSAP}/structs.rs"], 0),
+    # rustty-apprt concrete backends (EMBEDDED_BLUEPRINT §4/§6.5, chunk E0). Both
+    # reference files are 0-test -> zig=0 each (documented 0-test modules, same
+    # treatment as the other 0-test files). none.zig: performIpc-only App + empty
+    # Surface -> none.rs. browser.zig: empty App/Window structs -> browser.rs.
+    # rust >= zig always holds (rustty-only helper #[test]s add freely). The
+    # embedded backend + the 71 libghostty C ABI exports (rustty-apprt-c) map in
+    # as chunks E1..E11 land their content.
+    "apprt_none":        ([f"{GHAP}/none.zig"], [f"{RSAPPRT}/none.rs"], 0),
+    "apprt_browser":     ([f"{GHAP}/browser.zig"], [f"{RSAPPRT}/browser.rs"], 0),
     # rustty-crash (integration-tier stage 1). dir.zig: no test{} -> zig=0.
     "crash_dir":         ([f"{GHCR}/dir.zig"], [f"{RSCR}/dir.rs"], 0),
     # sentry.zig: no test{} -> zig=0; the pkg/sentry binding package files are

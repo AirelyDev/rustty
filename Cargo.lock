@@ -494,6 +494,7 @@ dependencies = [
 name = "rustty-apprt"
 version = "0.1.0"
 dependencies = [
+ "allocator-api2",
  "rustty-apprt-api",
  "rustty-config",
  "rustty-core",
@@ -517,6 +518,14 @@ dependencies = [
  "rustty-lib",
  "rustty-renderer",
  "rustty-vt",
+]
+
+[[package]]
+name = "rustty-apprt-c"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rustty-apprt",
 ]
 
 [[package]]

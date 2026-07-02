@@ -1736,3 +1736,51 @@ missing=0 on all three core files. Doc updates only: this ledger,
 `PORT_PLAN.md` crate-24 (Tests 1→15 actual, marked DONE),
 `check_test_counts.py` core_app/core_surface MAP comments (landed-state),
 `NEXT_PHASE_PLAN.md` CORE DONE checkpoint. **CORE MILESTONE COMPLETE.**
+
+## rustty-apprt embedded E0 (scaffold) — apprt-c crate + none/browser + rustty_init
+
+Chunk E0 of the libghostty C-ABI milestone (EMBEDDED_BLUEPRINT §3/§4/§7): the
+`rustty-apprt-c` top-sink crate scaffold, the `rustty-apprt::{embedded,none,browser}`
+module shells, and the global-state precursor. `none.zig` (19 loc) + `browser.zig`
+(4 loc) are ported FULLY here (§4 — no trait impls, faithful to the reference).
+The deferrals E0 CREATES (all scheduled, nothing dropped — R1):
+
+1. **The full `state.init()` port.** `rustty_apprt::init()` (the `rustty_init`
+   C-export's body) is the E0 MINIMAL precursor: it sets `rustty_core::STATE` with
+   the `()` allocator seam + `resourcesDir()` only, so the CAPI `global.alloc`
+   readers (`ghostty_surface_free_text`/`_tty_name`/`Text.deinit`) have a live
+   state. The FULL reference `global.zig` `init` body — GPA/allocator selection,
+   CLI action detection (`cli.action.detectArgs`), logging config (`GHOSTTY_LOG`),
+   `crash.init`, `internal_os.ensureLocale`, `i18n.init`, `initSignals` (SIGPIPE) —
+   is the BREAK #1 deferred seam (`rustty_global::GlobalState::init` is commented,
+   pending rustty-core wiring). **Target: the rustty-core/rustty-global `state.init`
+   wiring milestone.**
+
+2. **`std.os.argv` storage in `rustty_init`.** The reference `ghostty_init` does
+   `std.os.argv = argv[0..argc]`; the stored argv is consumed only by the deferred
+   CLI-action detection (item 1). `rustty_init` accepts `argv` (fixing the C-ABI
+   signature now) but does not store it yet. **Target: with item 1.**
+
+3. **The embedded backend + the 71 libghostty C-ABI exports.** `embedded.rs` is an
+   E0 shell (only `resourcesDir`). `embedded::App`/`Surface`/`Platform`/`Inspector`
+   + the `impl apprt_api::{App,Surface}` trait bodies + the surface callbacks land
+   in **E1..E4/E10**; the 71 `rustty_*` `ghostty_*` wrappers + CAPI extern structs
+   + D2 const-asserts land in **E5..E10** in `rustty-apprt-c`; the cbindgen
+   `after_includes` type-pins (Options/Platform/KeyEvent/SurfaceSize/…), the
+   `xtask header-gen` wiring for `include/rustty-apprt.h`, and the C compile+link
+   smoke KAT land in **E11**. The GPU (`draw`/`refresh` → `renderer_seam`), xev
+   (event loop), and macOS objc/Metal/CGS (Platform messaging, Inspector Metal,
+   quicklook, `set_window_background_blur`) `unimplemented!()` leaves are CREATED
+   by E3/E4/E10 — **not by E0** (E0 creates no runtime leaf; `none`/`browser` are
+   inert stubs and `rustty_init` is runtime-live). **Targets: Phase-3 R-d (GPU) +
+   D6 (xev) + E10 (macOS objc/CGS), per EMBEDDED_BLUEPRINT §1.**
+
+**Gate deltas (E0):** new crate `rustty-apprt-c` (cdylib/staticlib/rlib) —
+`librustty_apprt_c.{a,dylib,rlib}` build + export `_rustty_init` (verified via
+`nm`). `rustty-apprt` gains `allocator-api2` (the `none::App::perform_ipc`
+allocator param). MAP rows `apprt_none`/`apprt_browser` (both 0-test, GREEN).
+Whole-workspace gates green (build, touched-crate tests, clippy `-D warnings`,
+fmt, acyclic G7 with apprt-c a clean TOP SINK, test-counts G-gate); scoped-G3b on
+none.zig/browser.zig **missing=0** (none's 1 distinctive comment matched; browser
+has none). No regression (vt 2019, core 15, apprt-api 20, renderer 19, crash 12,
+termio 44).

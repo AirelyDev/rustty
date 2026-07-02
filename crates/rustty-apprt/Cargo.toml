@@ -25,3 +25,7 @@ rustty-inspector = { workspace = true }
 rustty-config = { workspace = true }
 rustty-input = { workspace = true }
 rustty-os = { workspace = true }
+# allocator-api2 Allocator trait (the workspace's `std.mem.Allocator` map): the
+# `none::App::perform_ipc` static fn takes a passed-in allocator (reference
+# none.zig `performIpc(_: Allocator, ...)`), matching `rustty_apprt_api::ipc`.
+allocator-api2 = { workspace = true }

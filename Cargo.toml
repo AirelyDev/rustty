@@ -52,6 +52,11 @@ members = [
     "crates/rustty-termio",        # 23
     "crates/rustty-core",          # 24
     "crates/rustty-apprt",         # 25
+    # The libghostty embedding C ABI (apprt/embedded): a NEW TOP SINK over
+    # rustty-apprt (vt-c precedent). cdylib/staticlib/rlib -> librustty.{dylib,a}
+    # + include/rustty-apprt.h (cbindgen, R2). Nothing depends on it
+    # (EMBEDDED_BLUEPRINT §3/§5). Independent of the strict port order (a sink).
+    "crates/rustty-apprt-c",
     "crates/rustty-cli",           # 26
     "crates/rustty",               # 27  <- bin (produces the `rustty` binary)
     "crates/rustty-bench",         # 28
@@ -141,6 +146,8 @@ rustty-terminfo = { path = "crates/rustty-terminfo" }
 rustty-termio = { path = "crates/rustty-termio" }
 rustty-core = { path = "crates/rustty-core" }
 rustty-apprt = { path = "crates/rustty-apprt" }
+# The libghostty embedding C ABI top-sink (cbindgen -> include/rustty-apprt.h).
+rustty-apprt-c = { path = "crates/rustty-apprt-c" }
 rustty-cli = { path = "crates/rustty-cli" }
 # Additive infra glue (R1): Zig stdlib equivalents; not in the parity contract.
 rustty-zigstd = { path = "crates/rustty-zigstd" }

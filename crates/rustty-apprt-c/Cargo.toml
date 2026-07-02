@@ -1,0 +1,35 @@
+# rustty-apprt-c — port crate (parity port order)
+#
+# Crate IDENTITY is `rustty-apprt-c` (R4). This is NOT the published artifact name; the
+# library/binary artifacts are renamed to the `rustty` product identity later (R2).
+# NO dependency on the ghostty tree (R3) — reference is an external oracle only.
+[package]
+name = "rustty-apprt-c"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+# The libghostty C ABI layer (apprt/embedded): a shared lib (cdylib) and static
+# lib (staticlib) for the librustty.{so,dylib,a} outputs, plus rlib so other Rust
+# crates can link it. This is the rustty analogue of `src/main_c.zig` — the C API
+# hub that `@export`s the `ghostty_*` symbols for `apprt.embedded`. cbindgen later
+# emits include/rustty-apprt.h with `rustty_*` symbols (R2, wired in chunk E11).
+#
+# Mirrors the rustty-vt-c precedent exactly: the pure-Rust backend logic lives in
+# `rustty-apprt` (the `embedded`/`none`/`browser` modules, unit-testable rlib);
+# this thin crate holds ONLY the `#[no_mangle] extern "C"` wrappers + the CAPI-only
+# extern structs + cbindgen.toml + the D2 const-asserts.
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+rustty-apprt = { workspace = true }
+# Same libc the reference's C API binds (R3): the `c_int`/`c_char` types the
+# `ghostty_*` (rustty `rustty_*`) exports cross the ABI with.
+libc = "0.2"
