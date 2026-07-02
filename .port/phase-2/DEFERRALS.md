@@ -521,15 +521,16 @@ integration-tier blueprint:
   rustty-renderer already deps rustty-crash, so crash must NOT dep renderer for
   its size types. This is deliberately NOT apprt-api's `CoreSurfaceHandle`
   (different concern).
-- **DEFERRED (untested-only, 0 tests — R1-safe) — PARTIALLY RESOLVED (core
-  C8):** the concrete `ThreadStateSurface` impl. **rustty-core's `Surface` now
-  implements the trait** (core C8, ahead of its C10 row: `impl
-  ThreadStateSurface for Surface<A>` + `Surface.crashThreadState()`
-  Surface.zig:6014 + the first two `crash.sentry.thread_state = ...` sites —
-  sizeCallback :2469 / preeditCallback :2530, via
+- **DEFERRED (untested-only, 0 tests — R1-safe) — RESOLVED (core C8 + C10):**
+  the concrete `ThreadStateSurface` impl. **rustty-core's `Surface` implements
+  the trait** (landed with core C8 ahead of its C10 row, confirmed closed by
+  the C10 row that owned it: `impl ThreadStateSurface for Surface<A>` +
+  `Surface.crashThreadState()` Surface.zig:6014 + the
+  `crash.sentry.thread_state = ...` sites — sizeCallback :2469 /
+  preeditCallback :2530 (C8) / keyCallback :2663 (C10), via
   `sentry::setThreadState`/`clearThreadState` and the [ADV 6.1] Drop guard
   `ThreadStateGuard` mapping the paired `defer ... = null`). The remaining
-  Surface.zig sites port with their owning chunks (C10-C13); the renderer
+  Surface.zig sites port with their owning chunks (C11-C13); the renderer
   Thread.zig / termio Thread.zig/Exec.zig sites stay with their owning files
   (GPU/D6 deferrals).
 - Note: tests never call the real `sentry_init` (the reference gates init on
@@ -1114,3 +1115,61 @@ created and none resolved. Ledger:
   precedent). `resolvePathForOpening` (C13 processLinks :4396) and
   `setSelectionAndCopy` (C12 :3866 / C13 :4086) carry `#[allow(dead_code)]`
   until their callsites land.
+
+## rustty-core C10 (core tier) — key tier + crash ThreadStateSurface un-defer
+
+Chunk C10 of CORE_BLUEPRINT §6 lands Surface.zig:2605-3281 + 6014-end in
+`crates/rustty-core/src/surface.rs`: `keyEventIsBinding`, `keyCallback`,
+`maybeHandleBinding`, `deactivateAllKeyTables`, `catchAllIsIgnore`,
+`endKeySequence` (the C8 SEQUENCING STUBS filled; the `KeySequenceQueued`/
+`KeySequenceMemory` allows removed), `encodeKey`, `encodeKeyOpts` — all
+LIVE — plus the 6014-end tail: `presentSurface` LIVE and `getProcessInfo`
+split into `getForegroundPid`/`getTtyName` (the rustty-os pty.rs /
+`Termio::getProcessInfo` comptime-return precedent). NO new deferral was
+created; ONE deferral RESOLVED-confirmed: the rustty-crash
+`ThreadStateSurface` entry above closes (the impl + `crashThreadState`
+landed with C8 ahead of this row; C10 — the owning row — adds keyCallback's
+`crash.sentry.thread_state` site, the third [ADV 6.1] `ThreadStateGuard`
+site). Ledger:
+
+- **Inspector defer block (CORE_BLUEPRINT §4):** keyCallback's
+  `defer if (insp_ev) |ev| ev: {...}` maps onto the `InspEvGuard` Drop
+  (ThreadStateGuard family; declared AFTER the crash guard so it drops
+  FIRST — the reference LIFO defer order). The None-arm (`ev.deinit`) is
+  LIVE; the Some-arm (`insp.recordKeyEvent` + queueRender kick) is
+  `unreachable!()` with the verbatim body preserved — `Inspector` is
+  uninhabited until Phase 3, so the guard's raw surface pointer is never
+  dereferenced today (documented at the type).
+- **Entry representation:** the reference `Binding.Set.Entry` (key/value
+  POINTER pair) is the `(*const Set, usize)` pair (the ported `getEvent`
+  returns the entry INDEX — app.rs keyEvent precedent);
+  `value_at`/`key_at` are the `entry.value_ptr.*`/`entry.key_ptr.*` reads.
+- **Additive growth (upstream crates, Rust-only glue — blueprint risk 7):**
+  rustty-input `binding::Set::key_at` (the `value_at` sibling; the
+  `.key_sequence` trigger payload read); core `TableStackEntry` gained
+  `Clone`/`Copy` derives (the reference copies elements out by value,
+  `const table = table_items[rev_i];`).
+- **Mutex fidelity:** keyCallback's KAM check / link-refresh /
+  scroll-to-bottom blocks and `encodeKeyOpts` realize each `defer unlock`
+  as the explicit unlock at every exit (the C7/C8/C9 convention).
+- **Comptime mappings:** `encodeKeyOpts`'s
+  `if (comptime builtin.os.tag != .macos) return opts;` is the `cfg!` early
+  return (the init xdg-terminal-exec precedent); the two `OptionAsAlt`
+  enums (rustty-input config-side vs rustty-vt key_encode-side, one type in
+  the reference) bridge through a documented 1:1 variant map at the single
+  assignment site.
+- **Writer mappings:** the `.fixed(&data)` small-array writer is an
+  `io::Cursor` over `[u8; WriteReq::MAX]` (overflow == the reference
+  `error.WriteFailed` arm); the `Allocating` writer is the growable `Vec`
+  sink (its OOM-only `try` collapses; `WriteReq.init`'s OOM likewise —
+  termio message.rs precedent).
+- **Ported ahead / stubs:** `closingAction` (C14's row, Surface.zig:5633)
+  ports LIVE — maybeHandleBinding's closing check needs it; STUBS added for
+  `mouseShiftCapture` (C12, :3712) and `hideMouse` (C13, :4741) —
+  keyCallback is their first caller. `modsChanged`/`mouseRefreshLinks`
+  allows removed (first callsites live). textCallback's doc comment
+  (:3276-3281, C10/C11 boundary straddle) is preserved verbatim for C11.
+- **C0-DECISION propagation:** the main `impl<A> Surface<A>` block gained
+  the `A::Surface: ApprtSurface<App = A, Core = Surface<A>>` where-clause
+  (app.rs precedent) — maybeHandleBinding calls the constrained
+  `App::performAllChainedAction`.

@@ -4421,6 +4421,17 @@ impl Set {
     pub fn value_at(&self, index: usize) -> &Value {
         self.bindings.value_at(index)
     }
+
+    /// Get the stored trigger key at an entry index.
+    //
+    // PORT NOTE (additive, core C10 — CORE_BLUEPRINT risk 7): the reference
+    // `Set.Entry` is a key/value POINTER pair; the ported `getEvent` returns
+    // the entry INDEX (see `get_index`), so `entry.key_ptr.*` reads
+    // (Surface.maybeHandleBinding's `.key_sequence` trigger payload) go
+    // through this accessor — the `value_at` sibling.
+    pub fn key_at(&self, index: usize) -> &Trigger {
+        self.bindings.key_at(index)
+    }
 }
 
 impl Set {

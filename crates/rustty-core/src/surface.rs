@@ -43,9 +43,19 @@
 //! `clipboardWrite`/`copySelectionToClipboards`/`setSelection`(`AndCopy`)
 //! LIVE — `imePoint`'s no-defer lock/unlock paired verbatim with the
 //! reference lines; the std.base64/std.fs.path analogues are the file-scope
-//! PORT helpers at the bottom; CORE_BLUEPRINT §6 rows C10..C15 fill the
-//! remaining function bodies IN PLACE — the declared method stubs below are
-//! owned by C10/C13/C14/C15).
+//! PORT helpers at the bottom; chunk C10 landed the key tier, Surface.zig:
+//! 2605-3281 + 6014-end — `keyEventIsBinding`/`keyCallback`/
+//! `maybeHandleBinding`/`deactivateAllKeyTables`/`catchAllIsIgnore`/
+//! `endKeySequence`/`encodeKey`(`Opts`) LIVE (keyCallback's inspector defer
+//! block is the `InspEvGuard` Drop — CORE_BLUEPRINT §4: None-arm live,
+//! Some-arm unreachable until Phase 3; its `crash.sentry.thread_state` site
+//! is the third [ADV 6.1] guard site) plus the 6014-end tail
+//! (`crashThreadState`/`ThreadStateSurface` had landed with C8;
+//! `presentSurface` LIVE; `getProcessInfo` split into
+//! `getForegroundPid`/`getTtyName` — the rustty-os pty.rs comptime-return
+//! precedent) and `closingAction` ported ahead of its C14 row;
+//! CORE_BLUEPRINT §6 rows C11..C15 fill the remaining function bodies IN
+//! PLACE — the declared method stubs below are owned by C12/C13/C14/C15).
 
 // PARITY: the reference's identifiers are camelCase (`needsConfirmQuit`,
 // `handleMessage`, `performBindingAction`, `scaledPadding`,
@@ -89,7 +99,8 @@ use allocator_api2::alloc::Global as Allocator;
 //
 // PORT NOTE: first reached by C8 (`crash.sentry.thread_state` in
 // sizeCallback/preeditCallback + `crashThreadState`, ahead of its C10 row —
-// [ADV 6.1]); the C10 key tier adds the remaining sites.
+// [ADV 6.1]); the C10 key tier added its keyCallback site; the remaining
+// sites land with C11-C13.
 use rustty_crash as crash;
 // const unicode = @import("unicode/main.zig");
 //
@@ -135,8 +146,13 @@ use rustty_input::binding;
 use rustty_input::config::OptionAsAlt;
 use rustty_input::key_mods::RemapSet;
 use rustty_input::link;
+use rustty_vt::input::key;
 use rustty_vt::input::key::u21;
+use rustty_vt::input::key::Key;
 use rustty_vt::input::key::KeyEvent;
+// PORT NOTE (D1 vt slice): `input.key_encode` lives in rustty-vt (the key
+// encoder is VT-protocol logic) — `encodeKey`/`encodeKeyOpts` (C10).
+use rustty_vt::input::key_encode;
 use rustty_vt::input::key_mods::Mods;
 use rustty_vt::input::mouse as input_mouse;
 // const App = @import("App.zig");
@@ -146,8 +162,7 @@ use rustty_os as internal_os;
 // const inspectorpkg = @import("inspector/main.zig");
 use rustty_inspector as inspectorpkg;
 // const SurfaceMouse = @import("surface_mouse.zig");
-// PORT NOTE: `crate::surface_mouse::SurfaceMouse` — first reached by the C10
-// key tier (modsChanged/keyCallback); preserved as this comment.
+use crate::surface_mouse::SurfaceMouse;
 // const ProcessInfo = @import("pty.zig").ProcessInfo;
 // PORT NOTE: `ProcessInfo` — first reached by C15 getProcessInfo; preserved
 // as this comment.
@@ -165,8 +180,9 @@ use rustty_datastruct::blocking_queue::{Size as QueueSize, Timeout};
 // trait for the typed `rt_surface.*` method edges (aliased per the C0
 // DECISION note — core's own struct is also named `Surface`).
 use rustty_apprt_api::action::{
-    CellSize, ColorChange, ColorKind, CommandFinished, ConfigChange, InitialSize, MouseOverLink,
-    Pwd, ReloadConfig, SearchSelected, SearchTotal, SecureInput, SetTitle, SizeLimit,
+    CellSize, ColorChange, ColorKind, CommandFinished, ConfigChange, InitialSize, KeySequence,
+    KeyTable, MouseOverLink, Pwd, ReloadConfig, SearchSelected, SearchTotal, SecureInput, SetTitle,
+    SizeLimit,
 };
 use rustty_apprt_api::Surface as ApprtSurface;
 
@@ -174,6 +190,7 @@ use rustty_apprt_api::Surface as ApprtSurface;
 // `MessageData(u8, 255)` unions) + the termio `write_alloc` payload
 // (handleMessage's report_title arm) — C7.
 use rustty_datastruct::message_data::Alloc;
+use rustty_datastruct::message_data::Small;
 use rustty_datastruct::MessageData;
 
 // The vt search-thread event type (`terminal.search.Thread.Event`) —
@@ -601,7 +618,10 @@ pub struct Keyboard {
 }
 
 /// PORT: the reference's anonymous `table_stack` element struct (see the
-/// [`Keyboard::table_stack`] PORT NOTE).
+/// [`Keyboard::table_stack`] PORT NOTE). `Copy` — the reference reads
+/// elements out BY VALUE (`const table = table_items[rev_i];`,
+/// maybeHandleBinding Surface.zig:2903).
+#[derive(Clone, Copy)]
 pub struct TableStackEntry {
     // set: *const input.Binding.Set,
     pub set: *const binding::Set,
@@ -1340,7 +1360,65 @@ impl Drop for ThreadStateGuard {
     }
 }
 
-impl<A: apprt::App + 'static> Surface<A> {
+/// PORT NOTE ([`ThreadStateGuard`] family, Rust-only glue): `keyCallback`'s
+/// inspector defer block (`defer if (insp_ev) |ev| ev: {...}`, Surface.zig:
+/// 2674-2689) must run on EVERY exit path (`?` propagation included), so it
+/// maps onto `Drop`. The guard owns the reference's `insp_ev` local (the
+/// `if (insp_ev) |*ev| ev else null` argument sites are `.ev.as_mut()`
+/// reborrows) and holds a raw surface pointer for the drop-time inspector
+/// recheck. Reachability contract (CORE_BLUEPRINT §4): `ev` is `Some` ONLY
+/// when an inspector existed at keyCallback entry, which is impossible until
+/// Phase 3 (`Inspector` is uninhabited) — so the raw pointer is never
+/// dereferenced today; when it is (Phase 3), the deref happens strictly
+/// AFTER the method body's last `&mut self` use (the guard drops at return —
+/// the rust-mut-args raw-ptr discipline).
+struct InspEvGuard<A: apprt::App + 'static> {
+    surface: *mut Surface<A>,
+    ev: Option<inspectorpkg::KeyEvent>,
+}
+
+impl<A: apprt::App + 'static> Drop for InspEvGuard<A> {
+    fn drop(&mut self) {
+        // defer if (insp_ev) |ev| ev: {
+        if let Some(mut ev) = self.ev.take() {
+            // We have to check for the inspector again because our keybinding
+            // might close it.
+            // const insp = self.inspector orelse {
+            //     ev.deinit(self.alloc);
+            //     break :ev;
+            // };
+            let _insp = match unsafe { (*self.surface).inspector } {
+                Some(v) => v,
+                None => {
+                    ev.deinit(unsafe { (*self.surface).alloc });
+                    return;
+                }
+            };
+
+            // if (insp.recordKeyEvent(self.alloc, ev)) {
+            //     self.queueRender() catch {};
+            // } else |err| {
+            //     log.warn("error adding key event to inspector err={}", .{err});
+            // }
+            //
+            // PORT NOTE (CORE_BLUEPRINT §4): the Some-arm needs the Phase-3
+            // `Inspector.recordKeyEvent` (+ the queueRender kick) — the
+            // pointee is uninhabited, so this arm is unreachable until the
+            // Phase-3 fill (the deinit/activateInspector arm precedent).
+            unreachable!("inspector is unconstructible until Phase 3 (recordKeyEvent)");
+        }
+    }
+}
+
+impl<A> Surface<A>
+where
+    A: apprt::App + 'static,
+    // C0 DECISION (CORE_BLUEPRINT §1, option 1 — the app.rs impl-block
+    // precedent): the self-referential associated-type bound; Surface's
+    // method tier needs it to call into `App<A>`'s constrained methods
+    // (maybeHandleBinding's `performAllChainedAction`, C10).
+    A::Surface: ApprtSurface<App = A, Core = Surface<A>>,
+{
     /// Create a new surface. This must be called from the main thread. The
     /// pointer to the memory for the surface must be provided and must be
     /// stable due to interfacing with various callbacks.
@@ -3714,10 +3792,9 @@ impl<A: apprt::App + 'static> Surface<A> {
     /// The renderer state mutex MUST NOT be held.
     // fn modsChanged(self: *Surface, mods: input.Mods) void {
     //
-    // PORT NOTE: the C10 keyCallback (:2720) / C12 mouseButtonCallback
-    // (:3774) / C13 cursorPosCallback (:4558) callsites land later; the allow
-    // is removed when the first one does.
-    #[allow(dead_code)]
+    // PORT NOTE: the C10 keyCallback (:2720) callsite is live; the C12
+    // mouseButtonCallback (:3774) / C13 cursorPosCallback (:4558) callsites
+    // land later.
     fn modsChanged(&mut self, mods: Mods) {
         // The only place we keep track of mods currently is on the mouse.
         // if (!self.mouse.mods.equal(mods)) {
@@ -3773,11 +3850,9 @@ impl<A: apprt::App + 'static> Surface<A> {
     //     over_link: bool,
     // ) !void {
     //
-    // PORT NOTE: the C10 keyCallback (:2733) / C13 cursorPosCallback (:4609)
-    // callsites land later (both call with the renderer mutex held); the
-    // allow is removed when the first one does. The inferred `!void` is the
-    // [`Error`] union.
-    #[allow(dead_code)]
+    // PORT NOTE: the C10 keyCallback (:2733) callsite is live; the C13
+    // cursorPosCallback (:4609) callsite lands later (both call with the
+    // renderer mutex held). The inferred `!void` is the [`Error`] union.
     fn mouseRefreshLinks(
         &mut self,
         pos: apprt::CursorPos,
@@ -5650,42 +5725,1184 @@ impl<A: apprt::App + 'static> Surface<A> {
         result.map_err(Error::from)
     }
 
-    // PORT NOTE (chunk C10 fills — Surface.zig:2605 `keyEventIsBinding`):
-    // the fn lands with the C10 key tier; its doc comment (:2597-2604)
-    // straddles the C8/C10 chunk-table boundary, preserved verbatim:
-    //
-    // /// Returns true if the given key event would trigger a keybinding
-    // /// if it were to be processed. This is useful for determining if
-    // /// a key event should be sent to the terminal or not.
-    // ///
-    // /// Note that this function does not check if the binding itself
-    // /// is performable, only if the key event would trigger a binding.
-    // /// If a performable binding is found and the event is not performable,
-    // /// then Ghosty will act as though the binding does not exist.
+    /// Returns true if the given key event would trigger a keybinding
+    /// if it were to be processed. This is useful for determining if
+    /// a key event should be sent to the terminal or not.
+    ///
+    /// Note that this function does not check if the binding itself
+    /// is performable, only if the key event would trigger a binding.
+    /// If a performable binding is found and the event is not performable,
+    /// then Ghosty will act as though the binding does not exist.
+    // pub fn keyEventIsBinding(
+    //     self: *Surface,
+    //     event_orig: input.KeyEvent,
+    // ) ?input.Binding.Flags {
+    pub fn keyEventIsBinding(&mut self, event_orig: KeyEvent) -> Option<binding::Flags> {
+        // Apply key remappings for consistency with keyCallback
+        // var event = event_orig;
+        //
+        // (PORT: `event_orig` moves into `event` — the Rust KeyEvent owns its
+        // utf8 bytes; both `event_orig.mods` reads below still see the
+        // pre-assignment mods, the RHS evaluates first.)
+        let mut event = event_orig;
+        // if (self.config.key_remaps.isRemapped(event_orig.mods)) {
+        if self.config.key_remaps.is_remapped(event.mods) {
+            // event.mods = self.config.key_remaps.apply(event_orig.mods);
+            event.mods = self.config.key_remaps.apply(event.mods);
+        }
 
-    // PORT NOTE (STUB — chunk C10 fills): `fn deactivateAllKeyTables(self:
-    // *Surface) !bool` — Surface.zig:3075 (updateConfig's :1755 caught
-    // callsite lands with C8; the inferred error set lands with the body —
-    // the opaque [`Error`] marker meanwhile).
+        // switch (event.action) {
+        match event.action {
+            // .release => return null,
+            key::Action::Release => return None,
+            // .press, .repeat => {},
+            key::Action::Press | key::Action::Repeat => {}
+        }
+
+        // Look up our entry
+        // const entry: input.Binding.Set.Entry = entry: {
+        //
+        // PORT NOTE: the reference `Entry` is a key/value POINTER pair; the
+        // ported `Set.getEvent` returns the entry INDEX (the app.rs keyEvent
+        // precedent), so the entry is the `(set, index)` pair here —
+        // `value_at`/`key_at` are the `entry.value_ptr.*`/`entry.key_ptr.*`
+        // reads. The set side is a raw pointer because two of the three
+        // sources (`sequence_set`, the table stack) already store raw
+        // pointers into config-owned sets, exactly as the reference.
+        let entry: (*const binding::Set, usize) = 'entry: {
+            // If we're in a sequence, check the sequence set
+            // if (self.keyboard.sequence_set) |set| {
+            //     break :entry set.getEvent(event) orelse return null;
+            // }
+            if let Some(set) = self.keyboard.sequence_set {
+                match unsafe { &*set }.get_event(&event) {
+                    Some(v) => break 'entry (set, v),
+                    None => return None,
+                }
+            }
+
+            // Check active key tables (inner-most to outer-most)
+            // const table_items = self.keyboard.table_stack.items;
+            let table_items = &self.keyboard.table_stack;
+            // for (0..table_items.len) |i| {
+            for i in 0..table_items.len() {
+                // const rev_i: usize = table_items.len - 1 - i;
+                let rev_i: usize = table_items.len() - 1 - i;
+                // if (table_items[rev_i].set.getEvent(event)) |entry| {
+                //     break :entry entry;
+                // }
+                if let Some(entry) = unsafe { &*table_items[rev_i].set }.get_event(&event) {
+                    break 'entry (table_items[rev_i].set, entry);
+                }
+            }
+
+            // Check the root set
+            // break :entry self.config.keybind.set.getEvent(event) orelse return null;
+            match self.config.keybind.set.get_event(&event) {
+                Some(v) => break 'entry (&self.config.keybind.set as *const binding::Set, v),
+                None => return None,
+            }
+        };
+
+        // Return flags based on the
+        // return switch (entry.value_ptr.*) {
+        match unsafe { &*entry.0 }.value_at(entry.1) {
+            // .leader => .{},
+            binding::Value::Leader(_) => Some(binding::Flags::default()),
+            // inline .leaf, .leaf_chained => |v| v.flags,
+            binding::Value::Leaf(v) => Some(v.flags),
+            binding::Value::LeafChained(v) => Some(v.flags),
+        }
+        // };
+    }
+
+    /// Called for any key events. This handles keybindings, encoding and
+    /// sending to the terminal, etc.
+    // pub fn keyCallback(
+    //     self: *Surface,
+    //     event_orig: input.KeyEvent,
+    // ) !InputEffect {
+    //
+    // (the inferred `!InputEffect` is the [`Error`] union.)
+    pub fn keyCallback(&mut self, event_orig: KeyEvent) -> Result<InputEffect, Error> {
+        // log.warn("text keyCallback event={}", .{event_orig});
+
+        // Apply key remappings to transform modifiers before any processing.
+        // This allows users to remap modifier keys at the app level.
+        // var event = event_orig;
+        //
+        // (PORT: the keyEventIsBinding move-and-read note above.)
+        let mut event = event_orig;
+        // if (self.config.key_remaps.isRemapped(event_orig.mods)) {
+        if self.config.key_remaps.is_remapped(event.mods) {
+            // event.mods = self.config.key_remaps.apply(event_orig.mods);
+            event.mods = self.config.key_remaps.apply(event.mods);
+        }
+
+        // Crash metadata in case we crash in here
+        // crash.sentry.thread_state = self.crashThreadState();
+        crash::sentry::setThreadState(self.crashThreadState());
+        // defer crash.sentry.thread_state = null;
+        //
+        // ([ADV 6.1] — the Drop guard clears at every exit below; declared
+        // BEFORE the inspector guard so it drops AFTER it, the reference's
+        // LIFO defer order.)
+        let _thread_state = ThreadStateGuard;
+
+        // Setup our inspector event if we have an inspector.
+        // var insp_ev: ?inspectorpkg.KeyEvent = if (self.inspector != null) ev: {
+        //     var copy = event;
+        //     copy.utf8 = "";
+        //     if (event.utf8.len > 0) copy.utf8 = try self.alloc.dupe(u8, event.utf8);
+        //     break :ev .{ .event = copy };
+        // } else null;
+        //
+        // (the OOM-only `try alloc.dupe` collapses to the owned clone — the
+        // inspector widgets/key.rs Event::init precedent.)
+        let insp_ev_: Option<inspectorpkg::KeyEvent> = if self.inspector.is_some() {
+            let mut copy = event.clone();
+            copy.utf8 = Vec::new();
+            if !event.utf8.is_empty() {
+                copy.utf8 = event.utf8.clone();
+            }
+            Some(inspectorpkg::KeyEvent {
+                event: copy,
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
+        // When we're done processing, we always want to add the event to
+        // the inspector.
+        //
+        // (the reference `defer if (insp_ev) |ev| ev: {...}` — Surface.zig:
+        // 2674-2689 — is [`InspEvGuard`]'s `Drop`; the `if (insp_ev) |*ev| ev
+        // else null` argument sites below are the `.ev.as_mut()` reborrows.)
+        let mut insp_ev = InspEvGuard::<A> {
+            surface: self,
+            ev: insp_ev_,
+        };
+
+        // Handle keybindings first. We need to handle this on all events
+        // (press, repeat, release) because a press may perform a binding but
+        // a release should not encode if we consumed the press.
+        // if (try self.maybeHandleBinding(
+        //     event,
+        //     if (insp_ev) |*ev| ev else null,
+        // )) |v| return v;
+        if let Some(v) = self.maybeHandleBinding(&event, insp_ev.ev.as_mut())? {
+            return Ok(v);
+        }
+
+        // If we allow KAM and KAM is enabled then we do nothing.
+        // if (self.config.vt_kam_allowed) {
+        if self.config.vt_kam_allowed {
+            // self.renderer_state.mutex.lock();
+            unsafe { (*self.renderer_state.mutex).lock() };
+            // defer self.renderer_state.mutex.unlock();
+            // if (self.io.terminal.modes.get(.disable_keyboard)) return .consumed;
+            if self
+                .io
+                .terminal
+                .modes
+                .get(terminal::modes::Mode::DisableKeyboard)
+            {
+                // (the deferred mutex unlock — the consumed return)
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return Ok(InputEffect::Consumed);
+            }
+            // (the deferred mutex unlock — the fall-through)
+            unsafe { (*self.renderer_state.mutex).unlock() };
+        }
+
+        // If this input event has text, then we hide the mouse if configured.
+        // We only do this on pressed events to avoid hiding the mouse when we
+        // change focus due to a keybinding (i.e. switching tabs).
+        // if (self.config.mouse_hide_while_typing and
+        //     event.action == .press and
+        //     !self.mouse.hidden and
+        //     event.utf8.len > 0)
+        if self.config.mouse_hide_while_typing
+            && event.action == key::Action::Press
+            && !self.mouse.hidden
+            && !event.utf8.is_empty()
+        {
+            self.hideMouse();
+        }
+
+        // If our mouse modifiers change we may need to change our
+        // link highlight state.
+        // if (!self.mouse.mods.equal(event.mods)) mouse_mods: {
+        if !self.mouse.mods.equal(event.mods) {
+            'mouse_mods: {
+                // Update our modifiers, this will update mouse mods too
+                self.modsChanged(event.mods);
+
+                // We only refresh links if
+                // 1. mouse reporting is off
+                // OR
+                // 2. mouse reporting is on and we are not reporting shift to the terminal
+                // if (self.io.terminal.flags.mouse_event == .none or
+                //     (self.mouse.mods.shift and !self.mouseShiftCapture(false)))
+                if self.io.terminal.flags.mouse_event == terminal::mouse::Event::None
+                    || (self.mouse.mods.shift && !self.mouseShiftCapture(false))
+                {
+                    // Refresh our link state
+                    // const pos = self.rt_surface.getCursorPos() catch break :mouse_mods;
+                    let pos = match unsafe { &*self.rt_surface }.get_cursor_pos() {
+                        Ok(v) => v,
+                        Err(_) => break 'mouse_mods,
+                    };
+                    // self.renderer_state.mutex.lock();
+                    unsafe { (*self.renderer_state.mutex).lock() };
+                    // defer self.renderer_state.mutex.unlock();
+                    // self.mouseRefreshLinks(
+                    //     pos,
+                    //     self.posToViewport(pos.x, pos.y),
+                    //     self.mouse.over_link,
+                    // ) catch |err| {
+                    //     log.warn("failed to refresh links err={}", .{err});
+                    //     break :mouse_mods;
+                    // };
+                    //
+                    // (Zig widens the f32 cursor coordinates to the f64
+                    // params — the selectionScrollTick precedent.)
+                    let pos_vp = self.posToViewport(f64::from(pos.x), f64::from(pos.y));
+                    if let Err(_err) = self.mouseRefreshLinks(pos, pos_vp, self.mouse.over_link) {
+                        // log.warn("failed to refresh links err={}", .{err});
+                        // (the deferred mutex unlock — the catch break)
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        break 'mouse_mods;
+                    }
+                    // (the deferred mutex unlock — the normal exit)
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                // } else if (self.io.terminal.flags.mouse_event != .none and !self.mouse.mods.shift) {
+                } else if self.io.terminal.flags.mouse_event != terminal::mouse::Event::None
+                    && !self.mouse.mods.shift
+                {
+                    // If we have mouse reports on and we don't have shift pressed, we reset state
+                    // _ = try self.rt_app.performAction(
+                    //     .{ .surface = self },
+                    //     .mouse_shape,
+                    //     self.io.terminal.mouse_shape,
+                    // );
+                    let _ = unsafe { &*self.rt_app }.perform_action(
+                        apprt::Target::Surface(&*self),
+                        apprt::Action::MouseShape(self.io.terminal.mouse_shape),
+                    )?;
+                    // _ = try self.rt_app.performAction(
+                    //     .{ .surface = self },
+                    //     .mouse_over_link,
+                    //     .{ .url = "" },
+                    // );
+                    let _ = unsafe { &*self.rt_app }.perform_action(
+                        apprt::Target::Surface(&*self),
+                        apprt::Action::MouseOverLink(MouseOverLink { url: b"" }),
+                    )?;
+                    // try self.queueRender();
+                    self.queueRender()?;
+                }
+            }
+        }
+
+        // Process the cursor state logic. This will update the cursor shape if
+        // needed, depending on the key state.
+        // if ((SurfaceMouse{
+        //     .physical_key = event.key,
+        //     .mouse_event = self.io.terminal.flags.mouse_event,
+        //     .mouse_shape = self.io.terminal.mouse_shape,
+        //     .mods = self.mouse.mods,
+        //     .over_link = self.mouse.over_link,
+        //     .hidden = self.mouse.hidden,
+        // }).keyToMouseShape()) |shape| _ = try self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .mouse_shape,
+        //     shape,
+        // );
+        if let Some(shape) = (SurfaceMouse {
+            physical_key: event.key,
+            mouse_event: self.io.terminal.flags.mouse_event,
+            mouse_shape: self.io.terminal.mouse_shape,
+            mods: self.mouse.mods,
+            over_link: self.mouse.over_link,
+            hidden: self.mouse.hidden,
+        })
+        .key_to_mouse_shape()
+        {
+            let _ = unsafe { &*self.rt_app }.perform_action(
+                apprt::Target::Surface(&*self),
+                apprt::Action::MouseShape(shape),
+            )?;
+        }
+
+        // We've processed a key event that produced some data so we want to
+        // track the last pressed key.
+        // self.pressed_key = event: {
+        self.pressed_key = 'event: {
+            // We need to unset the allocated fields that will become invalid
+            // var copy = event;
+            // copy.utf8 = "";
+            let mut copy = event.clone();
+            copy.utf8 = Vec::new();
+
+            // If we have a previous pressed key and we're releasing it
+            // then we set it to invalid to prevent repeating the release event.
+            // if (event.action == .release) {
+            if event.action == key::Action::Release {
+                // if we didn't have a previous event and this is a release
+                // event then we just want to set it to null.
+                // const prev = self.pressed_key orelse break :event null;
+                let prev = match &self.pressed_key {
+                    Some(v) => v,
+                    None => break 'event None,
+                };
+                // if (prev.key == copy.key) copy.key = .unidentified;
+                if prev.key == copy.key {
+                    copy.key = Key::Unidentified;
+                }
+            }
+
+            // If our key is invalid and we have no mods, then we're done!
+            // This helps catch the state that we naturally released all keys.
+            // if (copy.key == .unidentified and copy.mods.empty()) break :event null;
+            if copy.key == Key::Unidentified && copy.mods.empty() {
+                break 'event None;
+            }
+
+            // break :event copy;
+            Some(copy)
+        };
+
+        // Encode and send our key. If we didn't encode anything, then we
+        // return the effect as ignored.
+        // if (try self.encodeKey(
+        //     event,
+        //     if (insp_ev) |*ev| ev else null,
+        // )) |write_req| {
+        if let Some(write_req) = self.encodeKey(&event, insp_ev.ev.as_mut())? {
+            // If our process is exited and we press a key that results in
+            // an encoded value, we close the surface. We want to eventually
+            // move this behavior to the apprt probably.
+            // if (self.child_exited) {
+            if self.child_exited {
+                // self.close();
+                self.close();
+                // return .closed;
+                return Ok(InputEffect::Closed);
+            }
+
+            // errdefer write_req.deinit();
+            //
+            // (Drop-owned `WriteReq`; `queueIo` cannot fail, the errdefer
+            // never fires.)
+            // self.queueIo(switch (write_req) {
+            self.queueIo(
+                match write_req {
+                    // .small => |v| .{ .write_small = v },
+                    MessageData::Small(v) => termio::Message::WriteSmall(v),
+                    // .stable => |v| .{ .write_stable = v },
+                    MessageData::Stable(v) => termio::Message::WriteStable(v),
+                    // .alloc => |v| .{ .write_alloc = v },
+                    MessageData::Alloc(v) => termio::Message::WriteAlloc(v),
+                },
+                // }, .unlocked);
+                termio::termio_impl::MutexState::Unlocked,
+            );
+        } else {
+            // No valid request means that we didn't encode anything.
+            return Ok(InputEffect::Ignored);
+        }
+
+        // If our event is any keypress that isn't a modifier and we generated
+        // some data to send to the pty, then we move the viewport down to the
+        // bottom. We also clear the selection for any key other then modifiers.
+        // if (!event.key.modifier()) {
+        if !event.key.modifier() {
+            // self.renderer_state.mutex.lock();
+            unsafe { (*self.renderer_state.mutex).lock() };
+            // defer self.renderer_state.mutex.unlock();
+
+            // if (self.config.selection_clear_on_typing or
+            //     event.key == .escape)
+            if self.config.selection_clear_on_typing || event.key == Key::Escape {
+                // try self.setSelection(null);
+                if let Err(err) = self.setSelection(None) {
+                    // (the deferred mutex unlock — the error return)
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    return Err(err);
+                }
+            }
+
+            // if (self.config.scroll_to_bottom.keystroke) self.io.terminal.scrollViewport(.bottom);
+            if self.config.scroll_to_bottom.keystroke {
+                self.io
+                    .terminal
+                    .scroll_viewport(terminal::terminal::ScrollViewport::Bottom);
+            }
+
+            // try self.queueRender();
+            let result = self.queueRender();
+            // (the deferred mutex unlock — the normal/error exit)
+            unsafe { (*self.renderer_state.mutex).unlock() };
+            result?;
+        }
+
+        // return .consumed;
+        Ok(InputEffect::Consumed)
+    }
+
+    /// Maybe handles a binding for a given event and if so returns the effect.
+    /// Returns null if the event is not handled in any way and processing should
+    /// continue.
+    // fn maybeHandleBinding(
+    //     self: *Surface,
+    //     event: input.KeyEvent,
+    //     insp_ev: ?*inspectorpkg.KeyEvent,
+    // ) !?InputEffect {
+    //
+    // (by-value `event` -> `&KeyEvent` — the Rust KeyEvent owns its utf8
+    // bytes, the inspector Event::init receiver precedent; the inferred
+    // `!?InputEffect` is the [`Error`] union.)
+    fn maybeHandleBinding(
+        &mut self,
+        event: &KeyEvent,
+        mut insp_ev: Option<&mut inspectorpkg::KeyEvent>,
+    ) -> Result<Option<InputEffect>, Error> {
+        // switch (event.action) {
+        match event.action {
+            // Release events never trigger a binding but we need to check if
+            // we consumed the press event so we don't encode the release.
+            // .release => {
+            key::Action::Release => {
+                // if (self.keyboard.last_trigger) |last| {
+                if let Some(last) = self.keyboard.last_trigger {
+                    // if (last == event.bindingHash()) {
+                    if last == event.binding_hash() {
+                        // We don't reset the last trigger on release because
+                        // an apprt may send multiple release events for a single
+                        // press event.
+                        return Ok(Some(InputEffect::Consumed));
+                    }
+                }
+
+                // return null;
+                return Ok(None);
+            }
+
+            // Carry on processing.
+            // .press, .repeat => {},
+            key::Action::Press | key::Action::Repeat => {}
+        }
+
+        // Find an entry in the keybind set that matches our event.
+        // const entry: input.Binding.Set.Entry = entry: {
+        //
+        // (the `(set, index)` entry representation — the keyEventIsBinding
+        // PORT NOTE above.)
+        let entry: (*const binding::Set, usize) = 'entry: {
+            // Handle key sequences first.
+            // if (self.keyboard.sequence_set) |set| {
+            if let Some(set) = self.keyboard.sequence_set {
+                // Get our entry from the set for the given event.
+                // if (set.getEvent(event)) |v| break :entry v;
+                if let Some(v) = unsafe { &*set }.get_event(event) {
+                    break 'entry (set, v);
+                }
+
+                // No entry found. We need to encode everything up to this
+                // point and send to the pty since we're in a sequence.
+
+                // We ignore modifiers so that nested sequences such as
+                // ctrl+a>ctrl+b>c work.
+                // if (event.key.modifier()) return null;
+                if event.key.modifier() {
+                    return Ok(None);
+                }
+
+                // If we have a catch-all of ignore, then we special case our
+                // invalid sequence handling to ignore it.
+                // if (self.catchAllIsIgnore()) {
+                if self.catchAllIsIgnore() {
+                    // self.endKeySequence(.drop, .retain);
+                    self.endKeySequence(KeySequenceQueued::Drop, KeySequenceMemory::Retain);
+                    // return .ignored;
+                    return Ok(Some(InputEffect::Ignored));
+                }
+
+                // Encode everything up to this point
+                // self.endKeySequence(.flush, .retain);
+                self.endKeySequence(KeySequenceQueued::Flush, KeySequenceMemory::Retain);
+
+                // return null;
+                return Ok(None);
+            }
+
+            // No currently active sequence, move on to tables. For tables,
+            // we search inner-most table to outer-most. The table stack does
+            // NOT include the root set.
+            // const table_items = self.keyboard.table_stack.items;
+            // if (table_items.len > 0) {
+            //
+            // (the loop performs a binding action MID-iteration —
+            // `deactivate_key_table` pops this very stack — so it iterates
+            // by the captured length and copies each element out; the
+            // reference `const table = table_items[rev_i];` is a by-value
+            // copy too.)
+            let table_items_len = self.keyboard.table_stack.len();
+            if table_items_len > 0 {
+                // for (0..table_items.len) |i| {
+                for i in 0..table_items_len {
+                    // const rev_i: usize = table_items.len - 1 - i;
+                    let rev_i: usize = table_items_len - 1 - i;
+                    // const table = table_items[rev_i];
+                    let table = self.keyboard.table_stack[rev_i];
+                    // if (table.set.getEvent(event)) |v| {
+                    if let Some(v) = unsafe { &*table.set }.get_event(event) {
+                        // If this is a one-shot activation AND its the currently
+                        // active table, then we deactivate it after this.
+                        // Note: we may want to change the semantics here to
+                        // remove this table no matter where it is in the stack,
+                        // maybe.
+                        // if (table.once and i == 0) _ = try self.performBindingAction(
+                        //     .deactivate_key_table,
+                        // );
+                        if table.once && i == 0 {
+                            let _ =
+                                self.performBindingAction(binding::Action::DeactivateKeyTable)?;
+                        }
+
+                        // break :entry v;
+                        break 'entry (table.set, v);
+                    }
+                }
+            }
+
+            // No table, use our default set
+            // break :entry self.config.keybind.set.getEvent(event) orelse
+            //     return null;
+            match self.config.keybind.set.get_event(event) {
+                Some(v) => break 'entry (&self.config.keybind.set as *const binding::Set, v),
+                None => return Ok(None),
+            }
+        };
+
+        // Determine if this entry has an action or if its a leader key.
+        // const leaf: input.Binding.Set.GenericLeaf = switch (entry.value_ptr.*) {
+        let leaf: binding::GenericLeaf = match unsafe { &*entry.0 }.value_at(entry.1) {
+            // .leader => |set| {
+            binding::Value::Leader(set) => {
+                // Setup the next set we'll look at.
+                // self.keyboard.sequence_set = set;
+                self.keyboard.sequence_set = Some(&**set as *const binding::Set);
+
+                // Store this event so that we can drain and encode on invalid.
+                // We don't need to cap this because it is naturally capped by
+                // the config validation.
+                // if (try self.encodeKey(event, insp_ev)) |req| {
+                //     try self.keyboard.sequence_queued.append(self.alloc, req);
+                // }
+                if let Some(req) = self.encodeKey(event, insp_ev.as_deref_mut())? {
+                    self.keyboard.sequence_queued.push(req);
+                }
+
+                // Start or continue our key sequence
+                // _ = self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .key_sequence,
+                //     .{ .trigger = entry.key_ptr.* },
+                // ) catch |err| {
+                //     log.warn(
+                //         "failed to notify app of key sequence err={}",
+                //         .{err},
+                //     );
+                // };
+                let trigger = *unsafe { &*entry.0 }.key_at(entry.1);
+                if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::KeySequence(KeySequence::Trigger(trigger)),
+                ) {
+                    // log.warn("failed to notify app of key sequence err={}", .{err});
+                }
+
+                // return .consumed;
+                return Ok(Some(InputEffect::Consumed));
+            }
+
+            // inline .leaf, .leaf_chained => |leaf| leaf.generic(),
+            binding::Value::Leaf(leaf) => leaf.generic(),
+            binding::Value::LeafChained(leaf) => leaf.generic(),
+        };
+
+        // consumed determines if the input is consumed or if we continue
+        // encoding the key (if we have a key to encode).
+        // const consumed = consumed: {
+        let consumed = 'consumed: {
+            // If the consumed flag is explicitly set, then we are consumed.
+            // if (leaf.flags.consumed) break :consumed true;
+            if leaf.flags.consumed {
+                break 'consumed true;
+            }
+
+            // If the global or all flag is set, we always consume.
+            // if (leaf.flags.global or leaf.flags.all) break :consumed true;
+            if leaf.flags.global || leaf.flags.all {
+                break 'consumed true;
+            }
+
+            // break :consumed false;
+            false
+        };
+
+        // We have an action, so at this point we're handling SOMETHING so
+        // we reset the last trigger to null. We only set this if we actually
+        // perform an action (below)
+        // self.keyboard.last_trigger = null;
+        self.keyboard.last_trigger = None;
+
+        // An action also always resets the sequence set.
+        // self.keyboard.sequence_set = null;
+        self.keyboard.sequence_set = None;
+
+        // Setup our actions
+        // const actions = leaf.actionsSlice();
+        let actions: &[binding::Action] = leaf.actions_slice();
+
+        // Attempt to perform the action
+        // log.debug("key event binding flags={} action={any}", .{
+        //     leaf.flags,
+        //     actions,
+        // });
+        // const performed = performed: {
+        let performed = 'performed: {
+            // If this is a global or all action, then we perform it on
+            // the app and it applies to every surface.
+            // if (leaf.flags.global or leaf.flags.all) {
+            if leaf.flags.global || leaf.flags.all {
+                // self.app.performAllChainedAction(
+                //     self.rt_app,
+                //     actions,
+                // );
+                unsafe { (*self.app).performAllChainedAction(&*self.rt_app, actions) };
+
+                // "All" actions are always performed since they are global.
+                // break :performed true;
+                break 'performed true;
+            }
+
+            // Perform each action. We are performed if ANY of the chained
+            // actions perform.
+            // var performed: bool = false;
+            let mut performed: bool = false;
+            // for (actions) |action| {
+            for action in actions {
+                // if (self.performBindingAction(action)) |v| {
+                //     performed = performed or v;
+                // } else |err| {
+                //     log.info(
+                //         "key binding action failed action={t} err={}",
+                //         .{ action, err },
+                //     );
+                // }
+                //
+                // (Zig passes the action by value — the app.rs
+                // performAllChainedAction clone precedent.)
+                match self.performBindingAction(action.clone()) {
+                    Ok(v) => performed = performed || v,
+                    Err(_err) => {
+                        // log.info("key binding action failed action={t} err={}", .{ action, err });
+                    }
+                }
+            }
+
+            // break :performed performed;
+            performed
+        };
+
+        // if (performed) {
+        if performed {
+            // If we performed an action and it was a closing action,
+            // our "self" pointer is not safe to use anymore so we need to
+            // just exit immediately.
+            // for (actions) |action| if (closingAction(action)) {
+            for action in actions {
+                if closingAction(action) {
+                    // log.debug("key binding is a closing binding, halting key event processing", .{});
+                    // return .closed;
+                    return Ok(Some(InputEffect::Closed));
+                }
+            }
+
+            // If our action was "ignore" then we return the special input
+            // effect of "ignored".
+            // for (actions) |action| if (action == .ignore) {
+            //
+            // (Zig `==` on a tagged union with an enum literal is a TAG
+            // compare; `Ignore` is payloadless so `matches!` is exact.)
+            for action in actions {
+                if matches!(action, binding::Action::Ignore) {
+                    // If we're in a sequence, clear it.
+                    // self.endKeySequence(.drop, .retain);
+                    self.endKeySequence(KeySequenceQueued::Drop, KeySequenceMemory::Retain);
+
+                    // return .ignored;
+                    return Ok(Some(InputEffect::Ignored));
+                }
+            }
+        }
+
+        // If we have the performable flag and the action was not performed,
+        // then we act as though a binding didn't exist.
+        // if (leaf.flags.performable and !performed) {
+        if leaf.flags.performable && !performed {
+            // If we're in a sequence, we treat this as if we pressed a key
+            // that doesn't exist in the sequence. Reset our sequence and flush
+            // any queued events.
+            // self.endKeySequence(.flush, .retain);
+            self.endKeySequence(KeySequenceQueued::Flush, KeySequenceMemory::Retain);
+
+            // return null;
+            return Ok(None);
+        }
+
+        // If we consume this event, then we are done. If we don't consume
+        // it, we processed the action but we still want to process our
+        // encodings, too.
+        // if (consumed) {
+        if consumed {
+            // If we had queued events, we deinit them since we consumed
+            // self.endKeySequence(.drop, .retain);
+            self.endKeySequence(KeySequenceQueued::Drop, KeySequenceMemory::Retain);
+
+            // Store our last trigger so we don't encode the release event
+            // self.keyboard.last_trigger = event.bindingHash();
+            self.keyboard.last_trigger = Some(event.binding_hash());
+
+            // if (insp_ev) |ev| {
+            if let Some(ev) = insp_ev {
+                // ev.binding = self.alloc.dupe(
+                //     input.Binding.Action,
+                //     actions,
+                // ) catch |err| binding: {
+                //     log.warn(
+                //         "error allocating binding action for inspector err={}",
+                //         .{err},
+                //     );
+                //     break :binding &.{};
+                // };
+                //
+                // (the OOM-only catch collapses — infallible global
+                // allocator; the `&.{}` fallback arm is unreachable.)
+                ev.binding = actions.to_vec();
+            }
+            // return .consumed;
+            return Ok(Some(InputEffect::Consumed));
+        }
+
+        // If we didn't perform OR we didn't consume, then we want to
+        // encode any queued events for a sequence.
+        // self.endKeySequence(.flush, .retain);
+        self.endKeySequence(KeySequenceQueued::Flush, KeySequenceMemory::Retain);
+
+        // return null;
+        Ok(None)
+    }
+
+    // fn deactivateAllKeyTables(self: *Surface) !bool {
+    //
+    // (the inferred `!bool` — the body's only failure is `catch`-swallowed,
+    // so the set is empty; the opaque [`Error`] marker keeps the callers'
+    // `try` shape — updateConfig :1755.)
     fn deactivateAllKeyTables(&mut self) -> Result<bool, Error> {
-        unimplemented!(
-            "Surface.deactivateAllKeyTables lands with core chunk C10 (Surface.zig:3075)"
-        )
+        // switch (self.keyboard.table_stack.items.len) {
+        match self.keyboard.table_stack.len() {
+            // No key table active. This does nothing.
+            // 0 => return false,
+            0 => return Ok(false),
+
+            // Clear the entire table stack.
+            // else => self.keyboard.table_stack.clearAndFree(self.alloc),
+            //
+            // (`clearAndFree` — drop the storage too, the deinit mem::take
+            // precedent.)
+            _ => drop(std::mem::take(&mut self.keyboard.table_stack)),
+        }
+
+        // Notify the UI.
+        // _ = self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .key_table,
+        //     .deactivate_all,
+        // ) catch |err| {
+        //     log.warn(
+        //         "failed to notify app of key table err={}",
+        //         .{err},
+        //     );
+        // };
+        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+            apprt::Target::Surface(&*self),
+            apprt::Action::KeyTable(KeyTable::DeactivateAll),
+        ) {
+            // log.warn("failed to notify app of key table err={}", .{err});
+        }
+
+        // return true;
+        Ok(true)
+    }
+
+    /// This checks if the current keybinding sets have a catch_all binding
+    /// with `ignore`. This is used to determine some special input cases.
+    // fn catchAllIsIgnore(self: *Surface) bool {
+    fn catchAllIsIgnore(&mut self) -> bool {
+        // Get our catch all
+        // const entry: input.Binding.Set.Entry = entry: {
+        //
+        // (the `(set, index)` entry representation — the keyEventIsBinding
+        // PORT NOTE above; `Set.get` is the ported `get_index`.)
+        let entry: (*const binding::Set, usize) = 'entry: {
+            // const trigger: input.Binding.Trigger = .{ .key = .catch_all };
+            let trigger = binding::Trigger {
+                key: binding::TriggerKey::CatchAll,
+                ..Default::default()
+            };
+
+            // const table_items = self.keyboard.table_stack.items;
+            let table_items = &self.keyboard.table_stack;
+            // for (0..table_items.len) |i| {
+            for i in 0..table_items.len() {
+                // const rev_i: usize = table_items.len - 1 - i;
+                let rev_i: usize = table_items.len() - 1 - i;
+                // const entry = table_items[rev_i].set.get(trigger) orelse continue;
+                let entry = match unsafe { &*table_items[rev_i].set }.get_index(trigger) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                // break :entry entry;
+                break 'entry (table_items[rev_i].set, entry);
+            }
+
+            // break :entry self.config.keybind.set.get(trigger) orelse
+            //     return false;
+            match self.config.keybind.set.get_index(trigger) {
+                Some(v) => break 'entry (&self.config.keybind.set as *const binding::Set, v),
+                None => return false,
+            }
+        };
+
+        // We have a catch-all entry, see if its an ignore
+        // return switch (entry.value_ptr.*) {
+        match unsafe { &*entry.0 }.value_at(entry.1) {
+            // .leader => false,
+            binding::Value::Leader(_) => false,
+            // .leaf => |leaf| leaf.action == .ignore,
+            binding::Value::Leaf(leaf) => matches!(leaf.action, binding::Action::Ignore),
+            // .leaf_chained => |leaf| chained: for (leaf.actions.items) |action| {
+            //     if (action == .ignore) break :chained true;
+            // } else false,
+            binding::Value::LeafChained(leaf) => 'chained: {
+                for action in &leaf.actions {
+                    if matches!(action, binding::Action::Ignore) {
+                        break 'chained true;
+                    }
+                }
+                false
+            }
+        }
+        // };
     }
 
     /// End a key sequence. Safe to call if no key sequence is active.
     ///
     /// Action and mem determine the behavior of the queued inputs up to this
     /// point.
-    //
-    // PORT NOTE (STUB — chunk C10 fills): `fn endKeySequence(self: *Surface,
-    // action: KeySequenceQueued, mem: KeySequenceMemory) void` —
-    // Surface.zig:3134 (updateConfig's :1749 callsite lands with C8; the
-    // param enums are the file-scope consts ported below).
+    // fn endKeySequence(
+    //     self: *Surface,
+    //     action: KeySequenceQueued,
+    //     mem: KeySequenceMemory,
+    // ) void {
     fn endKeySequence(&mut self, action: KeySequenceQueued, mem: KeySequenceMemory) {
-        let _ = (action, mem);
-        unimplemented!("Surface.endKeySequence lands with core chunk C10 (Surface.zig:3134)")
+        // Notify apprt key sequence ended
+        // _ = self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .key_sequence,
+        //     .end,
+        // ) catch |err| {
+        //     log.warn(
+        //         "failed to notify app of key sequence end err={}",
+        //         .{err},
+        //     );
+        // };
+        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+            apprt::Target::Surface(&*self),
+            apprt::Action::KeySequence(KeySequence::End),
+        ) {
+            // log.warn("failed to notify app of key sequence end err={}", .{err});
+        }
+
+        // No matter what we clear our current sequence set. This restores
+        // the set we look at to the root set.
+        // self.keyboard.sequence_set = null;
+        self.keyboard.sequence_set = None;
+
+        // If we have no queued data, there is nothing else to do.
+        // if (self.keyboard.sequence_queued.items.len == 0) return;
+        if self.keyboard.sequence_queued.is_empty() {
+            return;
+        }
+
+        // Run the proper action first
+        //
+        // PORT NOTE: the Zig loops copy each queued request out of the list
+        // (`items` stays populated until the `mem` switch); the Rust
+        // `WriteReq` is move-only, so the list moves out for the loop and
+        // the emptied (capacity-retaining) vec goes back for the `mem`
+        // switch below — same observable content.
+        let mut queued = std::mem::take(&mut self.keyboard.sequence_queued);
+        // switch (action) {
+        match action {
+            // .flush => for (self.keyboard.sequence_queued.items) |write_req| {
+            //     self.queueIo(switch (write_req) {
+            //         .small => |v| .{ .write_small = v },
+            //         .stable => |v| .{ .write_stable = v },
+            //         .alloc => |v| .{ .write_alloc = v },
+            //     }, .unlocked);
+            // },
+            KeySequenceQueued::Flush => {
+                for write_req in queued.drain(..) {
+                    self.queueIo(
+                        match write_req {
+                            MessageData::Small(v) => termio::Message::WriteSmall(v),
+                            MessageData::Stable(v) => termio::Message::WriteStable(v),
+                            MessageData::Alloc(v) => termio::Message::WriteAlloc(v),
+                        },
+                        termio::termio_impl::MutexState::Unlocked,
+                    );
+                }
+            }
+
+            // .drop => for (self.keyboard.sequence_queued.items) |req| req.deinit(),
+            //
+            // (`WriteReq.deinit` — the alloc-variant free — is Drop in
+            // rustty; the deinit precedent.)
+            KeySequenceQueued::Drop => {
+                for req in queued.drain(..) {
+                    drop(req);
+                }
+            }
+        }
+        self.keyboard.sequence_queued = queued;
+
+        // Memory handling of the sequence after the action
+        // switch (mem) {
+        match mem {
+            // .free => self.keyboard.sequence_queued.clearAndFree(self.alloc),
+            KeySequenceMemory::Free => drop(std::mem::take(&mut self.keyboard.sequence_queued)),
+            // .retain => self.keyboard.sequence_queued.clearRetainingCapacity(),
+            KeySequenceMemory::Retain => self.keyboard.sequence_queued.clear(),
+        }
     }
+
+    /// Encodes the key event into a write request. The write request will
+    /// always copy or allocate so the caller can safely free the event.
+    // fn encodeKey(
+    //     self: *Surface,
+    //     event: input.KeyEvent,
+    //     insp_ev: ?*inspectorpkg.KeyEvent,
+    // ) !?termio.Message.WriteReq {
+    //
+    // (by-value `event` -> `&KeyEvent`, the maybeHandleBinding note; the
+    // inferred `!?WriteReq` is the [`Error`] union at the `'static` queued
+    // instantiation.)
+    fn encodeKey(
+        &mut self,
+        event: &KeyEvent,
+        insp_ev: Option<&mut inspectorpkg::KeyEvent>,
+    ) -> Result<Option<termio::message::WriteReq<'static>>, Error> {
+        // const write_req: termio.Message.WriteReq = req: {
+        let write_req: termio::message::WriteReq<'static> = 'req: {
+            // Build our encoding options, which requires the lock.
+            // const encoding_opts = self.encodeKeyOpts();
+            let encoding_opts = self.encodeKeyOpts();
+
+            // Try to write the input into a small array. This fits almost
+            // every scenario. Larger situations can happen due to long
+            // pre-edits.
+            // var data: termio.Message.WriteReq.Small.Array = undefined;
+            // var writer: std.Io.Writer = .fixed(&data);
+            //
+            // PORT NOTE: `Small.Array` == `[u8; WriteReq::MAX]`; Zig
+            // `undefined` -> zeroed (the tail past `len` is never read). The
+            // `.fixed` writer is a Cursor over the stack array — a write
+            // past the end is io's `WriteZero`, the reference's
+            // `error.WriteFailed`.
+            let mut data = [0u8; termio::message::WriteReq::MAX];
+            let mut writer = std::io::Cursor::new(&mut data[..]);
+            // if (input.key_encode.encode(
+            //     &writer,
+            //     event,
+            //     encoding_opts,
+            // )) {
+            if let Ok(()) = key_encode::encode(&mut writer, event, encoding_opts) {
+                // const written = writer.buffered();
+                let written_len = writer.position() as usize;
+
+                // Special-case: we did nothing.
+                // if (written.len == 0) return null;
+                if written_len == 0 {
+                    return Ok(None);
+                }
+
+                // break :req .{ .small = .{
+                //     .data = data,
+                //     .len = @intCast(written.len),
+                // } };
+                break 'req MessageData::Small(Small {
+                    data,
+                    len: written_len,
+                });
+            }
+            // } else |err| switch (err) {
+            //     // Means we need to allocate
+            //     error.WriteFailed => {},
+            // }
+            //
+            // (the fixed Cursor's only failure is buffer-full — the
+            // `error.WriteFailed` arm; fall through to allocate.)
+
+            // We need to allocate. We allocate double the UTF-8 length
+            // or double the small array size, whichever is larger. That's
+            // a heuristic that should work. The only scenario I know while
+            // typing this where we don't have enough space is a long preedit,
+            // and in that case the size we need is exactly the UTF-8 length,
+            // so the double is being safe.
+            // var alloc_writer: std.Io.Writer.Allocating = try .initCapacity(
+            //     self.alloc,
+            //     @max(event.utf8.len * 2, data.len * 2),
+            // );
+            // defer alloc_writer.deinit();
+            //
+            // (the growable `Vec` sink is the Allocating writer; the defer
+            // is its drop — `WriteReq.init` below copies out of it.)
+            let mut alloc_writer: Vec<u8> =
+                Vec::with_capacity(std::cmp::max(event.utf8.len() * 2, data.len() * 2));
+
+            // This results in a double allocation but this is such an unlikely
+            // path the performance impact is unimportant.
+            // try input.key_encode.encode(
+            //     &alloc_writer.writer,
+            //     event,
+            //     encoding_opts,
+            // );
+            //
+            // (the Allocating writer's only error is OOM — the `Vec` sink is
+            // infallible, the `try` collapses.)
+            key_encode::encode(&mut alloc_writer, event, encoding_opts)
+                .expect("Vec writer is infallible");
+            // break :req try termio.Message.WriteReq.init(
+            //     self.alloc,
+            //     alloc_writer.writer.buffered(),
+            // );
+            //
+            // (`WriteReq.init`'s only error is OOM — collapses, the termio
+            // message.rs writeReq precedent.)
+            break 'req termio::message::WriteReq::init(&alloc_writer);
+        };
+
+        // Copy the encoded data into the inspector event if we have one.
+        // We do this before the mailbox because the IO thread could
+        // release the memory before we get a chance to copy it.
+        // if (insp_ev) |ev| pty: {
+        if let Some(ev) = insp_ev {
+            // const slice = write_req.slice();
+            let slice = write_req.slice();
+            // const copy = self.alloc.alloc(u8, slice.len) catch |err| {
+            //     log.warn("error allocating pty data for inspector err={}", .{err});
+            //     break :pty;
+            // };
+            // errdefer self.alloc.free(copy);
+            // @memcpy(copy, slice);
+            //
+            // (the OOM-only catch + errdefer collapse — infallible owned
+            // copy.)
+            let copy = slice.to_vec();
+            // ev.pty = copy;
+            ev.pty = copy;
+        }
+
+        // return write_req;
+        Ok(Some(write_req))
+    }
+
+    // fn encodeKeyOpts(self: *const Surface) input.key_encode.Options {
+    fn encodeKeyOpts(&self) -> key_encode::Options {
+        // self.renderer_state.mutex.lock();
+        unsafe { (*self.renderer_state.mutex).lock() };
+        // defer self.renderer_state.mutex.unlock();
+        // const t = &self.io.terminal;
+        let t = &self.io.terminal;
+
+        // var opts: input.key_encode.Options = .fromTerminal(t);
+        let mut opts: key_encode::Options = key_encode::Options::from_terminal(t);
+        // if (comptime builtin.os.tag != .macos) return opts;
+        //
+        // (`cfg!` — the comptime OS check, the init xdg-terminal-exec
+        // precedent.)
+        if cfg!(not(target_os = "macos")) {
+            // (the deferred mutex unlock — the non-macOS comptime return)
+            unsafe { (*self.renderer_state.mutex).unlock() };
+            return opts;
+        }
+
+        // opts.macos_option_as_alt = self.config.macos_option_as_alt orelse detect: {
+        //
+        // PORT NOTE (crate-split glue): the reference has ONE
+        // `input.OptionAsAlt`; the port has the config-side enum
+        // (rustty-input — `self.config` and `detectOptionAsAlt`) and the
+        // VT-side copy (the key_encode Options field, duplicated there so
+        // the VT key encoder has no config dependency). The 1:1 variant map
+        // below is the seam (identical discriminants).
+        let v: OptionAsAlt = match self.config.macos_option_as_alt {
+            Some(v) => v,
+            None => 'detect: {
+                // If we don't have alt pressed, it doesn't matter what this
+                // config is so we can just say "false" and break out and avoid
+                // more expensive checks below.
+                // if (!self.mouse.mods.alt) break :detect .false;
+                if !self.mouse.mods.alt {
+                    break 'detect OptionAsAlt::False;
+                }
+
+                // Alt is pressed, we're on macOS. We break some encapsulation
+                // here and assume libghostty for ease...
+                // break :detect self.rt_app.keyboardLayout().detectOptionAsAlt();
+                break 'detect unsafe { &*self.rt_app }
+                    .keyboard_layout()
+                    .detect_option_as_alt();
+            }
+        };
+        opts.macos_option_as_alt = match v {
+            OptionAsAlt::False => rustty_vt::input::config::OptionAsAlt::r#false,
+            OptionAsAlt::True => rustty_vt::input::config::OptionAsAlt::r#true,
+            OptionAsAlt::Left => rustty_vt::input::config::OptionAsAlt::left,
+            OptionAsAlt::Right => rustty_vt::input::config::OptionAsAlt::right,
+        };
+
+        // return opts;
+        // (the deferred mutex unlock — the macOS return)
+        unsafe { (*self.renderer_state.mutex).unlock() };
+        opts
+    }
+
+    // PORT NOTE (chunk C11 fills — Surface.zig:3282 `textCallback`): the fn
+    // lands with the C11 callback tier; its doc comment (:3276-3281)
+    // straddles the C10/C11 chunk-table boundary, preserved verbatim (the
+    // keyEventIsBinding straddle precedent):
+    //
+    // /// Sends text as-is to the terminal without triggering any keyboard
+    // /// protocol. This will treat the input text as if it was pasted
+    // /// from the clipboard so the same logic will be applied. Namely,
+    // /// if bracketed mode is on this will do a bracketed paste. Otherwise,
+    // /// this will filter newlines to '\r'.
 
     /// Returns the link at the given cursor position, if any.
     ///
@@ -5698,6 +6915,18 @@ impl<A: apprt::App + 'static> Surface<A> {
     fn linkAtPos(&mut self, pos: apprt::CursorPos) -> Result<Option<Link>, Error> {
         let _ = pos;
         unimplemented!("Surface.linkAtPos lands with core chunk C13 (Surface.zig:4279)")
+    }
+
+    /// Returns true if the shift modifier is allowed to be captured by modifier
+    /// events. It is up to the caller to still verify it is a situation in which
+    /// shift capture makes sense (i.e. left button, mouse click, etc.)
+    //
+    // PORT NOTE (STUB — chunk C12 fills): `fn mouseShiftCapture(self: *const
+    // Surface, lock: bool) bool` — Surface.zig:3712 (keyCallback's :2727
+    // callsite lands with C10; `*const` receiver -> `&self`).
+    fn mouseShiftCapture(&self, lock: bool) -> bool {
+        let _ = lock;
+        unimplemented!("Surface.mouseShiftCapture lands with core chunk C12 (Surface.zig:3712)")
     }
 
     /// This returns the mouse mods to consider for link highlighting or
@@ -5733,6 +6962,12 @@ impl<A: apprt::App + 'static> Surface<A> {
     pub fn posToViewport(&self, xpos: f64, ypos: f64) -> terminal::point::Coordinate {
         let _ = (xpos, ypos);
         unimplemented!("Surface.posToViewport lands with core chunk C13 (Surface.zig:4726)")
+    }
+
+    // PORT NOTE (STUB — chunk C13 fills): `fn hideMouse(self: *Surface) void`
+    // — Surface.zig:4741 (keyCallback's :2713 callsite lands with C10).
+    fn hideMouse(&mut self) {
+        unimplemented!("Surface.hideMouse lands with core chunk C13 (Surface.zig:4741)")
     }
 
     // PORT NOTE (STUB — chunk C13 fills): `fn showMouse(self: *Surface) void`
@@ -5794,7 +7029,7 @@ impl<A: apprt::App + 'static> Surface<A> {
     //
     // PORT NOTE (ported with C8, ahead of its C10 row — Surface.zig:6014;
     // sizeCallback/preeditCallback are the first `crash.sentry.thread_state`
-    // sites, [ADV 6.1]).
+    // sites, [ADV 6.1]; the C10 key tier added the keyCallback site).
     fn crashThreadState(&self) -> crash::sentry::ThreadState<Surface<A>> {
         // return .{
         crash::sentry::ThreadState {
@@ -5808,34 +7043,85 @@ impl<A: apprt::App + 'static> Surface<A> {
 
     /// Tell the surface to present itself to the user. This may involve raising the
     /// window and switching tabs.
+    // fn presentSurface(self: *Surface) !void {
     //
-    // PORT NOTE (STUB — chunk C15 fills): `fn presentSurface(self: *Surface)
-    // !void` — Surface.zig:6023 (handleMessage's present_surface callsite
-    // lands with C7).
+    // (Surface.zig:6023 — the C10 range's 6014-end tail; the inferred
+    // `!void` is the performAction error.)
     fn presentSurface(&mut self) -> Result<(), Error> {
-        unimplemented!("Surface.presentSurface lands with core chunk C15 (Surface.zig:6023)")
+        // _ = try self.rt_app.performAction(
+        //     .{ .surface = self },
+        //     .present_terminal,
+        //     {},
+        // );
+        let _ = unsafe { &*self.rt_app }.perform_action(
+            apprt::Target::Surface(&*self),
+            apprt::Action::PresentTerminal,
+        )?;
+        Ok(())
+    }
+
+    /// Get information about the process(es) running within the surface. Returns
+    /// `null` if there was an error getting the information or the information is
+    /// not available on a particular platform.
+    //
+    // pub fn getProcessInfo(self: *Surface, comptime info: ProcessInfo) ?ProcessInfo.Type(info) {
+    //     return self.io.getProcessInfo(info);
+    // }
+    //
+    // PORT NOTE (comptime-return split — the rustty-os pty.rs /
+    // `Termio::getProcessInfo` precedent): Rust has no comptime
+    // type-from-value, so the `info` selector splits into the two concrete
+    // accessors (`.foreground_pid` -> `u64`, `.tty_name` -> `&CStr`).
+    pub fn getForegroundPid(&mut self) -> Option<u64> {
+        self.io.getForegroundPid()
+    }
+
+    /// See [`Surface::getForegroundPid`] (the `.tty_name` half of the
+    /// reference `getProcessInfo`).
+    pub fn getTtyName(&mut self) -> Option<&std::ffi::CStr> {
+        self.io.getTtyName()
     }
 }
 
 // PORT NOTE: the two file-scope param enums of `endKeySequence`
 // (Surface.zig:3128-3129, ported ahead of their C10 row — updateConfig's
-// `.drop`/`.free` callsite names them).
+// `.drop`/`.free` callsite names them; the C10 key tier landed the
+// `.flush`/`.retain` construction sites).
 // const KeySequenceQueued = enum { flush, drop };
-//
-// (the C10 `.flush`/`.retain` construction sites land later — the allows are
-// removed with them.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeySequenceQueued {
-    #[allow(dead_code)]
     Flush,
     Drop,
 }
 // const KeySequenceMemory = enum { retain, free };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeySequenceMemory {
-    #[allow(dead_code)]
     Retain,
     Free,
+}
+
+// fn closingAction(action: input.Binding.Action) bool {
+//
+// PORT NOTE (ported ahead of its C14 row — Surface.zig:5633;
+// maybeHandleBinding's :3013 closing-check names it; the by-value `action`
+// copy is a borrow, the posToViewport receiver precedent).
+fn closingAction(action: &binding::Action) -> bool {
+    // return switch (action) {
+    match action {
+        // .close_surface,
+        // .close_window,
+        // .close_tab,
+        // => true,
+        //
+        // (Zig tag-compare — `.close_tab`'s payload is ignored.)
+        binding::Action::CloseSurface
+        | binding::Action::CloseWindow
+        | binding::Action::CloseTab(_) => true,
+
+        // else => false,
+        _ => false,
+    }
+    // };
 }
 
 /// Represents text read from the terminal and some metadata about it
