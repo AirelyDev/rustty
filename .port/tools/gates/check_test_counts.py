@@ -108,6 +108,13 @@ GHCR = "/Users/gael/projects/ghostty/src/crash"
 GHPKGS = "/Users/gael/projects/ghostty/pkg/sentry"
 RSCR = "/Users/gael/projects/rustty/crates/rustty-crash/src"
 
+# rustty-termio: the termio tier (integration-tier blueprint stage 2+). GH base
+# = src/termio (+ termio.zig at src root). Stage 2 lands the dep wiring + the
+# struct shapes of the 0-test files + message.zig; Exec/shell_integration/
+# stream_handler (+ the relocated src/Command.zig, break #13b) are stages 3-4.
+GHTIO = "/Users/gael/projects/ghostty/src/termio"
+RSTIO = "/Users/gael/projects/rustty/crates/rustty-termio/src"
+
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
@@ -431,6 +438,37 @@ MAP = {
     # as lib.rs's ref_all_decls reify smoke. rust=1 >= 0 (the "main 1 reify" of
     # the blueprint's crash=9 accounting: envelope 8 + main 1).
     "crash_main":        ([f"{GHCR}/main.zig"], [f"{RSCR}/lib.rs"], 0),
+    # rustty-renderer (integration-tier stage 2) — the minimal cross-thread
+    # surface termio consumes. message.zig: no test{} -> zig=0.
+    "renderer_message":  ([f"{GHR}/message.zig"], [f"{RSR}/message.rs"], 0),
+    # Thread.zig: no test{} -> zig=0. Only the minimal surface (Thread::Mailbox
+    # + the DerivedConfig deferred-seam placeholder) is ported in thread.rs; the
+    # event loop is D6/GPU-deferred (DEFERRALS.md).
+    "renderer_thread":   ([f"{GHR}/Thread.zig"], [f"{RSR}/thread.rs"], 0),
+    # rustty-termio (integration-tier stage 2) — dep wiring + struct shapes.
+    # message.zig: 2 anonymous test{} blocks (skipped by zig_count -> zig=0);
+    # BOTH are ported (ref_all_decls reify + the @sizeOf anti-growth contract at
+    # the Rust-layout constant) -> rust=2 >= 0.
+    "termio_message":    ([f"{GHTIO}/message.zig"], [f"{RSTIO}/message.rs"], 0),
+    # Options.zig: no test{} -> zig=0 (struct shape in options.rs).
+    "termio_options":    ([f"{GHTIO}/Options.zig"], [f"{RSTIO}/options.rs"], 0),
+    # Termio.zig: no test{} -> zig=0 (struct shapes + self-contained logic in
+    # termio_impl.rs; live IO-thread bodies deferred verbatim — DEFERRALS.md).
+    "termio_termio":     ([f"{GHTIO}/Termio.zig"], [f"{RSTIO}/termio_impl.rs"], 0),
+    # backend.zig: no test{} -> zig=0 (delegating unions in backend.rs; Exec
+    # payloads are stage-4 placeholders).
+    "termio_backend":    ([f"{GHTIO}/backend.zig"], [f"{RSTIO}/backend.rs"], 0),
+    # mailbox.zig: no test{} -> zig=0 (SPSC Mailbox in mailbox.rs; `send` slow
+    # path deferred verbatim — DEFERRALS.md).
+    "termio_mailbox":    ([f"{GHTIO}/mailbox.zig"], [f"{RSTIO}/mailbox.rs"], 0),
+    # Thread.zig: no test{} -> zig=0 (writer-thread struct shape + init/deinit
+    # in thread.rs; run loop deferred verbatim, D6 — DEFERRALS.md).
+    "termio_thread":     ([f"{GHTIO}/Thread.zig"], [f"{RSTIO}/thread.rs"], 0),
+    # termio.zig root: 1 anon refAllDecls test (skipped by zig_count -> zig=0);
+    # ported as lib.rs's ref_all_decls reify smoke (the blueprint's "root 1"
+    # of termio=44, accounted HERE exactly once; its shell_integration reify
+    # half lands with stage 4's 21 tests). rust=1 >= 0.
+    "termio_root":       (["/Users/gael/projects/ghostty/src/termio.zig"], [f"{RSTIO}/lib.rs"], 0),
 }
 
 def expand(globs):

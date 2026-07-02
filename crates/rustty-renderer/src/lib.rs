@@ -22,6 +22,13 @@
 //!   2-variant `enum(c_int)` with zero GPU dependency, hoisted to the crate root
 //!   (like the render-types A1 `size` hoist) so `rustty-apprt-api`'s
 //!   `Action::renderer_health` can name it without a GPU-renderer edge.
+//! - `message` — renderer/message.zig (0 tests): the cross-thread `Message`
+//!   union sent to a renderer thread (integration-tier stage 2 — the surface
+//!   termio's `renderer_mailbox` consumes).
+//! - `thread` — renderer/Thread.zig, MINIMAL cross-thread surface ONLY
+//!   (integration-tier stage 2): `Thread::Mailbox` (= `BlockingQueue<Message,
+//!   64>`) + the `DerivedConfig` deferred-seam placeholder. The event loop is
+//!   NOT ported (D6 xev + GPU tier; DEFERRALS.md).
 //!
 //! renderer/size.zig (6 tests) is already ported in the `rustty-render-types`
 //! leaf (the A1 hoist) and re-exported below.
@@ -39,14 +46,40 @@
 pub mod cell;
 pub mod cursor;
 pub mod link;
+pub mod message;
 pub mod shaders;
 pub mod shadertoy;
 pub mod state;
+pub mod thread;
 
 // renderer/size.zig lives in the rustty-render-types leaf (A1 hoist). The
 // reference `renderer.zig` re-exports these size types (`GridSize`, `Size`,
 // `ScreenSize`, `CellSize`, `Padding`, `Coordinate`, ...); mirror that re-export.
 pub use rustty_render_types as size;
+
+// pub const Message = message.Message;
+pub use message::Message;
+
+/// PORT NOTE (DEFERRED SEAM): the reference crate root comptime-selects the GPU
+/// renderer implementation:
+///
+/// /// The implementation to use for the renderer. This is comptime chosen
+/// /// so that every build has exactly one renderer implementation.
+/// pub const Renderer = switch (build_config.renderer) {
+///     .metal => GenericRenderer(Metal),
+///     .opengl => GenericRenderer(OpenGL),
+///     .webgl => WebGL,
+/// };
+///
+/// The GPU draw path (renderer/generic.zig, which defines the nested
+/// `Renderer.DerivedConfig`, plus Metal/OpenGL/WebGL) is R-d/Phase 3. Only the
+/// nested `DerivedConfig` is named by the cross-thread message surface
+/// (`Message::ChangeConfig`), and the real `DerivedConfig.init` takes
+/// `*const configpkg.Config` (a renderer -> config edge would cycle, G7). Until
+/// the GPU renderer lands, this uninhabited placeholder stands in for
+/// `renderer.Renderer.DerivedConfig` (precedent: `state::Inspector`;
+/// DEFERRALS.md).
+pub enum RendererDerivedConfig {}
 
 /// The health status of a renderer. These must be shared across all
 /// renderers even if some states aren't reachable so that our API users

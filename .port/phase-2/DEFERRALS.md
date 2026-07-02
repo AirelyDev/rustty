@@ -531,3 +531,70 @@ integration-tier blueprint:
   build options and threading; the vendored build is `transport = .none`) —
   the sentry tests exercise `beforeSend` + the seam through the PURE value API
   only, and `sentry_pkg`'s reify test mirrors the sentry-sys KAT idiom.
+
+## rustty-termio stage 2 (integration tier) — dep wiring + struct shapes; deferred live-thread bodies + D6 xev seam
+
+Stage 2 of the integration-tier blueprint lands the termio Cargo edges
+(rustty-config / rustty-renderer / rustty-apprt-api / rustty-global — all
+downward-safe, G7-checked), the struct SHAPES of termio/{Options, Termio,
+Thread, backend, mailbox, message}.zig, the fully-ported message.zig (both
+anonymous `test{}` blocks), and the minimal rustty-renderer cross-thread
+surface (renderer/message.zig `Message` + `Thread::Mailbox` =
+`BlockingQueue<Message, 64>` + thin `DerivedConfig` placeholders). All
+deferrals below are untested-only (0 reference `test{}` blocks — R1-safe);
+every deferred body is preserved VERBATIM in comments at its Rust signature
+with an `unimplemented!()` marker (NOT fabricated logic).
+
+- **D6 xev seam (`rustty-termio/src/xev_seam.rs`).** Every termio file imports
+  `@import("../global.zig").xev` (libxev, `xev.Dynamic`). Per the blueprint's
+  D6 decision, libxev ports later as its own low crate (`rustty-xev`,
+  Zig-source precedent: rustty-z2d). Until then the handle TYPES
+  (`Async`/`Loop`/`Completion`/`Timer` + error sets) are termio-local
+  placeholders whose methods are `unimplemented!()` *dependency* markers
+  (rustty-os cf_release_thread `xev_seam` precedent), anchored to
+  `rustty_global::xev`.
+- **Deferred with verbatim bodies (rustty-termio):**
+  - `Termio.zig`: `init` (constructs the stage-4 `StreamHandler`),
+    `threadEnter` (builds `ThreadData` around the live loop; `.backend =
+    undefined` out-param protocol), `changeConfig`/`processOutput`/
+    `processOutputLocked` (stream handler + renderer mutex),
+    `resize`/`sizeReport`/`sizeReportLocked`/`resetSynchronizedOutput`/
+    `clearScreen`/`scrollViewport`/`jumpToPrompt`/`focusGained`/
+    `colorSchemeReport`/`colorSchemeReportLocked` (all execute on the IO
+    thread holding the live renderer-state mutex; several end in xev
+    wakeups). Ported REAL: the struct shapes, `MutexState`, `DerivedConfig`
+    (init/deinit in full), `ThreadEnterState` (create/destroy/prepareInput in
+    full), `ThreadData::deinit`, `deinit`, `queueMessage`, `queueWrite`,
+    `threadExit`, and the `getProcessInfo` comptime split
+    (`getForegroundPid`/`getTtyName`, rustty-os pty.rs precedent).
+  - `Thread.zig`: the run loop (`threadMain`/`threadMain_`/`CallbackData`/
+    `drainMailbox`/`startSynchronizedOutput`/`handleResize`/`startScrollTimer`/
+    `stopScrollTimer` + the five xev callbacks) — D6. Ported REAL: the struct
+    shape, `Coalesce` (+ `MIN_MS`), `SYNC_RESET_MS`/`SELECTION_SCROLL_MS`,
+    `Flags`, `init`, `deinit`.
+  - `mailbox.zig`: `send` — its slow path unlocks/relocks a CALLER-held
+    `std.Thread.Mutex` (manual lock/unlock), which guard-based
+    `std::sync::Mutex` cannot express from the callee frame; the renderer
+    `State.mutex` modeling is decided ONCE when the threads go live (D6 /
+    core tier), not fabricated now. Ported REAL: `initSPSC`/`deinit`/`notify`.
+- **Stage-4 placeholders (rustty-termio):** `backend::{Exec, ExecConfig,
+  ExecThreadData}` (Exec.zig, 10 tests) — uninhabited payload placeholders;
+  the `Backend`/`ThreadData` delegation arms are statically unreachable until
+  Exec lands (verbatim delegation preserved in comments).
+  `termio_impl::StreamHandlerStream` (stream_handler.zig `StreamHandler.
+  Stream`, 0 tests) — uninhabited field placeholder.
+- **rustty-renderer:** `message::Message::initChangeConfig` — takes
+  `*const configpkg.Config`, but config already deps renderer (G7 cycle, same
+  wall as `shadertoy::loadFromFile`); verbatim body preserved. The two
+  `DerivedConfig` pointee types (`thread::DerivedConfig`,
+  `RendererDerivedConfig` for `renderer.Renderer.DerivedConfig`) are
+  uninhabited placeholders (the real structs are config-coupled and belong to
+  the unported Thread event loop / GPU renderer), so `Message::ChangeConfig`
+  is not yet constructible and `Message::deinit`'s destroy arm is statically
+  unreachable. renderer/Thread.zig itself is ported ONLY as the minimal
+  cross-thread surface (`Mailbox` + `DerivedConfig`); its event loop defers
+  with D6 + the GPU tier (0 tests).
+- **Adjusted-constant note (R1):** termio message.zig's anonymous
+  `@sizeOf(Message) == 40` anti-growth test is pinned at the equivalent
+  Rust-layout constant (56) with the mapping documented at the assertion
+  (usize `len` in `MessageData::Small`, unpacked discriminant).

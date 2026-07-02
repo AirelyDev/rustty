@@ -773,9 +773,14 @@ dependencies = [
 name = "rustty-termio"
 version = "0.1.0"
 dependencies = [
+ "allocator-api2",
+ "rustty-apprt-api",
+ "rustty-config",
  "rustty-crash",
  "rustty-datastruct",
+ "rustty-global",
  "rustty-os",
+ "rustty-renderer",
  "rustty-terminfo",
  "rustty-util",
  "rustty-vt",

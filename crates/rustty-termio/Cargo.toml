@@ -22,3 +22,21 @@ rustty-datastruct = { workspace = true }
 rustty-os = { workspace = true }
 rustty-util = { workspace = true }
 rustty-terminfo = { workspace = true }
+# Integration-tier stage 2 dep wiring (blueprint: all four verified
+# downward-safe — none deps termio; the acyclic gate is the backstop):
+# - rustty-config: `Config` + the termio DerivedConfig source values
+#   (reference `configpkg = @import("../config.zig")`).
+# - rustty-renderer: `renderer.Size`/`renderer.State` + the cross-thread
+#   `renderer.Thread.Mailbox`/`renderer.Message` surface.
+# - rustty-apprt-api: `apprt.surface.Mailbox` == the already-landed
+#   `surface::{AppMailbox, Message, SurfaceMessageEnvelope}` seam (termio is a
+#   generic consumer, `M: AppMailbox`).
+# - rustty-global: the `xev = @import("../global.zig").xev` seam anchor (D6
+#   deferred; see `xev_seam` in src/xev_seam.rs).
+rustty-config = { workspace = true }
+rustty-renderer = { workspace = true }
+rustty-apprt-api = { workspace = true }
+rustty-global = { workspace = true }
+# `alloc: Allocator` fields/params mirror rustty-vt's Terminal convention
+# (`allocator_api2::alloc::Global as Allocator`).
+allocator-api2 = { workspace = true }
