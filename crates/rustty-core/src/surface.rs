@@ -53,8 +53,15 @@
 //! (`crashThreadState`/`ThreadStateSurface` had landed with C8;
 //! `presentSurface` LIVE; `getProcessInfo` split into
 //! `getForegroundPid`/`getTtyName` — the rustty-os pty.rs comptime-return
-//! precedent) and `closingAction` ported ahead of its C14 row;
-//! CORE_BLUEPRINT §6 rows C11..C15 fill the remaining function bodies IN
+//! precedent) and `closingAction` ported ahead of its C14 row; chunk C11
+//! landed the callback tier, Surface.zig:3282-3639 — `textCallback`/
+//! `occlusionCallback`/`focusCallback`/`refreshCallback`/`scrollCallback`/
+//! `contentScaleCallback` LIVE (the file-scope `ScrollAmount` hoists to the
+//! trailing cluster; focusCallback's comptime modifier-release loop is a
+//! local-macro unroll; six more [ADV 6.1] guard sites) with STUBS for
+//! `isMouseReporting`/`mouseReport` (C12) and `completeClipboardPaste`
+//! (C15) — their first callsites are this tier;
+//! CORE_BLUEPRINT §6 rows C12..C15 fill the remaining function bodies IN
 //! PLACE — the declared method stubs below are owned by C12/C13/C14/C15).
 
 // PARITY: the reference's identifiers are camelCase (`needsConfirmQuit`,
@@ -99,8 +106,8 @@ use allocator_api2::alloc::Global as Allocator;
 //
 // PORT NOTE: first reached by C8 (`crash.sentry.thread_state` in
 // sizeCallback/preeditCallback + `crashThreadState`, ahead of its C10 row —
-// [ADV 6.1]); the C10 key tier added its keyCallback site; the remaining
-// sites land with C11-C13.
+// [ADV 6.1]); the C10 key tier added its keyCallback site; the C11 callback
+// tier added its six sites; the remaining sites land with C12-C13.
 use rustty_crash as crash;
 // const unicode = @import("unicode/main.zig");
 //
@@ -6893,16 +6900,678 @@ where
         opts
     }
 
-    // PORT NOTE (chunk C11 fills — Surface.zig:3282 `textCallback`): the fn
-    // lands with the C11 callback tier; its doc comment (:3276-3281)
-    // straddles the C10/C11 chunk-table boundary, preserved verbatim (the
-    // keyEventIsBinding straddle precedent):
+    /// Sends text as-is to the terminal without triggering any keyboard
+    /// protocol. This will treat the input text as if it was pasted
+    /// from the clipboard so the same logic will be applied. Namely,
+    /// if bracketed mode is on this will do a bracketed paste. Otherwise,
+    /// this will filter newlines to '\r'.
+    // pub fn textCallback(self: *Surface, text: []const u8) !void {
     //
-    // /// Sends text as-is to the terminal without triggering any keyboard
-    // /// protocol. This will treat the input text as if it was pasted
-    // /// from the clipboard so the same logic will be applied. Namely,
-    // /// if bracketed mode is on this will do a bracketed paste. Otherwise,
-    // /// this will filter newlines to '\r'.
+    // (raw bytes `&[u8]`, never a lossy String; the inferred `!void` is
+    // `completeClipboardPaste`'s — the [`Error`] union.)
+    pub fn textCallback(&mut self, text: &[u8]) -> Result<(), Error> {
+        // Crash metadata in case we crash in here
+        // crash.sentry.thread_state = self.crashThreadState();
+        crash::sentry::setThreadState(self.crashThreadState());
+        // defer crash.sentry.thread_state = null;
+        // ([ADV 6.1] — the Drop guard clears at every exit below.)
+        let _thread_state = ThreadStateGuard;
+
+        // try self.completeClipboardPaste(text, true);
+        self.completeClipboardPaste(text, true)?;
+        Ok(())
+    }
+
+    /// Callback for when the surface is fully visible or not, regardless
+    /// of focus state. This is used to pause rendering when the surface
+    /// is not visible, and also re-render when it becomes visible again.
+    // pub fn occlusionCallback(self: *Surface, visible: bool) !void {
+    //
+    // (the inferred `!void` is `queueRender`'s xev notify error — carried by
+    // the [`Error`] union, the sizeCallback convention.)
+    pub fn occlusionCallback(&mut self, visible: bool) -> Result<(), Error> {
+        // Crash metadata in case we crash in here
+        // crash.sentry.thread_state = self.crashThreadState();
+        crash::sentry::setThreadState(self.crashThreadState());
+        // defer crash.sentry.thread_state = null;
+        // ([ADV 6.1] — the Drop guard clears at every exit below.)
+        let _thread_state = ThreadStateGuard;
+
+        // _ = self.renderer_thread.mailbox.push(.{
+        //     .visible = visible,
+        // }, .{ .forever = {} });
+        let _ = unsafe { &*self.renderer_thread.mailbox }
+            .push(rendererpkg::Message::Visible(visible), Timeout::Forever);
+        // try self.queueRender();
+        self.queueRender()?;
+        Ok(())
+    }
+
+    // pub fn focusCallback(self: *Surface, focused: bool) !void {
+    pub fn focusCallback(&mut self, focused: bool) -> Result<(), Error> {
+        // Crash metadata in case we crash in here
+        // crash.sentry.thread_state = self.crashThreadState();
+        crash::sentry::setThreadState(self.crashThreadState());
+        // defer crash.sentry.thread_state = null;
+        // ([ADV 6.1] — the Drop guard clears at every exit below.)
+        let _thread_state = ThreadStateGuard;
+
+        // Always update the app focused surface, otherwise we miss
+        // the first surface created.
+        // if (focused) self.app.focusSurface(self);
+        if focused {
+            let app = self.app;
+            unsafe { (*app).focusSurface(self) };
+        }
+
+        // If our focus state is unchanged we do nothing else.
+        // if (self.focused == focused) return;
+        if self.focused == focused {
+            return Ok(());
+        }
+        // self.focused = focused;
+        self.focused = focused;
+
+        // Notify our render thread of the new state
+        // _ = self.renderer_thread.mailbox.push(.{
+        //     .focus = focused,
+        // }, .{ .forever = {} });
+        let _ = unsafe { &*self.renderer_thread.mailbox }
+            .push(rendererpkg::Message::Focus(focused), Timeout::Forever);
+
+        // if (!focused) unfocused: {
+        if !focused {
+            'unfocused: {
+                // If we lost focus and we have a keypress, then we want to send a key
+                // release event for it. Depending on the apprt, this CAN result in
+                // duplicate key release events, but that is better than not sending
+                // a key release event at all.
+                // var pressed_key = self.pressed_key orelse break :unfocused;
+                // self.pressed_key = null;
+                //
+                // (the `orelse` value copy + the null-out collapse into the
+                // owning `take()` — KeyEvent owns its utf8 bytes.)
+                let mut pressed_key = match self.pressed_key.take() {
+                    Some(v) => v,
+                    None => break 'unfocused,
+                };
+
+                // All our actions will be releases
+                // pressed_key.action = .release;
+                pressed_key.action = key::Action::Release;
+
+                // Release the full key first
+                // if (pressed_key.key != .unidentified) {
+                if pressed_key.key != Key::Unidentified {
+                    // assert(self.keyCallback(pressed_key) catch |err| err: {
+                    //     log.warn("error releasing key on focus loss err={}", .{err});
+                    //     break :err .ignored;
+                    // } != .closed);
+                    //
+                    // (`assert` -> `debug_assert!` on the hoisted keyCallback
+                    // result — the side-effecting call always evaluates, only
+                    // the comparison is safety-gated; the caught error
+                    // collapses to the `.ignored` fallback, the log is the
+                    // comment above.)
+                    let effect = self
+                        .keyCallback(pressed_key.clone())
+                        .unwrap_or(InputEffect::Ignored);
+                    debug_assert!(effect != InputEffect::Closed);
+                }
+
+                // Release any modifiers if set
+                // if (pressed_key.mods.empty()) break :unfocused;
+                if pressed_key.mods.empty() {
+                    break 'unfocused;
+                }
+
+                // This is kind of nasty comptime meta programming but all we're doing
+                // here is going through all the modifiers and if they're set, releasing
+                // both the left and right sides of the modifier. This may not match
+                // the exact input event but it ensures a full reset.
+                // const keys = &.{ "shift", "ctrl", "alt", "super" };
+                // const original_key = pressed_key.key;
+                let original_key = pressed_key.key;
+                // inline for (keys) |key| {
+                //     if (@field(pressed_key.mods, key)) {
+                //         @field(pressed_key.mods, key) = false;
+                //         inline for (&.{ "right", "left" }) |side| {
+                //             const keyname = comptime keyname: {
+                //                 break :keyname if (std.mem.eql(u8, key, "ctrl"))
+                //                     "control"
+                //                 else if (std.mem.eql(u8, key, "super"))
+                //                     "meta"
+                //                 else
+                //                     key;
+                //             };
+                //             pressed_key.key = @field(input.Key, keyname ++ "_" ++ side);
+                //             if (pressed_key.key != original_key) {
+                //                 assert(self.keyCallback(pressed_key) catch |err| err: {
+                //                     log.warn("error releasing key on focus loss err={}", .{err});
+                //                     break :err .ignored;
+                //                 } != .closed);
+                //             }
+                //         }
+                //     }
+                // }
+                //
+                // PORT NOTE (comptime unroll): Rust has no `@field`; the
+                // local macro replays the comptime loop — same mods order
+                // (shift, ctrl, alt, super), same side order (right, left),
+                // same keyname map (ctrl -> control, super -> meta); the
+                // inner assert maps exactly as the release-the-full-key site
+                // above.
+                macro_rules! release_mod {
+                    ($field:ident, $right:ident, $left:ident) => {
+                        if pressed_key.mods.$field {
+                            pressed_key.mods.$field = false;
+                            for side in [Key::$right, Key::$left] {
+                                pressed_key.key = side;
+                                if pressed_key.key != original_key {
+                                    let effect = self
+                                        .keyCallback(pressed_key.clone())
+                                        .unwrap_or(InputEffect::Ignored);
+                                    debug_assert!(effect != InputEffect::Closed);
+                                }
+                            }
+                        }
+                    };
+                }
+                release_mod!(shift, ShiftRight, ShiftLeft);
+                release_mod!(ctrl, ControlRight, ControlLeft);
+                release_mod!(alt, AltRight, AltLeft);
+                release_mod!(super_, MetaRight, MetaLeft);
+            }
+        }
+
+        // Schedule render which also drains our mailbox
+        // try self.queueRender();
+        self.queueRender()?;
+
+        // Whenever our focus changes we unhide the mouse. The mouse will be
+        // hidden again if the user starts typing. This helps alleviate some
+        // buggy behavior upstream in macOS with the mouse never becoming visible
+        // again when tabbing between programs (see #2525).
+        // self.showMouse();
+        self.showMouse();
+
+        // Update the focus state and notify the terminal
+        {
+            // self.renderer_state.mutex.lock();
+            unsafe { (*self.renderer_state.mutex).lock() };
+            // self.io.terminal.flags.focused = focused;
+            self.io.terminal.flags.focused = focused;
+            // self.renderer_state.mutex.unlock();
+            unsafe { (*self.renderer_state.mutex).unlock() };
+            // self.queueIo(.{ .focused = focused }, .unlocked);
+            self.queueIo(
+                termio::Message::Focused(focused),
+                termio::termio_impl::MutexState::Unlocked,
+            );
+        }
+        Ok(())
+    }
+
+    // pub fn refreshCallback(self: *Surface) !void {
+    pub fn refreshCallback(&mut self) -> Result<(), Error> {
+        // Crash metadata in case we crash in here
+        // crash.sentry.thread_state = self.crashThreadState();
+        crash::sentry::setThreadState(self.crashThreadState());
+        // defer crash.sentry.thread_state = null;
+        // ([ADV 6.1] — the Drop guard clears at every exit below.)
+        let _thread_state = ThreadStateGuard;
+
+        // The point of this callback is to schedule a render, so do that.
+        // try self.queueRender();
+        self.queueRender()?;
+        Ok(())
+    }
+
+    // PORT NOTE: the file-scope `ScrollAmount` struct sits HERE in the
+    // reference (Surface.zig:3400-3415, between refreshCallback and
+    // scrollCallback); Rust impl blocks cannot hold type items, so it is
+    // ported at module scope below the impl (the KeySequenceQueued trailing
+    // cluster) — see [`ScrollAmount`].
+
+    /// Mouse scroll event. Negative is down, left. Positive is up, right.
+    ///
+    /// "Natural scrolling" is a macOS term for inverting the scroll direction.
+    /// This should be handled by the apprt implementation. At this layer,
+    /// negative is always down, left.
+    // pub fn scrollCallback(
+    //     self: *Surface,
+    //     xoff: f64,
+    //     yoff: f64,
+    //     scroll_mods: input.ScrollMods,
+    // ) !void {
+    pub fn scrollCallback(
+        &mut self,
+        xoff: f64,
+        yoff: f64,
+        scroll_mods: input_mouse::ScrollMods,
+    ) -> Result<(), Error> {
+        // log.info("SCROLL: xoff={} yoff={} mods={}", .{ xoff, yoff, scroll_mods });
+
+        // Crash metadata in case we crash in here
+        // crash.sentry.thread_state = self.crashThreadState();
+        crash::sentry::setThreadState(self.crashThreadState());
+        // defer crash.sentry.thread_state = null;
+        // ([ADV 6.1] — the Drop guard clears at every exit below, AFTER the
+        // explicit mutex unlocks: the reference's LIFO defer order.)
+        let _thread_state = ThreadStateGuard;
+
+        // Always show the mouse again if it is hidden
+        // if (self.mouse.hidden) self.showMouse();
+        if self.mouse.hidden {
+            self.showMouse();
+        }
+
+        // const y: ScrollAmount = if (yoff == 0) .{} else y: {
+        let y: ScrollAmount = if yoff == 0.0 {
+            ScrollAmount::default()
+        } else {
+            'y: {
+                // We use cell_size to determine if we have accumulated enough to trigger a scroll
+                // const cell_size: f64 = @floatFromInt(self.size.cell.height);
+                let cell_size: f64 = f64::from(self.size.cell.height);
+
+                // If we have precision scroll, yoff is the number of pixels to scroll. In non-precision
+                // scroll, yoff is the number of wheel ticks. Some mice are capable of reporting fractional
+                // wheel ticks, which don't necessarily get reported as precision scrolls. We normalize all
+                // scroll events to pixels by multiplying the wheel tick value and the cell size. This means
+                // that a wheel tick of 1 results in single scroll event.
+                // const yoff_adjusted: f64 = if (scroll_mods.precision)
+                //     yoff * self.config.mouse_scroll_multiplier.precision
+                // else yoff_adjusted: {
+                let yoff_adjusted: f64 = if scroll_mods.precision {
+                    yoff * self.config.mouse_scroll_multiplier.precision
+                } else {
+                    'yoff_adjusted: {
+                        // if (comptime builtin.target.os.tag.isDarwin()) {
+                        //
+                        // (`cfg!` — the childExitedAbnormally isDarwin
+                        // precedent.)
+                        if cfg!(target_vendor = "apple") {
+                            // Round out the yoff to an absolute minimum of 1. macos tries to
+                            // simulate precision scrolling with non precision events by
+                            // ramping up the magnitude of the offsets as it detects faster
+                            // scrolling. Single click (very slow) scrolls are reported with a
+                            // magnitude of 0.1 which would normally require a few clicks
+                            // before we register an actual scroll event (depending on cell
+                            // height and the mouse_scroll_multiplier setting).
+                            // const yoff_max: f64 = if (yoff > 0)
+                            //     @max(yoff, 1)
+                            // else
+                            //     @min(yoff, -1);
+                            let yoff_max: f64 = if yoff > 0.0 {
+                                yoff.max(1.0)
+                            } else {
+                                yoff.min(-1.0)
+                            };
+
+                            // break :yoff_adjusted yoff_max * cell_size * self.config.mouse_scroll_multiplier.discrete;
+                            break 'yoff_adjusted yoff_max
+                                * cell_size
+                                * self.config.mouse_scroll_multiplier.discrete;
+                        } else {
+                            // break :yoff_adjusted yoff * cell_size * self.config.mouse_scroll_multiplier.discrete;
+                            break 'yoff_adjusted yoff
+                                * cell_size
+                                * self.config.mouse_scroll_multiplier.discrete;
+                        }
+                    }
+                };
+
+                // Add our previously saved pending amount to the offset to get the
+                // new offset value. The signs of the pending and yoff should match
+                // so that we move further away from zero, but we don't assert
+                // this because in theory a user could scroll in the opposite
+                // direction and undo a pending scroll.
+                // const poff: f64 = self.mouse.pending_scroll_y + yoff_adjusted;
+                let poff: f64 = self.mouse.pending_scroll_y + yoff_adjusted;
+
+                // If the new offset is less than a single unit of scroll, we save
+                // the new pending value and do not scroll yet.
+                // if (@abs(poff) < cell_size) {
+                if poff.abs() < cell_size {
+                    // self.mouse.pending_scroll_y = poff;
+                    self.mouse.pending_scroll_y = poff;
+                    // break :y .{};
+                    break 'y ScrollAmount::default();
+                }
+
+                // We scroll by the number of rows in the offset and save the remainder
+                // const amount = poff / cell_size;
+                let amount = poff / cell_size;
+                // assert(@abs(amount) >= 1);
+                debug_assert!(amount.abs() >= 1.0);
+                // self.mouse.pending_scroll_y = poff - (amount * cell_size);
+                self.mouse.pending_scroll_y = poff - (amount * cell_size);
+
+                // Round towards zero.
+                // const delta: isize = @intFromFloat(@trunc(amount));
+                let delta: isize = amount.trunc() as isize;
+                // assert(@abs(delta) >= 1);
+                debug_assert!(delta.unsigned_abs() >= 1);
+
+                // break :y .{ .delta = delta };
+                break 'y ScrollAmount { delta };
+            }
+        };
+
+        // For detailed comments see the y calculation above.
+        // const x: ScrollAmount = if (xoff == 0) .{} else x: {
+        let x: ScrollAmount = if xoff == 0.0 {
+            ScrollAmount::default()
+        } else {
+            'x: {
+                // if (!scroll_mods.precision) {
+                if !scroll_mods.precision {
+                    // const x_delta_isize: isize = @intFromFloat(@round(xoff));
+                    let x_delta_isize: isize = xoff.round() as isize;
+                    // break :x .{ .delta = x_delta_isize };
+                    break 'x ScrollAmount {
+                        delta: x_delta_isize,
+                    };
+                }
+
+                // const poff: f64 = self.mouse.pending_scroll_x + xoff;
+                let poff: f64 = self.mouse.pending_scroll_x + xoff;
+                // const cell_size: f64 = @floatFromInt(self.size.cell.width);
+                let cell_size: f64 = f64::from(self.size.cell.width);
+                // if (@abs(poff) < cell_size) {
+                if poff.abs() < cell_size {
+                    // self.mouse.pending_scroll_x = poff;
+                    self.mouse.pending_scroll_x = poff;
+                    // break :x .{};
+                    break 'x ScrollAmount::default();
+                }
+
+                // const amount = poff / cell_size;
+                let amount = poff / cell_size;
+                // assert(@abs(amount) >= 1);
+                debug_assert!(amount.abs() >= 1.0);
+                // self.mouse.pending_scroll_x = poff - (amount * cell_size);
+                self.mouse.pending_scroll_x = poff - (amount * cell_size);
+                // const delta: isize = @intFromFloat(@trunc(amount));
+                let delta: isize = amount.trunc() as isize;
+                // assert(@abs(delta) >= 1);
+                debug_assert!(delta.unsigned_abs() >= 1);
+                // break :x .{ .delta = delta };
+                break 'x ScrollAmount { delta };
+            }
+        };
+
+        // log.info("SCROLL: delta_y={} delta_x={}", .{ y.delta, x.delta });
+
+        {
+            // self.renderer_state.mutex.lock();
+            // defer self.renderer_state.mutex.unlock();
+            //
+            // (guard-less zigstd Mutex — CORE_BLUEPRINT §3; the defer is the
+            // explicit unlock at every exit below.)
+            unsafe { (*self.renderer_state.mutex).lock() };
+
+            // If we have an active mouse reporting mode, clear the selection.
+            // The selection can occur if the user uses the shift mod key to
+            // override mouse grabbing from the window.
+            // if (self.isMouseReporting()) {
+            if self.isMouseReporting() {
+                // try self.setSelection(null);
+                if let Err(err) = self.setSelection(None) {
+                    // (the deferred mutex unlock — the error exit)
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    return Err(err);
+                }
+            }
+
+            // If we're in alternate screen with alternate scroll enabled, then
+            // we convert to cursor keys. This only happens if we're:
+            // (1) alt screen (2) no explicit mouse reporting and (3) alt
+            // scroll mode enabled.
+            // if (self.io.terminal.screens.active_key == .alternate and
+            //     self.io.terminal.flags.mouse_event == .none and
+            //     self.io.terminal.modes.get(.mouse_alternate_scroll))
+            // {
+            if self.io.terminal.screens.active_key == terminal::screen_set::Key::Alternate
+                && self.io.terminal.flags.mouse_event == terminal::mouse::Event::None
+                && self
+                    .io
+                    .terminal
+                    .modes
+                    .get(terminal::modes::Mode::MouseAlternateScroll)
+            {
+                // if (y.delta != 0) {
+                if y.delta != 0 {
+                    // When we send mouse events as cursor keys we always
+                    // clear the selection.
+                    // try self.setSelection(null);
+                    if let Err(err) = self.setSelection(None) {
+                        // (the deferred mutex unlock — the error exit)
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Err(err);
+                    }
+
+                    // const seq = if (self.io.terminal.modes.get(.cursor_keys)) seq: {
+                    //     // cursor key: application mode
+                    //     break :seq switch (y.direction()) {
+                    //         .up_right => "\x1bOA",
+                    //         .down_left => "\x1bOB",
+                    //     };
+                    // } else seq: {
+                    //     // cursor key: normal mode
+                    //     break :seq switch (y.direction()) {
+                    //         .up_right => "\x1b[A",
+                    //         .down_left => "\x1b[B",
+                    //     };
+                    // };
+                    //
+                    // (the `[:0]const u8` literals are static byte strings.)
+                    let seq: &'static [u8] = if self
+                        .io
+                        .terminal
+                        .modes
+                        .get(terminal::modes::Mode::CursorKeys)
+                    {
+                        // cursor key: application mode
+                        match y.direction() {
+                            ScrollAmountDirection::UpRight => b"\x1bOA",
+                            ScrollAmountDirection::DownLeft => b"\x1bOB",
+                        }
+                    } else {
+                        // cursor key: normal mode
+                        match y.direction() {
+                            ScrollAmountDirection::UpRight => b"\x1b[A",
+                            ScrollAmountDirection::DownLeft => b"\x1b[B",
+                        }
+                    };
+                    // for (0..y.magnitude()) |_| {
+                    for _ in 0..y.magnitude() {
+                        // self.queueIo(.{ .write_stable = seq }, .locked);
+                        self.queueIo(
+                            termio::Message::WriteStable(seq),
+                            termio::termio_impl::MutexState::Locked,
+                        );
+                    }
+                }
+
+                // return;
+                // (the deferred mutex unlock — the alternate-scroll return)
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return Ok(());
+            }
+
+            // We have mouse events, are not in an alternate scroll buffer,
+            // or have alternate scroll disabled. In this case, we just run
+            // the normal logic.
+
+            // If we're scrolling up or down, then send a mouse event.
+            // if (self.isMouseReporting()) {
+            if self.isMouseReporting() {
+                // for (0..@abs(y.delta)) |_| {
+                for _ in 0..y.delta.unsigned_abs() {
+                    // const pos = try self.rt_surface.getCursorPos();
+                    let pos = match unsafe { &*self.rt_surface }.get_cursor_pos() {
+                        Ok(v) => v,
+                        Err(err) => {
+                            // (the deferred mutex unlock — the error exit)
+                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            return Err(err.into());
+                        }
+                    };
+                    // self.mouseReport(switch (y.direction()) {
+                    //     .up_right => .four,
+                    //     .down_left => .five,
+                    // }, .press, self.mouse.mods, pos);
+                    self.mouseReport(
+                        Some(match y.direction() {
+                            ScrollAmountDirection::UpRight => input_mouse::Button::Four,
+                            ScrollAmountDirection::DownLeft => input_mouse::Button::Five,
+                        }),
+                        input_mouse::Action::Press,
+                        self.mouse.mods,
+                        pos,
+                    );
+                }
+
+                // for (0..@abs(x.delta)) |_| {
+                for _ in 0..x.delta.unsigned_abs() {
+                    // const pos = try self.rt_surface.getCursorPos();
+                    let pos = match unsafe { &*self.rt_surface }.get_cursor_pos() {
+                        Ok(v) => v,
+                        Err(err) => {
+                            // (the deferred mutex unlock — the error exit)
+                            unsafe { (*self.renderer_state.mutex).unlock() };
+                            return Err(err.into());
+                        }
+                    };
+                    // self.mouseReport(switch (x.direction()) {
+                    //     .up_right => .six,
+                    //     .down_left => .seven,
+                    // }, .press, self.mouse.mods, pos);
+                    self.mouseReport(
+                        Some(match x.direction() {
+                            ScrollAmountDirection::UpRight => input_mouse::Button::Six,
+                            ScrollAmountDirection::DownLeft => input_mouse::Button::Seven,
+                        }),
+                        input_mouse::Action::Press,
+                        self.mouse.mods,
+                        pos,
+                    );
+                }
+
+                // If mouse reporting is on, we do not want to scroll the
+                // viewport.
+                // return;
+                // (the deferred mutex unlock — the mouse-report return)
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return Ok(());
+            }
+
+            // if (y.delta != 0) {
+            if y.delta != 0 {
+                // Modify our viewport, this requires a lock since it affects
+                // rendering. We have to switch signs here because our delta
+                // is negative down but our viewport is positive down.
+                // self.io.terminal.scrollViewport(.{ .delta = y.delta * -1 });
+                self.io
+                    .terminal
+                    .scroll_viewport(terminal::terminal::ScrollViewport::Delta(-y.delta));
+            }
+
+            // (the deferred mutex unlock — the block end)
+            unsafe { (*self.renderer_state.mutex).unlock() };
+        }
+
+        // try self.queueRender();
+        self.queueRender()?;
+        Ok(())
+    }
+
+    /// This is called when the content scale of the surface changes. The surface
+    /// can then update any DPI-sensitive state.
+    // pub fn contentScaleCallback(self: *Surface, content_scale: apprt.ContentScale) !void {
+    pub fn contentScaleCallback(
+        &mut self,
+        content_scale: apprt::ContentScale,
+    ) -> Result<(), Error> {
+        // Crash metadata in case we crash in here
+        // crash.sentry.thread_state = self.crashThreadState();
+        crash::sentry::setThreadState(self.crashThreadState());
+        // defer crash.sentry.thread_state = null;
+        // ([ADV 6.1] — the Drop guard clears at every exit below.)
+        let _thread_state = ThreadStateGuard;
+
+        // Calculate the new DPI
+        // const x_dpi = content_scale.x * font.face.default_dpi;
+        let x_dpi = content_scale.x * f32::from(face::DEFAULT_DPI);
+        // const y_dpi = content_scale.y * font.face.default_dpi;
+        let y_dpi = content_scale.y * f32::from(face::DEFAULT_DPI);
+
+        // Update our font size which is dependent on the DPI
+        // const size = size: {
+        let size = 'size: {
+            // var size = self.font_size;
+            let mut size = self.font_size;
+            // size.xdpi = @intFromFloat(x_dpi);
+            size.xdpi = x_dpi as u16;
+            // size.ydpi = @intFromFloat(y_dpi);
+            size.ydpi = y_dpi as u16;
+            // break :size size;
+            break 'size size;
+        };
+
+        // If our DPI didn't actually change, save a lot of work by doing nothing.
+        // if (size.xdpi == self.font_size.xdpi and size.ydpi == self.font_size.ydpi) {
+        //     return;
+        // }
+        if size.xdpi == self.font_size.xdpi && size.ydpi == self.font_size.ydpi {
+            return Ok(());
+        }
+
+        // try self.setFontSize(size);
+        self.setFontSize(size)?;
+
+        // Update our padding which is dependent on DPI. We only do this for
+        // unbalanced padding since balanced padding is not dependent on DPI.
+        // if (self.config.window_padding_balance == .false) {
+        if self.config.window_padding_balance == configpkg::value_types::WindowPaddingBalance::False
+        {
+            // self.size.padding = self.config.scaledPadding(x_dpi, y_dpi);
+            self.size.padding = self.config.scaledPadding(x_dpi, y_dpi);
+        }
+
+        // Force a resize event because the change in padding will affect
+        // pixel-level changes to the renderer and viewport.
+        // try self.resize(self.size.screen);
+        self.resize(self.size.screen)?;
+        Ok(())
+    }
+
+    /// Returns true if mouse reporting is enabled both in the config and
+    /// the terminal state.
+    //
+    // PORT NOTE (STUB — chunk C12 fills): `fn isMouseReporting(self: *const
+    // Surface) bool` — Surface.zig:3640 (scrollCallback's :3525/:3568
+    // callsites land with C11; `*const` receiver -> `&self`).
+    fn isMouseReporting(&self) -> bool {
+        unimplemented!("Surface.isMouseReporting lands with core chunk C12 (Surface.zig:3640)")
+    }
+
+    // PORT NOTE (STUB — chunk C12 fills): `fn mouseReport(self: *Surface,
+    // button: ?input.MouseButton, action: input.MouseAction, mods:
+    // input.Mods, pos: apprt.CursorPos) void` — Surface.zig:3646
+    // (scrollCallback's :3571/:3579 callsites land with C11).
+    fn mouseReport(
+        &mut self,
+        button: Option<input_mouse::Button>,
+        action: input_mouse::Action,
+        mods: Mods,
+        pos: apprt::CursorPos,
+    ) {
+        let _ = (button, action, mods, pos);
+        unimplemented!("Surface.mouseReport lands with core chunk C12 (Surface.zig:3646)")
+    }
 
     /// Returns the link at the given cursor position, if any.
     ///
@@ -7014,6 +7683,17 @@ where
         unimplemented!("Surface.startClipboardRequest lands with core chunk C15 (Surface.zig:5822)")
     }
 
+    // PORT NOTE (STUB — chunk C15 fills): `fn completeClipboardPaste(self:
+    // *Surface, data: []const u8, allow_unsafe: bool) !void` —
+    // Surface.zig:5844 (textCallback's :3287 callsite lands with C11; raw
+    // bytes `&[u8]`, never a lossy String).
+    fn completeClipboardPaste(&mut self, data: &[u8], allow_unsafe: bool) -> Result<(), Error> {
+        let _ = (data, allow_unsafe);
+        unimplemented!(
+            "Surface.completeClipboardPaste lands with core chunk C15 (Surface.zig:5844)"
+        )
+    }
+
     // PORT NOTE (STUB — chunk C15 fills): `fn showDesktopNotification(self:
     // *Surface, title: [:0]const u8, body: [:0]const u8) !void` —
     // Surface.zig:5968 (handleMessage's desktop_notification callsite lands
@@ -7098,6 +7778,51 @@ enum KeySequenceQueued {
 enum KeySequenceMemory {
     Retain,
     Free,
+}
+
+// The amount to scroll. This structure is always normalized so that
+// negative is down, left and positive is up, right. Note that INTERNALLY,
+// vertical scroll on our terminal uses positive for down (right is not
+// supported by our screen since scrollback is only vertical).
+//
+// PORT NOTE: the reference declares this file-scope struct BETWEEN
+// refreshCallback and scrollCallback (Surface.zig:3405); Rust impl blocks
+// cannot hold type items, so it lives in this trailing file-scope cluster
+// (the KeySequenceQueued precedent).
+// const ScrollAmount = struct {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ScrollAmount {
+    // delta: isize = 0,
+    delta: isize,
+}
+
+/// PORT: the anonymous `enum { down_left, up_right }` return type of
+/// `ScrollAmount.direction`, hoisted to a named enum (the TextViewport
+/// hoist precedent).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScrollAmountDirection {
+    // down_left,
+    DownLeft,
+    // up_right,
+    UpRight,
+}
+
+impl ScrollAmount {
+    // pub fn direction(self: ScrollAmount) enum { down_left, up_right } {
+    pub fn direction(self) -> ScrollAmountDirection {
+        // return if (self.delta < 0) .down_left else .up_right;
+        if self.delta < 0 {
+            ScrollAmountDirection::DownLeft
+        } else {
+            ScrollAmountDirection::UpRight
+        }
+    }
+
+    // pub fn magnitude(self: ScrollAmount) usize {
+    pub fn magnitude(self) -> usize {
+        // return @abs(self.delta);
+        self.delta.unsigned_abs()
+    }
 }
 
 // fn closingAction(action: input.Binding.Action) bool {

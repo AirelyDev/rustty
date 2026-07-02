@@ -1173,3 +1173,47 @@ site). Ledger:
   the `A::Surface: ApprtSurface<App = A, Core = Surface<A>>` where-clause
   (app.rs precedent) — maybeHandleBinding calls the constrained
   `App::performAllChainedAction`.
+
+## rustty-core C11 (core tier) — focus/scroll/content-scale callback tier
+
+Chunk C11 of CORE_BLUEPRINT §6 lands Surface.zig:3282-3639 in
+`crates/rustty-core/src/surface.rs`: `textCallback`, `occlusionCallback`,
+`focusCallback`, `refreshCallback`, `scrollCallback`, `contentScaleCallback`
+— all LIVE (the C10-preserved textCallback doc-comment straddle is realized
+as the live `///` docs). NO new verbatim-comment deferral was created; NO
+deferral resolved. Ledger:
+
+- **File-scope hoist:** the reference declares `ScrollAmount` (+ the
+  anonymous `enum { down_left, up_right }` return of `direction`) BETWEEN
+  refreshCallback and scrollCallback (Surface.zig:3405); Rust impl blocks
+  cannot hold type items, so both port at module scope in the trailing
+  cluster (`ScrollAmount`/`ScrollAmountDirection` — the KeySequenceQueued /
+  TextViewport precedents), with a pointer PORT NOTE at the reference
+  position inside the impl.
+- **Comptime unroll:** focusCallback's modifier-release
+  `inline for (keys)` × `inline for (sides)` meta-loop (no `@field` in
+  Rust) replays through a fn-local `macro_rules! release_mod` — same mods
+  order (shift, ctrl, alt, super), same side order (right, left), same
+  keyname map (ctrl -> control, super -> meta). The
+  `assert(self.keyCallback(...) catch .ignored != .closed)` sites hoist the
+  side-effecting keyCallback out of the assert (it always evaluates;
+  `debug_assert!` gates only the comparison), the caught error collapsing
+  to the `.ignored` fallback with the log.warn as comment.
+- **Crash metadata:** six more [ADV 6.1] `ThreadStateGuard` sites (one per
+  callback); scrollCallback documents the LIFO defer order (guard drops
+  AFTER the explicit mutex unlocks).
+- **Mutex fidelity:** scrollCallback's `defer unlock` block realizes the
+  explicit unlock at every exit — 2 setSelection error exits, 2
+  getCursorPos error exits, the alternate-scroll return, the mouse-report
+  return, the block end (the C7/C8/C9 convention). focusCallback's
+  lock/assign/unlock has no defer — paired verbatim.
+- **Comptime mappings:** scrollCallback's
+  `builtin.target.os.tag.isDarwin()` is `cfg!(target_vendor = "apple")`
+  (the childExitedAbnormally precedent); `@intFromFloat`/`@trunc`/`@round`/
+  `@abs` map to `as`/`trunc()`/`round()`/`abs()`+`unsigned_abs()`.
+- **Ported ahead / stubs:** STUBS added for `isMouseReporting` (C12, :3640)
+  and `mouseReport` (C12, :3646) — scrollCallback is their first caller —
+  and `completeClipboardPaste` (C15, :5844) — textCallback is its first
+  caller. `keyboardLayout` needed NO new work: the apprt-api
+  `App::keyboard_layout` growth method's only core callsite (encodeKeyOpts,
+  Surface.zig:3271) landed with C10.
