@@ -358,24 +358,33 @@ per-crate Definition-of-Done.
   (R2; `identity-ghostty` feature emits `ghostty`/`xterm-ghostty` for the parity
   harness); terminfo corpus matches.
 
-### 23. rustty-termio — Tests: **34**
-- **Files (10):** `termio/` (`termio.zig, Exec, Options, Termio, Thread,
-  backend, mailbox, message, shell_integration, stream_handler`).
-- **Deps:** `vt, crash, datastruct, os, util, terminfo`; **renderer/apprt via
-  trait**.
-- **Breaks:** **#13 `termio→renderer/apprt`** (termio-surface trait).
-- **DoD:** 10 files ported; 34 ported tests pass; no hard renderer/apprt dep
-  (surface trait); `cycle_check.py` clean. **Flag A6** (fallback group member).
+### 23. rustty-termio — Tests: **44**
+- **Files (11):** `termio/` (`termio.zig, Exec, Options, Termio, Thread,
+  backend, mailbox, message, shell_integration, stream_handler`) **+ the
+  RELOCATED `src/Command.zig`** (break #13b — see crate 24; Command's 10 tests
+  move here: 34 + 10 = 44).
+- **Deps:** `vt, crash, datastruct, os, util, terminfo, config, renderer,
+  apprt-api, global` (integration-tier correction: the config/renderer/
+  apprt-api/global edges are real Cargo deps, all downward-safe — apprt stays
+  behind the apprt-api `surface::AppMailbox` seam).
+- **Breaks:** **#13 `termio→renderer/apprt`** (apprt via the apprt-api seam),
+  **#13b** (Command relocated in from src root).
+- **DoD:** 11 files ported; 44 ported tests pass; no hard apprt dep
+  (apprt-api seam); `cycle_check.py` clean. **Flag A6** (fallback group member).
 
-### 24. rustty-core — Tests: **11**
-- **Files (4):** `App.zig, Surface.zig, Command.zig, surface_mouse.zig` (+ the
+### 24. rustty-core — Tests: **1**
+- **Files (3):** `App.zig, Surface.zig, surface_mouse.zig` (+ the
   high-level **wiring split from `global.zig`** per break #1 — additive glue,
-  not a reference file).
+  not a reference file). `Command.zig` is RELOCATED to rustty-termio (break
+  #13b: Command-in-core would cycle — termio/Exec constructs+starts Command
+  while core already deps termio; Surface reaches it as
+  `rustty_termio::Command`).
 - **Deps:** `vt, config, renderer, font, input, termio, os, crash, inspector,
   apprt-api, global`.
 - **Breaks:** consumes **#1** (global wiring lands here), **#8** (apprt-api
-  trait), **#12** (inspector by ref).
-- **DoD:** 4 files ported; 11 ported tests pass (Command 10); depends on
+  trait), **#12** (inspector by ref), **#13b** (Command moved out).
+- **DoD:** 3 files ported; 1 ported test passes (surface_mouse
+  `keyToMouseShape`; Command's 10 moved to rustty-termio); depends on
   `apprt-api` (not `apprt`); global wiring reviewed (R1 additive); no edge to
   `apprt`/`cli` (`cycle_check.py` confirms core is below apprt).
 
@@ -534,7 +543,7 @@ inspector:     vt font util                              # core via ref/trait
 renderer:      vt os datastruct unicode util crash font render-types  # apprt/inspector via trait/hook
 config:        datastruct os util vt font renderer input args cfg-fmt
 terminfo:      identity
-termio:        vt crash datastruct os util terminfo      # renderer/apprt via trait
+termio:        vt crash datastruct os util terminfo config renderer apprt-api global  # apprt via apprt-api seam; + relocated Command.zig (break #13b)
 core:          vt config renderer font input termio os crash inspector apprt-api global
 apprt:         core apprt-api vt font renderer inspector config input os
 cli:           config vt font input os terminfo args apprt core crash

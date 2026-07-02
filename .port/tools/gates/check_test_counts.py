@@ -469,6 +469,14 @@ MAP = {
     # of termio=44, accounted HERE exactly once; its shell_integration reify
     # half lands with stage 4's 21 tests). rust=1 >= 0.
     "termio_root":       (["/Users/gael/projects/ghostty/src/termio.zig"], [f"{RSTIO}/lib.rs"], 0),
+    # src/Command.zig (RELOCATED, break #13b — blueprint §1): Command lives in
+    # rustty-termio, NOT rustty-core (core placement would cycle: termio/Exec
+    # constructs+starts Command while core already deps termio). The zig glob
+    # points at the PHYSICAL reference location (src root); the Rust file is
+    # termio's command.rs. 10 quoted tests -> 10 live #[test] (the 6
+    # windows-SkipZigTest'd tests run their posix bodies; the windows halves
+    # are cfg-gated, F3 DirectWrite precedent).
+    "termio_command":    ([f"{GHSRC}/Command.zig"], [f"{RSTIO}/command.rs"], 0),
 }
 
 def expand(globs):

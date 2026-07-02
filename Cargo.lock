@@ -774,6 +774,7 @@ name = "rustty-termio"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "libc",
  "rustty-apprt-api",
  "rustty-config",
  "rustty-crash",

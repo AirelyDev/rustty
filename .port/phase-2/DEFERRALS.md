@@ -598,3 +598,42 @@ with an `unimplemented!()` marker (NOT fabricated logic).
   `@sizeOf(Message) == 40` anti-growth test is pinned at the equivalent
   Rust-layout constant (56) with the mapping documented at the assertion
   (usize `len` in `MessageData::Small`, unpacked discriminant).
+
+## rustty-termio stage 3 (integration tier) — relocated Command.zig (break #13b)
+
+Stage 3 ports src/Command.zig (911 loc, 10 `test{}` blocks) into
+`rustty-termio/src/command.rs` (blueprint §1: Command-in-core would cycle —
+termio/Exec constructs+starts Command while core already deps termio;
+`rustty_termio::Command` is re-exported at the crate root so core's Surface
+reaches the reference's flat `Command` symbol). All 10 reference tests are
+ported LIVE (R1; `termio_command` MAP entry). Notes:
+
+- **GTK growth point (`RtPreExecInfo`/`RtPostForkInfo`).** The reference's
+  comptime `@hasDecl(apprt.runtime, "pre_exec"/"post_fork")` branches are
+  realized ONLY by the GTK apprt (ported last). Until GTK lands and
+  specializes these types IN PLACE, the trivial fallback structs
+  (`init(_: &Config) -> Self` on unit-like structs, needing only
+  rustty-config's `Config` type) are the definitions — marked at the types;
+  NOT added to rustty-apprt-api (blueprint §1). 0 tests affected.
+- **Windows spawn path (cfg-gated structural port, unverified).**
+  `startWindows`, the windows `wait`/`Exit`/`pseudo_console`/`pid` branches,
+  and the windows halves of the test literals are ported line-for-line under
+  `#[cfg(windows)]` (rustty-os pty.rs WindowsPty precedent) but are UNVERIFIED
+  on a real Windows target (none in CI; the reference itself `SkipZigTest`s 6
+  of the 10 tests on windows — mirrored as cfg-gated bodies, F3 DirectWrite
+  precedent). `createWindowsEnvBlock`/`windowsCreateCommandLine` are compiled
+  (and type-checked) on all targets. One shim decision, documented at the call
+  site: the reference's `windows.OpenFile(\Device\Null, ...)`
+  (std.os.windows' NtCreateFile wrapper) is realized as the
+  identical-behavior Win32 `CreateFileW("NUL", ...)` — "NUL" is the Win32
+  alias of the NT `\Device\Null` object — rather than re-binding ntdll.
+  `WaitForSingleObject`/`GetExitCodeProcess` are declared as Command-local
+  kernel32 shims (not yet in rustty-os::windows).
+- **Zig-std shims (Rust-only glue, R1 no-loss, in command.rs):**
+  `posix.execvpeZ` (Zig's USERSPACE PATH search — macOS has no execvpe(3) —
+  with the execveZ errno mapping reproduced), `posix.chdir` (stack-buffer
+  copy), `posix.dup2`/`waitpid`/`fork` errno mappings, `std.c.environ`
+  (`_NSGetEnviron` on Apple), and the fixed 1024-byte stack stderr writer.
+  None heap-allocate: the reference's allocation-after-fork prohibition is
+  preserved (all allocation happens before `fork()`; the child touches only
+  stack buffers + syscalls).

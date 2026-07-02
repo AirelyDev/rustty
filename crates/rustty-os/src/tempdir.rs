@@ -141,6 +141,21 @@ impl Dir {
         std::fs::write(self.path.join(sub_path), data)
     }
 
+    /// `std.fs.Dir.createFile`: create (or truncate) the file at `sub_path`
+    /// within this directory, returning the open handle. Zig's `CreateFlags`
+    /// default to `truncate = true`; `read` mirrors `.{ .read = true }` (the
+    /// handle is opened read+write). Used by consumers that spawn processes
+    /// with redirected stdio (e.g. the relocated Command.zig tests in
+    /// rustty-termio).
+    pub fn createFile(&self, sub_path: &str, read: bool) -> std::io::Result<std::fs::File> {
+        std::fs::OpenOptions::new()
+            .read(read)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(self.path.join(sub_path))
+    }
+
     /// `std.fs.Dir.realpath`: resolve `sub_path` (relative to this directory)
     /// to a canonical absolute path, returning the path bytes. The reference
     /// fills a caller-provided `[max_path_bytes]u8` buffer; the Rust port

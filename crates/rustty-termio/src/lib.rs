@@ -20,12 +20,14 @@
 //! rustty-termio
 //!
 //! PORTS: ghostty src/termio.zig (this file) + termio/{Options.zig, Termio.zig,
-//! Thread.zig, backend.zig, mailbox.zig, message.zig}; termio/{Exec.zig,
-//! shell_integration.zig, stream_handler.zig} + the relocated src/Command.zig
-//! (break #13b) land in the next integration-tier stages.
+//! Thread.zig, backend.zig, mailbox.zig, message.zig} + the RELOCATED
+//! src/Command.zig (break #13b: Command-in-core would cycle — termio/Exec
+//! constructs+starts Command while core already deps termio); termio/{Exec.zig,
+//! shell_integration.zig, stream_handler.zig} land in the stage-4
+//! testable-logic stage.
 //!
-//! PORT STATUS: in progress (integration-tier stage 2 — dep wiring + struct
-//! shapes + the message module):
+//! PORT STATUS: in progress (integration-tier stages 2-3 — dep wiring + struct
+//! shapes + the message module + the relocated Command):
 //!
 //! - `message` — termio/message.zig (2 tests): the IO-thread `Message` union.
 //! - `options` — termio/Options.zig (0 tests): the `Options` struct shape.
@@ -40,6 +42,8 @@
 //!   init/deinit; the run loop is deferred verbatim (D6).
 //! - `xev_seam` — the termio-local D6 placeholder surface for
 //!   `@import("../global.zig").xev` (rustty-os cf_release_thread precedent).
+//! - `command` — the RELOCATED src/Command.zig (10 tests, all ported): the
+//!   fork/exec subprocess spawner (integration-tier stage 3, break #13b).
 //!
 //! SEAMS: `apprt.surface.Mailbox` -> `rustty_apprt_api::surface::AppMailbox`
 //! (termio is a generic consumer, `M: AppMailbox`); `renderer.Size`/`State`/
@@ -81,6 +85,15 @@ pub use mailbox::Mailbox;
 pub use message::Message;
 // pub const StreamHandler = stream_handler.StreamHandler;
 // (PORT, stage 4: re-exported when stream_handler.zig lands.)
+
+// (No reference import line here: src/Command.zig is a src-ROOT file —
+// termio/Exec.zig imports it as `@import("../Command.zig")` and core's
+// Surface.zig as `@import("Command.zig")`. Break #13b relocates it INTO
+// rustty-termio — core placement would cycle, blueprint §1 — and re-exports it
+// at the crate root, preserving the reference's flat `Command` symbol: core's
+// Surface reaches it as `rustty_termio::Command`.)
+pub mod command;
+pub use command::Command;
 
 // The termio-local D6 xev placeholder seam (see its module doc).
 pub mod xev_seam;
@@ -133,6 +146,7 @@ mod tests {
         let _ = std::any::type_name::<crate::thread::Coalesce>();
         let _ = std::any::type_name::<crate::thread::Flags>();
         let _ = std::any::type_name::<crate::xev_seam::Async>();
+        let _ = std::any::type_name::<crate::Command<'static>>();
         let _ = std::any::type_name::<crate::Error>();
         // Options/Termio/ThreadData are generic over the AppMailbox seam and
         // are reified by their modules' signatures.

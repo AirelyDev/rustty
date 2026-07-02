@@ -1,7 +1,9 @@
 //! rustty-core
 //!
-//! PORTS: ghostty src/App.zig, Surface.zig, Command.zig, surface_mouse.zig + the high-level
+//! PORTS: ghostty src/App.zig, Surface.zig, surface_mouse.zig + the high-level
 //! wiring split from global.zig (break #1, additive glue). Depends on apprt-api, not apprt.
+//! (src/Command.zig is RELOCATED to rustty-termio — break #13b, Command-in-core
+//! would cycle; Surface reaches it as `rustty_termio::Command`.)
 //!
 //! PORT STATUS: stub
 //!

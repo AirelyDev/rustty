@@ -40,3 +40,8 @@ rustty-global = { workspace = true }
 # `alloc: Allocator` fields/params mirror rustty-vt's Terminal convention
 # (`allocator_api2::alloc::Global as Allocator`).
 allocator-api2 = { workspace = true }
+# Raw FFI bindings to the platform libc for the relocated src/Command.zig port
+# (fork/execve/dup2/dup3/fcntl/chdir/waitpid — integration-tier stage 3, break
+# #13b). R3: `libc` binds the SAME system library the reference's Zig
+# `std.posix`/`std.c` calls into (rustty-os precedent) — not a reimplementation.
+libc = "0.2"
