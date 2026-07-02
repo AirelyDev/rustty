@@ -2192,6 +2192,100 @@ pub enum ScopedApp {
     Quit,
 }
 
+/// Returns a union type that only contains actions that are scoped to
+/// the surface.
+//
+// PORT NOTE (core C14 `performBindingAction`): the `Scoped(.surface)`
+// instantiation of the comptime `Action.Scoped(comptime s: Scope) type`
+// (Binding.zig:1436) — the hand-written surface counterpart of [`ScopedApp`],
+// landed WITH its consumer (`Surface.performBindingAction`, Surface.zig:4809
+// `switch (action.scoped(.surface).?)`), exactly as the note at
+// [`Action::scoped_app`] promised. The variants are the fields whose
+// `scope() == .surface`, in the `Action` union's declaration order (the order
+// the comptime field loop preserves). Unlike `ScopedApp`, surface actions
+// carry payloads: the reference union shares the Action field TYPES (Zig
+// slices are copied headers aliasing the source), so the byte-slice arms
+// (`Csi`/`Esc`/`Text`/`Search`/`SetSurfaceTitle`/`SetTabTitle`/
+// `ActivateKeyTable`/`ActivateKeyTableOnce`) and the owned-`Vec` `CursorKey`
+// BORROW the projected `Action` (`&'a [u8]` / `&'a CursorKey`); the `Copy`
+// payloads are carried by value. The type has no `test {}` blocks in the
+// reference (it is a comptime-generated dispatch type).
+#[derive(Clone, Copy, Debug)]
+pub enum ScopedSurface<'a> {
+    Csi(&'a [u8]),
+    Esc(&'a [u8]),
+    Text(&'a [u8]),
+    CursorKey(&'a CursorKey),
+    Reset,
+    CopyToClipboard(CopyToClipboard),
+    PasteFromClipboard,
+    PasteFromSelection,
+    CopyUrlToClipboard,
+    CopyTitleToClipboard,
+    IncreaseFontSize(f32),
+    DecreaseFontSize(f32),
+    ResetFontSize,
+    SetFontSize(f32),
+    Search(&'a [u8]),
+    SearchSelection,
+    NavigateSearch(NavigateSearch),
+    StartSearch,
+    EndSearch,
+    ClearScreen,
+    SelectAll,
+    ScrollToTop,
+    ScrollToBottom,
+    ScrollToSelection,
+    ScrollToRow(usize),
+    ScrollPageUp,
+    ScrollPageDown,
+    ScrollPageFractional(f32),
+    ScrollPageLines(i16),
+    AdjustSelection(AdjustSelection),
+    JumpToPrompt(i16),
+    WriteScrollbackFile(WriteScreen),
+    WriteScreenFile(WriteScreen),
+    WriteSelectionFile(WriteScreen),
+    NewTab,
+    PreviousTab,
+    NextTab,
+    LastTab,
+    GotoTab(usize),
+    MoveTab(isize),
+    ToggleTabOverview,
+    PromptSurfaceTitle,
+    PromptTabTitle,
+    SetSurfaceTitle(&'a [u8]),
+    SetTabTitle(&'a [u8]),
+    NewSplit(SplitDirection),
+    GotoSplit(SplitFocusDirection),
+    GotoWindow(GotoWindow),
+    ToggleSplitZoom,
+    ToggleReadonly,
+    ResizeSplit(SplitResizeParameter),
+    EqualizeSplits,
+    ResetWindowSize,
+    Inspector(InspectorMode),
+    ShowOnScreenKeyboard,
+    CloseSurface,
+    CloseTab(CloseTabMode),
+    CloseWindow,
+    ToggleMaximize,
+    ToggleFullscreen,
+    ToggleWindowDecorations,
+    ToggleWindowFloatOnTop,
+    ToggleSecureInput,
+    ToggleMouseReporting,
+    ToggleCommandPalette,
+    ToggleBackgroundOpacity,
+    EndKeySequence,
+    ActivateKeyTable(&'a [u8]),
+    ActivateKeyTableOnce(&'a [u8]),
+    DeactivateKeyTable,
+    DeactivateAllKeyTables,
+    Crash(CrashThread),
+}
+
 impl Action {
     /// Returns the scope of an action.
     pub fn scope(&self) -> Scope {
@@ -2336,6 +2430,96 @@ impl Action {
             Action::Undo => Some(ScopedApp::Undo),
             Action::Redo => Some(ScopedApp::Redo),
             Action::Quit => Some(ScopedApp::Quit),
+            _ => None,
+        }
+    }
+
+    /// Returns the scoped version of this action for the surface scope. If the
+    /// action is not surface-scoped then this returns null.
+    //
+    // PORT NOTE: `scoped(self, comptime s)` monomorphizes per scope; this is
+    // the `s = .surface` instantiation (see the note at [`Action::scoped_app`]
+    // and [`ScopedSurface`]). Mirrors the reference's `inline else` + comptime
+    // `scope() != s` prune, written out by hand: the surface arms project into
+    // [`ScopedSurface`] (byte-slice/`CursorKey` payloads borrowed, `Copy`
+    // payloads by value), the app arms return `None`. The partition is proven
+    // consistent with [`Action::scope`] above.
+    pub fn scoped_surface(&self) -> Option<ScopedSurface<'_>> {
+        match self {
+            Action::Csi(v) => Some(ScopedSurface::Csi(v.as_slice())),
+            Action::Esc(v) => Some(ScopedSurface::Esc(v.as_slice())),
+            Action::Text(v) => Some(ScopedSurface::Text(v.as_slice())),
+            Action::CursorKey(v) => Some(ScopedSurface::CursorKey(v)),
+            Action::Reset => Some(ScopedSurface::Reset),
+            Action::CopyToClipboard(v) => Some(ScopedSurface::CopyToClipboard(*v)),
+            Action::PasteFromClipboard => Some(ScopedSurface::PasteFromClipboard),
+            Action::PasteFromSelection => Some(ScopedSurface::PasteFromSelection),
+            Action::CopyUrlToClipboard => Some(ScopedSurface::CopyUrlToClipboard),
+            Action::CopyTitleToClipboard => Some(ScopedSurface::CopyTitleToClipboard),
+            Action::IncreaseFontSize(v) => Some(ScopedSurface::IncreaseFontSize(*v)),
+            Action::DecreaseFontSize(v) => Some(ScopedSurface::DecreaseFontSize(*v)),
+            Action::ResetFontSize => Some(ScopedSurface::ResetFontSize),
+            Action::SetFontSize(v) => Some(ScopedSurface::SetFontSize(*v)),
+            Action::Search(v) => Some(ScopedSurface::Search(v.as_slice())),
+            Action::SearchSelection => Some(ScopedSurface::SearchSelection),
+            Action::NavigateSearch(v) => Some(ScopedSurface::NavigateSearch(*v)),
+            Action::StartSearch => Some(ScopedSurface::StartSearch),
+            Action::EndSearch => Some(ScopedSurface::EndSearch),
+            Action::ClearScreen => Some(ScopedSurface::ClearScreen),
+            Action::SelectAll => Some(ScopedSurface::SelectAll),
+            Action::ScrollToTop => Some(ScopedSurface::ScrollToTop),
+            Action::ScrollToBottom => Some(ScopedSurface::ScrollToBottom),
+            Action::ScrollToSelection => Some(ScopedSurface::ScrollToSelection),
+            Action::ScrollToRow(v) => Some(ScopedSurface::ScrollToRow(*v)),
+            Action::ScrollPageUp => Some(ScopedSurface::ScrollPageUp),
+            Action::ScrollPageDown => Some(ScopedSurface::ScrollPageDown),
+            Action::ScrollPageFractional(v) => Some(ScopedSurface::ScrollPageFractional(*v)),
+            Action::ScrollPageLines(v) => Some(ScopedSurface::ScrollPageLines(*v)),
+            Action::AdjustSelection(v) => Some(ScopedSurface::AdjustSelection(*v)),
+            Action::JumpToPrompt(v) => Some(ScopedSurface::JumpToPrompt(*v)),
+            Action::WriteScrollbackFile(v) => Some(ScopedSurface::WriteScrollbackFile(*v)),
+            Action::WriteScreenFile(v) => Some(ScopedSurface::WriteScreenFile(*v)),
+            Action::WriteSelectionFile(v) => Some(ScopedSurface::WriteSelectionFile(*v)),
+            Action::NewTab => Some(ScopedSurface::NewTab),
+            Action::PreviousTab => Some(ScopedSurface::PreviousTab),
+            Action::NextTab => Some(ScopedSurface::NextTab),
+            Action::LastTab => Some(ScopedSurface::LastTab),
+            Action::GotoTab(v) => Some(ScopedSurface::GotoTab(*v)),
+            Action::MoveTab(v) => Some(ScopedSurface::MoveTab(*v)),
+            Action::ToggleTabOverview => Some(ScopedSurface::ToggleTabOverview),
+            Action::PromptSurfaceTitle => Some(ScopedSurface::PromptSurfaceTitle),
+            Action::PromptTabTitle => Some(ScopedSurface::PromptTabTitle),
+            Action::SetSurfaceTitle(v) => Some(ScopedSurface::SetSurfaceTitle(v.as_slice())),
+            Action::SetTabTitle(v) => Some(ScopedSurface::SetTabTitle(v.as_slice())),
+            Action::NewSplit(v) => Some(ScopedSurface::NewSplit(*v)),
+            Action::GotoSplit(v) => Some(ScopedSurface::GotoSplit(*v)),
+            Action::GotoWindow(v) => Some(ScopedSurface::GotoWindow(*v)),
+            Action::ToggleSplitZoom => Some(ScopedSurface::ToggleSplitZoom),
+            Action::ToggleReadonly => Some(ScopedSurface::ToggleReadonly),
+            Action::ResizeSplit(v) => Some(ScopedSurface::ResizeSplit(*v)),
+            Action::EqualizeSplits => Some(ScopedSurface::EqualizeSplits),
+            Action::ResetWindowSize => Some(ScopedSurface::ResetWindowSize),
+            Action::Inspector(v) => Some(ScopedSurface::Inspector(*v)),
+            Action::ShowOnScreenKeyboard => Some(ScopedSurface::ShowOnScreenKeyboard),
+            Action::CloseSurface => Some(ScopedSurface::CloseSurface),
+            Action::CloseTab(v) => Some(ScopedSurface::CloseTab(*v)),
+            Action::CloseWindow => Some(ScopedSurface::CloseWindow),
+            Action::ToggleMaximize => Some(ScopedSurface::ToggleMaximize),
+            Action::ToggleFullscreen => Some(ScopedSurface::ToggleFullscreen),
+            Action::ToggleWindowDecorations => Some(ScopedSurface::ToggleWindowDecorations),
+            Action::ToggleWindowFloatOnTop => Some(ScopedSurface::ToggleWindowFloatOnTop),
+            Action::ToggleSecureInput => Some(ScopedSurface::ToggleSecureInput),
+            Action::ToggleMouseReporting => Some(ScopedSurface::ToggleMouseReporting),
+            Action::ToggleCommandPalette => Some(ScopedSurface::ToggleCommandPalette),
+            Action::ToggleBackgroundOpacity => Some(ScopedSurface::ToggleBackgroundOpacity),
+            Action::EndKeySequence => Some(ScopedSurface::EndKeySequence),
+            Action::ActivateKeyTable(v) => Some(ScopedSurface::ActivateKeyTable(v.as_slice())),
+            Action::ActivateKeyTableOnce(v) => {
+                Some(ScopedSurface::ActivateKeyTableOnce(v.as_slice()))
+            }
+            Action::DeactivateKeyTable => Some(ScopedSurface::DeactivateKeyTable),
+            Action::DeactivateAllKeyTables => Some(ScopedSurface::DeactivateAllKeyTables),
+            Action::Crash(v) => Some(ScopedSurface::Crash(*v)),
             _ => None,
         }
     }

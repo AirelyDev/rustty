@@ -894,9 +894,13 @@ glue, NOT a port) with 13 seam tests. Deferral ledger:
   `Scoped(.app)` instantiation now lands in rustty-input as the hand-written
   `ScopedApp` fieldless enum (Action-declaration-order fields; all app-scoped
   actions are void) + `Action::scoped_app`, WITH its first consumer
-  (App.performAction/keyEvent). **Still deferred: `Scoped(.surface)`** — it
-  lands with ITS consumer, core C14 `Surface.performBindingAction`
-  (Surface.zig:4775). 0 tests either way.
+  (App.performAction/keyEvent). ~~**Still deferred: `Scoped(.surface)`**~~
+  **RESOLVED (core C14a):** the `Scoped(.surface)` instantiation now lands in
+  rustty-input as the hand-written `ScopedSurface<'a>` enum
+  (Action-declaration-order surface fields; byte-slice/`CursorKey` payloads
+  borrowed, `Copy` payloads by value) + `Action::scoped_surface`, WITH its
+  consumer core C14a `Surface.performBindingAction` (Surface.zig:4809). 0 tests
+  either way.
 - **SEQUENCING STUBS (not deferrals; later chunks fill IN PLACE):** the four
   core-`Surface` methods App dispatches into — `close` (C6, Surface.zig:842),
   `needsConfirmQuit` (C6, :938), `handleMessage` (C7, :960),
@@ -1354,3 +1358,82 @@ resolved. Ledger:
   `scrollToBottom` carries the only NEW `#[allow(dead_code)]` (its
   :4829/:4856/:4872 performBindingAction and :5891 completeClipboardPaste
   callsites are C14a/C15).
+
+## rustty-core C14a (core tier) — performBindingAction first half (the highest-review-load switch)
+
+Chunk C14a of CORE_BLUEPRINT §6 lands Surface.zig:4775-5202 in
+`crates/rustty-core/src/surface.rs`: `performBindingAction`'s app-scoped
+forwarding block + the surface-scoped switch arms `.csi`/`.esc` through
+`.scroll_to_row`. The second half (`.scroll_to_selection`.. Surface.zig:5204-5625)
++ `closingAction` land with C14b. Every dispatch arm was checked against the
+CORE_BLUEPRINT §2 [ADV-FIX 4] regenerated Action checklist; `copy_title_to_clipboard`
+(:5065) is live. Scoped Surface.zig:4775-5202 G3b → 45 distinctive comments,
+missing=0. No new tests (0 in the reference; Surface<A> is untested-by-construction).
+
+- **`Scoped(.surface)` machinery (rustty-input):** `ScopedSurface<'a>` +
+  `Action::scoped_surface` added to `binding.rs` — the C4-deferred surface
+  scoped-union, landed with this consumer (see the C4 note). rustty-input test
+  count unchanged (113; the reference has no `test {}` for these).
+- **`app::Error` -> `surface::Error` bridge:** the app-scoped block calls
+  `App.newWindow`/`App.performAction` (returning `app::Error`); a new
+  `From<app::Error> for surface::Error` folds it back into the surface error set
+  (`Apprt` passes through, `Surface` unwraps) — the reference's single inferred
+  error union. Non-circular (opposite edge already exists).
+- **`scrollToBottom` now LIVE:** the csi/esc/cursor_key arms are its first live
+  callers (:4829/:4856/:4872), so its `#[allow(dead_code)]` is removed (the C15
+  completeClipboardPaste :5891 caller is still pending but no longer gates it).
+- **write_stable -> writeReq (`.cursor_key`, :4880/:4882):** the reference
+  `.{ .write_stable = ck.normal }` aliases the keybind config's STABLE slice
+  storage. The Rust `CursorKey` OWNS its `Vec<u8>` sequences (byte-slice
+  convention) and `action` is a cloned, stack-local copy dropped at return, so
+  no stable pointer exists; `queueIo` also requires `Message<'static>`. The
+  bytes are COPIED via `termio::Message::writeReq` (write_small/write_alloc) —
+  a necessary, documented deviation preserving observable behavior (bytes reach
+  the pty either way).
+- **`dupeZ` collapse (`.set_surface_title`/`.set_tab_title`, :5145/:5155):** the
+  reference `dupeZ`+`free` NUL-terminates for the `[:0]const u8` apprt field; the
+  Rust `SetTitle.title` models that as borrowed `&[u8]` (sentinel deferred to the
+  C-ABI pinning, apprt-api), so the owned copy collapses and the borrowed binding
+  bytes pass directly to the synchronous `performAction`.
+- **`@max(0, @min(255, delta))` NaN-fidelity (`.increase`/`.decrease_font_size`,
+  :5083/:5098):** kept as nested `f32::max`/`f32::min` (NOT `.clamp()`): Zig
+  `@max`/`@min` and Rust `f32::max`/`f32::min` return the non-NaN operand on NaN
+  (NaN delta -> 255), which `f32::clamp` does not (returns NaN). `manual_clamp`
+  lint allowed at each site to preserve the semantics.
+- **Mutex fidelity:** the six `defer unlock` regions (csi/esc scroll block, text
+  scroll block, cursor_key `normal:` block, reset, copy_to_clipboard, copy_url,
+  clear_screen alternate-check, scroll_to_row) realize the explicit unlock at
+  EVERY exit — the C9..C13 convention; the copy_to_clipboard/copy_url fallible
+  calls unlock before propagating/returning.
+
+### DEFERRED (within C14a) — `.search` arm (Surface.zig:4933) — the ONLY unported first-half arm
+
+The `.search` arm body is preserved VERBATIM as comments above an
+`unimplemented!()` (the GPU/xev-leaf precedent), blocked on TWO cross-cutting
+issues out of scope for this chunk:
+
+1. **Search-thread mutex-type unification.** The reference constructs the vt
+   search thread with `.mutex = self.renderer_state.mutex`. In the Rust port the
+   renderer `State.mutex` was retyped (C0) to the guard-less
+   `rustty_zigstd::thread::Mutex`, but `terminal::search::thread::Options.mutex`
+   is still `*const std::sync::Mutex<()>` (ported before C0) and its four
+   internal lock sites use std's RAII guard (`select`/`change_needle`/`feed`/
+   `refresh`, several spanning `?`-carrying scopes). The reference shares ONE
+   `*std.Thread.Mutex`, so `Options.mutex` + those lock sites + the search-thread
+   test must be retyped to the shared zigstd mutex (rustty-vt already deps
+   rustty-zigstd — no new crate edge). **Target: a focused rustty-vt follow-up
+   before/with C14b or C15.**
+2. **Self-referential long-lived spawn.** The reference stores the search state
+   into `self.search` FIRST (`.thread = undefined`), then spawns the OS thread
+   with `&s.state` (a stable pointer into the stored `Search`), then assigns the
+   handle. The ported `Search.thread` is a bare `JoinHandle` (not
+   `undefined`-able), so the construct-then-spawn order needs a dedicated design
+   (e.g. `Box`-ing the state for a location-independent address, or an
+   `Option<JoinHandle>`), settled together with (1).
+
+Every OTHER search-related first-half arm ports LIVE: `.start_search` /
+`.search_selection` (apprt-only notify), `.end_search` (`self.search.take()` +
+`deinit` + apprt notify), `.navigate_search` (`mailbox.push` + `wakeup.notify`
+on an existing search). With `.search` deferred, `self.search` is always `None`,
+so those arms' Some-branches are faithfully present but dormant until `.search`
+lands.

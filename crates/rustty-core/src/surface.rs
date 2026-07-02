@@ -211,8 +211,8 @@ use rustty_datastruct::blocking_queue::{Size as QueueSize, Timeout};
 // struct is also named `Surface`).
 use rustty_apprt_api::action::{
     CellSize, ColorChange, ColorKind, CommandFinished, ConfigChange, InitialSize, KeySequence,
-    KeyTable, MouseOverLink, MouseVisibility, OpenUrl, OpenUrlKind, Pwd, ReloadConfig,
-    SearchSelected, SearchTotal, SecureInput, SetTitle, SizeLimit,
+    KeyTable, MouseOverLink, MouseVisibility, OpenUrl, OpenUrlKind, PromptTitle, Pwd, ReloadConfig,
+    SearchSelected, SearchTotal, SecureInput, SetTitle, SizeLimit, StartSearch,
 };
 use rustty_apprt_api::Surface as ApprtSurface;
 
@@ -1191,6 +1191,21 @@ pub enum Error {
 impl From<apprt::ApprtError> for Error {
     fn from(err: apprt::ApprtError) -> Error {
         Error::Apprt(err)
+    }
+}
+
+// PORT NOTE (chunk C14a): `performBindingAction`'s app-scoped block calls
+// `App.newWindow`/`App.performAction`, whose `app::Error` must fold back into
+// the surface `Error` set (the reference's single inferred error union). The
+// `app::Error` variants map 1:1 — `Apprt` passes through, `Surface` unwraps to
+// the surface error it already carries (`app::Error` holds `From<surface::Error>`
+// for the opposite edge, so this bridge is non-circular).
+impl From<crate::app::Error> for Error {
+    fn from(err: crate::app::Error) -> Error {
+        match err {
+            crate::app::Error::Apprt(e) => Error::Apprt(e),
+            crate::app::Error::Surface(e) => e,
+        }
     }
 }
 
@@ -9950,10 +9965,10 @@ where
     /// Precondition: the render_state mutex must be held.
     // fn scrollToBottom(self: *Surface) !void {
     //
-    // PORT NOTE: the C14 performBindingAction (:4829/:4856/:4872) and C15
-    // completeClipboardPaste (:5891) callsites land later; the allow is
-    // removed when they do. The inferred `!void` is the [`Error`] union.
-    #[allow(dead_code)]
+    // PORT NOTE: now LIVE via the C14a performBindingAction csi/esc/cursor_key
+    // arms (:4829/:4856/:4872); the remaining C15 completeClipboardPaste
+    // (:5891) callsite lands later. The inferred `!void` is the [`Error`]
+    // union.
     fn scrollToBottom(&mut self) -> Result<(), Error> {
         // self.io.terminal.scrollViewport(.{ .bottom = {} });
         self.io
@@ -10021,11 +10036,861 @@ where
     /// will ever return false. We can expand this in the future if it becomes
     /// useful. We did previous/next tab so we could implement #498.
     //
-    // PORT NOTE (STUB — chunk C14 fills): `pub fn performBindingAction(self:
-    // *Surface, action: input.Binding.Action) !bool` — Surface.zig:4775.
+    // pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool {
+    //
+    // PORT NOTE (chunk C14a — Surface.zig:4775-5202, the first half of the
+    // switch; the second half `.scroll_to_selection`.. lands with C14b). The
+    // `.search` arm is DEFERRED (DEFERRALS.md "core C14a"): it constructs the
+    // vt search thread sharing `self.renderer_state.mutex`, which needs a
+    // cross-crate mutex-type unification (the search `Options.mutex` is still
+    // `*const std::sync::Mutex<()>` while the shared renderer mutex is the
+    // guard-less `rustty_zigstd::thread::Mutex`) AND a self-referential
+    // long-lived thread spawn (a stable pointer into `self.search.?.state`).
     pub fn performBindingAction(&mut self, action: binding::Action) -> Result<bool, Error> {
-        let _ = action;
-        unimplemented!("Surface.performBindingAction lands with core chunk C14 (Surface.zig:4775)")
+        // Forward app-scoped actions to the app. Some app-scoped actions are
+        // special-cased here because they do some special things when performed
+        // from the surface.
+        // if (action.scoped(.app)) |app_action| {
+        if let Some(app_action) = action.scoped_app() {
+            // switch (app_action) {
+            match app_action {
+                // .new_window => try self.app.newWindow(
+                //     self.rt_app,
+                //     .{ .parent = self },
+                // ),
+                binding::ScopedApp::NewWindow => {
+                    let self_ptr: *mut Surface<A> = self;
+                    let rt_app: &A = unsafe { &*self.rt_app };
+                    unsafe { &mut *self.app }.newWindow(
+                        rt_app,
+                        crate::app::NewWindow {
+                            parent: Some(self_ptr),
+                        },
+                    )?;
+                }
+
+                // Undo and redo both support both surface and app targeting.
+                // If we are triggering on a surface then we perform the
+                // action with the surface target.
+                // .undo => return try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .undo,
+                //     {},
+                // ),
+                binding::ScopedApp::Undo => {
+                    return Ok(unsafe { &*self.rt_app }
+                        .perform_action(apprt::Target::Surface(&*self), apprt::Action::Undo)?);
+                }
+
+                // .redo => return try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .redo,
+                //     {},
+                // ),
+                binding::ScopedApp::Redo => {
+                    return Ok(unsafe { &*self.rt_app }
+                        .perform_action(apprt::Target::Surface(&*self), apprt::Action::Redo)?);
+                }
+
+                // else => try self.app.performAction(
+                //     self.rt_app,
+                //     action.scoped(.app).?,
+                // ),
+                //
+                // (`app_action` IS `action.scoped(.app).?`, the value the
+                // reference re-derives here.)
+                _ => {
+                    let rt_app: &A = unsafe { &*self.rt_app };
+                    unsafe { &mut *self.app }.performAction(rt_app, app_action)?;
+                }
+            }
+            // return true;
+            return Ok(true);
+        }
+
+        // switch (action.scoped(.surface).?) {
+        match action.scoped_surface().unwrap() {
+            // .csi, .esc => |data| {
+            binding::ScopedSurface::Csi(data) | binding::ScopedSurface::Esc(data) => {
+                // We need to send the CSI/ESC sequence as a single write request.
+                // If you split it across two then the shell can interpret it
+                // as two literals.
+                // var buf: [128]u8 = undefined;
+                let mut buf = [0u8; 128];
+                // const full_data = switch (action) {
+                //     .csi => try std.fmt.bufPrint(&buf, "\x1b[{s}", .{data}),
+                //     .esc => try std.fmt.bufPrint(&buf, "\x1b{s}", .{data}),
+                //     else => unreachable,
+                // };
+                //
+                // (fixed-buffer `bufPrint` over a Cursor — the encodeKey
+                // precedent; the reference's `error.NoSpaceLeft` surfaces as
+                // io's `WriteZero`, `try`-propagated [`Error::Io`].)
+                let full_data_len = {
+                    use std::io::Write as _;
+                    let mut writer = std::io::Cursor::new(&mut buf[..]);
+                    match action {
+                        binding::Action::Csi(_) => {
+                            writer.write_all(b"\x1b[")?;
+                            writer.write_all(data)?;
+                        }
+                        binding::Action::Esc(_) => {
+                            writer.write_all(b"\x1b")?;
+                            writer.write_all(data)?;
+                        }
+                        // else => unreachable,
+                        _ => unreachable!(),
+                    }
+                    writer.position() as usize
+                };
+                let full_data = &buf[..full_data_len];
+                // self.queueIo(try termio.Message.writeReq(
+                //     self.alloc,
+                //     full_data,
+                // ), .unlocked);
+                self.queueIo(
+                    termio::Message::writeReq(full_data),
+                    termio::termio_impl::MutexState::Unlocked,
+                );
+
+                // CSI/ESC triggers a scroll.
+                // {
+                //     self.renderer_state.mutex.lock();
+                //     defer self.renderer_state.mutex.unlock();
+                //     self.scrollToBottom() catch |err| {
+                //         log.warn("error scrolling to bottom err={}", .{err});
+                //     };
+                // }
+                {
+                    unsafe { (*self.renderer_state.mutex).lock() };
+                    if let Err(_err) = self.scrollToBottom() {
+                        // log.warn("error scrolling to bottom err={}", .{err});
+                    }
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                }
+            }
+
+            // .text => |data| {
+            binding::ScopedSurface::Text(data) => {
+                // For text we always allocate just because its easier to
+                // handle all cases that way.
+                // const buf = try self.alloc.alloc(u8, data.len);
+                // defer self.alloc.free(buf);
+                let mut buf = vec![0u8; data.len()];
+                // const text = configpkg.string.parse(buf, data) catch |err| {
+                //     log.warn(
+                //         "error parsing text binding text={s} err={}",
+                //         .{ data, err },
+                //     );
+                //     return true;
+                // };
+                //
+                // (the reference `parse` returns a slice; the ported `parse`
+                // writes into `buf` and returns the written length.)
+                let text_len = match configpkg::string::parse(&mut buf, data) {
+                    Ok(n) => n,
+                    Err(_err) => {
+                        // log.warn("error parsing text binding text={s} err={}", .{ data, err });
+                        return Ok(true);
+                    }
+                };
+                let text = &buf[..text_len];
+                // self.queueIo(try termio.Message.writeReq(
+                //     self.alloc,
+                //     text,
+                // ), .unlocked);
+                self.queueIo(
+                    termio::Message::writeReq(text),
+                    termio::termio_impl::MutexState::Unlocked,
+                );
+
+                // Text triggers a scroll.
+                // {
+                //     self.renderer_state.mutex.lock();
+                //     defer self.renderer_state.mutex.unlock();
+                //     self.scrollToBottom() catch |err| {
+                //         log.warn("error scrolling to bottom err={}", .{err});
+                //     };
+                // }
+                {
+                    unsafe { (*self.renderer_state.mutex).lock() };
+                    if let Err(_err) = self.scrollToBottom() {
+                        // log.warn("error scrolling to bottom err={}", .{err});
+                    }
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                }
+            }
+
+            // .cursor_key => |ck| {
+            binding::ScopedSurface::CursorKey(ck) => {
+                // We send a different sequence depending on if we're
+                // in cursor keys mode. We're in "normal" mode if cursor
+                // keys mode is NOT set.
+                // const normal = normal: {
+                //     self.renderer_state.mutex.lock();
+                //     defer self.renderer_state.mutex.unlock();
+                //
+                //     // With the lock held, we must scroll to the bottom.
+                //     // We always scroll to the bottom for these inputs.
+                //     self.scrollToBottom() catch |err| {
+                //         log.warn("error scrolling to bottom err={}", .{err});
+                //     };
+                //
+                //     break :normal !self.io.terminal.modes.get(.cursor_keys);
+                // };
+                let normal = {
+                    unsafe { (*self.renderer_state.mutex).lock() };
+
+                    // With the lock held, we must scroll to the bottom.
+                    // We always scroll to the bottom for these inputs.
+                    if let Err(_err) = self.scrollToBottom() {
+                        // log.warn("error scrolling to bottom err={}", .{err});
+                    }
+
+                    let normal = !self
+                        .io
+                        .terminal
+                        .modes
+                        .get(terminal::modes::Mode::CursorKeys);
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    normal
+                };
+
+                // if (normal) {
+                //     self.queueIo(.{ .write_stable = ck.normal }, .unlocked);
+                // } else {
+                //     self.queueIo(.{ .write_stable = ck.application }, .unlocked);
+                // }
+                //
+                // PORT NOTE (write_stable -> writeReq): the reference
+                // `write_stable` aliases the keybind config's stable slice
+                // storage. The Rust `CursorKey` OWNS its `Vec<u8>` sequences
+                // (the byte-slice convention) and this `action` is a cloned,
+                // stack-local copy dropped at return, so no "stable pointer"
+                // exists; `queueIo` requires a `Message<'static>`, so the bytes
+                // are COPIED via `writeReq` (write_small/write_alloc).
+                if normal {
+                    self.queueIo(
+                        termio::Message::writeReq(&ck.normal),
+                        termio::termio_impl::MutexState::Unlocked,
+                    );
+                } else {
+                    self.queueIo(
+                        termio::Message::writeReq(&ck.application),
+                        termio::termio_impl::MutexState::Unlocked,
+                    );
+                }
+            }
+
+            // .reset => {
+            binding::ScopedSurface::Reset => {
+                // self.renderer_state.mutex.lock();
+                // defer self.renderer_state.mutex.unlock();
+                // self.renderer_state.terminal.fullReset();
+                unsafe { (*self.renderer_state.mutex).lock() };
+                unsafe { (*self.renderer_state.terminal).full_reset() };
+                unsafe { (*self.renderer_state.mutex).unlock() };
+            }
+
+            // .start_search => {
+            binding::ScopedSurface::StartSearch => {
+                // To save resources, we don't actually start a search here,
+                // we just notify the apprt. The real thread will start when
+                // the first needles are set.
+                // return try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .start_search,
+                //     .{ .needle = "" },
+                // );
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::StartSearch(StartSearch { needle: b"" }),
+                )?);
+            }
+
+            // .search_selection => {
+            binding::ScopedSurface::SearchSelection => {
+                // const selection = try self.selectionString(self.alloc) orelse return false;
+                // defer self.alloc.free(selection);
+                //
+                // (the owned `Vec` drops at scope end.)
+                let selection = match self.selectionString(self.alloc)? {
+                    Some(s) => s,
+                    None => return Ok(false),
+                };
+                // return try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .start_search,
+                //     .{ .needle = selection },
+                // );
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::StartSearch(StartSearch { needle: &selection }),
+                )?);
+            }
+
+            // .end_search => {
+            binding::ScopedSurface::EndSearch => {
+                // We only return that this was performed if we actually
+                // stopped a search, but we also send the apprt end_search so
+                // that GUIs can clean up stale stuff.
+                // const performed = self.search != null;
+                let performed = self.search.is_some();
+
+                // if (self.search) |*s| {
+                //     s.deinit();
+                //     self.search = null;
+                // }
+                //
+                // (`take()` is the reference's `deinit` + `= null`; `deinit`
+                // consumes the by-value `Search`.)
+                if let Some(s) = self.search.take() {
+                    s.deinit();
+                }
+
+                // _ = try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .end_search,
+                //     {},
+                // );
+                let _ = unsafe { &*self.rt_app }
+                    .perform_action(apprt::Target::Surface(&*self), apprt::Action::EndSearch)?;
+
+                // return performed;
+                return Ok(performed);
+            }
+
+            // .search => |text| search: {
+            binding::ScopedSurface::Search(_text) => {
+                // DEFERRED (DEFERRALS.md "core C14a"): the reference body
+                // constructs and spawns the vt search thread, sharing
+                // `self.renderer_state.mutex` into `terminal.search.Thread`'s
+                // `Options.mutex`. Two blockers keep this out of C14a:
+                //   1. Mutex-type unification: the search `Options.mutex` is
+                //      still `*const std::sync::Mutex<()>` (ported before the
+                //      C0 renderer-mutex retype) while the shared renderer
+                //      mutex is `*mut rustty_zigstd::thread::Mutex`. The
+                //      reference shares ONE `*std.Thread.Mutex`, so the search
+                //      thread's `Options.mutex` + its guard-based lock sites
+                //      must be retyped to the guard-less zigstd mutex.
+                //   2. Self-referential long-lived spawn: the thread receives
+                //      `&s.state` where `s = &self.search.?` (a stable pointer
+                //      into the stored `Search`), but the ported `Search.thread`
+                //      is a bare `JoinHandle` (not `undefined`-able), so the
+                //      construct-then-spawn order needs a dedicated design.
+                // Preserved verbatim:
+                //
+                // const s: *Search = if (self.search) |*s| s else init: {
+                //     // If we're stopping the search and we had no prior search,
+                //     // then there is nothing to do.
+                //     if (text.len == 0) return false;
+                //
+                //     // We need to assign directly to self.search because we need
+                //     // a stable pointer back to the thread state.
+                //     self.search = .{
+                //         .state = try .init(self.alloc, .{
+                //             .mutex = self.renderer_state.mutex,
+                //             .terminal = self.renderer_state.terminal,
+                //             .event_cb = &searchCallback,
+                //             .event_userdata = self,
+                //         }),
+                //         .thread = undefined,
+                //     };
+                //     const s: *Search = &self.search.?;
+                //     errdefer s.state.deinit();
+                //
+                //     s.thread = try .spawn(
+                //         .{},
+                //         terminal.search.Thread.threadMain,
+                //         .{&s.state},
+                //     );
+                //     s.thread.setName("search") catch {};
+                //
+                //     break :init s;
+                // };
+                //
+                // // Zero-length text means stop searching.
+                // if (text.len == 0) {
+                //     s.deinit();
+                //     self.search = null;
+                //     break :search;
+                // }
+                //
+                // _ = s.state.mailbox.push(
+                //     .{ .change_needle = try .init(
+                //         self.alloc,
+                //         text,
+                //     ) },
+                //     .forever,
+                // );
+                // s.state.wakeup.notify() catch {};
+                unimplemented!(
+                    "Surface.performBindingAction .search arm — deferred on search-thread \
+                     mutex-type unification + self-referential spawn (DEFERRALS.md core C14a; \
+                     Surface.zig:4933)"
+                )
+            }
+
+            // .navigate_search => |nav| {
+            binding::ScopedSurface::NavigateSearch(nav) => {
+                // const s: *Search = if (self.search) |*s| s else return false;
+                let s = match self.search.as_mut() {
+                    Some(s) => s,
+                    None => return Ok(false),
+                };
+                // _ = s.state.mailbox.push(
+                //     .{ .select = switch (nav) {
+                //         .next => .next,
+                //         .previous => .prev,
+                //     } },
+                //     .forever,
+                // );
+                let _ = s.state.mailbox.push(
+                    terminal::search::thread::Message::Select(match nav {
+                        binding::NavigateSearch::Next => terminal::search::screen::Select::Next,
+                        binding::NavigateSearch::Previous => terminal::search::screen::Select::Prev,
+                    }),
+                    Timeout::Forever,
+                );
+                // s.state.wakeup.notify() catch {};
+                let _ = s.state.wakeup.notify();
+            }
+
+            // .copy_to_clipboard => |format| {
+            binding::ScopedSurface::CopyToClipboard(format) => {
+                // self.renderer_state.mutex.lock();
+                // defer self.renderer_state.mutex.unlock();
+                //
+                // (the deferred unlock at every exit — the selectionString C9
+                // convention; the fallible calls unlock before propagating.)
+                unsafe { (*self.renderer_state.mutex).lock() };
+
+                // if (self.io.terminal.screens.active.selection) |sel| {
+                if let Some(sel) = unsafe { (*self.io.terminal.screens.active).selection } {
+                    // try self.copySelectionToClipboards(
+                    //     sel,
+                    //     &.{.standard},
+                    //     format,
+                    // );
+                    if let Err(err) =
+                        self.copySelectionToClipboards(sel, &[apprt::Clipboard::Standard], format)
+                    {
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Err(err);
+                    }
+
+                    // Clear the selection if configured to do so.
+                    // if (self.config.selection_clear_on_copy) {
+                    if self.config.selection_clear_on_copy {
+                        // if (self.setSelection(null)) {
+                        //     self.queueRender() catch |err| {
+                        //         log.warn("failed to queue render after clear selection err={}", .{err});
+                        //     };
+                        // } else |err| {
+                        //     log.warn("failed to clear selection after copy err={}", .{err});
+                        // }
+                        match self.setSelection(None) {
+                            Ok(()) => {
+                                if let Err(_err) = self.queueRender() {
+                                    // log.warn("failed to queue render after clear selection err={}", .{err});
+                                }
+                            }
+                            Err(_err) => {
+                                // log.warn("failed to clear selection after copy err={}", .{err});
+                            }
+                        }
+                    }
+
+                    // return true;
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    return Ok(true);
+                }
+
+                // return false;
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return Ok(false);
+            }
+
+            // .copy_url_to_clipboard => {
+            binding::ScopedSurface::CopyUrlToClipboard => {
+                // If the mouse isn't over a link, nothing we can do.
+                // if (!self.mouse.over_link) return false;
+                if !self.mouse.over_link {
+                    return Ok(false);
+                }
+                // const pos = try self.rt_surface.getCursorPos();
+                let pos = unsafe { &*self.rt_surface }.get_cursor_pos()?;
+
+                // self.renderer_state.mutex.lock();
+                // defer self.renderer_state.mutex.unlock();
+                //
+                // (the deferred unlock at every exit — the C9 convention.)
+                unsafe { (*self.renderer_state.mutex).lock() };
+                // if (try self.linkAtPos(pos)) |link_info| {
+                let link_info = match self.linkAtPos(pos) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Err(err);
+                    }
+                };
+                if let Some(link_info) = link_info {
+                    // const url_text = switch (link_info.action) {
+                    let url_text: Vec<u8> = match link_info.action {
+                        // .open => url_text: {
+                        link::Action::Open => {
+                            // For regex links, get the text from selection
+                            // break :url_text (self.io.terminal.screens.active.selectionString(self.alloc, .{
+                            //     .sel = link_info.selection,
+                            //     .trim = self.config.clipboard_trim_trailing_spaces,
+                            // })) catch |err| {
+                            //     log.err("error reading url string err={}", .{err});
+                            //     return false;
+                            // };
+                            let r = unsafe { &mut *self.io.terminal.screens.active }
+                                .selection_string(
+                                    self.alloc,
+                                    terminal::screen::SelectionString {
+                                        sel: link_info.selection,
+                                        trim: self.config.clipboard_trim_trailing_spaces,
+                                        map: None,
+                                    },
+                                );
+                            match r {
+                                Ok(v) => v,
+                                Err(_err) => {
+                                    // log.err("error reading url string err={}", .{err});
+                                    unsafe { (*self.renderer_state.mutex).unlock() };
+                                    return Ok(false);
+                                }
+                            }
+                        }
+
+                        // ._open_osc8 => url_text: {
+                        link::Action::OpenOsc8 => {
+                            // For OSC8 links, get the URI directly from hyperlink data
+                            // const uri = self.osc8URI(link_info.selection.start()) orelse {
+                            //     log.warn("failed to get URI for OSC8 hyperlink", .{});
+                            //     return false;
+                            // };
+                            let uri = match self.osc8URI(link_info.selection.start()) {
+                                Some(v) => v,
+                                None => {
+                                    // log.warn("failed to get URI for OSC8 hyperlink", .{});
+                                    unsafe { (*self.renderer_state.mutex).unlock() };
+                                    return Ok(false);
+                                }
+                            };
+                            // break :url_text try self.alloc.dupeZ(u8, uri);
+                            //
+                            // (`dupeZ` — an owned copy of the raw URI bytes; the
+                            // NUL sentinel drops per the byte-slice convention,
+                            // the processLinks C13 precedent.)
+                            uri.to_vec()
+                        }
+                    };
+                    // defer self.alloc.free(url_text);
+                    // (the owned `Vec` drops at scope end.)
+
+                    // self.rt_surface.setClipboard(.standard, &.{.{
+                    //     .mime = "text/plain",
+                    //     .data = url_text,
+                    // }}, false) catch |err| {
+                    //     log.err("error copying url to clipboard err={}", .{err});
+                    //     return false;
+                    // };
+                    if let Err(_err) = unsafe { &*self.rt_surface }.set_clipboard(
+                        apprt::Clipboard::Standard,
+                        &[apprt::ClipboardContent {
+                            mime: b"text/plain".as_slice(),
+                            data: &url_text,
+                        }],
+                        false,
+                    ) {
+                        // log.err("error copying url to clipboard err={}", .{err});
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Ok(false);
+                    }
+
+                    // return true;
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                    return Ok(true);
+                }
+
+                // return false;
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return Ok(false);
+            }
+
+            // .copy_title_to_clipboard => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .copy_title_to_clipboard,
+            //     {},
+            // ),
+            binding::ScopedSurface::CopyTitleToClipboard => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::CopyTitleToClipboard,
+                )?);
+            }
+
+            // .paste_from_clipboard => return try self.startClipboardRequest(
+            //     .standard,
+            //     .{ .paste = {} },
+            // ),
+            binding::ScopedSurface::PasteFromClipboard => {
+                return self.startClipboardRequest(
+                    apprt::Clipboard::Standard,
+                    apprt::ClipboardRequest::Paste,
+                );
+            }
+
+            // .paste_from_selection => return try self.startClipboardRequest(
+            //     .selection,
+            //     .{ .paste = {} },
+            // ),
+            binding::ScopedSurface::PasteFromSelection => {
+                return self.startClipboardRequest(
+                    apprt::Clipboard::Selection,
+                    apprt::ClipboardRequest::Paste,
+                );
+            }
+
+            // .increase_font_size => |delta| {
+            binding::ScopedSurface::IncreaseFontSize(delta) => {
+                // Max delta is somewhat arbitrary.
+                // const clamped_delta = @max(0, @min(255, delta));
+                //
+                // PORT NOTE: kept as nested max/min (NOT `.clamp()`): Zig
+                // `@max`/`@min` return the non-NaN operand on NaN input (so a
+                // NaN `delta` clamps to 255), which Rust `f32::max`/`f32::min`
+                // match but `f32::clamp` does NOT (it returns NaN) — the
+                // manual-clamp lint is allowed to preserve that semantics.
+                #[allow(clippy::manual_clamp)]
+                let clamped_delta = f32::max(0.0, f32::min(255.0, delta));
+
+                // log.debug("increase font size={}", .{clamped_delta});
+
+                // Max point size is somewhat arbitrary.
+                // var size = self.font_size;
+                let mut size = self.font_size;
+                // size.points = @min(size.points + clamped_delta, 255);
+                size.points = f32::min(size.points + clamped_delta, 255.0);
+                // try self.setFontSize(size);
+                self.setFontSize(size)?;
+
+                // Mark that we manually adjusted the font size
+                // self.font_size_adjusted = true;
+                self.font_size_adjusted = true;
+            }
+
+            // .decrease_font_size => |delta| {
+            binding::ScopedSurface::DecreaseFontSize(delta) => {
+                // Max delta is somewhat arbitrary.
+                // const clamped_delta = @max(0, @min(255, delta));
+                //
+                // PORT NOTE: kept as nested max/min (NOT `.clamp()`): Zig
+                // `@max`/`@min` return the non-NaN operand on NaN input (so a
+                // NaN `delta` clamps to 255), which Rust `f32::max`/`f32::min`
+                // match but `f32::clamp` does NOT (it returns NaN) — the
+                // manual-clamp lint is allowed to preserve that semantics.
+                #[allow(clippy::manual_clamp)]
+                let clamped_delta = f32::max(0.0, f32::min(255.0, delta));
+
+                // log.debug("decrease font size={}", .{clamped_delta});
+
+                // var size = self.font_size;
+                let mut size = self.font_size;
+                // size.points = @max(1, size.points - clamped_delta);
+                size.points = f32::max(1.0, size.points - clamped_delta);
+                // try self.setFontSize(size);
+                self.setFontSize(size)?;
+
+                // Mark that we manually adjusted the font size
+                // self.font_size_adjusted = true;
+                self.font_size_adjusted = true;
+            }
+
+            // .reset_font_size => {
+            binding::ScopedSurface::ResetFontSize => {
+                // log.debug("reset font size", .{});
+
+                // var size = self.font_size;
+                let mut size = self.font_size;
+                // size.points = self.config.original_font_size;
+                size.points = self.config.original_font_size;
+                // try self.setFontSize(size);
+                self.setFontSize(size)?;
+
+                // Reset font size also resets the manual adjustment state
+                // self.font_size_adjusted = false;
+                self.font_size_adjusted = false;
+            }
+
+            // .set_font_size => |points| {
+            binding::ScopedSurface::SetFontSize(points) => {
+                // log.debug("set font size={d}", .{points});
+
+                // var size = self.font_size;
+                let mut size = self.font_size;
+                // size.points = std.math.clamp(points, 1.0, 255.0);
+                size.points = points.clamp(1.0, 255.0);
+                // try self.setFontSize(size);
+                self.setFontSize(size)?;
+
+                // Mark that we manually adjusted the font size
+                // self.font_size_adjusted = true;
+                self.font_size_adjusted = true;
+            }
+
+            // .prompt_surface_title => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .prompt_title,
+            //     .surface,
+            // ),
+            binding::ScopedSurface::PromptSurfaceTitle => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::PromptTitle(PromptTitle::Surface),
+                )?);
+            }
+
+            // .prompt_tab_title => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .prompt_title,
+            //     .tab,
+            // ),
+            binding::ScopedSurface::PromptTabTitle => {
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::PromptTitle(PromptTitle::Tab),
+                )?);
+            }
+
+            // .set_surface_title => |v| {
+            binding::ScopedSurface::SetSurfaceTitle(v) => {
+                // const title = try self.alloc.dupeZ(u8, v);
+                // defer self.alloc.free(title);
+                //
+                // PORT NOTE: the `dupeZ` NUL-termination collapses —
+                // `SetTitle.title` models `[:0]const u8` as borrowed `&[u8]`
+                // (the sentinel is deferred C-ABI pinning, apprt-api action.rs),
+                // so the owned copy is unnecessary and the borrowed binding
+                // bytes are passed directly to the synchronous performAction.
+                // return try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .set_title,
+                //     .{ .title = title },
+                // );
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::SetTitle(SetTitle { title: v }),
+                )?);
+            }
+
+            // .set_tab_title => |v| {
+            binding::ScopedSurface::SetTabTitle(v) => {
+                // const title = try self.alloc.dupeZ(u8, v);
+                // defer self.alloc.free(title);
+                //
+                // PORT NOTE: see `.set_surface_title` — the `dupeZ` collapses
+                // into the deferred C-ABI sentinel; the borrowed bytes pass
+                // directly.
+                // return try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .set_tab_title,
+                //     .{ .title = title },
+                // );
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::SetTabTitle(SetTitle { title: v }),
+                )?);
+            }
+
+            // .clear_screen => {
+            binding::ScopedSurface::ClearScreen => {
+                // This is a duplicate of some of the logic in termio.clearScreen
+                // but we need to do this here so we can know the answer before
+                // we send the message. If the currently active screen is on the
+                // alternate screen then clear screen does nothing so we want to
+                // return false so the keybind can be unconsumed.
+                // {
+                //     self.renderer_state.mutex.lock();
+                //     defer self.renderer_state.mutex.unlock();
+                //     if (self.io.terminal.screens.active_key == .alternate) return false;
+                // }
+                {
+                    unsafe { (*self.renderer_state.mutex).lock() };
+                    if self.io.terminal.screens.active_key == terminal::screen_set::Key::Alternate {
+                        unsafe { (*self.renderer_state.mutex).unlock() };
+                        return Ok(false);
+                    }
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                }
+
+                // self.queueIo(.{
+                //     .clear_screen = .{ .history = true },
+                // }, .unlocked);
+                self.queueIo(
+                    termio::Message::ClearScreen { history: true },
+                    termio::termio_impl::MutexState::Unlocked,
+                );
+            }
+
+            // .scroll_to_top => {
+            binding::ScopedSurface::ScrollToTop => {
+                // self.queueIo(.{
+                //     .scroll_viewport = .{ .top = {} },
+                // }, .unlocked);
+                self.queueIo(
+                    termio::Message::ScrollViewport(terminal::terminal::ScrollViewport::Top),
+                    termio::termio_impl::MutexState::Unlocked,
+                );
+            }
+
+            // .scroll_to_bottom => {
+            binding::ScopedSurface::ScrollToBottom => {
+                // self.queueIo(.{
+                //     .scroll_viewport = .{ .bottom = {} },
+                // }, .unlocked);
+                self.queueIo(
+                    termio::Message::ScrollViewport(terminal::terminal::ScrollViewport::Bottom),
+                    termio::termio_impl::MutexState::Unlocked,
+                );
+            }
+
+            // .scroll_to_row => |n| {
+            binding::ScopedSurface::ScrollToRow(n) => {
+                // {
+                //     self.renderer_state.mutex.lock();
+                //     defer self.renderer_state.mutex.unlock();
+                //     const t: *terminal.Terminal = self.renderer_state.terminal;
+                //     t.screens.active.scroll(.{ .row = n });
+                // }
+                {
+                    unsafe { (*self.renderer_state.mutex).lock() };
+                    let t: *mut Terminal = self.renderer_state.terminal;
+                    unsafe { (*(*t).screens.active).scroll(terminal::screen::Scroll::Row(n)) };
+                    unsafe { (*self.renderer_state.mutex).unlock() };
+                }
+
+                // try self.queueRender();
+                self.queueRender()?;
+            }
+
+            // PORT NOTE (chunk C14b): the second half of the switch
+            // (`.scroll_to_selection` onward, Surface.zig:5204-5625) lands
+            // with C14b. This arm is replaced by the remaining explicit arms
+            // there (restoring the reference's exhaustive `Scoped(.surface)`
+            // switch safety).
+            _ => unimplemented!(
+                "Surface.performBindingAction second half lands with core chunk C14b \
+                 (Surface.zig:5204)"
+            ),
+        }
+
+        // return true;
+        Ok(true)
     }
 
     /// This starts a clipboard request, with some basic validation. For example,
