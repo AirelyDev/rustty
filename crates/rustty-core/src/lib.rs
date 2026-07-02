@@ -13,8 +13,12 @@
 //! Surface.zig:1-456 in `surface` — the full `Surface<A>` field set, the
 //! `InputEffect`/`Search`/`Mouse`/`Keyboard` types, `DerivedConfig`
 //! (+`scaledPadding`) under the field-parity audit, and the
-//! `SurfaceMailbox<A>` `AppMailbox` impl; the Surface function bodies land
-//! C6..C15 per CORE_BLUEPRINT §6).
+//! `SurfaceMailbox<A>` `AppMailbox` impl; chunk C6 landed Surface.zig:457-957
+//! — `init`/`deinit`/`close`/`surfaceMailbox`/`queueIo`/`draw`/
+//! `needsConfirmQuit` live (+ the break-#1 `GlobalState`/`STATE` wiring
+//! below), with `activateInspector`/`deactivateInspector` the only verbatim
+//! deferrals; the remaining Surface function bodies land C7..C15 per
+//! CORE_BLUEPRINT §6).
 //!
 //! Carved incrementally (R1: every line/comment/test{} ported as the crate is
 //! carved, leaves-first, under the acyclicity gate per R4).
@@ -43,6 +47,32 @@ pub mod surface;
 // PORT NOTE: Surface.zig:38 `const SurfaceMouse = @import("surface_mouse.zig");`
 // — the future surface.rs (C5+) reaches the module as `crate::surface_mouse`.
 pub mod surface_mouse;
+
+// PORT NOTE (BREAK #1 wiring glue, chunk C6): Surface.zig:21 `const
+// global_state = &@import("global.zig").state;` — rustty-global is the LEAF
+// process-state holder, generic over its upward seam types
+// (`GlobalState<Action, ResourcesDir>`; see the BREAK #1 doc in its lib.rs),
+// and core is the tier where the upward concrete types wire in.
+// `ResourcesDir` is the real rustty-os type (global.zig `resources_dir:
+// internal_os.ResourcesDir`); `Action` stays the deferred cli seam (`()`)
+// until rustty-cli lands and specializes it IN PLACE.
+pub type GlobalState = rustty_global::GlobalState<(), rustty_os::resourcesdir::ResourcesDir>;
+
+/// PARITY: reference `pub var state: GlobalState = undefined;` (global.zig)
+/// at the core-wired type — the `OnceLock` analogue of the
+/// undefined-until-`init()` contract (the rustty-global `STATE` precedent):
+/// empty until the entrypoint (`main()` / `rustty_init()`, unported) sets it.
+pub static STATE: std::sync::OnceLock<GlobalState> = std::sync::OnceLock::new();
+
+/// PORT (Rust-only glue): the `global_state.<field>` read. The reference
+/// contract guarantees `state` is initialized in `main()`/`ghostty_init()`
+/// before any consumer runs (dereferencing Zig `undefined` is UB; here it is
+/// a defined panic).
+pub fn global_state() -> &'static GlobalState {
+    STATE
+        .get()
+        .expect("global state is initialized by the entrypoint before use")
+}
 
 // C0 DECISION GATE (CORE_BLUEPRINT §1/§6): prototype the OPTION-1
 // self-referential `type Core` bound — `impl<A> ... where A: apprt_api::App,

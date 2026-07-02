@@ -264,7 +264,12 @@ fn setrlimit_nofile(lim: rlimit) -> Result<(), c_int> {
 
 // `std.crypto.random.bytes`: fill `buf` with cryptographically-secure random
 // bytes from the OS CSPRNG.
-fn crypto_random_bytes(buf: &mut [u8]) {
+//
+// PORT NOTE (Rust-only glue, additive): `pub` — this is the shared
+// `std.crypto.random` shim; rustty-core's `Surface.init` maps
+// `std.crypto.random.int(u64)` (the surface id, Surface.zig:584) onto 8
+// native-endian bytes from here.
+pub fn crypto_random_bytes(buf: &mut [u8]) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
         // The libc `arc4random_buf` is the canonical macOS/BSD CSPRNG and

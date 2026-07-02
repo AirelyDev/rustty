@@ -53,6 +53,11 @@ rustty-font-shaper = { workspace = true }
 rustty-datastruct = { workspace = true }
 rustty-zigstd = { workspace = true }
 rustty-xev = { workspace = true }
+# Core C6 (Surface.init): the reference's `GHOSTTY_*` env-var names carry the
+# product identity per R2 (the `GHOSTTY_LOG` removal + the
+# `GHOSTTY_SURFACE_ID` put, Surface.zig:640/643 — the termio
+# shell_integration `env_name` precedent). Leaf dep.
+rustty-identity = { workspace = true }
 # `alloc: Allocator` fields/params mirror the termio/vt convention
 # (`allocator_api2::alloc::Global as Allocator`).
 allocator-api2 = { workspace = true }

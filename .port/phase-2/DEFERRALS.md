@@ -952,3 +952,65 @@ names and order 1:1. Deferral ledger:
   `rt_surface`) written via field-projected raw pointers (the reference
   hands App pointers to `undefined` Surface memory; `Surface<A>` is
   untestable-by-construction per §7).
+
+## rustty-core C6 (core tier) — Surface init/deinit/close/draw lifecycle (inspector activate deferred verbatim)
+
+Chunk C6 of CORE_BLUEPRINT §6 lands Surface.zig:457-957 in
+`crates/rustty-core/src/surface.rs`: `init` (the full pty/renderer/io wiring,
+LIVE against the placeholder leaves — GPU `Renderer.surfaceInit/init/
+finalizeSurfaceInit`, renderer/termio `Thread.init` xev handles,
+`termio.Termio.init` (D6), where the runtime panics are confined), `deinit`,
+`close`, `surfaceMailbox`, `queueIo`, `draw`, `needsConfirmQuit`, plus the
+break-#1 `GlobalState`/`STATE`/`global_state()` wiring in lib.rs (the
+core-wired `rustty_global::GlobalState<(), rustty_os ResourcesDir>`; `Action`
+stays the deferred cli seam). Deferral ledger:
+
+- **DEFERRED (verbatim, CORE_BLUEPRINT §4 — the ONLY verbatim-comment
+  deferrals in core): `activateInspector`/`deactivateInspector`**
+  (Surface.zig:890/915, ~45 loc) — they `alloc.create`/`deinit` the
+  UNINHABITED Phase-3 `inspectorpkg::Inspector` placeholder (unconstructible
+  until the ImGui inspector tier lands). Bodies preserved verbatim above
+  `unimplemented!()`; `deinit`'s inspector teardown arm is
+  unreachable-by-construction (`unreachable!()` + verbatim body) for the same
+  reason. 0 tests, R1-safe; resolved by the Phase-3 inspector fill.
+- **Rust-only glue (documented in-file, not deferrals):**
+  `InitError` — the typed union of `init`'s *inferred* reference error set
+  (oni/renderer/apprt/font-grid/xev/exec/termio/spawn/surface sources);
+  `initErrdefers`/`initTry` — the post-`self.*`-write errdefer chain
+  realized by reading the moved-in fields back OUT of `self_` (Zig unwinds
+  through local struct copies aliasing the same state; LIFO order preserved,
+  pre-write sites fire the armed errdefers explicitly per site);
+  `RendererThreadArg`/`IoThreadArgs` — the [ADV-FIX 6b] documented
+  Send-wrapper newtypes for the two `std.Thread.spawn` raw-pointer captures
+  (whole-wrapper capture forced against edition-2021 disjoint captures).
+- **Documented shape mappings (not deferrals):** `init` stays an out-pointer
+  (`self_: *mut Surface<A>`, unsafe fn — the body is self-referential:
+  `&self.renderer_thread`/`&self.io.terminal`/the `self` mailbox pointer are
+  handed out mid-init), with the `self.* = .{...}` write realized
+  field-by-field via `ptr::write` in reference literal order (`.io =
+  undefined` placement-written by the io block; `renderer_thr`/`io_thr`
+  `undefined` -> the §8.5 `Option` `None`); `deinit` is an unsafe
+  invalidate-in-place (`ptr::read` for the consuming `termio.Thread`/
+  `Termio`/grid-set-key sub-deinits; owned containers dropped explicitly as
+  the collapsed Zig-allocator frees; caller frees without dropping — the
+  reference `alloc.destroy` contract); thread names via the pre-spawn
+  `Builder` (no post-spawn setName; the ignored `setName catch {}`
+  collapses); `finalizeSurfaceInit` through the moved-into field (the
+  reference calls its post-copy LOCAL — Zig value-copy, same GPU handles);
+  `needsConfirmQuit` takes `&mut self` (non-const reference receiver;
+  `cursorIsAtPrompt` mutates — the C5 `&self` stub note was wrong, app.rs
+  callsite updated).
+- **Additive growth (upstream crates, Rust-only glue):** rustty-os
+  `file::crypto_random_bytes` widened to `pub` (the shared
+  `std.crypto.random` shim — surface id, Surface.zig:584); rustty-config
+  `Command` gained `#[derive(Clone)]` (Zig copies the union by value;
+  Surface.init's Exec-config + title-block copy sites); rustty-core gained
+  the leaf `rustty-identity` dep (R2: `GHOSTTY_LOG`/`GHOSTTY_SURFACE_ID` ->
+  `<APP_NAME upper>_*`, the termio `env_name` precedent).
+- **SEQUENCING STUBS (not deferrals; later chunks fill IN PLACE):**
+  `recomputeInitialSize` (C8, Surface.zig:1826) and `resize` (C8, :2485) —
+  `unimplemented!()` stubs with the opaque `surface::Error` marker (init's
+  callsites land now: resize propagates, recomputeInitialSize is caught);
+  `#[allow(dead_code)]` on `surfaceMailbox`/`queueIo` (first live callsites
+  C7 `handleMessage`; the deferred inspector bodies name `queueIo`
+  meanwhile) — each allow is removed when its first consumer lands.

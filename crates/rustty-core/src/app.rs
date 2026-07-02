@@ -403,8 +403,13 @@ where
     pub fn needsConfirmQuit(&self) -> bool {
         for &v in self.surfaces.iter() {
             // if (v.core().needsConfirmQuit()) return true;
+            //
+            // PORT NOTE (C6): `&mut` — the reference receiver is the non-const
+            // `self: *Surface` and the body locks the renderer mutex and
+            // queries the terminal (`cursorIsAtPrompt` mutates prompt-scan
+            // state), so the core method takes `&mut self`.
             let core = unsafe { &*v }.core();
-            if unsafe { &*core }.needsConfirmQuit() {
+            if unsafe { &mut *core }.needsConfirmQuit() {
                 return true;
             }
         }

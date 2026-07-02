@@ -30,6 +30,13 @@ use rustty_cfg_fmt::{FormatEntry, Writer};
 /// direct case, we do this directly.
 // pub const Command = union(enum) {
 //     const Self = @This();
+//
+// PORT NOTE (Rust-only glue, additive): `Clone` — Zig copies the union by
+// value (shallow slice copies into config memory); the owned rustty payloads
+// clone the bytes at the reference's copy sites (Surface.init copies it into
+// the termio Exec config AND keeps it for the title block — Surface.zig:618/
+// 649/755/769; the core app.rs `performAllChainedAction` clone precedent).
+#[derive(Clone)]
 pub enum Command {
     /// Execute a command directly, e.g. via `exec`. The format here
     /// is already structured to be ready to passed directly to `exec`
