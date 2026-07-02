@@ -595,6 +595,7 @@ dependencies = [
  "rustty-crash",
  "rustty-datastruct",
  "rustty-font",
+ "rustty-font-shaper",
  "rustty-global",
  "rustty-input",
  "rustty-inspector",

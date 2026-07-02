@@ -44,6 +44,12 @@ rustty-global = { workspace = true }
 rustty-util = { workspace = true }
 rustty-unicode = { workspace = true }
 rustty-oniguruma = { workspace = true }
+# Core C3 (renderer_seam): renderer/Options.zig `font_grid: *font.SharedGrid`
+# — `SharedGrid`/`SharedGridSet` live in the D1 3-tier shaper crate ABOVE
+# vt+font (rustty-font-shaper); Surface<A>/App<A> also need it
+# (`font_grid_set: SharedGridSet`, CORE_BLUEPRINT §1). Downward-safe edge
+# (core is the top tier); the acyclic gate is the backstop.
+rustty-font-shaper = { workspace = true }
 rustty-datastruct = { workspace = true }
 rustty-zigstd = { workspace = true }
 rustty-xev = { workspace = true }

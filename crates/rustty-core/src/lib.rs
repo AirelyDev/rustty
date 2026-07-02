@@ -6,11 +6,28 @@
 //! would cycle; Surface reaches it as `rustty_termio::Command`.)
 //!
 //! PORT STATUS: stub (core chunk C0 landed: seam prep + the `type Core`
-//! decision gate below; chunk C2 landed `surface_mouse` in full — done; the
-//! App/Surface ports land C4+ per CORE_BLUEPRINT §6).
+//! decision gate below; chunk C2 landed `surface_mouse` in full — done; chunk
+//! C3 landed the `renderer_seam` dependency placeholders + the minimal
+//! `app`/`surface` module skeletons they name; the full App/Surface ports
+//! land C4+ per CORE_BLUEPRINT §6).
 //!
 //! Carved incrementally (R1: every line/comment/test{} ported as the crate is
 //! carved, leaves-first, under the acyclicity gate per R4).
+
+// PORT NOTE: App.zig — chunk C4 owns the full file; C3 landed the minimal
+// `Mailbox<A>`/`Queue<A>`/`Message<A>` skeleton (renderer_seam::Thread<A>
+// embeds `app::Mailbox<A>`, renderer/Thread.zig:89).
+pub mod app;
+
+// PORT NOTE (CORE_BLUEPRINT §5): core-local dependency placeholders for the
+// Phase-3 GPU renderer + renderer thread — `Renderer`, `Thread<A>`,
+// `Options<A>` (chunk C3).
+pub mod renderer_seam;
+
+// PORT NOTE: Surface.zig — chunks C5+ own the full file; C3 landed the
+// `Surface<A>` shell + the `SurfaceMailbox<A>` (apprt.surface.Mailbox) field
+// shape (renderer_seam::Options<A> names it).
+pub mod surface;
 
 // PORT NOTE: Surface.zig:38 `const SurfaceMouse = @import("surface_mouse.zig");`
 // — the future surface.rs (C5+) reaches the module as `crate::surface_mouse`.

@@ -818,3 +818,51 @@ R1-safe; owner: the Phase-3 inspector port):
   started (crate stays PORT STATUS: partial).
 - **RESOLVED: `main.zig`** — `KeyEvent = widgets.key.Event` re-export + the
   refAllDecls test (reify smoke over the carved surface) are live in lib.rs.
+
+## rustty-core C3 (core tier) — renderer_seam dependency placeholders (Renderer, Thread<A>, Options<A>)
+
+Chunk C3 of CORE_BLUEPRINT §6 (§5 "Renderer/GPU-coupled paths + xev (D6)
+map") lands `crates/rustty-core/src/renderer_seam.rs` — core-local
+DEPENDENCY PLACEHOLDERS (the termio `xev_seam` precedent: inhabited structs,
+faithful field/signature shapes, `unimplemented!()` bodies; NO reference
+logic stubbed), NOT verbatim-body deferrals. All 0 tests — R1-safe.
+Owner of the fill: the Phase-3 R-d GPU renderer tier + the D6 libxev port.
+
+- **DEFERRED (dependency placeholder): `renderer.Renderer`**
+  (src/renderer/generic.zig `GenericRenderer(Metal|OpenGL)`, comptime-chosen
+  at renderer.zig:38) -> inhabited unit struct `renderer_seam::Renderer` with
+  the §5 signatures `surfaceInit<S>` / `init(alloc, options)` ([ADV-FIX 3]:
+  alloc stays) / `finalizeSurfaceInit<S>` / `threadEnter<S>` / `drawFrame` /
+  `deinit`, plus the `renderer.Renderer.DerivedConfig` placeholder
+  (generic.zig:536; `init(alloc_gpa, &Config)`/`deinit`) and the opaque
+  `RendererError` marker (inferred reference error unions; `ApprtError`
+  growth-point precedent). The GraphicsAPI/SwapChain/FrameState/
+  CustomShaderState machinery and the rest of generic.zig land WITH the
+  Phase-3 port in rustty-renderer — nothing of it lives in core.
+- **DEFERRED (dependency placeholder): `renderer.Thread` run loop** —
+  `renderer_seam::Thread<A>` carries the FAITHFUL renderer/Thread.zig field
+  shape (xev loop/wakeup/stop/render_h/draw_h/draw_now/cursor_h handles +
+  completions from rustty-xev; `surface: *mut A::Surface`; `renderer: *mut
+  Renderer`; `state: *mut renderer::State` (REAL); `mailbox: *mut
+  renderer::thread::Mailbox` (REAL); `app_mailbox: app::Mailbox<A>`;
+  `config: renderer::thread::DerivedConfig` ([ADV-FIX 2] inhabited); `flags`
+  with the reference defaults `visible/focused = true` via manual `Default`)
+  and `init`/`threadMain`/`deinit` as `unimplemented!()` placeholders. The
+  run loop (`threadMain_`, `drainMailbox`, render/draw/cursor callbacks,
+  `DRAW_INTERVAL`/`CURSOR_BLINK_INTERVAL`, `must_draw_from_app_thread`) is
+  Phase-3 R-d + D6 work that lands WITH the real port (renderer/Thread.zig
+  imports configpkg AND core's App.Mailbox — both edges cycle from
+  rustty-renderer, which is WHY the shape lives core-local).
+- **Ported live (not deferred): `renderer.Options`** (renderer/Options.zig,
+  full field shape + comments) as `renderer_seam::Options<A>`; the blueprint
+  sketch's `Options<'_, A>` lifetime is dropped — the reference file has no
+  borrowed field (E0392), documented at the struct.
+- **SEQUENCING SKELETONS (not deferrals; next chunks fill IN PLACE):**
+  `src/app.rs` — minimal `Mailbox<A>`/`Queue<A>`/`Message<A>` shell (C4 owns
+  ALL of App.zig; renderer_seam::Thread embeds `app::Mailbox<A>` one chunk
+  early — the split the blueprint's C3 row sanctions); `src/surface.rs` —
+  `Surface<A>` shell + `SurfaceMailbox<A>` field shape (C5 owns Surface.zig;
+  §1 pins `apprt.surface.Mailbox` to surface.rs and renderer_seam::Options
+  names it). Both carry manual no-`A`-bound `Clone`/`Copy` ([ADV-FIX 6a]).
+  rustty-core gained the `rustty-font-shaper` dep (Options.zig `font_grid:
+  *font.SharedGrid` — the D1 shaper-tier type).
