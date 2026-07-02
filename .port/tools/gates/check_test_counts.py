@@ -122,6 +122,10 @@ RSTIO = "/Users/gael/projects/rustty/crates/rustty-termio/src"
 GHINS = "/Users/gael/projects/ghostty/src/inspector"
 RSINS = "/Users/gael/projects/rustty/crates/rustty-inspector/src"
 
+# rustty-core: the core tier (CORE_BLUEPRINT §6/§7). GH base = src root
+# (App.zig / Surface.zig / surface_mouse.zig live beside main_ghostty.zig).
+RSCORE = "/Users/gael/projects/rustty/crates/rustty-core/src"
+
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
@@ -508,6 +512,18 @@ MAP = {
     # as lib.rs's ref_all_decls reify smoke over the carved surface (termio_root
     # precedent). rust=1 >= 0.
     "inspector_main":    ([f"{GHINS}/main.zig"], [f"{RSINS}/lib.rs"], 0),
+    # rustty-core (core tier, CORE_BLUEPRINT §7: map all three files so the
+    # tracker proves coverage — config-cluster precedent).
+    # surface_mouse.zig (chunk C2): 1 quoted test ("keyToMouseShape", 13
+    # sub-blocks) -> 1 #[test] in surface_mouse.rs (ported as ONE test
+    # mirroring the single reference test{} block; rust >= zig).
+    "core_surface_mouse": ([f"{GHSRC}/surface_mouse.zig"], [f"{RSCORE}/surface_mouse.rs"], 0),
+    # App.zig: no test{} -> zig=0. Pre-registered; app.rs lands in chunk C4
+    # (expand() drops the not-yet-existing rust path -> rust=0 >= 0 until then).
+    "core_app":          ([f"{GHSRC}/App.zig"], [f"{RSCORE}/app.rs"], 0),
+    # Surface.zig: no test{} -> zig=0. Pre-registered; surface.rs lands in
+    # chunks C5+ (same expand() behavior as core_app until it exists).
+    "core_surface":      ([f"{GHSRC}/Surface.zig"], [f"{RSCORE}/surface.rs"], 0),
 }
 
 def expand(globs):

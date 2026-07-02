@@ -6,11 +6,15 @@
 //! would cycle; Surface reaches it as `rustty_termio::Command`.)
 //!
 //! PORT STATUS: stub (core chunk C0 landed: seam prep + the `type Core`
-//! decision gate below; the App/Surface/surface_mouse ports land C2+ per
-//! CORE_BLUEPRINT §6).
+//! decision gate below; chunk C2 landed `surface_mouse` in full — done; the
+//! App/Surface ports land C4+ per CORE_BLUEPRINT §6).
 //!
-//! Scaffold only — no real logic yet (R1: every line/comment/test{} ported as
-//! the crate is carved, leaves-first, under the acyclicity gate per R4).
+//! Carved incrementally (R1: every line/comment/test{} ported as the crate is
+//! carved, leaves-first, under the acyclicity gate per R4).
+
+// PORT NOTE: Surface.zig:38 `const SurfaceMouse = @import("surface_mouse.zig");`
+// — the future surface.rs (C5+) reaches the module as `crate::surface_mouse`.
+pub mod surface_mouse;
 
 // C0 DECISION GATE (CORE_BLUEPRINT §1/§6): prototype the OPTION-1
 // self-referential `type Core` bound — `impl<A> ... where A: apprt_api::App,
