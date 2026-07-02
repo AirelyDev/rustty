@@ -785,3 +785,36 @@ NO new verbatim-body deferrals; it RESOLVES/OWNS the following:
   type_core_prototype`; see CORE_BLUEPRINT.md "## C0 DECISION".
 - **[ADV-FIX 5]:** rustty-core Cargo deps completed (rustty-util/-unicode/
   -oniguruma/-datastruct/-zigstd/-xev + allocator-api2).
+
+## rustty-inspector C1 (core tier) — key-widget data surface; ImGui GUI deferred to Phase 3
+
+Chunk C1 of CORE_BLUEPRINT §6 (§4 "Inspector seam", [ADV-FIX 7]) carves ONLY
+the surface core's input hot path needs. Deferrals created (all 0 tests —
+R1-safe; owner: the Phase-3 inspector port):
+
+- **PARTIAL-FILE: `src/inspector/widgets/key.zig` ImGui section**
+  (`Event.render`/`renderUtf8`/`renderPty`, `modsTooltip`, the `Stream`
+  widget, `actionColor`/`keyColor`/`hsvToRgba`) — preserved as verbatim
+  comment bodies at the bottom of
+  `crates/rustty-inspector/src/widgets/key.rs`; fills in place when dcimgui
+  is wired. The pure-data `Event` + `EventRing = CircBuf<Event>` + `label()`
+  are LIVE (the datastruct `CircBuf` bound was relaxed `T: Copy` -> the
+  faithful `T: Clone` for the heap-owning element; the Zig CircBuf has no
+  comptime constraint — `append_slice_assume_capacity` keeps a per-method
+  `T: Copy` for its `fastmem` memcpy path).
+- **`src/inspector/Inspector.zig` -> uninhabited `pub enum Inspector {}`
+  placeholder** in `crates/rustty-inspector/src/lib.rs` (exact precedent:
+  `rustty_renderer::state::Inspector`). Unconstructible until Phase 3; core
+  stores `Option<*mut rustty_inspector::Inspector>` (always `None`) and the
+  single `renderer_state.inspector` assignment casts between the two
+  uninhabited placeholders (edge direction: inspector -> renderer, never the
+  reverse). `activateInspector`/`deactivateInspector` defer verbatim in core
+  (chunk C6) — they are the only constructors.
+- **`src/inspector/widgets.zig` remainder** (the page/pagelist/renderer/
+  screen/style/surface/terminal/termio sub-module re-exports + `helpMarker`/
+  `DetachableHeader`/`DetachableHeaderState`/`detachableHeader`) — module
+  wiring stub `crates/rustty-inspector/src/widgets.rs`; only the `key`
+  re-export is live. `units.zig` and the other `widgets/*.zig` files are not
+  started (crate stays PORT STATUS: partial).
+- **RESOLVED: `main.zig`** — `KeyEvent = widgets.key.Event` re-export + the
+  refAllDecls test (reify smoke over the carved surface) are live in lib.rs.

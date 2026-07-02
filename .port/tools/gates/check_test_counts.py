@@ -115,6 +115,13 @@ RSCR = "/Users/gael/projects/rustty/crates/rustty-crash/src"
 GHTIO = "/Users/gael/projects/ghostty/src/termio"
 RSTIO = "/Users/gael/projects/rustty/crates/rustty-termio/src"
 
+# rustty-inspector: core-tier chunk C1 (CORE_BLUEPRINT §4). GH base =
+# src/inspector. Only the pure-data key-widget surface (Event/EventRing/label)
+# + the main.zig KeyEvent re-export are carved; ALL inspector GUI logic
+# (Inspector.zig, units.zig, the other widgets, dcimgui) is Phase 3.
+GHINS = "/Users/gael/projects/ghostty/src/inspector"
+RSINS = "/Users/gael/projects/rustty/crates/rustty-inspector/src"
+
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
@@ -491,6 +498,16 @@ MAP = {
     # windows-SkipZigTest'd tests run their posix bodies; the windows halves
     # are cfg-gated, F3 DirectWrite precedent).
     "termio_command":    ([f"{GHSRC}/Command.zig"], [f"{RSTIO}/command.rs"], 0),
+    # rustty-inspector (core-tier C1). widgets/key.zig: no test{} -> zig=0
+    # (partial-file port: Event/EventRing/label live; the ImGui section is
+    # deferred verbatim — DEFERRALS.md "rustty-inspector C1").
+    "inspector_widgets_key": ([f"{GHINS}/widgets/key.zig"], [f"{RSINS}/widgets/key.rs"], 0),
+    # widgets.zig: no test{} -> zig=0 (module wiring only; ImGui helpers Phase 3).
+    "inspector_widgets": ([f"{GHINS}/widgets.zig"], [f"{RSINS}/widgets.rs"], 0),
+    # main.zig: 1 anon refAllDecls test (skipped by zig_count -> zig=0); ported
+    # as lib.rs's ref_all_decls reify smoke over the carved surface (termio_root
+    # precedent). rust=1 >= 0.
+    "inspector_main":    ([f"{GHINS}/main.zig"], [f"{RSINS}/lib.rs"], 0),
 }
 
 def expand(globs):

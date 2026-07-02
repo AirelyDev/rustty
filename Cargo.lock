@@ -687,7 +687,10 @@ dependencies = [
 name = "rustty-inspector"
 version = "0.1.0"
 dependencies = [
+ "allocator-api2",
+ "rustty-datastruct",
  "rustty-font",
+ "rustty-input",
  "rustty-util",
  "rustty-vt",
 ]

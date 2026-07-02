@@ -19,3 +19,10 @@ workspace = true
 rustty-vt = { workspace = true }
 rustty-font = { workspace = true }
 rustty-util = { workspace = true }
+# C1 (CORE_BLUEPRINT §4): widgets/key.zig's `input.Binding.Action` lives in
+# rustty-input (binding.rs); `CircBuf` (EventRing) in rustty-datastruct.
+# Both edges point downward (inspector is upper-tier) — acyclic.
+rustty-input = { workspace = true }
+rustty-datastruct = { workspace = true }
+# `Allocator` parameter parity (allocator_api2 Global — termio precedent).
+allocator-api2 = { workspace = true }

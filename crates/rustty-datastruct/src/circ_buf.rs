@@ -21,7 +21,16 @@ pub enum Error {
 }
 
 /// Returns a circular buffer containing type T.
-pub struct CircBuf<T: Copy> {
+// PORT NOTE (bound relaxation, C1 inspector): the Zig `CircBuf(T, default)` has
+// NO comptime constraint on `T` — elements are moved/filled by plain memcpy.
+// The original Rust port bounded `T: Copy` because every then-existing
+// instantiation (vt glossary/sliding_window/tmux) was a plain-old-data type.
+// The inspector's `EventRing = CircBuf(Event, undefined)` instantiates it with
+// a heap-owning element (`Event` holds `Vec`s), so the bound is relaxed to the
+// faithful `T: Clone` (strictly more general — `Copy: Clone`; every existing
+// user is unchanged). Only the `fastmem`-memcpy fast path
+// (`append_slice_assume_capacity`) retains a per-method `T: Copy` bound below.
+pub struct CircBuf<T: Clone> {
     // Implementation note: there's a lot of unsafe addition of usize
     // here in this implementation that can technically overflow. If someone
     // wants to fix this and make it overflow safe (use subtractions for
@@ -48,10 +57,10 @@ pub enum Direction {
     Reverse,
 }
 
-impl<T: Copy> CircBuf<T> {
+impl<T: Clone> CircBuf<T> {
     /// Initialize a new circular buffer that can store size elements.
     pub fn init(size: usize, default: T) -> Result<Self, Error> {
-        let buf = vec![default; size];
+        let buf = vec![default.clone(); size];
 
         Ok(CircBuf {
             storage: buf,
@@ -89,7 +98,13 @@ impl<T: Copy> CircBuf<T> {
     }
 
     /// Append a slice to the buffer.
-    pub fn append_slice_assume_capacity(&mut self, slice: &[T]) {
+    // PORT NOTE: the `fastmem.copy` (memcpy) bulk path is only expressible for
+    // `T: Copy`; every caller of this method uses plain-old-data elements
+    // (the relaxed struct bound is `T: Clone` — see the struct PORT NOTE).
+    pub fn append_slice_assume_capacity(&mut self, slice: &[T])
+    where
+        T: Copy,
+    {
         let storage = self.get_ptr_slice(self.len(), slice.len());
         // SAFETY: `get_ptr_slice` returns two disjoint, valid `*mut [T]`
         // subslices of `self.storage`; we hold no other borrow of `self` while
@@ -154,14 +169,15 @@ impl<T: Copy> CircBuf<T> {
         // Reallocate, this adds to the end so we're ready to go.
         let prev_len = self.len();
         let prev_cap = self.storage.len();
-        self.storage.resize(size, self.default);
+        let default = self.default.clone();
+        self.storage.resize(size, default.clone());
 
         // If we grew, we need to set our new defaults. We can add it
         // at the end since we rotated to start.
         if size > prev_cap {
             // (Vec::resize already filled [prev_cap..] with default.)
             for v in self.storage[prev_cap..].iter_mut() {
-                *v = self.default;
+                *v = default.clone();
             }
 
             // Fix up our head/tail
@@ -234,17 +250,17 @@ impl<T: Copy> CircBuf<T> {
         }
 
         // Clear the values back to default
-        let default = self.default;
+        let default = self.default.clone();
         let (s0, s1) = self.get_ptr_slice(0, n);
         // inline for (slices) |slice| @memset(slice, default);
         // SAFETY: the two returned `*mut [T]` are disjoint, valid subslices of
         // `self.storage` and no other borrow of `self` is live here.
         unsafe {
             for v in (*s0).iter_mut() {
-                *v = default;
+                *v = default.clone();
             }
             for v in (*s1).iter_mut() {
-                *v = default;
+                *v = default.clone();
             }
         }
 
@@ -349,13 +365,13 @@ impl<T: Copy> CircBuf<T> {
 }
 
 /// Iterator over a circular buffer.
-pub struct Iterator<'a, T: Copy> {
+pub struct Iterator<'a, T: Clone> {
     buf: &'a CircBuf<T>,
     idx: usize,
     direction: Direction,
 }
 
-impl<'a, T: Copy> Iterator<'a, T> {
+impl<'a, T: Clone> Iterator<'a, T> {
     // PARITY: the reference `circ_buf.zig:34` exposes an inherent,
     // iterator-like `next()` on its `Iterator` type. We keep that public API
     // shape rather than reshaping it into `std::iter::Iterator`, so we silence
