@@ -1910,3 +1910,55 @@ apprt 0, apprt-c 0; clippy `-D warnings`, fmt, acyclic G7 with apprt-c still a c
 TOP SINK, test-counts G-gate); scoped-G3b on embedded.zig **343-609 distinctive=39
 missing=0 review=0**. No regression (vt 2019, core 15, apprt-api 20, renderer 19,
 crash 12, termio 44).
+
+## rustty-apprt embedded E3 (Surface event-sink callbacks) — refresh/draw/mouse/…
+
+Chunk E3 of the libghostty C-ABI milestone (EMBEDDED_BLUEPRINT §7): ports
+`embedded.zig:610-990` into `crates/rustty-apprt/src/embedded.rs` — the Surface
+event-sink callbacks the CAPI drives (`refresh`/`draw`/`updateContentScale`/
+`updateSize`/`colorSchemeCallback`/`mouseButtonCallback`/`mousePressureCallback`/
+`scrollCallback`/`cursorPosCallback`/`preeditCallback`/`textCallback`/
+`focusCallback`/`occlusionCallback`), each delegating to a `core_surface.*Callback`,
+plus `completeClipboardRequest` (pub-widened for the E9 wrapper), `newSurfaceOptions`,
+and the private `cursorPosToPixels` helper. These are real core logic (not GPU/xev
+leaves) EXCEPT `draw`/`refresh` (item 1). The E2 growth-point trait method
+`default_termio_env` (also inside the 610-990 range, at 953) was already landed in
+E2 — E3 does not re-port it. Deferred out of E3:
+
+1. **`draw`/`refresh` reach the Phase-3 GPU renderer leaf at RUNTIME.**
+   `Surface::draw`/`refresh` delegate to core `Surface::draw`/`refreshCallback`,
+   which drive the `renderer_seam` Phase-3 `unimplemented!()` leaves (blueprint §1).
+   The delegation is ported LIVE (byte-faithful) — the panic is in the leaf, not
+   here; it fires only once a LIVE surface exists (`ghostty_surface_new`, **E7**) AND
+   the renderer lands (**Phase-3 R-d + D6**). Same honest line as E2 item 3 — E3
+   introduces NO new leaf, only LIVE delegation to an already-tracked one.
+
+2. **`initInspector` (embedded.zig:611-623) — E4, NOT E3.** Although it falls inside
+   the E3 line-range (610-990), `initInspector` constructs the dcimgui/Metal
+   `Inspector` (`alloc.create(Inspector)` + `Inspector.init`) — the E4 Phase-3 leaf.
+   Its 3 doc-comment lines are carried by **E4**; the E3 scoped-G3b is therefore
+   computed over the complement **624-990**. `queueInspectorRender` likewise stays the
+   E3/E4 `unimplemented!()` leaf carried from E1 (E2 item 2), untouched here.
+
+**Identity / ABI notes (R3):** `completeClipboardRequest`'s `str: [:0]const u8` →
+`&CStr` (the NUL sentinel is LOAD-BEARING — `str.ptr` is handed to the host
+`confirm_read_clipboard` callback as `[*:0]const u8`; the sans-sentinel `.to_bytes()`
+view goes to core). The reference's 4th confirm-callback arg `state.*` relies on
+Zig's implicit tagged-union→tag coercion (`ClipboardRequest` → `ClipboardRequestType`);
+Rust has none, so the tag is projected via an explicit `match`. `newSurfaceOptions`
+spells out `Surface.Options`'s Zig field defaults explicitly (Rust has no struct field
+defaults); `platform = undefined` → a zeroed `PlatformC` placeholder (never read — the
+C host overwrites `platform`/`platform_tag` before `ghostty_surface_new`); the
+inherited `working_directory` is a leaked `CString` owned by the C host (faithful to
+the reference's un-freed GPA `dupeZ`). `mouseButtonCallback`'s error arm carries the
+`#[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]` PARITY marker
+(the arm IS the reference `catch { log; return false }`, comment-only log → `false`).
+
+**Gate deltas (E3):** `embedded.rs` grows the Surface event-sink callbacks +
+`completeClipboardRequest`/`newSurfaceOptions`/`cursorPosToPixels`. `apprt_embedded`
+MAP row unchanged (still embedded.zig 0-test → embedded.rs, GREEN — rust ≥ zig).
+Whole-workspace gates green (build, touched-crate tests — apprt 0, apprt-c 0; clippy
+`-D warnings`, fmt, acyclic G7 with apprt-c still a clean TOP SINK, test-counts
+G-gate); scoped-G3b on embedded.zig **624-990 (E3; initInspector 611-623 → E4)
+distinctive=28 missing=0 review=0**. No regression (vt 2019, core 15, apprt-api 20,
+renderer 19, crash 12, termio 44).

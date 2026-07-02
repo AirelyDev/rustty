@@ -10,7 +10,7 @@
 //! concrete apprt backend — it proves the `apprt_api` generic trait seam against a
 //! real `A = embedded::App` (EMBEDDED_BLUEPRINT §2).
 //!
-//! PORT STATUS: in-progress (chunks E1+E2 landed). E1 ported `embedded.zig:29-342`
+//! PORT STATUS: in-progress (chunks E1+E2+E3 landed). E1 ported `embedded.zig:29-342`
 //! — the `App` struct with its `Options` (the `#[repr(C)]` host-callback config),
 //! `KeyEvent`, `KeyTarget`, and every `App` method (init/terminate/
 //! hasGlobalKeybinds/focusEvent/keyEvent/reloadKeymap/keyboardLayout/wakeup/wait/
@@ -21,12 +21,17 @@
 //! the full `Surface` struct + `SurfaceOptions` + `init`/`deinit` + the faithful
 //! `impl apprt_api::Surface for Surface` growth-point table (§2). This proves the
 //! self-referential `type Core = rustty_core::Surface<embedded::App>` bound against
-//! a REAL backend (core's C0 gate used a dummy `A`). Later chunks fill the rest
+//! a REAL backend (core's C0 gate used a dummy `A`). E3 ports `embedded.zig:610-990`
+//! — the Surface event-sink callbacks (`refresh`/`draw`/`updateContentScale`/
+//! `updateSize`/`colorSchemeCallback`/`mouseButtonCallback`/`mousePressureCallback`/
+//! `scrollCallback`/`cursorPosCallback`/`preeditCallback`/`textCallback`/
+//! `focusCallback`/`occlusionCallback`) that delegate straight to
+//! `core_surface.*Callback`, plus `completeClipboardRequest`, `newSurfaceOptions`,
+//! and the private `cursorPosToPixels` helper. `draw`/`refresh` reach the Phase-3
+//! GPU renderer leaf at RUNTIME (core `Surface::draw`/`refreshCallback` →
+//! `renderer_seam` `unimplemented!()`); the delegation is ported LIVE — the panic is
+//! in the leaf, not here (EMBEDDED_BLUEPRINT §1). Later chunks fill the rest
 //! (EMBEDDED_BLUEPRINT §7):
-//!
-//! E3 (610-990): surface event callbacks (refresh/draw/updateSize/mouse/…;
-//! draw/refresh reach the Phase-3 GPU leaf at runtime) + `completeClipboardRequest`
-//! + `newSurfaceOptions` + `cursorPosToPixels`.
 //!
 //! E4 (992-1243): `Inspector` (dcimgui+Metal) — a Phase-3 inhabited placeholder
 //! with `unimplemented!()` leaves. Deferrable/parallel. E2 carries a MINIMAL
@@ -65,8 +70,10 @@ use allocator_api2::alloc::{Allocator, Global};
 use rustty_apprt_api::action::{Action, ActionC, Target, TargetC};
 use rustty_apprt_api::ipc;
 use rustty_apprt_api::structs::{
-    Clipboard, ClipboardRequest, ClipboardRequestType, ContentScale, CursorPos, SurfaceSize,
+    Clipboard, ClipboardRequest, ClipboardRequestType, ColorScheme, ContentScale, CursorPos,
+    SurfaceSize,
 };
+use rustty_apprt_api::surface::should_inherit_working_directory;
 use rustty_apprt_api::{
     App as ApprtApp, ApprtError, CoreSurfaceHandle, NewSurfaceContext, Surface as ApprtSurface,
 };
@@ -85,6 +92,7 @@ use rustty_input::Keymap;
 use rustty_vt::input::key;
 use rustty_vt::input::key::KeyEvent as CoreKeyEvent;
 use rustty_vt::input::key_mods::Mods;
+use rustty_vt::input::mouse;
 
 use rustty_core::surface::{Error as CoreSurfaceError, InputEffect};
 
@@ -1222,12 +1230,465 @@ impl Surface {
         }
     }
 
+    // pub fn completeClipboardRequest(
+    //     self: *Surface,
+    //     str: [:0]const u8,
+    //     state: *apprt.ClipboardRequest,
+    //     confirmed: bool,
+    // ) void { ... }
+    //
+    // PORT NOTE (ADV-FIX 9 pub-widening): the reference is a file-private `fn`, but
+    // the apprt-c `ghostty_surface_complete_clipboard_request` wrapper (E9) reaches
+    // it across the crate boundary, so it is `pub` here. `str: [:0]const u8` → a
+    // borrowed `&CStr`: the NUL sentinel is LOAD-BEARING — `str.ptr` is handed to
+    // the host `confirm_read_clipboard` callback as `[*:0]const u8`, while the `[]`
+    // view (`.to_bytes()`, sans sentinel) goes to core. `state` stays a raw
+    // `*mut ClipboardRequest` (the heap request from [`Surface::clipboard_request`],
+    // Box-allocated there).
+    pub fn completeClipboardRequest(
+        &mut self,
+        str: &CStr,
+        state: *mut ClipboardRequest,
+        confirmed: bool,
+    ) {
+        // const alloc = self.app.core_app.alloc;
+        // (PORT: `state` is a Rust `Box` from `clipboard_request`; it is reclaimed +
+        // freed via `Box::from_raw` below — no core-app `alloc` handle is needed.)
+
+        // Attempt to complete the request, but we may request
+        // confirmation.
+        // self.core_surface.completeClipboardRequest(state.*, str, confirmed) catch |err| switch (err) {
+        //
+        // PORT NOTE: the Zig `catch |err| switch (err)` is rendered as a `match` on
+        // the `Result` — the `Ok(())` arm is the reference's no-error path (falls
+        // through to `alloc.destroy` below).
+        match self.core_surface.completeClipboardRequest(
+            unsafe { *state },
+            str.to_bytes(),
+            confirmed,
+        ) {
+            Ok(()) => {}
+
+            // error.UnsafePaste,
+            // error.UnauthorizedPaste,
+            // => { ... return; },
+            Err(CoreSurfaceError::UnsafePaste | CoreSurfaceError::UnauthorizedPaste) => {
+                // self.app.opts.confirm_read_clipboard(
+                //     self.userdata,
+                //     str.ptr,
+                //     state,
+                //     state.*,
+                // );
+                //
+                // PORT NOTE: the reference's 4th arg `state.*` (an
+                // `apprt.ClipboardRequest`) IMPLICITLY coerces to the callback's
+                // `apprt.ClipboardRequestType` param (Zig tagged-union → tag enum).
+                // Rust has no such coercion — the tag is projected explicitly.
+                let state_type = match unsafe { *state } {
+                    ClipboardRequest::Paste => ClipboardRequestType::Paste,
+                    ClipboardRequest::Osc52Read(_) => ClipboardRequestType::Osc52Read,
+                    ClipboardRequest::Osc52Write(_) => ClipboardRequestType::Osc52Write,
+                };
+                unsafe {
+                    ((*self.app).opts.confirm_read_clipboard)(
+                        self.userdata,
+                        str.as_ptr(),
+                        state,
+                        state_type,
+                    );
+                }
+
+                // return;
+                return;
+            }
+
+            // else => log.err("error completing clipboard request err={}", .{err}),
+            Err(_err) => {
+                // log.err("error completing clipboard request err={}", .{err});
+            }
+        }
+
+        // We don't defer this because the clipboard confirmation route
+        // preserves the clipboard request.
+        // alloc.destroy(state);
+        //
+        // (PORT: reclaim + drop the `Box` allocated in [`Surface::clipboard_request`].)
+        unsafe { drop(Box::from_raw(state)) };
+    }
+
+    // pub fn refresh(self: *Surface) void { ... }
+    pub fn refresh(&mut self) {
+        // self.core_surface.refreshCallback() catch |err| {
+        //     log.err("error in refresh callback err={}", .{err});
+        //     return;
+        // };
+        if let Err(_err) = self.core_surface.refreshCallback() {
+            // log.err("error in refresh callback err={}", .{err});
+        }
+    }
+
+    // pub fn draw(self: *Surface) void { ... }
+    //
+    // PORT NOTE: `draw` reaches the Phase-3 GPU renderer leaf at RUNTIME (core
+    // `Surface::draw` → `renderer_seam` `unimplemented!()`); the delegation is ported
+    // LIVE — the panic is in the leaf, not here (EMBEDDED_BLUEPRINT §1).
+    pub fn draw(&mut self) {
+        // self.core_surface.draw() catch |err| {
+        //     log.err("error in draw err={}", .{err});
+        //     return;
+        // };
+        if let Err(_err) = self.core_surface.draw() {
+            // log.err("error in draw err={}", .{err});
+        }
+    }
+
+    // pub fn updateContentScale(self: *Surface, x: f64, y: f64) void { ... }
+    pub fn updateContentScale(&mut self, x: f64, y: f64) {
+        // We are an embedded API so the caller can send us all sorts of
+        // garbage. We want to make sure that the float values are valid
+        // and we don't want to support fractional scaling below 1.
+        // const x_scaled = @max(1, if (std.math.isNan(x)) 1 else x);
+        let x_scaled = (if x.is_nan() { 1.0 } else { x }).max(1.0);
+        // const y_scaled = @max(1, if (std.math.isNan(y)) 1 else y);
+        let y_scaled = (if y.is_nan() { 1.0 } else { y }).max(1.0);
+
+        // self.content_scale = .{
+        //     .x = @floatCast(x_scaled),
+        //     .y = @floatCast(y_scaled),
+        // };
+        self.content_scale = ContentScale {
+            x: x_scaled as f32,
+            y: y_scaled as f32,
+        };
+
+        // self.core_surface.contentScaleCallback(self.content_scale) catch |err| {
+        //     log.err("error in content scale callback err={}", .{err});
+        //     return;
+        // };
+        if let Err(_err) = self.core_surface.contentScaleCallback(self.content_scale) {
+            // log.err("error in content scale callback err={}", .{err});
+        }
+    }
+
+    // pub fn updateSize(self: *Surface, width: u32, height: u32) void { ... }
+    pub fn updateSize(&mut self, width: u32, height: u32) {
+        // Runtimes sometimes generate superfluous resize events even
+        // if the size did not actually change (SwiftUI). We check
+        // that the size actually changed from what we last recorded
+        // since resizes are expensive.
+        // if (self.size.width == width and self.size.height == height) return;
+        if self.size.width == width && self.size.height == height {
+            return;
+        }
+
+        // self.size = .{
+        //     .width = width,
+        //     .height = height,
+        // };
+        self.size = SurfaceSize { width, height };
+
+        // Call the primary callback.
+        // self.core_surface.sizeCallback(self.size) catch |err| {
+        //     log.err("error in size callback err={}", .{err});
+        //     return;
+        // };
+        if let Err(_err) = self.core_surface.sizeCallback(self.size) {
+            // log.err("error in size callback err={}", .{err});
+        }
+    }
+
+    // pub fn colorSchemeCallback(self: *Surface, scheme: apprt.ColorScheme) void { ... }
+    pub fn colorSchemeCallback(&mut self, scheme: ColorScheme) {
+        // self.core_surface.colorSchemeCallback(scheme) catch |err| {
+        //     log.err("error setting color scheme err={}", .{err});
+        //     return;
+        // };
+        if let Err(_err) = self.core_surface.colorSchemeCallback(scheme) {
+            // log.err("error setting color scheme err={}", .{err});
+        }
+    }
+
+    // pub fn mouseButtonCallback(
+    //     self: *Surface,
+    //     action: input.MouseButtonState,
+    //     button: input.MouseButton,
+    //     mods: input.Mods,
+    // ) bool { ... }
+    pub fn mouseButtonCallback(
+        &mut self,
+        action: mouse::ButtonState,
+        button: mouse::Button,
+        mods: Mods,
+    ) -> bool {
+        // return self.core_surface.mouseButtonCallback(action, button, mods) catch |err| {
+        //     log.err("error in mouse button callback err={}", .{err});
+        //     return false;
+        // };
+        //
+        // PARITY: not `.unwrap_or(false)` — the arm IS the reference's catch block
+        // with its log site (the core surface.rs `performAction`-result precedent).
+        #[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]
+        match self.core_surface.mouseButtonCallback(action, button, mods) {
+            Ok(v) => v,
+            Err(_err) => {
+                // log.err("error in mouse button callback err={}", .{err});
+                false
+            }
+        }
+    }
+
+    // pub fn mousePressureCallback(
+    //     self: *Surface,
+    //     stage: input.MousePressureStage,
+    //     pressure: f64,
+    // ) void { ... }
+    pub fn mousePressureCallback(&mut self, stage: mouse::PressureStage, pressure: f64) {
+        // self.core_surface.mousePressureCallback(stage, pressure) catch |err| {
+        //     log.err("error in mouse pressure callback err={}", .{err});
+        //     return;
+        // };
+        if let Err(_err) = self.core_surface.mousePressureCallback(stage, pressure) {
+            // log.err("error in mouse pressure callback err={}", .{err});
+        }
+    }
+
+    // pub fn scrollCallback(
+    //     self: *Surface,
+    //     xoff: f64,
+    //     yoff: f64,
+    //     mods: input.ScrollMods,
+    // ) void { ... }
+    pub fn scrollCallback(&mut self, xoff: f64, yoff: f64, mods: mouse::ScrollMods) {
+        // self.core_surface.scrollCallback(xoff, yoff, mods) catch |err| {
+        //     log.err("error in scroll callback err={}", .{err});
+        //     return;
+        // };
+        if let Err(_err) = self.core_surface.scrollCallback(xoff, yoff, mods) {
+            // log.err("error in scroll callback err={}", .{err});
+        }
+    }
+
+    // pub fn cursorPosCallback(
+    //     self: *Surface,
+    //     x: f64,
+    //     y: f64,
+    //     mods: input.Mods,
+    // ) void { ... }
+    pub fn cursorPosCallback(&mut self, x: f64, y: f64, mods: Mods) {
+        // Convert our unscaled x/y to scaled.
+        // const pos = self.cursorPosToPixels(.{
+        //     .x = @floatCast(x),
+        //     .y = @floatCast(y),
+        // }) catch |err| {
+        //     log.err(
+        //         "error converting cursor pos to scaled pixels in cursor pos callback err={}",
+        //         .{err},
+        //     );
+        //     return;
+        // };
+        let pos = match self.cursorPosToPixels(CursorPos {
+            x: x as f32,
+            y: y as f32,
+        }) {
+            Ok(v) => v,
+            Err(_err) => {
+                // log.err(
+                //     "error converting cursor pos to scaled pixels in cursor pos callback err={}",
+                //     .{err},
+                // );
+                return;
+            }
+        };
+
+        // There are cases where the platform reports a mouse motion event
+        // without the cursor actually moving. For example, on macOS, updating
+        // the window title can trigger a phantom mouse-move event at the same
+        // coordinates. This can cause the mouse to incorrectly unhide when
+        // mouse-hide-while-typing is enabled (commonly seen with TUI apps
+        // like Zellij that frequently update the title). To prevent incorrect
+        // behavior, we only continue with callback logic if the cursor has
+        // actually moved.
+        // if (@abs(self.cursor_pos.x - pos.x) < 1 and
+        //     @abs(self.cursor_pos.y - pos.y) < 1) return;
+        if (self.cursor_pos.x - pos.x).abs() < 1.0 && (self.cursor_pos.y - pos.y).abs() < 1.0 {
+            return;
+        }
+
+        // self.cursor_pos = pos;
+        self.cursor_pos = pos;
+
+        // self.core_surface.cursorPosCallback(self.cursor_pos, mods) catch |err| {
+        //     log.err("error in cursor pos callback err={}", .{err});
+        //     return;
+        // };
+        //
+        // PORT NOTE: core `cursorPosCallback` takes `mods: ?input.Mods`; the
+        // reference's non-optional `mods` coerces to `Some`.
+        if let Err(_err) = self
+            .core_surface
+            .cursorPosCallback(self.cursor_pos, Some(mods))
+        {
+            // log.err("error in cursor pos callback err={}", .{err});
+        }
+    }
+
+    // pub fn preeditCallback(self: *Surface, preedit_: ?[]const u8) void { ... }
+    pub fn preeditCallback(&mut self, preedit_: Option<&[u8]>) {
+        // _ = self.core_surface.preeditCallback(preedit_) catch |err| {
+        //     log.err("error in preedit callback err={}", .{err});
+        //     return;
+        // };
+        if let Err(_err) = self.core_surface.preeditCallback(preedit_) {
+            // log.err("error in preedit callback err={}", .{err});
+        }
+    }
+
+    // pub fn textCallback(self: *Surface, text: []const u8) void { ... }
+    pub fn textCallback(&mut self, text: &[u8]) {
+        // _ = self.core_surface.textCallback(text) catch |err| {
+        //     log.err("error in key callback err={}", .{err});
+        //     return;
+        // };
+        if let Err(_err) = self.core_surface.textCallback(text) {
+            // log.err("error in key callback err={}", .{err});
+        }
+    }
+
+    // pub fn focusCallback(self: *Surface, focused: bool) void { ... }
+    pub fn focusCallback(&mut self, focused: bool) {
+        // self.core_surface.focusCallback(focused) catch |err| {
+        //     log.err("error in focus callback err={}", .{err});
+        //     return;
+        // };
+        if let Err(_err) = self.core_surface.focusCallback(focused) {
+            // log.err("error in focus callback err={}", .{err});
+        }
+    }
+
+    // pub fn occlusionCallback(self: *Surface, visible: bool) void { ... }
+    pub fn occlusionCallback(&mut self, visible: bool) {
+        // self.core_surface.occlusionCallback(visible) catch |err| {
+        //     log.err("error in occlusion callback err={}", .{err});
+        //     return;
+        // };
+        if let Err(_err) = self.core_surface.occlusionCallback(visible) {
+            // log.err("error in occlusion callback err={}", .{err});
+        }
+    }
+
     /// reference `fn queueInspectorRender(self: *Surface) void` (embedded.zig:922)
     /// — chunk E3/E4. It reaches the `render_inspector` action (dcimgui/Metal
     /// Phase-3 leaf); called by [`App::redrawInspector`]. Kept an `unimplemented!()`
     /// placeholder leaf here.
     pub fn queueInspectorRender(&mut self) {
         unimplemented!("embedded::Surface::queueInspectorRender — chunk E3/E4")
+    }
+
+    // pub fn newSurfaceOptions(self: *const Surface, context: apprt.surface.NewSurfaceContext) apprt.Surface.Options { ... }
+    //
+    // PORT NOTE: `apprt.Surface.Options` is the embedded backend's own
+    // [`SurfaceOptions`] (the `ghostty_surface_config_s`); the reference struct-literal
+    // relies on Zig field defaults for every field it does not set. Rust has no struct
+    // field defaults, so the elided fields are spelled out below with those exact
+    // defaults. Reached only by the E7 CAPI `ghostty_surface_inherited_config`
+    // (returned BY VALUE to the C host).
+    pub fn newSurfaceOptions(&self, context: NewSurfaceContext) -> SurfaceOptions {
+        // PORT NOTE: `self.app.config` is read through the E1 `UnsafeCell` accessor.
+        let config = unsafe { &*(*self.app).config.get() };
+
+        // const font_size: f32 = font_size: {
+        //     if (!self.app.config.@"window-inherit-font-size") break :font_size 0;
+        //     break :font_size self.core_surface.font_size.points;
+        // };
+        let font_size: f32 = 'font_size: {
+            if !config.window_inherit_font_size {
+                break 'font_size 0.0;
+            }
+            self.core_surface.font_size.points
+        };
+
+        // const working_directory: ?[*:0]const u8 = wd: {
+        //     if (!apprt.surface.shouldInheritWorkingDirectory(context, &self.app.config)) break :wd null;
+        //     const cwd = self.core_surface.pwd(self.app.core_app.alloc) catch null orelse break :wd null;
+        //     defer self.app.core_app.alloc.free(cwd);
+        //     break :wd self.app.core_app.alloc.dupeZ(u8, cwd) catch null;
+        // };
+        //
+        // PORT NOTE: rustty `pwd` is infallible (`Option<Vec<u8>>`; the reference's
+        // `catch null` collapses to the `None` arm). `cwd` is an owned `Vec<u8>`
+        // dropped at scope end (the reference `defer …free(cwd)`); `dupeZ` → a leaked
+        // NUL-terminated `CString` owned by the C host (the reference leaks the GPA
+        // `dupeZ` result the same way — this is `newSurfaceOptions`'s inherited-config
+        // contract). An interior-NUL `cwd` (impossible for a real pwd) maps the
+        // `CString::new` failure to `null`, matching the `dupeZ … catch null`.
+        let working_directory: *const c_char = 'wd: {
+            if !should_inherit_working_directory(context, config) {
+                break 'wd core::ptr::null();
+            }
+            let cwd = match self
+                .core_surface
+                .pwd(unsafe { (*(*self.app).core_app).alloc })
+            {
+                Some(v) => v,
+                None => break 'wd core::ptr::null(),
+            };
+            match CString::new(cwd) {
+                Ok(c) => c.into_raw().cast_const(),
+                Err(_) => core::ptr::null(),
+            }
+        };
+
+        // return .{
+        //     .font_size = font_size,
+        //     .working_directory = working_directory,
+        //     .context = context,
+        // };
+        SurfaceOptions {
+            font_size,
+            working_directory,
+            context,
+            // (elided reference fields → their `Surface.Options` Zig field defaults)
+            // platform_tag: c_int = 0,
+            platform_tag: 0,
+            // platform: Platform.C = undefined,
+            //
+            // PORT NOTE: Zig `undefined` is never read here (the C host overwrites
+            // `platform`/`platform_tag` before `ghostty_surface_new`); a zeroed union
+            // is the faithful placeholder.
+            platform: PlatformC {
+                macos: PlatformCMacOS {
+                    nsview: core::ptr::null_mut(),
+                },
+            },
+            // userdata: ?*anyopaque = null,
+            userdata: core::ptr::null_mut(),
+            // scale_factor: f64 = 1,
+            scale_factor: 1.0,
+            // command: ?[*:0]const u8 = null,
+            command: core::ptr::null(),
+            // env_vars: ?[*]EnvVar = null,
+            env_vars: core::ptr::null(),
+            // env_var_count: usize = 0,
+            env_var_count: 0,
+            // initial_input: ?[*:0]const u8 = null,
+            initial_input: core::ptr::null(),
+            // wait_after_command: bool = false,
+            wait_after_command: false,
+        }
+    }
+
+    /// The cursor position from the host directly is in screen coordinates but
+    /// all our interface works in pixels.
+    //
+    // fn cursorPosToPixels(self: *const Surface, pos: apprt.CursorPos) !apprt.CursorPos { ... }
+    fn cursorPosToPixels(&self, pos: CursorPos) -> Result<CursorPos, ApprtError> {
+        // const scale = try self.getContentScale();
+        let scale = self.get_content_scale()?;
+        // return .{ .x = pos.x * scale.x, .y = pos.y * scale.y };
+        Ok(CursorPos {
+            x: pos.x * scale.x,
+            y: pos.y * scale.y,
+        })
     }
 }
 
