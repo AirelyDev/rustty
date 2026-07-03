@@ -3072,6 +3072,33 @@ impl Config {
     // retained as a comment for fidelity; call sites that needed the arena now use
     // owned allocation directly.
 
+    // pub fn keyEventIsBinding(
+    //     self: *Config,
+    //     event: inputpkg.KeyEvent,
+    // ) bool {
+    //
+    // PORT NOTE: consumed by the libghostty C-ABI export `ghostty_config_key_is_binding`
+    // (embedded.zig:1470, rustty-apprt-c chunk E6). Renamed to snake_case per this
+    // module's method convention (`clone_config`/`change_conditional_state`/…).
+    // `self: *Config` is mutable-capable in the reference but the body only reads, so
+    // `&self` is the faithful minimal. `event` is taken by value (the reference
+    // `event: inputpkg.KeyEvent`); the borrow for `getEvent` is taken at the call.
+    // There is no reference `test{}` for this fn.
+    pub fn key_event_is_binding(&self, event: rustty_vt::input::key::KeyEvent) -> bool {
+        // switch (event.action) {
+        //     .release => return false,
+        //     .press, .repeat => {},
+        // }
+        match event.action {
+            rustty_vt::input::key::Action::Release => return false,
+            rustty_vt::input::key::Action::Press | rustty_vt::input::key::Action::Repeat => {}
+        }
+
+        // If we have a keybinding for this event then we return true.
+        // return self.keybind.set.getEvent(event) != null;
+        self.keybind.set.get_event(&event).is_some()
+    }
+
     /// Change the state of conditionals and reload the configuration
     /// based on the new state. This returns a new configuration based
     /// on the new state. The caller must free the old configuration if they

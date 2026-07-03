@@ -236,7 +236,11 @@ pub struct KeyEvent<'a> {
 
 impl KeyEvent<'_> {
     /// Convert a libghostty key event into a core key event.
-    fn core(&self) -> Option<CoreKeyEvent> {
+    //
+    // PORT NOTE (ADV-FIX 9): the reference `core` is file-private; the apprt-c
+    // C-ABI wrapper `ghostty_config_key_is_binding` reaches it
+    // (`event.keyEvent().core()`, embedded.zig:1474), so it is `pub` here.
+    pub fn core(&self) -> Option<CoreKeyEvent> {
         // const text: []const u8 = if (self.text) |v| v else "";
         let text: &[u8] = self.text.unwrap_or(b"");
         // const unshifted_codepoint: u21 = std.math.cast(u21, self.unshifted_codepoint) orelse 0;

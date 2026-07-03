@@ -2044,3 +2044,55 @@ rustty + cli; touched-crate tests — apprt 0, apprt-c 0; clippy `-D warnings`, 
 acyclic G7 with apprt-c still a clean TOP SINK, test-counts G-gate); scoped-G3b on
 embedded.zig **992-1243 (E4) distinctive=13 missing=0 review=0**. No regression (vt
 2019, core 15, apprt-api 20, renderer 19, crash 12, termio 44).
+
+## rustty-apprt-c embedded E6 (CAPI app-lifecycle exports) — runtime-live, NO leaf
+
+Chunk E6 of the libghostty C-ABI milestone (EMBEDDED_BLUEPRINT §1/§3/§7): ports
+`embedded.zig:1398-1535` — the 13 app-lifecycle + app/config `export fn ghostty_*`
+into `crates/rustty-apprt-c/src/lib.rs` as `#[no_mangle] pub unsafe extern "C" fn
+rustty_*`: `rustty_app_new` (+ the `app_new_` helper), `_tick`, `_userdata`, `_free`,
+`_set_focus`, `_key`, `_keyboard_changed`, `_open_config`, `_update_config`,
+`_needs_confirm_quit`, `_has_global_keybinds`, `_set_color_scheme`, and
+`rustty_config_key_is_binding`. These are the **runtime-EXERCISABLE core** — `app_new`
+builds `CoreApp` + keymap + config clone with **NO renderer and NO xev** (the GPU/xev
+leaf boundary is `ghostty_surface_new`, E7+), so **E6 creates NO new GPU/xev/objc
+leaf** (nothing added to the Phase-3/D6/E10 deferral set). The bodies forward to the
+already-ported `rustty-apprt` embedded backend (E1) + `rustty-core` App.
+
+**No deferrals** — every export is live. Two supporting COMPLETIONS (not deferrals),
+both required by E6 and both faithful ports:
+
+1. **`rustty-config`: `Config::key_event_is_binding`** (port of `Config.zig:6401`
+   `keyEventIsBinding`, consumed by `ghostty_config_key_is_binding`). Renamed to
+   snake_case per config_struct.rs's method convention. Its dep `keybind.set.getEvent`
+   (`rustty_input::binding::Set::get_event`) was already ported. `&self` (body only
+   reads). **0 reference `test{}`** → no test-count/MAP change; `config` suite 187,
+   green.
+2. **`rustty-apprt`: `embedded::KeyEvent::core` widened to `pub`** (ADV-FIX 9
+   pub-widening — the reference `core` is file-private, but the apprt-c wrapper
+   `ghostty_config_key_is_binding` reaches it via `event.keyEvent().core()`).
+
+**Identity / ABI notes (R3):** the reference `app_new_`'s inferred `!*App` error set
+(`CoreApp.create`'s `CreateError` ∪ `App.init`'s `KeymapError`) is modeled as one
+local `AppNewError` enum so `rustty_app_new`'s single `catch |err|` log site is
+preserved (`#[allow(dead_code)]` — the payloads are read only via the derived-`Debug`
+log, invisible to dead-code analysis; on non-macOS `KeymapError` is `()`).
+`global.alloc.create(App)`/`errdefer destroy` collapse into boxing `App::init`'s
+returned value (rustty `init` is by-value, not placement-init); `opts.*` → `ptr::read`
+(Options is `#[repr(C)]`). `ghostty_app_free`'s `global.alloc.destroy(v)` frees the App
+box via `ManuallyDrop` (terminate already tore down — the `closeSurface` precedent).
+`ghostty_app_open_config`'s `performAction(.app, .open_config, {})` → the `apprt_api::App`
+trait `perform_action(Target::<CoreSurface>::App, Action::OpenConfig)`. The
+`app_set_color_scheme` `intToEnum` guard lives on the raw `c_int` (0=light/1=dark); the
+reference warn string names `ghostty_surface_set_color_scheme` (a ghostty copy-paste
+quirk inside the app fn) — preserved verbatim in the comment.
+
+**Gate deltas (E6):** new deps on `rustty-apprt-c`: `rustty-core`, `rustty-config`,
+`rustty-apprt-api`, `allocator-api2` (all far below apprt-c — it stays a clean TOP
+SINK). `apprt_embedded` MAP row unchanged (embedded.zig 0-test; the exports land under
+the existing `{RSAPPRTC}/**/*.rs` glob — GREEN, rust ≥ zig; NO new MAP entry).
+Whole-workspace gates green (build incl. apprt-c + rustty + cli; touched-crate tests —
+config 187, apprt 0, apprt-c 0; clippy `-D warnings`, fmt, acyclic G7 with apprt-c
+still a clean TOP SINK, test-counts G-gate); scoped-G3b on embedded.zig **1398-1537
+(E6) distinctive=18 missing=0 review=0**. No regression (vt 2019, core 15, apprt-api
+20, renderer 19, crash 12, termio 44).
