@@ -3145,6 +3145,23 @@ mod tests {
                 ptr::addr_of!(one).cast(),
                 size_of::<libc::c_int>() as socklen_t,
             );
+            // PORT NOTE (cargo-parallel + rapid-rerun stability adaptation):
+            // add SO_REUSEPORT alongside the reference's SO_REUSEADDR. The
+            // reference binds the fixed port 3131 once per single-threaded
+            // `zig test` run; under cargo's rapid sequential re-runs a prior
+            // process can leave a 3131 socket mid-teardown (macOS TIME_WAIT /
+            // leaked accepted-fd lifecycle) that SO_REUSEADDR alone does not
+            // fully cover on Darwin, yielding intermittent EADDRINUSE at bind.
+            // SO_REUSEPORT closes that residual rebind race. Port 3131 and all
+            // observable behavior are unchanged — same family of adaptation as
+            // the SOCKET_TEST_LOCK here and the onig_initialize/OnceLock guard.
+            libc::setsockopt(
+                ln,
+                libc::SOL_SOCKET,
+                libc::SO_REUSEPORT,
+                ptr::addr_of!(one).cast(),
+                size_of::<libc::c_int>() as socklen_t,
+            );
             assert!(
                 libc::bind(
                     ln,
@@ -3394,6 +3411,23 @@ mod tests {
                 ln,
                 libc::SOL_SOCKET,
                 libc::SO_REUSEADDR,
+                ptr::addr_of!(one).cast(),
+                size_of::<libc::c_int>() as socklen_t,
+            );
+            // PORT NOTE (cargo-parallel + rapid-rerun stability adaptation):
+            // add SO_REUSEPORT alongside the reference's SO_REUSEADDR. The
+            // reference binds the fixed port 3131 once per single-threaded
+            // `zig test` run; under cargo's rapid sequential re-runs a prior
+            // process can leave a 3131 socket mid-teardown (macOS TIME_WAIT /
+            // leaked accepted-fd lifecycle) that SO_REUSEADDR alone does not
+            // fully cover on Darwin, yielding intermittent EADDRINUSE at bind.
+            // SO_REUSEPORT closes that residual rebind race. Port 3131 and all
+            // observable behavior are unchanged — same family of adaptation as
+            // the SOCKET_TEST_LOCK here and the onig_initialize/OnceLock guard.
+            libc::setsockopt(
+                ln,
+                libc::SOL_SOCKET,
+                libc::SO_REUSEPORT,
                 ptr::addr_of!(one).cast(),
                 size_of::<libc::c_int>() as socklen_t,
             );
