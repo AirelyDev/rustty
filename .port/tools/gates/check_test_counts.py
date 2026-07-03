@@ -140,6 +140,17 @@ RSINS = "/Users/gael/projects/rustty/crates/rustty-inspector/src"
 # (App.zig / Surface.zig / surface_mouse.zig live beside main_ghostty.zig).
 RSCORE = "/Users/gael/projects/rustty/crates/rustty-core/src"
 
+# rustty-xev: the libxev event-loop crate (D6, XEV_BLUEPRINT §7 / [ADV-FIX F7]).
+# The count-gate cannot see libxev via ghostty/src — libxev is a content-addressed
+# zig-cache DEPENDENCY package (mitchellh/libxev, the exact commit ghostty pins),
+# NOT ghostty src. Its base path is therefore the pinned zig cache src dir. SCOPE =
+# macOS/kqueue only (XEV_BLUEPRINT §0-§1); other backends/file/tcp/udp are DEFERRED
+# (DEFERRALS.md), so only the in-scope files are mapped. C1 seeds the mapping with
+# the three pure intrusive data-structure files (queue/queue_mpsc/heap); later
+# chunks add darwin/loop/kqueue/async/timer/process/stream entries.
+GHXEV = "/Users/gael/.cache/zig/p/libxev-0.0.0-86vtc4IcEwCqEYxEYoN_3KXmc6A9VLcm22aVImfvecYs/src"
+RSXEV = "/Users/gael/projects/rustty/crates/rustty-xev/src"
+
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
@@ -652,6 +663,14 @@ MAP = {
     # same reason), so rust=0 == zig=0; the G3b comment-coverage gate + per-chunk
     # review carry Surface's quality (0 missing over the full file, C-F sweep).
     "core_surface":      ([f"{GHSRC}/Surface.zig"], [f"{RSCORE}/surface.rs"], 0),
+    # rustty-xev C1 (XEV_BLUEPRINT §8) — the intrusive data structures. queue.zig
+    # (1 test `Intrusive`: singly-linked FIFO), queue_mpsc.zig (1 test `Intrusive`:
+    # Vyukov MPSC), heap.zig (6 tests: heap; remove root; remove w/ children; equal
+    # values; million values; dangling next). Pure, Miri-clean. Later chunks add the
+    # kqueue/async/timer/process/stream mappings.
+    "xev_queue":         ([f"{GHXEV}/queue.zig"], [f"{RSXEV}/queue.rs"], 0),
+    "xev_queue_mpsc":    ([f"{GHXEV}/queue_mpsc.zig"], [f"{RSXEV}/queue_mpsc.rs"], 0),
+    "xev_heap":          ([f"{GHXEV}/heap.zig"], [f"{RSXEV}/heap.rs"], 0),
 }
 
 def expand(globs):

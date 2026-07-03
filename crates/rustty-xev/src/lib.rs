@@ -30,6 +30,19 @@
 #[allow(unused_imports)]
 use rustty_global::xev as _DeferredXevBackend;
 
+// XEV_BLUEPRINT §8 chunk C1: the pure intrusive data structures that establish the
+// raw-pointer discipline for the whole libxev port. They are INTERNAL modules for
+// now (queue.zig / queue_mpsc.zig / heap.zig ported byte-faithfully); the kqueue
+// loop (C3) uses them (`submissions`/`thread_pool_completions`/`TimerHeap`), and C7
+// wires the package re-export surface. `allow(dead_code)`: they are sequenced ahead
+// of their first non-test consumer (C3), so the lib-only build sees them as unused.
+#[allow(dead_code)]
+mod heap;
+#[allow(dead_code)]
+mod queue;
+#[allow(dead_code)]
+mod queue_mpsc;
+
 /// PORT: `xev.Loop` (the per-thread event loop; termio Thread owns one and
 /// `Termio.ThreadData.loop` points at it).
 pub struct Loop {}
