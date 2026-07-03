@@ -2096,3 +2096,86 @@ config 187, apprt 0, apprt-c 0; clippy `-D warnings`, fmt, acyclic G7 with apprt
 still a clean TOP SINK, test-counts G-gate); scoped-G3b on embedded.zig **1398-1537
 (E6) distinctive=18 missing=0 review=0**. No regression (vt 2019, core 15, apprt-api
 20, renderer 19, crash 12, termio 44).
+
+## rustty-apprt-c embedded E7 (CAPI surface lifecycle + state/query + render exports)
+
+Chunk E7 of the libghostty C-ABI milestone (EMBEDDED_BLUEPRINT §1/§3/§7): ports
+`embedded.zig:1538-1757` — the surface lifecycle (7), state/query (8), and
+render/window (7) `export fn ghostty_surface_*` — into
+`crates/rustty-apprt-c/src/lib.rs` as `#[no_mangle] pub unsafe extern "C" fn
+rustty_surface_*`: `_config_new`, `_new` (+ the `surface_new_` helper), `_free`,
+`_userdata`, `_app`, `_inherited_config`, `_update_config`, `_needs_confirm_quit`,
+`_process_exited`, `_has_selection`, `_read_selection`, `_read_text` (+ the
+`readTextLocked` helper), `_free_text`, `_refresh`, `_draw`, `_set_size`, `_size`,
+`_foreground_pid`, `_tty_name`, `_set_color_scheme`, `_set_content_scale`,
+`_set_focus`, `_set_occlusion`. Bodies forward to the already-ported `rustty-apprt`
+embedded backend (E1/E2/E3) + `rustty-core` Surface. `ghostty_surface_new`
+heap-boxes + pins the backend `Surface` via the backend `App::newSurface`
+(ADV-FIX 8 — done in E1/E2, reached here).
+
+**Runtime-live split (EMBEDDED_BLUEPRINT §1):** only `rustty_surface_config_new` (a
+pure defaulted `Surface.Options`) is runtime-live. **Every other E7 export needs a
+LIVE surface**, which only exists past `rustty_surface_new` → core `Surface::init` →
+`renderer_seam::{Renderer,Thread}` (surface.rs:324/333 — the Phase-3 R-d GPU + D6 xev
+leaves, already in the core C3 deferral set above). So the whole E7 surface set
+**COMPILES + LINKS + header-generates NOW and PANICS when driven against a real
+surface**. E7 adds **NO new `unimplemented!()` leaf in apprt-c** — it is a pure FFI
+projection that REACHES the existing renderer/xev leaves at runtime:
+
+1. **`rustty_surface_new`** → `App::newSurface` → `Surface::init` → core
+   `Surface::init` constructs `renderer_seam::{Renderer,Thread}` (Phase-3 R-d/D6
+   leaf). LINKS now; a live-surface call panics in the core init leaf.
+2. **`_refresh`/`_draw`/`_set_size`/`_set_content_scale`/`_set_focus`/`_set_occlusion`/
+   `_set_color_scheme`** → the backend `Surface::{refresh,draw,updateSize,
+   updateContentScale,focusCallback,occlusionCallback,colorSchemeCallback}` (E3) →
+   core surface callbacks that reach the renderer leaf at runtime (`draw` most
+   directly). LINK now; panic only when driven against a live surface.
+3. **`_read_selection`/`_read_text`/`_has_selection`/`_process_exited`/
+   `_needs_confirm_quit`/`_foreground_pid`/`_tty_name`/`_size`/`_update_config`/
+   `_inherited_config`** → live core-surface state (mutex/terminal/io/size/pty). Real
+   core logic, NO GPU, but unreachable without a live surface (so effectively Phase-3
+   until R-d+D6). No NEW leaf.
+
+**Two supporting COMPLETIONS (not deferrals), both faithful ports of `main_c.zig`:**
+
+1. **`main_c.zig` `String` (`ghostty_string_s`) + `rustty_string_free`.** embedded.zig
+   imports `String` (`const String = @import("../main_c.zig").String;`,
+   embedded.zig:23) and `ghostty_surface_tty_name` returns it. This crate root IS the
+   `main_c.zig` analog, so its items are folded in as the exports that need them land
+   (the **E0 `rustty_init` precedent**). Ported the full struct (`ptr`/`len`/`sentinel`)
+   + `empty`/`from_slice`/`deinit` + the `rustty_string_free` freeing export
+   (main_c.zig:155). `from_slice` fuses the reference `dupeZ` copy + `fromSlice` wrap +
+   the sentinel append (the config c_api `from_path` precedent); `deinit` reconstructs
+   the leaked `Box<[u8]>` via Rust's global allocator (the E5 `Text::deinit` seam).
+   rustty-config ships its own *local deferred* projection of this same struct (no
+   `deinit`, `c_api.rs`); this is the canonical `main_c` port with the freeing pair.
+   NOT a deferral — fully implemented + host-freeable.
+2. **read-text NUL discipline.** core `dumpTextLocked` returns `Text { text: Vec<u8> }`
+   whose length EXCLUDES the sentinel (the vt `selection_string` convention) and whose
+   buffer carries NO trailing NUL; `readTextLocked` pushes the NUL and leaks a
+   `Box<[u8]>` of exactly `text_len + 1` bytes so the E5 `Text::deinit`
+   (`ghostty_surface_free_text`) reconstruction frees the same allocation. Faithful to
+   the reference `[:0]const u8` allocation shape (documented at both E5 and E7 sites).
+
+**Identity / ABI notes (R3):** `ghostty_surface_config_new`'s `.{}` → the
+`Surface.Options` Zig field defaults spelled out (the E3 `newSurfaceOptions`
+precedent; `platform` = reference `undefined` → a zeroed union placeholder).
+`surface_new_`'s `opts.*` → `ptr::read` (`SurfaceOptions` is `#[repr(C)]`).
+`ghostty_surface_free`'s `ptr.app.closeSurface(ptr)` captures the `app` raw pointer
+before handing `ptr` to `closeSurface` (raw-pointer args). `read_selection`/`read_text`
+realize the reference `defer mutex.unlock()` as a single unlock before the one return
+(both the no-selection and read arms flow through it). `getProcessInfo(.foreground_pid)`/
+`(.tty_name)` → the core comptime-return split (`getForegroundPid`/`getTtyName`).
+`readTextLocked` keeps the reference camelCase identifier (`#[allow(non_snake_case)]`).
+The `surface_set_color_scheme` `intToEnum` guard lives on the raw `c_int` (0=light/
+1=dark), the E6 precedent.
+
+**Gate deltas (E7):** new dep on `rustty-apprt-c`: `rustty-vt` (via `capi`, already
+present; E7 adds `rustty-core::surface::TextViewport` + `rustty-vt::selection` uses —
+all far below apprt-c, still a clean TOP SINK). `apprt_embedded` MAP row unchanged
+(embedded.zig 0-test; the exports land under the existing `{RSAPPRTC}/**/*.rs` glob —
+GREEN, rust ≥ zig; NO new MAP entry). Whole-workspace gates green (build incl. apprt-c
++ rustty + cli; touched-crate tests — apprt-c 0; clippy `-D warnings`, fmt, acyclic G7
+with apprt-c still a clean TOP SINK, test-counts G-gate); scoped-G3b on embedded.zig
+**1538-1757 (E7) distinctive=27 missing=0 review=0**. No regression (vt 2019, core 15,
+apprt-api 20, renderer 19, crash 12, termio 44).
