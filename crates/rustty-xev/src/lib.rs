@@ -178,6 +178,14 @@ pub use stream::{PollError, PollEvent, Stream, WriteQueue, WriteRequest};
 pub use thread_pool::ThreadPool;
 #[cfg(target_os = "macos")]
 pub use timer::Timer;
+// PORT NOTE: `Timer.run`/`reset`'s callback error type (`pub const RunError =
+// error{Canceled, Unexpected}`) must be nameable by consumers — a termio
+// `termiosTimer`/`syncResetCallback`/... callback spells its `r:
+// Timer.RunError!void` parameter, and a named fn-item callback cannot infer it.
+// The `timer` module is private, so re-export the type here (Milestone-A export
+// gap surfaced by Milestone B's first typed Timer callback).
+#[cfg(target_os = "macos")]
+pub use timer::RunError as TimerRunError;
 
 // PORT: `main.zig` also forwards `File`/`TCP`/`UDP` (watchers) + `Dynamic`/
 // `DynamicXev` (the runtime backend switch) + `IO_Uring`/`Epoll`/`Kqueue`/

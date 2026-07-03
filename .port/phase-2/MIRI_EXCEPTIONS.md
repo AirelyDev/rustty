@@ -221,3 +221,33 @@ forked child (`subprocess_pre_exec` → `childPreExec`), which Miri never observ
 (the child is a separate process). [ADV-FIX F3] the pty.slave `File` is
 `ManuallyDrop` (no double-close) and the single verbatim `posix.close(pty.slave)`
 does the one close — a fd-lifetime property, native/ASan territory, not Miri.
+
+## rustty-termio B2 (Exec threadEnter/queueWrite/ttyWrite xev wiring) — MIRI exception
+
+B2's un-deferred `Exec::threadEnter` / `queueWrite` / `ttyWrite` /
+`processExit` / `termiosTimer` / `threadExit` (`exec.rs`) + its rustty-only KAT
+`threadenter_queuewrite_writes_to_pty` build on B1's spawn and additionally: create
+a real **kqueue** `Loop`, register a **`EVFILT_PROC`** process watcher + a
+**`Stream::queue_write`** ordered write on the pty master + a **`Timer`** (termios
+poll), spawn a real **read thread**, and drive `loop.run(NoWait)` over live
+`kevent64`/`read`/`write`/`fcntl` syscalls — the same "can't call foreign function"
+class as the rustty-xev C3–C6 exceptions (and B1's fork/exec). So the KAT **runs
+natively**, not under Miri.
+
+The teeth (why no unsafe path is left un-verified): the KAT is the memory-safety +
+correctness proof for the xev write path and the frame-pinned `ThreadData` model
+(blueprint §3). It drives the actual round-trip (queueWrite → `Stream::queue_write`
+→ pty master → canonical-echo/cat passthrough → parent read), so the pool-buffer
+lifetimes (`write_buf_pool`/`write_req_pool` slices stable across the async write,
+recycled by `ttyWrite`), the raw completion pointers the loop re-enters across ticks
+(`process_wait_c`/`termios_timer_c`/`write_queue`, held raw — never a long-lived
+`&mut` per `rust-mut-args-strongly-protected`), and the `io: *mut Termio<M>` handed
+raw to the read thread ([ADV-FIX F2]) are all exercised natively. Under strict
+Stacked Borrows the KAT is NOT clean (the frame-pinned `td` is passed to the Exec
+methods as `&mut` and a raw pointer is derived from it and stored into the loop; the
+full frame-local raw threading of `td` — matching the reference `td: *ThreadData` —
+lands with `Thread::threadMain` in B4). That is precisely why B2's loop-driving KAT
+is Miri-excluded rather than Miri-checked; on real hardware the `td`/loop memory is
+frame-pinned and never moves, so the raw pointers stay valid for the bounded pump.
+The read-thread `io` pointer is never dereferenced in B2 (the B3 sequencing stub
+ignores it), and the read thread is joined in `threadExit` before the frame drops.

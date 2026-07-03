@@ -84,15 +84,26 @@ impl Backend {
         }
     }
 
-    pub fn threadEnter<M: AppMailbox>(
+    // PORT NOTE ([ADV-FIX F2] raw-pointer discipline, xev Milestone B): the
+    // reference `io` is `*termio.Termio` (a RAW pointer). The port keeps it raw
+    // because `Exec.threadEnter` hands `io` to the spawned read thread as a
+    // `*mut Termio<M>` (a `&mut` would be a protected `Unique` retag that aliases
+    // the concurrent read thread), matching the reference `threadMainPosix(fd,
+    // io: *termio.Termio, quit)`. `td` stays `&mut` for Milestone B (the
+    // frame-pinned-local raw-threading of `td` lands with `Thread::threadMain` in
+    // B4, per the blueprint).
+    ///
+    /// # Safety
+    /// `io` must be a valid `Termio<M>` pointer that outlives the read thread.
+    pub unsafe fn threadEnter<M: AppMailbox + 'static>(
         &mut self,
         alloc: Allocator,
-        io: &mut Termio<M>,
+        io: *mut Termio<M>,
         td: &mut termio_impl::ThreadData<M>,
     ) -> Result<(), Error> {
         match self {
             // .exec => |*exec| try exec.threadEnter(alloc, io, td),
-            Backend::Exec(exec) => exec.threadEnter(alloc, io, td),
+            Backend::Exec(exec) => unsafe { exec.threadEnter(alloc, io, td) },
         }
     }
 
@@ -103,7 +114,7 @@ impl Backend {
         }
     }
 
-    pub fn focusGained<M: AppMailbox>(
+    pub fn focusGained<M: AppMailbox + 'static>(
         &mut self,
         td: &mut termio_impl::ThreadData<M>,
         focused: bool,

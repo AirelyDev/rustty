@@ -988,7 +988,10 @@ impl<M: AppMailbox> Termio<M> {
     // read through the shared `renderer_state.terminal` pointer (which aliases
     // `self.terminal`), exactly as the reference. The `focus.encode` uses a
     // stack `FixedWriter` (the `std.Io.Writer.fixed` analogue).
-    pub fn focusGained(&mut self, td: &mut ThreadData<M>, focused: bool) -> Result<(), Error> {
+    pub fn focusGained(&mut self, td: &mut ThreadData<M>, focused: bool) -> Result<(), Error>
+    where
+        M: 'static,
+    {
         // self.renderer_state.mutex.lock();
         //
         // SAFETY: guard-less shared renderer-state lock (see `changeConfig`);

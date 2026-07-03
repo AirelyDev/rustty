@@ -77,6 +77,10 @@ use std::os::fd::FromRawFd as _;
 use crate::command::{Command, EnvMap, RtPostForkInfo, RtPreExecInfo};
 use crate::shell_integration::{self, env_name, env_string};
 use crate::xev_seam as xev;
+// The surface-mailbox messages the xev exit / termios callbacks push
+// (`.child_exited` / `.password_input`), and the blocking-queue timeout.
+use rustty_apprt_api::surface::{ChildExited, Message as SurfaceMessage};
+use rustty_datastruct::blocking_queue::Timeout;
 
 // const log = std.log.scoped(.io_exec);
 //
@@ -311,13 +315,285 @@ impl Exec {
     //         );
     //     }
     // }
-    pub fn threadEnter<M: rustty_apprt_api::surface::AppMailbox>(
+    //
+    // PORT NOTE ([ADV-FIX F2], xev Milestone B): `io` is a RAW `*mut Termio<M>`
+    // (the reference `io: *termio.Termio`) — it is handed to the spawned read
+    // thread, which aliases `*io` concurrently under the renderer mutex; a `&mut`
+    // would be a whole-call protected `Unique` retag. `td` stays `&mut` for
+    // Milestone B; a raw `td_ptr` is derived once for the loop-stored completion
+    // pointers + userdata (the loop re-enters them across ticks — never a
+    // long-lived `&mut`). The full frame-pinned-local raw threading of `td` lands
+    // with `Thread::threadMain` in B4.
+    ///
+    /// # Safety
+    /// `io` must be a valid `Termio<M>` pointer that outlives the read thread;
+    /// `td` must be frame-pinned for the loop's life (see the blueprint §3).
+    pub unsafe fn threadEnter<M: rustty_apprt_api::surface::AppMailbox + 'static>(
         &mut self,
-        _alloc: Allocator,
-        _io: &mut crate::Termio<M>,
-        _td: &mut crate::termio_impl::ThreadData<M>,
+        alloc: Allocator,
+        io: *mut crate::Termio<M>,
+        td: &mut crate::termio_impl::ThreadData<M>,
     ) -> Result<(), crate::Error> {
-        unimplemented!("termio.Exec.threadEnter deferred (D6 xev); verbatim body above")
+        // A raw pointer to the frame-pinned `td` for the loop-stored completion
+        // pointers / userdata (never a long-lived `&mut` — the loop re-enters
+        // these across ticks; `rust-mut-args-strongly-protected`).
+        let td_ptr: *mut crate::termio_impl::ThreadData<M> = td;
+
+        // Start our subprocess
+        // const pty_fds = self.subprocess.start(alloc) catch |err| {
+        //     // If we specifically got this error then we are in the forked
+        //     // process and our child failed to execute. If we DIDN'T
+        //     // get this specific error then we're in the parent and
+        //     // we need to bubble it up.
+        //     if (err != error.ExecFailedInChild) return err;
+        //     // We're in the child. Nothing more we can do but abnormal exit.
+        //     // The Command will output some additional information.
+        //     posix.exit(1);
+        // };
+        //
+        // (PORT NOTE: the `error.ExecFailedInChild` -> `posix.exit(1)` child
+        // branch is handled inside `Subprocess::start` — the one place `in_child`
+        // is known, since the opaque `crate::Error` cannot carry the discriminant
+        // here; see start's PORT NOTE. Every error that reaches here is a parent
+        // error and bubbles up.)
+        let pty_fds = self.subprocess.start(alloc)?;
+        // errdefer self.subprocess.stop();
+        // (PORT: no `errdefer`; each fallible step below runs the accumulated
+        // cleanup explicitly, in reverse registration order, before returning.)
+
+        // Watcher to detect subprocess exit
+        // var process: ?xev.Process = if (self.subprocess.process) |v| switch (v) {
+        //     .fork_exec => |cmd| try xev.Process.init(cmd.pid orelse return error.ProcessNoPid),
+        //     .flatpak => null,
+        // } else return error.ProcessNotStarted;
+        //
+        // (PORT: copy the pid out from behind the `&self.subprocess.process`
+        // borrow first, so the error arms can call `&mut self.subprocess.stop()`
+        // — the `errdefer self.subprocess.stop()` — without a borrow conflict.)
+        enum ProcessWhich {
+            NotStarted,
+            Flatpak,
+            ForkExec(Option<libc::pid_t>),
+        }
+        let which = match &self.subprocess.process {
+            None => ProcessWhich::NotStarted,
+            Some(Process::Flatpak(_)) => ProcessWhich::Flatpak,
+            Some(Process::ForkExec(cmd)) => ProcessWhich::ForkExec(cmd.pid),
+        };
+        let mut process: Option<xev::Process> = match which {
+            // } else return error.ProcessNotStarted;
+            ProcessWhich::NotStarted => {
+                self.subprocess.stop();
+                return Err(crate::Error);
+            }
+            // .flatpak => null (traditional process watching not possible)
+            ProcessWhich::Flatpak => None,
+            // .fork_exec => |cmd| try xev.Process.init(cmd.pid orelse return error.ProcessNoPid)
+            ProcessWhich::ForkExec(None) => {
+                // return error.ProcessNoPid (errdefer stop fires)
+                self.subprocess.stop();
+                return Err(crate::Error);
+            }
+            ProcessWhich::ForkExec(Some(pid)) => match xev::Process::init(pid) {
+                Ok(p) => Some(p),
+                Err(_) => {
+                    self.subprocess.stop();
+                    return Err(crate::Error);
+                }
+            },
+        };
+        // errdefer if (process) |*p| p.deinit();
+
+        // Track our process start time for abnormal exits
+        // const process_start = try std.time.Instant.now();
+        let process_start = std::time::Instant::now();
+
+        // Create our pipe that we'll use to kill our read thread.
+        // pipe[0] is the read end, pipe[1] is the write end.
+        // const pipe = try internal_os.pipe();
+        let pipe = match rustty_os::pipe::pipe() {
+            Ok(p) => p,
+            Err(_) => {
+                // errdefer if (process) |*p| p.deinit(); errdefer self.subprocess.stop();
+                if let Some(p) = &mut process {
+                    p.deinit();
+                }
+                self.subprocess.stop();
+                return Err(crate::Error);
+            }
+        };
+        // errdefer posix.close(pipe[0]);
+        // errdefer posix.close(pipe[1]);
+
+        // Setup our stream so that we can write.
+        // var stream = xev.Stream.initFd(pty_fds.write);
+        let stream = xev::Stream::init_fd(pty_fds.write);
+        // errdefer stream.deinit();
+
+        // Start our timer to read termios state changes. This is used
+        // to detect things such as when password input is being done
+        // so we can render the terminal in a different way.
+        // var termios_timer = try xev.Timer.init();
+        let termios_timer = match xev::Timer::init() {
+            Ok(t) => t,
+            Err(_) => {
+                // errdefer (reverse): stream.deinit(); close pipe[1]; close pipe[0];
+                //          process.deinit(); self.subprocess.stop();
+                stream.deinit();
+                unsafe {
+                    libc::close(pipe[1]);
+                    libc::close(pipe[0]);
+                }
+                if let Some(p) = &mut process {
+                    p.deinit();
+                }
+                self.subprocess.stop();
+                return Err(crate::Error);
+            }
+        };
+        // errdefer termios_timer.deinit();
+
+        // Start our read thread
+        // const read_thread = try std.Thread.spawn(
+        //     .{},
+        //     if (builtin.os.tag == .windows) ReadThread.threadMainWindows else ReadThread.threadMainPosix,
+        //     .{ pty_fds.read, io, pipe[0] },
+        // );
+        // read_thread.setName("io-reader") catch {};
+        //
+        // (PORT: `io: *mut Termio<M>` is `!Send`, so the spawn captures it behind
+        // the `ReadThreadArgs` Send wrapper — the `IoThreadArgs` precedent
+        // (surface.rs), whose sole toucher of `*io` for `processOutput` is this
+        // read thread, between spawn and `threadExit`'s `join()`; blueprint §3.)
+        let read_args = ReadThreadArgs::<M>(pty_fds.read, io, pipe[0]);
+        let read_thread = match std::thread::Builder::new()
+            .name("io-reader".to_string())
+            .spawn(move || {
+                let args = read_args;
+                // SAFETY: `args.1` (`*mut Termio<M>`) is valid for the read
+                // thread's life; this thread is its sole `processOutput` toucher.
+                ReadThread::threadMainPosix::<M>(args.0, args.1, args.2);
+            }) {
+            Ok(t) => t,
+            Err(_) => {
+                // errdefer (reverse): termios_timer.deinit(); stream.deinit();
+                //          close pipe[1]; close pipe[0]; process.deinit();
+                //          self.subprocess.stop();
+                termios_timer.deinit();
+                stream.deinit();
+                unsafe {
+                    libc::close(pipe[1]);
+                    libc::close(pipe[0]);
+                }
+                if let Some(p) = &mut process {
+                    p.deinit();
+                }
+                self.subprocess.stop();
+                return Err(crate::Error);
+            }
+        };
+
+        // Setup our threadata backend state to be our own
+        // td.backend = .{ .exec = .{
+        //     .start = process_start,
+        //     .write_stream = stream,
+        //     .process = process,
+        //     .read_thread = read_thread,
+        //     .read_thread_pipe = pipe[1],
+        //     .read_thread_fd = pty_fds.read,
+        //     .termios_timer = termios_timer,
+        // } };
+        //
+        // PORT NOTE: the reference's `td.backend` was `undefined` (the
+        // out-parameter protocol — `Termio.threadEnter` builds `ThreadData{ …,
+        // .backend = undefined }`, and THIS is the Backend that fills it). Rust
+        // has no `undefined`; the caller supplies a placeholder `backend`, and
+        // this move-assign drops it (the placeholder is constructed to be
+        // trivially droppable). The remaining exec fields take their reference
+        // struct defaults (`write_req_pool`/`write_buf_pool` = `.{}` =
+        // preallocated pools, `write_queue`/`*_c` = `.{}`, `termios_timer_running`
+        // = true, `termios_mode` = `.{}`).
+        td.backend = crate::backend::ThreadData::Exec(ThreadData {
+            start: process_start,
+            exited: false,
+            write_stream: stream,
+            process,
+            write_req_pool: SegmentedPool::new(ThreadData::WRITE_REQ_PREALLOC),
+            write_buf_pool: SegmentedPool::new(ThreadData::WRITE_REQ_PREALLOC),
+            write_queue: xev::WriteQueue::default(),
+            process_wait_c: xev::Completion::default(),
+            flatpak_wait_c: FlatpakHostCommandCompletion::default(),
+            read_thread,
+            read_thread_pipe: pipe[1],
+            read_thread_fd: pty_fds.read,
+            termios_timer,
+            termios_timer_c: xev::Completion::default(),
+            termios_timer_running: true,
+            termios_mode: ptypkg::Mode::default(),
+        });
+
+        // A raw pointer into the now-installed `td.backend.exec` for the
+        // loop-stored completion pointers (`&td.backend.exec.*_c`) — stable for
+        // the loop's life (frame-pinned `td`).
+        // (PORT: `td.backend.exec` — a single-variant `union(Kind){exec}` field
+        // access; the irrefutable `let` binds the sole `Exec` variant.)
+        let crate::backend::ThreadData::Exec(exec_ptr) = &mut td.backend;
+        let exec_ptr: *mut ThreadData = exec_ptr;
+
+        // Start our process watcher. If we have an xev.Process use it.
+        // if (process) |*p| p.wait(
+        //     td.loop,
+        //     &td.backend.exec.process_wait_c,
+        //     termio.Termio.ThreadData,
+        //     td,
+        //     processExit,
+        // ) else if (comptime build_config.flatpak) flatpak: {
+        //     switch (self.subprocess.process orelse break :flatpak) {
+        //         .flatpak => |*c| c.waitXev(
+        //             td.loop, &td.backend.exec.flatpak_wait_c,
+        //             termio.Termio.ThreadData, td, flatpakExit,
+        //         ),
+        //         .fork_exec => {},
+        //     }
+        // }
+        //
+        // (PORT: `build_config.flatpak` is const false — the `else if` flatpak arm
+        // + `flatpakExit` are comptime-elided, exactly as Zig's lazy compilation
+        // leaves them; verbatim in the reference blocks above.)
+        if let Some(p) = process {
+            // SAFETY: `td.loop_`/`process_wait_c`/`td_ptr` are all valid, stable
+            // pointers held raw by the loop across ticks.
+            unsafe {
+                p.wait(
+                    td.loop_,
+                    std::ptr::addr_of_mut!((*exec_ptr).process_wait_c),
+                    td_ptr,
+                    Self::processExit::<M>,
+                );
+            }
+        }
+
+        // Start our termios timer. We don't support this on Windows.
+        // Fundamentally, we could support this on Windows so we're just
+        // waiting for someone to implement it.
+        // if (comptime builtin.os.tag != .windows) {
+        //     termios_timer.run(
+        //         td.loop, &td.backend.exec.termios_timer_c, TERMIOS_POLL_MS,
+        //         termio.Termio.ThreadData, td, termiosTimer,
+        //     );
+        // }
+        #[cfg(not(windows))]
+        unsafe {
+            termios_timer.run(
+                td.loop_,
+                std::ptr::addr_of_mut!((*exec_ptr).termios_timer_c),
+                TERMIOS_POLL_MS,
+                td_ptr,
+                Self::termiosTimer::<M>,
+            );
+        }
+
+        Ok(())
     }
 
     // DEFERRED (D6 xev thread lifecycle, 0 tests — R1-safe): the body writes
@@ -360,9 +636,80 @@ impl Exec {
     // }
     pub fn threadExit<M: rustty_apprt_api::surface::AppMailbox>(
         &mut self,
-        _td: &mut crate::termio_impl::ThreadData<M>,
+        td: &mut crate::termio_impl::ThreadData<M>,
     ) {
-        unimplemented!("termio.Exec.threadExit deferred (D6 xev); verbatim body above")
+        // assert(td.backend == .exec);
+        // const exec = &td.backend.exec;
+        // (PORT: single-variant `union(Kind){exec}` field access.)
+        let crate::backend::ThreadData::Exec(exec) = &mut td.backend;
+
+        // if (exec.exited) self.subprocess.externalExit();
+        if exec.exited {
+            self.subprocess.externalExit();
+        }
+        // self.subprocess.stop();
+        self.subprocess.stop();
+
+        // Quit our read thread after exiting the subprocess so that
+        // we don't get stuck waiting for data to stop flowing if it is
+        // a particularly noisy process.
+        // _ = posix.write(exec.read_thread_pipe, "x") catch |err| switch (err) {
+        //     // BrokenPipe means that our read thread is closed already,
+        //     // which is completely fine since that is what we were trying
+        //     // to achieve.
+        //     error.BrokenPipe => {},
+        //     else => log.warn("error writing to read thread quit pipe err={}", .{err}),
+        // };
+        //
+        // SAFETY: `read_thread_pipe` is the write end of the quit pipe, valid
+        // until `ThreadData::deinit` closes it. A closed read end yields EPIPE
+        // (Rust ignores SIGPIPE), which — like the reference's `error.BrokenPipe`
+        // — is fine (the read thread is already gone).
+        let rc = unsafe {
+            libc::write(
+                exec.read_thread_pipe,
+                b"x".as_ptr().cast::<std::ffi::c_void>(),
+                1,
+            )
+        };
+        if rc < 0 {
+            // error.BrokenPipe => {} ; else => log.warn(...)
+            // (either way nothing else to do here — the read thread is exiting.)
+        }
+
+        // if (comptime builtin.os.tag == .windows) {
+        //     // Interrupt the blocking read so the thread can see the quit message
+        //     if (windows.kernel32.CancelIoEx(exec.read_thread_fd, null) == 0) {
+        //         switch (windows.kernel32.GetLastError()) {
+        //             .NOT_FOUND => {},
+        //             else => |err| log.warn("error interrupting read thread err={}", .{err}),
+        //         }
+        //     }
+        // }
+        #[cfg(windows)]
+        {
+            if unsafe {
+                rustty_os::windows::exp::kernel32::CancelIoEx(
+                    exec.read_thread_fd,
+                    std::ptr::null_mut(),
+                )
+            } == 0
+            {
+                // switch (GetLastError()) { .NOT_FOUND => {}, else => log.warn(...) }
+            }
+        }
+
+        // exec.read_thread.join();
+        //
+        // (PORT: the reference `join()` returns `void`; Rust's returns a `Result`
+        // that is `Err` if the read thread panicked — the reference ignores it,
+        // so we do too. `JoinHandle::join` consumes the handle by value, but
+        // `exec` is a `&mut` place, so the handle is moved out via `mem::replace`
+        // and the slot is left holding a detached already-finished no-op thread —
+        // keeping `exec` fully-initialized for its later `deinit`. `threadExit`
+        // is terminal for the ThreadData; nothing reads `read_thread` again.)
+        let read_thread = std::mem::replace(&mut exec.read_thread, std::thread::spawn(|| {}));
+        let _ = read_thread.join();
     }
 
     // DEFERRED (D6 xev termios timer, 0 tests — R1-safe). Preserved verbatim:
@@ -400,12 +747,69 @@ impl Exec {
     //         }
     //     }
     // }
-    pub fn focusGained<M: rustty_apprt_api::surface::AppMailbox>(
+    pub fn focusGained<M: rustty_apprt_api::surface::AppMailbox + 'static>(
         &mut self,
-        _td: &mut crate::termio_impl::ThreadData<M>,
-        _focused: bool,
+        td: &mut crate::termio_impl::ThreadData<M>,
+        focused: bool,
     ) -> Result<(), crate::Error> {
-        unimplemented!("termio.Exec.focusGained deferred (D6 xev); verbatim body above")
+        // _ = self;
+        let _ = self;
+
+        // assert(td.backend == .exec);
+        // const execdata = &td.backend.exec;
+        let td_ptr: *mut crate::termio_impl::ThreadData<M> = td;
+        // (PORT: single-variant `union(Kind){exec}` field access.)
+        let crate::backend::ThreadData::Exec(execdata) = &mut td.backend;
+        let execdata: *mut ThreadData = execdata;
+
+        // Windows has no termios, so there is nothing to poll.
+        // if (comptime builtin.os.tag == .windows) return;
+        #[cfg(windows)]
+        return Ok(());
+
+        // if (!focused) {
+        #[cfg(not(windows))]
+        if !focused {
+            // Flag the timer to end on the next iteration. This is
+            // a lot cheaper than doing full timer cancellation.
+            // execdata.termios_timer_running = false;
+            unsafe {
+                (*execdata).termios_timer_running = false;
+            }
+        } else {
+            // Always set this to true. There is a race condition if we lose
+            // focus and regain focus before the termios timer ticks where
+            // if we don't set this unconditionally the timer will end on
+            // the next iteration.
+            // execdata.termios_timer_running = true;
+            unsafe {
+                (*execdata).termios_timer_running = true;
+            }
+
+            // If we're focused, we want to start our termios timer. We
+            // only do this if it isn't already running. We use the termios
+            // callback because that'll trigger an immediate state check AND
+            // start the timer.
+            // if (execdata.termios_timer_c.state() != .active) {
+            //     _ = termiosTimer(td, undefined, undefined, {});
+            // }
+            //
+            // SAFETY: `termios_timer_c` is a stable Completion in the frame-pinned
+            // `td.backend.exec`; `Completion::state_of` only reads its state flag.
+            if unsafe { (*execdata).termios_timer_c.state_of() } != xev::CompletionState::Active {
+                // The reference passes `undefined` loop/completion — `termiosTimer`
+                // ignores both (`_`); `{}` is the void success value `Ok(())`.
+                let _ = Self::termiosTimer::<M>(
+                    td_ptr,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    Ok(()),
+                );
+            }
+        }
+
+        #[cfg(not(windows))]
+        return Ok(());
     }
 
     // pub fn resize(
@@ -559,6 +963,233 @@ impl Exec {
     //
     //     return .disarm;
     // }
+    //
+    // The three exit / termios callbacks below fill the verbatim reference bodies
+    // preserved in the comment block above. `flatpakExit` stays a comment
+    // (uninstantiated — its only caller is the comptime-`false` flatpak arm of
+    // `threadEnter`, matching Zig lazy compilation). Userdata is termio's
+    // `ThreadData<M>` (the reference `termio.Termio.ThreadData`), so these are
+    // generic over `M` and reference it via `Self::processExit::<M>` etc.
+
+    // fn processExitCommon(td: *termio.Termio.ThreadData, exit_code: u32) void
+    fn processExitCommon<M: rustty_apprt_api::surface::AppMailbox + 'static>(
+        td: *mut crate::termio_impl::ThreadData<M>,
+        exit_code: u32,
+    ) {
+        // assert(td.backend == .exec);
+        // const execdata = &td.backend.exec;
+        // (PORT: single-variant `union(Kind){exec}` field access.)
+        let crate::backend::ThreadData::Exec(execdata) = unsafe { &mut (*td).backend };
+        let execdata: *mut ThreadData = execdata;
+        // execdata.exited = true;
+        unsafe {
+            (*execdata).exited = true;
+        }
+
+        // Determine how long the process was running for.
+        // const runtime_ms: ?u64 = runtime: {
+        //     const process_end = std.time.Instant.now() catch break :runtime null;
+        //     const runtime_ns = process_end.since(execdata.start);
+        //     const runtime_ms = runtime_ns / std.time.ns_per_ms;
+        //     break :runtime runtime_ms;
+        // };
+        //
+        // (PORT: Rust's `Instant::now()` is infallible, so the `catch ... null`
+        // arm never fires; `since` -> `duration_since`, `/ ns_per_ms` ->
+        // `as_nanos() / 1_000_000`.)
+        let runtime_ms: Option<u64> = {
+            let process_end = std::time::Instant::now();
+            let start = unsafe { (*execdata).start };
+            let runtime_ns = process_end.duration_since(start);
+            Some((runtime_ns.as_nanos() / 1_000_000) as u64)
+        };
+        // log.debug("child process exited status={} runtime={}ms", .{ exit_code, runtime_ms orelse 0 });
+
+        // We always notify the surface immediately that the child has
+        // exited and some metadata about the exit.
+        // _ = td.surface_mailbox.push(.{ .child_exited = .{
+        //     .exit_code = exit_code, .runtime_ms = runtime_ms orelse 0,
+        // } }, .{ .forever = {} });
+        let _ = unsafe {
+            (*td).surface_mailbox.push(
+                SurfaceMessage::ChildExited(ChildExited {
+                    exit_code,
+                    runtime_ms: runtime_ms.unwrap_or(0),
+                }),
+                Timeout::Forever,
+            )
+        };
+    }
+
+    // fn processExit(
+    //     td_: ?*termio.Termio.ThreadData,
+    //     _: *xev.Loop,
+    //     _: *xev.Completion,
+    //     r: xev.Process.WaitError!u32,
+    // ) xev.CallbackAction
+    fn processExit<M: rustty_apprt_api::surface::AppMailbox + 'static>(
+        td_: *mut crate::termio_impl::ThreadData<M>,
+        _l: *mut xev::Loop,
+        _c: *mut xev::Completion,
+        r: core::result::Result<u32, xev::ProcError>,
+    ) -> xev::CallbackAction {
+        // const exit_code = r catch unreachable;
+        let exit_code = r.unwrap();
+        // processExitCommon(td_.?, exit_code);
+        Self::processExitCommon::<M>(td_, exit_code);
+        // return .disarm;
+        xev::CallbackAction::Disarm
+    }
+
+    // fn termiosTimer(
+    //     td_: ?*termio.Termio.ThreadData,
+    //     _: *xev.Loop,
+    //     _: *xev.Completion,
+    //     r: xev.Timer.RunError!void,
+    // ) xev.CallbackAction
+    #[cfg_attr(windows, allow(unreachable_code, unused_variables))]
+    fn termiosTimer<M: rustty_apprt_api::surface::AppMailbox + 'static>(
+        td_: *mut crate::termio_impl::ThreadData<M>,
+        _l: *mut xev::Loop,
+        _c: *mut xev::Completion,
+        r: core::result::Result<(), xev::TimerRunError>,
+    ) -> xev::CallbackAction {
+        // log.debug("termios timer fired", .{});
+
+        // This should never happen because we guard starting our
+        // timer on windows but we want this assertion to fire if
+        // we ever do start the timer on windows.
+        // TODO: support on windows
+        // if (comptime builtin.os.tag == .windows) { @panic("termios timer not implemented on Windows"); }
+        #[cfg(windows)]
+        panic!("termios timer not implemented on Windows");
+
+        // _ = r catch |err| switch (err) {
+        //     error.Canceled => return .disarm,
+        //     else => { log.warn(...); @panic("crash in termios timer callback"); },
+        // };
+        match r {
+            Ok(()) => {}
+            // This is sent when our timer is canceled. That's fine.
+            Err(xev::TimerRunError::Canceled) => return xev::CallbackAction::Disarm,
+            Err(_err) => {
+                // log.warn("error in termios timer callback err={}", .{err});
+                panic!("crash in termios timer callback");
+            }
+        }
+
+        // const td = td_.?;
+        let td = td_;
+        // assert(td.backend == .exec);
+        // const exec = &td.backend.exec;
+        // (PORT: single-variant `union(Kind){exec}` field access.)
+        let crate::backend::ThreadData::Exec(exec) = unsafe { &mut (*td).backend };
+        let exec: *mut ThreadData = exec;
+
+        // This is kind of hacky but we rebuild a Pty struct to get the
+        // termios data.
+        // const mode: ptypkg.Mode = (Pty{ .master = exec.read_thread_fd, .slave = undefined }).getMode() catch |err| err: {
+        //     log.warn("error getting termios mode err={}", .{err});
+        //     break :err .{};
+        // };
+        //
+        // (PORT: Rust struct privacy forbids the inline `Pty{ .master, .slave =
+        // undefined }` literal; `Pty::init_master_only` is that throwaway
+        // master-only Pty — see its rustty-os PORT NOTE.)
+        let master = unsafe { (*exec).read_thread_fd };
+        // (PORT: kept as a `match` — not `.unwrap_or_default()` — to preserve the
+        // reference's `catch |err| { log.warn(...); break :err .{} }` error arm,
+        // which logs before falling back to the default `Mode`.)
+        #[allow(clippy::manual_unwrap_or_default)]
+        let mode: ptypkg::Mode = match Pty::init_master_only(master).getMode() {
+            Ok(m) => m,
+            Err(_) => {
+                // log.warn("error getting termios mode err={}", .{err});
+                // break :err .{};
+                ptypkg::Mode::default()
+            }
+        };
+
+        // If the mode changed, then we process it.
+        // if (!std.meta.eql(mode, exec.termios_mode)) mode_change: {
+        if mode != unsafe { (*exec).termios_mode } {
+            'mode_change: {
+                // log.debug("termios change mode={}", .{mode});
+                // exec.termios_mode = mode;
+                unsafe {
+                    (*exec).termios_mode = mode;
+                }
+
+                // We assume we're in some sort of password input if we're
+                // in canonical mode and not echoing. This is a heuristic.
+                // const password_input = mode.canonical and !mode.echo;
+                let password_input = mode.canonical && !mode.echo;
+
+                // If our password input state changed on the terminal then
+                // we notify the surface.
+                // {
+                //     td.renderer_state.mutex.lock();
+                //     defer td.renderer_state.mutex.unlock();
+                //     const t = td.renderer_state.terminal;
+                //     if (t.flags.password_input == password_input) break :mode_change;
+                // }
+                {
+                    // SAFETY: `renderer_state` is the live shared render State for
+                    // the io thread's life; `.mutex` is the guard-less shared lock
+                    // (the guard-less C0 model makes the `defer unlock` explicit).
+                    let rs = unsafe { (*td).renderer_state };
+                    unsafe {
+                        (*(*rs).mutex).lock();
+                    }
+                    let t = unsafe { (*rs).terminal };
+                    let same = unsafe { (*t).flags.password_input } == password_input;
+                    unsafe {
+                        (*(*rs).mutex).unlock();
+                    }
+                    if same {
+                        break 'mode_change;
+                    }
+                }
+
+                // We have to notify the surface that we're in password input.
+                // We must block on this because the balanced true/false state
+                // of this is critical to apprt behavior.
+                // _ = td.surface_mailbox.push(.{ .password_input = password_input }, .{ .forever = {} });
+                let _ = unsafe {
+                    (*td).surface_mailbox.push(
+                        SurfaceMessage::PasswordInput(password_input),
+                        Timeout::Forever,
+                    )
+                };
+            }
+        }
+
+        // Repeat the timer
+        // if (exec.termios_timer_running) {
+        if unsafe { (*exec).termios_timer_running } {
+            // exec.termios_timer.run(
+            //     td.loop, &exec.termios_timer_c, TERMIOS_POLL_MS,
+            //     termio.Termio.ThreadData, td, termiosTimer,
+            // );
+            //
+            // SAFETY: `td.loop_`/`&exec.termios_timer_c` are stable pointers held
+            // raw by the loop; `td` is the frame-pinned userdata.
+            unsafe {
+                let timer = (*exec).termios_timer;
+                let loop_ = (*td).loop_;
+                timer.run(
+                    loop_,
+                    std::ptr::addr_of_mut!((*exec).termios_timer_c),
+                    TERMIOS_POLL_MS,
+                    td,
+                    Self::termiosTimer::<M>,
+                );
+            }
+        }
+
+        // return .disarm;
+        xev::CallbackAction::Disarm
+    }
 
     // DEFERRED (D6 xev write stream/pools, 0 tests — R1-safe). Preserved
     // verbatim:
@@ -631,12 +1262,143 @@ impl Exec {
     // }
     pub fn queueWrite<M: rustty_apprt_api::surface::AppMailbox>(
         &mut self,
-        _alloc: Allocator,
-        _td: &mut crate::termio_impl::ThreadData<M>,
-        _data: &[u8],
-        _linefeed: bool,
+        alloc: Allocator,
+        td: &mut crate::termio_impl::ThreadData<M>,
+        data: &[u8],
+        linefeed: bool,
     ) -> Result<(), crate::Error> {
-        unimplemented!("termio.Exec.queueWrite deferred (D6 xev); verbatim body above")
+        // _ = self;
+        let _ = self;
+        let _ = alloc;
+        // const exec = &td.backend.exec;
+        //
+        // Raw pointers: `exec` is `td.backend.exec` (an `exec::ThreadData`); the
+        // `Stream::queue_write` engine stores `&req.completion` + the WriteQueue
+        // raw into the loop and re-enters them across ticks, and `td.loop_` is the
+        // shared loop — never a long-lived `&mut` (`rust-mut-args-strongly-
+        // protected`).
+        let loop_: *mut xev::Loop = td.loop_;
+        // (PORT: single-variant `union(Kind){exec}` field access.)
+        let crate::backend::ThreadData::Exec(exec) = &mut td.backend;
+        let exec: *mut ThreadData = exec;
+
+        // If our process is exited then we don't send any more writes.
+        // if (exec.exited) return;
+        if unsafe { (*exec).exited } {
+            return Ok(());
+        }
+
+        // We go through and chunk the data if necessary to fit into
+        // our cached buffers that we can queue to the stream.
+        // var i: usize = 0;
+        let mut i: usize = 0;
+        // while (i < data.len) {
+        while i < data.len() {
+            // const req = try exec.write_req_pool.getGrow(alloc);
+            let req: *mut xev::WriteRequest = unsafe {
+                (*exec)
+                    .write_req_pool
+                    .get_grow()
+                    .map_err(|_| crate::Error)?
+            };
+            // const buf = try exec.write_buf_pool.getGrow(alloc);
+            // (PORT: the pool element is `WriteBuf([u8; 64])`; `buf` is the inner
+            // 64-byte array — `buf.len` == 64.)
+            let buf_wrap: *mut WriteBuf = unsafe {
+                (*exec)
+                    .write_buf_pool
+                    .get_grow()
+                    .map_err(|_| crate::Error)?
+            };
+            let buf: *mut [u8; 64] = unsafe { std::ptr::addr_of_mut!((*buf_wrap).0) };
+            let buf_len = 64usize;
+
+            // const slice = slice: {
+            let slice: *const [u8] = {
+                // The maximum end index is either the end of our data or
+                // the end of our buffer, whichever is smaller.
+                // const max = @min(data.len, i + buf.len);
+                let max = std::cmp::min(data.len(), i + buf_len);
+
+                // Fast
+                // if (!linefeed) {
+                if !linefeed {
+                    // fastmem.copy(u8, buf, data[i..max]);
+                    // const len = max - i;
+                    let len = max - i;
+                    // SAFETY: `buf` is a stable 64-byte pool buffer; `len <=
+                    // buf_len`; `data[i..max]` is in-bounds.
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(data[i..max].as_ptr(), buf.cast::<u8>(), len);
+                    }
+                    // i = max;
+                    i = max;
+                    // break :slice buf[0..len];
+                    std::ptr::slice_from_raw_parts(buf.cast::<u8>(), len)
+                } else {
+                    // Slow, have to replace \r with \r\n
+                    // var buf_i: usize = 0;
+                    let mut buf_i: usize = 0;
+                    // while (i < data.len and buf_i < buf.len - 1) {
+                    while i < data.len() && buf_i < buf_len - 1 {
+                        // const ch = data[i];
+                        let ch = data[i];
+                        // i += 1;
+                        i += 1;
+
+                        // if (ch != '\r') {
+                        if ch != b'\r' {
+                            // buf[buf_i] = ch;
+                            unsafe {
+                                (*buf)[buf_i] = ch;
+                            }
+                            // buf_i += 1;
+                            buf_i += 1;
+                            // continue;
+                            continue;
+                        }
+
+                        // CRLF
+                        // buf[buf_i] = '\r';
+                        // buf[buf_i + 1] = '\n';
+                        unsafe {
+                            (*buf)[buf_i] = b'\r';
+                            (*buf)[buf_i + 1] = b'\n';
+                        }
+                        // buf_i += 2;
+                        buf_i += 2;
+                    }
+
+                    // break :slice buf[0..buf_i];
+                    std::ptr::slice_from_raw_parts(buf.cast::<u8>(), buf_i)
+                }
+            };
+
+            //for (slice) |b| log.warn("write: {x}", .{b});
+
+            // exec.write_stream.queueWrite(
+            //     td.loop, &exec.write_queue, req, .{ .slice = slice },
+            //     termio.Exec.ThreadData, exec, ttyWrite,
+            // );
+            //
+            // SAFETY: `loop_`/`&exec.write_queue`/`req` are stable pointers held
+            // raw by the ordered-write engine; `slice` points into the stable
+            // pool buffer (recycled by `ttyWrite` after the write completes); the
+            // userdata is the `exec::ThreadData` pointer `ttyWrite` recovers.
+            unsafe {
+                let write_stream = (*exec).write_stream;
+                write_stream.queue_write(
+                    loop_,
+                    std::ptr::addr_of_mut!((*exec).write_queue),
+                    req,
+                    xev::WriteBuffer::Slice(slice),
+                    exec,
+                    Self::ttyWrite,
+                );
+            }
+        }
+
+        Ok(())
     }
 
     // DEFERRED (D6 — the xev stream-write completion callback). Preserved
@@ -663,6 +1425,41 @@ impl Exec {
     //
     //     return .disarm;
     // }
+    //
+    // PORT NOTE: `td_` here is the `exec::ThreadData` (the reference `ThreadData`
+    // in Exec.zig scope), NOT termio's — the reference passed `exec` as the
+    // `queueWrite` userdata. Non-generic (no `M`).
+    fn ttyWrite(
+        td_: *mut ThreadData,
+        _l: *mut xev::Loop,
+        _c: *mut xev::Completion,
+        _s: xev::Stream,
+        _b: xev::WriteBuffer,
+        r: core::result::Result<usize, xev::WriteError>,
+    ) -> xev::CallbackAction {
+        // const td = td_.?;
+        let td = td_;
+        // td.write_req_pool.put();
+        // td.write_buf_pool.put();
+        unsafe {
+            (*td).write_req_pool.put();
+            (*td).write_buf_pool.put();
+        }
+
+        // const d = r catch |err| { log.err("write error: {}", .{err}); return .disarm; };
+        let _d = match r {
+            Ok(d) => d,
+            Err(_err) => {
+                // log.err("write error: {}", .{err});
+                return xev::CallbackAction::Disarm;
+            }
+        };
+        // _ = d;
+        //log.info("WROTE: {d}", .{d});
+
+        // return .disarm;
+        xev::CallbackAction::Disarm
+    }
 
     /// Get information about the process(es) running within the backend. Returns
     /// `null` if there was an error getting the information or the information is
@@ -1810,6 +2607,28 @@ impl Subprocess {
                 })
             };
 
+            // If we are in the forked child and exec failed (`in_child`), the
+            // reference propagates `error.ExecFailedInChild` up to
+            // `Exec.threadEnter`, which does `posix.exit(1)`:
+            //     if (err != error.ExecFailedInChild) return err;
+            //     posix.exit(1);
+            //
+            // PORT NOTE ([ADV-FIX], xev Milestone B): the port's opaque
+            // `crate::Error` (a unit struct, B1) cannot carry the
+            // `ExecFailedInChild` discriminant across the `Subprocess::start`
+            // boundary, so `threadEnter` cannot tell the child apart from a
+            // genuine parent error. Because the forked child MUST NOT return into
+            // the parent's continuation (it would run the event loop as a
+            // duplicate process), the `posix.exit(1)` is performed HERE — the one
+            // place `in_child` is known — BEFORE the parent-only errdefer/defer
+            // cleanup (which `in_child` already guards). `posix.exit ->
+            // std::process::exit` per command.rs's mapping. Behaviorally
+            // identical to the reference: the child exits 1; the parent bubbles
+            // every other error.
+            if in_child {
+                std::process::exit(1);
+            }
+
             // The reference errdefer/defer, now that the scoped spawn resolved:
             match &result {
                 // defer if (!in_child and self.process != null) { ... };
@@ -2189,6 +3008,27 @@ fn killCommandFlatpak(_command: &mut FlatpakHostCommand) -> Result<(), crate::Er
 // pub const ReadThread = struct {
 pub struct ReadThread;
 
+/// The spawn arguments for [`ReadThread::threadMainPosix`], wrapped so the
+/// `!Send` `*mut Termio<M>` can cross the `std::thread::spawn` boundary.
+//
+// PORT NOTE (blueprint §3): the reference spawns `std.Thread.spawn(...,
+// threadMainPosix, .{ pty_fds.read, io, pipe[0] })`. The `io: *mut Termio<M>`
+// raw pointer is `!Send`, so — exactly the `IoThreadArgs` (surface.rs) precedent
+// for the writer thread — a tiny newtype carries it with an `unsafe impl Send`.
+// The contract: the read thread is the SOLE toucher of `*io` (for
+// `processOutput`) between the spawn and `Exec::threadExit`'s `join()`; the io
+// thread owns it before the spawn and after the join.
+pub(crate) struct ReadThreadArgs<M: rustty_apprt_api::surface::AppMailbox>(
+    pub std::os::fd::RawFd,
+    pub *mut crate::Termio<M>,
+    pub std::os::fd::RawFd,
+);
+
+// SAFETY: see the newtype's contract — the wrapped `*mut Termio<M>` has a single
+// toucher (the read thread) for the window it is shared, matching the landed
+// `IoThreadArgs` unsafe-Send discipline (surface.rs).
+unsafe impl<M: rustty_apprt_api::surface::AppMailbox> Send for ReadThreadArgs<M> {}
+
 impl ReadThread {
     // DEFERRED (D6 thread lifecycle, 0 tests — R1-safe): spawned only by the
     // deferred threadEnter; drives the deferred `Termio.processOutput` and the
@@ -2298,13 +3138,26 @@ impl ReadThread {
     //     }
     // }
     #[cfg(not(windows))]
-    #[allow(dead_code)]
     fn threadMainPosix<M: rustty_apprt_api::surface::AppMailbox>(
         _fd: std::os::fd::RawFd,
         _io: *mut crate::Termio<M>,
-        _quit: std::os::fd::RawFd,
+        quit: std::os::fd::RawFd,
     ) {
-        unimplemented!("termio.Exec.ReadThread.threadMainPosix deferred (D6); verbatim body above")
+        // B2 SEQUENCING STUB (blueprint §7 B3 lands the real body below the
+        // preserved verbatim comment above): `Exec::threadEnter` (B2) already
+        // spawns this thread, but the real `poll(2)`/`read`/`processOutput` loop
+        // — which drives the still-deferred `Termio::processOutput` (B3) — is not
+        // wired yet. For B2 this stub honors ONLY the reference's `defer
+        // posix.close(quit)` (so the quit-pipe read end is not leaked) and
+        // returns immediately, so `Exec::threadExit`'s `join()` completes
+        // promptly. It does NOT touch `_io` or `_fd` — the B2 write-path KAT reads
+        // the pty master itself. R5-safe: replaces an `unimplemented!()` with a
+        // strictly-narrower non-panicking stand-in, filled in B3.
+        //
+        // defer posix.close(quit);
+        unsafe {
+            libc::close(quit);
+        }
     }
 
     // DEFERRED (D6 thread lifecycle, windows half). Preserved verbatim:
@@ -2731,6 +3584,14 @@ mod tests {
     use super::*;
     use rustty_os::passwd::Entry as PasswdEntry;
 
+    // Serialize the pty/fork-spawning KATs so two do not `fork()` concurrently in
+    // the same test binary (a `fork` snapshots every open fd; concurrent
+    // pty-spawning tests can leak each other's master fd into a child — the
+    // parallel-cargo-test isolation lesson). Every KAT that spawns a real process
+    // takes this lock for its duration.
+    #[cfg(target_os = "macos")]
+    static FORK_KAT_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     // test "execCommand darwin: shell command" {
     #[test]
     fn exec_command_darwin_shell_command() {
@@ -3141,6 +4002,9 @@ mod tests {
     fn subprocess_start_spawns_and_reaps() {
         use allocator_api2::alloc::Global;
 
+        // Serialize with the other fork/pty KATs (see FORK_KAT_SERIAL).
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
         // Minimal Config: `sh -c 'exit 7'`, no resources dir (shell integration
         // disabled), no cwd, xterm-256color.
         let cfg = Config {
@@ -3190,5 +4054,188 @@ mod tests {
 
         // deinit is safe post-stop.
         subprocess.deinit();
+    }
+
+    // A trivial `AppMailbox` test double: it accepts every push (returns a
+    // non-zero queue size) and records nothing. Enough for the exit / termios /
+    // write callbacks, which only `push(...)` to it.
+    #[cfg(target_os = "macos")]
+    struct TestMailbox;
+
+    #[cfg(target_os = "macos")]
+    impl rustty_apprt_api::surface::AppMailbox for TestMailbox {
+        type Surface = ();
+
+        #[allow(clippy::result_large_err)]
+        fn push_or_return(
+            &self,
+            _msg: rustty_apprt_api::surface::Message<'static>,
+            _timeout: rustty_datastruct::blocking_queue::Timeout,
+        ) -> Result<
+            rustty_datastruct::blocking_queue::Size,
+            rustty_apprt_api::surface::Message<'static>,
+        > {
+            // Non-zero => "accepted" (matches a live queue's push return).
+            Ok(1)
+        }
+    }
+
+    // KAT (rustty-only margin — blueprint §7 B2; NOT a mapped Zig `test{}`, so the
+    // test-count contract is unaffected). Drives the xev write path end-to-end:
+    //   Exec::init(/bin/cat) -> threadEnter (real fork/exec on a pty + xev
+    //   Process::wait / Stream / Timer wiring + read-thread spawn) -> queueWrite a
+    //   marker -> bounded loop.run(NoWait) pump -> assert the bytes round-trip the
+    //   pty (the master, which the parent owns as `read_thread_fd`; canonical-mode
+    //   echo + cat's passthrough) -> threadExit reaps + joins.
+    //
+    // Real fork/exec + openpty + kqueue syscalls -> Miri-excluded
+    // (MIRI_EXCEPTIONS.md, "rustty-termio B2"). Bounded (NoWait passes + a
+    // wall-clock deadline + a tick cap + explicit teardown), so it never blocks on
+    // the child's life. The `io: *mut Termio` handed to threadEnter is a
+    // never-dereferenced placeholder (the B2 read-thread stub ignores it; B3 wires
+    // the real `processOutput` read loop). `renderer_state` is null: `cat` never
+    // changes the pty termios (it stays canonical+echo == `Mode::default()`), so
+    // `termiosTimer`'s mode-change branch — the sole `renderer_state` user — never
+    // fires.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn threadenter_queuewrite_writes_to_pty() {
+        use allocator_api2::alloc::Global;
+        use std::time::{Duration, Instant};
+
+        // Serialize with the other fork/pty KATs (see FORK_KAT_SERIAL).
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Config: run `/bin/cat` directly (a deterministic pty passthrough), no
+        // resources dir (shell integration disabled), xterm-256color.
+        let cfg = Config {
+            command: Some(configpkg::command::Command::Direct(vec![
+                b"/bin/cat".to_vec()
+            ])),
+            env: EnvMap::new(),
+            env_override: configpkg::RepeatableStringMap::default(),
+            shell_integration: configpkg::value_types::ShellIntegration::Detect,
+            shell_integration_features: configpkg::value_types::ShellIntegrationFeatures::default(),
+            cursor_blink: None,
+            working_directory: None,
+            resources_dir: None,
+            term: b"xterm-256color".to_vec(),
+            rt_pre_exec_info: RtPreExecInfo,
+            rt_post_fork_info: RtPostForkInfo,
+        };
+        let mut exec = Exec::init(Global, cfg).expect("Exec::init");
+
+        // The event loop (created here, driven here — the KAT stands in for the
+        // io thread's `threadMain_` frame).
+        let mut loop_ = xev::Loop::init().expect("Loop::init");
+        let loop_ptr: *mut xev::Loop = std::ptr::addr_of_mut!(loop_);
+
+        // A never-dereferenced `Termio<TestMailbox>` for the `io` arg (the read
+        // thread stub ignores it — see the KAT doc comment).
+        let mut io_storage = std::mem::MaybeUninit::<crate::Termio<TestMailbox>>::uninit();
+        let io_ptr: *mut crate::Termio<TestMailbox> = io_storage.as_mut_ptr();
+
+        // The frame-pinned ThreadData. `backend` is a placeholder that
+        // `threadEnter` overwrites (the reference's `backend = undefined`
+        // out-parameter protocol); it holds a trivial already-finished thread +
+        // inert fds so its drop (on the overwrite) is a no-op.
+        let mut td: crate::termio_impl::ThreadData<TestMailbox> = crate::termio_impl::ThreadData {
+            alloc: Global,
+            loop_: loop_ptr,
+            renderer_state: std::ptr::null_mut(),
+            surface_mailbox: TestMailbox,
+            backend: crate::backend::ThreadData::Exec(ThreadData {
+                start: Instant::now(),
+                exited: false,
+                write_stream: xev::Stream::init_fd(-1),
+                process: None,
+                write_req_pool: SegmentedPool::new(0),
+                write_buf_pool: SegmentedPool::new(0),
+                write_queue: xev::WriteQueue::default(),
+                process_wait_c: xev::Completion::default(),
+                flatpak_wait_c: FlatpakHostCommandCompletion::default(),
+                read_thread: std::thread::spawn(|| {}),
+                read_thread_pipe: -1,
+                read_thread_fd: -1,
+                termios_timer: xev::Timer::init().expect("placeholder Timer::init"),
+                termios_timer_c: xev::Completion::default(),
+                termios_timer_running: false,
+                termios_mode: ptypkg::Mode::default(),
+            }),
+            mailbox: std::ptr::null_mut(),
+        };
+
+        // Start the subprocess + wire the xev handles (+ spawn the read thread).
+        // SAFETY: `io_ptr` outlives the read thread (joined in threadExit); `td`
+        // is frame-pinned for the loop's life.
+        unsafe { exec.threadEnter(Global, io_ptr, &mut td) }.expect("threadEnter");
+
+        // The pty master (parent side; both read + write ends of PtyFds).
+        let master: std::os::fd::RawFd = {
+            let crate::backend::ThreadData::Exec(e) = &td.backend;
+            e.read_thread_fd
+        };
+        // Non-blocking reads on the master so our drain never blocks.
+        unsafe {
+            let flags = libc::fcntl(master, libc::F_GETFL, 0);
+            libc::fcntl(master, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+
+        // Queue a marker write (goes: mailbox-less direct queueWrite -> chunk into
+        // the write pools -> Stream::queue_write -> loop).
+        const MARK: &[u8] = b"RUSTTY_B2_MARK\n";
+        exec.queueWrite(Global, &mut td, MARK, false)
+            .expect("queueWrite");
+
+        // Bounded pump: NoWait ticks + drain the master + wall-clock deadline.
+        let needle = b"RUSTTY_B2_MARK";
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut acc: Vec<u8> = Vec::new();
+        let mut found = false;
+        for _ in 0..2000 {
+            loop_.run(xev::RunMode::NoWait).expect("loop.run(NoWait)");
+
+            // Drain whatever the master has (echo + cat passthrough).
+            let mut buf = [0u8; 1024];
+            loop {
+                let n = unsafe {
+                    libc::read(
+                        master,
+                        buf.as_mut_ptr().cast::<std::ffi::c_void>(),
+                        buf.len(),
+                    )
+                };
+                if n > 0 {
+                    acc.extend_from_slice(&buf[..n as usize]);
+                } else {
+                    break;
+                }
+            }
+
+            if acc.windows(needle.len()).any(|w| w == needle) {
+                found = true;
+                break;
+            }
+            if Instant::now() > deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        assert!(
+            found,
+            "queued write did not round-trip the pty within the deadline; master saw: {:?}",
+            String::from_utf8_lossy(&acc)
+        );
+
+        // Teardown: reap cat + write the quit pipe + join the read thread.
+        exec.threadExit(&mut td);
+        // Close the pty master (never closed by deinit) and free the ThreadData.
+        unsafe {
+            libc::close(master);
+        }
+        td.deinit();
+        loop_.deinit();
+        exec.deinit();
     }
 }

@@ -283,6 +283,26 @@ impl PosixPty {
         // Rust drops it after the borrow ends.
     }
 
+    /// Build a throwaway `Pty` that carries only a `master` fd, for querying
+    /// the termios `Mode` (see [`getMode`](Self::getMode)).
+    //
+    // PORT NOTE: the reference `termio.Exec.termiosTimer` builds an inline
+    // throwaway `Pty{ .master = exec.read_thread_fd, .slave = undefined }` purely
+    // to call `.getMode()`. Rust struct privacy (the `tty_name*` cache fields)
+    // forbids that struct literal from outside this module, so this constructor
+    // expresses it faithfully: `master` is set, `slave` is a placeholder (never
+    // read — `getMode` reads only `self.master`), and the tty-name cache starts
+    // empty. Returns the `Pty` alias (== `PosixPty` on this target).
+    pub fn init_master_only(master: PosixPtyFd) -> PosixPty {
+        PosixPty {
+            master,
+            // .slave = undefined — never read by `getMode`; a safe placeholder.
+            slave: -1,
+            tty_name_buf: [0; MAX_PATH_BYTES + 1],
+            tty_name: None,
+        }
+    }
+
     pub fn getMode(&self) -> Result<Mode, PosixPtyError> {
         let mut attrs: libc::termios = unsafe { std::mem::zeroed() };
         if unsafe { libc::tcgetattr(self.master, &mut attrs) } != 0 {
