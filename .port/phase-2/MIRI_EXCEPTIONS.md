@@ -145,3 +145,15 @@ class as the C3 exception above, so they **run natively**, not under Miri. KAT 1
 (cross-thread `notify` → `run(.once)` wakes exactly once) is the memory-safety +
 coalescing-correctness proof for the raw-ptr `machport` trampoline. The pure C1
 structures stay the Miri-gated surface.
+
+## rustty-xev C5 (Process EVFILT_PROC wait) — MIRI exception
+
+C5's `process.rs` `wait` + trampoline + all 4 tests (`process wait`, `process wait
+with non-zero exit code`, `process wait on a process that already exited`, KAT 3)
+spawn a real child (`std::process::Command` / `posix_spawn`) and drive an
+`EVFILT_PROC` (`NOTE_EXIT|NOTE_EXITSTATUS`) completion whose trampoline reaps with
+`waitpid` — all live syscalls via the kqueue loop, the same foreign-function class
+as the C3/C4 exceptions above, so they **run natively**, not under Miri. KAT 3
+(`posix_spawn /usr/bin/true` → `Process.wait` → `run(.until_done)` asserts exit
+status 0) is the memory-safety + exit-decode-correctness proof for the raw-ptr
+`proc` trampoline. The pure C1 structures stay the Miri-gated surface.

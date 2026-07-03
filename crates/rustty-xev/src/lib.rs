@@ -15,8 +15,9 @@
 //!
 //! CHUNK STATUS: C1 (queue/queue_mpsc/heap) + C2 (darwin) + C3 (loop core:
 //! `Loop`/`Completion`/`Operation`/`Result`, the tick, `Async`(mach) wakeup
-//! subset, the `Timer` watcher run) have LANDED. `Stream`/`Process`/`WriteQueue`/
-//! `WriteRequest` remain sequencing placeholders (chunks C5/C6) — filled in place;
+//! subset, the `Timer` watcher run) + C4 (`Async` mach-port watcher) + C5
+//! (`Process` EVFILT_PROC watcher) have LANDED. `Stream`/`WriteQueue`/
+//! `WriteRequest` remain sequencing placeholders (chunk C6) — filled in place;
 //! downstream `use` paths never change. See .port/phase-2/XEV_BLUEPRINT.md +
 //! DEFERRALS.md.
 
@@ -70,6 +71,12 @@ mod looppkg;
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
 mod net;
+// XEV_BLUEPRINT §4/§8 chunk C5: the `Process` watcher (`watcher/process.zig`
+// `ProcessKqueue`) — the subprocess exit-wait (EVFILT_PROC + `waitpid` reap) that
+// termio's Exec rides. The loop `proc` op/perform (Operation::Proc + exit decode)
+// landed in C3; this module adds the high-level `xev.Process` watcher surface.
+#[cfg(target_os = "macos")]
+mod process;
 #[cfg(target_os = "macos")]
 mod thread_pool;
 #[cfg(target_os = "macos")]
@@ -90,6 +97,8 @@ pub use kqueue::{
 #[cfg(target_os = "macos")]
 pub use looppkg::{CallbackAction, CompletionState, Options, RunMode};
 #[cfg(target_os = "macos")]
+pub use process::Process;
+#[cfg(target_os = "macos")]
 pub use timer::Timer;
 
 /// PORT: the error set of `Loop.init`/`Async.init`/`Timer.init` — the unified D6
@@ -108,8 +117,8 @@ pub struct Error;
 pub struct NotifyError;
 
 // ---------------------------------------------------------------------------
-// Sequencing placeholders for the not-yet-ported watchers (chunks C5/C6). Filled
-// IN PLACE; downstream `use` paths never change. termio names these types +
+// Sequencing placeholders for the not-yet-ported `Stream` watcher (chunk C6).
+// Filled IN PLACE; downstream `use` paths never change. termio names these types +
 // default-constructs `WriteRequest`/`WriteQueue` (F3), so the trait surface is
 // preserved. Method bodies are `unimplemented!()` dependency markers — no
 // reference logic is stubbed behind them.
@@ -122,16 +131,6 @@ pub struct Stream {}
 impl Stream {
     pub fn deinit(&mut self) {
         unimplemented!("xev Stream deferred (XEV_BLUEPRINT chunk C6): rustty-xev tier")
-    }
-}
-
-/// PORT: `xev.Process` (the subprocess exit watcher — `xev.Process.init(pid)` in
-/// Exec's threadEnter; chunk C5).
-pub struct Process {}
-
-impl Process {
-    pub fn deinit(&mut self) {
-        unimplemented!("xev Process deferred (XEV_BLUEPRINT chunk C5): rustty-xev tier")
     }
 }
 
@@ -169,6 +168,9 @@ mod non_macos_seam {
     pub struct Completion {}
     /// PORT: `xev.Timer` placeholder (non-macOS backend deferred).
     pub struct Timer {}
+    /// PORT: `xev.Process` placeholder (non-macOS backend deferred).
+    #[derive(Clone, Copy)]
+    pub struct Process {}
 
     impl Loop {
         pub fn init() -> Result<Loop, Error> {
@@ -208,6 +210,19 @@ mod non_macos_seam {
             )
         }
         pub fn deinit(&self) {
+            unimplemented!(
+                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+            )
+        }
+    }
+
+    impl Process {
+        pub fn init(_pid: i32) -> Result<Process, Error> {
+            unimplemented!(
+                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+            )
+        }
+        pub fn deinit(&mut self) {
             unimplemented!(
                 "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
             )

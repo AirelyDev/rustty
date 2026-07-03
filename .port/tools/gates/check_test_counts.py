@@ -685,6 +685,16 @@ MAP = {
     # variants are comptime-elided on macOS (§0) and deferred (§1); their doc
     # comments are preserved in async.rs (R3, G3b-covered).
     "xev_async":         ([f"{GHXEV}/watcher/async.zig"], [f"{RSXEV}/async.rs"], 0),
+    # rustty-xev C5 (XEV_BLUEPRINT §4/§7) — the EVFILT_PROC subprocess exit watcher.
+    # process.zig has 3 quoted `test{}` (`process wait`, `process wait with non-zero
+    # exit code`, `process wait on a process that already exited`, inside
+    # `ProcessTests`; the per-variant `test { _ = ProcessTests(...); }` are anon
+    # refAllDecls, zig_count-skipped) → zig=3. process.rs ports all 3 as live #[test]
+    # + rustty KAT 3 (posix_spawn /bin/true → wait → exit status 0) → rust=4 >= 3.
+    # The non-kqueue ProcessPidFd/ProcessIocp/ProcessDynamic variants are
+    # comptime-elided on macOS (§0) and deferred (§1); their doc comments are
+    # preserved in process.rs (R3, G3b-covered).
+    "xev_process":       ([f"{GHXEV}/watcher/process.zig"], [f"{RSXEV}/process.rs"], 0),
 }
 
 def expand(globs):
