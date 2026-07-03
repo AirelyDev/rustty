@@ -22,9 +22,17 @@
 //! `_set_focus`/`_set_occlusion`) + the `main_c.zig` `String`/`rustty_string_free`
 //! precursor `_tty_name` returns. Only `_config_new` is runtime-live; every other E7
 //! export needs a live surface, so it reaches the Phase-3 GPU leaf past
-//! `rustty_surface_new` (compiles + links now, panics when driven). The remaining
-//! `ghostty_*` (`rustty_*`) exports land in chunks E8..E10; cbindgen header
-//! generation + the C compile+link smoke KAT land in E11 (EMBEDDED_BLUEPRINT §3/§6/§7).
+//! `rustty_surface_new` (compiles + links now, panics when driven). E8 lands the
+//! input exports (key/text/preedit/mouse); E9 lands the surface-action exports
+//! (`_request_close`/`_split`/`_split_focus`/`_split_resize`/`_split_equalize`/
+//! `_binding_action`), the `_complete_clipboard_request` sink, and the 10 inspector
+//! exports (`_surface_inspector`/`_inspector_free`/`_set_size`/`_set_content_scale`/
+//! `_mouse_button`/`_mouse_pos`/`_mouse_scroll`/`_key`/`_text`/`_set_focus`). All of
+//! E8/E9 need a live surface (and the per-inspector sinks a live inspector, itself a
+//! Phase-3 dcimgui leaf), so they link now and reach the leaf only when driven. The
+//! remaining `ghostty_*` (`rustty_*`) exports land in chunk E10 (misc + Darwin-gated);
+//! cbindgen header generation + the C compile+link smoke KAT land in E11
+//! (EMBEDDED_BLUEPRINT §3/§6/§7).
 //!
 //! PORT NOTE: this is the crate root, the rustty analog of `src/main_c.zig` (the
 //! C API hub) together with `apprt.embedded`'s `CAPI` decl. `main_c.zig`
@@ -38,7 +46,7 @@
 //! Carved incrementally (R1: every line/comment/test{} ported as the crate is
 //! carved, leaves-first, under the acyclicity gate per R4).
 
-use core::ffi::c_void;
+use core::ffi::{c_void, CStr};
 use std::mem::ManuallyDrop;
 
 use allocator_api2::alloc::Global;
@@ -52,7 +60,7 @@ use libc::{c_char, c_int};
 // `PlatformC`/`PlatformCMacOS` build the zeroed platform union for the default
 // `ghostty_surface_config_new`.
 use rustty_apprt::embedded::{
-    self, App, KeyTarget, Options, PlatformC, PlatformCMacOS, Surface, SurfaceOptions,
+    self, App, Inspector, KeyTarget, Options, PlatformC, PlatformCMacOS, Surface, SurfaceOptions,
 };
 // The `apprt_api::App` TRAIT (`perform_action`) the embedded `App` implements —
 // imported under a distinct name so it does not shadow the concrete `App` above.
@@ -62,6 +70,17 @@ use rustty_apprt_api::App as ApprtApp;
 // (`ghostty_surface_inherited_config`); `ApprtError` is the `App::newSurface`
 // error the `ghostty_surface_new` path logs.
 use rustty_apprt_api::{Action, ApprtError, ColorScheme, NewSurfaceContext, Target};
+// The split-action value types the E9 surface-action exports pass BY VALUE across
+// the C ABI (`ghostty_surface_split`/`_split_focus`/`_split_resize` take
+// `apprt.action.{SplitDirection,GotoSplit,ResizeSplit.Direction}` directly). Each is
+// an FFI-safe `#[repr(i32)]`/`#[repr(C)]` type (apprt-api action.rs); `ResizeSplit`
+// is reassembled from its `{direction, amount}` params. (`ResizeSplit.Direction` is
+// hoisted to the sibling `ResizeSplitDirection` — Rust cannot nest a type in a
+// struct's value namespace.)
+use rustty_apprt_api::action::{GotoSplit, ResizeSplit, ResizeSplitDirection, SplitDirection};
+// `apprt.ClipboardRequest` — the heap request `ghostty_surface_complete_clipboard_request`
+// receives back as `*mut ClipboardRequest` (the `Box` from `Surface::clipboard_request`, E3).
+use rustty_apprt_api::ClipboardRequest;
 // `ghostty_app_new`/`_update_config`/`config_key_is_binding` take a `*Config` — the
 // `rustty_config::Config` the config C-ABI (`rustty_config_new`) hands the host.
 use rustty_config::Config;
@@ -76,12 +95,16 @@ use rustty_vt::selection::Selection as CoreSelection;
 // (`ghostty_surface_{key_translation_mods,mouse_button,mouse_pos}`); `mouse`'s
 // `ButtonState`/`Button`/`PressureStage`/`ScrollMods` are the mouse-event value
 // types (`ghostty_surface_mouse_{button,scroll,pressure}`).
+use rustty_vt::input::key;
 use rustty_vt::input::key_mods::{Mods, ModsBacking};
 use rustty_vt::input::mouse;
 // `input.Binding.Flags.C` (`ghostty_surface_key_is_binding`'s out-param, written
 // from `Flags.cval()`) and `input.Mods.translation` (`ghostty_surface_key_translation_mods`);
 // `translation` is a `rustty-input` free fn (it needs the apprt-layer `OptionAsAlt`).
-use rustty_input::binding::FlagsC;
+// `binding` (the module) is also brought in for `input.Binding.Action.parse` — the
+// E9 `ghostty_surface_binding_action` parser; it is module-qualified (`binding::Action`)
+// to avoid clashing with the apprt-api `Action` imported above.
+use rustty_input::binding::{self, FlagsC};
 use rustty_input::key_mods::translation;
 
 // The raw C-API `KeyEvent` (E5, capi.rs) — the wire form `ghostty_app_key` /
@@ -1646,4 +1669,449 @@ pub unsafe extern "C" fn rustty_surface_ime_point(
         *width = pos.width;
         *height = pos.height;
     }
+}
+
+// ===========================================================================
+// CAPI surface-action + clipboard + inspector exports (embedded.zig 1922-2100,
+// chunk E9): the 6 surface-action sinks (request_close / split / split_focus /
+// split_resize / split_equalize / binding_action), the 1 clipboard-completion
+// sink, and the 10 inspector sinks (surface_inspector / inspector_free +
+// set_size / set_content_scale + mouse_button / mouse_pos / mouse_scroll / key /
+// text / set_focus). The surface-action exports forward to the backend `App`'s
+// `perform_action` (the apprt-api trait — E6 `open_config` precedent, here with a
+// `Target::Surface`) or the core surface directly; the clipboard sink forwards to
+// the backend `Surface::completeClipboardRequest` (E3); the inspector sinks forward
+// to the E4 `Inspector` methods. Every export here needs a LIVE surface (created via
+// `rustty_surface_new`, the Phase-3 GPU-leaf boundary), and the inspector sinks
+// additionally need a LIVE `Inspector` — `ghostty_surface_inspector` reaches the
+// Phase-3 dcimgui `Inspector::init` leaf, so no inspector can yet exist and the
+// per-inspector sinks reach the E4 `unimplemented!()` methods when driven. All link
+// now and reach the leaf only when exercised; NO new `unimplemented!()` leaf is added
+// in apprt-c (DEFERRALS.md, E7/E8 precedent).
+// ===========================================================================
+
+/// C: rustty_surface_request_close
+///
+/// Request that the surface become closed. This will go through the
+/// normal trigger process that a close surface input binding would.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by [`rustty_surface_new`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_request_close(ptr: *mut Surface) {
+    // ptr.core_surface.close();
+    // SAFETY: `ptr` validity is the caller's contract.
+    unsafe { (*ptr).core_surface.close() };
+}
+
+/// C: rustty_surface_split
+///
+/// Request that the surface split in the given direction.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by [`rustty_surface_new`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_split(ptr: *mut Surface, direction: SplitDirection) {
+    // _ = ptr.app.performAction(
+    //     .{ .surface = &ptr.core_surface },
+    //     .new_split,
+    //     direction,
+    // ) catch |err| {
+    //     log.err("error creating new split err={}", .{err});
+    //     return;
+    // };
+    //
+    // PORT NOTE: the reference `*App` method `performAction(.{ .surface =
+    // &ptr.core_surface }, .new_split, direction)` maps to the `apprt_api::App` trait
+    // `perform_action(Target::Surface(&core_surface), Action::NewSplit(direction))`
+    // (the E6 `open_config` precedent — here the `Target` carries the surface, so `C`
+    // is inferred as `CoreSurface`). The `bool` result is discarded (reference `_ =`).
+    // SAFETY: `ptr` validity is the caller's contract.
+    if let Err(err) = unsafe {
+        (*(*ptr).app).perform_action(
+            Target::Surface(&(*ptr).core_surface),
+            Action::NewSplit(direction),
+        )
+    } {
+        eprintln!("error creating new split err={err:?}");
+    }
+}
+
+/// C: rustty_surface_split_focus
+///
+/// Focus on the next split (if any).
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by [`rustty_surface_new`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_split_focus(ptr: *mut Surface, direction: GotoSplit) {
+    // _ = ptr.app.performAction(
+    //     .{ .surface = &ptr.core_surface },
+    //     .goto_split,
+    //     direction,
+    // ) catch |err| {
+    //     log.err("error creating new split err={}", .{err});
+    //     return;
+    // };
+    //
+    // PORT NOTE: the reference log message is "error creating new split" verbatim —
+    // a copy-paste of `ghostty_surface_split`'s message; preserved faithfully (R3).
+    // SAFETY: `ptr` validity is the caller's contract.
+    if let Err(err) = unsafe {
+        (*(*ptr).app).perform_action(
+            Target::Surface(&(*ptr).core_surface),
+            Action::GotoSplit(direction),
+        )
+    } {
+        eprintln!("error creating new split err={err:?}");
+    }
+}
+
+/// C: rustty_surface_split_resize
+///
+/// Resize the current split by moving the split divider in the given
+/// direction. `direction` specifies which direction the split divider will
+/// move relative to the focused split. `amount` is a fractional value
+/// between 0 and 1 that specifies by how much the divider will move.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by [`rustty_surface_new`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_split_resize(
+    ptr: *mut Surface,
+    direction: ResizeSplitDirection,
+    amount: u16,
+) {
+    // _ = ptr.app.performAction(
+    //     .{ .surface = &ptr.core_surface },
+    //     .resize_split,
+    //     .{ .direction = direction, .amount = amount },
+    // ) catch |err| {
+    //     log.err("error resizing split err={}", .{err});
+    //     return;
+    // };
+    //
+    // PORT NOTE: `.resize_split`'s value is the `ResizeSplit` struct, reassembled by
+    // field name from the two params (`.{ .direction, .amount }`).
+    // SAFETY: `ptr` validity is the caller's contract.
+    if let Err(err) = unsafe {
+        (*(*ptr).app).perform_action(
+            Target::Surface(&(*ptr).core_surface),
+            Action::ResizeSplit(ResizeSplit { direction, amount }),
+        )
+    } {
+        eprintln!("error resizing split err={err:?}");
+    }
+}
+
+/// C: rustty_surface_split_equalize
+///
+/// Equalize the size of all splits in the current window.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by [`rustty_surface_new`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_split_equalize(ptr: *mut Surface) {
+    // _ = ptr.app.performAction(
+    //     .{ .surface = &ptr.core_surface },
+    //     .equalize_splits,
+    //     {},
+    // ) catch |err| {
+    //     log.err("error equalizing splits err={}", .{err});
+    //     return;
+    // };
+    //
+    // PORT NOTE: the reference void value `{}` for `.equalize_splits` maps to the
+    // fieldless `Action::EqualizeSplits` variant.
+    // SAFETY: `ptr` validity is the caller's contract.
+    if let Err(err) = unsafe {
+        (*(*ptr).app).perform_action(
+            Target::Surface(&(*ptr).core_surface),
+            Action::EqualizeSplits,
+        )
+    } {
+        eprintln!("error equalizing splits err={err:?}");
+    }
+}
+
+/// C: rustty_surface_binding_action
+///
+/// Invoke an action on the surface.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by [`rustty_surface_new`]; `action_ptr`
+/// must point to `action_len` valid bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_binding_action(
+    ptr: *mut Surface,
+    action_ptr: *const u8,
+    action_len: usize,
+) -> bool {
+    // const action_str = action_ptr[0..action_len];
+    // SAFETY: `action_ptr`/`action_len` validity is the caller's contract.
+    let action_str = unsafe { core::slice::from_raw_parts(action_ptr, action_len) };
+
+    // const action = input.Binding.Action.parse(action_str) catch |err| {
+    //     log.err("error parsing binding action action={s} err={}", .{ action_str, err });
+    //     return false;
+    // };
+    let action = match binding::Action::parse(action_str) {
+        Ok(action) => action,
+        Err(err) => {
+            eprintln!(
+                "error parsing binding action action={} err={err:?}",
+                // PORT NOTE: fully-qualified — the crate-local C-API `String` (the
+                // `main_c.zig` heap-string type) shadows `std::string::String` here.
+                std::string::String::from_utf8_lossy(action_str),
+            );
+            return false;
+        }
+    };
+
+    // return ptr.core_surface.performBindingAction(action) catch |err| {
+    //     log.err("error performing binding action action={f} err={}", .{ action, err });
+    //     return false;
+    // };
+    //
+    // PORT NOTE: Zig passes the `action` union to `performBindingAction` BY VALUE (a
+    // copy), leaving the local `action` live for the `catch` error log. Rust's
+    // `performBindingAction(&mut self, action: binding::Action)` CONSUMES its arg, so
+    // `action.clone()` reproduces Zig's by-value copy and keeps `action` available for
+    // the error branch's `action={f}` (rendered via `Debug`, the faithful analog of
+    // the reference's custom `{f}` `Action.format`).
+    // SAFETY: `ptr` validity is the caller's contract.
+    match unsafe { (*ptr).core_surface.performBindingAction(action.clone()) } {
+        Ok(v) => v,
+        Err(err) => {
+            eprintln!("error performing binding action action={action:?} err={err:?}");
+            false
+        }
+    }
+}
+
+/// C: rustty_surface_complete_clipboard_request
+///
+/// Complete a clipboard read request started via the read callback.
+/// This can only be called once for a given request. Once it is called
+/// with a request the request pointer will be invalidated.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by [`rustty_surface_new`]; `str` must be a
+/// valid NUL-terminated C string; `state` must be the request pointer handed to the
+/// host by the read callback (it is invalidated by this call).
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_complete_clipboard_request(
+    ptr: *mut Surface,
+    str: *const c_char,
+    state: *mut ClipboardRequest,
+    confirmed: bool,
+) {
+    // ptr.completeClipboardRequest(
+    //     std.mem.sliceTo(str, 0),
+    //     state,
+    //     confirmed,
+    // );
+    //
+    // PORT NOTE: `str: [*:0]const u8` + `std.mem.sliceTo(str, 0)` → a borrowed `&CStr`
+    // (`CStr::from_ptr`): the backend `completeClipboardRequest` slices it
+    // (`.to_bytes()`) for core and re-hands `.as_ptr()` to the host
+    // `confirm_read_clipboard` callback (the NUL sentinel is load-bearing, E3).
+    // SAFETY: `ptr`/`str`/`state` validity is the caller's contract.
+    unsafe {
+        (*ptr).completeClipboardRequest(CStr::from_ptr(str), state, confirmed);
+    }
+}
+
+/// C: rustty_surface_inspector
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by [`rustty_surface_new`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_inspector(ptr: *mut Surface) -> *mut Inspector {
+    // return ptr.initInspector() catch |err| {
+    //     log.err("error initializing inspector err={}", .{err});
+    //     return null;
+    // };
+    //
+    // PORT NOTE: `?*Inspector` → a nullable `*mut Inspector` (cbindgen emits the raw
+    // pointer; `null` for the error case). `initInspector` reaches the Phase-3 dcimgui
+    // `Inspector::init` leaf at RUNTIME (EMBEDDED_BLUEPRINT §1) — so a live inspector
+    // cannot yet be built; this export links now and panics in that leaf when driven.
+    // SAFETY: `ptr` validity is the caller's contract.
+    match unsafe { (*ptr).initInspector() } {
+        Ok(v) => v,
+        Err(err) => {
+            eprintln!("error initializing inspector err={err:?}");
+            core::ptr::null_mut()
+        }
+    }
+}
+
+/// C: rustty_inspector_free
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by [`rustty_surface_new`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_inspector_free(ptr: *mut Surface) {
+    // ptr.freeInspector();
+    //
+    // PORT NOTE: the reference `ghostty_inspector_free` takes a `*Surface` (NOT a
+    // `*Inspector`) — it frees the surface-owned inspector via `freeInspector` (E4).
+    // SAFETY: `ptr` validity is the caller's contract.
+    unsafe { (*ptr).freeInspector() };
+}
+
+/// C: rustty_inspector_set_size
+///
+/// # Safety
+/// `ptr` must be a valid [`Inspector`] pointer returned by [`rustty_surface_inspector`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_inspector_set_size(ptr: *mut Inspector, w: u32, h: u32) {
+    // ptr.updateSize(w, h);
+    // SAFETY: `ptr` validity is the caller's contract.
+    unsafe { (*ptr).updateSize(w, h) };
+}
+
+/// C: rustty_inspector_set_content_scale
+///
+/// # Safety
+/// `ptr` must be a valid [`Inspector`] pointer returned by [`rustty_surface_inspector`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_inspector_set_content_scale(ptr: *mut Inspector, x: f64, y: f64) {
+    // ptr.updateContentScale(x, y);
+    // SAFETY: `ptr` validity is the caller's contract.
+    unsafe { (*ptr).updateContentScale(x, y) };
+}
+
+/// C: rustty_inspector_mouse_button
+///
+/// # Safety
+/// `ptr` must be a valid [`Inspector`] pointer returned by [`rustty_surface_inspector`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_inspector_mouse_button(
+    ptr: *mut Inspector,
+    action: mouse::ButtonState,
+    button: mouse::Button,
+    mods: c_int,
+) {
+    // ptr.mouseButtonCallback(
+    //     action,
+    //     button,
+    //     @bitCast(@as(
+    //         input.Mods.Backing,
+    //         @truncate(@as(c_uint, @bitCast(mods))),
+    //     )),
+    // );
+    //
+    // PORT NOTE: the `c_int` mods reinterpret is the E8 `mouse_button` precedent
+    // (`Mods::from_int(mods as c_uint as Backing)`).
+    // SAFETY: `ptr` validity is the caller's contract.
+    unsafe {
+        (*ptr).mouseButtonCallback(
+            action,
+            button,
+            Mods::from_int(mods as core::ffi::c_uint as ModsBacking),
+        )
+    };
+}
+
+/// C: rustty_inspector_mouse_pos
+///
+/// # Safety
+/// `ptr` must be a valid [`Inspector`] pointer returned by [`rustty_surface_inspector`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_inspector_mouse_pos(ptr: *mut Inspector, x: f64, y: f64) {
+    // ptr.cursorPosCallback(x, y);
+    // SAFETY: `ptr` validity is the caller's contract.
+    unsafe { (*ptr).cursorPosCallback(x, y) };
+}
+
+/// C: rustty_inspector_mouse_scroll
+///
+/// # Safety
+/// `ptr` must be a valid [`Inspector`] pointer returned by [`rustty_surface_inspector`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_inspector_mouse_scroll(
+    ptr: *mut Inspector,
+    x: f64,
+    y: f64,
+    scroll_mods: c_int,
+) {
+    // ptr.scrollCallback(
+    //     x,
+    //     y,
+    //     @bitCast(@as(u8, @truncate(@as(c_uint, @bitCast(scroll_mods))))),
+    // );
+    //
+    // PORT NOTE: the E8 `mouse_scroll` precedent — reinterpret the `c_int` as unsigned,
+    // truncate to the `u8` `ScrollMods` backing, then reinterpret the bits.
+    // SAFETY: `ptr` validity is the caller's contract.
+    unsafe {
+        (*ptr).scrollCallback(
+            x,
+            y,
+            mouse::ScrollMods::from_int(scroll_mods as core::ffi::c_uint as u8),
+        )
+    };
+}
+
+/// C: rustty_inspector_key
+///
+/// # Safety
+/// `ptr` must be a valid [`Inspector`] pointer returned by [`rustty_surface_inspector`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_inspector_key(
+    ptr: *mut Inspector,
+    action: key::Action,
+    key: key::Key,
+    c_mods: c_int,
+) {
+    // ptr.keyCallback(
+    //     action,
+    //     key,
+    //     @bitCast(@as(
+    //         input.Mods.Backing,
+    //         @truncate(@as(c_uint, @bitCast(c_mods))),
+    //     )),
+    // ) catch |err| {
+    //     log.err("error processing key event err={}", .{err});
+    //     return;
+    // };
+    // SAFETY: `ptr` validity is the caller's contract.
+    if let Err(err) = unsafe {
+        (*ptr).keyCallback(
+            action,
+            key,
+            Mods::from_int(c_mods as core::ffi::c_uint as ModsBacking),
+        )
+    } {
+        eprintln!("error processing key event err={err:?}");
+    }
+}
+
+/// C: rustty_inspector_text
+///
+/// # Safety
+/// `ptr` must be a valid [`Inspector`] pointer returned by [`rustty_surface_inspector`];
+/// `str` must be a valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_inspector_text(ptr: *mut Inspector, str: *const c_char) {
+    // ptr.textCallback(std.mem.sliceTo(str, 0));
+    //
+    // PORT NOTE: `str: [*:0]const u8` + `std.mem.sliceTo(str, 0)` → a borrowed `&CStr`
+    // (`CStr::from_ptr`); the backend `textCallback` re-hands `text.ptr` to imgui (the
+    // NUL sentinel is load-bearing, E4).
+    // SAFETY: `ptr`/`str` validity is the caller's contract.
+    unsafe { (*ptr).textCallback(CStr::from_ptr(str)) };
+}
+
+/// C: rustty_inspector_set_focus
+///
+/// # Safety
+/// `ptr` must be a valid [`Inspector`] pointer returned by [`rustty_surface_inspector`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_inspector_set_focus(ptr: *mut Inspector, focused: bool) {
+    // ptr.focusCallback(focused);
+    // SAFETY: `ptr` validity is the caller's contract.
+    unsafe { (*ptr).focusCallback(focused) };
 }

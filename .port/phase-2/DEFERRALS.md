@@ -2239,3 +2239,78 @@ GREEN, rust ≥ zig; NO new MAP entry). Whole-workspace gates green (build incl.
 acyclic G7 with apprt-c still a clean TOP SINK, test-counts G-gate); scoped-G3b on
 embedded.zig **1758-1920 (E8) distinctive=18 missing=0 review=0**. No regression
 (vt 2019, core 15, apprt-api 20, renderer 19, crash 12, termio 44).
+
+## rustty-apprt-c embedded E9 (CAPI surface-action + clipboard + inspector exports) — live-surface / live-inspector leaf, NO new leaf
+
+Chunk E9 of the libghostty C-ABI milestone (EMBEDDED_BLUEPRINT §1/§3/§7): ports
+embedded.zig **1924-2100** (the E9 range 1924-2106) — the 6 surface-action exports,
+the 1 clipboard-completion export, and the 10 inspector exports — into
+`crates/rustty-apprt-c/src/lib.rs` as `#[no_mangle] pub unsafe extern "C" fn
+rustty_*`: `_surface_request_close`, `_surface_split`, `_surface_split_focus`,
+`_surface_split_resize`, `_surface_split_equalize`, `_surface_binding_action`,
+`_surface_complete_clipboard_request`, `_surface_inspector`, `_inspector_free`,
+`_inspector_set_size`, `_inspector_set_content_scale`, `_inspector_mouse_button`,
+`_inspector_mouse_pos`, `_inspector_mouse_scroll`, `_inspector_key`, `_inspector_text`,
+`_inspector_set_focus`. The surface-action exports forward to the backend `App`'s
+`perform_action` (the apprt-api trait, E6 `open_config` precedent — here with a
+`Target::Surface`) or straight to the core surface (`_request_close` →
+`core_surface.close()`, `_binding_action` → `core_surface.performBindingAction`); the
+clipboard sink forwards to the backend `Surface::completeClipboardRequest` (E3); the
+inspector sinks forward to the E4 `Inspector` methods.
+
+**Runtime split (EMBEDDED_BLUEPRINT §1):** every E9 export needs a **LIVE surface**
+(created via `rustty_surface_new`, the Phase-3 GPU-leaf boundary — the R-d/D6 leaves in
+the core C3 deferral set). The surface-action + clipboard exports are pure FFI
+marshaling once a surface exists (the split exports reach the host `action` callback;
+`_binding_action` runs real core logic; `_complete_clipboard_request` runs the real E3
+backend, reaching the host `confirm_read_clipboard` callback on the unsafe/unauthorized-
+paste arm). The **inspector per-callback exports additionally reach the E4 `Inspector`
+`unimplemented!()` leaves** (dcimgui `ImGuiIO_Add*Event`, `Inspector::init`): a LIVE
+inspector cannot yet exist because `_surface_inspector` → `Surface::initInspector` →
+`Inspector::init` is a Phase-3 dcimgui leaf, so `_inspector_{mouse_button,mouse_pos,
+mouse_scroll,key,text,set_focus}` are unreachable this milestone (their leaves are E4's,
+already documented above). E9 adds **NO new `unimplemented!()` leaf in apprt-c** — it is
+a pure FFI projection (the E6/E7/E8 precedent), so there is nothing to un-defer here
+beyond the existing renderer/xev (R-d/D6) and E4 dcimgui-inspector leaves.
+
+**Identity / ABI notes (R3):** the split-action value types cross the ABI BY VALUE
+(`apprt.action.{SplitDirection,GotoSplit}` are `#[repr(i32)]`; `ResizeSplit` is
+`#[repr(C)]`); `apprt.action.ResizeSplit.Direction` is the hoisted sibling
+`ResizeSplitDirection` (Rust cannot nest a type in a struct's value namespace), and
+`ResizeSplit` is reassembled by field name from the `{direction, amount}` params. The
+reference `ptr.app.performAction(.{ .surface = ... }, .new_split, v)` maps to
+`(*app).perform_action(Target::Surface(&core_surface), Action::NewSplit(v))` — the
+E6 precedent, now with a surface-carrying `Target` (`C` inferred as `CoreSurface`).
+`_split_focus`'s reference log message **"error creating new split"** is a verbatim
+copy-paste of `_split`'s (preserved faithfully). `_binding_action`: `binding::Action`
+is **module-qualified** (`binding::Action::parse`) to avoid clashing with the apprt-api
+`Action`; Zig passes the parsed `action` union to `performBindingAction` **by value** (a
+copy) so the local stays live for the `catch`'s `action={f}` log — Rust's by-value
+`performBindingAction` consumes its arg, so **`action.clone()`** reproduces that copy and
+keeps `action` live for the error branch (rendered via `Debug`, the analog of the
+reference `{f}` `Action.format`); the crate-local C-API `String` (main_c.zig heap-string)
+shadows `std::string::String`, so the parse-error log fully-qualifies
+`std::string::String::from_utf8_lossy`. `_complete_clipboard_request`'s
+`std.mem.sliceTo(str, 0)` → a borrowed `&CStr` (`CStr::from_ptr`; the NUL sentinel is
+load-bearing — the backend re-hands `.as_ptr()` to the host callback), with `state` a raw
+`*mut ClipboardRequest` (the `Box` from `Surface::clipboard_request`, E3). The reference
+**`ghostty_inspector_free` takes a `*Surface`** (NOT a `*Inspector`) — it frees the
+surface-owned inspector via `freeInspector`. `_surface_inspector`'s `?*Inspector` → a
+nullable `*mut Inspector` (`null` on the `initInspector` error). The inspector mods
+reinterprets (`_inspector_mouse_button`/`_inspector_key` `c_int` → `Mods::from_int`,
+`_inspector_mouse_scroll` `c_int` → `ScrollMods::from_int`) are the E8 precedent;
+`_inspector_key`'s `action: input.Action`/`key: input.Key` cross by value as
+`#[repr(C)]` `key::{Action,Key}` enums.
+
+**Gate deltas (E9):** NO new `rustty-apprt-c` Cargo dep — E9's imports come from deps
+already present: the split value types + `ClipboardRequest` from `rustty-apprt-api`, the
+`key` module (`key::{Action,Key}`) from `rustty-vt`, and the `binding` module
+(`binding::Action`) from `rustty-input` (added at E8). `apprt_embedded` MAP row unchanged
+(embedded.zig 0-test; the exports land under the existing `{RSAPPRTC}/**/*.rs` glob —
+GREEN, rust ≥ zig; NO new MAP entry). Whole-workspace gates green (build incl. apprt-c
++ rustty + cli; touched-crate tests — apprt-c 0; clippy `-D warnings`, fmt, acyclic G7
+with apprt-c still a clean TOP SINK, test-counts G-gate); scoped-G3b on embedded.zig
+**1924-2106 (E9) distinctive=12 (E9-owned) missing=0** — the 3 remaining distinctive
+lines in the range are the `ghostty_set_window_background_blur` doc-comment (2102-2106;
+its `export fn` is at 2108, the E10 macOS objc/CGS leaf) and defer with E10. No
+regression (vt 2019, core 15, apprt-api 20, renderer 19, crash 12, termio 44).
