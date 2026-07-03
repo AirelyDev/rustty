@@ -3137,26 +3137,202 @@ impl ReadThread {
     //         }
     //     }
     // }
+    // PORTED (xev B3, 0 reference tests — R1-safe): the real raw `poll(2)`/`read`/
+    // `processOutput` read loop, below the preserved verbatim comment above.
     #[cfg(not(windows))]
     fn threadMainPosix<M: rustty_apprt_api::surface::AppMailbox>(
-        _fd: std::os::fd::RawFd,
-        _io: *mut crate::Termio<M>,
+        fd: std::os::fd::RawFd,
+        io: *mut crate::Termio<M>,
         quit: std::os::fd::RawFd,
     ) {
-        // B2 SEQUENCING STUB (blueprint §7 B3 lands the real body below the
-        // preserved verbatim comment above): `Exec::threadEnter` (B2) already
-        // spawns this thread, but the real `poll(2)`/`read`/`processOutput` loop
-        // — which drives the still-deferred `Termio::processOutput` (B3) — is not
-        // wired yet. For B2 this stub honors ONLY the reference's `defer
-        // posix.close(quit)` (so the quit-pipe read end is not leaked) and
-        // returns immediately, so `Exec::threadExit`'s `join()` completes
-        // promptly. It does NOT touch `_io` or `_fd` — the B2 write-path KAT reads
-        // the pty master itself. R5-safe: replaces an `unimplemented!()` with a
-        // strictly-narrower non-panicking stand-in, filled in B3.
-        //
+        // Always close our end of the pipe when we exit.
         // defer posix.close(quit);
+        //
+        // PORT: `defer` -> a Drop guard (the `CloseHandleGuard` precedent) so the
+        // quit-pipe read end is closed on EVERY return path below.
+        struct QuitFdCloser(std::os::fd::RawFd);
+        impl Drop for QuitFdCloser {
+            fn drop(&mut self) {
+                // posix.close(quit);
+                unsafe {
+                    libc::close(self.0);
+                }
+            }
+        }
+        let _quit_closer = QuitFdCloser(quit);
+
+        // Right now, on Darwin, `std.Thread.setName` can only name the current
+        // thread, and we have no way to get the current thread from within it,
+        // so instead we use this code to name the thread instead.
+        // if (builtin.os.tag.isDarwin()) {
+        //     internal_os.macos.pthread_setname_np(&"io-reader".*);
+        // }
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         unsafe {
-            libc::close(quit);
+            rustty_os::macos::pthread_setname_np(c"io-reader".as_ptr());
+        }
+
+        // Setup our crash metadata
+        // crash.sentry.thread_state = .{
+        //     .type = .io,
+        //     .surface = io.surface_mailbox.surface,
+        // };
+        // defer crash.sentry.thread_state = null;
+        //
+        // DEFERRED (cross-crate crash-sentry seam, not part of B3): the read
+        // thread's crash metadata sets `thread_state.surface = io.surface_mailbox
+        // .surface`, but the `AppMailbox` trait does not yet expose a `.surface`
+        // accessor (it lands with rustty-core's `Surface: ThreadStateSurface`
+        // impl — see `crash.sentry` + the ReadThread deferral note above).
+        // Preserved verbatim above; wired when core lands.
+
+        // First thing, we want to set the fd to non-blocking. We do this
+        // so that we can try to read from the fd in a tight loop and only
+        // check the quit fd occasionally.
+        // if (posix.fcntl(fd, posix.F.GETFL, 0)) |flags| {
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL, 0) };
+        if flags != -1 {
+            // _ = posix.fcntl(
+            //     fd,
+            //     posix.F.SETFL,
+            //     flags | @as(u32, @bitCast(posix.O{ .NONBLOCK = true })),
+            // ) catch |err| {
+            //     log.warn("read thread failed to set flags err={}", .{err});
+            //     log.warn("this isn't a fatal error, but may cause performance issues", .{});
+            // };
+            let rc = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+            if rc == -1 {
+                // log.warn("read thread failed to set flags err={}", .{err});
+                // log.warn("this isn't a fatal error, but may cause performance issues", .{});
+            }
+        } else {
+            // log.warn("read thread failed to get flags err={}", .{err});
+            // log.warn("this isn't a fatal error, but may cause performance issues", .{});
+        }
+
+        // Build up the list of fds we're going to poll. We are looking
+        // for data on the pty and our quit notification.
+        // var pollfds: [2]posix.pollfd = .{
+        //     .{ .fd = fd, .events = posix.POLL.IN, .revents = undefined },
+        //     .{ .fd = quit, .events = posix.POLL.IN, .revents = undefined },
+        // };
+        let mut pollfds: [libc::pollfd; 2] = [
+            libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: quit,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+
+        // var buf: [1024]u8 = undefined;
+        let mut buf = [0u8; 1024];
+        // while (true) {
+        loop {
+            // We try to read from the file descriptor as long as possible
+            // to maximize performance. We only check the quit fd if the
+            // main fd blocks. This optimizes for the realistic scenario that
+            // the data will eventually stop while we're trying to quit. This
+            // is always true because we kill the process.
+            // while (true) {
+            'tight: loop {
+                // const n = posix.read(fd, &buf) catch |err| {
+                //     switch (err) {
+                //         // This means our pty is closed. We're probably
+                //         // gracefully shutting down.
+                //         error.NotOpenForReading,
+                //         error.InputOutput,
+                //         => { log.info("io reader exiting", .{}); return; },
+                //         // No more data, fall back to poll and check for
+                //         // exit conditions.
+                //         error.WouldBlock => break,
+                //         else => { log.err("io reader error err={}", .{err}); unreachable; },
+                //     }
+                // };
+                //
+                // (PORT: `posix.read` wraps `read(2)` and retries EINTR internally
+                // (Zig std) — modeled by the inner retry loop; the Zig error set
+                // maps EBADF -> NotOpenForReading, EIO -> InputOutput, EAGAIN ->
+                // WouldBlock.)
+                let n: usize = 'read: loop {
+                    let rc = unsafe {
+                        libc::read(fd, buf.as_mut_ptr().cast::<std::ffi::c_void>(), buf.len())
+                    };
+                    if rc >= 0 {
+                        break 'read rc as usize;
+                    }
+                    let e = errno();
+                    // (posix.read retries on EINTR.)
+                    if e == libc::EINTR {
+                        continue 'read;
+                    }
+                    // error.NotOpenForReading, error.InputOutput => graceful shutdown.
+                    if e == libc::EBADF || e == libc::EIO {
+                        // log.info("io reader exiting", .{});
+                        return;
+                    }
+                    // error.WouldBlock => break (fall back to poll below).
+                    if e == libc::EAGAIN {
+                        break 'tight;
+                    }
+                    // else => { log.err("io reader error err={}", .{err}); unreachable; }
+                    unreachable!("io reader error");
+                };
+
+                // This happens on macOS instead of WouldBlock when the
+                // child process dies. To be safe, we just break the loop
+                // and let our poll happen.
+                // if (n == 0) break;
+                if n == 0 {
+                    break 'tight;
+                }
+
+                // log.info("DATA: {d}", .{n});
+                // @call(.always_inline, termio.Termio.processOutput, .{ io, buf[0..n] });
+                //
+                // SAFETY: `io` is the read thread's sole `processOutput` toucher
+                // (the `ReadThreadArgs` contract); its `renderer_state` is live for
+                // the pointer's lifetime (joined in `threadExit` before teardown).
+                unsafe {
+                    crate::Termio::processOutput(io, &buf[..n]);
+                }
+            }
+
+            // Wait for data.
+            // _ = posix.poll(&pollfds, -1) catch |err| {
+            //     log.warn("poll failed on read thread, exiting early err={}", .{err});
+            //     return;
+            // };
+            let rc = unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as libc::nfds_t, -1) };
+            if rc < 0 {
+                // log.warn("poll failed on read thread, exiting early err={}", .{err});
+                return;
+            }
+
+            // If our quit fd is set, we're done.
+            // if (pollfds[1].revents & posix.POLL.IN != 0) {
+            //     log.info("read thread got quit signal", .{});
+            //     return;
+            // }
+            if pollfds[1].revents & libc::POLLIN != 0 {
+                // log.info("read thread got quit signal", .{});
+                return;
+            }
+
+            // If our pty fd is closed, then we're also done with our
+            // read thread.
+            // if (pollfds[0].revents & posix.POLL.HUP != 0) {
+            //     log.info("pty fd closed, read thread exiting", .{});
+            //     return;
+            // }
+            if pollfds[0].revents & libc::POLLHUP != 0 {
+                // log.info("pty fd closed, read thread exiting", .{});
+                return;
+            }
         }
     }
 
@@ -4080,23 +4256,217 @@ mod tests {
         }
     }
 
+    // A heap-pinned `Termio<TestMailbox>` test harness (blueprint §5 shape,
+    // constructed by hand because `Termio::init` is deferred to B4). It carries a
+    // live renderer `State` (guard-less zigstd mutex + a real owned `Terminal`), a
+    // real `StreamHandler` whose `terminal`/`size`/`termio_mailbox` self-pointers
+    // are re-seated at the FINAL heap address (the [ADV-FIX F1] discipline), real
+    // termio + renderer mailboxes, and a real renderer-wakeup `Async`. The backend
+    // `Exec` is a required field that the read path never touches (no subprocess is
+    // started through it). Shared by the B2 write-path + B3 read-path KATs — both
+    // now drive the REAL `Termio::processOutput` (B3) so `io` must be a valid,
+    // pinned `Termio`, not a placeholder.
+    #[cfg(target_os = "macos")]
+    struct TestTermio {
+        io: *mut crate::Termio<TestMailbox>,
+        state: *mut rustty_renderer::state::State,
+        mutex: *mut rustty_zigstd::thread::Mutex,
+        renderer_mailbox: *mut rustty_renderer::thread::Mailbox,
+        renderer_wakeup: xev::Async,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl TestTermio {
+        fn build() -> TestTermio {
+            use allocator_api2::alloc::Global;
+
+            // The shared render State (heap-pinned; `terminal` re-seated after the
+            // Termio is pinned). `mutex` is the guard-less zigstd lock.
+            let mutex: *mut rustty_zigstd::thread::Mutex =
+                Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
+            let state: *mut rustty_renderer::state::State =
+                Box::into_raw(Box::new(rustty_renderer::state::State {
+                    mutex,
+                    terminal: std::ptr::null_mut(),
+                    inspector: None,
+                    preedit: None,
+                    mouse: rustty_renderer::state::Mouse::default(),
+                }));
+
+            // A throwaway renderer mailbox (pushes queue; notify fails-safe) and a
+            // real renderer-wakeup Async (Copy; shared by the handler + Termio).
+            let renderer_mailbox: *mut rustty_renderer::thread::Mailbox =
+                Box::into_raw(rustty_renderer::thread::Mailbox::create());
+            let renderer_wakeup = xev::Async::init().expect("Async::init");
+
+            // The owned Terminal (80x24).
+            let terminal = Terminal::init(
+                Global,
+                rustty_vt::terminal::Options {
+                    cols: 80,
+                    rows: 24,
+                    max_scrollback: 1000,
+                    colors: rustty_vt::terminal::Colors::default(),
+                    default_modes: rustty_vt::modes::ModePacked::default(),
+                    kitty_image_storage_limit: 0,
+                    kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
+                },
+            )
+            .expect("Terminal::init");
+
+            // DerivedConfig from a default Config (only the handler's cursor/OSC
+            // fields are read from it; `config` itself is untouched by the read
+            // path).
+            let full_config = configpkg::Config::default();
+            let derived = crate::termio_impl::DerivedConfig::init(&full_config);
+
+            // Backend (Exec; a required Termio field, never used by the read path —
+            // no subprocess is started through it).
+            let exec_cfg = Config {
+                command: Some(configpkg::command::Command::Direct(vec![
+                    b"/bin/cat".to_vec()
+                ])),
+                env: EnvMap::new(),
+                env_override: configpkg::RepeatableStringMap::default(),
+                shell_integration: configpkg::value_types::ShellIntegration::Detect,
+                shell_integration_features:
+                    configpkg::value_types::ShellIntegrationFeatures::default(),
+                cursor_blink: None,
+                working_directory: None,
+                resources_dir: None,
+                term: b"xterm-256color".to_vec(),
+                rt_pre_exec_info: RtPreExecInfo,
+                rt_post_fork_info: RtPostForkInfo,
+            };
+            let backend =
+                crate::backend::Backend::Exec(Exec::init(Global, exec_cfg).expect("Exec::init"));
+
+            // The termio mailbox (SPSC; its own wakeup Async).
+            let mailbox = crate::mailbox::Mailbox::initSPSC().expect("Mailbox::initSPSC");
+
+            // Size (a required field, unread by the read path).
+            let size = rustty_renderer::size::Size {
+                screen: rustty_renderer::size::ScreenSize {
+                    width: 800,
+                    height: 480,
+                },
+                cell: rustty_renderer::size::CellSize {
+                    width: 10,
+                    height: 20,
+                },
+                padding: rustty_renderer::size::Padding::default(),
+            };
+
+            // The StreamHandler. Its `terminal`/`size`/`termio_mailbox` are raw
+            // pointers back into the owning Termio — null here, re-seated at the
+            // FINAL address after the Termio is heap-pinned (the F1 discipline).
+            let handler = crate::stream_handler::StreamHandler::<TestMailbox> {
+                alloc: Global,
+                size: std::ptr::null_mut(),
+                terminal: std::ptr::null_mut(),
+                termio_mailbox: std::ptr::null_mut(),
+                surface_mailbox: TestMailbox,
+                renderer_state: state,
+                renderer_mailbox,
+                renderer_wakeup,
+                default_cursor: true,
+                default_cursor_style: derived.cursor_style,
+                default_cursor_blink: derived.cursor_blink,
+                enquiry_response: derived.enquiry_response.clone(),
+                osc_color_report_format: derived.osc_color_report_format,
+                clipboard_write: derived.clipboard_write,
+                apc: rustty_vt::apc::Handler::default(),
+                dcs: rustty_vt::dcs::Handler::default(),
+                tmux_viewer: None,
+                termio_messaged: false,
+                seen_title: false,
+            };
+            let terminal_stream = crate::stream_handler::Stream::init(handler);
+
+            // Assemble + heap-pin the Termio.
+            let io: *mut crate::Termio<TestMailbox> = Box::into_raw(Box::new(crate::Termio {
+                alloc: Global,
+                backend,
+                config: derived,
+                terminal,
+                renderer_state: state,
+                renderer_wakeup,
+                renderer_mailbox,
+                surface_mailbox: TestMailbox,
+                size,
+                mailbox,
+                terminal_stream,
+                last_cursor_reset: None,
+                thread_enter_state: None,
+            }));
+
+            // Re-seat the self-referential pointers at the final address (F1).
+            unsafe {
+                (*io).terminal_stream.handler.terminal = std::ptr::addr_of_mut!((*io).terminal);
+                (*io).terminal_stream.handler.size = std::ptr::addr_of_mut!((*io).size);
+                (*io).terminal_stream.handler.termio_mailbox =
+                    std::ptr::addr_of_mut!((*io).mailbox);
+                (*state).terminal = std::ptr::addr_of_mut!((*io).terminal);
+            }
+
+            TestTermio {
+                io,
+                state,
+                mutex,
+                renderer_mailbox,
+                renderer_wakeup,
+            }
+        }
+
+        // The active Screen text, read under the renderer mutex (matching the read
+        // thread's `processOutput` lock discipline).
+        fn screen_dump(&self) -> Vec<u8> {
+            use allocator_api2::alloc::Global;
+            unsafe { (*self.mutex).lock() };
+            let dump = unsafe {
+                (*(*self.io).terminal.screens.active).dump_string_alloc(
+                    Global,
+                    rustty_vt::point::Point::Active(rustty_vt::point::Coordinate::default()),
+                )
+            };
+            unsafe { (*self.mutex).unlock() };
+            dump.unwrap_or_default()
+        }
+
+        // Deinit everything. MUST be called only after every thread touching `io`
+        // is joined (nothing dereferences `io` anymore): moving the Termio out of
+        // the box invalidates its self-pointers, which is sound only post-join.
+        fn teardown(self) {
+            let termio = unsafe { *Box::from_raw(self.io) };
+            termio.deinit();
+            unsafe {
+                drop(Box::from_raw(self.state));
+                drop(Box::from_raw(self.mutex));
+                drop(Box::from_raw(self.renderer_mailbox));
+            }
+            let mut w = self.renderer_wakeup;
+            w.deinit();
+        }
+    }
+
     // KAT (rustty-only margin — blueprint §7 B2; NOT a mapped Zig `test{}`, so the
-    // test-count contract is unaffected). Drives the xev write path end-to-end:
+    // test-count contract is unaffected). Drives the xev write path end-to-end and
+    // (now that B3 wires the REAL read loop) the full round trip:
     //   Exec::init(/bin/cat) -> threadEnter (real fork/exec on a pty + xev
-    //   Process::wait / Stream / Timer wiring + read-thread spawn) -> queueWrite a
-    //   marker -> bounded loop.run(NoWait) pump -> assert the bytes round-trip the
-    //   pty (the master, which the parent owns as `read_thread_fd`; canonical-mode
-    //   echo + cat's passthrough) -> threadExit reaps + joins.
+    //   Process::wait / Stream / Timer wiring + a REAL read-thread spawn) ->
+    //   queueWrite a marker -> bounded loop.run(NoWait) pump -> the read thread
+    //   reads cat's echo off the pty master and `Termio::processOutput` lands it in
+    //   the terminal `Screen` -> assert the Screen shows the marker -> threadExit
+    //   reaps + joins.
     //
     // Real fork/exec + openpty + kqueue syscalls -> Miri-excluded
     // (MIRI_EXCEPTIONS.md, "rustty-termio B2"). Bounded (NoWait passes + a
     // wall-clock deadline + a tick cap + explicit teardown), so it never blocks on
-    // the child's life. The `io: *mut Termio` handed to threadEnter is a
-    // never-dereferenced placeholder (the B2 read-thread stub ignores it; B3 wires
-    // the real `processOutput` read loop). `renderer_state` is null: `cat` never
-    // changes the pty termios (it stays canonical+echo == `Mode::default()`), so
-    // `termiosTimer`'s mode-change branch — the sole `renderer_state` user — never
-    // fires.
+    // the child's life. The `io: *mut Termio` handed to threadEnter is now a REAL,
+    // heap-pinned `Termio` (B3's read thread dereferences it for `processOutput`;
+    // the B2 read-thread stub that ignored it is gone). We assert on the Screen
+    // (the sink the read thread commits to) rather than reading the master directly
+    // — the real read thread is the master's sole reader now.
     #[test]
     #[cfg(target_os = "macos")]
     fn threadenter_queuewrite_writes_to_pty() {
@@ -4130,19 +4500,21 @@ mod tests {
         let mut loop_ = xev::Loop::init().expect("Loop::init");
         let loop_ptr: *mut xev::Loop = std::ptr::addr_of_mut!(loop_);
 
-        // A never-dereferenced `Termio<TestMailbox>` for the `io` arg (the read
-        // thread stub ignores it — see the KAT doc comment).
-        let mut io_storage = std::mem::MaybeUninit::<crate::Termio<TestMailbox>>::uninit();
-        let io_ptr: *mut crate::Termio<TestMailbox> = io_storage.as_mut_ptr();
+        // A REAL, heap-pinned `Termio<TestMailbox>` for the `io` arg: the read
+        // thread now dereferences it via `processOutput` and deposits cat's echo
+        // into its terminal `Screen`.
+        let t = TestTermio::build();
+        let io_ptr = t.io;
 
         // The frame-pinned ThreadData. `backend` is a placeholder that
         // `threadEnter` overwrites (the reference's `backend = undefined`
         // out-parameter protocol); it holds a trivial already-finished thread +
-        // inert fds so its drop (on the overwrite) is a no-op.
+        // inert fds so its drop (on the overwrite) is a no-op. `renderer_state`
+        // points at the harness State (unused by cat's write path, but valid).
         let mut td: crate::termio_impl::ThreadData<TestMailbox> = crate::termio_impl::ThreadData {
             alloc: Global,
             loop_: loop_ptr,
-            renderer_state: std::ptr::null_mut(),
+            renderer_state: t.state,
             surface_mailbox: TestMailbox,
             backend: crate::backend::ThreadData::Exec(ThreadData {
                 start: Instant::now(),
@@ -4165,54 +4537,35 @@ mod tests {
             mailbox: std::ptr::null_mut(),
         };
 
-        // Start the subprocess + wire the xev handles (+ spawn the read thread).
-        // SAFETY: `io_ptr` outlives the read thread (joined in threadExit); `td`
-        // is frame-pinned for the loop's life.
+        // Start the subprocess + wire the xev handles (+ spawn the REAL read
+        // thread). SAFETY: `io_ptr` outlives the read thread (joined in threadExit);
+        // `td` is frame-pinned for the loop's life.
         unsafe { exec.threadEnter(Global, io_ptr, &mut td) }.expect("threadEnter");
 
-        // The pty master (parent side; both read + write ends of PtyFds).
+        // The pty master (parent side; both read + write ends of PtyFds). The read
+        // thread is its sole reader now; we only keep it to close at teardown.
         let master: std::os::fd::RawFd = {
             let crate::backend::ThreadData::Exec(e) = &td.backend;
             e.read_thread_fd
         };
-        // Non-blocking reads on the master so our drain never blocks.
-        unsafe {
-            let flags = libc::fcntl(master, libc::F_GETFL, 0);
-            libc::fcntl(master, libc::F_SETFL, flags | libc::O_NONBLOCK);
-        }
 
-        // Queue a marker write (goes: mailbox-less direct queueWrite -> chunk into
-        // the write pools -> Stream::queue_write -> loop).
+        // Queue a marker write (goes: direct queueWrite -> chunk into the write
+        // pools -> Stream::queue_write -> loop). cat echoes it back on the pty; the
+        // read thread reads it and `processOutput` commits it to the Screen.
         const MARK: &[u8] = b"RUSTTY_B2_MARK\n";
         exec.queueWrite(Global, &mut td, MARK, false)
             .expect("queueWrite");
 
-        // Bounded pump: NoWait ticks + drain the master + wall-clock deadline.
+        // Bounded pump: NoWait ticks (to flush the write) + poll the Screen + a
+        // wall-clock deadline.
         let needle = b"RUSTTY_B2_MARK";
         let deadline = Instant::now() + Duration::from_secs(3);
-        let mut acc: Vec<u8> = Vec::new();
         let mut found = false;
         for _ in 0..2000 {
             loop_.run(xev::RunMode::NoWait).expect("loop.run(NoWait)");
 
-            // Drain whatever the master has (echo + cat passthrough).
-            let mut buf = [0u8; 1024];
-            loop {
-                let n = unsafe {
-                    libc::read(
-                        master,
-                        buf.as_mut_ptr().cast::<std::ffi::c_void>(),
-                        buf.len(),
-                    )
-                };
-                if n > 0 {
-                    acc.extend_from_slice(&buf[..n as usize]);
-                } else {
-                    break;
-                }
-            }
-
-            if acc.windows(needle.len()).any(|w| w == needle) {
+            let dump = t.screen_dump();
+            if dump.windows(needle.len()).any(|w| w == needle) {
                 found = true;
                 break;
             }
@@ -4224,11 +4577,12 @@ mod tests {
 
         assert!(
             found,
-            "queued write did not round-trip the pty within the deadline; master saw: {:?}",
-            String::from_utf8_lossy(&acc)
+            "queued write did not round-trip the pty into the Screen within the deadline; screen saw: {:?}",
+            String::from_utf8_lossy(&t.screen_dump())
         );
 
-        // Teardown: reap cat + write the quit pipe + join the read thread.
+        // Teardown: reap cat + write the quit pipe + join the read thread (so
+        // nothing dereferences `io` after this).
         exec.threadExit(&mut td);
         // Close the pty master (never closed by deinit) and free the ThreadData.
         unsafe {
@@ -4237,5 +4591,111 @@ mod tests {
         td.deinit();
         loop_.deinit();
         exec.deinit();
+        // The read thread is joined; deinit the harness Termio last.
+        t.teardown();
+    }
+
+    // KAT (rustty-only margin — blueprint §7 B3; NOT a mapped Zig `test{}`, so the
+    // test-count contract is unaffected). Drives the B3 read path end-to-end,
+    // WITHOUT a shell: a real `ReadThread::threadMainPosix` poll/read loop over a
+    // real pty delivers a byte string fed to the slave into the terminal `Screen`
+    // via the [ADV-FIX F2] raw-`*mut` `Termio::processOutput`/`processOutputLocked`.
+    //
+    //   build a heap-pinned Termio<TestMailbox> (its `StreamHandler` self-pointers
+    //   re-seated at the final address, per F1) -> openpty -> spawn the read thread
+    //   on the master -> write "RUSTTY_B3_READPATH" to the slave -> bounded poll of
+    //   the active Screen under the renderer mutex -> quit-pipe teardown + join.
+    //
+    // Real openpty + poll/read syscalls + a spawned thread -> Miri-excluded
+    // (MIRI_EXCEPTIONS.md, "rustty-termio B3"). Bounded (tick cap + a wall-clock
+    // deadline + explicit teardown), so it never blocks. No fork here, but it holds
+    // open pty fds while other in-process KATs may `fork()`, so it takes
+    // FORK_KAT_SERIAL (a concurrent fork would snapshot these fds).
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn readthread_pty_bytes_land_in_screen() {
+        use std::time::{Duration, Instant};
+
+        // Serialize with the other fork/pty KATs (see FORK_KAT_SERIAL).
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        // A real, heap-pinned Termio<TestMailbox> whose read path the read thread
+        // drives via `processOutput`.
+        let t = TestTermio::build();
+        let io = t.io;
+
+        // --- A real pty: the read thread reads the master; the test writes the
+        //     slave (which appears on the master). ---
+        let pty = Pty::open(ptypkg::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 800,
+            ws_ypixel: 480,
+        })
+        .expect("Pty::open");
+        let master = pty.master;
+        let slave = pty.slave;
+
+        // --- The quit pipe (read end -> read thread; write end -> teardown). ---
+        let mut pipefds = [0 as std::os::fd::RawFd; 2];
+        assert_eq!(unsafe { libc::pipe(pipefds.as_mut_ptr()) }, 0, "pipe()");
+        let quit_read = pipefds[0];
+        let quit_write = pipefds[1];
+
+        // --- Spawn the read thread (the raw `io` ptr crosses via ReadThreadArgs). ---
+        let read_args = ReadThreadArgs::<TestMailbox>(master, io, quit_read);
+        let handle = std::thread::spawn(move || {
+            let args = read_args;
+            ReadThread::threadMainPosix::<TestMailbox>(args.0, args.1, args.2);
+        });
+
+        // --- Feed the pty: write the needle to the slave (no newline -> no OPOST
+        //     translation). It appears on the master, which the read thread reads. ---
+        const NEEDLE: &[u8] = b"RUSTTY_B3_READPATH";
+        let w = unsafe {
+            libc::write(
+                slave,
+                NEEDLE.as_ptr().cast::<std::ffi::c_void>(),
+                NEEDLE.len(),
+            )
+        };
+        assert_eq!(
+            w,
+            NEEDLE.len() as isize,
+            "wrote the full needle to the pty slave"
+        );
+
+        // --- Bounded poll of the active Screen (under the renderer mutex, via the
+        //     harness `screen_dump`). ---
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut found = false;
+        for _ in 0..3000 {
+            let dump = t.screen_dump();
+            if dump.windows(NEEDLE.len()).any(|c| c == NEEDLE) {
+                found = true;
+                break;
+            }
+            if Instant::now() > deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        // --- Teardown: signal quit, join the read thread (which closes quit_read
+        //     via its Drop guard), then close the remaining fds + deinit the Termio
+        //     (safe now that the read thread — the sole `io` toucher — is joined). ---
+        let _ = unsafe { libc::write(quit_write, b"x".as_ptr().cast::<std::ffi::c_void>(), 1) };
+        handle.join().expect("read thread join");
+        unsafe {
+            libc::close(quit_write);
+            libc::close(master);
+            libc::close(slave);
+        }
+        t.teardown();
+
+        assert!(
+            found,
+            "pty bytes did not land in the terminal Screen within the deadline"
+        );
     }
 }

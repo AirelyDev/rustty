@@ -249,5 +249,38 @@ full frame-local raw threading of `td` — matching the reference `td: *ThreadDa
 lands with `Thread::threadMain` in B4). That is precisely why B2's loop-driving KAT
 is Miri-excluded rather than Miri-checked; on real hardware the `td`/loop memory is
 frame-pinned and never moves, so the raw pointers stay valid for the bounded pump.
-The read-thread `io` pointer is never dereferenced in B2 (the B3 sequencing stub
-ignores it), and the read thread is joined in `threadExit` before the frame drops.
+Since B3, the read-thread `io` pointer IS dereferenced (the real `processOutput`
+read loop landed): B2's KAT now hands the read thread a real, heap-pinned
+`Termio<TestMailbox>` (the `TestTermio` harness) and asserts on the terminal
+`Screen` the read thread commits cat's echo into. The read thread — the master's
+sole reader — is joined in `threadExit` before the frame (and the harness Termio)
+are torn down.
+
+## rustty-termio B3 (ReadThread read loop + processOutput raw-ptr [F2]) — MIRI exception
+
+B3's un-deferred `ReadThread::threadMainPosix` (the raw `poll(2)`/`read`/
+`processOutput` loop over `[pty_fd, quit_fd]`, `O_NONBLOCK`) + the [ADV-FIX F2]
+raw-`*mut Termio<M>` retyping of `Termio::processOutput`/`processOutputLocked`
+(`exec.rs`/`termio_impl.rs`) + its rustty-only KAT `readthread_pty_bytes_land_in_screen`
+open a real pty (`openpty`), spawn a real **read thread**, and drive live
+`fcntl`/`poll`/`read`/`write`/`close` syscalls plus a mach-port `Async::notify`
+(`queueRender`) — the same "can't call foreign function" class as the rustty-xev
+C3–C6 exceptions and B1/B2. So the KAT **runs natively**, not under Miri.
+
+The teeth (why no unsafe path is left un-verified): the KAT is the memory-safety +
+correctness proof for the read path. It builds a real, heap-pinned `Termio<TestMailbox>`
+whose `StreamHandler` self-pointers (`terminal`/`size`/`termio_mailbox`) are re-seated
+at the FINAL address (the [ADV-FIX F1] discipline, exercised here ahead of B4's
+`Termio::init`), feeds a byte string to the pty slave, and asserts it round-trips the
+real read thread (`threadMainPosix` → `Termio::processOutput` → renderer-mutex lock →
+`terminal_stream.next_slice` → the terminal `Screen`) under the shared guard-less
+`zigstd::thread::Mutex`. The raw `io: *mut Termio<M>` is threaded on both concurrent
+paths (the read thread's `processOutput` and, in the shared harness, the parent's
+Screen reads) per [ADV-FIX F2]: only transient, non-overlapping borrows are formed
+under the lock (never a long-lived `&mut` per `rust-mut-args-strongly-protected`), so
+no protected-`Unique` aliasing exists. The read thread is joined (quit-pipe teardown)
+before the heap-pinned Termio is deinit'd — moving it out of the box (which invalidates
+the self-pointers) is sound only post-join. The fork/`openpty`/`poll` syscalls are why
+it is Miri-excluded rather than Miri-checked; the borrow scoping itself is
+Stacked-Borrows-clean (transient borrows under the mutex, no `&mut` retag spanning the
+loop).

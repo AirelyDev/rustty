@@ -1039,8 +1039,13 @@ impl<M: AppMailbox> Termio<M> {
     /// call with pty data but it is also called by the read thread when using
     /// an exec subprocess.
     //
-    // DEFERRED (renderer-mutex modeling + stage-4 stream handler, 0 tests —
-    // R1-safe). Preserved verbatim:
+    // PORTED (xev B3, [ADV-FIX F2], 0 reference tests — R1-safe). The reference
+    // threads a RAW `self: *Termio`; the port keeps `io: *mut Termio<M>` (NOT
+    // `&mut self`) because the read thread calls this concurrently with the
+    // writer thread's `threadMain` — a `&mut self` arg is a protected `Unique`
+    // retag for the whole call that would alias the writer + the parent
+    // (`rust-mut-args-strongly-protected`). We form only transient,
+    // non-overlapping borrows under the renderer mutex. Preserved verbatim:
     //
     // pub fn processOutput(self: *Termio, buf: []const u8) void {
     //     // We are modifying terminal state from here on out and we need
@@ -1049,11 +1054,27 @@ impl<M: AppMailbox> Termio<M> {
     //     defer self.renderer_state.mutex.unlock();
     //     self.processOutputLocked(buf);
     // }
-    pub fn processOutput(&mut self, _buf: &[u8]) {
-        unimplemented!("termio.Termio.processOutput deferred (renderer-mutex modeling + stage-4 stream handler); verbatim body above")
+    ///
+    /// # Safety
+    /// `io` must be a valid `Termio<M>` pointer whose `renderer_state` is a live
+    /// shared render `State`; the read thread is its sole `processOutput` toucher
+    /// for the pointer's lifetime.
+    pub unsafe fn processOutput(io: *mut Termio<M>, buf: &[u8]) {
+        // We are modifying terminal state from here on out and we need
+        // the lock to grab our read data.
+        // self.renderer_state.mutex.lock();
+        unsafe { (*(*(*io).renderer_state).mutex).lock() };
+        // defer self.renderer_state.mutex.unlock();
+        // self.processOutputLocked(buf);
+        unsafe { Self::processOutputLocked(io, buf) };
+        // (the deferred renderer-state unlock — the guard-less zigstd Mutex model,
+        // matching `colorSchemeReport`'s explicit lock/call/unlock precedent; the
+        // `defer` fires after the call returns.)
+        unsafe { (*(*(*io).renderer_state).mutex).unlock() };
     }
 
-    // DEFERRED (with processOutput above). Preserved verbatim:
+    // PORTED (xev B3, with `processOutput` above — was DEFERRED). The verbatim
+    // reference is preserved below; the ported body follows it:
     //
     // /// Process output from readdata but the lock is already held.
     // fn processOutputLocked(self: *Termio, buf: []const u8) void {
@@ -1106,10 +1127,101 @@ impl<M: AppMailbox> Termio<M> {
     //         self.mailbox.notify();
     //     }
     // }
-    // (dead_code: the only reference caller, `processOutput`, is deferred above.)
-    #[allow(dead_code)]
-    fn processOutputLocked(&mut self, _buf: &[u8]) {
-        unimplemented!("termio.Termio.processOutputLocked deferred (renderer-mutex modeling + stage-4 stream handler); verbatim body above")
+    // PORTED (xev B3, [ADV-FIX F2], 0 reference tests — R1-safe): now live (the
+    // sole reference caller, `processOutput` above, is live). Raw `io: *mut
+    // Termio<M>` (NOT `&mut self`) for the same protected-aliasing reason as
+    // `processOutput`; forms only transient, non-overlapping borrows under the
+    // caller-held renderer mutex.
+    //
+    // # Safety: `io` must be a valid `Termio<M>` pointer with the renderer mutex
+    // held by the caller (`processOutput`).
+    unsafe fn processOutputLocked(io: *mut Termio<M>, buf: &[u8]) {
+        // Schedule a render. We can call this first because we have the lock.
+        // self.terminal_stream.handler.queueRender() catch unreachable;
+        unsafe { (*io).terminal_stream.handler.queueRender() }.unwrap();
+
+        // Whenever a character is typed, we ensure the cursor is in the
+        // non-blink state so it is rendered if visible. If we're under
+        // HEAVY read load, we don't want to send a ton of these so we
+        // use a timer under the covers
+        // if (std.time.Instant.now()) |now| cursor_reset: {
+        //     if (self.last_cursor_reset) |last| {
+        //         if (now.since(last) <= (500 * std.time.ns_per_ms)) {
+        //             break :cursor_reset;
+        //         }
+        //     }
+        //
+        //     self.last_cursor_reset = now;
+        //     _ = self.renderer_mailbox.push(.{
+        //         .reset_cursor_blink = {},
+        //     }, .{ .instant = {} });
+        // } else |err| {
+        //     log.warn("failed to get current time err={}", .{err});
+        // }
+        //
+        // (PORT: Rust's `Instant::now()` is infallible, so the `else |err|` warn
+        // arm never fires; `since` -> `duration_since`, `500 * ns_per_ms` ->
+        // `Duration::from_millis(500)`.)
+        let now = std::time::Instant::now();
+        'cursor_reset: {
+            // if (self.last_cursor_reset) |last| {
+            if let Some(last) = unsafe { (*io).last_cursor_reset } {
+                // if (now.since(last) <= (500 * std.time.ns_per_ms)) break :cursor_reset;
+                if now.duration_since(last) <= std::time::Duration::from_millis(500) {
+                    break 'cursor_reset;
+                }
+            }
+            // self.last_cursor_reset = now;
+            unsafe { (*io).last_cursor_reset = Some(now) };
+            // _ = self.renderer_mailbox.push(.{ .reset_cursor_blink = {} }, .{ .instant = {} });
+            let _ = unsafe { &*(*io).renderer_mailbox }
+                .push(RendererMessage::ResetCursorBlink, Timeout::Instant);
+        }
+
+        // If we have an inspector, we enter SLOW MODE because we need to
+        // process a byte at a time alternating between the inspector handler
+        // and the termio handler. This is very slow compared to our optimizations
+        // below but at least users only pay for it if they're using the inspector.
+        // if (self.renderer_state.inspector) |insp| {
+        //     for (buf, 0..) |byte, i| {
+        //         insp.recordPtyRead(self.alloc, &self.terminal, buf[i .. i + 1]) catch |err| {
+        //             log.err("error recording pty read in inspector err={}", .{err});
+        //         };
+        //         self.terminal_stream.next(byte);
+        //     }
+        // } else {
+        //     self.terminal_stream.nextSlice(buf);
+        // }
+        //
+        // PORT NOTE: renderer `Inspector` is an uninhabited seam (rustty-inspector
+        // unported — renderer `state.rs` `pub enum Inspector {}`) and its
+        // `recordPtyRead` is not yet ported. The slow-path branch is preserved for
+        // control-flow fidelity but is unreachable today (nothing constructs an
+        // inspector to store in `renderer_state.inspector`); when the inspector
+        // lands, the `insp.recordPtyRead(...)` call is added inside the loop below.
+        if let Some(_insp) = unsafe { (*(*io).renderer_state).inspector } {
+            // for (buf, 0..) |byte, i| {
+            for &byte in buf {
+                // insp.recordPtyRead(self.alloc, &self.terminal, buf[i .. i + 1]) catch |err| {
+                //     log.err("error recording pty read in inspector err={}", .{err});
+                // };
+                // self.terminal_stream.next(byte);
+                unsafe { (*io).terminal_stream.next(byte) };
+            }
+        } else {
+            // self.terminal_stream.nextSlice(buf);
+            unsafe { (*io).terminal_stream.next_slice(buf) };
+        }
+
+        // If our stream handling caused messages to be sent to the mailbox
+        // thread, then we need to wake it up so that it processes them.
+        // if (self.terminal_stream.handler.termio_messaged) {
+        if unsafe { (*io).terminal_stream.handler.termio_messaged } {
+            // self.terminal_stream.handler.termio_messaged = false;
+            unsafe { (*io).terminal_stream.handler.termio_messaged = false };
+            // self.mailbox.notify();
+            unsafe { (*io).mailbox.notify() };
+        }
     }
 
     /// Sends a DSR response for the current color scheme to the pty.
