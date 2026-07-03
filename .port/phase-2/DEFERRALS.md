@@ -2384,3 +2384,59 @@ apprt-c still a clean TOP SINK, test-counts G-gate); scoped-G3b on embedded.zig
 export-count diff **71 == 71** (identical name sets). No regression (vt 2019, core 15,
 apprt-api 20, renderer 19, crash 12, termio 44). This CLOSES the E9-deferred
 `ghostty_set_window_background_blur` doc-comment (2102-2106) — ported with its export.
+
+## rustty-apprt embedded E11 (C-ABI smoke KAT + finale) — header-gen + cc compile+link
+Chunk E11 of the libghostty C-ABI milestone (EMBEDDED_BLUEPRINT §3/§6/§7 [ADV-FIX 2]):
+the verification finale. It creates **NO new production leaf** — it wires header
+generation + the C compile+link+run KAT and audits the completed 71-export surface.
+
+**What landed (no reference logic; tooling + tests + pins):**
+1. **cbindgen header generation.** `xtask` gains a `header-gen-apprt` subcommand
+   emitting `include/rustty-apprt.h` from `rustty-apprt-c` (mirrors the vt-c
+   `header-gen`). `cbindgen.toml` `after_includes` is filled (was empty through E10):
+   the cross-crate C types are hand-pinned (`parse_deps=false`, vt-c precedent) — the
+   opaque handles (`App`/`Surface`/`Inspector`/`Config`/`ClipboardRequest`/`FlagsC`),
+   the input `Action`(3)/`Key`(176)/mouse `ButtonState`/`Button` + apprt-api
+   `SplitDirection`/`GotoSplit`/`ResizeSplitDirection`/`NewSurfaceContext` enums, the
+   `ClipboardRequestType` (`uint8_t`, `#[repr(u8)]`), `TargetC`(16)/`ActionC`(32) (the
+   `ActionCValue` union pinned size/align-faithful — apprt-api's byte-exact C-ABI
+   projection is its OWN documented deferral), `ClipboardContent`/`EnvVar`/`Platform.C`,
+   and `Options`(64)/`SurfaceOptions`(88). The header compiles standalone as **C AND
+   C++** (`clang -std=c11` / `clang++ -std=c++17 -Wall -Wextra`, exit 0).
+2. **The smoke KAT** (`tests/smoke.c` + `tests/smoke.rs`). See EMBEDDED_BLUEPRINT §6.3.
+   **DEVIATION-WITH-RATIONALE:** the KAT links the **cdylib** (`librustty_apprt_c.dylib`),
+   not the staticlib. `rustty-apprt-c`'s dep closure is the whole app (core → renderer/
+   font/… → vendored `-sys` C libs), and rustc's `staticlib` does NOT bundle those
+   `cc`-built archives into the `.a` (verified: `_deflate`/`_OnigEncodingKOI8`/
+   `_bindtextdomain` have 0 defs in it), so standalone static linking would need every
+   `-sys` crate's hashed `OUT_DIR` archive — fragile + non-portable. The cdylib is
+   self-contained (all native deps resolved in) and is the standard C-host consumption
+   path; linking+running it equally proves "the published `librustty` + header, callable
+   by a host, exit 0" (EMBEDDED_BLUEPRINT §1 rec 1). The staticlib artifact is still
+   asserted to EXIST + export the C-ABI symbols (a lighter static check), so both
+   published artifacts are covered.
+3. **`main_c.zig` config-header note.** rustty-config ships the `rustty_config_*` symbols
+   but not yet its own cbindgen header (a separate config-milestone deliverable), so
+   `smoke.c` forward-declares the 3 config functions it uses (against the opaque `Config`
+   from rustty-apprt.h). **Target: config C-ABI header (own milestone).**
+4. **Cross-crate ABI-pin const-asserts** (`capi.rs`, the E11 audit): `Options`==64,
+   `SurfaceOptions`==88, `EnvVar`==16, `PlatformC`==8, `TargetC`==16, `ActionC`==32 +
+   the enum-width pins — the drift gate that keeps the hand-pinned header honest.
+
+**Leaf audit (E11 item 5) — apprt-c has exactly 4 `unimplemented!()` code-leaves, ALL
+E10-created, ALL documented above:** `rustty_set_window_background_blur` (macOS
+objc/CGS), `rustty_surface_set_display_id` (renderer/xev), `rustty_surface_quicklook_font`
+(objc/coretext + renderer), `rustty_surface_quicklook_word` (renderer_state). The
+inspector `_metal_*` exports delegate to the E4 backend leaves (no apprt-c leaf). E11
+adds none.
+
+**Gate deltas (E11):** NO new `rustty-apprt-c` Cargo dep (uses apprt-api types already
+in the closure). `apprt_embedded`/`apprt_none`/`apprt_browser` MAP rows unchanged +
+GREEN (all 0-test; the new `tests/smoke.rs` `#[test]` lives outside the mapped
+`{RSAPPRTC}/src/**` glob, so it is uncounted — rust ≥ zig holds). Whole-workspace build
+clean; apprt-c tests GREEN (smoke KAT compile+link+run exit 0); clippy `-D warnings` +
+fmt (apprt-c + xtask); acyclic G7 with apprt-c a clean TOP SINK; full-file scoped-G3b
+GREEN (embedded.zig 235 / none.zig 1 / browser.zig 0 distinctive, missing=0); no
+regression (apprt-api 20, core 15, crash 12, renderer 19, termio 44). **This CLOSES the
+apprt/embedded milestone: C-ABI 71/71 compiles+links+header+smoke; runtime-live subset
+≈15/71; GPU/xev/objc/coretext deferred to Phase-3 (R-d + D6).**

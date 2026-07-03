@@ -241,6 +241,46 @@ compiles+reviews as real Rust; runtime panics are confined to those leaves.
   assert) + none.zig headless; then cli + bin. core now fills apprt-api's
   growth-point trait methods, so the embedded backend implements a known seam.
 
+## EMBEDDED C-ABI (apprt/embedded): ✅ DONE (2026-07-02) — libghostty C ABI 71/71
+Per EMBEDDED_BLUEPRINT.md (adversarially reviewed ACCEPT-WITH-FIXES, 9 fixes
+folded), landed in 12 chunks E0→E11. **embedded.zig (2250) + none.zig (19) +
+browser.zig (4) + the `main_c.zig` C-API hub** ported: the concrete `embedded`
+backend (App/Surface impl apprt-api's generic traits — the FIRST concrete `A`),
+the `none`/`browser` module stubs, and the **71 `ghostty_*` (`rustty_*`) C-ABI
+exports** in the new **`rustty-apprt-c`** top-sink crate (cdylib/staticlib/rlib →
+`librustty.{dylib,a}` + `include/rustty-apprt.h`).
+- **C-ABI: 71/71 compile + link + header-generate NOW.** cbindgen (E11) emits
+  `include/rustty-apprt.h` (via `xtask header-gen-apprt`); it compiles standalone
+  as **C AND C++** (`cpp_compat`, clang `-std=c11`/`-std=c++17 -Wall -Wextra`).
+  Cross-crate C types hand-pinned in `cbindgen.toml` `after_includes`
+  (`parse_deps=false`, vt-c precedent) — Options(64)/SurfaceOptions(88)/EnvVar(16)/
+  Platform.C(8)/TargetC(16)/ActionC(32) + the input `Key`(176)/`Action`/mouse/
+  split enums — gated by D2 const-asserts in `capi.rs` (drift fails the build).
+- **Smoke KAT (E11, the "step up" from vt-c's header-only gate):** `tests/smoke.c`
+  is a REAL C host — `rustty_init` → config C-ABI (`rustty_config_new`/`_finalize`)
+  → `rustty_surface_config_new` → `rustty_app_new` with REAL typed `extern "C"`
+  callback stubs (the fn-ptr-ABI backstop, ADV-FIX 7) → `rustty_config_key_is_binding`
+  → `rustty_app_needs_confirm_quit` → free. `tests/smoke.rs` shells cc/clang to
+  compile+link (against the self-contained cdylib — the fat staticlib does not
+  bundle the vendored `-sys` C archives) + run, asserting **exit 0**. Does NOT
+  call `rustty_surface_new`/`_set_window_background_blur` (the leaf boundary).
+- **Runtime-live coverage ≈ 21% (15/71): the ~14 app/config/pure-marshal exports.**
+  The GPU/xev/objc/coretext half links now and PANICS when driven (documented
+  Phase-3 seam). The runtime boundary is `rustty_surface_new` → core `Surface::init`
+  → `renderer_seam::{Renderer,Thread}` (Phase-3 R-d + D6). apprt-c has exactly **4**
+  `unimplemented!()` code-leaves, all E10 macOS/objc/CGS/renderer/coretext
+  (`set_window_background_blur`/`surface_set_display_id`/`quicklook_font`/
+  `quicklook_word`); the inspector/metal exports delegate to the E4 backend leaves.
+  E11 creates NO new leaf.
+- **Gates:** workspace build clean + apprt-c tests (smoke KAT) + adjacent
+  regressions (apprt-api 20 / core 15 / crash 12 / renderer 19 / termio 44) +
+  clippy `-D warnings` + fmt + acyclic (apprt-c a clean top-sink) + test-counts
+  (embedded/none/browser 0-test rows GREEN) + full-file scoped-G3b
+  (embedded.zig 235 / none.zig 1 / browser.zig 0 distinctive, missing=0) all GREEN.
+- **NEXT: cli + bin** (the `rustty` binary over the `none` backend, headless
+  first — EMBEDDED_BLUEPRINT §1 rec 2), then Phase-3 (renderer R-d + D6 xev +
+  the objc/Metal/dcimgui inspector) makes the live-surface half runtime-real.
+
 ## INTEGRATION TIER — the critical path to the libghostty embedding milestone (original notes)
 Dependency-ordered, apprt-api now unblocks it:
 **quirks** (57 loc, tiny leaf, imports font — needs a crate-placement decision) + **Command** (911 loc/10t, now unblocked by apprt-api — placement decision) + **crash** (sentry-sys ready) → **termio** (pty/exec/thread, 30 tests — the "run a real shell" layer; pty.rs already ported in rustty-os) → **core** (Surface.zig/App.zig — the big one; fills apprt-api's growth-point trait methods + the mailbox/queue seam) → **apprt/embedded** (2250 loc, 71 C-ABI exports — THE libghostty embedding milestone, via vt-c cbindgen+pinned-padding+const-size-assert) + **none.zig** (headless). Then **cli** + **bin**. Crown-jewel-adjacent — needs design + careful review (not background dispatch).

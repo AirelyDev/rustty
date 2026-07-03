@@ -35,11 +35,16 @@ use rustty_apprt::embedded;
 
 use rustty_vt::input::key;
 use rustty_vt::input::key_mods::{Mods, ModsBacking};
+use rustty_vt::input::mouse;
 use rustty_vt::pagelist::Pin;
 use rustty_vt::point;
 use rustty_vt::screen::Screen;
 use rustty_vt::selection;
 use rustty_vt::size;
+
+use rustty_apprt_api::action::{ActionC, GotoSplit, ResizeSplitDirection, SplitDirection, TargetC};
+use rustty_apprt_api::structs::ClipboardRequestType;
+use rustty_apprt_api::surface::NewSurfaceContext;
 
 /// This is the same as Surface.KeyEvent but this is the raw C API version.
 //
@@ -392,3 +397,62 @@ impl Selection {
 // `ghostty_inspector_metal_*`) are `#[cfg(target_os = "macos")]`-gated free
 // functions that the compiler includes automatically when targeting Darwin, so no
 // force-reference is needed; this block has no runtime analogue.
+
+// ===================================================================
+// Cross-crate ABI layout pins (E11 — the cbindgen `after_includes` drift gate).
+//
+// The generated `include/rustty-apprt.h` hand-pins the C layouts of a set of
+// `#[repr(C)]` types DEFINED in sibling crates (cbindgen runs with
+// `parse_deps = false`, so it cannot emit them — EMBEDDED_BLUEPRINT §3). The
+// SIZES below are hardcoded into that header's `after_includes`; these
+// const-asserts pin the SAME sizes on the Rust types so any layout drift fails
+// the apprt-c build BEFORE it can silently desync the published header (the D2
+// build-failure discipline, capi.rs / vt-c `point.rs`/`sgr.rs` precedent).
+//
+// [ADV-FIX 7]: `size_of` is NOT the fn-ptr-signature backstop (all fn-ptrs are
+// pointer-sized) — the callback typedefs in the header + the C smoke KAT's typed
+// stubs are. These asserts catch field add/remove and enum-width drift only.
+// ===================================================================
+
+// `Options` (`ghostty_runtime_config_s`, embedded.rs): userdata + bool + 7
+// callbacks, all pointer-slotted -> 64 bytes, align 8. (Header `Options`.)
+const _: () = assert!(size_of::<embedded::Options>() == 64);
+const _: () = assert!(align_of::<embedded::Options>() == 8);
+
+// `SurfaceOptions` (`ghostty_surface_config_s`, embedded.rs) -> 88 bytes, align 8.
+// (Header `SurfaceOptions`.)
+const _: () = assert!(size_of::<embedded::SurfaceOptions>() == 88);
+const _: () = assert!(align_of::<embedded::SurfaceOptions>() == 8);
+
+// `EnvVar` (embedded.rs): {key: *const c_char, value: *const c_char} -> 16, align 8.
+const _: () = assert!(size_of::<embedded::EnvVar>() == 16);
+const _: () = assert!(align_of::<embedded::EnvVar>() == 8);
+
+// `Platform.C` (embedded.rs `PlatformC` union) -> one pointer (8, align 8). Also
+// asserted at its definition site; re-pinned here as the header's `PlatformC`.
+const _: () = assert!(size_of::<embedded::PlatformC>() == 8);
+const _: () = assert!(align_of::<embedded::PlatformC>() == 8);
+
+// `apprt.Target.C` (apprt-api `TargetC`): {key: TargetKey(i32), value: union{void*}}
+// -> 16, align 8. (Header `TargetC`; the smoke `action` stub passes it by value.)
+const _: () = assert!(size_of::<TargetC>() == 16);
+const _: () = assert!(align_of::<TargetC>() == 8);
+
+// `apprt.Action.C` (apprt-api `ActionC`): {key: ActionKey(i32), value: 24-byte
+// union} -> 32, align 8. (Header `ActionC`; the header pins the value union
+// size/align-faithfully — apprt-api's byte-exact C projection is deferred.)
+const _: () = assert!(size_of::<ActionC>() == 32);
+const _: () = assert!(align_of::<ActionC>() == 8);
+
+// Enum widths crossing the ABI by value. The header emits C `enum`s (int width)
+// for these, so pin them c_int-wide; `ClipboardRequestType` is `#[repr(u8)]` so
+// the header pins it `uint8_t` (1 byte) — assert that too.
+const _: () = assert!(size_of::<key::Action>() == size_of::<c_int>());
+const _: () = assert!(size_of::<key::Key>() == size_of::<c_int>());
+const _: () = assert!(size_of::<mouse::ButtonState>() == size_of::<c_int>());
+const _: () = assert!(size_of::<mouse::Button>() == size_of::<c_int>());
+const _: () = assert!(size_of::<SplitDirection>() == size_of::<c_int>());
+const _: () = assert!(size_of::<GotoSplit>() == size_of::<c_int>());
+const _: () = assert!(size_of::<ResizeSplitDirection>() == size_of::<c_int>());
+const _: () = assert!(size_of::<NewSurfaceContext>() == size_of::<c_int>());
+const _: () = assert!(size_of::<ClipboardRequestType>() == 1);
