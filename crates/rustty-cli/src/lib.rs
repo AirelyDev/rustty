@@ -48,6 +48,7 @@ pub mod list_fonts;
 pub mod list_keybinds;
 pub mod list_themes;
 pub mod new_window;
+pub mod pager;
 pub mod show_config;
 pub mod show_face;
 pub mod ssh;

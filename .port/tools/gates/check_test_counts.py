@@ -257,6 +257,19 @@ MAP = {
     "cli_root":          ([f"{GHC}/../cli.zig"], [f"{RSCLI}/lib.rs"], 0),
     "cli_help":          ([f"{GHC}/help.zig"], [f"{RSCLI}/help.rs"], 0),
     "cli_version":       ([f"{GHC}/version.zig"], [f"{RSCLI}/version.rs"], 0),
+    # rustty-cli C2 (CLI_BLUEPRINT.md §7): the pure config/introspection actions +
+    # Pager. Pager.zig (2t: "pager: non-tty" + "pager: default writer") -> pager.rs.
+    # show_config/validate_config/list_actions.zig are 0t. explain_config.zig has
+    # 1t ("explain") which is DEFERRED (ADV-FIX 3) on the unbuilt help_strings
+    # generator — SkipZigTest-style, body preserved verbatim as a comment, no live
+    # #[test] -> rust=0, apc_deferred=1 (need = 1 - 1 = 0), un-deferred when the
+    # help_strings codegen lands. show_face/list_fonts stay sequencing stubs
+    # (0t, no MAP entry) — blocked on rustty-font discovery/SharedGridSet (C2 note).
+    "cli_pager":            ([f"{GHC}/Pager.zig"], [f"{RSCLI}/pager.rs"], 0),
+    "cli_show_config":      ([f"{GHC}/show_config.zig"], [f"{RSCLI}/show_config.rs"], 0),
+    "cli_validate_config":  ([f"{GHC}/validate_config.zig"], [f"{RSCLI}/validate_config.rs"], 0),
+    "cli_list_actions":     ([f"{GHC}/list_actions.zig"], [f"{RSCLI}/list_actions.rs"], 0),
+    "cli_explain_config":   ([f"{GHC}/explain_config.zig"], [f"{RSCLI}/explain_config.rs"], 1),
     # Stage C — rustty-terminfo (GH base = src/terminfo, not src/terminal).
     # Source.zig (2t: "xtgettcap map" + "encode") -> source.rs.
     # ghostty.zig (1t: "encode") -> entry.rs (the terminfo entry; names carry

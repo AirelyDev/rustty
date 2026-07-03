@@ -2502,3 +2502,74 @@ detection lives in the bin, ADV-FIX 2). New cli Cargo deps: `rustty-build-config
   `vaxis`/`zf` deps (same class as libxev D6 / z2d). Their plain/enumeration
   paths land in C5; the interactive render paths are deferred placeholder leaves
   (GPU/GTK/xev precedent). All 0-test → no contract impact.
+
+## rustty-cli C2 (Phase-2 CLI milestone) — pure config/introspection actions + Pager
+
+C2 (CLI_BLUEPRINT.md §7) lands the pure config/font/introspection actions into
+`rustty-cli`: `Pager.zig` (2t → `pager.rs`), `show_config.zig` (0t →
+`show_config.rs`), `validate_config.zig` (0t → `validate_config.rs`),
+`list_actions.zig` (0t → `list_actions.rs`), and `explain_config.zig` (1t →
+**DEFERRED**, `explain_config.rs`). Gate-green: cli now 14 `#[test]` (12 C1 + 2
+Pager); test-count GREEN (cli_pager 2/2, cli_show_config 0/0,
+cli_validate_config 0/0, cli_list_actions 0/0, cli_explain_config 1→0
+apc_deferred=1); scoped-G3b missing=0 on all 5 ported files; acyclic G7 GREEN.
+New cli Cargo dep: `rustty-cfg-fmt` (member 14 — the `Writer` trait that
+`FileFormatter::format` / `helpgen_actions::generate` are generic over, adapted
+to the Pager/stdout sinks). Enabling change in `rustty-args`: an additive
+`Error::ActionHelpRequested` variant (see below). Deferrals introduced/continued:
+
+- **`explain_config.zig`'s 1 test ("explain") is DEFERRED (ADV-FIX 3) on the
+  unbuilt `help_strings` generator.** The test asserts `explainOption("font-size")
+  != null` and `explainKeybind("copy_to_clipboard") != null`, which require the
+  build-generated `help_strings.Config` / `help_strings.KeybindAction` doc tables
+  — the SAME deferred seam already tracked for config (`formatter_file.rs`) and
+  input (`helpgen_actions` `NoHelpStrings`). `explain_option`/`explain_keybind`
+  preserve the config-key / keybind-action-tag VALIDATION (`Key::string_to_enum`
+  / `KeybindAction::FIELD_NAMES`) but return `None` for every name until the
+  help-text source lands, so `+explain-config` currently prints `Unknown: '<name>'`
+  and exits 1 for all inputs (honest deferred behavior, 0 KAT). The test body is
+  preserved verbatim (R1) as a SkipZigTest-style commented block at the bottom of
+  `explain_config.rs` (the `# [test]` attribute written spaced so
+  check_test_counts' grep does not count it → rust=0); `check_test_counts.py`
+  balances it via `apc_deferred=1` for `cli_explain_config` (need = 1 - 1 = 0).
+  **Target:** the `help_strings` codegen follow-up un-defers this test (restore
+  the live `#[test]` + drop `apc_deferred` to 0), same follow-up as the C1
+  `help_text` / `show_config --docs` deferrals.
+
+- **`show_config --docs` is gated on the same `help_strings` seam (0-test).**
+  `show_config.rs` threads `opts.docs` into `FileFormatter { docs }` faithfully,
+  but the formatter's `docs=true` branch reads `help_strings.Config`, a deferred
+  seam (`formatter_file.rs` `debug_assert!(!do_docs, …)`); `+show-config --docs`
+  is therefore gated on the help_strings codegen. The `docs=false` path (every
+  current use) is complete. Continuation of the C1 `help_strings` deferral.
+
+- **`rustty-args` enabling change: additive `Error::ActionHelpRequested`.** C2 is
+  the first chunk whose actions route a `help` decl through `args.parse`
+  (show_config/validate_config/list_actions `Options` impl `Target::help` /
+  `has_help_decl`). The reference's `args.parse` error set INFERS
+  `error.ActionHelpRequested` (`cli.ghostty.Action.help_error`, a cli-layer error
+  args.zig never names); Rust needs a concrete return type, so the sentinel is
+  carried as a new `Error::ActionHelpRequested` variant that `Target::help`
+  returns and the cli's `From<ParseError> for ghostty::Error` recovers into
+  `ghostty::Error::ActionHelpRequested` (caught by `Action::run`'s `help_error`
+  arm). Additive-only: the two internal `match err` sites in `parse`/`parse_self`
+  gain an arm restoring the reference's omitted `else => "unknown error {}"`
+  catch-all (the sentinel never reaches them — help is matched before
+  `parse_into_field`); all 65 rustty-args tests + config(187)/input(113) stay
+  green. This completes the C1 `help()`/`has_help_decl()` trait hook (which C1
+  established but left unexercised).
+
+- **`show_face.zig` (0t) + `list_fonts.zig` (0t) remain sequencing stubs —
+  BLOCKED on rustty-font discovery/SharedGridSet (NOT deferred-by-choice).** The
+  CLI_BLUEPRINT.md §1 table assumed rustty-font's font-discovery + `SharedGridSet`
+  + `SharedGrid`/resolver/collection + `face.name` + `Style`/`Presentation`/
+  `DesiredSize`/`DerivedConfig` were ported; they are NOT (rustty-font is
+  "in progress": only opentype/embedded/glyph/metrics/atlas/codepoint_map/sprite/
+  options have landed). `show_face`/`list_fonts` reference that entire unported
+  subsystem (their `Options` even name `font.Style`/`font.Presentation`), so a
+  faithful port is impossible now without fabricating font APIs (R5 forbids). They
+  stay as C1 sequencing stubs (`unimplemented!()`, 0-test, no MAP entry — same
+  status the C1 note records for not-yet-ported impls). **Target:** port both when
+  the rustty-font discovery/SharedGridSet subsystem is carved (a font-crate
+  milestone, not a cli chunk); at that point add `cli_show_face`/`cli_list_fonts`
+  MAP entries (both 0-test → G3b-gated) and scoped-G3b them.

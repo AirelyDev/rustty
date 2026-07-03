@@ -41,6 +41,11 @@ pub enum Error {
     Parse(rustty_args::args::ParseError),
     /// The process args iterator failed to initialize.
     ArgsInit(rustty_os::args::InitError),
+    /// A `Config.load`/`loadFile`/`finalize` failure propagated from an action
+    /// (`show_config`/`validate_config`/`explain_config`). Reference: the
+    /// `Config.load(alloc)` errors folded into each action `run`'s inferred `!u8`
+    /// error set.
+    Config(rustty_config::config_struct::LoadError),
 }
 
 impl From<std::io::Error> for Error {
@@ -51,13 +56,27 @@ impl From<std::io::Error> for Error {
 
 impl From<rustty_args::args::ParseError> for Error {
     fn from(e: rustty_args::args::ParseError) -> Self {
-        Error::Parse(e)
+        // The `help` sentinel (`error.ActionHelpRequested`) travels through
+        // `args.parse` as `ParseError::ActionHelpRequested` (see the rustty-args
+        // `Error` note); recover it as the cli-level `ActionHelpRequested` so
+        // `Action::run`'s `help_error` catch matches. All other parse failures
+        // wrap into `Parse`.
+        match e {
+            rustty_args::args::Error::ActionHelpRequested => Error::ActionHelpRequested,
+            other => Error::Parse(other),
+        }
     }
 }
 
 impl From<rustty_os::args::InitError> for Error {
     fn from(e: rustty_os::args::InitError) -> Self {
         Error::ArgsInit(e)
+    }
+}
+
+impl From<rustty_config::config_struct::LoadError> for Error {
+    fn from(e: rustty_config::config_struct::LoadError) -> Self {
+        Error::Config(e)
     }
 }
 

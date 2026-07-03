@@ -33,3 +33,9 @@ rustty-crash = { workspace = true }
 # (ADV-FIX 1) so no rustty-renderer / rustty-xev dep is needed.
 rustty-build-config = { workspace = true }
 rustty-identity = { workspace = true }
+# C2 (CLI_BLUEPRINT.md §7): show_config streams `config.FileFormatter` output and
+# list_actions streams `input.helpgen_actions.generate` output; both are generic
+# over the `rustty_cfg_fmt::Writer` trait (the ported `std.Io.Writer` surface), so
+# the cli names it to adapt the Pager / stdout sinks. rustty-cfg-fmt is member 14
+# (strictly-earlier), so the crate graph stays acyclic (G7).
+rustty-cfg-fmt = { workspace = true }

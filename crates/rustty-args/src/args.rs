@@ -53,6 +53,17 @@ pub enum Error {
     ValueRequired,
     InvalidField,
     InvalidValue,
+    /// PORT NOTE: NOT a member of the reference `args.Error` set. The reference's
+    /// `parse` error set is INFERRED and transitively includes whatever a
+    /// destination's `help` decl returns — for CLI actions that is
+    /// `error.ActionHelpRequested` (`cli.ghostty.Action.help_error`, declared in
+    /// the cli layer, not here). Rust needs a concrete return type for `parse`, so
+    /// the help sentinel is carried as this variant: `Target::help()` returns
+    /// `Some(Err(Error::ActionHelpRequested))`, `parse`/`parse_self` propagate it
+    /// via `res?`, and the cli maps it back to `ghostty::Error::ActionHelpRequested`
+    /// (its `From<ParseError>` impl). It never reaches the field-parse error
+    /// handlers below (help is matched before `parse_into_field`).
+    ActionHelpRequested,
 }
 
 /// PORTS: the union of base `Error` plus the `OutOfMemory`/`Unknown` extras and
@@ -524,10 +535,13 @@ where
                     // else => try std.fmt.allocPrintSentinel(arena_alloc, "unknown error {}", .{err}, 0),
                     //
                     // PORT NOTE: the `else` arm covers type-specific errors
-                    // beyond the base set; in the Rust port every parse failure
-                    // already maps to one of the base variants above, so this arm
-                    // is unreachable, but is retained as the catch-all the
+                    // beyond the base set; every parse failure from
+                    // `parse_into_field` maps to one of the base variants above,
+                    // so this arm is unreachable HERE (the `ActionHelpRequested`
+                    // sentinel is returned by `help()` before field parsing, never
+                    // by `parse_into_field`). It is retained as the catch-all the
                     // reference's open error set requires.
+                    Error::ActionHelpRequested => format!("unknown error {err:?}").into_bytes(),
                 };
 
                 // Add our diagnostic
@@ -695,6 +709,9 @@ where
                     Error::InvalidField => b"unknown field".to_vec(),
                     Error::ValueRequired => format_value_required(dst, key),
                     Error::InvalidValue => format_invalid_value(dst, key, value),
+                    // See the `parse` twin: the help sentinel is emitted by
+                    // `help()` before field parsing, so it never reaches here.
+                    Error::ActionHelpRequested => format!("unknown error {err:?}").into_bytes(),
                 };
 
                 let location = iter.location_self().unwrap_or(Location::None);
