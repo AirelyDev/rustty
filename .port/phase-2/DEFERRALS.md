@@ -2617,3 +2617,68 @@ deferrals; two convention notes (NOT deferrals — no follow-up scheduled):
   routes the reference's inline `iter`-drain through the arg driver's `ConsumeRest`
   seam (`record_replay_arg` → `_ssh_args`, `apply_e_command` → halt) — the
   aliasing-safe analogue of the `-e` path (memory `rust-mut-args-strongly-protected`).
+
+## rustty-cli C5 (Phase-2 CLI milestone) — vaxis/zf-touching actions
+
+C5 (CLI_BLUEPRINT.md §1/§7 + Risk 1/2) lands the four vaxis/zf-touching actions
+into `rustty-cli`: `list_colors.zig` (0t → `list_colors.rs`), `list_keybinds.zig`
+(0t → `list_keybinds.rs`), `list_themes.zig` (1741 loc, 0t → `list_themes.rs`),
+and `boo.zig` (0t → `boo.rs`). All 0-test → cli stays **44/45 now + 1 deferred**
+(explain_config), no contract change. Gate-green: test-count GREEN (cli_list_colors
+0/0, cli_list_keybinds 0/0, cli_list_themes 0/0, cli_boo 0/0), scoped-G3b
+**missing=0** on all four ported `.zig` files (incl. list_themes' 1741 loc — the
+picker is preserved VERBATIM as a commented block), clippy `-D warnings` / fmt /
+acyclic G7 GREEN, rustty-vt 2019 (no regression). The plain/enumeration paths are
+LIVE; the vaxis/zf render paths are documented deferred placeholder leaves.
+
+- **`vaxis` + `zf` are unported Zig-source dependencies** (TTY UI + fuzzy match) —
+  the same class as libxev (D6) and z2d, NOT ghostty src and NOT C libs. Every
+  code path that needs them is 0-test and sits behind the `tui.can_pretty_print &&
+  !plain && isatty` gate, so the plain/enumeration paths — the ONLY paths the KAT
+  and any redirected pipe hit — land LIVE now and the render paths defer:
+  - **`list_colors` `--plain`/non-tty path — LIVE.** Iterates `x11_color.map.keys()`
+    (sorted `orderIgnoreCase`) and prints `name = #RRGGBB`. The `prettyPrint`
+    (vaxis) branch is a deferred leaf (`unimplemented!()` + verbatim body/comments
+    preserved). **Enabling change in `rustty-vt` (x11_color.rs):** the ported
+    `x11_color` map stored keys *lowercased* (for case-insensitive `get`), which
+    would corrupt `+list-colors`' displayed names (e.g. `GhostWhite`→`ghostwhite`).
+    Added an additive `Map::keys()` returning the ORIGINAL-case names in rgb.txt
+    order (a second lazy parse; `get`/`build_color_map` and the `x11 color map`
+    test are untouched — rustty-vt stays 2019, x11_color.zig G3b stays missing=0).
+  - **`list_keybinds` `--plain`/non-tty path — LIVE.** Streams
+    `config.keybind.formatEntryDocs(entryFormatter("keybind", writer), opts.docs)`
+    over the ported `rustty_cfg_fmt::EntryFormatter` (`--docs` rides the same
+    `help_strings`/`NoHelpStrings` deferred seam already tracked for C1/C2 — no new
+    deferral). The `prettyPrint` (vaxis) + its `ChordBinding`/`TriggerNode`/
+    `iterateBindings` helpers are a deferred leaf (verbatim body/comments preserved).
+  - **`list_themes` theme ENUMERATION — LIVE.** Built on the ported
+    `config/theme.zig` `LocationIterator` + `Config.loadFile` + `shouldIncludeTheme`
+    (luminance filter). The interactive vaxis+zf fuzzy-finder picker (`Preview` and
+    all its methods, `preview`, `resolveAutoThemePath`/`writeAutoThemeFile`,
+    `color`, `ThemeListElement.toUri`) is a deferred leaf — the reference body +
+    comments (1552 lines) are preserved VERBATIM as a commented block; `preview` is
+    an `unimplemented!()` marker. `lorem_ipsum.txt` (`@embedFile`, used only by the
+    deferred `drawPreview`) is copied into the rustty tree (R3) only when the picker
+    lands — NOT needed for the live enumeration.
+  - **`boo` — full vaxis-deferred leaf.** A 100% vaxis/vxfw ghost animation (needs
+    the `framedata` compressed asset too); `run` is an `unimplemented!()` marker and
+    the whole reference (`Boo` widget, span-parser, flate decompression) is preserved
+    verbatim as comments (comment-fidelity, scoped-G3b missing=0). Un-deferred with
+    the `vaxis` port.
+
+- **`list_themes` resources-dir two-seam note (NOT a new deferral).** The reference
+  reads `global_state.resources_dir.app()` (the process-global) for BOTH the
+  "resources dir not found" stderr warning AND `theme.zig`'s `.resources`
+  LocationIterator arm. In the port the warning reads `rustty_core::STATE` (the
+  `OnceLock<GlobalState>`, ADV-FIX 2) while the config `theme.rs` `.resources` arm
+  reads a SEPARATE config-crate seam (`theme::set_resources_dir`, BREAK #1). Both
+  are populated from the same `GlobalState.resources_dir` by the bin's init (C6), so
+  they stay consistent; the C5 warning path uses `STATE.get()` (None until C6 →
+  collapses to the reference's `resources_dir == null` warning, not an
+  uninitialized-global deref). No follow-up owed beyond the already-scheduled C6 bin
+  wiring.
+
+- **`show_face.zig` (0t) + `list_fonts.zig` (0t) STILL sequencing stubs** — BLOCKED
+  on the rustty-font discovery/SharedGridSet subsystem (continuation of the C2 note;
+  NOT a C5 chunk). Their MAP entries + scoped-G3b land when that font-crate
+  milestone is carved.

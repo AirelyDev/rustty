@@ -5,15 +5,19 @@
 //! `args.zig`/`diagnostics.zig`/`CommaSplitter.zig` are the separate
 //! `rustty-args` crate (break #7) and are re-exported below, NOT re-ported here.
 //!
-//! PORT STATUS: C1–C4 (CLI_BLUEPRINT.md §3+§7). C1 landed the action dispatcher
+//! PORT STATUS: C1–C5 (CLI_BLUEPRINT.md §3+§7). C1 landed the action dispatcher
 //! (`action.zig` 7t, `ghostty.zig` Action enum + `run`/`runMain` 4t), `help.zig`,
 //! `version.zig` (PARTIAL, ADV-FIX 1), and the `cli.zig` re-export surface. C2
 //! landed the pure config/introspection actions + Pager; C3 the ssh subsystem;
 //! C4 the apprt-backed + misc actions (`crash_report`, `edit_config`, the
-//! none-backed IPC `new_window`/`toggle_quick_terminal`, `tui.zig` seam). The
-//! remaining action impls (list_fonts, list_keybinds, list_themes, list_colors,
-//! show_face, boo) are faithful SEQUENCING STUBS here — their full ports land in
-//! chunk C5.
+//! none-backed IPC `new_window`/`toggle_quick_terminal`, `tui.zig` seam). C5
+//! landed the vaxis/zf-touching actions' plain/enumeration paths LIVE —
+//! `list_colors`/`list_keybinds` (`--plain`/non-tty) + `list_themes`
+//! (enumeration) — with the interactive vaxis+zf render paths and `boo` (a pure
+//! vaxis animation) as documented vaxis-deferred placeholder leaves (DEFERRALS.md
+//! "cli C5"). The remaining action impls (list_fonts, show_face) are faithful
+//! SEQUENCING STUBS here — BLOCKED on the rustty-font discovery/SharedGridSet
+//! subsystem (DEFERRALS.md "cli C2"), not this chunk.
 
 // cli.zig:
 //   const diags = @import("cli/diagnostics.zig");
@@ -35,10 +39,12 @@ pub mod action;
 pub mod ghostty;
 
 // The action impls. `help`/`version` (C1), the C2 config/introspection actions,
-// the C3 ssh subsystem, and the C4 apprt-backed + misc actions are real ports;
-// the C5 list_*/show_face/boo leaves remain SEQUENCING STUBS (CLI_BLUEPRINT.md §7)
-// so `ghostty::Action::run_main` compiles today. They are `pub mod` so their
-// `Options`/`run` are part of the crate's action surface.
+// the C3 ssh subsystem, the C4 apprt-backed + misc actions, and the C5
+// vaxis/zf-touching actions (`list_colors`/`list_keybinds` plain paths +
+// `list_themes` enumeration; `boo` a vaxis-deferred leaf) are real ports;
+// `list_fonts`/`show_face` remain SEQUENCING STUBS (BLOCKED on rustty-font
+// discovery, DEFERRALS.md "cli C2") so `ghostty::Action::run_main` compiles today.
+// They are `pub mod` so their `Options`/`run` are part of the crate's action surface.
 pub mod help;
 pub mod version;
 

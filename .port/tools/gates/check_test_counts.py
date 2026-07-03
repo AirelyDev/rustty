@@ -300,6 +300,18 @@ MAP = {
     "cli_new_window":       ([f"{GHC}/new_window.zig"], [f"{RSCLI}/new_window.rs"], 0),
     "cli_toggle_quick_terminal": ([f"{GHC}/toggle_quick_terminal.zig"], [f"{RSCLI}/toggle_quick_terminal.rs"], 0),
     "cli_tui":              ([f"{GHC}/tui.zig"], [f"{RSCLI}/tui.rs"], 0),
+    # rustty-cli C5 (CLI_BLUEPRINT.md §1/§7 + Risk 1/2): the vaxis/zf-touching
+    # actions. All 0-test. list_colors/list_keybinds land the `--plain`/non-tty
+    # paths LIVE (x11_color enumeration / config.keybind.formatEntryDocs); their
+    # `prettyPrint` (vaxis) branches are vaxis-deferred leaves. list_themes lands
+    # the theme ENUMERATION LIVE (config/theme.zig LocationIterator + Config.loadFile);
+    # its interactive vaxis+zf picker is a deferred leaf (reference body preserved
+    # verbatim). boo is a pure-vaxis animation -> vaxis-deferred leaf. All deferred
+    # render paths are 0-test (no contract impact); G3b-gated on comments.
+    "cli_list_colors":      ([f"{GHC}/list_colors.zig"], [f"{RSCLI}/list_colors.rs"], 0),
+    "cli_list_keybinds":    ([f"{GHC}/list_keybinds.zig"], [f"{RSCLI}/list_keybinds.rs"], 0),
+    "cli_list_themes":      ([f"{GHC}/list_themes.zig"], [f"{RSCLI}/list_themes.rs"], 0),
+    "cli_boo":              ([f"{GHC}/boo.zig"], [f"{RSCLI}/boo.rs"], 0),
     # Stage C — rustty-terminfo (GH base = src/terminfo, not src/terminal).
     # Source.zig (2t: "xtgettcap map" + "encode") -> source.rs.
     # ghostty.zig (1t: "encode") -> entry.rs (the terminfo entry; names carry

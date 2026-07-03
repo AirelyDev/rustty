@@ -42,11 +42,52 @@ impl Map {
     pub fn get(&self, name: &str) -> Option<RGB> {
         color_map().get(&name.to_ascii_lowercase()).copied()
     }
+
+    /// The color names in `rgb.txt` (insertion) order, ORIGINAL case preserved.
+    // PORT NOTE: mirrors `StaticStringMap.keys()` — the reference
+    // `StaticStringMapWithEql` stores the ORIGINAL-case names as keys (comparing
+    // them ASCII-case-insensitively via `eqlAsciiIgnoreCase`), so `map.keys()`
+    // yields e.g. `GhostWhite` / `ghost white` verbatim. `+list-colors` prints
+    // these names directly, so the case MUST be preserved; `build_color_map`
+    // above lowercases keys for the case-insensitive `get`, so the displayed key
+    // set is parsed separately here (same `rgb.txt` parse, original-case names).
+    pub fn keys(&self) -> &'static [String] {
+        color_keys()
+    }
 }
 
 fn color_map() -> &'static ColorMap {
     static MAP: OnceLock<ColorMap> = OnceLock::new();
     MAP.get_or_init(build_color_map)
+}
+
+// PORT NOTE: the original-case name list backing `Map::keys()`. `build_color_map`
+// discards case (it stores lowercased lookup keys), so the verbatim `rgb.txt`
+// names are collected here in file (insertion) order — exactly the key set the
+// reference `StaticStringMap.keys()` returns. Lazily built once, like `color_map`.
+fn color_keys() -> &'static [String] {
+    static KEYS: OnceLock<Vec<String>> = OnceLock::new();
+    KEYS.get_or_init(build_color_keys)
+}
+
+// PORT NOTE: the name-only half of `colorMap()`'s parse — same trimming as
+// `build_color_map` but keeping the ORIGINAL-case name (no RGB, no lowercasing).
+fn build_color_keys() -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    for raw_line in DATA.split('\n') {
+        // Trim \r so this works with both LF and CRLF line endings.
+        let line = if !raw_line.is_empty() && raw_line.as_bytes()[raw_line.len() - 1] == b'\r' {
+            &raw_line[0..raw_line.len() - 1]
+        } else {
+            raw_line
+        };
+        if line.is_empty() {
+            continue;
+        }
+        let name = line[12..].trim_matches(|c| c == ' ' || c == '\t');
+        keys.push(name.to_string());
+    }
+    keys
 }
 
 // PORT NOTE: ported from the reference `fn colorMap() ColorMap`. The reference
