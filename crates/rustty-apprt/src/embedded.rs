@@ -10,7 +10,7 @@
 //! concrete apprt backend — it proves the `apprt_api` generic trait seam against a
 //! real `A = embedded::App` (EMBEDDED_BLUEPRINT §2).
 //!
-//! PORT STATUS: in-progress (chunks E1+E2+E3 landed). E1 ported `embedded.zig:29-342`
+//! PORT STATUS: in-progress (chunks E1+E2+E3+E4 landed). E1 ported `embedded.zig:29-342`
 //! — the `App` struct with its `Options` (the `#[repr(C)]` host-callback config),
 //! `KeyEvent`, `KeyTarget`, and every `App` method (init/terminate/
 //! hasGlobalKeybinds/focusEvent/keyEvent/reloadKeymap/keyboardLayout/wakeup/wait/
@@ -33,12 +33,18 @@
 //! in the leaf, not here (EMBEDDED_BLUEPRINT §1). Later chunks fill the rest
 //! (EMBEDDED_BLUEPRINT §7):
 //!
-//! E4 (992-1243): `Inspector` (dcimgui+Metal) — a Phase-3 inhabited placeholder
-//! with `unimplemented!()` leaves. Deferrable/parallel. E2 carries a MINIMAL
-//! `Inspector` E2->E4 SEQUENCING STUB (an opaque type + an `unimplemented!()`
-//! `deinit` leaf) so `Surface::deinit`/`freeInspector` and the `inspector` field
-//! typecheck; E4 replaces it with the real struct. `queueInspectorRender` likewise
-//! stays an `unimplemented!()` E3/E4 leaf (it reaches the render-inspector action).
+//! E4 ports `embedded.zig:992-1243` — the `Inspector` (dcimgui + Metal terminal
+//! inspector) as a Phase-3 INHABITED PLACEHOLDER (blueprint row E4). The struct +
+//! `Backend` enum are inhabited with real fields; the two NON-GPU state methods
+//! `updateContentScale`/`updateSize` are REAL (the `content_scale` cache is ported
+//! LIVE, the dcimgui side effects deferred); every dcimgui/Metal method
+//! (`init`/`deinit`/`initMetal`/`renderMetal`/`newFrame`/`Backend::deinit` + the
+//! mouse/scroll/cursor/focus/text/key callbacks) is a documented `unimplemented!()`
+//! leaf — dcimgui-sys is NOT wired (the `cimgui.*`/`ImGui_ImplMetal_*`/objc bodies
+//! are preserved verbatim as comments, Phase-3/R-d). `queueRender` forwards LIVE to
+//! the Surface's `queueInspectorRender` (itself a Phase-3 leaf). E4 also lands
+//! `Surface::initInspector` (deferred from E3's range because it constructs the real
+//! `Inspector`) and replaces E2's `Inspector` E2->E4 sequencing stub.
 //!
 //! [ADV-FIX 8] PINNING INVARIANT (correctness-critical, for E2): `embedded::Surface`
 //! holds `core_surface: rustty_core::Surface<App>` BY VALUE, and core
@@ -1209,11 +1215,56 @@ impl Surface {
         Ok(())
     }
 
+    /// Initialize the inspector instance. A surface can only have one
+    /// inspector at any given time, so this will return the previous inspector
+    /// if it was already initialized.
+    //
+    // pub fn initInspector(self: *Surface) !*Inspector { ... }
+    //
+    // PORT NOTE: deferred FROM E3 (its reference range, embedded.zig:614) TO E4,
+    // because it constructs the real [`Inspector`] (which E2 carried only as a
+    // sequencing stub). Now that E4 provides the inhabited `Inspector`, it is ported
+    // LIVE. `pub` because the E9 CAPI `ghostty_surface_inspector` wrapper reaches it
+    // across the crate boundary (ADV-FIX 9). Reaches the Phase-3 dcimgui leaf
+    // `Inspector::init` at RUNTIME (the panic is in the leaf), so a live inspector
+    // cannot yet exist — `self.inspector` stays `None` in practice this milestone.
+    pub fn initInspector(&mut self) -> Result<*mut Inspector, ApprtError> {
+        // if (self.inspector) |v| return v;
+        if let Some(v) = self.inspector {
+            return Ok(v);
+        }
+
+        // const alloc = self.app.core_app.alloc;
+        // const inspector = try alloc.create(Inspector);
+        // errdefer alloc.destroy(inspector);
+        // inspector.* = try .init(self);
+        //
+        // PORT NOTE: the reference allocates the `Inspector` slot FIRST then
+        // placement-inits into it (with `errdefer alloc.destroy` to free on init
+        // failure). In Rust the fallible `Inspector::init` is evaluated BEFORE the
+        // heap `Box`, so an init error returns WITHOUT allocating (the `errdefer` is
+        // subsumed — nothing to free). `Inspector::init` is a Phase-3 dcimgui leaf
+        // (`unimplemented!()`), so this line panics once a live inspector is
+        // requested — the honest Phase-3 boundary. The `Box` heap-pins the
+        // `Inspector`; its `surface` back-pointer stays valid because the embedded
+        // `Surface` is itself heap-pinned (ADV-FIX 8).
+        let inspector = Inspector::init(core::ptr::from_mut(self))?;
+        let inspector: *mut Inspector = Box::into_raw(Box::new(inspector));
+
+        // self.inspector = inspector;
+        self.inspector = Some(inspector);
+
+        // return inspector;
+        Ok(inspector)
+    }
+
     // pub fn freeInspector(self: *Surface) void { ... }
     //
-    // PORT NOTE: `initInspector`'s inverse; `Inspector` create/deinit is a Phase-3
-    // dcimgui+Metal leaf (E4). Reached by [`deinit`]; a no-op while `inspector` is
-    // `None`, which it always is until E4's `initInspector` lands.
+    // PORT NOTE: `initInspector`'s inverse (both land in E4). `Inspector`
+    // create/deinit is a Phase-3 dcimgui+Metal leaf; reached by [`deinit`]. It is a
+    // no-op while `inspector` is `None` — which it stays in practice this milestone,
+    // since `initInspector` reaches the `Inspector::init` dcimgui leaf
+    // (`unimplemented!()`) before it can set `inspector`.
     pub fn freeInspector(&mut self) {
         // if (self.inspector) |v| {
         if let Some(v) = self.inspector {
@@ -1692,21 +1743,436 @@ impl Surface {
     }
 }
 
-/// [E2 -> E4 SEQUENCING STUB] reference `Inspector` (embedded.zig:992-1243) — the
-/// dcimgui + Metal terminal inspector. A Phase-3 inhabited placeholder; E4 fills
-/// the real struct + methods. Only [`Surface::freeInspector`] (via
-/// [`Surface::deinit`]) and the `inspector` field name it in E2, and only while
-/// `inspector` is `None` — so `Inspector::deinit` never runs this milestone.
-#[allow(dead_code)]
+/// Inspector is the state required for the terminal inspector. A terminal
+/// inspector is 1:1 with a Surface.
+//
+// pub const Inspector = struct { ... }   (embedded.zig:994)
+//
+// [CHUNK E4 — Phase-3 INHABITED PLACEHOLDER] The inspector is the dcimgui (Dear
+// ImGui) + Metal debug UI. Per the placeholder-leaf doctrine (blueprint row E4)
+// the struct is INHABITED with its real fields, and the two NON-GPU state methods
+// [`Inspector::updateContentScale`]/[`Inspector::updateSize`] are REAL; every
+// method that drives dcimgui or Metal (`init`/`deinit`/`initMetal`/`renderMetal`/
+// `newFrame`/the mouse/scroll/cursor/focus/text/key callbacks + `Backend::deinit`)
+// is a documented `unimplemented!()` leaf. dcimgui-sys is NOT wired here — the
+// `cimgui.*`/`ImGui_ImplMetal_*`/objc bodies are preserved verbatim as comments and
+// land when the GPU/dcimgui render path is filled (Phase-3, R-d). `queueRender`
+// forwards LIVE to [`Surface::queueInspectorRender`] (itself a Phase-3 leaf — the
+// draw/refresh delegation precedent).
 pub struct Inspector {
-    // E4: dcimgui context + Metal render state (Phase-3 leaves).
-    _e4: (),
+    // const cimgui = @import("dcimgui");
+    //
+    // PORT NOTE: the reference imports the `dcimgui` binding package for the whole
+    // struct. dcimgui-sys is NOT wired this milestone (blueprint E4), so the import
+    // has no Rust analogue — every `cimgui.*` reference below is a documented leaf.
+
+    // surface: *Surface,
+    pub surface: *mut Surface,
+    // ig_ctx: *cimgui.c.ImGuiContext,
+    //
+    // PORT NOTE: the Dear ImGui context handle. dcimgui-sys is not wired, so its
+    // `*ImGuiContext` type has no binding here — stored as an opaque `*mut c_void`
+    // (a raw C handle; only ever produced/consumed by the dcimgui leaves).
+    pub ig_ctx: *mut c_void,
+    // backend: ?Backend = null,
+    pub backend: Option<Backend>,
+    // content_scale: f64 = 1,
+    pub content_scale: f64,
+
+    /// Our previous instant used to calculate delta time for animations.
+    // instant: ?std.time.Instant = null,
+    pub instant: Option<std::time::Instant>,
+}
+
+// const Backend = enum { ... };
+//
+// PORT NOTE: the reference `Backend` is a file-private `const` enum; Rust's
+// pub-field visibility (it appears in the `pub backend` field of the `pub`
+// `Inspector`) requires it be at least as visible → `pub`. Its sole variant's
+// render backend is Metal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    // metal,
+    Metal,
+}
+
+impl Backend {
+    // pub fn deinit(self: Backend) void { ... }
+    //
+    // PORT NOTE: dcimgui+Metal Phase-3 leaf — `ImGui_ImplMetal_Shutdown()` (Darwin).
+    pub fn deinit(self) {
+        // switch (self) {
+        //     .metal => if (builtin.target.os.tag.isDarwin()) cimgui.ImGui_ImplMetal_Shutdown(),
+        // }
+        match self {
+            Backend::Metal => {
+                unimplemented!(
+                    "embedded::Inspector::Backend::deinit (metal) — dcimgui \
+                     ImGui_ImplMetal_Shutdown (Phase-3 leaf, embedded.zig:1008-1012)"
+                )
+            }
+        }
+    }
 }
 
 impl Inspector {
-    /// reference `Inspector.deinit` — chunk E4 (dcimgui/Metal Phase-3 leaf).
-    fn deinit(&mut self) {
-        unimplemented!("embedded::Inspector::deinit — chunk E4 (embedded.zig 992-1243)")
+    // pub fn init(surface: *Surface) !Inspector { ... }
+    //
+    // PORT NOTE: constructs the Dear ImGui context + activates the core inspector —
+    // a dcimgui + `CoreInspector.setup()` Phase-3 leaf. The reference body is
+    // preserved verbatim below; `!Inspector` (its only error is `error.OutOfMemory`
+    // from `ImGui_CreateContext`) maps to `Result<Inspector, ApprtError>`.
+    pub fn init(surface: *mut Surface) -> Result<Inspector, ApprtError> {
+        // const ig_ctx = cimgui.c.ImGui_CreateContext(null) orelse return error.OutOfMemory;
+        // errdefer cimgui.c.ImGui_DestroyContext(ig_ctx);
+        // cimgui.c.ImGui_SetCurrentContext(ig_ctx);
+        // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
+        // io.BackendPlatformName = "ghostty_embedded";
+        //
+        // // Setup our core inspector
+        // CoreInspector.setup();
+        // surface.core_surface.activateInspector() catch |err| {
+        //     log.err("failed to activate inspector err={}", .{err});
+        // };
+        //
+        // return .{
+        //     .surface = surface,
+        //     .ig_ctx = ig_ctx,
+        // };
+        let _ = surface;
+        unimplemented!(
+            "embedded::Inspector::init — dcimgui ImGui_CreateContext + core \
+             activateInspector (Phase-3 leaf, embedded.zig:1015-1032)"
+        )
+    }
+
+    // pub fn deinit(self: *Inspector) void { ... }
+    //
+    // PORT NOTE: core `deactivateInspector` + dcimgui context teardown — Phase-3
+    // leaf. Reached by [`Surface::freeInspector`] (never this milestone: no live
+    // inspector can be constructed, since `init` above is a leaf).
+    pub fn deinit(&mut self) {
+        // self.surface.core_surface.deactivateInspector();
+        // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        // if (self.backend) |v| v.deinit();
+        // cimgui.c.ImGui_DestroyContext(self.ig_ctx);
+        unimplemented!(
+            "embedded::Inspector::deinit — core deactivateInspector + dcimgui \
+             DestroyContext (Phase-3 leaf, embedded.zig:1034-1039)"
+        )
+    }
+
+    /// Queue a render for the next frame.
+    //
+    // pub fn queueRender(self: *Inspector) void { ... }
+    //
+    // PORT NOTE: a pure delegation to [`Surface::queueInspectorRender`] (no dcimgui);
+    // ported LIVE — the panic is in that Phase-3 leaf, not here (the draw/refresh
+    // delegation precedent).
+    pub fn queueRender(&mut self) {
+        // self.surface.queueInspectorRender();
+        unsafe { (*self.surface).queueInspectorRender() };
+    }
+
+    /// Initialize the inspector for a metal backend.
+    //
+    // pub fn initMetal(self: *Inspector, device: objc.Object) bool { ... }
+    //
+    // PORT NOTE: objc/Metal + dcimgui `ImGui_ImplMetal_Init` — Phase-3 leaf. The
+    // objc `device: objc.Object` handle → an opaque `*mut c_void` (no objc dep this
+    // milestone, blueprint §5/§8.1). Target of the E10 Darwin CAPI
+    // `ghostty_inspector_metal_init`.
+    pub fn initMetal(&mut self, device: *mut c_void) -> bool {
+        // defer device.msgSend(void, objc.sel("release"), .{});
+        // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        //
+        // if (self.backend) |v| {
+        //     v.deinit();
+        //     self.backend = null;
+        // }
+        //
+        // if (!cimgui.ImGui_ImplMetal_Init(device.value)) {
+        //     log.warn("failed to initialize metal backend", .{});
+        //     return false;
+        // }
+        // self.backend = .metal;
+        //
+        // log.debug("initialized metal backend", .{});
+        // return true;
+        let _ = device;
+        unimplemented!(
+            "embedded::Inspector::initMetal — objc/Metal + dcimgui ImGui_ImplMetal_Init \
+             (Phase-3 leaf, embedded.zig:1047-1064)"
+        )
+    }
+
+    // pub fn renderMetal(self: *Inspector, command_buffer: objc.Object, desc: objc.Object) !void { ... }
+    //
+    // PORT NOTE: the objc/Metal render pass (dcimgui `ImGui_ImplMetal_NewFrame`/
+    // `RenderDrawData` + `MTLRenderCommandEncoder` msgSends) — Phase-3 leaf. The two
+    // objc `objc.Object` handles → opaque `*mut c_void`. Target of the E10 Darwin
+    // CAPI `ghostty_inspector_metal_render`.
+    pub fn renderMetal(
+        &mut self,
+        command_buffer: *mut c_void,
+        desc: *mut c_void,
+    ) -> Result<(), ApprtError> {
+        // defer {
+        //     command_buffer.msgSend(void, objc.sel("release"), .{});
+        //     desc.msgSend(void, objc.sel("release"), .{});
+        // }
+        // assert(self.backend == .metal);
+        // //log.debug("render", .{});
+        //
+        // // Setup our imgui frame. We need to render multiple frames to ensure
+        // // ImGui completes all its state processing. I don't know how to fix
+        // // this.
+        // for (0..2) |_| {
+        //     cimgui.ImGui_ImplMetal_NewFrame(desc.value);
+        //     try self.newFrame();
+        //     cimgui.c.ImGui_NewFrame();
+        //
+        //     // Build our UI
+        //     render: {
+        //         const surface = &self.surface.core_surface;
+        //         const inspector = surface.inspector orelse break :render;
+        //         inspector.render(surface);
+        //     }
+        //
+        //     // Render
+        //     cimgui.c.ImGui_Render();
+        // }
+        //
+        // // MTLRenderCommandEncoder
+        // const encoder = command_buffer.msgSend(
+        //     objc.Object,
+        //     objc.sel("renderCommandEncoderWithDescriptor:"),
+        //     .{desc.value},
+        // );
+        // defer encoder.msgSend(void, objc.sel("endEncoding"), .{});
+        // cimgui.ImGui_ImplMetal_RenderDrawData(
+        //     cimgui.c.ImGui_GetDrawData(),
+        //     command_buffer.value,
+        //     encoder.value,
+        // );
+        let _ = (command_buffer, desc);
+        unimplemented!(
+            "embedded::Inspector::renderMetal — objc/Metal render + dcimgui \
+             ImplMetal_NewFrame/RenderDrawData (Phase-3 leaf, embedded.zig:1066-1109)"
+        )
+    }
+
+    // pub fn updateContentScale(self: *Inspector, x: f64, y: f64) void { ... }
+    //
+    // PORT NOTE (blueprint E4: REAL, non-GPU): the one pure-Rust effect — caching
+    // `content_scale` (read by `cursorPosCallback`'s pixel scaling) — is ported LIVE.
+    // The dcimgui style-scaling side effect (`ImGuiStyle_ScaleAllSizes` etc.) is a
+    // documented Phase-3 leaf, elided until dcimgui-sys is wired; the method does NOT
+    // panic.
+    pub fn updateContentScale(&mut self, x: f64, y: f64) {
+        // _ = y;   (the vertical scale is unused — `x` drives both axes)
+        let _ = y;
+        // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);   [dcimgui leaf — deferred]
+
+        // Cache our scale because we use it for cursor position calculations.
+        // self.content_scale = x;
+        self.content_scale = x;
+
+        // Setup a new style and scale it appropriately. We must use the
+        // ImGuiStyle constructor to get proper default values (e.g.,
+        // CurveTessellationTol) rather than zero-initialized values.
+        // var style: cimgui.c.ImGuiStyle = undefined;
+        // cimgui.ext.ImGuiStyle_ImGuiStyle(&style);
+        // cimgui.c.ImGuiStyle_ScaleAllSizes(&style, @floatCast(x));
+        // const active_style = cimgui.c.ImGui_GetStyle();
+        // active_style.* = style;
+        // [dcimgui style-scaling leaf — deferred until dcimgui-sys is wired (Phase-3)]
+    }
+
+    // pub fn updateSize(self: *Inspector, width: u32, height: u32) void { ... }
+    //
+    // PORT NOTE (blueprint E4: REAL, non-GPU): the imgui IO `DisplaySize` write is a
+    // dcimgui leaf, deferred until dcimgui-sys is wired (Phase-3). The Inspector
+    // holds no Rust-side size field (`DisplaySize` lives in imgui's IO), so the
+    // ported body accepts the size and defers — it does NOT panic. `width`/`height`
+    // are function parameters (never linted for unused).
+    pub fn updateSize(&mut self, width: u32, height: u32) {
+        // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
+        // io.DisplaySize = .{ .x = @floatFromInt(width), .y = @floatFromInt(height) };
+        //
+        // (accepted-but-deferred: the imgui IO `DisplaySize` write is the only effect
+        // and it is a dcimgui leaf — see the PORT NOTE above.)
+        let _ = (width, height);
+    }
+
+    // pub fn mouseButtonCallback(self, action, button, mods) void { ... }
+    //
+    // PORT NOTE: dcimgui `ImGuiIO_AddMouseButtonEvent` (imgui button mapping) —
+    // Phase-3 leaf. Target of the E9 CAPI `ghostty_inspector_mouse_button`.
+    pub fn mouseButtonCallback(
+        &mut self,
+        action: mouse::ButtonState,
+        button: mouse::Button,
+        mods: Mods,
+    ) {
+        // _ = mods;
+        //
+        // self.queueRender();
+        // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
+        //
+        // const imgui_button = switch (button) {
+        //     .left => cimgui.c.ImGuiMouseButton_Left,
+        //     .middle => cimgui.c.ImGuiMouseButton_Middle,
+        //     .right => cimgui.c.ImGuiMouseButton_Right,
+        //     else => return, // unsupported
+        // };
+        //
+        // cimgui.c.ImGuiIO_AddMouseButtonEvent(io, imgui_button, action == .press);
+        let _ = (action, button, mods);
+        unimplemented!(
+            "embedded::Inspector::mouseButtonCallback — dcimgui \
+             ImGuiIO_AddMouseButtonEvent (Phase-3 leaf, embedded.zig:1134-1154)"
+        )
+    }
+
+    // pub fn scrollCallback(self, xoff, yoff, mods) void { ... }
+    //
+    // PORT NOTE: dcimgui `ImGuiIO_AddMouseWheelEvent` — Phase-3 leaf. Target of the
+    // E9 CAPI `ghostty_inspector_mouse_scroll`.
+    pub fn scrollCallback(&mut self, xoff: f64, yoff: f64, mods: mouse::ScrollMods) {
+        // self.queueRender();
+        // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
+        //
+        // // For precision scrolling (trackpads), the values are in pixels which
+        // // scroll way too fast. Scale them down to approximate discrete wheel
+        // // notches. imgui expects 1.0 to scroll ~5 lines of text.
+        // const scale: f64 = if (mods.precision) 0.1 else 1.0;
+        // cimgui.c.ImGuiIO_AddMouseWheelEvent(
+        //     io,
+        //     @floatCast(xoff * scale),
+        //     @floatCast(yoff * scale),
+        // );
+        let _ = (xoff, yoff, mods);
+        unimplemented!(
+            "embedded::Inspector::scrollCallback — dcimgui ImGuiIO_AddMouseWheelEvent \
+             (Phase-3 leaf, embedded.zig:1156-1175)"
+        )
+    }
+
+    // pub fn cursorPosCallback(self: *Inspector, x: f64, y: f64) void { ... }
+    //
+    // PORT NOTE: dcimgui `ImGuiIO_AddMousePosEvent` (scaled by `content_scale`) —
+    // Phase-3 leaf. Target of the E9 CAPI `ghostty_inspector_mouse_pos`.
+    pub fn cursorPosCallback(&mut self, x: f64, y: f64) {
+        // self.queueRender();
+        // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
+        // cimgui.c.ImGuiIO_AddMousePosEvent(
+        //     io,
+        //     @floatCast(x * self.content_scale),
+        //     @floatCast(y * self.content_scale),
+        // );
+        let _ = (x, y);
+        unimplemented!(
+            "embedded::Inspector::cursorPosCallback — dcimgui ImGuiIO_AddMousePosEvent \
+             (Phase-3 leaf, embedded.zig:1177-1186)"
+        )
+    }
+
+    // pub fn focusCallback(self: *Inspector, focused: bool) void { ... }
+    //
+    // PORT NOTE: dcimgui `ImGuiIO_AddFocusEvent` — Phase-3 leaf. Target of the E9
+    // CAPI `ghostty_inspector_set_focus`.
+    pub fn focusCallback(&mut self, focused: bool) {
+        // self.queueRender();
+        // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
+        // cimgui.c.ImGuiIO_AddFocusEvent(io, focused);
+        let _ = focused;
+        unimplemented!(
+            "embedded::Inspector::focusCallback — dcimgui ImGuiIO_AddFocusEvent \
+             (Phase-3 leaf, embedded.zig:1188-1193)"
+        )
+    }
+
+    // pub fn textCallback(self: *Inspector, text: [:0]const u8) void { ... }
+    //
+    // PORT NOTE: dcimgui `ImGuiIO_AddInputCharactersUTF8` — Phase-3 leaf. The
+    // `[:0]const u8` NUL-terminated slice → `&CStr` (`text.ptr` is the load-bearing
+    // sentinel handed to imgui). Target of the E9 CAPI `ghostty_inspector_text`.
+    pub fn textCallback(&mut self, text: &CStr) {
+        // self.queueRender();
+        // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
+        // cimgui.c.ImGuiIO_AddInputCharactersUTF8(io, text.ptr);
+        let _ = text;
+        unimplemented!(
+            "embedded::Inspector::textCallback — dcimgui ImGuiIO_AddInputCharactersUTF8 \
+             (Phase-3 leaf, embedded.zig:1195-1200)"
+        )
+    }
+
+    // pub fn keyCallback(self, action, key, mods) !void { ... }
+    //
+    // PORT NOTE: dcimgui `ImGuiIO_AddKeyEvent` (modifiers + `key.imguiKey()` — the
+    // `Key::imgui_key` dcimgui binding, itself a deferred leaf in rustty-vt) —
+    // Phase-3 leaf. Target of the E9 CAPI `ghostty_inspector_key`.
+    pub fn keyCallback(
+        &mut self,
+        action: key::Action,
+        key: key::Key,
+        mods: Mods,
+    ) -> Result<(), ApprtError> {
+        // self.queueRender();
+        // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
+        //
+        // // Update all our modifiers
+        // cimgui.c.ImGuiIO_AddKeyEvent(io, cimgui.c.ImGuiKey_LeftShift, mods.shift);
+        // cimgui.c.ImGuiIO_AddKeyEvent(io, cimgui.c.ImGuiKey_LeftCtrl, mods.ctrl);
+        // cimgui.c.ImGuiIO_AddKeyEvent(io, cimgui.c.ImGuiKey_LeftAlt, mods.alt);
+        // cimgui.c.ImGuiIO_AddKeyEvent(io, cimgui.c.ImGuiKey_LeftSuper, mods.super);
+        //
+        // // Send our keypress
+        // if (key.imguiKey()) |imgui_key| {
+        //     cimgui.c.ImGuiIO_AddKeyEvent(
+        //         io,
+        //         imgui_key,
+        //         action == .press or action == .repeat,
+        //     );
+        // }
+        let _ = (action, key, mods);
+        unimplemented!(
+            "embedded::Inspector::keyCallback — dcimgui ImGuiIO_AddKeyEvent + \
+             key.imguiKey (Phase-3 leaf, embedded.zig:1202-1226)"
+        )
+    }
+
+    // fn newFrame(self: *Inspector) !void { ... }
+    //
+    // PORT NOTE: the imgui frame delta-time setup (`io.DeltaTime`) — Phase-3 leaf. A
+    // private helper called ONLY by the deferred [`Inspector::renderMetal`], so it is
+    // `#[allow(dead_code)]` until that render path goes live (E10 / Phase-3).
+    #[allow(dead_code)]
+    fn newFrame(&mut self) -> Result<(), ApprtError> {
+        // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
+        //
+        // // Determine our delta time
+        // const now = try std.time.Instant.now();
+        // io.DeltaTime = if (self.instant) |prev| delta: {
+        //     const since_ns: f64 = @floatFromInt(now.since(prev));
+        //     const ns_per_s: f64 = @floatFromInt(std.time.ns_per_s);
+        //     const since_s: f32 = @floatCast(since_ns / ns_per_s);
+        //     break :delta @max(0.00001, since_s);
+        // } else (1.0 / 60.0);
+        // self.instant = now;
+        unimplemented!(
+            "embedded::Inspector::newFrame — dcimgui io.DeltaTime delta-time setup \
+             (Phase-3 leaf, embedded.zig:1228-1240)"
+        )
     }
 }
 

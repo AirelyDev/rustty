@@ -1962,3 +1962,85 @@ Whole-workspace gates green (build, touched-crate tests — apprt 0, apprt-c 0; 
 G-gate); scoped-G3b on embedded.zig **624-990 (E3; initInspector 611-623 → E4)
 distinctive=28 missing=0 review=0**. No regression (vt 2019, core 15, apprt-api 20,
 renderer 19, crash 12, termio 44).
+
+## rustty-apprt embedded E4 (Inspector — dcimgui + Metal) — Phase-3 inhabited placeholder
+
+Chunk E4 of the libghostty C-ABI milestone (EMBEDDED_BLUEPRINT §7, row E4): ports
+`embedded.zig:992-1243` into `crates/rustty-apprt/src/embedded.rs` — the `Inspector`
+(the dcimgui / Dear ImGui + Metal terminal inspector, 1:1 with a Surface) as a
+**Phase-3 INHABITED PLACEHOLDER** per the placeholder-leaf doctrine. The `Inspector`
+struct + the `Backend` enum are INHABITED with their real fields; E4 also lands
+`Surface::initInspector` (deferred INTO E4 by the E3 section, item 2) and replaces
+E2's `Inspector` E2→E4 sequencing stub (E2 item 1 below is now RESOLVED). dcimgui-sys
+is **NOT wired** this milestone — every `cimgui.*`/`ImGui_ImplMetal_*`/objc body is
+preserved VERBATIM as comments and lands with the GPU/dcimgui render path (Phase-3
+R-d). What is REAL vs leaf:
+
+- **REAL (non-GPU):** the `Inspector`/`Backend` structs (all fields — `surface`,
+  `ig_ctx` as an opaque `*mut c_void` for the un-bound dcimgui `*ImGuiContext`,
+  `backend`, `content_scale`, `instant`); `updateContentScale` (caches
+  `content_scale`, the read `cursorPosCallback` needs — the dcimgui style-scaling is
+  elided as a documented leaf, method does NOT panic); `updateSize` (accepts the
+  size; the imgui IO `DisplaySize` write is a dcimgui leaf, method does NOT panic —
+  the Inspector has no Rust-side size field, `DisplaySize` lives in imgui's IO);
+  `queueRender` (forwards LIVE to `Surface::queueInspectorRender`, the draw/refresh
+  delegation precedent); `Surface::initInspector` (real heap-`Box` pin + LIVE call to
+  the leaf `Inspector::init`).
+
+Deferred out of E4 (all Phase-3 leaves; NO new capability dropped — R1; every body
+preserved verbatim as comments, never fabricated):
+
+1. **`Inspector::init` / `deinit` — dcimgui context + core inspector Phase-3 leaf.**
+   `init` = `ImGui_CreateContext` + `CoreInspector.setup()` + `activateInspector`;
+   `deinit` = `deactivateInspector` + `ImGui_DestroyContext`. `unimplemented!()`
+   leaves. Because `init` is a leaf, **no live `Inspector` can be constructed this
+   milestone** — `Surface.inspector` stays `None` in practice, so `freeInspector` /
+   `Inspector::deinit` never actually run. **Target: Phase-3 R-d (dcimgui render path).**
+
+2. **`Inspector::initMetal` / `renderMetal` + `Backend::deinit` — objc/Metal Phase-3
+   leaf.** The two objc `objc.Object` handles → opaque `*mut c_void` (no objc2/coretext
+   dep now — blueprint §5/§8.1); `ImGui_ImplMetal_Init`/`NewFrame`/`RenderDrawData` +
+   the `MTLRenderCommandEncoder` msgSends + `ImGui_ImplMetal_Shutdown` are
+   `unimplemented!()` leaves. **Targets of the E10 Darwin CAPI**
+   `ghostty_inspector_metal_init`/`_metal_render`/`_metal_shutdown`. **Phase-3 R-d.**
+
+3. **`Inspector::{mouseButtonCallback,scrollCallback,cursorPosCallback,focusCallback,
+   textCallback,keyCallback}` + the private `newFrame` — dcimgui event/IO Phase-3
+   leaves.** Each drives `cimgui.c.ImGuiIO_Add*Event` (+ `key.imguiKey()`, itself the
+   already-deferred `Key::imgui_key` dcimgui binding in rustty-vt). `unimplemented!()`
+   leaves; `textCallback`'s `[:0]const u8` → `&CStr` (NUL sentinel handed to imgui).
+   `newFrame` is a private helper called ONLY by the deferred `renderMetal`, so it
+   carries `#[allow(dead_code)]` until that render path goes live. **Targets of the E9
+   CAPI** `ghostty_inspector_{mouse_button,mouse_scroll,mouse_pos,set_focus,text,key}`.
+   **Phase-3 R-d.**
+
+4. **`Surface::initInspector` reaches the `Inspector::init` leaf at RUNTIME.** Ported
+   LIVE (real `Box::into_raw(Box::new(...))` heap-pin, mirroring the reference
+   `alloc.create` + placement `.init`); the `?` on `Inspector::init` panics once a
+   live inspector is requested (the E9 CAPI `ghostty_surface_inspector` seam). No new
+   leaf — LIVE delegation to leaf item 1. The `Inspector` back-pointer to `Surface`
+   is sound: the embedded `Surface` is itself heap-pinned (ADV-FIX 8).
+
+**RESOLVED by E4 (were E2 deferrals):** E2 item 1 (`Inspector` E2→E4 sequencing stub)
+— the opaque `_e4: ()` stub + `unimplemented!()` `deinit` are replaced by the real
+inhabited `Inspector`. E3 item 2 (`initInspector` → E4, 3 doc-comment lines) — landed
+here.
+
+**Identity / ABI notes (R3):** `Backend` is a file-private `const` enum in the
+reference; Rust's pub-field visibility (it appears in the `pub backend` field of the
+`pub Inspector`) forces it `pub` (`#[derive(Debug, Clone, Copy, PartialEq, Eq)]`,
+value semantics matching the Zig enum). The dcimgui `*ImGuiContext` handle → opaque
+`*mut c_void` (dcimgui-sys not wired). `Inspector::init`'s `!Inspector` (sole error
+`error.OutOfMemory` from `ImGui_CreateContext`) → `Result<Inspector, ApprtError>`;
+`renderMetal`/`keyCallback`/`newFrame`'s `!void` → `Result<(), ApprtError>`.
+`updateContentScale`'s `_ = y;` (vertical scale unused, `x` drives both axes) →
+`let _ = y;`.
+
+**Gate deltas (E4):** `embedded.rs` replaces the E2 `Inspector` stub with the full
+Inspector struct + `Backend` enum + 14 methods, and adds `Surface::initInspector`.
+`apprt_embedded` MAP row unchanged (still embedded.zig 0-test → embedded.rs, GREEN —
+rust ≥ zig; NO new MAP entry). Whole-workspace gates green (build incl. apprt-c +
+rustty + cli; touched-crate tests — apprt 0, apprt-c 0; clippy `-D warnings`, fmt,
+acyclic G7 with apprt-c still a clean TOP SINK, test-counts G-gate); scoped-G3b on
+embedded.zig **992-1243 (E4) distinctive=13 missing=0 review=0**. No regression (vt
+2019, core 15, apprt-api 20, renderer 19, crash 12, termio 44).
