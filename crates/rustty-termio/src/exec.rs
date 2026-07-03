@@ -63,6 +63,17 @@ use rustty_renderer::size::{GridSize, ScreenSize};
 use rustty_vt::terminal::Terminal;
 use std::ffi::{CStr, CString};
 
+// [ADV-FIX F3] the pty.slave File is wrapped NON-owningly so `Command` (which
+// reads only `.as_raw_fd()`) never closes it; the single verbatim
+// `posix.close(pty.slave)` in `Subprocess::start` does the one close. Posix-only
+// (the slave-File spawn path).
+#[cfg(not(windows))]
+use std::fs::File;
+#[cfg(not(windows))]
+use std::mem::ManuallyDrop;
+#[cfg(not(windows))]
+use std::os::fd::FromRawFd as _;
+
 use crate::command::{Command, EnvMap, RtPostForkInfo, RtPreExecInfo};
 use crate::shell_integration::{self, env_name, env_string};
 use crate::xev_seam as xev;
@@ -904,6 +915,42 @@ impl core::fmt::Display for ArgsFormatter<'_> {
     }
 }
 
+// The reference's `os_pre_exec` callback (an anonymous `struct { fn callback(cmd:
+// *Command) ?u8 } `). It runs /in the forked child/ after fork but before exec.
+// Ported as a free fn matching `PreExecFn`; it recovers the owning `Subprocess`
+// from `cmd.data` (the raw `*mut Subprocess` self-pointer stored by `start`) and
+// dereferences it ONLY here in the child — where `fork` has copied the parent's
+// address space, so the parent-side borrows are irrelevant (the raw-ptr
+// container_of discipline, vtc-effects-trampoline-seam).
+//
+//     .os_pre_exec = switch (comptime builtin.os.tag) {
+//         .windows => null,
+//         else => f: {
+//             const f = struct {
+//                 fn callback(cmd: *Command) ?u8 {
+//                     const sp = cmd.getData(Subprocess) orelse unreachable;
+//                     sp.childPreExec() catch |err| log.err(
+//                         "error initializing child: {}",
+//                         .{err},
+//                     );
+//                     return null;
+//                 }
+//             };
+//             break :f f.callback;
+//         },
+//     },
+#[cfg(not(windows))]
+fn subprocess_pre_exec(cmd: &mut Command) -> Option<u8> {
+    // const sp = cmd.getData(Subprocess) orelse unreachable;
+    let sp = cmd.getData::<Subprocess>().expect("getData(Subprocess)");
+    // sp.childPreExec() catch |err| log.err("error initializing child: {}", .{err});
+    if unsafe { (*sp).childPreExec() }.is_err() {
+        // log.err("error initializing child: {}", .{err});
+    }
+    // return null;
+    None
+}
+
 impl Subprocess {
     /// Initialize the subprocess. This will NOT start it, this only sets
     /// up the internal state necessary to start it later.
@@ -1341,15 +1388,23 @@ impl Subprocess {
         // the poison is Rust's "must not reuse after deinit" contract.)
     }
 
-    // DEFERRED (0 tests — R1-safe): the spawn body is expressible EXCEPT the
-    // final `self.process = .{ .fork_exec = cmd }` — the stored Command holds
-    // the reference's arena POINTERS into the subprocess's own args/env
-    // (freed-on-success env included), which Zig tolerates as raw pointers but
-    // which as Rust references is exactly the strongly-protected-reference UB
-    // the port forbids (memory rust-mut-args-strongly-protected). The stored-
-    // process modeling (raw-ptr Command variant or a pid-only handle) is
-    // decided with the D6 live-thread wiring, whose threadEnter is this
-    // function's ONLY caller. Preserved verbatim (R5: no silent drop):
+    // PORTED (xev B1, 0 reference tests — R1-safe): the spawn body is now live.
+    // The former deferral point was the final `self.process = .{ .fork_exec =
+    // cmd }` — the reference stores a Command whose fields are arena POINTERS
+    // into the subprocess's own args/env (freed-on-success env included), which
+    // Zig tolerates as raw pointers but which as Rust references would be exactly
+    // the strongly-protected-reference UB the port forbids (memory
+    // rust-mut-args-strongly-protected). RESOLUTION (blueprint §2, the "pid-only
+    // handle" the deferral named): the transient argv/env/cwd borrows live ONLY
+    // inside `start()`'s frame (read exactly once, by `cmd.start()`); the stored
+    // `Process::ForkExec(Command)` has TRUE 'static empty reference fields (`c""`,
+    // `&[]`, `None`) with only `pid` live, so no self-referential borrow exists at
+    // rest (`killCommand` reads only `pid`). [ADV-FIX F3] the pty.slave File is
+    // ManuallyDrop (Command reads only `.as_raw_fd()`) + the single verbatim
+    // `posix.close`. [ADV-FIX F4] the raw `*mut Subprocess` self-pointer (`data`)
+    // is derived via `addr_of_mut!` BEFORE any `&self.*` borrow and dereferenced
+    // ONLY in the forked child (`subprocess_pre_exec`). Reference preserved
+    // verbatim below (R5: no silent drop):
     //
     // /// Start the subprocess. If the subprocess is already started this
     // /// will crash.
@@ -1539,8 +1594,259 @@ impl Subprocess {
     //         },
     //     };
     // }
-    pub fn start(&mut self, _alloc: Allocator) -> Result<PtyFds, crate::Error> {
-        unimplemented!("termio.Exec.Subprocess.start deferred (stored fork_exec Command aliases the subprocess arena; D6 threadEnter is the only caller); verbatim body above")
+    // pub fn start(self: *Subprocess, alloc: Allocator) !struct {
+    //     read: Pty.Fd,
+    //     write: Pty.Fd,
+    // } {
+    pub fn start(&mut self, alloc: Allocator) -> Result<PtyFds, crate::Error> {
+        // The windows spawn half (out_pipe/in_pipe + pseudo_console) stays
+        // deferred (D6 windows; verbatim in the reference block above); termio's
+        // pty/PtyFds surface is posix-typed.
+        #[cfg(windows)]
+        {
+            let _ = alloc;
+            unimplemented!("termio.Exec.Subprocess.start windows spawn deferred (D6 windows); verbatim body above")
+        }
+
+        #[cfg(not(windows))]
+        {
+            // assert(self.pty == null and self.process == null);
+            assert!(self.pty.is_none() && self.process.is_none());
+
+            // This function is funny because on POSIX systems it can
+            // fail in the forked process. This is flipped to true if
+            // we're in an error state in the forked process (child
+            // process).
+            // var in_child: bool = false;
+            let mut in_child = false;
+
+            // Create our pty
+            // var pty = try Pty.open(.{ .ws_row = @intCast(self.grid_size.rows), ... });
+            let pty = Pty::open(ptypkg::winsize {
+                // .ws_row = @intCast(self.grid_size.rows),
+                ws_row: self.grid_size.rows,
+                // .ws_col = @intCast(self.grid_size.columns),
+                ws_col: self.grid_size.columns,
+                // .ws_xpixel = @intCast(self.screen_size.width),
+                ws_xpixel: self.screen_size.width.try_into().unwrap(),
+                // .ws_ypixel = @intCast(self.screen_size.height),
+                ws_ypixel: self.screen_size.height.try_into().unwrap(),
+            })
+            .map_err(|_| crate::Error)?;
+            // self.pty = pty;
+            // (PORT: the Rust `Pty` is not `Copy`; capture the slave/master fds
+            // before the move — the reference's errdefer/defer read the local
+            // copy's `pty.slave`/`pty.master`.)
+            let slave = pty.slave;
+            let master = pty.master;
+            self.pty = Some(pty);
+            // errdefer if (!in_child) { ... posix.close(pty.slave); pty.deinit();
+            //     self.pty = null; ... };
+            // defer if (!in_child and self.process != null) { ...
+            //     posix.close(pty.slave); ... env.deinit(); self.env = null; ... };
+            // (PORT: Rust has no defer/errdefer; both are modeled explicitly at
+            // the exit points below, gated by `in_child` / `self.process`.)
+
+            // (PORT: `rt_*_info` are trivially-copyable ZSTs; read once for both
+            // the spawn Command and the stored pid-only handle.)
+            let rt_pre = self.rt_pre_exec_info;
+            let rt_post = self.rt_post_fork_info;
+
+            // [ADV-FIX F4] derive the write-capable raw self-pointer BEFORE any
+            // `&self.*` field borrow, so it and the shared `&self.env` are never
+            // simultaneously live; it is dereferenced only in the forked child.
+            let self_ptr: *mut Subprocess = std::ptr::addr_of_mut!(*self);
+
+            // log.debug("starting command command={f}", .{ArgsFormatter{ .args = self.args }});
+
+            // If we can't access the cwd, then don't set any cwd and inherit.
+            // This is important because our cwd can be set by the shell (OSC 7)
+            // and we don't want to break new windows.
+            // const cwd: ?[:0]const u8 = if (self.cwd) |proposed| cwd: {
+            let cwd: Option<&[u8]> = if let Some(proposed) = &self.cwd {
+                // if ((comptime build_config.flatpak) and internal_os.isFlatpak()) {
+                //     ... flatpak test-spawn to verify cwd access ...
+                // }
+                // (build_config.flatpak is const false -> this comptime-false
+                // branch is compiled out; verbatim in the reference block above.)
+
+                // if (std.fs.cwd().access(proposed, .{})) {
+                //     break :cwd proposed;
+                // } else |err| {
+                //     log.warn("cannot access cwd, ignoring: {}", .{err});
+                //     break :cwd null;
+                // }
+                if unsafe { libc::access(proposed.as_ptr(), libc::F_OK) } == 0 {
+                    Some(proposed.to_bytes())
+                } else {
+                    // log.warn("cannot access cwd, ignoring: {}", .{err});
+                    None
+                }
+            } else {
+                None
+            };
+
+            // In flatpak, we use the HostCommand to execute our shell.
+            // if (internal_os.isFlatpak()) flatpak: {
+            if rustty_os::flatpak::isFlatpak() {
+                // if (comptime !build_config.flatpak) {
+                //     log.warn("flatpak detected, but flatpak support not built-in", .{});
+                //     break :flatpak;
+                // }
+                // (build_config.flatpak is const false -> the comptime-true
+                // branch: warn + break; the comptime-false HostCommand spawn is
+                // compiled out — verbatim in the reference block above.)
+            }
+
+            // [ADV-FIX F3] the pty.slave File is NON-owning: `Command` reads only
+            // `.as_raw_fd()` and never closes it, and the slave fd is closed
+            // EXACTLY ONCE by the ported `posix.close(pty.slave)` below. A
+            // dropping `File` here would double-close (fd-reuse race).
+            let pty_slave_file = ManuallyDrop::new(unsafe { File::from_raw_fd(slave) });
+
+            // (PORT: the transient argv VIEW over self.args (Vec<CString>) — a
+            // stack local, valid for this frame only; nothing post-start reads
+            // it. This is the Rust materialization of the Zig `self.args` slice.)
+            let argv: Vec<&CStr> = self.args.iter().map(|c| c.as_c_str()).collect();
+            // .env = if (self.env) |*env| env else null,
+            let env_ref: Option<&EnvMap> = self.env.as_ref();
+
+            // Build our subcommand
+            // var cmd: Command = .{
+            let mut cmd: Command = Command {
+                // .path = self.args[0],
+                path: argv[0],
+                // .args = self.args,
+                args: argv.as_slice(),
+                // .env = if (self.env) |*env| env else null,
+                env: env_ref,
+                // .cwd = cwd,
+                cwd,
+                // .stdin = if (builtin.os.tag == .windows) null else .{ .handle = pty.slave },
+                stdin: Some(&*pty_slave_file),
+                // .stdout = if (builtin.os.tag == .windows) null else .{ .handle = pty.slave },
+                stdout: Some(&*pty_slave_file),
+                // .stderr = if (builtin.os.tag == .windows) null else .{ .handle = pty.slave },
+                stderr: Some(&*pty_slave_file),
+                // .pseudo_console = if (windows) pty.pseudo_console else {},
+                // (posix: the field does not exist — cfg(windows) only.)
+                // .os_pre_exec = switch (comptime builtin.os.tag) { .windows => null, else => ... },
+                os_pre_exec: Some(subprocess_pre_exec),
+                // .rt_pre_exec = if (comptime @hasDecl(apprt.runtime, "pre_exec")) apprt.runtime.pre_exec.preExec else null,
+                // (@hasDecl is comptime-false in this build — realized only by the
+                // GTK apprt, blueprint §1.)
+                rt_pre_exec: None,
+                // .rt_pre_exec_info = self.rt_pre_exec_info,
+                rt_pre_exec_info: rt_pre,
+                // .rt_post_fork = if (comptime @hasDecl(apprt.runtime, "post_fork")) apprt.runtime.post_fork.postFork else null,
+                rt_post_fork: None,
+                // .rt_post_fork_info = self.rt_post_fork_info,
+                rt_post_fork_info: rt_post,
+                // .data = self,
+                data: Some(self_ptr.cast::<std::ffi::c_void>()),
+                // (.pid is set by cmd.start.)
+                pid: None,
+            };
+
+            // The scoped spawn: `cmd`'s transient self-borrows (argv/env/cwd/the
+            // slave File) are read ONLY inside `cmd.start()`; `pid` is the sole
+            // field alive past here.
+            let result: Result<PtyFds, crate::Error> = 'spawn: {
+                // cmd.start(alloc) catch |err| {
+                //     const StartError = error{ExecFailedInChild} || @TypeOf(err);
+                //     switch (@as(StartError, err)) {
+                //         error.ExecFailedInChild => { in_child = true; return err; },
+                //         else => return err,
+                //     }
+                // };
+                match cmd.start(alloc) {
+                    // If we fail in our child we need to flag it so our
+                    // errdefers don't run.
+                    Err(crate::command::Error::ExecFailedInChild) => {
+                        in_child = true;
+                        break 'spawn Err(crate::Error);
+                    }
+                    Err(_e) => break 'spawn Err(crate::Error),
+                    Ok(()) => {}
+                }
+                // errdefer killCommand(&cmd) catch |err| {
+                //     log.warn("error killing command during cleanup err={}", .{err});
+                // };
+                // (PORT: there is no reachable error return between here and the
+                // success `return` below — the straight-line body never triggers
+                // this errdefer — so no cleanup is registered for it.)
+                // log.info("started subcommand path={s} pid={?}", .{ self.args[0], cmd.pid });
+
+                // (the ONLY field alive past here)
+                let pid = cmd.pid;
+
+                // self.process = .{ .fork_exec = cmd };
+                // (PORT §2: store a pid-only handle — the stored Command's
+                // reference fields are TRUE 'static empties, so no
+                // self-referential borrow can exist at rest.)
+                self.process = Some(Process::ForkExec(Command {
+                    path: c"",
+                    args: &[],
+                    env: None,
+                    cwd: None,
+                    stdin: None,
+                    stdout: None,
+                    stderr: None,
+                    os_pre_exec: None,
+                    rt_pre_exec: None,
+                    rt_pre_exec_info: rt_pre,
+                    rt_post_fork: None,
+                    rt_post_fork_info: rt_post,
+                    data: None,
+                    pid,
+                }));
+
+                // return switch (builtin.os.tag) {
+                //     else => .{ .read = pty.master, .write = pty.master },
+                // };
+                Ok(PtyFds {
+                    read: master,
+                    write: master,
+                })
+            };
+
+            // The reference errdefer/defer, now that the scoped spawn resolved:
+            match &result {
+                // defer if (!in_child and self.process != null) { ... };
+                Ok(_) => {
+                    if !in_child {
+                        // Once our subcommand is started we can close the slave
+                        // side. This prevents the slave fd from being leaked to
+                        // future children.
+                        // _ = posix.close(pty.slave);
+                        unsafe {
+                            libc::close(slave);
+                        }
+
+                        // Successful start we can clear out some memory.
+                        // if (self.env) |*env| { env.deinit(); self.env = null; }
+                        self.env = None;
+                    }
+                }
+                // errdefer if (!in_child) { ... }; (defer no-ops: process == null)
+                Err(_) => {
+                    if !in_child {
+                        // _ = posix.close(pty.slave);
+                        unsafe {
+                            libc::close(slave);
+                        }
+                        // pty.deinit();
+                        if let Some(p) = &mut self.pty {
+                            p.deinit();
+                        }
+                        // self.pty = null;
+                        self.pty = None;
+                    }
+                }
+            }
+
+            result
+        }
     }
 
     /// This should be called after fork but before exec in the child process.
@@ -1551,9 +1857,10 @@ impl Subprocess {
     //     // Setup our pty
     //     try self.pty.?.childPreExec();
     // }
-    // (dead_code: the only reference caller is `start`'s os_pre_exec closure,
-    // deferred above.)
-    #[allow(dead_code)]
+    // (The only reference caller is `start`'s os_pre_exec closure — the
+    // `subprocess_pre_exec` trampoline, live in `start`; on windows os_pre_exec
+    // is null, so the fn is unused there.)
+    #[cfg_attr(windows, allow(dead_code))]
     fn childPreExec(&mut self) -> Result<(), crate::Error> {
         // Setup our pty
         self.pty
@@ -2817,5 +3124,71 @@ mod tests {
             // try testing.expectEqualStrings("arg with spaces", result[1]);
             assert_eq!(b"arg with spaces", result[1].to_bytes());
         }
+    }
+
+    // KAT (rustty-only margin — blueprint §7 B1; NOT a mapped Zig `test{}`, so
+    // the test-count contract is unaffected). Drives the real init -> start
+    // fork/exec spawn on a real pty and proves the pid-only handle model:
+    //   Subprocess::init -> start "sh -c 'exit 7'" -> assert PtyFds returned +
+    //   process is ForkExec(pid) with 'static-empty reference fields -> stop()
+    //   reaps (SIGHUP to the child pgroup + waitpid).
+    // Real fork/exec + openpty syscalls -> Miri-excluded (MIRI_EXCEPTIONS.md,
+    // "rustty-termio B1"); the parent-side scoped-borrow spawn is the
+    // Stacked-Borrows surface (no `&'static`-to-non-static at rest; the sole raw
+    // self-pointer derefs only in the forked child).
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn subprocess_start_spawns_and_reaps() {
+        use allocator_api2::alloc::Global;
+
+        // Minimal Config: `sh -c 'exit 7'`, no resources dir (shell integration
+        // disabled), no cwd, xterm-256color.
+        let cfg = Config {
+            command: Some(configpkg::command::Command::Shell(b"exit 7".to_vec())),
+            env: EnvMap::new(),
+            env_override: configpkg::RepeatableStringMap::default(),
+            shell_integration: configpkg::value_types::ShellIntegration::Detect,
+            shell_integration_features: configpkg::value_types::ShellIntegrationFeatures::default(),
+            cursor_blink: None,
+            working_directory: None,
+            resources_dir: None,
+            term: b"xterm-256color".to_vec(),
+            rt_pre_exec_info: RtPreExecInfo,
+            rt_post_fork_info: RtPostForkInfo,
+        };
+
+        let mut subprocess = Subprocess::init(Global, cfg).expect("Subprocess::init");
+
+        // start() on a real pty: fork + exec the (login-wrapped) shell.
+        let fds = subprocess.start(Global).expect("Subprocess::start");
+
+        // PtyFds returned: read == write == the pty master (a valid fd).
+        assert!(fds.read >= 0, "PtyFds carries a valid master fd");
+        assert_eq!(fds.read, fds.write, "read/write are both the pty master");
+
+        // process is a pid-bearing ForkExec handle whose reference fields are
+        // TRUE 'static empties (the pid-only handle, blueprint §2).
+        match &subprocess.process {
+            Some(Process::ForkExec(cmd)) => {
+                assert!(cmd.pid.is_some(), "ForkExec handle carries a pid");
+                assert!(cmd.args.is_empty(), "stored args are the 'static empty");
+                assert!(cmd.env.is_none(), "stored env is None (no dangling borrow)");
+                assert!(cmd.data.is_none(), "stored data self-pointer is cleared");
+            }
+            _ => panic!("expected process == ForkExec after start"),
+        }
+
+        // stop() sends SIGHUP to the child's process group and reaps it (must
+        // NOT hang — the child setsid'd in childPreExec so getpgid resolves).
+        subprocess.stop();
+        assert!(subprocess.process.is_none(), "stop() clears the process");
+
+        // Close the master (read/write) fd so the test leaks nothing.
+        unsafe {
+            libc::close(fds.read);
+        }
+
+        // deinit is safe post-stop.
+        subprocess.deinit();
     }
 }

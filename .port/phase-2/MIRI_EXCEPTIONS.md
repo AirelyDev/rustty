@@ -193,3 +193,31 @@ C7's NEW pure code IS Miri-clean and stays on the Miri-gated surface: `backend.r
 derefs). The pure C1 intrusive structures (`heap`/`queue`/`queue_mpsc`) remain the
 Miri-gated core and stay green after C7 (surface-only chunk — the C1 files are
 untouched).
+
+## rustty-termio B1 (Subprocess.start fork/exec spawn) — MIRI exception
+
+B1's un-deferred `Subprocess::start` (`exec.rs`) + its rustty-only KAT
+`subprocess_start_spawns_and_reaps` open a real pty (`openpty`), `fork()` +
+`execvpe` a real child, and `stop()` it (`killpg(SIGHUP)` + `waitpid`) — all live
+syscalls of the same foreign-function class as the rustty-xev C5 (Process wait)
+exception above (`fork`/`execve`/`openpty`/`waitpid` are "can't call foreign
+function" under Miri on macOS), so the KAT **runs natively**, not under Miri.
+`fork` in particular Miri cannot model at all (it never sees the child's copied
+address space).
+
+The teeth (why no unsafe path is left un-verified): the KAT is the memory-safety +
+spawn-correctness proof for the scoped-borrow spawn (blueprint §2). The
+Stacked-Borrows surface it exercises is the PARENT side — the transient
+argv/env/cwd borrows scoped to `start()`'s frame, the raw `*mut Subprocess`
+self-pointer (`data`) derived via `addr_of_mut!` before any `&self.*` borrow and
+NEVER dereferenced in the parent, and the stored `Process::ForkExec(Command)`
+whose reference fields are TRUE `'static` empties (`c""`/`&[]`/`None`) so no
+self-referential borrow exists at rest. That parent-side borrow scoping is what
+Miri *would* check; it is designed SB-clean (no `&'static`-to-non-static, no
+write through the raw self-pointer while `&self.env` is live — [ADV-FIX F4]) and
+is small/side-effect-free enough to Miri-check in isolation with the fork/exec
+stubbed if a future harness wants to. The `data` pointer's only deref is in the
+forked child (`subprocess_pre_exec` → `childPreExec`), which Miri never observes
+(the child is a separate process). [ADV-FIX F3] the pty.slave `File` is
+`ManuallyDrop` (no double-close) and the single verbatim `posix.close(pty.slave)`
+does the one close — a fd-lifetime property, native/ASan territory, not Miri.
