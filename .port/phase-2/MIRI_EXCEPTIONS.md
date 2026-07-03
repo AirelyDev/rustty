@@ -284,3 +284,35 @@ the self-pointers) is sound only post-join. The fork/`openpty`/`poll` syscalls a
 it is Miri-excluded rather than Miri-checked; the borrow scoping itself is
 Stacked-Borrows-clean (transient borrows under the mutex, no `&mut` retag spanning the
 loop).
+
+## rustty-termio B5 (live-shell KAT: real /bin/sh round-trip) — MIRI exception
+
+B5's live-shell KAT (`crates/rustty-termio/tests/live_shell.rs`,
+`live_shell_echo_round_trips_into_the_screen`, its own integration-test process,
+`#![cfg(target_os = "macos")]`) is the milestone culmination: it `fork`/`exec`s a real
+`/bin/sh -c 'echo RUSTTY_OK'` on a real pty and drives the WHOLE live stack —
+`Termio::init` ([ADV-FIX F1] in-place out-param), `Termio::threadEnter` → `Exec::threadEnter`
+(fork/exec + xev `Process`/`Stream`/`Timer` wiring + a real read-thread spawn), a bounded
+`Loop::run(NoWait)` pump, and the read thread's raw-`*mut` `Termio::processOutput` — so the
+shell's output round-trips into the terminal `Screen`. Real `fork`/`execve`/`openpty`/
+`kevent`/mach-port syscalls place it in the same "can't call foreign function" class as the
+rustty-xev C3–C6 exceptions and B1–B3: it **runs natively**, not under Miri.
+
+The teeth (why no unsafe path is left un-verified): the KAT is the end-to-end memory-safety +
+correctness proof that the port runs a real terminal. It builds a heap-pinned
+`Termio<TestMailbox>` via the public `Termio::init` (self-pointers re-seated at the FINAL
+address, [ADV-FIX F1]); the concurrent read thread is the sole `*mut Termio` toucher, threading
+the raw pointer per [ADV-FIX F2] (only transient, non-overlapping borrows under the guard-less
+`zigstd::thread::Mutex`, never a long-lived `&mut` spanning a loop tick); teardown reaps the
+shell + joins the read thread (`Backend::threadExit`, field-scoped to avoid the whole-`&mut io`
+retag) BEFORE the heap-pinned Termio is deinit'd. Bounded (tick cap + a 3 s wall-clock deadline
++ explicit teardown), so it never `run(.until_done)`-blocks on the child's life.
+
+ENVIRONMENT NOTE: because `Subprocess::start` on macOS routes the command through
+`/usr/bin/login -flp <user> …` (`execCommand`, matching the reference), the KAT requires a
+non-sandboxed, login-capable session (real `fork`/`execve` + a reapable `login` child). B5's
+self-terminating command with a real read thread DRAINING the pty reaps cleanly here; note the
+pre-existing B1 unit KAT `subprocess_start_spawns_and_reaps` (which spawns a login-wrapped shell
+but has NO read thread to drain the pty) can wedge `killPid`'s `killpg`/`waitpid(WNOHANG)` reap
+loop in a headless/undrained context — a property of that no-drain KAT, unrelated to B5 (which
+drains).
