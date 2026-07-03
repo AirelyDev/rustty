@@ -571,10 +571,12 @@ version = "0.1.0"
 dependencies = [
  "rustty-apprt",
  "rustty-args",
+ "rustty-build-config",
  "rustty-config",
  "rustty-core",
  "rustty-crash",
  "rustty-font",
+ "rustty-identity",
  "rustty-input",
  "rustty-os",
  "rustty-terminfo",

@@ -2440,3 +2440,65 @@ GREEN (embedded.zig 235 / none.zig 1 / browser.zig 0 distinctive, missing=0); no
 regression (apprt-api 20, core 15, crash 12, renderer 19, termio 44). **This CLOSES the
 apprt/embedded milestone: C-ABI 71/71 compiles+links+header+smoke; runtime-live subset
 ≈15/71; GPU/xev/objc/coretext deferred to Phase-3 (R-d + D6).**
+
+## rustty-cli C1 (Phase-2 CLI milestone) — dispatcher; version(partial) + help_strings + C2–C5 stubs
+
+C1 (CLI_BLUEPRINT.md §3+§7) lands the action dispatcher into `rustty-cli`:
+`action.zig` (7t → `action.rs`), `ghostty.zig` Action enum + `detectSpecialCase`
++ `run`/`runMain` (4t → `ghostty.rs`), `cli.zig` re-export (`lib.rs`), `help.zig`
+(`help.rs`), `version.zig` (PARTIAL, `version.rs`). All gate-green: cli 12
+`#[test]` (7+4+1), test-count GREEN (cli_action 7/7, cli_ghostty 4/4, cli_root
+0/1, cli_help 0/0, cli_version 0/0), scoped-G3b missing=0 on all 5 ported files,
+acyclic G7 GREEN (cli deps only strictly-earlier members — no `apprt→cli` edge;
+detection lives in the bin, ADV-FIX 2). New cli Cargo deps: `rustty-build-config`
++ `rustty-identity` (ADV-FIX 4). Deferrals introduced/continued:
+
+- **`version.zig` is PARTIAL (ADV-FIX 1) — `renderer.Renderer` + `xev.backend`
+  STUBBED.** `version.rs` emits documented STUB strings for the `- renderer` line
+  (`RENDERER_STUB`; rustty-renderer's `Renderer` is a Phase-3 leaf, commented out)
+  and the `- libxev` line (`LIBXEV_STUB`; rustty-xev unimplemented, D6). The
+  `builtin.zig_version_string` line has no Rust analog (no Zig toolchain / no
+  build script capturing rustc) → `TOOLCHAIN_VERSION_STUB`. The OSC-8 commit
+  hyperlink reads `build_config.version.build`, which the Rust runtime
+  `SemanticVersion` view drops (no `+BUILD`), so `commit_hash()` is always `None`
+  and the branch never emits; the reference commit-URL host
+  (`github.com/ghostty-org/ghostty/commit/…`) is an R2 product-identity value not
+  yet in `rustty-identity`. 0-test file → no contract breakage; the `+version`
+  KAT (C6) must NOT assert the renderer/libxev/toolchain line CONTENT. The GTK
+  block (`app_runtime == .gtk`) is comptime-false for the headless `.none` build,
+  preserved verbatim as commented reference (R1). **Target:** un-defer the
+  renderer/libxev line content when R-d (renderer) / D6 (libxev) land; add a
+  rustty repo-URL constant to `rustty-identity` for the hyperlink.
+
+- **`help_strings` / `Action::help_text` — the `+action --help` text is "".**
+  `ghostty::Action::run`'s `help_error` path (a faithful direct-match port of the
+  reference `inline for` over `Action` fields) prints `self.help_text()`, which
+  indexes the build-generated `help_strings.Action.<field>` doc table. That
+  generator is the SAME deferred stub already tracked for config
+  (`formatter_file.rs:142`) and input (`helpgen_actions` `NoHelpStrings`), so
+  `help_text` returns "" for every action until the `help_strings` codegen
+  follow-up lands. Control flow (write text + "\n", flush, exit 0; warn + exit 1
+  on IO failure) is preserved verbatim; 0-test, runtime-only. **Target:** the
+  `help_strings` codegen follow-up (which also un-defers `explain_config`'s 1 test
+  — ADV-FIX 3 — and enables `+help` / `show_config --docs` / `list_keybinds
+  --docs`, all 0-test).
+
+- **C2–C5 action-impl sequencing stubs (0 tests, no MAP entry yet).** The 16
+  not-yet-ported action impls (`list_fonts`, `list_keybinds`, `list_themes`,
+  `list_colors`, `list_actions`, `ssh`, `ssh_cache`, `edit_config`,
+  `show_config`, `explain_config`, `validate_config`, `crash_report`,
+  `show_face`, `boo`, `new_window`, `toggle_quick_terminal`) are faithful
+  sequencing stubs — each `pub fn run() -> Result<u8, ghostty::Error>` with the
+  reference signature + `unimplemented!()` body — so `runMain` compiles. Their
+  full logic, comment coverage (scoped-G3b), and `check_test_counts.py` MAP
+  entries land with their owning chunks (C2–C5 per CLI_BLUEPRINT.md §7). Until
+  then, the WHOLE-CRATE `check_comment_coverage.py --crate rustty-cli` reports
+  their reference comments as "missing" (~523) — this is EXPECTED per the
+  DEFERRALS "Rule"; the C1 scoped-G3b (5 ported files) is missing=0.
+
+- **vaxis/zf TUI leaves (C5, forward-scheduled — not in C1).** `boo` (pure vaxis
+  animation), `list_themes`' interactive picker (vaxis+zf), and the
+  `prettyPrint` branches of `list_colors`/`list_keybinds` need the unported Zig
+  `vaxis`/`zf` deps (same class as libxev D6 / z2d). Their plain/enumeration
+  paths land in C5; the interactive render paths are deferred placeholder leaves
+  (GPU/GTK/xev precedent). All 0-test → no contract impact.

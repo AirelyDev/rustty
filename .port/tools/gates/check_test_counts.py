@@ -37,6 +37,9 @@ RSFS = "/Users/gael/projects/rustty/crates/rustty-font-shaper/src"
 GHC = "/Users/gael/projects/ghostty/src/cli"
 RSA = "/Users/gael/projects/rustty/crates/rustty-args/src"
 
+# rustty-cli: GH base = src/cli (same GHC) + src/cli.zig. Phase-2 CLI milestone.
+RSCLI = "/Users/gael/projects/rustty/crates/rustty-cli/src"
+
 # rustty-terminfo: GH base differs (src/terminfo, not src/terminal). Stage C.
 GHT = "/Users/gael/projects/ghostty/src/terminfo"
 RST = "/Users/gael/projects/rustty/crates/rustty-terminfo/src"
@@ -244,6 +247,16 @@ MAP = {
     "args":              ([f"{GHC}/args.zig"], [f"{RSA}/args.rs", f"{RSA}/args/tests.rs"], 0),
     "comma_splitter":    ([f"{GHC}/CommaSplitter.zig"], [f"{RSA}/comma_splitter.rs"], 0),
     "cli_diagnostics":   ([f"{GHC}/diagnostics.zig"], [f"{RSA}/diagnostics.rs"], 0),
+    # rustty-cli C1 (CLI_BLUEPRINT.md §3+§7): the action dispatcher. action.zig
+    # (7t) + ghostty.zig Action enum/run/runMain (4t) + cli.zig re-export
+    # (anonymous refAllDecls `test {`, skipped by zig_count → 0) + help.zig (0t) +
+    # version.zig (0t, PARTIAL). The remaining cli/ action impls are sequencing
+    # stubs (0t, no MAP entry yet); their entries land with chunks C2–C5.
+    "cli_action":        ([f"{GHC}/action.zig"], [f"{RSCLI}/action.rs"], 0),
+    "cli_ghostty":       ([f"{GHC}/ghostty.zig"], [f"{RSCLI}/ghostty.rs"], 0),
+    "cli_root":          ([f"{GHC}/../cli.zig"], [f"{RSCLI}/lib.rs"], 0),
+    "cli_help":          ([f"{GHC}/help.zig"], [f"{RSCLI}/help.rs"], 0),
+    "cli_version":       ([f"{GHC}/version.zig"], [f"{RSCLI}/version.rs"], 0),
     # Stage C — rustty-terminfo (GH base = src/terminfo, not src/terminal).
     # Source.zig (2t: "xtgettcap map" + "encode") -> source.rs.
     # ghostty.zig (1t: "encode") -> entry.rs (the terminfo entry; names carry

@@ -26,3 +26,10 @@ rustty-args = { workspace = true }
 rustty-apprt = { workspace = true }
 rustty-core = { workspace = true }
 rustty-crash = { workspace = true }
+# C1 (CLI_BLUEPRINT.md ADV-FIX 4): version.zig reads the build-config version /
+# release-channel / app-runtime / font-backend, and version/help emit the rustty
+# product name via rustty-identity (R2). Both are strictly-earlier members (2, 3)
+# so the crate graph stays acyclic (G7). version's renderer/xev lines are STUBBED
+# (ADV-FIX 1) so no rustty-renderer / rustty-xev dep is needed.
+rustty-build-config = { workspace = true }
+rustty-identity = { workspace = true }
