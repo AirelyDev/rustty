@@ -1,26 +1,31 @@
-//! timer.rs — the C3 subset of libxev `watcher/timer.zig` (D6, XEV_BLUEPRINT
+//! timer.rs — the full port of libxev `watcher/timer.zig` (D6, XEV_BLUEPRINT
 //! §4/§7).
 //!
 //! `Timer` (the `xev.Timer` high-level watcher) wraps the loop's low-level
 //! `timer`/`timer_reset` methods. termio names `xev::Timer` (scroll/coalesce/
 //! sync_reset/termios timers) and constructs it via `Timer::init()`, and KAT 2
-//! (Timer fires) drives `Timer::run`. So `init`/`deinit`/`run` land in C3; the
-//! `reset`/`cancel` methods + `watcher/timer.zig`'s 5 `test{}`s (`timer`, `reset`,
-//! `reset before tick`, `reset after trigger`, `cancel`) are DEFERRED to a later
-//! chunk (DEFERRALS.md) — the loop-level `timer`/`timer_reset` machinery they ride
-//! is already ported + exercised by the kqueue timer tests in C3.
+//! (Timer fires) drives `Timer::run`. `init`/`deinit`/`run` landed in C3; C7 (the
+//! finale) un-defers `reset`/`cancel` + `watcher/timer.zig`'s 5 `test{}`s
+//! (`timer`, `timer reset`, `timer reset before tick`, `timer reset after
+//! trigger`, `timer cancel`) — the loop-level `timer`/`timer_reset`/`add`/`.cancel`
+//! machinery they ride was already ported + exercised by the kqueue timer tests in
+//! C3, so these watcher-level methods are thin faithful wrappers over it.
 //
 // PORT NOTE: the reference is `fn Timer(comptime xev: type) type` → `if
 // (xev.dynamic) TimerDynamic else TimerLoop`. On macOS `xev.dynamic == false`
 // (§0), so this is the `TimerLoop` instantiation (`xev = kqueue`).
 // (module is `#[cfg(target_os = "macos")]`-gated in lib.rs)
 
-use crate::kqueue::{Completion, Loop, Result, TimerTrigger};
+use crate::kqueue::{CancelError, Completion, Loop, Operation, Result, TimerTrigger};
 use crate::looppkg::CallbackAction;
 
 /// A timer fires a callback after a specified amount of time. A timer can
 /// repeat by returning "rearm" in the callback or by rescheduling the
 /// start within the callback.
+//
+// PORT: this is the `TimerLoop` instantiation (on macOS `xev.dynamic == false`,
+// §0, so `Timer(xev)` is `TimerLoop(xev)`, never `TimerDynamic`).
+// An implementation that uses the loop timer methods.
 //
 // PORT NOTE: the `TimerLoop` struct is empty (only methods); a zero-sized handle.
 // `#[derive(Clone, Copy)]` — the reference `run`/`reset` take `self: Self` by
@@ -142,15 +147,428 @@ impl Timer {
         };
         cb(ud_typed, l_inner, c_inner, mapped)
     }
+
+    /// Reset a timer to execute in next_ms milliseconds. If the timer
+    /// is already started, this will stop it and restart it. If the
+    /// timer has never been started, this is equivalent to running "run".
+    /// In every case, the timer callback is updated to the given userdata
+    /// and callback.
+    ///
+    /// This requires an additional completion c_cancel to represent
+    /// the need to possibly cancel the previous timer. You can check
+    /// if c_cancel was used by checking the state() after the call.
+    ///
+    /// VERY IMPORTANT: both c and c_cancel MUST NOT be undefined. They
+    /// must be initialized to ".{}" if being used for the first time.
+    //
+    // PORT NOTE: delegates to `loop.timer_reset` with the SAME untyped
+    // trampoline as `run` (both map `xev.Result.timer` → `RunError!void`), so it
+    // reuses `Self::trampoline::<UD, CB>`. `loop`/`c`/`c_cancel` stay RAW pointers.
+    ///
+    /// # Safety
+    /// `c`/`c_cancel` must be valid, stable `Completion` pointers that outlive
+    /// the timer.
+    pub unsafe fn reset<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c: *mut Completion,
+        c_cancel: *mut Completion,
+        next_ms: u64,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                core::result::Result<(), RunError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(core::mem::size_of::<CB>() == 0, "Timer::reset cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb")
+        };
+        let _ = cb;
+
+        unsafe {
+            (*loop_).timer_reset(
+                c,
+                c_cancel,
+                next_ms,
+                userdata.cast::<core::ffi::c_void>(),
+                Self::trampoline::<UD, CB>,
+            );
+        }
+    }
+
+    /// Cancel a previously started timer. The timer to cancel used the completion
+    /// "c_cancel". A new completion "c" must be specified which will be called
+    /// with the callback once cancellation is complete.
+    ///
+    /// The original timer will still have its callback fired but with the
+    /// error "error.Canceled".
+    //
+    // PORT NOTE: the reference switches on `xev.backend`; the kqueue arm builds a
+    // `.cancel = .{ .c = c_timer }` completion (the io_uring `.timer_remove` arm
+    // is comptime-elided on macOS, §0) and `loop.add`s it. Its trampoline maps
+    // `xev.Result.cancel` → `CancelError!void`.
+    ///
+    /// # Safety
+    /// `c_timer`/`c_cancel` must be valid, stable `Completion` pointers.
+    pub unsafe fn cancel<UD, CB>(
+        self,
+        loop_: *mut Loop,
+        c_timer: *mut Completion,
+        c_cancel: *mut Completion,
+        userdata: *mut UD,
+        cb: CB,
+    ) where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                core::result::Result<(), CancelError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        const {
+            assert!(core::mem::size_of::<CB>() == 0, "Timer::cancel cb must be zero-sized (a fn item / non-capturing closure), matching Zig comptime cb")
+        };
+        let _ = cb;
+
+        unsafe {
+            // Reference: `c_cancel.* = .{ .op = .{ .cancel = .{ .c = c_timer } },
+            // .userdata = userdata, .callback = ... }`. Built via the `pub(crate)`
+            // `Completion::new_op` seam (the faithful full-reset helper C4/C6 use)
+            // since the internal fields are private to `kqueue` (module boundary).
+            *c_cancel = Completion::new_op(
+                Operation::Cancel { c: c_timer },
+                userdata.cast::<core::ffi::c_void>(),
+                Self::cancel_trampoline::<UD, CB>,
+            );
+
+            (*loop_).add(c_cancel);
+        }
+    }
+
+    /// The monomorphized untyped loop trampoline for `cancel` (maps the loop's
+    /// `Result::Cancel` → `CancelError!void`, distinct from `run`/`reset`).
+    fn cancel_trampoline<UD, CB>(
+        ud: *mut core::ffi::c_void,
+        l_inner: *mut Loop,
+        c_inner: *mut Completion,
+        r: Result,
+    ) -> CallbackAction
+    where
+        UD: 'static,
+        CB: Fn(
+                *mut UD,
+                *mut Loop,
+                *mut Completion,
+                core::result::Result<(), CancelError>,
+            ) -> CallbackAction
+            + 'static,
+    {
+        // SAFETY: `CB` is a ZST (asserted in `cancel`), so reading it through an
+        // aligned dangling pointer accesses zero bytes and is sound.
+        let cb: CB = unsafe { core::ptr::NonNull::<CB>::dangling().as_ptr().read() };
+
+        let ud_typed = crate::common::userdata_value::<UD>(ud);
+        // if (r.cancel) |_| {} else |err| err
+        let mapped: core::result::Result<(), CancelError> = match r {
+            Result::Cancel(res) => res,
+            _ => unreachable!(),
+        };
+        cb(ud_typed, l_inner, c_inner, mapped)
+    }
 }
 
-/// PORT: `pub const RunError = error{Canceled, Unexpected}`.
+/// Error that could happen while running a timer.
+//
+// PORT: `pub const RunError = error{Canceled, Unexpected}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunError {
     /// The timer was canceled before it could expire
     Canceled,
     /// Some unexpected error.
     Unexpected,
+}
+
+// PORT: `pub const CancelError = xev.CancelError;` — the timer watcher forwards
+// the loop's cancel error set unchanged (`crate::kqueue::CancelError`, imported
+// at the top of this module and used by `cancel`/`cancel_trampoline`).
+
+// ---------------------------------------------------------------------------
+// PORT: `watcher/timer.zig`'s `TimerTests(xev, Impl)` — the 5 R1 `test{}`s of the
+// timer watcher (`timer`, `timer reset`, `timer reset before tick`, `timer reset
+// after trigger`, `timer cancel`). These drive the real kqueue loop (Miri can't —
+// real syscalls); `#[cfg(target_os = "macos")]` via the module gate. `undefined`
+// completions in the reference become `Completion::default()` (Rust has no
+// `undefined`; `run`/`timer` overwrite them). Callbacks are ZST non-capturing
+// closures (Copy) — the faithful monomorphized-comptime-cb form (§2.2).
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kqueue::{Completion, Loop};
+    use crate::looppkg::{CompletionState, RunMode};
+    use core::ptr::addr_of_mut;
+
+    // test "timer"
+    #[test]
+    fn timer() {
+        let mut loop_ = Loop::init().unwrap();
+        let timer = Timer::init().unwrap();
+
+        // Add the timer
+        let mut called = false;
+        let mut c1 = Completion::default();
+        let cb = |ud: *mut bool,
+                  _l: *mut Loop,
+                  _c: *mut Completion,
+                  r: core::result::Result<(), RunError>| {
+            r.unwrap();
+            unsafe { *ud = true };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            timer.run(
+                &mut loop_ as *mut Loop,
+                addr_of_mut!(c1),
+                1,
+                addr_of_mut!(called),
+                cb,
+            );
+        }
+
+        // Wait
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(called);
+
+        timer.deinit();
+        loop_.deinit();
+    }
+
+    // test "timer reset"
+    #[test]
+    fn timer_reset() {
+        let mut loop_ = Loop::init().unwrap();
+        let timer = Timer::init().unwrap();
+
+        let mut c_timer = Completion::default();
+        let mut c_cancel = Completion::default();
+        let cb = |ud: *mut bool,
+                  _l: *mut Loop,
+                  _c: *mut Completion,
+                  r: core::result::Result<(), RunError>| {
+            r.unwrap();
+            unsafe { *ud = true };
+            CallbackAction::Disarm
+        };
+
+        // Add the timer
+        let mut canceled = false;
+        unsafe {
+            timer.run(
+                &mut loop_ as *mut Loop,
+                addr_of_mut!(c_timer),
+                100_000,
+                addr_of_mut!(canceled),
+                cb,
+            );
+        }
+
+        // Wait
+        loop_.run(RunMode::NoWait).unwrap();
+        assert!(!canceled);
+
+        // Reset it
+        unsafe {
+            timer.reset(
+                &mut loop_ as *mut Loop,
+                addr_of_mut!(c_timer),
+                addr_of_mut!(c_cancel),
+                1,
+                addr_of_mut!(canceled),
+                cb,
+            );
+        }
+
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(canceled);
+        assert!(c_timer.state_of() == CompletionState::Dead);
+        assert!(c_cancel.state_of() == CompletionState::Dead);
+
+        timer.deinit();
+        loop_.deinit();
+    }
+
+    // test "timer reset before tick"
+    #[test]
+    fn timer_reset_before_tick() {
+        let mut loop_ = Loop::init().unwrap();
+        let timer = Timer::init().unwrap();
+
+        let mut c_timer = Completion::default();
+        let mut c_cancel = Completion::default();
+        let cb = |ud: *mut bool,
+                  _l: *mut Loop,
+                  _c: *mut Completion,
+                  r: core::result::Result<(), RunError>| {
+            r.unwrap();
+            unsafe { *ud = true };
+            CallbackAction::Disarm
+        };
+
+        // Add the timer
+        let mut canceled = false;
+        unsafe {
+            timer.run(
+                &mut loop_ as *mut Loop,
+                addr_of_mut!(c_timer),
+                100_000,
+                addr_of_mut!(canceled),
+                cb,
+            );
+        }
+
+        // Reset it
+        unsafe {
+            timer.reset(
+                &mut loop_ as *mut Loop,
+                addr_of_mut!(c_timer),
+                addr_of_mut!(c_cancel),
+                1,
+                addr_of_mut!(canceled),
+                cb,
+            );
+        }
+
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(canceled);
+        assert!(c_timer.state_of() == CompletionState::Dead);
+        assert!(c_cancel.state_of() == CompletionState::Dead);
+
+        timer.deinit();
+        loop_.deinit();
+    }
+
+    // test "timer reset after trigger"
+    #[test]
+    fn timer_reset_after_trigger() {
+        let mut loop_ = Loop::init().unwrap();
+        let timer = Timer::init().unwrap();
+
+        let mut c_timer = Completion::default();
+        let mut c_cancel = Completion::default();
+        let cb = |ud: *mut bool,
+                  _l: *mut Loop,
+                  _c: *mut Completion,
+                  r: core::result::Result<(), RunError>| {
+            r.unwrap();
+            unsafe { *ud = true };
+            CallbackAction::Disarm
+        };
+
+        // Add the timer
+        let mut canceled = false;
+        unsafe {
+            timer.run(
+                &mut loop_ as *mut Loop,
+                addr_of_mut!(c_timer),
+                1,
+                addr_of_mut!(canceled),
+                cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(canceled);
+        canceled = false;
+
+        // Reset it
+        unsafe {
+            timer.reset(
+                &mut loop_ as *mut Loop,
+                addr_of_mut!(c_timer),
+                addr_of_mut!(c_cancel),
+                1,
+                addr_of_mut!(canceled),
+                cb,
+            );
+        }
+
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(canceled);
+        assert!(c_timer.state_of() == CompletionState::Dead);
+        assert!(c_cancel.state_of() == CompletionState::Dead);
+
+        timer.deinit();
+        loop_.deinit();
+    }
+
+    // test "timer cancel"
+    #[test]
+    fn timer_cancel() {
+        let mut loop_ = Loop::init().unwrap();
+        let timer = Timer::init().unwrap();
+
+        // Add the timer
+        let mut canceled = false;
+        let mut c1 = Completion::default();
+        let cb_timer = |ud: *mut bool,
+                        _l: *mut Loop,
+                        _c: *mut Completion,
+                        r: core::result::Result<(), RunError>| {
+            // ud.?.* = if (r) false else |err| err == error.Canceled;
+            unsafe {
+                *ud = match r {
+                    Ok(()) => false,
+                    Err(e) => e == RunError::Canceled,
+                }
+            };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            timer.run(
+                &mut loop_ as *mut Loop,
+                addr_of_mut!(c1),
+                100_000,
+                addr_of_mut!(canceled),
+                cb_timer,
+            );
+        }
+
+        // Cancel
+        let mut cancel_confirm = false;
+        let mut c2 = Completion::default();
+        let cb_cancel = |ud: *mut bool,
+                         _l: *mut Loop,
+                         _c: *mut Completion,
+                         r: core::result::Result<(), CancelError>| {
+            r.unwrap();
+            unsafe { *ud = true };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            timer.cancel(
+                &mut loop_ as *mut Loop,
+                addr_of_mut!(c1),
+                addr_of_mut!(c2),
+                addr_of_mut!(cancel_confirm),
+                cb_cancel,
+            );
+        }
+
+        // Wait
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(canceled);
+        assert!(cancel_confirm);
+
+        timer.deinit();
+        loop_.deinit();
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -325,6 +325,50 @@ bin.**
   + xev D6). DEFERRALS.md "rustty bin C6" tracks the GUI leaf + the log-facade /
   help_strings / vaxis / version-stub-line continuations.
 
+## rustty-xev (D6 libxev port) — Milestone A ✅ DONE (2026-07-03) — isolated real `rustty-xev`
+
+The libxev event-loop LIBRARY (mitchellh/libxev, ghostty's pinned commit) ported
+faithfully into `crates/rustty-xev`, **macOS/kqueue only** (XEV_BLUEPRINT §0: on
+macOS `xev.Dynamic` IS the static kqueue `Api()`, so `dynamic.zig` is comptime-
+elided/deferred, not weakened). Chunks C1–C7 landed gate-green; the placeholder
+handle types were filled IN PLACE (downstream `use` paths never changed —
+termio/core `pub use rustty_xev::*` / `use rustty_xev as xev`).
+
+- **What's real:** `queue`/`queue_mpsc`/`heap` (raw-ptr intrusive FIFO/MPSC/pairing-
+  heap, C1, Miri-clean) → `darwin` mach bindings (C2) → the `Loop` core
+  (`Completion`/`Operation`/`Result` + the exact `tick` ordering, C3) → `Async`
+  mach-port wakeup (C4) → `Process` EVFILT_PROC wait (C5) → `Stream`/`WriteQueue`/
+  `WriteRequest` + the `queueWrite` ordered-write engine (C6) → **C7 the finale:**
+  the `lib.rs` package surface = kqueue `Api()` (`main.zig` re-exports + `api.zig`'s
+  2 tests + `backend.zig`'s `Backend` enum, `default() == Kqueue`), `Timer::reset`/
+  `cancel` un-deferred.
+- **Tests:** **36 R1-parity `#[test]`** (queue 1 + mpsc 1 + heap 6 + kqueue 12 +
+  async 3 + timer 5 + process 3 + stream 4 + api 1) + **4 live KATs** (async/timer/
+  process/pty round-trips on real kqueue) + 2 reify/sanity margins = **42 total**,
+  `cargo test -p rustty-xev` green. `check_test_counts.py` maps every in-scope module
+  ([ADV-FIX F7], all rust ≥ zig). The one honest skip-stub is `kqueue: file IO on
+  thread pool` (ThreadPool body deferred — ghostty passes no pool).
+- **Discipline:** raw pointers end-to-end (loop holds `*mut Completion` into caller
+  memory; callbacks get `*mut Loop`/`*mut Completion` — no `&mut`/lifetime aliasing,
+  Stacked-Borrows-safe); `unsafe impl Send` with single-thread-affinity notes
+  ([ADV-FIX F2]); hand-written `Default` for `Completion`/`WriteQueue`/`WriteRequest`
+  + `Async: Copy` + `NotifyError: Debug+Clone+Copy+PartialEq+Eq` ([ADV-FIX F3], the
+  load-bearing termio/core trait surface). `check_acyclic.sh` green (rustty-xev deps
+  only `rustty-global` + `libc`; NO edge to termio/core/os). Miri covers C1; the
+  kqueue/mach syscall chunks (C3–C6) lean on the live KATs (MIRI_EXCEPTIONS.md).
+- **Deferred (DEFERRALS.md "rustty-xev C7"):** `dynamic.zig` / ThreadPool body /
+  `watcher/file`|`tcp`|`udp` / other backends (epoll/io_uring/iocp/wasi_poll) /
+  `c_api.zig` + the one skip-stub. [ADV-FIX F6] flatpak/vt-search xev refs resolve
+  LATER via direct `os → xev` / `vt → xev` edges (NOT a `rustty_global::xev` re-
+  export, which would cycle).
+
+**Milestone B (NEXT):** un-defer **TERMIO ONLY** ([ADV-FIX F8]) — `Thread.run` loop +
+`Termio.init`/`threadEnter`/`processOutput` + `Exec` `Subprocess.start`/`ReadThread`/
+`queueWrite` + the core `Async::notify()` leaves termio's threads poke — capped with a
+**live-shell KAT** (spawn a shell in a pty, pump the loop, assert output round-trips).
+`renderer.Thread` stays the **Phase-3 GPU tier** (GPU-*and*-xev-blocked; landing
+rustty-xev does not unblock it — listing it would false-green).
+
 ## INTEGRATION TIER — the critical path to the libghostty embedding milestone (original notes)
 Dependency-ordered, apprt-api now unblocks it:
 **quirks** (57 loc, tiny leaf, imports font — needs a crate-placement decision) + **Command** (911 loc/10t, now unblocked by apprt-api — placement decision) + **crash** (sentry-sys ready) → **termio** (pty/exec/thread, 30 tests — the "run a real shell" layer; pty.rs already ported in rustty-os) → **core** (Surface.zig/App.zig — the big one; fills apprt-api's growth-point trait methods + the mailbox/queue seam) → **apprt/embedded** (2250 loc, 71 C-ABI exports — THE libghostty embedding milestone, via vt-c cbindgen+pinned-padding+const-size-assert) + **none.zig** (headless). Then **cli** + **bin**. Crown-jewel-adjacent — needs design + careful review (not background dispatch).

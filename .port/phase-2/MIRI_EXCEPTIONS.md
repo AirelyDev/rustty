@@ -173,3 +173,23 @@ the pty tests would hit "can't call foreign function `openpty`"). KAT 4 (`openpt
 proof for the raw-ptr `queueWrite` trampoline (the `WriteRequest::from` container_of
 recovery + the re-`writeInit` remainder path). The pure C1 structures stay the
 Miri-gated surface.
+
+## rustty-xev C7 (package surface + Timer reset/cancel finale) — MIRI exception + Miri-clean margins
+
+C7's un-deferred `Timer::reset` (delegates to `loop.timer_reset`, reusing the `run`
+trampoline) + `Timer::cancel` (a `.cancel`-op `Completion::new_op` + `loop.add` +
+`cancel_trampoline`) and their 5 reference tests (`timer`, `timer reset`, `timer reset
+before tick`, `timer reset after trigger`, `timer cancel`) drive the real kqueue loop
+(`kqueue`/`kevent64`/`clock_gettime` via `run(.until_done)`) — the same
+foreign-function class as the C3–C6 exceptions above, so they **run natively**, not
+under Miri. The loop-level `timer`/`timer_reset`/`.cancel`-op machinery they ride was
+already exercised by the C3 kqueue timer×family tests; KAT 2 (Timer fires) is the
+live backstop.
+
+C7's NEW pure code IS Miri-clean and stays on the Miri-gated surface: `backend.rs`
+(the `Backend` enum + `default()`/`candidates()`, no `unsafe`, no raw ptrs) and
+`lib.rs`'s `api_tests` (`ref_all_decls` = `size_of` reflection; `completion_is_zero_able`
+= `Completion::default()`, which only writes null ptrs / the noop callback, never
+derefs). The pure C1 intrusive structures (`heap`/`queue`/`queue_mpsc`) remain the
+Miri-gated core and stay green after C7 (surface-only chunk — the C1 files are
+untouched).

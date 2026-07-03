@@ -17,13 +17,24 @@
 //! `Loop`/`Completion`/`Operation`/`Result`, the tick, `Async`(mach) wakeup
 //! subset, the `Timer` watcher run) + C4 (`Async` mach-port watcher) + C5
 //! (`Process` EVFILT_PROC watcher) + C6 (`Stream`/`WriteQueue`/`WriteRequest` +
-//! the `Writeable.queueWrite` ordered-write engine) have LANDED — the whole
+//! the `Writeable.queueWrite` ordered-write engine) + C7 (THE FINALE: this
+//! `lib.rs` package surface = the kqueue `Api()` — `main.zig` re-exports +
+//! `api.zig`'s 2 `test{}` + `backend.zig`'s `Backend`; `Timer::reset`/`cancel`
+//! un-deferred with `watcher/timer.zig`'s 5 `test{}`) have LANDED — the whole
 //! macOS/kqueue in-scope surface is now filled in place; downstream `use` paths
-//! never change. See .port/phase-2/XEV_BLUEPRINT.md + DEFERRALS.md.
+//! never change. Milestone A (isolated real `rustty-xev`) is DONE. See
+//! .port/phase-2/XEV_BLUEPRINT.md + DEFERRALS.md + NEXT_PHASE_PLAN.md.
 
 // PORT: `rustty_global::seam::Xev` (= `()`), the deferred xev backend package.
 #[allow(unused_imports)]
 use rustty_global::xev as _DeferredXevBackend;
+
+// XEV_BLUEPRINT §1/§7 chunk C7: `backend.zig` — the `Backend` enum + `default()`/
+// `candidates()`. Cross-platform (the enum names every backend; the `#[cfg]` arms
+// pick the live one), so NOT macOS-gated. `Backend::default() == Kqueue` +
+// single-element `candidates()` are the §0 fact that comptime-elides `dynamic.zig`.
+mod backend;
+pub use backend::Backend;
 
 // XEV_BLUEPRINT §8 chunk C1: the pure intrusive data structures that establish the
 // raw-pointer discipline for the whole libxev port (queue.zig / queue_mpsc.zig /
@@ -91,7 +102,63 @@ mod timer;
 
 // ---------------------------------------------------------------------------
 // The macOS/kqueue package re-export surface (= the kqueue `Api()` decls the
-// consumers name as `xev::*`). Filled by the real port (C3).
+// consumers name as `xev::*`). This is the collapse-on-macOS of `main.zig` +
+// `api.zig` (§0); their reference doc comments are preserved verbatim here (R3).
+//
+// [main.zig] The low-level IO interfaces using the recommended compile-time
+// interface for the target system. We forward these as the default
+// API of this package.
+//
+// [api.zig] Creates the Xev API based on a backend type.
+//
+// For the default backend type for your system (i.e. io_uring on Linux),
+// this is the main API you interact with. It is forwarded into the main
+// the "xev" package so you'd use types such as `xev.Loop`, `xev.Completion`,
+// etc.
+//
+// Unless you're using a custom or specific backend type, you do NOT ever
+// need to call the Xev function itself.
+//
+// Per-decl (the Api() members forwarded here):
+//  - `dynamic`: This is used to detect a static vs dynamic API at comptime.
+//  - `backend`: The backend that this is. This is supplied at comptime so
+//    it is up to the caller to say the right thing. This lets custom
+//    implementations also "quack" like an implementation.
+//  - `available`: A function to test if this API is available on the
+//    current system.
+//  - `Callback`: The callback of the main Loop operations. Higher level interfaces
+//    may use a different callback mechanism.
+//  - `noopCallback` (noop_callback): A callback that does nothing and immediately disarms. This
+//    implements xev.Callback and is the default value for completions.
+//  - `Sys`: A way to access the raw type.
+//
+// The high-level helper interfaces that make it easier to perform
+// common tasks. These may not work with all possible Loop implementations.
+// (`Async`/`Process`/`Stream`/`Timer` live; `File`/`TCP`/`UDP` deferred, §1.)
+//
+// [main.zig] The dynamic interface that allows for runtime selection of the
+// backend to use. This is useful if you want to support multiple
+// backends and have a fallback mechanism.
+//
+// There is a very small overhead to using this API compared to the
+// static API, but it is generally negligible.
+//
+// The API for this isn't _exactly_ the same as the static API
+// since it requires initialization of the main struct to detect
+// a backend and then this needs to be passed to every high-level
+// type such as Async, File, etc. so that they can use the correct
+// backend that is coherent with the loop.
+// (`Dynamic` is comptime-elided at a single candidate on macOS — §0 — DEFERRED.)
+//
+// [main.zig] System-specific interfaces. Note that they are always pub for
+// all systems but if you reference them and force them to be analyzed
+// the proper system APIs must exist. Due to Zig's lazy analysis, if you
+// don't use any interface it will NOT be compiled (yay!).
+// (`IO_Uring`/`Epoll`/`WasiPoll`/`IOCP` are whole follow-up backend ports.)
+//
+// [main.zig] This stream (lowercase s) can be used as a namespace to access
+// Closeable, Writeable, Readable, etc. so that custom streams
+// can be constructed.
 // ---------------------------------------------------------------------------
 #[cfg(target_os = "macos")]
 pub use async_watcher::Async;
@@ -102,13 +169,24 @@ pub use kqueue::{
     TimerError, TimerTrigger, WriteBuffer, WriteError,
 };
 #[cfg(target_os = "macos")]
-pub use looppkg::{CallbackAction, CompletionState, Options, RunMode};
+pub use looppkg::{noop_callback, Callback, CallbackAction, CompletionState, Options, RunMode};
 #[cfg(target_os = "macos")]
 pub use process::Process;
 #[cfg(target_os = "macos")]
 pub use stream::{PollError, PollEvent, Stream, WriteQueue, WriteRequest};
 #[cfg(target_os = "macos")]
+pub use thread_pool::ThreadPool;
+#[cfg(target_os = "macos")]
 pub use timer::Timer;
+
+// PORT: `main.zig` also forwards `File`/`TCP`/`UDP` (watchers) + `Dynamic`/
+// `DynamicXev` (the runtime backend switch) + `IO_Uring`/`Epoll`/`Kqueue`/
+// `WasiPoll`/`IOCP` (the per-backend Api()s) + `Sys`/`dynamic`/`backend`/
+// `available`. On macOS these are DEFERRED (XEV_BLUEPRINT §0/§1): `File`/`TCP`/
+// `UDP` are unused-by-ghostty watchers; the `Dynamic` layer is comptime-elided at
+// a single candidate (§0); the non-kqueue backend Api()s are whole follow-up
+// ports; `Sys`/`dynamic`(=false)/`backend`(=kqueue)/`available` are the internal
+// Api()-selection decls. See DEFERRALS.md.
 
 /// PORT: the error set of `Loop.init`/`Async.init`/`Timer.init` — the unified D6
 /// seam error (every libxev alloc/syscall failure collapses here; termio
@@ -124,6 +202,83 @@ pub struct Error;
 // faithful). [ADV-FIX F3]: load-bearing for the workspace build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotifyError;
+
+// [ADV-FIX F6] NO `rustty_global::xev` re-export of these types. `os/flatpak.rs`
+// and vt-search reference the xev package; resolving them by making
+// `rustty_global::xev` re-export `rustty-xev` would create a `global → xev →
+// global` cycle (rustty-xev deps rustty-global). Those refs instead resolve LATER
+// via DIRECT edges — `os → xev` (flatpak) and `vt → xev` (search) — both acyclic
+// (rustty-xev deps neither os nor vt). `rustty_global::xev` stays the `()` package
+// anchor exactly as `global.zig`'s `pub const xev` is (§0 consequence 4).
+
+// ---------------------------------------------------------------------------
+// PORT: `api.zig`'s 2 `test{}` — the `Xev(be, T)` decl-forwarding struct's tests.
+// On macOS the Api() collapses to THIS crate's public surface (§0/§1: `main.zig`
+// re-exports the kqueue Api() decls), so api.zig's tests live here at the package
+// root. The anonymous `test { refAllDecls(@This()); }` → `ref_all_decls` (a helper
+// reify; anonymous `test {` is skipped by the count-gate's zig_count, so it is a
+// +margin, not the R1-counted one). `test "completion is zero-able"` → the R1
+// parity test mapped to api.zig (zig_count=1).
+// ---------------------------------------------------------------------------
+#[cfg(all(test, target_os = "macos"))]
+mod api_tests {
+    use super::*;
+
+    // test { @import("std").testing.refAllDecls(@This()); }
+    // Reference every in-scope public decl the kqueue Api() forwards (the Rust
+    // analogue of refAllDecls — force each re-export to be named/analyzed). This is
+    // also the analogue of `main.zig`'s comptime forwarding check:
+    // This ensures that all the public decls from the API are forwarded
+    // from the main struct. (In Rust a missing `pub use` is a consumer compile
+    // error, and this test names each re-export so a drop is caught here too.)
+    #[test]
+    fn ref_all_decls() {
+        // Core loop types.
+        let _ = core::mem::size_of::<Loop>();
+        let _ = core::mem::size_of::<Completion>();
+        let _ = core::mem::size_of::<Result>();
+        let _ = core::mem::size_of::<Operation>();
+        let _ = core::mem::size_of::<ReadBuffer>();
+        let _ = core::mem::size_of::<WriteBuffer>();
+        let _ = core::mem::size_of::<Options>();
+        let _ = core::mem::size_of::<RunMode>();
+        let _ = core::mem::size_of::<CallbackAction>();
+        let _ = core::mem::size_of::<CompletionState>();
+        // The callback ABI + its noop default.
+        let _: Callback = noop_callback;
+        // Watchers.
+        let _ = core::mem::size_of::<Async>();
+        let _ = core::mem::size_of::<Process>();
+        let _ = core::mem::size_of::<Stream>();
+        let _ = core::mem::size_of::<Timer>();
+        let _ = core::mem::size_of::<WriteQueue>();
+        let _ = core::mem::size_of::<WriteRequest>();
+        // Error sets.
+        let _ = core::mem::size_of::<AcceptError>();
+        let _ = core::mem::size_of::<CancelError>();
+        let _ = core::mem::size_of::<CloseError>();
+        let _ = core::mem::size_of::<ConnectError>();
+        let _ = core::mem::size_of::<ShutdownError>();
+        let _ = core::mem::size_of::<WriteError>();
+        let _ = core::mem::size_of::<ReadError>();
+        let _ = core::mem::size_of::<PollError>();
+        let _ = core::mem::size_of::<PollEvent>();
+        let _ = core::mem::size_of::<Error>();
+        let _ = core::mem::size_of::<NotifyError>();
+        // Backend enum + thread-pool type surface.
+        let _ = Backend::default();
+        let _ = core::mem::size_of::<ThreadPool>();
+    }
+
+    // test "completion is zero-able" { const c: Self.Completion = .{}; _ = c; }
+    // The intrusive `Completion` is default-constructible (hand-written `Default`,
+    // [ADV-FIX F3]) — the load-bearing contract termio/core rely on.
+    #[test]
+    fn completion_is_zero_able() {
+        let c: Completion = Completion::default();
+        let _ = c;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Non-macOS: the crate is kqueue-only (XEV_BLUEPRINT §0/§1); other backends are

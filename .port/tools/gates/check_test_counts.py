@@ -705,6 +705,44 @@ MAP = {
     # methods are comptime-elided on macOS (§0) and deferred (§1); their doc comments
     # are preserved in stream.rs (R3, G3b-covered).
     "xev_stream":        ([f"{GHXEV}/watcher/stream.zig"], [f"{RSXEV}/stream.rs"], 0),
+    # rustty-xev C7 (XEV_BLUEPRINT §1/§7 + [ADV-FIX F7]) — THE FINALE mapping so R1
+    # is enforced across the whole in-scope surface (rust #[test] >= zig test{}).
+    # backend/kqueue.zig: 12 quoted `test "kqueue: ..."` (incl. `file IO on thread
+    # pool`, ported as a documented SkipZigTest-style skip-stub #[test] — ThreadPool
+    # body deferred, DEFERRALS.md; the count still holds) → zig=12; kqueue.rs=12.
+    "xev_kqueue":        ([f"{GHXEV}/backend/kqueue.zig"], [f"{RSXEV}/kqueue.rs"], 0),
+    # watcher/timer.zig: 5 quoted `test{}` (`timer`, `timer reset`, `timer reset
+    # before tick`, `timer reset after trigger`, `timer cancel`, inside `TimerTests`;
+    # the per-variant anon `test { _ = TimerTests(...); }` are refAllDecls, zig_count-
+    # skipped) → zig=5. C7 un-defers `Timer::reset`/`cancel` and ports all 5 as live
+    # #[test] + rustty KAT 2 (Timer fires) → timer.rs=6 >= 5. The `TimerDynamic`
+    # variant is comptime-elided on macOS (§0); its doc comments are R3/G3b-covered.
+    "xev_timer":         ([f"{GHXEV}/watcher/timer.zig"], [f"{RSXEV}/timer.rs"], 0),
+    # api.zig: the `Xev(be, T)` decl-forwarding struct. 1 quoted `test "completion is
+    # zero-able"` (R1) + 1 anon `test { refAllDecls }` (zig_count-skipped) → zig=1. On
+    # macOS the Api() collapses to this crate's public surface (§0), so both tests live
+    # at the package root (lib.rs `api_tests`): completion_is_zero_able (the R1 parity
+    # test) + ref_all_decls (the +margin reify) → lib.rs=2 >= 1.
+    "xev_api":           ([f"{GHXEV}/api.zig"], [f"{RSXEV}/lib.rs"], 0),
+    # backend.zig: `Backend` enum + `default()`/`candidates()`/`Api()`. 0 test{} →
+    # zig=0. backend.rs adds one +margin sanity #[test] (default==kqueue + single
+    # candidate, the §0 fact). rust=1 >= 0.
+    "xev_backend":       ([f"{GHXEV}/backend.zig"], [f"{RSXEV}/backend.rs"], 0),
+    # main.zig: the package root re-export surface. Its sole `test {}` is the anon
+    # heap/queue/ThreadPool/Dynamic aggregator (zig_count-skipped) → zig=0. Ported as
+    # THIS crate's lib.rs re-export surface (shares lib.rs with xev_api; rust>=0).
+    "xev_main":          ([f"{GHXEV}/main.zig"], [f"{RSXEV}/lib.rs"], 0),
+    # loop.zig: Options/RunMode/Callback/NoopCallback/CallbackAction/CompletionState
+    # (the callback ABI). 0 test{} → zig=0 (loop.rs; G3b carries fidelity).
+    "xev_loop":          ([f"{GHXEV}/loop.zig"], [f"{RSXEV}/loop.rs"], 0),
+    # watcher/common.zig: `userdataValue` (the typed→untyped bridge). 0 test{} →
+    # zig=0 (common.rs).
+    "xev_common":        ([f"{GHXEV}/watcher/common.zig"], [f"{RSXEV}/common.rs"], 0),
+    # ThreadPool.zig: the generic thread pool. Ported as TYPE SURFACE only (body
+    # DEFERRED — ghostty passes no pool, §1/§6; DEFERRALS.md). 0 test{} → zig=0
+    # (thread_pool.rs). net.rs (a std.net.Address subset, not a libxev source file)
+    # is intentionally UNMAPPED — it has no `.zig` reference oracle.
+    "xev_thread_pool":   ([f"{GHXEV}/ThreadPool.zig"], [f"{RSXEV}/thread_pool.rs"], 0),
 }
 
 def expand(globs):
