@@ -114,3 +114,23 @@ verify agent, not a fundamental wall.
 
 Net: Miri is back as a per-sub-batch gate for the raw-pointer-risky tests on vt-12+,
 not just a periodic check.
+
+---
+
+## rustty-xev C3 (kqueue loop core) — MIRI exception
+
+The kqueue backend makes real syscalls (`kqueue`/`kevent64`/`clock_gettime`/
+`socket`/`bind`/`connect`/`accept`/`send`/`recv`/`close`/`shutdown`/`read`/`write`
++ mach `mach_port_allocate`/`mach_msg`/…). Miri cannot call these foreign
+functions on macOS ("unsupported operation: can't call foreign function `kqueue`"),
+so the **kqueue/mach tests (loop time/stop/timer×family/cancel×2/socket×2/mach
+port + KAT 2) are a documented MIRI EXCEPTION** — they run natively (the live KATs
+are the memory-safety proof for the raw-pointer intrusive-completion paths there;
+the raw-pointer discipline is the mitigation, per `rust-mut-args-strongly-protected`).
+
+The **pure C1 intrusive structures remain Miri-gated** and stay green after C3:
+`cargo +nightly miri test -p rustty-xev` on `heap::tests::*` (excl. the slow
+million-values), `queue::tests::intrusive`, `queue_mpsc::tests::intrusive` → all
+pass (the crate Miri-compiles clean; the FFI-bearing loop functions are compiled
+but not interpreted when those tests run). This is the same split as the FFI crates
+(Miri for pure code, native/ASan for the C-boundary).

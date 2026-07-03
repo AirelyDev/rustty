@@ -1,41 +1,33 @@
 //! rustty-xev
 //!
-//! PARITY (DEFERRED SEAM, R4 / D6): the `xev` event-loop backend surface —
-//! libxev's future home.
+//! PARITY (D6): the `xev` event-loop backend — a faithful port of the libxev
+//! LIBRARY (mitchellh/libxev, the commit ghostty pins), macOS/kqueue-only for now
+//! (XEV_BLUEPRINT §0: on macOS `xev.Dynamic` IS the static kqueue `Api()`, so
+//! `dynamic.zig` is comptime-elided/deferred, not weakened).
 //!
 //! Every termio reference file (and, with the core tier, renderer/Thread.zig +
 //! core Surface.zig) imports `const xev = @import("../global.zig").xev` — the
-//! libxev async event-loop backend (`@import("xev").Dynamic`). Per the
-//! integration-tier blueprint's deferred decision point D6, libxev is Zig
-//! source (not C) and will be ported faithfully INTO THIS CRATE (vendored
-//! Zig-source precedent: rustty-z2d) when a real "run a shell end-to-end"
-//! milestone forces it; today `rustty-global` carries the package as the
-//! `seam::Xev` (= `()`) placeholder, exactly as `global.zig`'s `pub const xev`
-//! is a deferred seam.
+//! libxev async event-loop backend (`@import("xev").Dynamic`). Per the D6
+//! decision, libxev is Zig source (not C) and is ported faithfully INTO THIS
+//! CRATE (vendored Zig-source precedent: rustty-z2d). `rustty-global` carries the
+//! package as the `seam::Xev` (= `()`) anchor exactly as `global.zig`'s `pub
+//! const xev` is; the concrete handle types live here.
 //!
-//! The consumers need the individual handle TYPES (`Async`/`Loop`/
-//! `Completion`/`Timer`/...) for faithful field and signature shapes, so they
-//! are declared here as SHARED placeholders (hoisted from the termio-local
-//! `xev_seam` module with core chunk C0 — CORE_BLUEPRINT §5 "xev handle
-//! unification": core hands `render_thread.wakeup`, an `xev.Async`, to
-//! `termio::Options.renderer_wakeup`, so the type must be one crate both
-//! sides name; precedent: rustty-os cf_release_thread's `xev_seam` module).
-//! The method bodies are intentionally `unimplemented!()` markers: they are
-//! *dependency* placeholders, to be replaced by the real libxev port — no
-//! reference logic is stubbed or weakened behind them. When the port lands the
-//! types are filled IN PLACE, so downstream `use` paths never change. See
-//! .port/phase-2/DEFERRALS.md ("rustty-termio stage 2").
+//! CHUNK STATUS: C1 (queue/queue_mpsc/heap) + C2 (darwin) + C3 (loop core:
+//! `Loop`/`Completion`/`Operation`/`Result`, the tick, `Async`(mach) wakeup
+//! subset, the `Timer` watcher run) have LANDED. `Stream`/`Process`/`WriteQueue`/
+//! `WriteRequest` remain sequencing placeholders (chunks C5/C6) — filled in place;
+//! downstream `use` paths never change. See .port/phase-2/XEV_BLUEPRINT.md +
+//! DEFERRALS.md.
 
 // PORT: `rustty_global::seam::Xev` (= `()`), the deferred xev backend package.
 #[allow(unused_imports)]
 use rustty_global::xev as _DeferredXevBackend;
 
 // XEV_BLUEPRINT §8 chunk C1: the pure intrusive data structures that establish the
-// raw-pointer discipline for the whole libxev port. They are INTERNAL modules for
-// now (queue.zig / queue_mpsc.zig / heap.zig ported byte-faithfully); the kqueue
-// loop (C3) uses them (`submissions`/`thread_pool_completions`/`TimerHeap`), and C7
-// wires the package re-export surface. `allow(dead_code)`: they are sequenced ahead
-// of their first non-test consumer (C3), so the lib-only build sees them as unused.
+// raw-pointer discipline for the whole libxev port (queue.zig / queue_mpsc.zig /
+// heap.zig, byte-faithful). The kqueue loop (C3) uses them (`submissions`/
+// `thread_pool_completions`/`TimerHeap`); C7 wires the package re-export surface.
 #[allow(dead_code)]
 mod heap;
 #[allow(dead_code)]
@@ -45,108 +37,180 @@ mod queue_mpsc;
 
 // XEV_BLUEPRINT §3 chunk C2: the darwin/syscall layer (`darwin.zig` ported
 // byte-faithfully) — the mach-port / `mach_msg` bindings + `KernE`/`MachMsgE`
-// the kqueue `Wakeup` (C3) and `Async`(mach) (C4) ride. macOS/kqueue-only, so
-// `#[cfg(target_os = "macos")]`. `allow(dead_code)`: sequenced ahead of its
-// first consumer (C3/C4), so the lib-only build sees it as unused. The kqueue
-// syscall consts (`EVFILT_*`/`EV_*`/`NOTE_*`) + `kevent64`/`kevent64_s` come
-// from `libc` directly ([ADV-FIX F4]); this module binds only the mach APIs
-// libc lacks.
+// the kqueue `Wakeup` (C3) and `Async`(mach) ride. macOS/kqueue-only. The kqueue
+// syscall consts (`EVFILT_*`/`EV_*`/`NOTE_*`) + `kevent64`/`kevent64_s` come from
+// `libc` directly ([ADV-FIX F4]); this module binds only the mach APIs libc lacks.
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
 mod darwin;
 
-/// PORT: `xev.Loop` (the per-thread event loop; termio Thread owns one and
-/// `Termio.ThreadData.loop` points at it).
-pub struct Loop {}
+// XEV_BLUEPRINT §2/§8 chunk C3: the loop core.
+//  - `looppkg` (loop.zig): Options/RunMode/Callback/NoopCallback/CallbackAction/
+//    CompletionState (the callback ABI). `loop` is a Rust keyword → `#[path]`.
+//  - `common` (watcher/common.zig): the typed→untyped `userdata_value` bridge.
+//  - `thread_pool` (ThreadPool.zig): the TYPE SURFACE only (body deferred, §1/§6).
+//  - `kqueue` (backend/kqueue.zig): the whole loop — `Loop`/`Completion`/
+//    `Operation`/`Result`/`Wakeup`/`kevent_syscall`.
+//  - `async_watcher` (watcher/async.zig): the `AsyncMachPort` C3 subset (the
+//    wakeup handle the loop `Wakeup` embeds). `async` is a Rust keyword → `#[path]`.
+//  - `net` (std.net.Address subset): the connect/sendto/recvfrom addr type.
+//  - `timer` (watcher/timer.zig): the `xev.Timer` watcher C3 subset (init/run).
+#[cfg(target_os = "macos")]
+#[path = "async.rs"]
+mod async_watcher;
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+mod common;
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+mod kqueue;
+#[cfg(target_os = "macos")]
+#[path = "loop.rs"]
+mod looppkg;
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+mod net;
+#[cfg(target_os = "macos")]
+mod thread_pool;
+#[cfg(target_os = "macos")]
+mod timer;
 
-/// PORT: `xev.Async` (a cross-thread wakeup handle).
-//
-// PORT NOTE: `Clone`/`Copy` — the reference copies the handle by value
-// (Surface.zig `.renderer_wakeup = render_thread.wakeup`; Zig struct
-// assignment is a copy). A real libxev Async is a small fd/kqueue/eventfd
-// handle struct for which the by-value copy is exactly the reference
-// semantics, so the derive is kept when the port fills this in.
-#[derive(Clone, Copy)]
-pub struct Async {}
+// ---------------------------------------------------------------------------
+// The macOS/kqueue package re-export surface (= the kqueue `Api()` decls the
+// consumers name as `xev::*`). Filled by the real port (C3).
+// ---------------------------------------------------------------------------
+#[cfg(target_os = "macos")]
+pub use async_watcher::Async;
+#[cfg(target_os = "macos")]
+pub use kqueue::{
+    AcceptError, CancelError, CloseError, Completion, ConnectError, KEventError, Loop,
+    MachPortError, Operation, ProcError, ReadBuffer, ReadError, Result, ShutdownError, ShutdownHow,
+    TimerError, TimerTrigger, WriteBuffer, WriteError,
+};
+#[cfg(target_os = "macos")]
+pub use looppkg::{CallbackAction, CompletionState, Options, RunMode};
+#[cfg(target_os = "macos")]
+pub use timer::Timer;
 
-/// PORT: `xev.Completion` (default-initialized `.{}` in the reference).
-#[derive(Default)]
-pub struct Completion {}
-
-/// PORT: `xev.Timer` (the coalesce/sync-reset/selection-scroll timers).
-pub struct Timer {}
-
-/// PORT: the error set of `Loop.init`/`Async.init`/`Timer.init`.
+/// PORT: the error set of `Loop.init`/`Async.init`/`Timer.init` — the unified D6
+/// seam error (every libxev alloc/syscall failure collapses here; termio
+/// propagates `Loop::init()?`/`Async::init()?`/`Timer::init()?` through one type).
 #[derive(Debug)]
 pub struct Error;
 
 /// PORT: `xev.Async.NotifyError` (the error set of `Async.notify`).
 //
-// PORT NOTE: the extra derives are required by rustty-core's `surface::Error`
-// union (core C7), which embeds this error and itself derives
-// `Copy`/`PartialEq` (Zig error sets are trivially copyable/comparable
-// values, so the derives are faithful and survive the real libxev fill).
+// PORT NOTE: the derives are required by rustty-core's `surface::Error` union
+// (core C7), which embeds this error and itself derives `Copy`/`PartialEq` (Zig
+// error sets are trivially copyable/comparable values, so the derives are
+// faithful). [ADV-FIX F3]: load-bearing for the workspace build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotifyError;
 
-impl Loop {
-    // PORT: `xev.Loop.init(.{})`.
-    pub fn init() -> Result<Loop, Error> {
-        unimplemented!("xev backend deferred seam (R4/D6): rustty-xev tier")
-    }
-    pub fn deinit(&mut self) {
-        unimplemented!("xev backend deferred seam (R4/D6): rustty-xev tier")
-    }
-}
+// ---------------------------------------------------------------------------
+// Sequencing placeholders for the not-yet-ported watchers (chunks C5/C6). Filled
+// IN PLACE; downstream `use` paths never change. termio names these types +
+// default-constructs `WriteRequest`/`WriteQueue` (F3), so the trait surface is
+// preserved. Method bodies are `unimplemented!()` dependency markers — no
+// reference logic is stubbed behind them.
+// ---------------------------------------------------------------------------
 
-impl Async {
-    pub fn init() -> Result<Async, Error> {
-        unimplemented!("xev backend deferred seam (R4/D6): rustty-xev tier")
-    }
-    pub fn deinit(&mut self) {
-        unimplemented!("xev backend deferred seam (R4/D6): rustty-xev tier")
-    }
-    pub fn notify(&mut self) -> Result<(), NotifyError> {
-        unimplemented!("xev backend deferred seam (R4/D6): rustty-xev tier")
-    }
-}
-
-impl Timer {
-    pub fn init() -> Result<Timer, Error> {
-        unimplemented!("xev backend deferred seam (R4/D6): rustty-xev tier")
-    }
-    pub fn deinit(&mut self) {
-        unimplemented!("xev backend deferred seam (R4/D6): rustty-xev tier")
-    }
-}
-
-/// PORT: `xev.Stream` (the pty write stream — `xev.Stream.initFd(pty_fds.
-/// write)` in Exec's threadEnter; stage 4).
+/// PORT: `xev.Stream` (the pty write stream — `xev.Stream.initFd(pty_fds.write)`
+/// in Exec's threadEnter; chunk C6).
 pub struct Stream {}
 
 impl Stream {
     pub fn deinit(&mut self) {
-        unimplemented!("xev backend deferred seam (R4/D6): rustty-xev tier")
+        unimplemented!("xev Stream deferred (XEV_BLUEPRINT chunk C6): rustty-xev tier")
     }
 }
 
-/// PORT: `xev.Process` (the subprocess exit watcher — `xev.Process.init(pid)`
-/// in Exec's threadEnter; stage 4).
+/// PORT: `xev.Process` (the subprocess exit watcher — `xev.Process.init(pid)` in
+/// Exec's threadEnter; chunk C5).
 pub struct Process {}
 
 impl Process {
     pub fn deinit(&mut self) {
-        unimplemented!("xev backend deferred seam (R4/D6): rustty-xev tier")
+        unimplemented!("xev Process deferred (XEV_BLUEPRINT chunk C5): rustty-xev tier")
     }
 }
 
 /// PORT: `xev.WriteRequest` (the pooled stream-write request — Exec's
 /// `write_req_pool: SegmentedPool(xev.WriteRequest, ...)`; default-initialized
-/// by the pool).
+/// by the pool; chunk C6).
 #[derive(Default)]
 pub struct WriteRequest {}
 
 /// PORT: `xev.WriteQueue` (default-initialized `.{}` in the reference — Exec's
-/// `write_queue` field).
+/// `write_queue` field; chunk C6).
 #[derive(Default)]
 pub struct WriteQueue {}
+
+// ---------------------------------------------------------------------------
+// Non-macOS: the crate is kqueue-only (XEV_BLUEPRINT §0/§1); other backends are
+// whole follow-up ports. Keep the D6 seam placeholder handle types so the
+// workspace still type-checks off-macOS (real types are macOS-gated above).
+// ---------------------------------------------------------------------------
+
+#[cfg(not(target_os = "macos"))]
+pub use non_macos_seam::*;
+
+#[cfg(not(target_os = "macos"))]
+mod non_macos_seam {
+    use super::Error;
+
+    /// PORT: `xev.Loop` placeholder (non-macOS backend deferred).
+    pub struct Loop {}
+    /// PORT: `xev.Async` placeholder (non-macOS backend deferred).
+    #[derive(Clone, Copy)]
+    pub struct Async {}
+    /// PORT: `xev.Completion` placeholder (non-macOS backend deferred).
+    #[derive(Default)]
+    pub struct Completion {}
+    /// PORT: `xev.Timer` placeholder (non-macOS backend deferred).
+    pub struct Timer {}
+
+    impl Loop {
+        pub fn init() -> Result<Loop, Error> {
+            unimplemented!(
+                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+            )
+        }
+        pub fn deinit(&mut self) {
+            unimplemented!(
+                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+            )
+        }
+    }
+
+    impl Async {
+        pub fn init() -> Result<Async, Error> {
+            unimplemented!(
+                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+            )
+        }
+        pub fn deinit(&mut self) {
+            unimplemented!(
+                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+            )
+        }
+        pub fn notify(&self) -> Result<(), super::NotifyError> {
+            unimplemented!(
+                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+            )
+        }
+    }
+
+    impl Timer {
+        pub fn init() -> Result<Timer, Error> {
+            unimplemented!(
+                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+            )
+        }
+        pub fn deinit(&self) {
+            unimplemented!(
+                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+            )
+        }
+    }
+}

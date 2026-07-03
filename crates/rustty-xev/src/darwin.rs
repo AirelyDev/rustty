@@ -518,3 +518,62 @@ extern "C" {
     /// Mach APIs from Zig stdlib") — used by async.zig `init` errdefer / `deinit`.
     pub fn mach_port_destroy(task: ipc_space_t, name: mach_port_name_t) -> libc::kern_return_t;
 }
+
+// ---------------------------------------------------------------------------
+// Mach enum/struct primitives from Zig `std.c` (`posix.system.*`) + the
+// async.zig-local "Missing Mach APIs from Zig stdlib" block, that the `libc`
+// crate does not expose (XEV_BLUEPRINT §3 C2, used first by C3 Wakeup/`Async` +
+// the kqueue "mach port" test). Modeled as `#[repr(transparent)]` newtypes /
+// consts over the C integer types (`natural_t`/`mach_msg_bits_t`) so they OR/coerce
+// exactly where the reference `@intFromEnum(...)` does.
+// ---------------------------------------------------------------------------
+
+/// PORT: `posix.system.MACH_PORT_RIGHT` (Zig std.c) — the `right` values passed
+/// to `mach_port_allocate` (`@intFromEnum(MACH_PORT_RIGHT.RECEIVE)`).
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MACH_PORT_RIGHT(pub mach_port_right_t);
+
+impl MACH_PORT_RIGHT {
+    pub const SEND: MACH_PORT_RIGHT = MACH_PORT_RIGHT(0);
+    pub const RECEIVE: MACH_PORT_RIGHT = MACH_PORT_RIGHT(1);
+    pub const SEND_ONCE: MACH_PORT_RIGHT = MACH_PORT_RIGHT(2);
+    pub const PORT_SET: MACH_PORT_RIGHT = MACH_PORT_RIGHT(3);
+    pub const DEAD_NAME: MACH_PORT_RIGHT = MACH_PORT_RIGHT(4);
+    pub const LABELH: MACH_PORT_RIGHT = MACH_PORT_RIGHT(5);
+    pub const NUMBER: MACH_PORT_RIGHT = MACH_PORT_RIGHT(6);
+}
+
+/// PORT: `posix.system.MACH_MSG_TYPE` (Zig std.c) — the message-header disposition
+/// bits (`@intFromEnum(MACH_MSG_TYPE.MAKE_SEND)` etc.) used by `Async` and the
+/// kqueue "mach port" test.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MACH_MSG_TYPE(pub mach_msg_bits_t);
+
+impl MACH_MSG_TYPE {
+    pub const MOVE_RECEIVE: MACH_MSG_TYPE = MACH_MSG_TYPE(16);
+    pub const MOVE_SEND: MACH_MSG_TYPE = MACH_MSG_TYPE(17);
+    pub const MOVE_SEND_ONCE: MACH_MSG_TYPE = MACH_MSG_TYPE(18);
+    pub const COPY_SEND: MACH_MSG_TYPE = MACH_MSG_TYPE(19);
+    pub const MAKE_SEND: MACH_MSG_TYPE = MACH_MSG_TYPE(20);
+    pub const MAKE_SEND_ONCE: MACH_MSG_TYPE = MACH_MSG_TYPE(21);
+    pub const COPY_RECEIVE: MACH_MSG_TYPE = MACH_MSG_TYPE(22);
+    pub const DISPOSE_RECEIVE: MACH_MSG_TYPE = MACH_MSG_TYPE(24);
+    pub const DISPOSE_SEND: MACH_MSG_TYPE = MACH_MSG_TYPE(25);
+    pub const DISPOSE_SEND_ONCE: MACH_MSG_TYPE = MACH_MSG_TYPE(26);
+}
+
+/// PORT: async.zig-local `const mach_port_limits = extern struct { mpl_qlimit:
+/// c_uint };` ("Missing Mach APIs from Zig stdlib. Data from xnu:
+/// osfmk/mach/port.h") — the `info` payload of `mach_port_set_attributes` used by
+/// `Async.init` to set the port queue size (qlimit = 1).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct mach_port_limits {
+    pub mpl_qlimit: libc::c_uint,
+}
+
+/// PORT: async.zig-local `const MACH_PORT_LIMITS_INFO = 1;` — the `flavor`
+/// argument of `mach_port_set_attributes`.
+pub const MACH_PORT_LIMITS_INFO: mach_port_flavor_t = 1;

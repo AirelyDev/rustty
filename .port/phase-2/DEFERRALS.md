@@ -2802,3 +2802,68 @@ bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
   optimize/runtime/font log lines, rlimit init, crash.init, ensureLocale,
   glslang.init, oni.init, i18n.init) stay BREAK #1 deferred seams (preserved verbatim
   in `rustty_global::GlobalState::init`), wired as rustty-core / apprt land (Phase-3).
+
+---
+
+## rustty-xev C3 (loop core + Completion/Operation + tick) — deferrals
+
+Chunk C3 landed the kqueue loop core: `loop.rs` (Options/RunMode/Callback/
+NoopCallback/CallbackAction/CompletionState), `kqueue.rs` (the `Loop`,
+`Completion`, the 17-variant `Operation`/`Result` unions, `available`,
+`kevent_syscall`/`kevent_init`, `Wakeup`, and the whole `tick` — process_
+cancellations → submit → timer-heap firing → thread-pool MPSC migration [dead
+branch] → completions drain + EV.DELETE disarm staging → kevent_syscall → event
+dispatch), `common.rs` (`userdata_value`), the `AsyncMachPort` init/deinit/notify
+subset (`async.rs`), the `std.net.Address` subset (`net.rs`), the `Timer` watcher
+init/deinit/run subset (`timer.rs`), and the `ThreadPool` TYPE SURFACE
+(`thread_pool.rs`). All 12 kqueue `test{}`s land (10 timers/cancel/socket tests +
+`mach port` — runnable in C3 since the `machport` op + darwin bindings are ported —
++ the `file IO on thread pool` skip-stub) plus KAT 2 (Timer fires). Gate-green in
+isolation.
+
+DEFERRED (documented; not needed to unit-prove the loop):
+
+- **`ThreadPool.zig` work-stealing BODY** (§1/§6). Only the TYPE SURFACE
+  (`Task`/`Batch::from`/`schedule`/`init`/`deinit`/`shutdown` + a Rust-glue
+  `Task::default`) is ported so `kqueue.rs` compiles; ghostty passes NO
+  thread_pool (`Loop.init(.{})`), so the kqueue thread-pool branch is a faithfully-
+  ported DEAD branch (never taken while `thread_pool` is None). The
+  `kqueue: file IO on thread pool` test is a **SkipZigTest-style skip-stub `#[test]`**
+  (count holds, reference comments preserved) — it activates with the pool body.
+- **`Loop.init(options: Options)` → `Loop::init()` (no-arg).** ghostty's macOS
+  build only ever calls `Loop.init(.{})` (default Options, no thread_pool) and
+  termio's D6 seam fixes the signature to no-arg; the Options-carrying form + the
+  `thread_pool` path are deferred with the pool body. The `thread_pool:
+  options.thread_pool` assignment is preserved (default `null`).
+- **`watcher/timer.zig`: `reset`/`cancel` + its 5 `test{}`s** (`timer`, `reset`,
+  `reset before tick`, `reset after trigger`, `cancel`). C3 ports only
+  `init`/`deinit`/`run` (termio's `Timer::init()` + KAT 2). The loop-level
+  `timer`/`timer_reset` machinery the watcher rides IS ported and exercised by the
+  kqueue timer x-family tests.
+- **`watcher/async.zig`: `wait`/`drain` (the `machport`-op trampoline) + the
+  non-Darwin `AsyncEventFd`/`AsyncLoopState`/`AsyncIOCP` variants + the 3
+  `AsyncTests` + KAT 1** → chunk C4. C3 ports the `AsyncMachPort`
+  init/deinit/notify lifecycle (the loop `Wakeup` embeds it) + the loop `machport`
+  op arm (start/kevent/perform/syscall_result), so the wiring is present.
+- **`watcher/process.zig` (`ProcessKqueue`) → C5; `watcher/stream.zig`
+  (`Stream`/`WriteQueue`/`WriteRequest`) → C6.** `xev::Stream`/`Process`/
+  `WriteRequest`/`WriteQueue` remain lib.rs sequencing placeholders (F3 trait
+  surface preserved: `WriteRequest`/`WriteQueue: Default`).
+- **The non-Darwin `Wakeup` else-branch** (eventfd BSD TODO) — cfg-elided (macOS-
+  only); its verbatim comments are preserved in the `Wakeup` PORT note.
+- **`dynamic.zig`** — comptime-elided on single-candidate macOS (§0); N/A, not
+  weakened. **Other backends** (epoll/io_uring/iocp/wasi_poll), **`watcher/file`
+  /`tcp`/`udp`**, **`c_api.zig`** — whole follow-up ports (§1). Non-macOS handle
+  types stay lib.rs placeholders.
+- **`@sizeOf(Completion) == 256` → `size_of::<Completion>() == 232`
+  (divergence).** Rust's tagged-enum `Operation` (160B) is laid out differently
+  from Zig's `union(OperationType)` (176B); `flags` is a 2-byte struct vs Zig's
+  bit-packed 1 byte; the deferred-ThreadPool `Task.node` is a ZST placeholder vs
+  Zig's 8-byte Zap node. `Result` (24B) + `Address` (108B) match Zig. The layout
+  tripwire's PURPOSE is preserved — 232 is pinned so any accidental Completion
+  bloat trips the `const _: () = assert!(...)` exactly as Zig's `@compileLog`.
+- **`check_test_counts.py` rustty-xev mapping** — deferred to chunk C7 ([ADV-FIX
+  F7]: the count-gate maps ghostty `src/`, but libxev lives in the zig cache; a
+  libxev base-path / in-repo manifest is added in C7 with the full in-scope
+  contract). The per-crate `cargo test -p rustty-xev` count (21 = 8 C1 + 12
+  kqueue + KAT 2) is the authoritative backstop today.
