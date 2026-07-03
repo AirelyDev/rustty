@@ -325,7 +325,7 @@ bin.**
   + xev D6). DEFERRALS.md "rustty bin C6" tracks the GUI leaf + the log-facade /
   help_strings / vaxis / version-stub-line continuations.
 
-## rustty-xev (D6 libxev port) — Milestone A ✅ DONE (2026-07-03) — isolated real `rustty-xev`
+## rustty-xev (D6 libxev port) — Milestone A ✅ + Milestone B ✅ DONE (2026-07-03) — real `rustty-xev` + live shell
 
 The libxev event-loop LIBRARY (mitchellh/libxev, ghostty's pinned commit) ported
 faithfully into `crates/rustty-xev`, **macOS/kqueue only** (XEV_BLUEPRINT §0: on
@@ -362,12 +362,49 @@ termio/core `pub use rustty_xev::*` / `use rustty_xev as xev`).
   LATER via direct `os → xev` / `vt → xev` edges (NOT a `rustty_global::xev` re-
   export, which would cycle).
 
-**Milestone B (NEXT):** un-defer **TERMIO ONLY** ([ADV-FIX F8]) — `Thread.run` loop +
-`Termio.init`/`threadEnter`/`processOutput` + `Exec` `Subprocess.start`/`ReadThread`/
-`queueWrite` + the core `Async::notify()` leaves termio's threads poke — capped with a
-**live-shell KAT** (spawn a shell in a pty, pump the loop, assert output round-trips).
-`renderer.Thread` stays the **Phase-3 GPU tier** (GPU-*and*-xev-blocked; landing
-rustty-xev does not unblock it — listing it would false-green).
+**Milestone B — D6 ✅ DONE (2026-07-03) — THE PORT RUNS A LIVE SHELL.** termio is
+wired to the real `rustty-xev` kqueue loop and spawns a real `/bin/sh` end-to-end
+(XEV_MILESTONE_B_BLUEPRINT.md, chunks B1–B6, adversarially reviewed ACCEPT-WITH-FIXES,
+all 3+1 mandatory UB fixes honored). Un-deferred **TERMIO ONLY** ([ADV-FIX F8]):
+`Thread::{threadMain,threadMain_}` run loop + `drainMailbox` + the timer/async
+callbacks; `Termio::{init,threadEnter,processOutput,processOutputLocked}`;
+`Exec::{threadEnter,threadExit,focusGained,queueWrite,ttyWrite}` +
+`processExit`/`termiosTimer`; `Subprocess::start` (posix); `ReadThread::
+threadMainPosix`. The core `Async::notify()` leaves (io/stop/mailbox-wakeup) that
+termio's threads poke are now actually pumped by the io thread.
+- **UB fixes folded in:** [F1] `Termio::init` is the in-place out-param
+  `init(self_: *mut Termio<M>, …)` (StreamHandler self-ptrs re-seated at the final
+  address — no dangle); [F2] `Thread::threadMain` + `Termio::processOutput` take RAW
+  `*mut` (not `&mut`) to avoid the protected-`Unique` aliasing against the concurrent
+  ReadThread; [F3] the pty slave `File` is `ManuallyDrop`/`forget` + a single verbatim
+  `posix.close` (no double-close/fd-reuse race); [F4] `self_ptr` derived via
+  `addr_of_mut!` before any `&self.*` borrow (spawn scoped-borrow, SB-clean).
+- **Proof / gates:** the bounded **live-shell KAT**
+  (`crates/rustty-termio/tests/live_shell.rs`, macOS-only, its own process) spawns a
+  real `sh -c 'echo …'` in a pty, pumps `run(NoWait)` under a wall-clock deadline + tick
+  cap (never `run(.until_done)`), and asserts the echo round-trips into the terminal
+  `Screen` — **20/20 deterministic, no hangs/flakes**. termio = **47 unit tests**
+  (≥ 44, no drop) + the live-shell KAT (rustty-only integration margin); core 15, xev
+  42, vt 2019 (no regression); clippy `-D warnings` clean, fmt clean; `check_acyclic.sh`
+  + `check_test_counts.py` GREEN; scoped-G3b `missing=0` (888 distinctive ref comments,
+  verbatim reference comments preserved, `unimplemented!()` replaced BELOW). Real
+  fork/exec + kqueue syscalls are Miri-excluded (MIRI_EXCEPTIONS.md); the parent-side
+  spawn borrow-scoping is Stacked-Borrows-clean.
+- **What STILL stays deferred** (genuinely out-of-scope, NOT xev IO wiring):
+  `renderer.Thread`'s own event loop = **Phase-3 GPU tier** (GPU-*and*-xev-blocked;
+  landing rustty-xev does not unblock it — the io thread's `renderer_wakeup.notify()`
+  still fires a real mach send onto an Async whose loop nobody pumps yet, non-blocking
+  + fails-safe); the DCS↔tmux `.tmux` arm in `stream_handler::dcsCommand` (**vt tmux
+  control-mode DCS wiring** sub-batch, vt-side `TmuxCommand = ()` stub); and the
+  Windows/Flatpak/Zig-lazy-comptime stubs (`Subprocess::start` windows spawn,
+  `ReadThread::threadMainWindows`, `killCommandFlatpak`, `Backend::
+  childExitedAbnormally`) — all `#[cfg]`/const-false, unrelated to the macOS live shell.
+
+**Remaining after D6-Milestone-B:** Phase-3 = the GPU/GTK/inspector shell (renderer
+R-d Metal/OpenGL draw path + `renderer.Thread` event loop + the embedded/GTK apprt GUI
+launch + inspector dcimgui) + the synthetic/bench/fontconfig-discovery tails. The
+headless product (vt/config/cli/bin) and now the **live IO layer** are done; what is
+left is the on-screen GPU tier.
 
 ## INTEGRATION TIER — the critical path to the libghostty embedding milestone (original notes)
 Dependency-ordered, apprt-api now unblocks it:

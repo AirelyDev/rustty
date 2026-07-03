@@ -538,7 +538,7 @@ integration-tier blueprint:
   the sentry tests exercise `beforeSend` + the seam through the PURE value API
   only, and `sentry_pkg`'s reify test mirrors the sentry-sys KAT idiom.
 
-## rustty-termio stage 2 (integration tier) — dep wiring + struct shapes; deferred live-thread bodies + D6 xev seam
+## rustty-termio stage 2 (integration tier) — dep wiring + struct shapes; deferred live-thread bodies + D6 xev seam [D6 RESOLVED — xev Milestone B DONE, live shell runs]
 
 Stage 2 of the integration-tier blueprint lands the termio Cargo edges
 (rustty-config / rustty-renderer / rustty-apprt-api / rustty-global — all
@@ -550,6 +550,41 @@ surface (renderer/message.zig `Message` + `Thread::Mailbox` =
 deferrals below are untested-only (0 reference `test{}` blocks — R1-safe);
 every deferred body is preserved VERBATIM in comments at its Rust signature
 with an `unimplemented!()` marker (NOT fabricated logic).
+
+**STATUS 2026-07-03 — D6 xev Milestone B DONE (the port RUNS A LIVE SHELL).**
+Every D6 xev/live-thread termio seam below is now RESOLVED: `rustty-xev` (the real
+kqueue `Loop`/`Async`/`Timer`/`Process`/`Stream`/`WriteQueue`/`Completion`) landed
+(Milestone A), and Milestone B (chunks B1–B6, XEV_MILESTONE_B_BLUEPRINT.md) wired
+the termio writer thread onto it and spawns a real `/bin/sh` end-to-end. The
+un-deferred bodies (all preserved-verbatim reference comments intact, R3;
+`unimplemented!()` replaced BELOW the comment): `Subprocess::start` (posix, the
+pid-only-handle scoped-borrow spawn, no pty double-close — [F1]/[F3]/[F4]),
+`Exec::{threadEnter,threadExit,focusGained,queueWrite,ttyWrite}` +
+`processExit`/`processExitCommon`/`termiosTimer`, `ReadThread::threadMainPosix`,
+`Termio::{init (in-place out-param, [F1]),threadEnter,processOutput,
+processOutputLocked}`, and `Thread::{threadMain,threadMain_}` + `drainMailbox` +
+the timer/async callbacks (`syncResetCallback`/`coalesceCallback`/`wakeupCallback`/
+`stopCallback`/`selectionScrollCallback`/`startScrollTimer`/`stopScrollTimer`/
+`startSynchronizedOutput`/`handleResize`). [F2] `Thread::threadMain` +
+`Termio::processOutput` take RAW `*mut` (not `&mut`) to avoid the protected-`Unique`
+aliasing UB against the concurrent ReadThread. Proof: the bounded live-shell KAT
+(`crates/rustty-termio/tests/live_shell.rs`, macOS-only) drives a real `sh -c 'echo
+…'` through the full Exec→pty→xev→terminal round-trip and asserts the output lands
+in the `Screen` — deterministic (20/20 no hangs/flakes; bounded `run(NoWait)` +
+wall-clock deadline + tick cap, never `run(.until_done)`). termio = 47 unit tests
+(≥ 44, no drop) + the live-shell KAT (rustty-only integration margin); scoped-G3b
+`missing=0` (888 distinctive ref comments). The fork/exec + kqueue KATs are
+Miri-excluded (real syscalls; MIRI_EXCEPTIONS.md). **What STILL stays deferred**
+(genuinely out-of-scope, NOT xev IO wiring): `renderer.Thread`'s own event loop
+(GPU + xev, **Phase-3**; the io thread's `renderer_wakeup.notify()` still fires a
+real mach send onto an Async whose loop nobody pumps yet — non-blocking, fails-safe);
+the DCS↔tmux `.tmux` enter/exit arm in `stream_handler::dcsCommand` (vt-side
+`TmuxCommand = ()` stub — the **vt tmux control-mode DCS wiring** sub-batch); and the
+Windows/Flatpak stubs (`Subprocess::start` windows spawn, `ReadThread::
+threadMainWindows`, `killCommandFlatpak`, `Backend::childExitedAbnormally` — the
+last uninstantiated in the reference via Zig lazy compilation), all `#[cfg]`/
+const-false and unrelated to the macOS live-shell milestone. The remaining
+`[UPDATED …]` notes below are retained for provenance.
 
 - **D6 xev seam (`rustty-termio/src/xev_seam.rs`).** Every termio file imports
   `@import("../global.zig").xev` (libxev, `xev.Dynamic`). Per the blueprint's
@@ -565,6 +600,10 @@ with an `unimplemented!()` marker (NOT fabricated logic).
   gained `Clone`/`Copy`, the reference copies the handle by value);
   `termio::xev_seam` is now a `pub use rustty_xev::*` re-export. Still
   D6-deferred — the crate is libxev's future home, filled in place.]
+  [UPDATED xev Milestone A/B — RESOLVED: `rustty-xev` is a REAL working kqueue
+  loop and `termio::xev_seam` re-exports it; all termio bodies now call the live
+  `Loop`/`Async`/`Timer`/`Process`/`Stream`/`WriteQueue`/`Completion` API (no
+  `unimplemented!()` seam methods remain in the IO path).]
 - **Deferred with verbatim bodies (rustty-termio):**
   - `Termio.zig`: `init` (constructs the stage-4 `StreamHandler`),
     `threadEnter` (builds `ThreadData` around the live loop; `.backend =
@@ -593,11 +632,31 @@ with an `unimplemented!()` marker (NOT fabricated logic).
     graphics_exec move-out/move-back for the storage↔terminal alias. STILL
     D6-deferred: `init`/`threadEnter`/`processOutput`/`processOutputLocked`
     (xev loop + read-thread inspector slow path).]
+    [UPDATED xev Milestone B — RESOLVED: `init` is now the in-place out-param
+    `init(self_: *mut Termio<M>, …) -> Result<()>` ([F1] — re-seats the
+    `StreamHandler` `terminal`/`size`/`termio_mailbox` raw ptrs at the FINAL
+    address, no dangle); `threadEnter` builds `ThreadData { loop_, … }` and calls
+    `backend.threadEnter` then `queueWrite`s prepared input; `processOutput`
+    (RAW `*mut Termio<M>`, [F2]) + `processOutputLocked` lock the renderer mutex,
+    drive `terminal_stream.nextSlice`, `queueRender()`, `mailbox.notify()`. All
+    LIVE — the read-thread inspector slow path is ported as-is. Proven by the
+    live-shell KAT.]
   - `Thread.zig`: the run loop (`threadMain`/`threadMain_`/`CallbackData`/
     `drainMailbox`/`startSynchronizedOutput`/`handleResize`/`startScrollTimer`/
     `stopScrollTimer` + the five xev callbacks) — D6. Ported REAL: the struct
     shape, `Coalesce` (+ `MIN_MS`), `SYNC_RESET_MS`/`SELECTION_SCROLL_MS`,
     `Flags`, `init`, `deinit`.
+    [UPDATED xev Milestone B — RESOLVED: the whole run loop is LIVE.
+    `threadMain(self_: *mut Thread, io: *mut Termio<M>)` (RAW `*mut`, [F2]) runs
+    `threadMain_`, which frame-pins `CallbackData`/`ThreadData` (stable ptr for
+    the loop's life — the reference's "stack here so it has a stable pointer"),
+    arms `mailbox.wakeup.wait`/`stop.wait`, and runs `loop.run(.until_done)`.
+    `drainMailbox` + `startSynchronizedOutput`/`handleResize`/`startScrollTimer`/
+    `stopScrollTimer` + the five callbacks (`syncResetCallback`/`coalesceCallback`/
+    `wakeupCallback`/`stopCallback`/`selectionScrollCallback`) are ZST fn-items
+    recovering state through the `*mut CallbackData` userdata (never a long-lived
+    `&mut` across a tick — rust-mut-args-strongly-protected). Proven by the
+    live-shell KAT.]
   - `mailbox.zig`: `send` — its slow path unlocks/relocks a CALLER-held
     `std.Thread.Mutex` (manual lock/unlock), which guard-based
     `std::sync::Mutex` cannot express from the callee frame; the renderer
@@ -612,6 +671,10 @@ with an `unimplemented!()` marker (NOT fabricated logic).
     your copy" — Rust moves, so a failed instant push hands the message BACK)
     and the guard-less mutex `unlock()`/`lock()` for the caller-held-lock
     inversion. `wakeup.notify()` is the xev placeholder leaf.]
+    [UPDATED xev Milestone B — RESOLVED: `wakeup.notify()` is now a LIVE
+    `rustty_xev::Async::notify` mach-port poke, and the io thread's `threadMain_`
+    actually pumps the mailbox `wakeup` Async — the mailbox→writer wakeup path is
+    whole (exercised end-to-end by the live-shell KAT).]
 - **Stage-4 placeholders (rustty-termio) — RESOLVED (stage 4):**
   `backend::{Exec, ExecConfig, ExecThreadData}` are now the REAL
   `exec::{Exec, Config, ThreadData}` types (Exec.zig ported, 10 tests) and
