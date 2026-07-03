@@ -2682,3 +2682,109 @@ LIVE; the vaxis/zf render paths are documented deferred placeholder leaves.
   on the rustty-font discovery/SharedGridSet subsystem (continuation of the C2 note;
   NOT a C5 chunk). Their MAP entries + scoped-G3b land when that font-crate
   milestone is carved.
+
+## rustty bin C6 (Phase-2 CLI milestone) — the `rustty` bin (action dispatch + usage banner + Phase-3 GUI leaf)
+
+C6 (CLI_BLUEPRINT.md §5/§6 + ADV-FIX 2/6) lands the `rustty` bin: `main.zig`
+(the entrypoint selector → `main.rs`) + `main_ghostty.zig` (`main()` dispatch,
+`logFn`, `std_options` → `main_ghostty.rs`). **[ADV-FIX 2]** action DETECTION
+lives in the BIN (bin deps cli): `main_ghostty::state_init` runs
+`cli::action::detect_args::<cli::ghostty::Action>` over `os::args` and builds the
+bin's OWN `rustty_global::GlobalState<Action>` (NOT `rustty_core::STATE`, bound
+`Action=()`); `rustty_apprt::init` stays cli-free (no `apprt→cli` cycle). Dispatch:
+detected action → `exit(action.run())`; `app_runtime == .none` + no action → the
+usage banner + `exit(0)`; the GUI `else` branch (App.create + apprt.App.init/run
+over xev, D6) is the Phase-3 leaf (`unimplemented!()`). The headless product runs
+for real (the "it runs" KAT `crates/rustty/tests/cli_smoke.rs`: +version / --version
+/ +list-actions / +validate-config / +ssh-cache / +new-window / no-args banner /
++bogus, all asserted end-to-end over the spawned binary). Gate-green: bin 2
+`#[test]` (main 1 ref_entrypoint + main_ghostty 1 ref_all_decls) + 9 KAT smoke
+tests; test-count GREEN (main 0/1, main_ghostty 0/1, main_c 3/3→apprt-c,
+lib_vt 0/308→vt-c); scoped-G3b **missing=0** on the two ported `.zig` files
+(main.zig + main_ghostty.zig); clippy/fmt/acyclic GREEN (no `apprt→cli` edge — the
+bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
+`rustty-build-config`, `rustty-identity`. Deferrals introduced/continued:
+
+- **Phase-3 GUI launch leaf (`main_ghostty.rs`).** The reference `main()`'s GUI
+  path (`App.create(alloc)` + `apprt.App.init/run` the event loop, `startQuitTimer`)
+  reaches the concrete embedded/GTK apprt backend + the xev event loop (D6). It is
+  ported as a documented `unimplemented!()` leaf with the reference body preserved
+  verbatim as comments (the GPU/GTK/xev "deferred placeholder leaf" precedent). The
+  reference reaches it only for a GUI build (`app_runtime != .none`); the headless
+  `.none` bin (the current darwin/Windows default) never does — it runs the action
+  or prints the usage banner. **Target:** un-defer when the embedded/GTK apprt
+  backend + xev (D6) land (Phase-3). The no-args KAT is scoped to `.none`
+  (`app_runtime()` guard) so it stays honest on a future `.gtk` build.
+
+- **`main_c.zig` (3t) re-homed to rustty-apprt-c; `lib_vt.zig` (1t) re-homed to
+  rustty-vt-c [ADV-FIX 6].** The 3 `ghostty_string_s` tests are ported
+  assertion-for-assertion into `rustty-apprt-c/src/lib.rs`'s `main_c_tests` mod
+  (they exercise the `String`/`ghostty_string_s` C hub the apprt-c crate ports); the
+  `check_test_counts.py` crate_map entry `main_c → apprt-c/lib.rs` keeps the count
+  exact (3/3). `lib_vt.zig`'s sole `test {}` is the anonymous refAllDecls-style reify
+  (zig_count anon-skip → zig=0), re-homed `lib_vt → vt-c` (already covered by vt-c's
+  C-ABI reify surface). **The bin does NOT dep apprt-c** (apprt-c is the top-sink).
+  NOTE: the phase-0 `tests-summary.json` crate_map still partitions main_c.zig /
+  lib_vt.zig under `bin`, so a WHOLE-CRATE `check_comment_coverage.py --crate rustty`
+  reports their (and main_gen/main_wasm/main_build_data's) reference comments as
+  "missing" — this is EXPECTED per the DEFERRALS "Rule" (main_c's non-test comment
+  fidelity — ghostty_init/ghostty_info/ghostty_translate/DllMain/the comptime export
+  block — is the rustty-apprt-c E-series' concern, not C6). The C6 scoped-G3b on the
+  two files the bin actually ports (main.zig + main_ghostty.zig) is missing=0.
+
+- **`main_gen.zig` / `main_wasm.zig` / `main_build_data.zig` (0t each) DEFERRED.**
+  These are standalone build-tool / wasm-module entrypoints, NOT on the `rustty`
+  exe's `exe_entrypoint` switch (main.zig selects only `.ghostty` → main_ghostty for
+  the `rustty` binary; helpgen/mdgen/webgen are the codegen tools). All 0-test → no
+  test-count contract impact; no MAP entry yet. **Target:** port with the
+  gen/wasm-artifact tooling milestone (the same milestone that builds the
+  `help_strings` codegen — see below).
+
+- **`logFn` / `std_options` — the log-facade seam is a deferred seam (continued).**
+  `main_ghostty.rs` ports `logFn` (the stderr branch is LIVE, gated on the bin's
+  `GlobalState.logging.stderr` + the debug-only-in-Debug rule, exactly as the
+  reference) and `std_options` (the compile-time `LOG_LEVEL`). The macOS unified-
+  logging branch (`macos.os.Log`) is the SAME log-facade seam the rest of the tree
+  defers (rustty-os stubs `std.log.scoped`) — preserved verbatim as comments (incl.
+  the `sudo log stream …` view predicate, R2-renamed to the `io.airely.rustty`
+  bundle id). The action path sets `logging.stderr = false` (reference global.zig
+  line 107) so action stdout stays clean; on the headless `.none` build stderr
+  logging is off by default regardless. NOTE: the config/os crates emit their OWN
+  `info(config):` log lines (a separate pre-existing facade) that the bin's
+  `logging.stderr` flag does not gate — a documented consequence of the rustty
+  log-facade split, not a C6 regression; the KAT reads stdout (diagnostics/banner)
+  separately from that stderr noise. **Target:** un-defer with the unified log-facade
+  follow-up.
+
+- **`version.zig` renderer/libxev/toolchain STUB lines (continued from C1, ADV-FIX
+  1).** The `+version` KAT asserts ONLY exit 0 + stdout starts `rustty ` — it does
+  NOT assert the `- renderer` (`RENDERER_STUB`), `- libxev` (`LIBXEV_STUB`), or
+  `- Rust version` (`TOOLCHAIN_VERSION_STUB`) line CONTENT, which stay documented
+  stubs until R-d (renderer) / D6 (libxev) land. Unchanged by C6.
+
+- **`explain_config` (1t DEFERRED) + `help_strings` codegen (continued, ADV-FIX 3).**
+  The bin does not un-defer these; `Action::help_text` still returns "" (the
+  `+action --help` text) and the explain_config test stays SkipZigTest-style until
+  the `help_strings` codegen follow-up lands (which also enables +help /
+  show_config --docs / list_keybinds --docs, all 0-test). The KAT does not exercise
+  `+explain-config` / `+help`.
+
+- **vaxis/zf TUI leaves (continued from C5).** `boo` (pure vaxis animation),
+  `list_themes`' interactive vaxis+zf picker, and the `prettyPrint` branches of
+  `list_colors`/`list_keybinds` remain deferred placeholder leaves (their
+  plain/enumeration paths are LIVE and are the only paths the KAT and any redirected
+  pipe hit). The bin's dispatch reaches every action's `run()`; the deferred render
+  paths are 0-test and only entered on an interactive TTY (which the KAT is not).
+  Un-deferred with the `vaxis`/`zf` port.
+
+- **`rustty_apprt::init` resources-dir wiring (resolves the C5 note).** C6's
+  `state_init` calls `rustty_apprt::init()` — the one live upward call the reference
+  `global.zig` init makes (`self.resources_dir = try apprt.runtime.resourcesDir`) —
+  which populates `rustty_core::STATE.resources_dir`. This is the "C6 bin wiring" the
+  C5 `list_themes` resources-dir note scheduled: the bin's own `GlobalState<Action>`
+  carries the action, core STATE carries the resources dir, both set here so the
+  list_themes `.resources` warning seam stays consistent. The remaining reference
+  init side effects (GHOSTTY_LOG parse, signal setup, xev detect, the version/
+  optimize/runtime/font log lines, rlimit init, crash.init, ensureLocale,
+  glslang.init, oni.init, i18n.init) stay BREAK #1 deferred seams (preserved verbatim
+  in `rustty_global::GlobalState::init`), wired as rustty-core / apprt land (Phase-3).

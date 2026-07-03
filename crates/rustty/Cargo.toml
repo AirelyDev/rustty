@@ -19,7 +19,30 @@ name = "rustty"
 path = "src/main.rs"
 
 [dependencies]
-# Entry points fan out only: cli, apprt, core (wired as the upper tiers land).
+# Entry points fan out only: cli, apprt, core.
 rustty-cli = { workspace = true }
 rustty-apprt = { workspace = true }
 rustty-core = { workspace = true }
+# C6 (CLI_BLUEPRINT.md §5/§6 + ADV-FIX 2): the bin runs the CLI action DETECTION
+# itself (`cli::action::detect_iter::<cli::ghostty::Action>`) and constructs its
+# OWN `rustty_global::GlobalState<Action>` (NOT `rustty_core::STATE`, which is
+# bound `Action=()`). Detection living HERE (bin deps cli) — instead of in
+# `rustty_apprt::init` (which sits below cli and would cycle `apprt→cli`) — is the
+# fix that keeps `apprt` cli-free and the crate graph acyclic (G7). rustty-global
+# is member 8 (strictly-earlier) so the graph stays acyclic.
+rustty-global = { workspace = true }
+# C6: main_ghostty.zig branches on `build_config.app_runtime == .none` (the
+# headless usage-banner path vs the Phase-3 GUI leaf) and the identity-renamed
+# banner / "unknown CLI action" text emit the rustty product name via
+# rustty-identity (R2). Both are strictly-earlier members (2, 3) — acyclic.
+rustty-build-config = { workspace = true }
+rustty-identity = { workspace = true }
+
+[dev-dependencies]
+# The "it runs" KAT (CLI_BLUEPRINT.md §7, tests/cli_smoke.rs) spawns the built
+# `rustty` binary via env!("CARGO_BIN_EXE_rustty"). It reads `app_runtime()` to
+# scope the no-args usage-banner assertion to the headless `.none` build (the GUI
+# `.gtk` build would take the Phase-3 leaf instead). Temp dirs for the
+# ssh-cache / validate-config cases are created with std::env::temp_dir (no
+# extra dep — the disk_cache tests' precedent).
+rustty-build-config = { workspace = true }

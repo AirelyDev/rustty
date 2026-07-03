@@ -281,6 +281,50 @@ exports** in the new **`rustty-apprt-c`** top-sink crate (cdylib/staticlib/rlib 
   first — EMBEDDED_BLUEPRINT §1 rec 2), then Phase-3 (renderer R-d + D6 xev +
   the objc/Metal/dcimgui inspector) makes the live-surface half runtime-real.
 
+## CLI + BIN: ✅ DONE (2026-07-02) — the headless `rustty` product RUNS
+Per CLI_BLUEPRINT.md (adversarially reviewed ACCEPT-WITH-FIXES, 6 ADV-FIXES
+folded), landed in 6 chunks C1→C6. **`src/cli/` (dispatcher + 18 action impls +
+ssh subsystem) → `rustty-cli`; `src/main.zig` + `main_ghostty.zig` → the `rustty`
+bin.**
+- **cli = 44 tests now + 1 deferred (explain_config, ADV-FIX 3).** C1 dispatcher
+  (action 7 / ghostty 4 + help + version-PARTIAL + cli.zig re-export); C2 pure
+  config/introspection actions + Pager (2); C3 ssh subsystem (Entry 3 / DiskCache
+  12 / ssh_cache 5 / ssh 10 = 30); C4 apprt-backed + misc (crash_report /
+  edit_config / the none-backed IPC new_window / toggle_quick_terminal exit-1 /
+  tui seam); C5 the vaxis/zf-touching actions' plain/enumeration paths LIVE
+  (list_colors / list_keybinds --plain + list_themes enumeration; boo + the
+  interactive pickers are vaxis-deferred leaves). No cli test needs a live app.
+- **bin = C6 (ADV-FIX 2/6).** `main.rs` (entrypoint selector) + `main_ghostty.rs`
+  (`main()` dispatch + `logFn` + `std_options`). Action DETECTION lives in the BIN
+  (`cli::action::detect_args::<cli::ghostty::Action>` over os args → the bin's own
+  `rustty_global::GlobalState<Action>`, NOT core's `Action=()` STATE);
+  `rustty_apprt::init` stays cli-free (no `apprt→cli` cycle). Dispatch: action →
+  `exit(action.run())`; `app_runtime == .none` + no action → usage banner + exit 0;
+  the GUI else-branch (App.create + apprt.App.init/run over xev) is the Phase-3
+  `unimplemented!()` leaf. `main_c.zig`(3t)→apprt-c + `lib_vt.zig`(1t)→vt-c re-homed
+  in the test-count crate_map (bin does NOT dep apprt-c); main_gen/main_wasm/
+  main_build_data (0t gen/wasm artifacts) deferred.
+- **The "it runs" KAT (`crates/rustty/tests/cli_smoke.rs`, 9 tests).** Spawns the
+  BUILT `env!("CARGO_BIN_EXE_rustty")` and asserts end-to-end: `+version` (exit 0,
+  stdout starts `rustty ` — NOT the renderer/libxev stub content, ADV-FIX 1) /
+  `--version` / `+list-actions` (non-empty) / `+validate-config` (exit 0 valid,
+  exit 1 + diagnostic broken) / `+ssh-cache --add` then list shows the entry /
+  `+new-window` (exit 1 + "not supported on this platform" — the faithful `none`
+  IPC seam, ADV-FIX 4) / no-args (exit 0 + usage banner, `.none`-scoped) / `+bogus`
+  (exit 1 + "unknown CLI action"). **The headless product actually executes.**
+- **Gates:** workspace build clean + bin tests (2 unit + 9 KAT) + apprt-c
+  (3 re-homed main_c + smoke) + adjacent regressions (vt 2019 / core 15 /
+  apprt-api 20 / termio 44) + clippy `-D warnings` + fmt + acyclic (bin a clean top
+  sink over cli+apprt; no `apprt→cli` edge) + test-counts (main 0/1, main_ghostty
+  0/1, main_c 3/3, lib_vt 0/308 GREEN) + scoped-G3b (main.zig + main_ghostty.zig
+  distinctive, missing=0) all GREEN.
+- **Headless framing (honest):** `rustty +version`/`+list-fonts`/`+validate-config`/
+  `+show-config`/`+list-actions`/`+ssh-cache`/`+ssh …` all RUN for real; `rustty`
+  with no action prints the usage banner and exits (it is the headless helper CLI,
+  not a window). **GUI launch = Phase-3** (needs the live embedded/GTK apprt backend
+  + xev D6). DEFERRALS.md "rustty bin C6" tracks the GUI leaf + the log-facade /
+  help_strings / vaxis / version-stub-line continuations.
+
 ## INTEGRATION TIER — the critical path to the libghostty embedding milestone (original notes)
 Dependency-ordered, apprt-api now unblocks it:
 **quirks** (57 loc, tiny leaf, imports font — needs a crate-placement decision) + **Command** (911 loc/10t, now unblocked by apprt-api — placement decision) + **crash** (sentry-sys ready) → **termio** (pty/exec/thread, 30 tests — the "run a real shell" layer; pty.rs already ported in rustty-os) → **core** (Surface.zig/App.zig — the big one; fills apprt-api's growth-point trait methods + the mailbox/queue seam) → **apprt/embedded** (2250 loc, 71 C-ABI exports — THE libghostty embedding milestone, via vt-c cbindgen+pinned-padding+const-size-assert) + **none.zig** (headless). Then **cli** + **bin**. Crown-jewel-adjacent — needs design + careful review (not background dispatch).

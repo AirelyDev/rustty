@@ -107,6 +107,9 @@ RSAPPRT = "/Users/gael/projects/rustty/crates/rustty-apprt/src"
 # block (the extern structs, chunk E5 -> capi.rs; the 71 `ghostty_*` exports,
 # E6..E10) + the main_c.zig C API hub (lib.rs). All 0-test reference files.
 RSAPPRTC = "/Users/gael/projects/rustty/crates/rustty-apprt-c/src"
+# rustty (the `rustty` bin, member 27). GH base = src root (main.zig /
+# main_ghostty.zig live beside App.zig). CLI_BLUEPRINT.md §5/§6 chunk C6.
+RSBIN = "/Users/gael/projects/rustty/crates/rustty/src"
 # renderer.zig is at src/renderer.zig (crate root), one level above GHR (src/renderer).
 GHSRC = "/Users/gael/projects/ghostty/src"
 
@@ -312,6 +315,28 @@ MAP = {
     "cli_list_keybinds":    ([f"{GHC}/list_keybinds.zig"], [f"{RSCLI}/list_keybinds.rs"], 0),
     "cli_list_themes":      ([f"{GHC}/list_themes.zig"], [f"{RSCLI}/list_themes.rs"], 0),
     "cli_boo":              ([f"{GHC}/boo.zig"], [f"{RSCLI}/boo.rs"], 0),
+    # rustty bin C6 (CLI_BLUEPRINT.md §5/§6 + ADV-FIX 2/6): the `rustty` bin.
+    # main.zig (anon `test { _ = entrypoint; }`, refAllDecls-style -> skipped by
+    # zig_count -> zig=0) -> main.rs (rust=1 ref_entrypoint). main_ghostty.zig (anon
+    # `test { _ = @import(..); }`, refAllDecls-style -> zig=0) -> main_ghostty.rs
+    # (rust=1 ref_all_decls). The bin owes main 1 + main_ghostty 1 at the phase-0
+    # inventory level (2t); at the GATE both are the skipped anonymous form (zig=0),
+    # so rust>=zig holds with the ported reify tests.
+    "main":              ([f"{GHSRC}/main.zig"], [f"{RSBIN}/main.rs"], 0),
+    "main_ghostty":      ([f"{GHSRC}/main_ghostty.zig"], [f"{RSBIN}/main_ghostty.rs"], 0),
+    # ADV-FIX 6 (§6 option b): main_c.zig (3 quoted `ghostty_string_s` tests) is
+    # RE-HOMED to rustty-apprt-c (the libghostty C-API hub the `String` port lives
+    # in) — the bin does NOT dep apprt-c. zig=3; the 3 tests are ported into
+    # rustty-apprt-c/lib.rs's main_c_tests mod (rust>=3). Note apprt-c's lib.rs is
+    # also globbed by `apprt_embedded` (a per-module independent count); both
+    # entries hold.
+    "main_c":            ([f"{GHSRC}/main_c.zig"], [f"{RSAPPRTC}/lib.rs"], 0),
+    # ADV-FIX 6: lib_vt.zig (the librustty-vt entry) is RE-HOMED to rustty-vt-c
+    # (vt-c precedent). Its sole `test {}` is the anonymous refAllDecls-style reify
+    # (`_ = terminal; _ = lib/main; refAllDecls(input); _ = terminal.c_api;`) -> the
+    # zig_count anon-skip makes it zig=0, already covered by vt-c's C-ABI reify
+    # surface (rust>=0).
+    "lib_vt":            ([f"{GHSRC}/lib_vt.zig"], [f"{RSVC}/**/*.rs"], 0),
     # Stage C — rustty-terminfo (GH base = src/terminfo, not src/terminal).
     # Source.zig (2t: "xtgettcap map" + "encode") -> source.rs.
     # ghostty.zig (1t: "encode") -> entry.rs (the terminfo entry; names carry

@@ -486,8 +486,11 @@ name = "rustty"
 version = "0.1.0"
 dependencies = [
  "rustty-apprt",
+ "rustty-build-config",
  "rustty-cli",
  "rustty-core",
+ "rustty-global",
+ "rustty-identity",
 ]
 
 [[package]]

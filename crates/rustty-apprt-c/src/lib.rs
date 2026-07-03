@@ -2461,3 +2461,99 @@ pub unsafe extern "C" fn rustty_inspector_metal_shutdown(ptr: *mut Inspector) {
         }
     }
 }
+
+// ===================================================================
+// main_c.zig test tail — re-homed to rustty-apprt-c (CLI_BLUEPRINT.md ADV-FIX 6).
+//
+// The 3 `ghostty_string_s` tests exercise the `String` (`ghostty_string_s`) C hub
+// type that main_c.zig defines and this crate ports (above). Per ADV-FIX 6 (§6
+// option b) the main_c.zig test blocks are crate_map-re-homed here — the `rustty`
+// bin does NOT dep apprt-c (apprt-c is the top-sink), so its libghostty-entry
+// tests live with the ported `String` they exercise. Ported assertion-for-
+// assertion (R1); the reference `state.alloc = testing.allocator` install has no
+// analog because the rustty `String` frees via the global allocator (see
+// `String::deinit`, Box::from_raw).
+// ===================================================================
+#[cfg(test)]
+mod main_c_tests {
+    use super::String;
+
+    // test "ghostty_string_s empty string" {
+    #[test]
+    fn ghostty_string_s_empty_string() {
+        // const testing = std.testing;
+        // const empty_string = String.empty;
+        let empty_string = String::empty();
+        // defer empty_string.deinit();
+
+        // try testing.expect(empty_string.len == 0);
+        assert!(empty_string.len == 0);
+        // try testing.expect(empty_string.sentinel == false);
+        assert!(!empty_string.sentinel);
+
+        // defer empty_string.deinit(); — runs at scope end (null ptr -> no-op).
+        empty_string.deinit();
+    }
+
+    // test "ghostty_string_s c string" {
+    #[test]
+    fn ghostty_string_s_c_string() {
+        // const testing = std.testing;
+        // state.alloc = testing.allocator;
+        //   PORT NOTE: the rustty `String` frees via the global allocator
+        //   (`Box::from_raw` in `deinit`), so there is no `state.alloc` to install;
+        //   the reference's `testing.allocator` install is unnecessary.
+
+        // const slice: [:0]const u8 = "hello";
+        let slice: &[u8] = b"hello";
+        // const allocated_slice = try testing.allocator.dupeZ(u8, slice);
+        //   the `dupeZ` copy; the rustty `from_slice` appends the sentinel NUL
+        //   itself, so the owned copy is just the `hello` bytes with `sentinel=true`.
+        let allocated_slice = slice.to_vec();
+        // const c_null_string = String.fromSlice(allocated_slice);
+        let c_null_string = String::from_slice(allocated_slice, true);
+        // defer c_null_string.deinit();
+
+        // try testing.expect(allocated_slice[5] == 0);
+        //   the sentinel NUL `from_slice` appended lives at index `len` (== 5).
+        //   SAFETY: `from_slice(_, true)` allocated `len + 1` bytes with a trailing NUL.
+        assert!(unsafe { *c_null_string.ptr.add(5) } == 0);
+        // try testing.expect(@TypeOf(slice) == [:0]const u8);
+        // try testing.expect(@TypeOf(allocated_slice) == [:0]u8);
+        //   compile-time type assertions; the Rust types are `&[u8]` / `Vec<u8>`
+        //   with the sentinel tracked by the explicit `true` arg (no runtime analog).
+        // try testing.expect(c_null_string.len == 5);
+        assert!(c_null_string.len == 5);
+        // try testing.expect(c_null_string.sentinel == true);
+        assert!(c_null_string.sentinel);
+
+        // defer c_null_string.deinit(); — frees `len + 1` bytes at scope end.
+        c_null_string.deinit();
+    }
+
+    // test "ghostty_string_s zig string" {
+    #[test]
+    fn ghostty_string_s_zig_string() {
+        // const testing = std.testing;
+        // state.alloc = testing.allocator; (see the c-string note — no analog needed.)
+
+        // const slice: []const u8 = "hello";
+        let slice: &[u8] = b"hello";
+        // const allocated_slice = try testing.allocator.dupe(u8, slice);
+        let allocated_slice = slice.to_vec();
+        // const zig_string = String.fromSlice(allocated_slice);
+        let zig_string = String::from_slice(allocated_slice, false);
+        // defer zig_string.deinit();
+
+        // try testing.expect(@TypeOf(slice) == []const u8);
+        // try testing.expect(@TypeOf(allocated_slice) == []u8);
+        //   compile-time type assertions; no runtime analog.
+        // try testing.expect(zig_string.len == 5);
+        assert!(zig_string.len == 5);
+        // try testing.expect(zig_string.sentinel == false);
+        assert!(!zig_string.sentinel);
+
+        // defer zig_string.deinit(); — frees `len` bytes at scope end.
+        zig_string.deinit();
+    }
+}
