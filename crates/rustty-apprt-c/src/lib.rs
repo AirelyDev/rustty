@@ -71,6 +71,18 @@ use rustty_core::surface::TextViewport;
 // The core `terminal.Selection` `readTextLocked` receives (resolved by the caller
 // from the active screen's selection or the wire `Selection`).
 use rustty_vt::selection::Selection as CoreSelection;
+// The E8 input exports' mods/mouse wire types (all `input.*` in the reference):
+// `Mods`/`ModsBacking` reinterpret the raw `c_int` mods a host passes
+// (`ghostty_surface_{key_translation_mods,mouse_button,mouse_pos}`); `mouse`'s
+// `ButtonState`/`Button`/`PressureStage`/`ScrollMods` are the mouse-event value
+// types (`ghostty_surface_mouse_{button,scroll,pressure}`).
+use rustty_vt::input::key_mods::{Mods, ModsBacking};
+use rustty_vt::input::mouse;
+// `input.Binding.Flags.C` (`ghostty_surface_key_is_binding`'s out-param, written
+// from `Flags.cval()`) and `input.Mods.translation` (`ghostty_surface_key_translation_mods`);
+// `translation` is a `rustty-input` free fn (it needs the apprt-layer `OptionAsAlt`).
+use rustty_input::binding::FlagsC;
+use rustty_input::key_mods::translation;
 
 // The raw C-API `KeyEvent` (E5, capi.rs) — the wire form `ghostty_app_key` /
 // `ghostty_config_key_is_binding` receive, converted to the native form via
@@ -1278,4 +1290,360 @@ pub unsafe extern "C" fn rustty_surface_set_occlusion(surface: *mut Surface, vis
     // surface.occlusionCallback(visible);
     // SAFETY: `surface` validity is the caller's contract.
     unsafe { (*surface).occlusionCallback(visible) };
+}
+
+// ===========================================================================
+// CAPI input exports (embedded.zig 1758-1920, chunk E8): the raw key/text/preedit
+// and mouse (button/pos/scroll/pressure/ime) sinks. Each wrapper marshals the wire
+// form the host passes (`c_int` mods reinterpreted as `input.Mods`, `input.Mouse*`
+// value types) and forwards to the ported `rustty-apprt` backend `Surface` callback
+// methods (E3) or the core surface directly. Every export here needs a LIVE surface
+// (created via `rustty_surface_new`, the Phase-3 GPU-leaf boundary), so it links now
+// and reaches the renderer leaf only when driven — NO new `unimplemented!()` leaf in
+// apprt-c (DEFERRALS.md, E7 precedent).
+// ===========================================================================
+
+/// C: rustty_surface_key_translation_mods
+///
+/// Filter the mods if necessary. This handles settings such as
+/// `macos-option-as-alt`. The filtered mods should be used for
+/// key translation but should NOT be sent back via the `_key`
+/// function -- the original mods should be used for that.
+///
+/// # Safety
+/// `surface` must be a valid pointer returned by [`rustty_surface_new`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_key_translation_mods(
+    surface: *mut Surface,
+    mods_raw: c_int,
+) -> c_int {
+    // const mods: input.Mods = @bitCast(@as(
+    //     input.Mods.Backing,
+    //     @truncate(@as(c_uint, @bitCast(mods_raw))),
+    // ));
+    //
+    // PORT NOTE: reinterpret the signed `c_int` as unsigned (`@bitCast` ->
+    // `as c_uint`), truncate to the `u16` `Mods.Backing` (`@truncate` ->
+    // `as ModsBacking`), then reinterpret the backing bits as `Mods`
+    // (`@bitCast` -> `Mods::from_int`), the E5 `KeyEvent::keyEvent` precedent.
+    let mods = Mods::from_int(mods_raw as core::ffi::c_uint as ModsBacking);
+    // const result = mods.translation(
+    //     surface.core_surface.config.macos_option_as_alt orelse
+    //         surface.app.keyboardLayout().detectOptionAsAlt(),
+    // );
+    //
+    // PORT NOTE: `Mods.translation` is ported as the `rustty-input` free fn
+    // `key_mods::translation` (it needs the apprt-layer `OptionAsAlt`, so it cannot
+    // live on `rustty-vt`'s `Mods`). The `orelse` is lazy — `keyboardLayout()`
+    // (`detectOptionAsAlt`) is only evaluated when the config value is unset —
+    // mirrored with `unwrap_or_else`.
+    // SAFETY: `surface` validity is the caller's contract.
+    let option_as_alt = unsafe { (*surface).core_surface.config.macos_option_as_alt }
+        // SAFETY: `surface.app` is the stable backend `App` pointer set at init.
+        .unwrap_or_else(|| unsafe { (*(*surface).app).keyboardLayout() }.detect_option_as_alt());
+    let result = translation(mods, option_as_alt);
+    // return @intCast(@as(input.Mods.Backing, @bitCast(result)));
+    //
+    // PORT NOTE: reinterpret `result` as its `u16` backing (`@bitCast` -> `int()`)
+    // then widen to the `c_int` the ABI returns (`@intCast`).
+    result.int() as c_int
+}
+
+/// C: rustty_surface_key
+///
+/// Send this for raw keypresses (i.e. the keyDown event on macOS).
+/// This will handle the keymap translation and send the appropriate
+/// key and char events.
+///
+/// # Safety
+/// `surface` must be a valid pointer returned by [`rustty_surface_new`]; `event.text`,
+/// if non-null, must be a valid NUL-terminated C string that outlives the call.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_key(surface: *mut Surface, event: KeyEvent) -> bool {
+    // return surface.app.keyEvent(
+    //     .{ .surface = surface },
+    //     event.keyEvent(),
+    // ) catch |err| {
+    //     log.warn("error processing key event err={}", .{err});
+    //     return false;
+    // };
+    // SAFETY: `event.text` validity is the caller's contract (KeyEvent::keyEvent).
+    let kev = unsafe { event.keyEvent() };
+    // SAFETY: `surface`/`surface.app` validity is the caller's contract.
+    match unsafe { (*(*surface).app).keyEvent(KeyTarget::Surface(surface), kev) } {
+        Ok(v) => v,
+        Err(err) => {
+            eprintln!("error processing key event err={err:?}");
+            false
+        }
+    }
+}
+
+/// C: rustty_surface_key_is_binding
+///
+/// Returns true if the given key event would trigger a binding
+/// if it were sent to the surface right now. The "right now"
+/// is important because things like trigger sequences are only
+/// valid until the next key event.
+///
+/// # Safety
+/// `surface` must be a valid pointer returned by [`rustty_surface_new`]; `event.text`,
+/// if non-null, must be a valid NUL-terminated C string that outlives the call;
+/// `c_flags`, if non-null, must be a valid writable [`FlagsC`] pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_key_is_binding(
+    surface: *mut Surface,
+    event: KeyEvent,
+    c_flags: *mut FlagsC,
+) -> bool {
+    // const core_event = event.keyEvent().core() orelse {
+    //     log.warn("error processing key event", .{});
+    //     return false;
+    // };
+    // SAFETY: `event.text` validity is the caller's contract (KeyEvent::keyEvent).
+    let core_event = match unsafe { event.keyEvent() }.core() {
+        Some(v) => v,
+        None => {
+            eprintln!("error processing key event");
+            return false;
+        }
+    };
+
+    // const flags = surface.core_surface.keyEventIsBinding(
+    //     core_event,
+    // ) orelse return false;
+    // SAFETY: `surface` validity is the caller's contract.
+    let flags = match unsafe { (*surface).core_surface.keyEventIsBinding(core_event) } {
+        Some(v) => v,
+        None => return false,
+    };
+    // if (c_flags) |ptr| ptr.* = flags.cval();
+    //
+    // PORT NOTE: the reference `?*` nullable pointer is a raw `*mut FlagsC`; the
+    // `if (c_flags) |ptr|` capture is a null-check before the write.
+    if !c_flags.is_null() {
+        // SAFETY: `c_flags` is non-null and the caller's contract makes it writable.
+        unsafe { *c_flags = flags.cval() };
+    }
+    // return true;
+    true
+}
+
+/// C: rustty_surface_text
+///
+/// Send raw text to the terminal. This is treated like a paste
+/// so this isn't useful for sending escape sequences. For that,
+/// individual key input should be used.
+///
+/// # Safety
+/// `surface` must be a valid pointer returned by [`rustty_surface_new`]; `ptr` must
+/// point to at least `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_text(surface: *mut Surface, ptr: *const u8, len: usize) {
+    // surface.textCallback(ptr[0..len]);
+    // SAFETY: `ptr[0..len]` validity is the caller's contract.
+    let text = unsafe { core::slice::from_raw_parts(ptr, len) };
+    // SAFETY: `surface` validity is the caller's contract.
+    unsafe { (*surface).textCallback(text) };
+}
+
+/// C: rustty_surface_preedit
+///
+/// Set the preedit text for the surface. This is used for IME
+/// composition. If the length is 0, then the preedit text is cleared.
+///
+/// # Safety
+/// `surface` must be a valid pointer returned by [`rustty_surface_new`]; `ptr` must
+/// point to at least `len` readable bytes when `len != 0`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_preedit(surface: *mut Surface, ptr: *const u8, len: usize) {
+    // surface.preeditCallback(if (len == 0) null else ptr[0..len]);
+    //
+    // PORT NOTE: the reference `?[]const u8` — `null` when `len == 0`, else the
+    // `ptr[0..len]` slice — maps to `Option<&[u8]>`.
+    let preedit = if len == 0 {
+        None
+    } else {
+        // SAFETY: `ptr[0..len]` validity is the caller's contract (len != 0 here).
+        Some(unsafe { core::slice::from_raw_parts(ptr, len) })
+    };
+    // SAFETY: `surface` validity is the caller's contract.
+    unsafe { (*surface).preeditCallback(preedit) };
+}
+
+/// C: rustty_surface_mouse_captured
+///
+/// Returns true if the surface currently has mouse capturing
+/// enabled.
+///
+/// # Safety
+/// `surface` must be a valid pointer returned by [`rustty_surface_new`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_mouse_captured(surface: *mut Surface) -> bool {
+    // return surface.core_surface.mouseCaptured();
+    // SAFETY: `surface` validity is the caller's contract.
+    unsafe { (*surface).core_surface.mouseCaptured() }
+}
+
+/// C: rustty_surface_mouse_button
+///
+/// Tell the surface that it needs to schedule a render
+///
+/// # Safety
+/// `surface` must be a valid pointer returned by [`rustty_surface_new`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_mouse_button(
+    surface: *mut Surface,
+    action: mouse::ButtonState,
+    button: mouse::Button,
+    mods: c_int,
+) -> bool {
+    // return surface.mouseButtonCallback(
+    //     action,
+    //     button,
+    //     @bitCast(@as(
+    //         input.Mods.Backing,
+    //         @truncate(@as(c_uint, @bitCast(mods))),
+    //     )),
+    // );
+    //
+    // PORT NOTE: the `c_int` mods reinterpret is the `key_translation_mods` /
+    // `KeyEvent::keyEvent` precedent (`Mods::from_int(mods as c_uint as Backing)`).
+    // SAFETY: `surface` validity is the caller's contract.
+    unsafe {
+        (*surface).mouseButtonCallback(
+            action,
+            button,
+            Mods::from_int(mods as core::ffi::c_uint as ModsBacking),
+        )
+    }
+}
+
+/// C: rustty_surface_mouse_pos
+///
+/// Update the mouse position within the view.
+///
+/// # Safety
+/// `surface` must be a valid pointer returned by [`rustty_surface_new`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_mouse_pos(
+    surface: *mut Surface,
+    x: f64,
+    y: f64,
+    mods: c_int,
+) {
+    // surface.cursorPosCallback(
+    //     x,
+    //     y,
+    //     @bitCast(@as(
+    //         input.Mods.Backing,
+    //         @truncate(@as(c_uint, @bitCast(mods))),
+    //     )),
+    // );
+    // SAFETY: `surface` validity is the caller's contract.
+    unsafe {
+        (*surface).cursorPosCallback(
+            x,
+            y,
+            Mods::from_int(mods as core::ffi::c_uint as ModsBacking),
+        )
+    };
+}
+
+/// C: rustty_surface_mouse_scroll
+///
+/// # Safety
+/// `surface` must be a valid pointer returned by [`rustty_surface_new`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_mouse_scroll(
+    surface: *mut Surface,
+    x: f64,
+    y: f64,
+    scroll_mods: c_int,
+) {
+    // surface.scrollCallback(
+    //     x,
+    //     y,
+    //     @bitCast(@as(u8, @truncate(@as(c_uint, @bitCast(scroll_mods))))),
+    // );
+    //
+    // PORT NOTE: reinterpret the signed `c_int` as unsigned, truncate to the `u8`
+    // `ScrollMods` backing, then reinterpret the bits as `ScrollMods`
+    // (`@bitCast` -> `ScrollMods::from_int`, the vt `Mods::from_int` idiom).
+    // SAFETY: `surface` validity is the caller's contract.
+    unsafe {
+        (*surface).scrollCallback(
+            x,
+            y,
+            mouse::ScrollMods::from_int(scroll_mods as core::ffi::c_uint as u8),
+        )
+    };
+}
+
+/// C: rustty_surface_mouse_pressure
+///
+/// # Safety
+/// `surface` must be a valid pointer returned by [`rustty_surface_new`].
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_mouse_pressure(
+    surface: *mut Surface,
+    stage_raw: u32,
+    pressure: f64,
+) {
+    // const stage = std.meta.intToEnum(
+    //     input.MousePressureStage,
+    //     stage_raw,
+    // ) catch {
+    //     log.warn(
+    //         "invalid mouse pressure stage value={}",
+    //         .{stage_raw},
+    //     );
+    //     return;
+    // };
+    //
+    // PORT NOTE: `intToEnum` is the fallible tag guard on the raw `u32` crossing the
+    // C boundary (the E7 `set_color_scheme` precedent). `MousePressureStage` is
+    // `enum(u8) { none=0, normal=1, deep=2 }`.
+    let stage = match stage_raw {
+        0 => mouse::PressureStage::None,
+        1 => mouse::PressureStage::Normal,
+        2 => mouse::PressureStage::Deep,
+        _ => {
+            eprintln!("invalid mouse pressure stage value={stage_raw}");
+            return;
+        }
+    };
+
+    // surface.mousePressureCallback(stage, pressure);
+    // SAFETY: `surface` validity is the caller's contract.
+    unsafe { (*surface).mousePressureCallback(stage, pressure) };
+}
+
+/// C: rustty_surface_ime_point
+///
+/// # Safety
+/// `surface` must be a valid pointer returned by [`rustty_surface_new`]; `x`/`y`/
+/// `width`/`height` must be valid writable `f64` pointers.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_ime_point(
+    surface: *mut Surface,
+    x: *mut f64,
+    y: *mut f64,
+    width: *mut f64,
+    height: *mut f64,
+) {
+    // const pos = surface.core_surface.imePoint();
+    // SAFETY: `surface` validity is the caller's contract.
+    let pos = unsafe { (*surface).core_surface.imePoint() };
+    // x.* = pos.x;
+    // y.* = pos.y;
+    // width.* = pos.width;
+    // height.* = pos.height;
+    // SAFETY: `x`/`y`/`width`/`height` writability is the caller's contract.
+    unsafe {
+        *x = pos.x;
+        *y = pos.y;
+        *width = pos.width;
+        *height = pos.height;
+    }
 }

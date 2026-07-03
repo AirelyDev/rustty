@@ -53,6 +53,13 @@ rustty-config = { workspace = true }
 # app-lifecycle exports drive (`ghostty_app_open_config` -> `perform_action(.app,
 # .open_config)`).
 rustty-apprt-api = { workspace = true }
+# The E8 input exports reach two rustty-input decls the reference names as
+# `input.Mods.translation` + `input.Binding.Flags.C`: `ghostty_surface_key_translation_mods`
+# calls `key_mods::translation` (the `Mods.translation` method, ported as a free fn
+# since it needs the apprt-layer `OptionAsAlt`), and `ghostty_surface_key_is_binding`
+# writes a `binding::FlagsC` (`?*input.Binding.Flags.C`). Forward edge (far below
+# apprt-c) — apprt-c stays the top sink, `check_acyclic.sh` GREEN.
+rustty-input = { workspace = true }
 # The process-global allocator seam (`global.alloc`): `CoreApp::create` takes an
 # `allocator_api2 Global` (rustty's `std.mem.Allocator` map), matching
 # `rustty_apprt::init`'s `()` alloc seam.

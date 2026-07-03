@@ -531,6 +531,7 @@ dependencies = [
  "rustty-apprt-api",
  "rustty-config",
  "rustty-core",
+ "rustty-input",
  "rustty-vt",
 ]
 

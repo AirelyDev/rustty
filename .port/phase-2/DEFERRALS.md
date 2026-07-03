@@ -2179,3 +2179,63 @@ GREEN, rust ≥ zig; NO new MAP entry). Whole-workspace gates green (build incl.
 with apprt-c still a clean TOP SINK, test-counts G-gate); scoped-G3b on embedded.zig
 **1538-1757 (E7) distinctive=27 missing=0 review=0**. No regression (vt 2019, core 15,
 apprt-api 20, renderer 19, crash 12, termio 44).
+
+## rustty-apprt-c embedded E8 (CAPI input exports) — live-surface leaf, NO new leaf
+
+Chunk E8 of the libghostty C-ABI milestone (EMBEDDED_BLUEPRINT §1/§3/§7): ports
+embedded.zig **1758-1920** — the 11 raw input exports — into
+`crates/rustty-apprt-c/src/lib.rs` as `#[no_mangle] pub unsafe extern "C" fn
+rustty_surface_*`: `_key_translation_mods`, `_key`, `_key_is_binding`, `_text`,
+`_preedit`, `_mouse_captured`, `_mouse_button`, `_mouse_pos`, `_mouse_scroll`,
+`_mouse_pressure`, `_ime_point`. Each marshals the wire form (the `c_int` mods
+reinterpreted as `input.Mods`; the `input.Mouse{ButtonState,Button,PressureStage}` +
+`input.ScrollMods` value types) and forwards to the ported `rustty-apprt` backend
+`Surface` callback methods (E3: `keyEvent`/`textCallback`/`preeditCallback`/
+`mouseButtonCallback`/`cursorPosCallback`/`scrollCallback`/`mousePressureCallback`) or
+straight to the core surface (`mouseCaptured`/`keyEventIsBinding`/`imePoint`).
+
+**Runtime split (EMBEDDED_BLUEPRINT §1):** every E8 export needs a **LIVE surface**
+(created via `rustty_surface_new`, the Phase-3 GPU-leaf boundary — core `Surface::init`
+constructs `renderer_seam::{Renderer,Thread}`, the R-d/D6 leaves already in the core C3
+deferral set above). The wrappers LINK now; a live-surface call reaches the renderer
+leaf only when driven (key/mouse callbacks schedule a render). E8 adds **NO new
+`unimplemented!()` leaf in apprt-c** — it is a pure FFI projection (the E6/E7 precedent),
+so there is nothing to un-defer here beyond the existing renderer/xev leaves.
+
+**One supporting COMPLETION (not a deferral) — faithful `@bitCast` helper in vt:**
+`ghostty_surface_mouse_scroll` reinterprets the wire `scroll_mods` bits as
+`input.ScrollMods` (reference `@bitCast(@as(u8, @truncate(@as(c_uint, @bitCast(...)))))`).
+The port models `ScrollMods` as an unpacked struct with an `int()` backing serializer;
+E8 adds its inverse **`ScrollMods::from_int(u8)`** to `rustty-vt`
+(`crates/rustty-vt/src/input/mouse.rs`), mirroring the established `key_mods::Mods::from_int`
+/ `Keys::from_int` / `Side::from_int` idiom (the port form of `@bitCast(backing_int) ->
+packed struct`) — so the apprt-c export calls `ScrollMods::from_int(...)` exactly as
+`capi.rs` calls `Mods::from_int(...)` (E5). The `momentum` `u3` sub-field only names
+values 0..=6; the one unrepresentable pattern (`7`) — which `int()` / a real platform
+scroll event never produces — traps via `unreachable!()`, the Rust-safe analog of the
+reference `@bitCast`-to-exhaustive-`enum(u3)` illegal behavior. Additive pure fn; the
+vt 2019-test suite is unchanged (no `#[test]` added, no MAP delta). NOT a deferral.
+
+**Identity / ABI notes (R3):** the `c_int` mods reinterpret is the E5 `KeyEvent::keyEvent`
+precedent (`Mods::from_int(mods as c_uint as ModsBacking)`), shared by
+`_key_translation_mods`/`_mouse_button`/`_mouse_pos`. `_key_translation_mods`'s
+`Mods.translation` is the `rustty-input` free fn `key_mods::translation` (it needs the
+apprt-layer `OptionAsAlt`, so it cannot live on vt's `Mods`); the `orelse` fallback to
+`keyboardLayout().detectOptionAsAlt()` is lazy (`unwrap_or_else`). `_key`'s target is
+`KeyTarget::Surface(surface)` (vs E6 `_app`'s `KeyTarget::App`). `_key_is_binding`'s
+`?*input.Binding.Flags.C` out-param is a raw `*mut FlagsC` written under a null-check
+(the `if (c_flags) |ptr|` capture); `Flags.cval()` is the `rustty-input` serializer.
+`_mouse_pressure`'s `intToEnum(MousePressureStage, ...)` guard is inlined on the raw
+`u32` (the E7 `set_color_scheme` precedent). `_ime_point` writes the four `apprt.IMEPos`
+fields through the caller's `*mut f64` out-params. `_text`/`_preedit` build `&[u8]`
+(preedit: `Option<&[u8]>`, `None` when `len == 0`) from the `[*]const u8`+`len` pair.
+
+**Gate deltas (E8):** new dep on `rustty-apprt-c`: **`rustty-input`** (via `key_mods::translation`
++ `binding::FlagsC` — far below apprt-c, still a clean TOP SINK). E8 also touches
+`rustty-vt` (the additive `ScrollMods::from_int`). `apprt_embedded` MAP row unchanged
+(embedded.zig 0-test; the exports land under the existing `{RSAPPRTC}/**/*.rs` glob —
+GREEN, rust ≥ zig; NO new MAP entry). Whole-workspace gates green (build incl. apprt-c
++ rustty + cli; touched-crate tests — apprt-c 0, vt 2019; clippy `-D warnings`, fmt,
+acyclic G7 with apprt-c still a clean TOP SINK, test-counts G-gate); scoped-G3b on
+embedded.zig **1758-1920 (E8) distinctive=18 missing=0 review=0**. No regression
+(vt 2019, core 15, apprt-api 20, renderer 19, crash 12, termio 44).

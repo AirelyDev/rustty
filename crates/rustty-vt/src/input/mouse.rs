@@ -143,6 +143,34 @@ impl ScrollMods {
     pub fn int(self) -> u8 {
         (self.precision as u8) | ((self.momentum as u8) << 1)
     }
+
+    /// PORT NOTE: `@bitCast` from the `u8` backing integer back to the packed
+    /// `ScrollMods` struct. Reproduces the bit layout from `int()` (`precision`
+    /// at bit 0, `momentum` occupying the `u3` at bits 1..=3, `_padding` at bits
+    /// 4..=7). Mirrors `key_mods::Mods::from_int` / `Keys::from_int` / `Side::from_int`
+    /// — the port idiom for the reference `@bitCast(backing_int) -> packed struct`.
+    /// Used by the embedded CAPI `ghostty_surface_mouse_scroll` export (E8) to
+    /// reinterpret the wire `scroll_mods` bits the host passes.
+    pub fn from_int(v: u8) -> ScrollMods {
+        ScrollMods {
+            precision: (v & 0b0000_0001) != 0,
+            // The `u3` `Momentum` field only names values 0..=6; a valid `ScrollMods`
+            // (from `int()` or a real platform scroll event) never sets the seventh
+            // (`7`) representation. The reference `@bitCast` to the exhaustive
+            // `enum(u3)` treats that value as illegal behavior (ReleaseSafe trap /
+            // ReleaseFast UB), so the Rust-safe analog traps here too.
+            momentum: match (v >> 1) & 0b0000_0111 {
+                0 => Momentum::None,
+                1 => Momentum::Began,
+                2 => Momentum::Stationary,
+                3 => Momentum::Changed,
+                4 => Momentum::Ended,
+                5 => Momentum::Cancelled,
+                6 => Momentum::MayBegin,
+                _ => unreachable!("invalid ScrollMods momentum bit pattern"),
+            },
+        }
+    }
 }
 
 // For our own understanding
