@@ -1527,6 +1527,19 @@ impl Completion {
             ..Completion::default()
         }
     }
+
+    /// PORT: the `c.flags.threadpool = true` assignment the stream `Closeable`
+    /// (and the `Readable`/`Writeable` kqueue arms when `options.threadpool`)
+    /// perform inside the package (stream.zig:434/609/998). `flags` is module-
+    /// private, so this `pub(crate)` seam lets the sibling `stream` module
+    /// (C6) set the threadpool bit without seeing the internal flags layout —
+    /// exactly as Zig sets `c.flags.threadpool` directly within the package.
+    ///
+    /// # Safety
+    /// `c` must be a valid, stable `Completion` pointer.
+    pub(crate) unsafe fn set_threadpool(c: *mut Completion, v: bool) {
+        unsafe { (*c).flags.threadpool = v };
+    }
 }
 
 // PORT NOTE [ADV-FIX F2]: `Completion` holds raw-ptr links (`next`/`task_loop`) +

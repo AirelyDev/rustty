@@ -16,10 +16,10 @@
 //! CHUNK STATUS: C1 (queue/queue_mpsc/heap) + C2 (darwin) + C3 (loop core:
 //! `Loop`/`Completion`/`Operation`/`Result`, the tick, `Async`(mach) wakeup
 //! subset, the `Timer` watcher run) + C4 (`Async` mach-port watcher) + C5
-//! (`Process` EVFILT_PROC watcher) have LANDED. `Stream`/`WriteQueue`/
-//! `WriteRequest` remain sequencing placeholders (chunk C6) — filled in place;
-//! downstream `use` paths never change. See .port/phase-2/XEV_BLUEPRINT.md +
-//! DEFERRALS.md.
+//! (`Process` EVFILT_PROC watcher) + C6 (`Stream`/`WriteQueue`/`WriteRequest` +
+//! the `Writeable.queueWrite` ordered-write engine) have LANDED — the whole
+//! macOS/kqueue in-scope surface is now filled in place; downstream `use` paths
+//! never change. See .port/phase-2/XEV_BLUEPRINT.md + DEFERRALS.md.
 
 // PORT: `rustty_global::seam::Xev` (= `()`), the deferred xev backend package.
 #[allow(unused_imports)]
@@ -77,6 +77,13 @@ mod net;
 // landed in C3; this module adds the high-level `xev.Process` watcher surface.
 #[cfg(target_os = "macos")]
 mod process;
+// XEV_BLUEPRINT §4/§8 chunk C6: the `Stream` watcher (`watcher/stream.zig`) — the
+// `Shared` piece (`WriteQueue`/`WriteRequest`/`PollError`/`PollEvent`) +
+// `GenericStream` (init_fd/deinit/read/write/close/poll) + the `Writeable.queueWrite`
+// ordered-write engine termio's pty write path rides. The loop read/write/close ops
+// landed in C3; this module adds the high-level `xev.Stream` surface.
+#[cfg(target_os = "macos")]
+mod stream;
 #[cfg(target_os = "macos")]
 mod thread_pool;
 #[cfg(target_os = "macos")]
@@ -99,6 +106,8 @@ pub use looppkg::{CallbackAction, CompletionState, Options, RunMode};
 #[cfg(target_os = "macos")]
 pub use process::Process;
 #[cfg(target_os = "macos")]
+pub use stream::{PollError, PollEvent, Stream, WriteQueue, WriteRequest};
+#[cfg(target_os = "macos")]
 pub use timer::Timer;
 
 /// PORT: the error set of `Loop.init`/`Async.init`/`Timer.init` — the unified D6
@@ -115,35 +124,6 @@ pub struct Error;
 // faithful). [ADV-FIX F3]: load-bearing for the workspace build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotifyError;
-
-// ---------------------------------------------------------------------------
-// Sequencing placeholders for the not-yet-ported `Stream` watcher (chunk C6).
-// Filled IN PLACE; downstream `use` paths never change. termio names these types +
-// default-constructs `WriteRequest`/`WriteQueue` (F3), so the trait surface is
-// preserved. Method bodies are `unimplemented!()` dependency markers — no
-// reference logic is stubbed behind them.
-// ---------------------------------------------------------------------------
-
-/// PORT: `xev.Stream` (the pty write stream — `xev.Stream.initFd(pty_fds.write)`
-/// in Exec's threadEnter; chunk C6).
-pub struct Stream {}
-
-impl Stream {
-    pub fn deinit(&mut self) {
-        unimplemented!("xev Stream deferred (XEV_BLUEPRINT chunk C6): rustty-xev tier")
-    }
-}
-
-/// PORT: `xev.WriteRequest` (the pooled stream-write request — Exec's
-/// `write_req_pool: SegmentedPool(xev.WriteRequest, ...)`; default-initialized
-/// by the pool; chunk C6).
-#[derive(Default)]
-pub struct WriteRequest {}
-
-/// PORT: `xev.WriteQueue` (default-initialized `.{}` in the reference — Exec's
-/// `write_queue` field; chunk C6).
-#[derive(Default)]
-pub struct WriteQueue {}
 
 // ---------------------------------------------------------------------------
 // Non-macOS: the crate is kqueue-only (XEV_BLUEPRINT §0/§1); other backends are
@@ -171,6 +151,25 @@ mod non_macos_seam {
     /// PORT: `xev.Process` placeholder (non-macOS backend deferred).
     #[derive(Clone, Copy)]
     pub struct Process {}
+    /// PORT: `xev.Stream` placeholder (non-macOS backend deferred).
+    #[derive(Clone, Copy)]
+    pub struct Stream {}
+    /// PORT: `xev.WriteRequest` placeholder (non-macOS backend deferred) — Exec's
+    /// `SegmentedPool<xev::WriteRequest>` requires `Default`.
+    #[derive(Default)]
+    pub struct WriteRequest {}
+    /// PORT: `xev.WriteQueue` placeholder (non-macOS backend deferred) — Exec's
+    /// `write_queue` field default-constructs it.
+    #[derive(Default)]
+    pub struct WriteQueue {}
+
+    impl Stream {
+        pub fn deinit(&self) {
+            unimplemented!(
+                "xev backend is kqueue/macOS-only (XEV_BLUEPRINT §0): non-macOS deferred"
+            )
+        }
+    }
 
     impl Loop {
         pub fn init() -> Result<Loop, Error> {

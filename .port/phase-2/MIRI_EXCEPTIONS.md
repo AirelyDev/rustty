@@ -157,3 +157,19 @@ as the C3/C4 exceptions above, so they **run natively**, not under Miri. KAT 3
 (`posix_spawn /usr/bin/true` → `Process.wait` → `run(.until_done)` asserts exit
 status 0) is the memory-safety + exit-decode-correctness proof for the raw-ptr
 `proc` trampoline. The pure C1 structures stay the Miri-gated surface.
+
+## rustty-xev C6 (Stream/WriteQueue ordered-write engine) — MIRI exception
+
+C6's `stream.rs` `GenericStream` (`read`/`write`/`close`/`poll`/`queueWrite`) + the
+4 reference tests (`Stream decls`, `pty: child to parent`, `pty: parent to child`,
+`pty: queued writes`) + rustty KAT 4 open a real pty (`openpty`) and drive
+`EVFILT_READ`/`EVFILT_WRITE` completions whose trampolines call live
+`read`/`write`/`close` syscalls via the kqueue loop — the same foreign-function
+class as the C3/C4/C5 exceptions above, so they **run natively**, not under Miri
+(`Stream decls` is a pure compile-time reflection test and would run under Miri, but
+the pty tests would hit "can't call foreign function `openpty`"). KAT 4 (`openpty`
+→ `queueWrite` a payload → read it back on the child end → assert bytes + the
+`WriteQueue` drains) is the memory-safety + ordered-write/partial-write-correctness
+proof for the raw-ptr `queueWrite` trampoline (the `WriteRequest::from` container_of
+recovery + the re-`writeInit` remainder path). The pure C1 structures stay the
+Miri-gated surface.

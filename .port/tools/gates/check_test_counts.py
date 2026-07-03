@@ -695,6 +695,16 @@ MAP = {
     # comptime-elided on macOS (§0) and deferred (§1); their doc comments are
     # preserved in process.rs (R3, G3b-covered).
     "xev_process":       ([f"{GHXEV}/watcher/process.zig"], [f"{RSXEV}/process.rs"], 0),
+    # rustty-xev C6 (XEV_BLUEPRINT §4/§7) — the Stream watcher + ordered-write engine.
+    # stream.zig has 4 quoted `test{}` (`Stream decls`, `pty: child to parent`, `pty:
+    # parent to child`, `pty: queued writes`, inside `GenericStreamTests`; the two
+    # per-variant `test { _ = GenericStreamTests(...); }` are anon refAllDecls,
+    # zig_count-skipped) → zig=4. stream.rs ports all 4 as live #[test] + rustty KAT 4
+    # (openpty → queue_write → read-back → assert bytes + WriteQueue drains) → rust=5
+    # >= 4. The `xev.dynamic` Union/superset branches + the `.recv`/`.send` read/write
+    # methods are comptime-elided on macOS (§0) and deferred (§1); their doc comments
+    # are preserved in stream.rs (R3, G3b-covered).
+    "xev_stream":        ([f"{GHXEV}/watcher/stream.zig"], [f"{RSXEV}/stream.rs"], 0),
 }
 
 def expand(globs):
