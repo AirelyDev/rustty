@@ -29,8 +29,13 @@
 //! exports (`_surface_inspector`/`_inspector_free`/`_set_size`/`_set_content_scale`/
 //! `_mouse_button`/`_mouse_pos`/`_mouse_scroll`/`_key`/`_text`/`_set_focus`). All of
 //! E8/E9 need a live surface (and the per-inspector sinks a live inspector, itself a
-//! Phase-3 dcimgui leaf), so they link now and reach the leaf only when driven. The
-//! remaining `ghostty_*` (`rustty_*`) exports land in chunk E10 (misc + Darwin-gated);
+//! Phase-3 dcimgui leaf), so they link now and reach the leaf only when driven. E10
+//! lands the misc + Darwin-gated tail — `rustty_set_window_background_blur` (a macOS
+//! objc/CGS leaf; non-macOS no-op) plus the six `#[cfg(target_os = "macos")]` Darwin
+//! exports (`_surface_set_display_id`/`_quicklook_font`/`_quicklook_word`/
+//! `_inspector_metal_init`/`_metal_render`/`_metal_shutdown`): renderer/xev/coretext/
+//! objc/Metal Phase-3 leaves (the metal trio delegate to the E4 backend leaves). With
+//! E10 ALL 71 `ghostty_*` (`rustty_*`) exports exist (71 == 71 vs the reference).
 //! cbindgen header generation + the C compile+link smoke KAT land in E11
 //! (EMBEDDED_BLUEPRINT §3/§6/§7).
 //!
@@ -2114,4 +2119,345 @@ pub unsafe extern "C" fn rustty_inspector_set_focus(ptr: *mut Inspector, focused
     // ptr.focusCallback(focused);
     // SAFETY: `ptr` validity is the caller's contract.
     unsafe { (*ptr).focusCallback(focused) };
+}
+
+// ===========================================================================
+// E10 — misc + Darwin-gated exports (embedded.zig 2108-2250)
+//
+// The final chunk of the 71-export libghostty C-ABI: the platform-conditional
+// tail of the reference `CAPI` decl. After E10 ALL 71 `ghostty_*` (`rustty_*`)
+// exports exist. Per EMBEDDED_BLUEPRINT §1/§3 (misc + Darwin-gated groups) and
+// the E0 deferral (DEFERRALS.md: "macOS objc/Metal/CGS ... unimplemented!()
+// leaves are CREATED by E3/E4/E10"), E10 is EXPLICITLY the leaf-CREATING chunk
+// for the macOS objc/CGS/Metal/coretext seams — UNLIKE the pure-marshaling
+// E6-E9, it lands `unimplemented!()` leaves (all `#[cfg(target_os = "macos")]`
+// or macOS-branch-gated). Do NOT fabricate objc/CGS/Metal/coretext logic — the
+// reference bodies are preserved VERBATIM as comments (R1 no-loss) and the
+// Phase-3 targets are tracked in DEFERRALS.md.
+// ===========================================================================
+
+/// C: rustty_set_window_background_blur
+///
+/// Sets the window background blur on macOS to the desired value.
+/// I do this in Zig as an extern function because I don't know how to
+/// call these functions in Swift.
+///
+/// This uses an undocumented, non-public API because this is what
+/// every terminal appears to use, including Terminal.app.
+///
+/// # Safety
+/// `app` must be a valid [`App`] pointer returned by [`rustty_app_new`]; `window`
+/// must be a valid `NSWindow` id (macOS only). On non-macOS this is a no-op.
+//
+// export fn ghostty_set_window_background_blur(app: *App, window: *anyopaque) void { ... }
+//
+// PORT NOTE [ADV-FIX 3]: this export is NOT pure and is NOT in the runtime-safe
+// list — its macOS body does an objc `msgSend` (`windowNumber`) + a private,
+// undocumented CoreGraphics call (`CGSSetWindowBackgroundBlurRadius`). It is a
+// macOS objc/CGS Phase-3 leaf. The reference `if (comptime target != .macos)
+// return;` comptime guard splits by `#[cfg]`: on non-macOS the whole body is the
+// no-op early return; on macOS the objc/CGS body is an `unimplemented!()` leaf
+// (no objc2/CGS dep this milestone — blueprint §5/§8.1). The smoke KAT (E11)
+// MUST NOT call it. The export EXISTS on all platforms (matching the reference,
+// which `@export`s it unconditionally — only its BODY is comptime-gated).
+#[no_mangle]
+pub unsafe extern "C" fn rustty_set_window_background_blur(app: *mut App, window: *mut c_void) {
+    // This is only supported on macOS
+    // if (comptime builtin.target.os.tag != .macos) return;
+    #[cfg(not(target_os = "macos"))]
+    {
+        // (non-macOS: the reference `comptime` guard returns immediately — no-op.)
+        let _ = (app, window);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // const config = &app.config;
+        //
+        // // Do nothing if we don't have background transparency enabled
+        // if (config.@"background-opacity" >= 1.0) return;
+        //
+        // const nswindow = objc.Object.fromId(window);
+        // _ = CGSSetWindowBackgroundBlurRadius(
+        //     CGSDefaultConnectionForThread(),
+        //     nswindow.msgSend(usize, objc.sel("windowNumber"), .{}),
+        //     @intCast(config.@"background-blur".cval()),
+        // );
+        let _ = (app, window);
+        unimplemented!(
+            "rustty_set_window_background_blur — objc msgSend(windowNumber) + private \
+             CGS CGSSetWindowBackgroundBlurRadius (macOS objc/CGS Phase-3 leaf, \
+             embedded.zig:2108-2126)"
+        )
+    }
+}
+
+// /// See ghostty_set_window_background_blur
+// extern "c" fn CGSSetWindowBackgroundBlurRadius(*anyopaque, usize, c_int) i32;
+// extern "c" fn CGSDefaultConnectionForThread() *anyopaque;
+//
+// PORT NOTE: the two private CoreGraphics `extern "c"` declarations
+// (embedded.zig:2128-2130) are the symbols the leaf above would link against in
+// Phase-3. They are preserved verbatim as comments (R1) rather than declared as
+// live `extern "C"` blocks, since nothing calls them until the objc/CGS leaf is
+// realized; declaring unused link references to private CGS symbols now would
+// only invite link/lint noise. They land as real `extern "C"` fns with the
+// blur leaf in Phase-3.
+
+// // Darwin-only C APIs.
+// const Darwin = struct { ... };
+//
+// PORT NOTE: the reference groups the six Darwin exports in a `const Darwin =
+// struct {…}` and force-references it via `comptime { if isDarwin() _ = Darwin; }`
+// (embedded.zig:1390-1396) so its `export fn`s are pulled into the C API only on
+// Darwin. That comptime force-reference has no runtime analogue (ported as a
+// comment note in `capi.rs`, E5): in rustty the six Darwin exports are plain
+// `#[cfg(target_os = "macos")]`-gated free functions the compiler includes
+// automatically when targeting Darwin. Each is a Phase-3 leaf per its subsystem
+// (renderer/xev for `set_display_id`, coretext for `quicklook_font`,
+// renderer_state/terminal for `quicklook_word`, objc/Metal for the three
+// `metal_*`). NOTE the reference gate is `isDarwin()` (macOS OR iOS); the rustty
+// gate is `target_os = "macos"` (the blueprint §3/§7 + E5 `capi.rs` decision —
+// the objc/Metal/coretext seams these reach are macOS-only in practice).
+
+/// C: rustty_surface_set_display_id
+///
+/// # Safety
+/// `ptr` must be a valid [`Surface`] pointer returned by [`rustty_surface_new`].
+//
+// export fn ghostty_surface_set_display_id(ptr: *Surface, display_id: u32) void { ... }
+//
+// PORT NOTE: pushes a `.macos_display_id` message to the renderer thread's
+// mailbox and wakes it (`renderer_thread.wakeup.notify()`). Both the renderer
+// thread and its xev `wakeup` are Phase-3 placeholder leaves (renderer R-d +
+// D6 xev), so this is an `unimplemented!()` leaf — reached only once a live
+// surface + render thread exist. Body preserved verbatim.
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_set_display_id(ptr: *mut Surface, display_id: u32) {
+    // const surface = &ptr.core_surface;
+    // _ = surface.renderer_thread.mailbox.push(
+    //     .{ .macos_display_id = display_id },
+    //     .{ .forever = {} },
+    // );
+    // surface.renderer_thread.wakeup.notify() catch {};
+    let _ = (ptr, display_id);
+    unimplemented!(
+        "rustty_surface_set_display_id — renderer_thread.mailbox.push(.macos_display_id) \
+         + xev wakeup.notify (renderer R-d + D6 xev Phase-3 leaf, embedded.zig:2134-2141)"
+    )
+}
+
+/// C: rustty_surface_quicklook_font
+///
+/// This returns a CTFontRef that should be used for quicklook
+/// highlighted text. This is always the primary font in use
+/// regardless of the selected text. If coretext is not in use
+/// then this will return nothing.
+///
+/// # Safety
+/// `ptr` must be a valid [`Surface`] pointer returned by [`rustty_surface_new`].
+/// The returned value, if non-null, is a `CTFontRef` owned by the caller.
+//
+// export fn ghostty_surface_quicklook_font(ptr: *Surface) ?*anyopaque { ... }
+//
+// PORT NOTE: reads the shared font grid's primary CoreText face and returns a
+// `copyWithAttributes`-resized `CTFontRef` (`?*anyopaque` → nullable `*mut
+// c_void`). It reaches the renderer's `font_grid` AND messages CoreText
+// (`face.font.copyAttribute`/`copyWithAttributes`) — an objc/coretext + renderer
+// Phase-3 leaf (no coretext dep this milestone, blueprint §5/§8.1). The
+// reference non-CoreText early return (`return null`) is subsumed: the whole
+// body is the leaf. Body preserved verbatim.
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mut c_void {
+    // // For non-CoreText we just return null.
+    // if (comptime font.options.backend != .coretext) {
+    //     return null;
+    // }
+    //
+    // // We'll need content scale so fail early if we can't get it.
+    // const content_scale = ptr.getContentScale() catch return null;
+    //
+    // // Get the shared font grid. We acquire a read lock to
+    // // read the font face. It should not be deferred since
+    // // we're loading the primary face.
+    // const grid = ptr.core_surface.renderer.font_grid;
+    // grid.lock.lockShared();
+    // defer grid.lock.unlockShared();
+    //
+    // const collection = &grid.resolver.collection;
+    // const face = collection.getFace(.{}) catch return null;
+    //
+    // // We need to unscale the content scale. We apply the
+    // // content scale to our font stack because we are rendering
+    // // at 1x but callers of this should be using scaled or apply
+    // // scale themselves.
+    // const size: f32 = size: {
+    //     const num = face.font.copyAttribute(.size) orelse
+    //         break :size 12;
+    //     defer num.release();
+    //     var v: f32 = 12;
+    //     _ = num.getValue(.float, &v);
+    //     break :size v;
+    // };
+    //
+    // const copy = face.font.copyWithAttributes(
+    //     size / content_scale.y,
+    //     null,
+    //     null,
+    // ) catch return null;
+    //
+    // return copy;
+    let _ = ptr;
+    unimplemented!(
+        "rustty_surface_quicklook_font — renderer font_grid + CoreText \
+         copyAttribute/copyWithAttributes (objc/coretext + renderer R-d Phase-3 \
+         leaf, embedded.zig:2147-2186)"
+    )
+}
+
+/// C: rustty_surface_quicklook_word
+///
+/// This returns the selected word for quicklook. This will populate
+/// the buffer with the word under the cursor and the selection
+/// info so that quicklook can be rendered.
+///
+/// This does not modify the selection active on the surface (if any).
+///
+/// # Safety
+/// `ptr` must be a valid [`Surface`] pointer returned by [`rustty_surface_new`];
+/// `result` must point to a writable [`Text`].
+//
+// export fn ghostty_surface_quicklook_word(ptr: *Surface, result: *Text) bool { ... }
+//
+// PORT NOTE: resolves the word under the cursor (`getCursorPos` + `posToViewport`
+// + `pages.pin` + `selectWord`) then reads it via `readTextLocked` (the E7
+// helper). It holds `renderer_state.mutex` and reads `renderer_state.terminal` —
+// the live-surface renderer_state seam (renderer R-d Phase-3). Grouped with the
+// Darwin block, it is a Phase-3 leaf reached only once a live surface exists.
+// Body preserved verbatim.
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_quicklook_word(
+    ptr: *mut Surface,
+    result: *mut Text,
+) -> bool {
+    // const surface = &ptr.core_surface;
+    // surface.renderer_state.mutex.lock();
+    // defer surface.renderer_state.mutex.unlock();
+    //
+    // // Get our word selection
+    // const sel = sel: {
+    //     const screen: *terminal.Screen = surface.renderer_state.terminal.screens.active;
+    //     const pos = try ptr.getCursorPos();
+    //     const pt_viewport = surface.posToViewport(pos.x, pos.y);
+    //     const pin = screen.pages.pin(.{
+    //         .viewport = .{
+    //             .x = pt_viewport.x,
+    //             .y = pt_viewport.y,
+    //         },
+    //     }) orelse {
+    //         if (comptime std.debug.runtime_safety) unreachable;
+    //         return false;
+    //     };
+    //     break :sel surface.io.terminal.screens.active.selectWord(
+    //         pin,
+    //         surface.config.selection_word_chars,
+    //     ) orelse return false;
+    // };
+    //
+    // // Read the selection
+    // return readTextLocked(ptr, sel, result);
+    let _ = (ptr, result);
+    unimplemented!(
+        "rustty_surface_quicklook_word — renderer_state.mutex + selectWord + \
+         readTextLocked (renderer_state live-surface R-d Phase-3 leaf, \
+         embedded.zig:2193-2223)"
+    )
+}
+
+/// C: rustty_inspector_metal_init
+///
+/// # Safety
+/// `ptr` must be a valid [`Inspector`] pointer returned by [`rustty_surface_inspector`];
+/// `device` must be a valid `MTLDevice` id.
+//
+// export fn ghostty_inspector_metal_init(ptr: *Inspector, device: objc.c.id) bool { ... }
+//
+// PORT NOTE: delegates to the E4 backend `Inspector::initMetal` (a Phase-3
+// objc/Metal + dcimgui `ImGui_ImplMetal_Init` leaf; DEFERRALS.md E4 item 2). The
+// reference `.fromId(device)` wraps the raw objc id in an `objc.Object`; rustty's
+// `initMetal` takes the opaque `*mut c_void` directly (no objc dep this
+// milestone). No new leaf in apprt-c — the panic is in the E4 backend leaf.
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_inspector_metal_init(
+    ptr: *mut Inspector,
+    device: *mut c_void,
+) -> bool {
+    // return ptr.initMetal(.fromId(device));
+    // SAFETY: `ptr` validity is the caller's contract.
+    unsafe { (*ptr).initMetal(device) }
+}
+
+/// C: rustty_inspector_metal_render
+///
+/// # Safety
+/// `ptr` must be a valid [`Inspector`] pointer returned by [`rustty_surface_inspector`];
+/// `command_buffer` / `descriptor` must be valid `MTLCommandBuffer` / render-pass
+/// descriptor ids.
+//
+// export fn ghostty_inspector_metal_render(ptr: *Inspector, command_buffer: objc.c.id, descriptor: objc.c.id) void { ... }
+//
+// PORT NOTE: delegates to the E4 backend `Inspector::renderMetal` (a Phase-3
+// objc/Metal render + dcimgui `ImplMetal_NewFrame`/`RenderDrawData` leaf;
+// DEFERRALS.md E4 item 2), catching + logging its error exactly as the reference
+// `catch |err| { log.err(...); return; }`. The two `.fromId(...)` objc-id wraps →
+// opaque `*mut c_void`. No new leaf in apprt-c — the panic is in the E4 backend.
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_inspector_metal_render(
+    ptr: *mut Inspector,
+    command_buffer: *mut c_void,
+    descriptor: *mut c_void,
+) {
+    // return ptr.renderMetal(
+    //     .fromId(command_buffer),
+    //     .fromId(descriptor),
+    // ) catch |err| {
+    //     log.err("error rendering inspector err={}", .{err});
+    //     return;
+    // };
+    // SAFETY: `ptr` validity is the caller's contract.
+    if let Err(err) = unsafe { (*ptr).renderMetal(command_buffer, descriptor) } {
+        eprintln!("error rendering inspector err={err:?}");
+    }
+}
+
+/// C: rustty_inspector_metal_shutdown
+///
+/// # Safety
+/// `ptr` must be a valid [`Inspector`] pointer returned by [`rustty_surface_inspector`].
+//
+// export fn ghostty_inspector_metal_shutdown(ptr: *Inspector) void { ... }
+//
+// PORT NOTE: tears down the Metal backend if one was initialized. `Backend::deinit`
+// is the E4 Phase-3 leaf (dcimgui `ImGui_ImplMetal_Shutdown`); it runs only when a
+// backend was actually set, which cannot happen this milestone (`initMetal` is a
+// leaf), so on a live inspector this is a no-op (`backend == None`). Faithful to
+// the reference `if (ptr.backend) |v| { v.deinit(); ptr.backend = null; }`.
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_inspector_metal_shutdown(ptr: *mut Inspector) {
+    // if (ptr.backend) |v| {
+    //     v.deinit();
+    //     ptr.backend = null;
+    // }
+    // SAFETY: `ptr` validity is the caller's contract.
+    unsafe {
+        if let Some(v) = (*ptr).backend {
+            v.deinit();
+            (*ptr).backend = None;
+        }
+    }
 }

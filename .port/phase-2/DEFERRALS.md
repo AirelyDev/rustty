@@ -2314,3 +2314,73 @@ with apprt-c still a clean TOP SINK, test-counts G-gate); scoped-G3b on embedded
 lines in the range are the `ghostty_set_window_background_blur` doc-comment (2102-2106;
 its `export fn` is at 2108, the E10 macOS objc/CGS leaf) and defer with E10. No
 regression (vt 2019, core 15, apprt-api 20, renderer 19, crash 12, termio 44).
+
+## rustty-apprt-c embedded E10 (misc + Darwin-gated exports) — macOS objc/CGS/Metal/coretext Phase-3 leaves; 71 == 71
+
+Chunk E10 of the libghostty C-ABI milestone (EMBEDDED_BLUEPRINT §1/§3/§7, row E10):
+ports embedded.zig **2108-2250** — the misc export (1) + the Darwin-gated block (6) —
+into `crates/rustty-apprt-c/src/lib.rs` as `#[no_mangle] pub unsafe extern "C" fn
+rustty_*`: `_set_window_background_blur`, `_surface_set_display_id`,
+`_surface_quicklook_font`, `_surface_quicklook_word`, `_inspector_metal_init`,
+`_inspector_metal_render`, `_inspector_metal_shutdown`. **With E10 ALL 71 exports
+exist** — a mechanical name-set diff vs the reference's 71 `export fn ghostty_*` is
+IDENTICAL (71 == 71; the two `main_c.zig` precursors `rustty_init`/`rustty_string_free`
+are excluded from the tally, matching that they are not embedded.zig `export fn`s).
+
+**E10 is the leaf-CREATING chunk (unlike the pure-marshaling E6-E9).** The E0 deferral
+recorded that the "macOS objc/Metal/CGS ... `unimplemented!()` leaves are CREATED by
+E3/E4/E10". E10 lands the macOS objc/CGS/Metal/coretext seams as documented Phase-3
+leaves — every reference body preserved VERBATIM as comments (R1 no-loss); NO
+objc/CGS/Metal/coretext logic fabricated. Runtime split + targets:
+
+1. **`rustty_set_window_background_blur` — macOS objc/CGS leaf; non-macOS no-op
+   [ADV-FIX 3].** The export EXISTS on ALL platforms (the reference `@export`s it
+   unconditionally; only its BODY is comptime-gated). The reference `if (comptime
+   target != .macos) return;` splits by `#[cfg]`: `#[cfg(not(target_os = "macos"))]`
+   is the no-op early return; `#[cfg(target_os = "macos")]` is an `unimplemented!()`
+   leaf (objc `msgSend(windowNumber)` + private CGS `CGSSetWindowBackgroundBlurRadius`).
+   The two private CoreGraphics `extern "c"` decls (`CGSSetWindowBackgroundBlurRadius`/
+   `CGSDefaultConnectionForThread`, embedded.zig:2128-2130) are preserved as comments
+   (they land as live `extern "C"` fns WITH the leaf in Phase-3). NOT in the runtime-safe
+   list; the E11 smoke KAT MUST NOT call it. **Target: Phase-3 (macOS objc/CGS glue).**
+2. **`rustty_surface_set_display_id` — renderer/xev leaf.** Pushes a `.macos_display_id`
+   message to `renderer_thread.mailbox` + `wakeup.notify()`; both the renderer thread
+   and its xev `wakeup` are placeholders. `unimplemented!()` leaf. **Target: Phase-3 R-d
+   (renderer) + D6 (xev).**
+3. **`rustty_surface_quicklook_font` — objc/coretext + renderer leaf.** Reaches the
+   renderer `font_grid` primary CoreText face + `copyAttribute`/`copyWithAttributes`
+   (coretext). `unimplemented!()` leaf. **Target: Phase-3 R-d (renderer) + coretext.**
+4. **`rustty_surface_quicklook_word` — renderer_state live-surface leaf.** Real terminal
+   logic (`getCursorPos`/`posToViewport`/`pages.pin`/`selectWord` + the E7 `readTextLocked`
+   helper) under `renderer_state.mutex` — grouped with the Darwin block per the blueprint,
+   ported as an `unimplemented!()` leaf (reaches the live-surface renderer_state seam).
+   **Target: Phase-3 R-d (renderer_state).**
+5. **`rustty_inspector_metal_init` / `_metal_render` / `_metal_shutdown` — delegate to
+   the E4 backend leaves (NO new apprt-c leaf).** The reference bodies are pure
+   delegations, so the wrappers forward to the already-landed E4 backend methods
+   `Inspector::{initMetal, renderMetal}` + `Backend::deinit` (DEFERRALS.md E4 item 2,
+   which named these three as "Targets of the E10 Darwin CAPI"). `_metal_render` catches
+   + logs the error exactly as the reference `catch |err| { log.err(...); return; }`;
+   `_metal_shutdown` is a faithful `if let Some(v) = ptr.backend { v.deinit(); ptr.backend
+   = None }` (a no-op this milestone, since `initMetal` is a leaf so `backend == None`).
+   The panic is in the E4 backend leaf. **Target: Phase-3 R-d (objc/Metal + dcimgui).**
+
+**Darwin gating (§3/§7 + E5 `capi.rs` decision):** the six Darwin exports are
+`#[cfg(target_os = "macos")]`-gated free functions (the compiler pulls them into the C
+API when targeting Darwin — no runtime analogue for the reference `comptime { if
+isDarwin() _ = Darwin; }` force-reference, already ported as a `capi.rs` comment note in
+E5). NOTE the reference gate is `isDarwin()` (macOS OR iOS); rustty uses `target_os =
+"macos"` (the objc/Metal/coretext seams these reach are macOS-only in practice). The
+71 == 71 completeness therefore holds on a Darwin (macOS) build, matching the reference
+(which likewise emits all 71 only on Darwin).
+
+**Gate deltas (E10):** NO new `rustty-apprt-c` Cargo dep — E10's `App`/`Surface`/
+`Inspector`/`Text` are all already imported (E6/E7/E9). `apprt_embedded` MAP row
+unchanged (embedded.zig 0-test; the exports land under the existing `{RSAPPRTC}/**/*.rs`
+glob — GREEN, rust ≥ zig; NO new MAP entry). Whole-workspace gates green (build incl.
+apprt-c; touched-crate tests — apprt-c 0; clippy `-D warnings`, fmt, acyclic G7 with
+apprt-c still a clean TOP SINK, test-counts G-gate); scoped-G3b on embedded.zig
+**2108-2250 (E10) missing=0** (whole-file embedded.zig G3b GREEN). Mechanical
+export-count diff **71 == 71** (identical name sets). No regression (vt 2019, core 15,
+apprt-api 20, renderer 19, crash 12, termio 44). This CLOSES the E9-deferred
+`ghostty_set_window_background_blur` doc-comment (2102-2106) — ported with its export.
