@@ -15,9 +15,11 @@
 //! `list_colors`/`list_keybinds` (`--plain`/non-tty) + `list_themes`
 //! (enumeration) — with the interactive vaxis+zf render paths and `boo` (a pure
 //! vaxis animation) as documented vaxis-deferred placeholder leaves (DEFERRALS.md
-//! "cli C5"). The remaining action impls (list_fonts, show_face) are faithful
-//! SEQUENCING STUBS here — BLOCKED on the rustty-font discovery/SharedGridSet
-//! subsystem (DEFERRALS.md "cli C2"), not this chunk.
+//! "cli C5"). `list_fonts` + `show_face` are now REAL ports against
+//! `rustty-font-shaper` (the D1 shaper tier that fully ports font discovery +
+//! `SharedGridSet`); the earlier "blocked on rustty-font discovery/SharedGridSet"
+//! note was a mis-attribution (that subsystem lives in the shaper crate, not
+//! rustty-font) — see DEFERRALS.md "cli C2".
 
 // cli.zig:
 //   const diags = @import("cli/diagnostics.zig");
@@ -39,12 +41,12 @@ pub mod action;
 pub mod ghostty;
 
 // The action impls. `help`/`version` (C1), the C2 config/introspection actions,
-// the C3 ssh subsystem, the C4 apprt-backed + misc actions, and the C5
+// the C3 ssh subsystem, the C4 apprt-backed + misc actions, the C5
 // vaxis/zf-touching actions (`list_colors`/`list_keybinds` plain paths +
-// `list_themes` enumeration; `boo` a vaxis-deferred leaf) are real ports;
-// `list_fonts`/`show_face` remain SEQUENCING STUBS (BLOCKED on rustty-font
-// discovery, DEFERRALS.md "cli C2") so `ghostty::Action::run_main` compiles today.
-// They are `pub mod` so their `Options`/`run` are part of the crate's action surface.
+// `list_themes` enumeration; `boo` a vaxis-deferred leaf), and `list_fonts`/
+// `show_face` (real ports against rustty-font-shaper's discovery + SharedGridSet)
+// are all real ports. They are `pub mod` so their `Options`/`run` are part of the
+// crate's action surface.
 pub mod help;
 pub mod version;
 

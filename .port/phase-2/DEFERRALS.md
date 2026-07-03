@@ -2562,20 +2562,33 @@ to the Pager/stdout sinks). Enabling change in `rustty-args`: an additive
   green. This completes the C1 `help()`/`has_help_decl()` trait hook (which C1
   established but left unexercised).
 
-- **`show_face.zig` (0t) + `list_fonts.zig` (0t) remain sequencing stubs —
-  BLOCKED on rustty-font discovery/SharedGridSet (NOT deferred-by-choice).** The
-  CLI_BLUEPRINT.md §1 table assumed rustty-font's font-discovery + `SharedGridSet`
-  + `SharedGrid`/resolver/collection + `face.name` + `Style`/`Presentation`/
-  `DesiredSize`/`DerivedConfig` were ported; they are NOT (rustty-font is
-  "in progress": only opentype/embedded/glyph/metrics/atlas/codepoint_map/sprite/
-  options have landed). `show_face`/`list_fonts` reference that entire unported
-  subsystem (their `Options` even name `font.Style`/`font.Presentation`), so a
-  faithful port is impossible now without fabricating font APIs (R5 forbids). They
-  stay as C1 sequencing stubs (`unimplemented!()`, 0-test, no MAP entry — same
-  status the C1 note records for not-yet-ported impls). **Target:** port both when
-  the rustty-font discovery/SharedGridSet subsystem is carved (a font-crate
-  milestone, not a cli chunk); at that point add `cli_show_face`/`cli_list_fonts`
-  MAP entries (both 0-test → G3b-gated) and scoped-G3b them.
+- ~~**`show_face.zig` (0t) + `list_fonts.zig` (0t) remain sequencing stubs —
+  BLOCKED on rustty-font discovery/SharedGridSet (NOT deferred-by-choice).**~~
+  **RESOLVED — the block was a MIS-ATTRIBUTION.** The C2 note above claimed the
+  font-discovery + `SharedGridSet` + `SharedGrid`/resolver/collection + `face.name`
+  + `Style`/`Presentation`/`DesiredSize`/`DerivedConfig` subsystem was "unported in
+  rustty-font". It is NOT unported — it is FULLY PORTED in **rustty-font-shaper**
+  (the D1 shaper tier ABOVE vt+font): `discovery.rs` (the CoreText discoverer +
+  `Descriptor` + `DiscoverIterator`), `collection.rs` (`getFace`/`Index`/
+  `SpecialHasNoFace`), `codepoint_resolver.rs` (`getIndex`), `shared_grid_set.rs`
+  (`SharedGridSet`/`ref`/`deref`/`DerivedConfig`), `shared_grid.rs` (`SharedGrid`/
+  `resolver`), `face/{mod,coretext}.rs` (`DesiredSize`/`name`), `deferred_face.rs`
+  (`familyName`/`name`), and public `Style`/`Presentation`. rustty-font stays the
+  PURE leaf below; the discovery subsystem was carved into the shaper tier (memory
+  `apc-glyf-font-layering-d1`). Both files are now REAL ports in
+  `crates/rustty-cli/src/{list_fonts,show_face}.rs` against `rustty-font-shaper`
+  (added as a downward cli dep — acyclic, G7). MAP entries `cli_list_fonts` /
+  `cli_show_face` added (both 0-test); scoped-G3b on `list_fonts.zig` +
+  `show_face.zig` → missing=0. **One documented seam** (NOT a stub): the reference
+  `SharedGridSet.DerivedConfig.init(alloc, config)` is duck-typed over the GLOBAL
+  config while the shaper models `DerivedConfig` via break-#9 DI stand-in config
+  types, so the config→DerivedConfig conversion is cli-local glue
+  (`show_face.rs::font_shared_grid_set_derived_config`), byte-for-byte identical to
+  rustty-core's proven `font_shared_grid_set_derived_config` (surface.rs) — all
+  fields convert exactly. **Non-macOS Fontconfig discovery** is still DEFERRED in
+  the shaper (`discovery.rs`); on those targets both actions map the reference's
+  `font.Discover == void` arm (print "no discovery mechanism", exit 1) — the macOS
+  CoreText path is the live port (gates run on macOS).
 
 ## rustty-cli C3 (Phase-2 CLI milestone) — the ssh subsystem (30 tests)
 
@@ -2678,10 +2691,11 @@ LIVE; the vaxis/zf render paths are documented deferred placeholder leaves.
   uninitialized-global deref). No follow-up owed beyond the already-scheduled C6 bin
   wiring.
 
-- **`show_face.zig` (0t) + `list_fonts.zig` (0t) STILL sequencing stubs** — BLOCKED
-  on the rustty-font discovery/SharedGridSet subsystem (continuation of the C2 note;
-  NOT a C5 chunk). Their MAP entries + scoped-G3b land when that font-crate
-  milestone is carved.
+- ~~**`show_face.zig` (0t) + `list_fonts.zig` (0t) STILL sequencing stubs**~~
+  **RESOLVED** — see the C2 note above (corrected): the "blocked on rustty-font
+  discovery/SharedGridSet" claim was a mis-attribution; that subsystem is fully
+  ported in **rustty-font-shaper**, and both files are now real ports against it
+  (`cli_list_fonts`/`cli_show_face` MAP entries + scoped-G3b missing=0).
 
 ## rustty bin C6 (Phase-2 CLI milestone) — the `rustty` bin (action dispatch + usage banner + Phase-3 GUI leaf)
 

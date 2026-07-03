@@ -583,6 +583,7 @@ dependencies = [
  "rustty-core",
  "rustty-crash",
  "rustty-font",
+ "rustty-font-shaper",
  "rustty-identity",
  "rustty-input",
  "rustty-lib",

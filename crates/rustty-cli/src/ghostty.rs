@@ -16,8 +16,8 @@ use crate::action::{self, SpecialCase};
 
 // const list_fonts = @import("list_fonts.zig"); ... etc.
 //
-// The not-yet-ported action impls are faithful sequencing stubs (chunks C2–C5,
-// CLI_BLUEPRINT.md §7); `version`/`help` are the real C1 ports.
+// All action impls are real ports (chunks C1–C5, CLI_BLUEPRINT.md §7); `list_fonts`
+// + `show_face` port against rustty-font-shaper's discovery + SharedGridSet.
 use crate::{
     boo, crash_report, edit_config, explain_config, help, list_actions, list_colors, list_fonts,
     list_keybinds, list_themes, new_window, show_config, show_face, ssh, ssh_cache,
@@ -53,6 +53,13 @@ pub enum Error {
     /// `configpkg.preferredDefaultFilePath(alloc)`, folded into `edit_config`'s
     /// `runInner` `!u8`.
     FileLoad(rustty_config::file_load::FileLoadError),
+    /// A CoreText font-discovery failure propagated from `list_fonts`
+    /// (`font.Discover.discover`/`DiscoverIterator.next`), folded into the
+    /// reference `run`'s inferred `!u8` error set. macOS-only — the shaper's
+    /// `discovery::Error` is defined only on the CoreText backend; the Fontconfig
+    /// discoverer (non-macOS) is DEFERRED.
+    #[cfg(target_os = "macos")]
+    FontDiscover(rustty_font_shaper::discovery::Error),
 }
 
 impl From<std::io::Error> for Error {
@@ -96,6 +103,13 @@ impl From<rustty_os::xdg::DirError> for Error {
 impl From<rustty_config::file_load::FileLoadError> for Error {
     fn from(e: rustty_config::file_load::FileLoadError) -> Self {
         Error::FileLoad(e)
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl From<rustty_font_shaper::discovery::Error> for Error {
+    fn from(e: rustty_font_shaper::discovery::Error) -> Self {
+        Error::FontDiscover(e)
     }
 }
 

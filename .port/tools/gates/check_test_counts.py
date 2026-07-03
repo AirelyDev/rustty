@@ -266,13 +266,17 @@ MAP = {
     # 1t ("explain") which is DEFERRED (ADV-FIX 3) on the unbuilt help_strings
     # generator — SkipZigTest-style, body preserved verbatim as a comment, no live
     # #[test] -> rust=0, apc_deferred=1 (need = 1 - 1 = 0), un-deferred when the
-    # help_strings codegen lands. show_face/list_fonts stay sequencing stubs
-    # (0t, no MAP entry) — blocked on rustty-font discovery/SharedGridSet (C2 note).
+    # help_strings codegen lands. list_fonts.zig (0t) + show_face.zig (0t) are now
+    # REAL ports against rustty-font-shaper's discovery + SharedGridSet (the earlier
+    # "blocked on rustty-font discovery" C2 note was a mis-attribution; that
+    # subsystem lives in the shaper crate) — both 0-test MAP entries below.
     "cli_pager":            ([f"{GHC}/Pager.zig"], [f"{RSCLI}/pager.rs"], 0),
     "cli_show_config":      ([f"{GHC}/show_config.zig"], [f"{RSCLI}/show_config.rs"], 0),
     "cli_validate_config":  ([f"{GHC}/validate_config.zig"], [f"{RSCLI}/validate_config.rs"], 0),
     "cli_list_actions":     ([f"{GHC}/list_actions.zig"], [f"{RSCLI}/list_actions.rs"], 0),
     "cli_explain_config":   ([f"{GHC}/explain_config.zig"], [f"{RSCLI}/explain_config.rs"], 1),
+    "cli_list_fonts":       ([f"{GHC}/list_fonts.zig"], [f"{RSCLI}/list_fonts.rs"], 0),
+    "cli_show_face":        ([f"{GHC}/show_face.zig"], [f"{RSCLI}/show_face.rs"], 0),
     # rustty-cli C3 (CLI_BLUEPRINT.md §4): the ssh subsystem, ported as an `ssh`
     # submodule tree under rustty-cli. Entry.zig (3 quoted) -> ssh_cache/entry.rs.
     # DiskCache.zig (9 quoted + isValidHost/isValidUser/isValidCacheKey named-

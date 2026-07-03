@@ -19,6 +19,13 @@ workspace = true
 rustty-config = { workspace = true }
 rustty-vt = { workspace = true }
 rustty-font = { workspace = true }
+# list_fonts / show_face (cli/list_fonts.zig + cli/show_face.zig) drive the font
+# discovery + SharedGridSet pipeline, which is fully ported in rustty-font-shaper
+# (the D1 shaper tier: discovery.rs CoreText + collection/codepoint_resolver/
+# shared_grid_set). cli is the top app crate and font-shaper is BELOW it (above
+# vt+font, below apprt/core), so cli->font-shaper is a downward edge — acyclic
+# (G7; cli already reaches it transitively via rustty-core/rustty-apprt).
+rustty-font-shaper = { workspace = true }
 rustty-input = { workspace = true }
 rustty-os = { workspace = true }
 rustty-terminfo = { workspace = true }
