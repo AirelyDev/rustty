@@ -39,3 +39,7 @@ rustty-identity = { workspace = true }
 # the cli names it to adapt the Pager / stdout sinks. rustty-cfg-fmt is member 14
 # (strictly-earlier), so the crate graph stays acyclic (G7).
 rustty-cfg-fmt = { workspace = true }
+# C3 (CLI_BLUEPRINT.md §4): the ssh-cache DiskCache reproduces the reference's
+# `file.tryLock(.exclusive)`/`unlock` over `flock(2)`. R3: `libc` binds the SAME
+# system call the reference's Zig std uses (no reimplementation).
+libc = "0.2"

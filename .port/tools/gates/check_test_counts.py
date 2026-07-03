@@ -270,6 +270,23 @@ MAP = {
     "cli_validate_config":  ([f"{GHC}/validate_config.zig"], [f"{RSCLI}/validate_config.rs"], 0),
     "cli_list_actions":     ([f"{GHC}/list_actions.zig"], [f"{RSCLI}/list_actions.rs"], 0),
     "cli_explain_config":   ([f"{GHC}/explain_config.zig"], [f"{RSCLI}/explain_config.rs"], 1),
+    # rustty-cli C3 (CLI_BLUEPRINT.md §4): the ssh subsystem, ported as an `ssh`
+    # submodule tree under rustty-cli. Entry.zig (3 quoted) -> ssh_cache/entry.rs.
+    # DiskCache.zig (9 quoted + isValidHost/isValidUser/isValidCacheKey named-
+    # unquoted = 12) -> ssh_cache/disk_cache.rs (the 2 FailingAllocator OOM tests
+    # run their single success path — Rust allocation is infallible; ownership +
+    # Miri are the leak/UB backstop). ssh_cache.zig (matchesQuery/formatTimestamp/
+    # relativeAge named-unquoted + "runInner rejects multiple actions" = 4; the anon
+    # `test { _ = DiskCache; _ = Entry; }` reify is skipped by zig_count) ->
+    # ssh_cache.rs (rust=5 with the ref_all_decls reify margin). ssh.zig (3
+    # parseManuallyHook + 6 parseDestination quoted = 9; the anon Joined `test {` is
+    # skipped) -> ssh.rs (rust=10 with the ported Joined test). xterm-ghostty ->
+    # xterm-rustty and the DiskCache program dir ghostty -> rustty route through
+    # rustty-identity (ADV-FIX 5).
+    "cli_ssh_cache_entry":  ([f"{GHC}/ssh-cache/Entry.zig"], [f"{RSCLI}/ssh_cache/entry.rs"], 0),
+    "cli_ssh_cache_diskcache": ([f"{GHC}/ssh-cache/DiskCache.zig"], [f"{RSCLI}/ssh_cache/disk_cache.rs"], 0),
+    "cli_ssh_cache":        ([f"{GHC}/ssh_cache.zig"], [f"{RSCLI}/ssh_cache.rs"], 0),
+    "cli_ssh":              ([f"{GHC}/ssh.zig"], [f"{RSCLI}/ssh.rs"], 0),
     # Stage C — rustty-terminfo (GH base = src/terminfo, not src/terminal).
     # Source.zig (2t: "xtgettcap map" + "encode") -> source.rs.
     # ghostty.zig (1t: "encode") -> entry.rs (the terminfo entry; names carry

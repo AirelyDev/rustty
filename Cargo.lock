@@ -569,6 +569,7 @@ version = "0.1.0"
 name = "rustty-cli"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rustty-apprt",
  "rustty-args",
  "rustty-build-config",

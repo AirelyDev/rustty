@@ -2483,18 +2483,20 @@ detection lives in the bin, ADV-FIX 2). New cli Cargo deps: `rustty-build-config
   — ADV-FIX 3 — and enables `+help` / `show_config --docs` / `list_keybinds
   --docs`, all 0-test).
 
-- **C2–C5 action-impl sequencing stubs (0 tests, no MAP entry yet).** The 16
+- **C4–C5 action-impl sequencing stubs (0 tests, no MAP entry yet).** The 10
   not-yet-ported action impls (`list_fonts`, `list_keybinds`, `list_themes`,
-  `list_colors`, `list_actions`, `ssh`, `ssh_cache`, `edit_config`,
-  `show_config`, `explain_config`, `validate_config`, `crash_report`,
-  `show_face`, `boo`, `new_window`, `toggle_quick_terminal`) are faithful
-  sequencing stubs — each `pub fn run() -> Result<u8, ghostty::Error>` with the
-  reference signature + `unimplemented!()` body — so `runMain` compiles. Their
-  full logic, comment coverage (scoped-G3b), and `check_test_counts.py` MAP
-  entries land with their owning chunks (C2–C5 per CLI_BLUEPRINT.md §7). Until
-  then, the WHOLE-CRATE `check_comment_coverage.py --crate rustty-cli` reports
-  their reference comments as "missing" (~523) — this is EXPECTED per the
-  DEFERRALS "Rule"; the C1 scoped-G3b (5 ported files) is missing=0.
+  `list_colors`, `edit_config`, `crash_report`, `show_face`, `boo`,
+  `new_window`, `toggle_quick_terminal`) are faithful sequencing stubs — each
+  `pub fn run() -> Result<u8, ghostty::Error>` with the reference signature +
+  `unimplemented!()` body — so `runMain` compiles. Their full logic, comment
+  coverage (scoped-G3b), and `check_test_counts.py` MAP entries land with their
+  owning chunks (C4–C5 per CLI_BLUEPRINT.md §7). Until then, the WHOLE-CRATE
+  `check_comment_coverage.py --crate rustty-cli` reports their reference comments
+  as "missing" — this is EXPECTED per the DEFERRALS "Rule"; the C1/C2/C3
+  scoped-G3b (ported files) is missing=0. (C2 landed show_config /
+  validate_config / list_actions / explain_config + Pager; C3 landed the ssh
+  subsystem — ssh / ssh_cache / DiskCache / Entry — so all four are no longer
+  stubs.)
 
 - **vaxis/zf TUI leaves (C5, forward-scheduled — not in C1).** `boo` (pure vaxis
   animation), `list_themes`' interactive picker (vaxis+zf), and the
@@ -2573,3 +2575,44 @@ to the Pager/stdout sinks). Enabling change in `rustty-args`: an additive
   the rustty-font discovery/SharedGridSet subsystem is carved (a font-crate
   milestone, not a cli chunk); at that point add `cli_show_face`/`cli_list_fonts`
   MAP entries (both 0-test → G3b-gated) and scoped-G3b them.
+
+## rustty-cli C3 (Phase-2 CLI milestone) — the ssh subsystem (30 tests)
+
+C3 (CLI_BLUEPRINT.md §4) lands the self-contained ssh subsystem into
+`rustty-cli` as an `ssh_cache` submodule tree + the `ssh` action:
+`ssh-cache/Entry.zig` (3t → `ssh_cache/entry.rs`), `ssh-cache/DiskCache.zig`
+(12t → `ssh_cache/disk_cache.rs`), `ssh_cache.zig` (5t → `ssh_cache.rs`), and
+`ssh.zig` (10t → `ssh.rs`) = **30 tests**, all live `#[test]`, assertion-for-
+assertion. Gate-green: cli now 44 `#[test]` (14 C1+C2 + 30 C3); test-count GREEN
+(cli_ssh_cache_entry 3/3, cli_ssh_cache_diskcache 12/12, cli_ssh_cache 4/5,
+cli_ssh 9/10 — the anon `Joined`/`{_=DiskCache;_=Entry;}` reifies are skipped by
+zig_count, ported for R1 completeness); scoped-G3b missing=0 on all 4 ported
+files; clippy/fmt/acyclic GREEN. New cli Cargo dep: `libc` (the DiskCache
+`flock(2)` lock — R3, the SAME syscall the reference's `file.tryLock` uses).
+**[ADV-FIX 5]** the `xterm-ghostty` TERM token → `xterm-rustty` and the DiskCache
+program dir `ghostty` → `rustty` (Entry default terminfo, DiskCache.add's cached
+terminfo, ssh's `TERM`/`SetEnv`/`infocmp` remote script + `ghostty-ssh-`
+control-path prefix, and every ported test fixture) route through
+`rustty-identity` (`TERMINFO_PRIMARY_NAME` / `APP_NAME`), so the tests stay
+self-consistent under both the default and `identity-ghostty` profiles. No new
+deferrals; two convention notes (NOT deferrals — no follow-up scheduled):
+
+- **The 2 DiskCache `FailingAllocator` OOM tests (`disk cache reads/add survives
+  allocation failure`) run their single success path.** Rust allocation is
+  infallible (aborts), so there is no `error.OutOfMemory` to inject and the
+  reference's `while (fail_index)` injection loop collapses to one run. The
+  no-double-free / no-leak guarantee the reference proves via FailingAllocator is
+  provided statically by ownership (each `Entry` owns its `hostname`/
+  `terminfo_version` `Vec<u8>`; the `HashMap` frees each once on drop), with Miri
+  (R6) as the UB/leak backstop for the pure logic. Both reference loop bodies are
+  preserved verbatim as commented blocks (R1). Not a deferral — no injection
+  harness is owed (the guarantee is structural, not test-driven).
+
+- **The ssh runtime spawn paths (`resolveDestination`/`installRemoteTerminfo`/
+  `childExec`/`runInner` session setup) are 0-test by design — I/O the harness
+  invokes, not a dependency on a running app.** They are fully ported (faithful
+  comments, `std::process::Command` over `ssh -G` / ControlMaster / piped-stdin
+  `tic`), G3b-gated on comments, and exercised only in real use. `parseManuallyHook`
+  routes the reference's inline `iter`-drain through the arg driver's `ConsumeRest`
+  seam (`record_replay_arg` → `_ssh_args`, `apply_e_command` → halt) — the
+  aliasing-safe analogue of the `-e` path (memory `rust-mut-args-strongly-protected`).
