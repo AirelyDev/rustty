@@ -166,9 +166,8 @@ pub fn run() -> Result<u8, Error> {
     //     .docs = opts.docs,
     // };
     //   PORT NOTE: FileFormatter's `--docs` mode reads the build-generated
-    //   `help_strings.Config` table, a deferred seam (formatter_file.rs);
-    //   `+show-config --docs` is gated on that codegen follow-up (DEFERRALS.md,
-    //   0-test). With `docs=false` (every current path) the formatter is complete.
+    //   `help_strings.Config` table (`config_help`, now wired in formatter_file.rs),
+    //   so `+show-config --docs` prints each option's doc as `# ` comments.
     let configfmt = FileFormatter {
         config: &config,
         changed: !opts.default && opts.changes_only,

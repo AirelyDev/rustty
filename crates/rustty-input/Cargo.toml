@@ -42,3 +42,9 @@ rustty-zigstd = { workspace = true }
 # `oni_regex` is always compiled (no cargo feature gate). This adds a transitive
 # C-FFI edge (oniguruma-sys), so rustty-input is an FFI crate for G6 (ASan).
 rustty-oniguruma = { workspace = true }
+
+# Build-time codegen of the `help_strings.KeybindAction` table (R1 port of
+# helpgen.genKeybindActions): build.rs scans binding.rs for each Action variant's
+# `///` doc block. std-only leaf, acyclic build-dep edge (G7).
+[build-dependencies]
+rustty-helpgen = { workspace = true }

@@ -9,7 +9,7 @@ use rustty_args::args;
 use crate::ghostty::{Action, Error};
 // const Allocator = std.mem.Allocator;
 // const helpgen_actions = @import("../input/helpgen_actions.zig");
-use rustty_input::helpgen_actions::{self, Format, NoHelpStrings};
+use rustty_input::helpgen_actions::{self, Format, RealHelpStrings};
 
 use crate::pager::IoWriter;
 use std::io::Write;
@@ -107,13 +107,11 @@ pub fn run() -> Result<u8, Error> {
     //     std.heap.page_allocator,
     // );
     //
-    // PORT NOTE: `help_strings` (the build-generated per-action doc table) is a
-    // deferred seam (DEFERRALS.md); `NoHelpStrings` reproduces the "no field has
-    // docs" state — so `--docs` still lists every action name, just without the
-    // (not-yet-generated) doc text, exactly as the `show_docs && !@hasDecl` path
-    // does. The `page_allocator` arg is dropped (the allocating writer owns its
-    // buffer).
-    helpgen_actions::generate(&mut stdout, Format::Plaintext, opts.docs, &NoHelpStrings)?;
+    // PORT NOTE: `help_strings` (the build-generated per-action doc table) is
+    // `RealHelpStrings`, delegating to the generated `keybind_help` — so `--docs`
+    // prints each action's real doc text. The `page_allocator` arg is dropped
+    // (the allocating writer owns its buffer).
+    helpgen_actions::generate(&mut stdout, Format::Plaintext, opts.docs, &RealHelpStrings)?;
     // try stdout_writer.interface.flush();
     stdout.0.flush()?;
 

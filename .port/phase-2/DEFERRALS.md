@@ -2470,18 +2470,20 @@ detection lives in the bin, ADV-FIX 2). New cli Cargo deps: `rustty-build-config
   renderer/libxev line content when R-d (renderer) / D6 (libxev) land; add a
   rustty repo-URL constant to `rustty-identity` for the hyperlink.
 
-- **`help_strings` / `Action::help_text` — the `+action --help` text is "".**
+- **`help_strings` / `Action::help_text` — the `+action --help` text. ✅ RESOLVED
+  (help_strings doc-table generator landed).**
   `ghostty::Action::run`'s `help_error` path (a faithful direct-match port of the
   reference `inline for` over `Action` fields) prints `self.help_text()`, which
-  indexes the build-generated `help_strings.Action.<field>` doc table. That
-  generator is the SAME deferred stub already tracked for config
-  (`formatter_file.rs:142`) and input (`helpgen_actions` `NoHelpStrings`), so
-  `help_text` returns "" for every action until the `help_strings` codegen
-  follow-up lands. Control flow (write text + "\n", flush, exit 0; warn + exit 1
-  on IO failure) is preserved verbatim; 0-test, runtime-only. **Target:** the
-  `help_strings` codegen follow-up (which also un-defers `explain_config`'s 1 test
-  — ADV-FIX 3 — and enables `+help` / `show_config --docs` / `list_keybinds
-  --docs`, all 0-test).
+  indexes the build-generated `help_strings.Action.<field>` doc table. This is now
+  the ported `crate::help_strings::action_help` — a `build.rs` codegen (over the
+  shared `rustty-helpgen` leaf, R1 port of `src/helpgen.zig` + `HelpStrings.zig`)
+  that extracts each action module's `pub fn run` `///` doc block. `help_text`
+  returns the real per-action doc text. The SAME milestone landed the config
+  `help_strings.Config` (`config_help`) and input `help_strings.KeybindAction`
+  (`keybind_help`) tables (replacing `formatter_file.rs`'s deferred `debug_assert`
+  and input's `NoHelpStrings` seam with `RealHelpStrings`), un-deferred
+  `explain_config`'s 1 test, and enabled `+help` / `show_config --docs` /
+  `list-actions --docs` (all previously 0-test).
 
 - **C5 action-impl sequencing stubs (0 tests, no MAP entry yet).** The 6
   not-yet-ported action impls (`list_fonts`, `list_keybinds`, `list_themes`,
@@ -2521,30 +2523,28 @@ New cli Cargo dep: `rustty-cfg-fmt` (member 14 — the `Writer` trait that
 to the Pager/stdout sinks). Enabling change in `rustty-args`: an additive
 `Error::ActionHelpRequested` variant (see below). Deferrals introduced/continued:
 
-- **`explain_config.zig`'s 1 test ("explain") is DEFERRED (ADV-FIX 3) on the
-  unbuilt `help_strings` generator.** The test asserts `explainOption("font-size")
-  != null` and `explainKeybind("copy_to_clipboard") != null`, which require the
-  build-generated `help_strings.Config` / `help_strings.KeybindAction` doc tables
-  — the SAME deferred seam already tracked for config (`formatter_file.rs`) and
-  input (`helpgen_actions` `NoHelpStrings`). `explain_option`/`explain_keybind`
-  preserve the config-key / keybind-action-tag VALIDATION (`Key::string_to_enum`
-  / `KeybindAction::FIELD_NAMES`) but return `None` for every name until the
-  help-text source lands, so `+explain-config` currently prints `Unknown: '<name>'`
-  and exits 1 for all inputs (honest deferred behavior, 0 KAT). The test body is
-  preserved verbatim (R1) as a SkipZigTest-style commented block at the bottom of
-  `explain_config.rs` (the `# [test]` attribute written spaced so
-  check_test_counts' grep does not count it → rust=0); `check_test_counts.py`
-  balances it via `apc_deferred=1` for `cli_explain_config` (need = 1 - 1 = 0).
-  **Target:** the `help_strings` codegen follow-up un-defers this test (restore
-  the live `#[test]` + drop `apc_deferred` to 0), same follow-up as the C1
-  `help_text` / `show_config --docs` deferrals.
+- **`explain_config.zig`'s 1 test ("explain"). ✅ RESOLVED (un-deferred).** The
+  test asserts `explainOption("font-size") != null` and
+  `explainKeybind("copy_to_clipboard") != null`, which require the build-generated
+  `help_strings.Config` / `help_strings.KeybindAction` doc tables. Those tables
+  now exist (`config_help` / `keybind_help` `build.rs` codegen over the
+  `rustty-helpgen` leaf), so `explain_option`/`explain_keybind` return the doc
+  text (the config-key / keybind-action-tag VALIDATION via `Key::string_to_enum`
+  / `KeybindAction::FIELD_NAMES` is preserved). The test is restored as a live
+  `#[test]` and passes; `check_test_counts.py` `apc_deferred` for
+  `cli_explain_config` flipped 1 → 0 (cli now 45 `#[test]`). The prerequisite —
+  porting the ~193 `Config` field `///` doc blocks into `config_struct.rs`
+  (previously deferred to "the fill sub-batch") — landed with this milestone,
+  clearing the whole-crate `check_comment_coverage.py --crate rustty-config
+  --strict` RED to missing=0.
 
-- **`show_config --docs` is gated on the same `help_strings` seam (0-test).**
-  `show_config.rs` threads `opts.docs` into `FileFormatter { docs }` faithfully,
-  but the formatter's `docs=true` branch reads `help_strings.Config`, a deferred
-  seam (`formatter_file.rs` `debug_assert!(!do_docs, …)`); `+show-config --docs`
-  is therefore gated on the help_strings codegen. The `docs=false` path (every
-  current use) is complete. Continuation of the C1 `help_strings` deferral.
+- **`show_config --docs`. ✅ RESOLVED (same milestone).** `show_config.rs` threads
+  `opts.docs` into `FileFormatter { docs }`; the formatter's `docs=true` branch
+  now reads the build-generated `help_strings.Config` (`config_help`, wired into
+  `formatter_file.rs` in place of the deferred `debug_assert!(!do_docs, …)`), so
+  `+show-config --docs` prints each option's doc as `# ` comment lines. The
+  keybind-doc path (`Keybinds::format_entry_docs`) likewise now uses
+  `RealHelpStrings` → `keybind_help`.
 
 - **`rustty-args` enabling change: additive `Error::ActionHelpRequested`.** C2 is
   the first chunk whose actions route a `help` decl through `args.parse`

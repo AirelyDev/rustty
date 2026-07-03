@@ -1,14 +1,13 @@
 //! rustty-cli::explain_config
 //!
-//! PORTS: ghostty src/cli/explain_config.zig (1t → **DEFERRED**, ADV-FIX 3).
+//! PORTS: ghostty src/cli/explain_config.zig (1t).
 //!
-//! PORT STATUS: the file is FULLY ported; its 1 test ("explain") is DEFERRED
-//! because its assertions require the build-generated `help_strings.Config` /
-//! `help_strings.KeybindAction` doc tables — a deferred seam in rustty
-//! (`explain_option`/`explain_keybind` return `None` until that codegen lands).
-//! The test body is preserved verbatim (R1) as a documented, un-deferrable-later
-//! block at the bottom; check_test_counts accounts for it via
-//! `apc_deferred=1` (DEFERRALS.md "cli C2 — explain_config").
+//! PORT STATUS: done. The 1 test ("explain") is LIVE: `explain_option` /
+//! `explain_keybind` consult the build-generated `help_strings.Config` /
+//! `help_strings.KeybindAction` doc tables (`config_help` / `keybind_help`), so
+//! `explainOption("font-size")` and `explainKeybind("copy_to_clipboard")` return
+//! their doc text (DEFERRALS.md "cli C2 — explain_config" RESOLVED;
+//! check_test_counts apc_deferred flipped 1 → 0).
 
 // const std = @import("std");
 // const args = @import("args.zig");
@@ -17,7 +16,8 @@ use rustty_args::args;
 // const Action = @import("ghostty.zig").Action;
 use crate::ghostty::Error;
 // const help_strings = @import("help_strings");
-//   -> DEFERRED seam (see `explain_option`/`explain_keybind`).
+//   -> the build-generated tables `rustty_config::help_strings::config_help` and
+//   `rustty_input::help_strings::keybind_help` (see `explain_option`/`explain_keybind`).
 // const Config = @import("../config/Config.zig");
 // const ConfigKey = @import("../config/key.zig").Key;
 use rustty_config::Key as ConfigKey;
@@ -221,7 +221,7 @@ pub fn run() -> Result<u8, Error> {
 // fn explainOption(name: []const u8) ?[]const u8 {
 fn explain_option(name: &[u8]) -> Option<&'static [u8]> {
     // const key = std.meta.stringToEnum(ConfigKey, name) orelse return null;
-    let _key = ConfigKey::string_to_enum(name)?;
+    let key = ConfigKey::string_to_enum(name)?;
     // return switch (key) {
     //     inline else => |tag| {
     //         const field_name = @tagName(tag);
@@ -232,15 +232,13 @@ fn explain_option(name: &[u8]) -> Option<&'static [u8]> {
     //     },
     // };
     //
-    // PORT NOTE (DEFERRED SEAM, ADV-FIX 3): `help_strings.Config` is the
-    // build-generated per-key doc table; it is not yet produced in rustty (same
-    // deferral as formatter_file.rs / helpgen_actions `NoHelpStrings`). With no
-    // generated table, `@hasDecl(help_strings.Config, field_name)` is false for
-    // every valid key, so this returns `None`. The config-key VALIDATION above
-    // (`string_to_enum`) is preserved; only the help-text source is deferred. When
-    // the help_strings codegen lands, this returns the doc text and the "explain"
-    // test is un-deferred.
-    None
+    // PORT NOTE: `help_strings.Config` is the build-generated per-key doc table,
+    // ported as `rustty_config::help_strings::config_help` (emitted by config's
+    // build.rs from each field's `///` doc block). The `inline else => |tag|
+    // @hasDecl/@field` switch is exactly `config_help(key)`: `Some(text)` for a
+    // documented key, `None` (the `@hasDecl == false` arm) otherwise. The config-
+    // key VALIDATION (`string_to_enum`) is preserved above.
+    rustty_config::help_strings::config_help(key)
 }
 
 // fn explainKeybind(name: []const u8) ?[]const u8 {
@@ -266,40 +264,37 @@ fn explain_keybind(name: &[u8]) -> Option<&'static [u8]> {
     //     },
     // };
     //
-    // PORT NOTE (DEFERRED SEAM, ADV-FIX 3): `help_strings.KeybindAction` is the
-    // build-generated per-action doc table — deferred (as above), so this returns
-    // `None` for every valid action-tag until the codegen lands.
-    None
+    // PORT NOTE: `help_strings.KeybindAction` is the build-generated per-action
+    // doc table, ported as `rustty_input::help_strings::keybind_help` (emitted by
+    // input's build.rs from each `Action` variant's `///` doc block). `Some(text)`
+    // for a documented action, `None` (`@hasDecl == false`) otherwise. The action-
+    // tag VALIDATION (the `FIELD_NAMES` membership) is preserved above.
+    rustty_input::help_strings::keybind_help(name)
 }
 
-// test "explain"  — DEFERRED (ADV-FIX 3; DEFERRALS.md "cli C2 — explain_config").
+// test "explain"
 //
-// The assertions require the build-generated `help_strings.Config` /
-// `help_strings.KeybindAction` doc tables, which are a deferred seam
-// (`explain_option`/`explain_keybind` return `None` for every name until that
-// codegen lands), so `explainOption("font-size") != null` and
-// `explainKeybind("copy_to_clipboard") != null` cannot pass yet. The body is
-// preserved verbatim (R1) below and is restored as a live Rust test (add the
-// `# [test]` attribute) — and the `apc_deferred=1` in check_test_counts removed —
-// when the help_strings generator lands. Do NOT convert it to a passing/weakened
-// test (R5). (The test attribute is written spaced below so check_test_counts'
-// test-attribute grep does not count this deferred, non-live body.)
-//
-// # [test]
-// fn explain() {
-//     // Config options
-//     // try std.testing.expect(explainOption("font-size") != null);
-//     assert!(explain_option(b"font-size").is_some());
-//     // try std.testing.expect(explainOption("copy_to_clipboard") == null);
-//     assert!(explain_option(b"copy_to_clipboard").is_none());
-//     // try std.testing.expect(explainOption("unknown-option") == null);
-//     assert!(explain_option(b"unknown-option").is_none());
-//
-//     // Keybind actions
-//     // try std.testing.expect(explainKeybind("copy_to_clipboard") != null);
-//     assert!(explain_keybind(b"copy_to_clipboard").is_some());
-//     // try std.testing.expect(explainKeybind("font-size") == null);
-//     assert!(explain_keybind(b"font-size").is_none());
-//     // try std.testing.expect(explainKeybind("unknown_keybind") == null);
-//     assert!(explain_keybind(b"unknown_keybind").is_none());
-// }
+// UN-DEFERRED: the `help_strings.Config` / `help_strings.KeybindAction` doc tables
+// are now build-generated (`config_help` / `keybind_help`), so
+// `explainOption("font-size") != null` and `explainKeybind("copy_to_clipboard")
+// != null` hold. This is the R1-contract test restored as a live Rust test
+// (DEFERRALS.md "cli C2 — explain_config" RESOLVED; check_test_counts
+// apc_deferred flipped 1 → 0).
+#[test]
+fn explain() {
+    // Config options
+    // try std.testing.expect(explainOption("font-size") != null);
+    assert!(explain_option(b"font-size").is_some());
+    // try std.testing.expect(explainOption("copy_to_clipboard") == null);
+    assert!(explain_option(b"copy_to_clipboard").is_none());
+    // try std.testing.expect(explainOption("unknown-option") == null);
+    assert!(explain_option(b"unknown-option").is_none());
+
+    // Keybind actions
+    // try std.testing.expect(explainKeybind("copy_to_clipboard") != null);
+    assert!(explain_keybind(b"copy_to_clipboard").is_some());
+    // try std.testing.expect(explainKeybind("font-size") == null);
+    assert!(explain_keybind(b"font-size").is_none());
+    // try std.testing.expect(explainKeybind("unknown_keybind") == null);
+    assert!(explain_keybind(b"unknown_keybind").is_none());
+}

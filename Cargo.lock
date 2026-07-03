@@ -584,6 +584,7 @@ dependencies = [
  "rustty-crash",
  "rustty-font",
  "rustty-font-shaper",
+ "rustty-helpgen",
  "rustty-identity",
  "rustty-input",
  "rustty-lib",
@@ -601,6 +602,7 @@ dependencies = [
  "rustty-cfg-fmt",
  "rustty-datastruct",
  "rustty-font",
+ "rustty-helpgen",
  "rustty-identity",
  "rustty-input",
  "rustty-oniguruma",
@@ -695,6 +697,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustty-helpgen"
+version = "0.1.0"
+
+[[package]]
 name = "rustty-identity"
 version = "0.1.0"
 
@@ -705,6 +711,7 @@ dependencies = [
  "rustty-args",
  "rustty-cfg-fmt",
  "rustty-datastruct",
+ "rustty-helpgen",
  "rustty-oniguruma",
  "rustty-render-types",
  "rustty-util",

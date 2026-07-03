@@ -315,6 +315,7 @@ pub enum RightClickAction {
     ContextMenu,
 }
 
+/// Options for middle-click actions.
 // pub const MiddleClickAction = enum { "primary-paste", ignore };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MiddleClickAction {
@@ -336,6 +337,7 @@ pub enum ShellIntegration {
     Zsh,
 }
 
+/// OSC 4, 10, 11, and 12 default color reporting format.
 // pub const OSCColorReportFormat = enum { none, "8-bit", "16-bit" };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OSCColorReportFormat {
@@ -377,6 +379,7 @@ pub enum MacTitlebarStyle {
     Hidden,
 }
 
+/// See macos-titlebar-proxy-icon
 // pub const MacTitlebarProxyIcon = enum { visible, hidden };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MacTitlebarProxyIcon {
@@ -391,6 +394,11 @@ pub enum MacHidden {
     Always,
 }
 
+/// See macos-icon
+///
+/// Note: future versions of rustty can support a custom icon with
+/// path by changing this to a tagged union, which doesn't change our
+/// format at all.
 // pub const MacAppIcon = enum { official, blueprint, chalkboard, microchip, glass, holographic, paper, retro, xray, custom, "custom-style" };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MacAppIcon {
@@ -473,6 +481,7 @@ pub enum MouseShiftCapture {
     Never,
 }
 
+/// How to treat requests to write to or read from the clipboard
 // pub const ClipboardAccess = enum { allow, deny, ask };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardAccess {
@@ -489,6 +498,7 @@ pub enum WindowSaveState {
     Always,
 }
 
+/// See window-new-tab-position
 // pub const WindowNewTabPosition = enum { current, end };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowNewTabPosition {
@@ -558,6 +568,7 @@ pub enum QuickTerminalScreen {
     MacosMenuBar,
 }
 
+// See quick-terminal-space-behavior
 // pub const QuickTerminalSpaceBehavior = enum { remain, move };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickTerminalSpaceBehavior {
@@ -565,6 +576,7 @@ pub enum QuickTerminalSpaceBehavior {
     Move,
 }
 
+/// See quick-terminal-keyboard-interactivity
 // pub const QuickTerminalKeyboardInteractivity = enum { none, "on-demand", exclusive };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickTerminalKeyboardInteractivity {
@@ -661,6 +673,8 @@ pub enum WindowDecoration {
 }
 
 impl WindowDecoration {
+    // Make this a valid gobject if we're in a GTK environment.
+    // pub const getGObjectType = switch (build_config.app_runtime) { .gtk => ... };
     // PORT NOTE: `getGObjectType` is a GTK-only comptime decl; reproduced at apprt.
 
     /// `std.meta.stringToEnum(WindowDecoration, input)`.
@@ -1212,6 +1226,12 @@ impl Default for BellFeatures {
 // pub const FreetypeLoadFlags = packed struct { hinting, "force-autohint", monochrome, autohint, light };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FreetypeLoadFlags {
+    // The defaults here at the time of writing this match the defaults
+    // for Freetype itself. rustty hasn't made any opinionated changes
+    // to these defaults. (Strictly speaking, `light` isn't FreeType's
+    // own default, but appears to be the effective default with most
+    // Fontconfig-aware software using FreeType, so until rustty
+    // implements Fontconfig support we default to `light`.)
     pub hinting: bool,
     pub force_autohint: bool,
     pub monochrome: bool,
@@ -4823,17 +4843,18 @@ impl Keybinds {
     // exactly these pieces; the trigger/table-name prefix is written into the
     // shared `RewindBuffer` via the public `write_trigger_to_buffer`/`write_all`
     // helpers. The `docs` branch's `help_strings.KeybindAction` lookup is the
-    // build-generated help artifact (a documented deferred seam, modeled by
-    // `helpgen_actions::HelpStrings`); `NoHelpStrings` reproduces the
-    // no-`@hasDecl` path exactly, which is the only path the ported tests exercise
-    // (they all call `formatEntry`, i.e. `docs = false`).
+    // build-generated help artifact (modeled by `helpgen_actions::HelpStrings`);
+    // `RealHelpStrings` delegates to the generated `keybind_help` table so
+    // `docs = true` (list-keybinds/show-config `--docs`) emits the real per-action
+    // doc text. The ported tests only exercise `formatEntry` (i.e. `docs = false`),
+    // where the table is not consulted.
     pub fn format_entry_docs<W: Writer>(
         &self,
         formatter: &mut rustty_cfg_fmt::EntryFormatter<W>,
         docs: bool,
     ) -> Result<(), W::Error> {
         use rustty_input::binding::{write_trigger_to_buffer, RewindBuffer};
-        use rustty_input::helpgen_actions::{HelpStrings, NoHelpStrings};
+        use rustty_input::helpgen_actions::{HelpStrings, RealHelpStrings};
 
         // if (self.set.bindings.count() == 0 and self.tables.count() == 0) {
         //     try formatter.formatEntry(void, {});
@@ -4848,7 +4869,7 @@ impl Keybinds {
         //
         // PORT NOTE: the reference's fixed 1024-byte stack buffer is the growable
         // `RewindBuffer` (its `format_entries` callers rewind via the `end` cursor).
-        let help_strings = NoHelpStrings;
+        let help_strings = RealHelpStrings;
 
         // Format root set bindings
         // var iter = self.set.bindings.iterator();

@@ -39,6 +39,7 @@
 
 pub mod action;
 pub mod ghostty;
+pub mod help_strings;
 
 // The action impls. `help`/`version` (C1), the C2 config/introspection actions,
 // the C3 ssh subsystem, the C4 apprt-backed + misc actions, the C5

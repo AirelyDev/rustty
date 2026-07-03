@@ -63,3 +63,9 @@ allocator-api2 = { workspace = true }
 # C4: new_window's `checkArg` uses `lib.cutPrefix` (`--class=` / `--working-directory=`
 # prefix cuts). rustty-lib is a low, strictly-earlier member — acyclic (G7).
 rustty-lib = { workspace = true }
+
+# Build-time codegen of the `help_strings.Action` table (R1 port of
+# helpgen.genActions): build.rs scans each cli action module's `pub fn run` doc.
+# std-only leaf, acyclic build-dep edge (G7).
+[build-dependencies]
+rustty-helpgen = { workspace = true }

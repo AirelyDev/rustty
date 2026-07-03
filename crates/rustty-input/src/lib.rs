@@ -22,6 +22,7 @@
 pub mod binding;
 pub mod command;
 pub mod config;
+pub mod help_strings;
 pub mod helpgen_actions;
 pub mod key_mods;
 pub mod keyboard;

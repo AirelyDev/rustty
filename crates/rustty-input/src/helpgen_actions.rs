@@ -97,7 +97,10 @@ pub trait HelpStrings {
     fn field(&self, field_name: &str) -> &[u8];
 }
 
-/// A `HelpStrings` with no docs for any field (build artifact absent).
+/// A `HelpStrings` with no docs for any field. Used where the build-generated
+/// table is deliberately not consulted (and reproduced the pre-codegen state);
+/// retained as the injection seam's null case (`show_docs = false` / no
+/// `@hasDecl` paths) and for tests.
 pub struct NoHelpStrings;
 
 impl HelpStrings for NoHelpStrings {
@@ -106,6 +109,21 @@ impl HelpStrings for NoHelpStrings {
     }
     fn field(&self, _field_name: &str) -> &[u8] {
         b""
+    }
+}
+
+/// The real `help_strings.KeybindAction` table, generated at build time from each
+/// `Action` variant's `///` doc block (`crate::help_strings::keybind_help`).
+/// `@hasDecl(help_strings.KeybindAction, field)` == `keybind_help(field).is_some()`;
+/// `@field(...)` == the stored doc bytes.
+pub struct RealHelpStrings;
+
+impl HelpStrings for RealHelpStrings {
+    fn has_decl(&self, field_name: &str) -> bool {
+        crate::help_strings::keybind_help(field_name.as_bytes()).is_some()
+    }
+    fn field(&self, field_name: &str) -> &[u8] {
+        crate::help_strings::keybind_help(field_name.as_bytes()).unwrap_or(b"")
     }
 }
 

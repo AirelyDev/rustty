@@ -15,6 +15,15 @@ authors.workspace = true
 [lints]
 workspace = true
 
+# The per-field `///` doc comments ported from ghostty `Config.zig` (R1) contain
+# indented config-file examples (e.g. `language = de`, `font-family = ""`) which
+# rustdoc would misinterpret as runnable Rust doc examples. These are config
+# syntax, never Rust; this crate defines no intended doc examples (all tests live
+# in `#[test]` blocks), so doctests are disabled rather than altering the faithful
+# comment text (the same rationale as rustty-font / rustty-font-shaper).
+[lib]
+doctest = false
+
 [features]
 # The single `url.zig` test uses oniguruma. It is gated behind this off-by-default
 # feature which pulls in the `oni` safe wrapper crate (`rustty-oniguruma`). The url
@@ -43,3 +52,8 @@ rustty-cfg-fmt = { workspace = true }
 # The `oni` safe wrapper (lib name `oni`), pulled in only by the `oniguruma`
 # feature for the url.zig `url regex` test.
 rustty-oniguruma = { workspace = true, optional = true }
+
+# Build-time codegen of the `help_strings.Config` table (R1 port of
+# helpgen.genConfig): build.rs scans config_struct.rs for each field's `///` doc.
+[build-dependencies]
+rustty-helpgen = { workspace = true }

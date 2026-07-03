@@ -67,6 +67,13 @@ members = [
     # test-contract crate_map. A leaf over rustty-util; backing = std::alloc.
     "crates/rustty-zigstd",
 
+    # ----- build-time help_strings extraction (R1 port of src/helpgen.zig) -----
+    # The shared LEAF used as a [build-dependencies] by the three crates that own
+    # a `help_strings` table (config/input/cli). std-only, no rustty dep, so the
+    # build-dep edges stay acyclic (G7 includes [build-dependencies]). NOT in the
+    # 3234-test contract (its parity contract is the scoped-G3b over helpgen.zig).
+    "crates/rustty-helpgen",
+
     # ----- libxev event-loop crate (D6): placeholder types now, port later -----
     # libxev is a Zig-source dependency package (not ghostty src/, not a C lib);
     # the D6 decision ports it faithfully into THIS crate when a live event-loop
@@ -151,6 +158,9 @@ rustty-apprt-c = { path = "crates/rustty-apprt-c" }
 rustty-cli = { path = "crates/rustty-cli" }
 # Additive infra glue (R1): Zig stdlib equivalents; not in the parity contract.
 rustty-zigstd = { path = "crates/rustty-zigstd" }
+# Build-time help_strings doc-table extraction (R1 port of src/helpgen.zig). A
+# std-only leaf, used only as a [build-dependencies] by config/input/cli.
+rustty-helpgen = { path = "crates/rustty-helpgen" }
 # D6: the libxev event-loop crate — shared xev handle placeholder types today,
 # the faithful libxev port (in place) later. A leaf over rustty-global.
 rustty-xev = { path = "crates/rustty-xev" }

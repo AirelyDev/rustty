@@ -1,0 +1,26 @@
+# rustty-helpgen — build-time help-string extraction primitives (R1 port of
+# src/helpgen.zig's `extractDocComments` + `findCommonPrefix`).
+#
+# This is the shared LEAF used as a `[build-dependencies]` by the three crates
+# that own a `help_strings` table (rustty-config, rustty-input, rustty-cli). It
+# is the faithful analog of ghostty's single `src/helpgen.zig` program (run by
+# `src/build/HelpStrings.zig`): each owning crate's `build.rs` scans its own
+# ported source and emits a table into `OUT_DIR`, exactly as the reference build
+# step parses the source and emits `help_strings.zig`.
+#
+# Crate IDENTITY is `rustty-helpgen` (R4). std-only, ZERO rustty dependency so
+# the `config/input/cli -> helpgen` build-dependency edges stay acyclic (G7,
+# which includes [build-dependencies]). NO ghostty-tree dependency (R3).
+[package]
+name = "rustty-helpgen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

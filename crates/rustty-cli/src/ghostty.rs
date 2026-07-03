@@ -9,7 +9,7 @@
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;
 // const help_strings = @import("help_strings");
-//   -> DEFERRED stub in rustty (see `help_text` below + DEFERRALS.md "cli C1").
+//   -> the build-generated `crate::help_strings::action_help` table (see `help_text`).
 // const actionpkg = @import("action.zig");
 // const SpecialCase = actionpkg.SpecialCase;
 use crate::action::{self, SpecialCase};
@@ -367,14 +367,13 @@ impl Action {
     /// when an action returns [`Error::ActionHelpRequested`].
     ///
     /// Reference: `@field(help_strings.Action, field.name)` — the build-generated
-    /// (helpgen/Pandoc) per-action doc table. `help_strings` is a DEFERRED stub in
-    /// rustty (DEFERRALS.md — "cli C1"), so there is no generated text yet; this
-    /// returns "" for every action until the help_strings codegen follow-up lands.
+    /// per-action doc table. This is the ported `crate::help_strings::action_help`
+    /// (emitted by build.rs from each action module's `pub fn run` `///` doc), the
+    /// runtime analog of the reference's `inline for` field lookup.
     fn help_text(self) -> &'static str {
-        // help_strings codegen deferred (ADV-FIX 3); no per-action text available
-        // for any action yet, so the lookup collapses to "" (the reference's
-        // `@field(help_strings.Action, field.name)` has no populated table).
-        ""
+        // const text = @field(help_strings.Action, field.name) ++ "\n";
+        //   (the trailing "\n" is added by the `writeln!` in `run`.)
+        crate::help_strings::action_help(self)
     }
 
     /// Returns the filename associated with an action. This is a relative

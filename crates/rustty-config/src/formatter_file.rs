@@ -127,20 +127,23 @@ impl<'a> FileFormatter<'a> {
                 //     }
                 // }
                 //
-                // PORT NOTE (DEFERRED SEAM, R4): the `docs` branch prints the
-                // Pandoc help text for each key from `help_strings.Config`, a
-                // build-time (helpgen/Pandoc) generated module that is NOT yet
-                // ported in rustty. The whole-config format works identically for
-                // `docs = false` (the only mode the ported tests exercise); the
-                // `docs = true` help-string emission is deferred until the
-                // help-strings generator lands. This is a clearly surfaced
-                // deferral (NOT a stub-to-pass): the `docs` flag is honored, only
-                // the help-text source is absent.
-                let do_docs = self.docs; // && help_strings.Config.has(name)
-                debug_assert!(
-                    !do_docs,
-                    "FileFormatter docs mode requires help_strings (deferred)"
-                );
+                // PORT NOTE: `help_strings.Config` is the build-generated per-key
+                // doc table (`crate::help_strings::config_help`, emitted by
+                // build.rs from each field's `///` doc block — the
+                // `helpgen.genConfig` analog). `@hasDecl(help_strings.Config,
+                // field.name)` becomes `config_help(key).is_some()`; an
+                // undocumented field yields `None` (no `# ` doc lines emitted).
+                let help = crate::help_strings::config_help(key);
+                let do_docs = self.docs && help.is_some();
+                if do_docs {
+                    // var lines = std.mem.splitScalar(u8, help, '\n');
+                    // while (lines.next()) |line| { try writer.print("# {s}\n", ...); }
+                    for line in help.unwrap().split(|&c| c == b'\n') {
+                        writer.write_all(b"# ")?;
+                        writer.write_all(line)?;
+                        writer.write_all(b"\n")?;
+                    }
+                }
 
                 // formatter.formatEntry(
                 //     field.type,

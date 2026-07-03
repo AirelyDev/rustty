@@ -23,6 +23,7 @@ pub mod edit;
 pub mod error_list;
 pub mod file_load;
 pub mod formatter_file;
+pub mod help_strings;
 pub mod io;
 pub mod path;
 pub mod repeatable_string_map;
