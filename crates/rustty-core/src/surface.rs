@@ -2109,29 +2109,36 @@ where
             //     .surface_mailbox = .{ .surface = self, .app = app_mailbox },
             // });
             //
-            // PORT NOTE: the reference out-pointer init is the Rust
-            // constructor return (the termio_impl PORT NOTE); the returned
-            // value is placement-written into the uninitialized `self.io`
-            // field. (`termio::DerivedConfig::init` is infallible — the
-            // reference `try` collapses, its PORT NOTE.)
-            let io = match termio::Termio::init(
-                alloc,
-                termio::Options {
-                    size,
-                    full_config: config,
-                    config: termio::DerivedConfig::init(config),
-                    backend: termio::Backend::Exec(io_exec),
-                    mailbox: io_mailbox,
-                    renderer_state: unsafe { &raw mut (*self_).renderer_state },
-                    renderer_wakeup,
-                    renderer_mailbox,
-                    surface_mailbox: SurfaceMailbox {
-                        surface: self_,
-                        app: app_mailbox,
+            // PORT NOTE ([ADV-FIX F1]): the reference `try termio.Termio.init(
+            // &self.io, alloc, .{...})` is an IN-PLACE out-param initializer, and the
+            // port matches it (`unsafe fn init(self_: *mut Termio<M>, ...)`). This
+            // is MANDATORY: `StreamHandler` holds raw self-pointers back into the
+            // owning Termio (`terminal`/`size`/`termio_mailbox`); a by-value return
+            // + a `ptr::write` here would copy those pointer *values* but leave them
+            // aimed at the old return slot → dangling. `init` writes every field at
+            // the FINAL `(*self_).io` address. (`termio::DerivedConfig::init` is
+            // infallible — the reference `try` collapses, its PORT NOTE.)
+            match unsafe {
+                termio::Termio::init(
+                    &raw mut (*self_).io,
+                    alloc,
+                    termio::Options {
+                        size,
+                        full_config: config,
+                        config: termio::DerivedConfig::init(config),
+                        backend: termio::Backend::Exec(io_exec),
+                        mailbox: io_mailbox,
+                        renderer_state: &raw mut (*self_).renderer_state,
+                        renderer_wakeup,
+                        renderer_mailbox,
+                        surface_mailbox: SurfaceMailbox {
+                            surface: self_,
+                            app: app_mailbox,
+                        },
                     },
-                },
-            ) {
-                Ok(v) => v,
+                )
+            } {
+                Ok(()) => {}
                 Err(err) => {
                     // (errdefer io_mailbox.deinit(alloc) + errdefer
                     // io_exec.deinit() — both moved into the consumed options;
@@ -2139,8 +2146,7 @@ where
                     unsafe { Self::initErrdefers(self_, false) };
                     return Err(err.into());
                 }
-            };
-            unsafe { std::ptr::write(&raw mut (*self_).io, io) };
+            }
         }
         // Outside the block, IO has now taken ownership of our temporary state
         // so we can just defer this and not the subcomponents.
@@ -2267,7 +2273,12 @@ where
                 // (whole-wrapper capture — same note as the renderer spawn
                 // above.)
                 let args = args;
-                unsafe { (*args.thread).threadMain(&mut *args.io) }
+                // [ADV-FIX F2]: `Thread::threadMain` is an associated fn taking RAW
+                // `*mut Thread`/`*mut Termio<M>` (NOT `&mut`) — a `&mut` arg would be
+                // a protected `Unique` retag for the whole `loop.run` (shell life),
+                // aliasing the concurrent ReadThread + the parent's pre-join
+                // `io_thread.stop.notify()`. Pass the raw pointers straight through.
+                unsafe { termio::Thread::threadMain(args.thread, args.io) }
             });
         let io_thr = unsafe { Self::initTry(self_, true, spawn_result) }?;
         unsafe { (*self_).io_thr = Some(io_thr) };

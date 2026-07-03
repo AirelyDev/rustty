@@ -219,6 +219,16 @@ pub enum ThreadData {
 }
 
 impl ThreadData {
+    /// PORT NOTE (Rust-only glue, xev B4): the backend-agnostic `undefined`
+    /// placeholder `Termio.threadEnter` writes into `ThreadData.backend` before
+    /// `self.backend.threadEnter` overwrites it. Since `Backend`/`ThreadData` have
+    /// the single `Exec` variant, the only inhabited "undefined" value is
+    /// `Exec(placeholder)` — see `exec::ThreadData::placeholder`.
+    #[cfg(not(windows))]
+    pub(crate) fn placeholder() -> ThreadData {
+        ThreadData::Exec(exec::ThreadData::placeholder())
+    }
+
     pub fn deinit(&mut self, alloc: Allocator) {
         match self {
             // .exec => |*exec| exec.deinit(alloc),

@@ -59,6 +59,12 @@ rustty-identity = { workspace = true }
 # `alloc: Allocator` fields/params mirror rustty-vt's Terminal convention
 # (`allocator_api2::alloc::Global as Allocator`).
 allocator-api2 = { workspace = true }
+# - rustty-lib: the process-static `GlobalZigAllocator`/`ZigAllocatorRef` that
+#   backs the terminal Stream's OSC parser allocator in `Termio::init`
+#   (`terminal_stream = .initAlloc(alloc, handler)` — the same `'static` global
+#   the vt-c `TerminalWrapper` and `Terminal::vt_stream` use). FIRM leaf crate,
+#   no cycle (termio already depends transitively via rustty-vt).
+rustty-lib = { workspace = true }
 # Raw FFI bindings to the platform libc for the relocated src/Command.zig port
 # (fork/execve/dup2/dup3/fcntl/chdir/waitpid — integration-tier stage 3, break
 # #13b). R3: `libc` binds the SAME system library the reference's Zig

@@ -12,13 +12,11 @@
 //! `resetSynchronizedOutput`/`clearScreen`/`scrollViewport`/`jumpToPrompt`/
 //! `focusGained`/`colorSchemeReport*`) are ported LIVE (core C-T) against the
 //! guard-less C0 `rustty_zigstd::thread::Mutex`; the xev `renderer_wakeup.
-//! notify()` in a few of them is the D6 placeholder leaf (live-now, panics only
-//! once the render thread runs). STILL DEFERRED with faithful signatures +
-//! verbatim reference bodies in comments + `unimplemented!()` markers (0
-//! reference tests — R1-safe): `init`/`threadEnter` and
-//! `processOutput`/`processOutputLocked` — they build/drive the live xev loop +
-//! read-thread inspector slow path (the D6 xev decision). NOT fabricated logic.
-//! See .port/phase-2/DEFERRALS.md ("rustty-termio stage 2" + "core C-T").
+//! notify()` is the real `Async::notify` leaf (rustty-xev). `processOutput`/
+//! `processOutputLocked` landed in xev B3 (RAW `*mut Termio<M>`, [ADV-FIX F2]);
+//! `init` (in-place out-param, [ADV-FIX F1]) and `threadEnter` (RAW `*mut`,
+//! [ADV-FIX F2]) landed in xev B4 — the writer thread now drives the live xev
+//! loop end-to-end. See .port/phase-2/XEV_MILESTONE_B_BLUEPRINT.md.
 
 // PARITY: the reference's identifiers are camelCase (`queueMessage`,
 // `threadEnter`, ...); preserved verbatim per R1/R2.
@@ -71,10 +69,22 @@ use crate::backend;
 use crate::mailbox::Mailbox;
 use crate::message::Message;
 use crate::options::Options;
+use crate::stream_handler::StreamHandler;
 use crate::thread::Thread;
 use crate::xev_seam as xev;
 use crate::Backend;
 use crate::Error;
+
+/// PORT NOTE: the process-static Zig allocator that backs the terminal
+/// `Stream`'s OSC parser (`terminal_stream = .initAlloc(alloc, handler)`). The
+/// reference threads the same `std.mem.Allocator` it passes to `Termio.init`;
+/// rustty's `Stream::init_alloc` wants a `ZigAllocatorRef`, so we back the OSC
+/// parser with the process-static global zig allocator — the identical choice
+/// `Terminal::vt_stream` and the vt-c `TerminalWrapper` make (supports dynamic
+/// OSC growth, e.g. large OSC 52 clipboard payloads). `GlobalZigAllocator` is a
+/// stateless ZST, so sharing the static is sound.
+static GLOBAL_ZIG_ALLOCATOR_FOR_OSC: rustty_lib::allocator::GlobalZigAllocator =
+    rustty_lib::allocator::GlobalZigAllocator;
 
 // const log = std.log.scoped(.io_exec);
 //
@@ -443,10 +453,244 @@ impl<M: AppMailbox> Termio<M> {
     //         .thread_enter_state = thread_enter_state,
     //     };
     // }
-    pub fn init(_alloc: Allocator, _opts: Options<'_, M>) -> Result<Termio<M>, Error> {
-        unimplemented!(
-            "termio.Termio.init deferred (stage-4 stream_handler + D6); verbatim body above"
+    //
+    // PORTED (xev B4, [ADV-FIX F1], 0 reference tests — R1-safe). The reference
+    // `init(self: *Termio, ...) !void` is an IN-PLACE out-param initializer — the
+    // faithful Rust form is `unsafe fn init(self_: *mut Termio<M>, ...)`, NOT a
+    // by-value return. This matters: `StreamHandler` holds raw self-pointers back
+    // into the owning Termio (`terminal`/`size`/`termio_mailbox` =
+    // `&self.terminal`/`&self.size`/`&self.mailbox`, stream_handler.rs:95/97/101).
+    // A by-value return + a caller `ptr::write` would copy those pointer *values*
+    // but leave them aimed at the OLD return slot → dangling. Here we `ptr::write`
+    // every field into `*self_` at its FINAL address, THEN build the handler with
+    // pointers into `*self_`, so the self-references are valid for the Termio's
+    // life (matches the reference's "points to memory in self so it isn't safe to
+    // use until self.* is set" + the surface's own `renderer_state.terminal =
+    // &raw mut (*self_).io.terminal` precedent). `M: Copy` is Rust-only glue: the
+    // reference copies `opts.surface_mailbox` by value into BOTH `self.*` and the
+    // handler (`apprt.surface.Mailbox` is a trivially-copyable value type —
+    // `SurfaceMailbox<A>` is `Copy`).
+    ///
+    /// # Safety
+    /// `self_` must point at uninitialized (or otherwise overwritable)
+    /// `Termio<M>`-sized, aligned storage; on `Ok` every field is initialized and
+    /// the handler self-pointers are valid for the Termio's lifetime. On `Err`
+    /// nothing is written (the sole fallible step, `Terminal::init`, runs before
+    /// any write).
+    pub unsafe fn init(
+        self_: *mut Termio<M>,
+        alloc: Allocator,
+        opts: Options<'_, M>,
+    ) -> Result<(), Error>
+    where
+        M: Copy + 'static,
+    {
+        // The default terminal modes based on our config.
+        // const default_modes: terminalpkg.ModePacked = modes: {
+        //     var modes: terminalpkg.ModePacked = .{};
+        //     switch (opts.full_config.@"grapheme-width-method") {
+        //         .unicode => modes.grapheme_cluster = true,
+        //         .legacy => {},
+        //     }
+        //     modes.cursor_blinking = opts.config.cursor_blink orelse true;
+        //     break :modes modes;
+        // };
+        //
+        // (PORT: the packed-bit-set field writes `modes.grapheme_cluster = true`
+        // / `modes.cursor_blinking = ...` use the public `ModeState::set` +
+        // `.values` path since `ModePacked`'s per-field bit helpers are private —
+        // the `terminal_full_reset_default_modes` test precedent.)
+        let default_modes: rustty_vt::modes::ModePacked = {
+            let mut modes = rustty_vt::modes::ModeState::default();
+
+            // Setup our initial grapheme cluster support if enabled. We use a
+            // switch to ensure we get a compiler error if more cases are added.
+            match opts.full_config.grapheme_width_method {
+                rustty_config::value_types::GraphemeWidthMethod::Unicode => {
+                    modes.set(rustty_vt::modes::Mode::GraphemeCluster, true);
+                }
+                rustty_config::value_types::GraphemeWidthMethod::Legacy => {}
+            }
+
+            // Set default cursor blink settings
+            modes.set(
+                rustty_vt::modes::Mode::CursorBlinking,
+                opts.config.cursor_blink.unwrap_or(true),
+            );
+
+            modes.values
+        };
+
+        // Create our terminal
+        // var term = try terminalpkg.Terminal.init(alloc, opts: { ... });
+        let grid_size = opts.size.grid();
+        let mut term = Terminal::init(
+            alloc,
+            rustty_vt::terminal::Options {
+                cols: grid_size.columns,
+                rows: grid_size.rows,
+                max_scrollback: opts.full_config.scrollback_limit,
+                default_modes,
+                colors: rustty_vt::terminal::Colors {
+                    // .background = .init(opts.config.background.toTerminalRGB()),
+                    background: color::DynamicRGB::init(opts.config.background.to_terminal_rgb()),
+                    // .foreground = .init(opts.config.foreground.toTerminalRGB()),
+                    foreground: color::DynamicRGB::init(opts.config.foreground.to_terminal_rgb()),
+                    // .cursor = cursor: {
+                    //     const color = opts.config.cursor_color orelse break :cursor .unset;
+                    //     const rgb = color.toTerminalRGB() orelse break :cursor .unset;
+                    //     break :cursor .init(rgb);
+                    // },
+                    cursor: 'cursor: {
+                        let Some(cursor_color) = opts.config.cursor_color else {
+                            break 'cursor color::DynamicRGB::UNSET;
+                        };
+                        let Some(rgb) = cursor_color.to_terminal_rgb() else {
+                            break 'cursor color::DynamicRGB::UNSET;
+                        };
+                        color::DynamicRGB::init(rgb)
+                    },
+                    // .palette = .init(opts.config.palette),
+                    palette: color::DynamicPalette::init(opts.config.palette),
+                },
+                kitty_image_storage_limit: opts.config.image_storage_limit,
+                // .kitty_image_loading_limits = .all,
+                kitty_image_loading_limits: Limits::ALL,
+            },
         )
+        // (PORT: `Terminal::init`'s `OutOfMemory` maps to the opaque termio
+        // `crate::Error` — the reference `try` bubbles the alloc failure.)
+        .map_err(|_| Error)?;
+        // errdefer term.deinit(alloc);
+        // (PORT: `Terminal::init` is the sole fallible step and runs BEFORE any
+        // write into `*self_`; on error we return before writing, so no
+        // partial-init cleanup is needed — the errdefer collapses.)
+
+        // Set our default cursor style
+        // term.screens.active.cursor.cursor_style = opts.config.cursor_style;
+        //
+        // SAFETY: `term.screens.active` is the live active-screen pointer just
+        // returned by `Terminal::init`.
+        unsafe { (*term.screens.active).cursor.cursor_style = opts.config.cursor_style };
+
+        // Setup our terminal size in pixels for certain requests.
+        // term.width_px = term.cols * opts.size.cell.width;
+        // term.height_px = term.rows * opts.size.cell.height;
+        term.width_px = term.cols as u32 * opts.size.cell.width;
+        term.height_px = term.rows as u32 * opts.size.cell.height;
+
+        // Setup our backend.
+        // var backend = opts.backend;
+        // backend.initTerminal(&term);
+        let mut backend = opts.backend;
+        backend.initTerminal(&mut term);
+
+        // (PORT: read every `opts.config.*` scalar the handler needs BEFORE the
+        // `opts.config` value is moved into `self.config` below — Zig copies the
+        // fields by value; Rust must not read a moved-out value. `enquiry_response`
+        // is the one owned field, cloned as the handler's owned copy — see the
+        // StreamHandler field PORT NOTE.)
+        let handler_osc = opts.config.osc_color_report_format;
+        let handler_clipboard_write = opts.config.clipboard_write;
+        let handler_enquiry_response = opts.config.enquiry_response.clone();
+        let handler_cursor_style = opts.config.cursor_style;
+        let handler_cursor_blink = opts.config.cursor_blink;
+
+        // (PORT: `opts.surface_mailbox`/`opts.renderer_wakeup`/`opts.renderer_state`
+        // /`opts.renderer_mailbox`/`alloc` are all `Copy` — the reference uses each
+        // in BOTH `self.*` and the handler; the `M: Copy` bound makes the double
+        // use a copy, not a move.)
+        let surface_mailbox = opts.surface_mailbox;
+        let renderer_state = opts.renderer_state;
+        let renderer_wakeup = opts.renderer_wakeup;
+        let renderer_mailbox = opts.renderer_mailbox;
+
+        // const thread_enter_state = try ThreadEnterState.create(alloc, opts.full_config);
+        // (PORT: `ThreadEnterState::create` is infallible — the arena OOM half of
+        // the reference `!` collapsed; returns `Option<Box<ThreadEnterState>>`.)
+        let thread_enter_state = ThreadEnterState::create(opts.full_config);
+
+        // self.* = .{ ... };
+        //
+        // (PORT: the reference `self.* = .{...}` overwrites the out-pointer's
+        // storage in one shot; Rust writes each field via `ptr::write` into the
+        // uninitialized `*self_` — no old value is dropped, and every field is
+        // written exactly once. `terminal`/`size`/`mailbox` are written FIRST so
+        // the handler below can take their FINAL addresses.)
+        //
+        // SAFETY: `self_` is caller-provided overwritable `Termio<M>` storage; each
+        // `write` targets a distinct field and none is read before it is written.
+        unsafe {
+            (&raw mut (*self_).alloc).write(alloc);
+            (&raw mut (*self_).backend).write(backend);
+            (&raw mut (*self_).config).write(opts.config);
+            (&raw mut (*self_).terminal).write(term);
+            (&raw mut (*self_).renderer_state).write(renderer_state);
+            (&raw mut (*self_).renderer_wakeup).write(renderer_wakeup);
+            (&raw mut (*self_).renderer_mailbox).write(renderer_mailbox);
+            (&raw mut (*self_).surface_mailbox).write(surface_mailbox);
+            (&raw mut (*self_).size).write(opts.size);
+            (&raw mut (*self_).mailbox).write(opts.mailbox);
+            (&raw mut (*self_).last_cursor_reset).write(None);
+            (&raw mut (*self_).thread_enter_state).write(thread_enter_state);
+        }
+
+        // Create our stream handler. This points to memory in self so it
+        // isn't safe to use until self.* is set.
+        // const handler: StreamHandler = .{ ... };
+        //
+        // SAFETY: the three self-pointers (`termio_mailbox`/`size`/`terminal`) are
+        // taken AFTER the corresponding fields are `ptr::write`n above, so they
+        // point at the live, final Termio storage (the whole point of [ADV-FIX F1]).
+        let handler: StreamHandler<M> = StreamHandler {
+            // .alloc = alloc,
+            alloc,
+            // .termio_mailbox = &self.mailbox,
+            termio_mailbox: unsafe { &raw mut (*self_).mailbox },
+            // .surface_mailbox = opts.surface_mailbox,
+            surface_mailbox,
+            // .renderer_state = opts.renderer_state,
+            renderer_state,
+            // .renderer_wakeup = opts.renderer_wakeup,
+            renderer_wakeup,
+            // .renderer_mailbox = opts.renderer_mailbox,
+            renderer_mailbox,
+            // .size = &self.size,
+            size: unsafe { &raw mut (*self_).size },
+            // .terminal = &self.terminal,
+            terminal: unsafe { &raw mut (*self_).terminal },
+            // .osc_color_report_format = opts.config.osc_color_report_format,
+            osc_color_report_format: handler_osc,
+            // .clipboard_write = opts.config.clipboard_write,
+            clipboard_write: handler_clipboard_write,
+            // .enquiry_response = opts.config.enquiry_response,
+            enquiry_response: handler_enquiry_response,
+            // .default_cursor_style = opts.config.cursor_style,
+            default_cursor_style: handler_cursor_style,
+            // .default_cursor_blink = opts.config.cursor_blink,
+            default_cursor_blink: handler_cursor_blink,
+            // (reference field defaults for the handler fields not in the literal:
+            // `default_cursor = true`, `apc = .{}`, `dcs = .{}`,
+            // `tmux_viewer = null`, `termio_messaged = false`, `seen_title = false`.)
+            default_cursor: true,
+            apc: rustty_vt::apc::Handler::default(),
+            dcs: rustty_vt::dcs::Handler::default(),
+            tmux_viewer: None,
+            termio_messaged: false,
+            seen_title: false,
+        };
+
+        // .terminal_stream = .initAlloc(alloc, handler),
+        //
+        // SAFETY: `terminal_stream` is the last unwritten field of `*self_`; the
+        // handler it takes references the already-written self fields above.
+        let terminal_stream: StreamHandlerStream<M> = crate::stream_handler::Stream::init_alloc(
+            rustty_lib::allocator::ZigAllocatorRef::new(&GLOBAL_ZIG_ALLOCATOR_FOR_OSC),
+            handler,
+        );
+        unsafe { (&raw mut (*self_).terminal_stream).write(terminal_stream) };
+
+        Ok(())
     }
 
     // pub fn deinit(self: *Termio) void — consuming `self` (the reference
@@ -528,12 +772,141 @@ impl<M: AppMailbox> Termio<M> {
     //         },
     //     };
     // }
-    pub fn threadEnter(
-        &mut self,
-        _thread: &mut Thread,
-        _data: &mut ThreadData<M>,
-    ) -> Result<(), Error> {
-        unimplemented!("termio.Termio.threadEnter deferred (D6); verbatim body above")
+    //
+    // PORTED (xev B4, [ADV-FIX F2], 0 reference tests — R1-safe). The reference
+    // threads a RAW `self: *Termio` + `data: *ThreadData` (out-param). The port
+    // keeps BOTH raw (NOT `&mut self`) because `self.backend.threadEnter(...)`
+    // spawns the read thread, which then aliases `*self_` via `processOutput`
+    // concurrently with the writer thread; a `&mut self` would be a protected
+    // `Unique` retag for the whole call, aliasing the reader
+    // (`rust-mut-args-strongly-protected`). We form only transient, field-scoped
+    // borrows. `data` is an OUT-PARAM pointing at uninitialized `ThreadData`
+    // storage (the reference `data.* = .{...}` writes it whole; `backend` is the
+    // reference's `undefined` — here a droppable placeholder that
+    // `Exec.threadEnter` overwrites, see `backend::ThreadData::placeholder`).
+    // `M: Copy` is Rust-only glue (the reference copies `self.surface_mailbox` by
+    // value into `data`).
+    ///
+    /// # Safety
+    /// `self_` must point at a live, initialized `Termio<M>`; `thread` at the live
+    /// owning `Thread`; `data` at uninitialized `ThreadData<M>` storage that is
+    /// stable for the loop's life (the frame-pinned `CallbackData::data`). On `Ok`,
+    /// `*data` is fully initialized.
+    pub unsafe fn threadEnter(
+        self_: *mut Termio<M>,
+        thread: *mut Thread,
+        data: *mut ThreadData<M>,
+    ) -> Result<(), Error>
+    where
+        M: Copy + 'static,
+    {
+        // The reference's `defer if (self.thread_enter_state) |v| { v.destroy();
+        // self.thread_enter_state = null; }` frees the thread-enter state at EVERY
+        // exit. We run the body, then free once at the single exit below — the
+        // faithful `defer` semantics.
+        let body = || -> Result<(), Error> {
+            // If we have thread enter state then we're going to validate
+            // and set that all up now so that we can error before we actually
+            // start the command and pty.
+            // const inputs: ?[]const ThreadEnterState.Input = if (self.thread_enter_state) |v|
+            //     try v.prepareInput() else null;
+            let inputs: Option<Vec<Input>> = match unsafe { (*self_).thread_enter_state.as_mut() } {
+                // (PORT: `try v.prepareInput()` — the `InputNotFound` error maps to
+                // the opaque `crate::Error`; the reference bubbles it to
+                // `threadMain`'s error switch, unreachable while `Error` is opaque.)
+                Some(v) => Some(v.prepareInput().map_err(|_| Error)?),
+                None => None,
+            };
+
+            // data.* = .{ .alloc, .loop = &thread.loop, .renderer_state,
+            //             .surface_mailbox, .mailbox = &self.mailbox,
+            //             .backend = undefined };
+            //
+            // SAFETY: `data` is caller-provided uninitialized `ThreadData<M>`
+            // storage; `ptr::write` initializes it whole (no old value dropped).
+            // `backend` is the droppable `undefined` placeholder that
+            // `Exec.threadEnter` overwrites below.
+            unsafe {
+                data.write(ThreadData {
+                    alloc: (*self_).alloc,
+                    loop_: &raw mut (*thread).loop_,
+                    renderer_state: (*self_).renderer_state,
+                    surface_mailbox: (*self_).surface_mailbox,
+                    backend: backend::ThreadData::placeholder(),
+                    mailbox: &raw mut (*self_).mailbox,
+                });
+            }
+
+            // Setup our backend
+            // try self.backend.threadEnter(self.alloc, self, data);
+            //
+            // SAFETY: forms the field-scoped `&mut (*self_).backend` receiver and
+            // hands the raw whole-Termio `self_` as `io` + the raw `data` — matching
+            // the reference `self.backend.threadEnter(self.alloc, self, data)`; the
+            // spawned read thread aliases `*self_`'s OTHER fields only, disjoint from
+            // the `.backend` receiver.
+            unsafe {
+                (*self_)
+                    .backend
+                    .threadEnter((*self_).alloc, self_, &mut *data)
+            }?;
+            // errdefer self.backend.threadExit(data);
+            // (PORT: fired explicitly on each input-queue error below — the sole
+            // steps after `backend.threadEnter` succeeds.)
+
+            // If we have inputs, then queue them all up.
+            // for (inputs orelse &.{}) |input| switch (input) { ... }
+            for input in inputs.into_iter().flatten() {
+                let queued: Result<(), Error> = match input {
+                    // .string => |v| self.queueWrite(data, v, false) catch |err| {
+                    //     log.warn("failed to queue input string err={}", .{err});
+                    //     return error.InputFailed;
+                    // },
+                    Input::String(v) => unsafe { (*self_).queueWrite(&mut *data, &v, false) },
+                    // .file => |f| self.queueWrite(
+                    //     data,
+                    //     f.readToEndAlloc(self.alloc, 10 * 1024 * 1024) catch |err| {
+                    //         log.warn("failed to read input file err={}", .{err});
+                    //         return error.InputFailed;
+                    //     },
+                    //     false,
+                    // ) catch |err| {
+                    //     log.warn("failed to queue input file err={}", .{err});
+                    //     return error.InputFailed;
+                    // },
+                    Input::File(f) => match read_input_file(f, 10 * 1024 * 1024) {
+                        Ok(bytes) => unsafe { (*self_).queueWrite(&mut *data, &bytes, false) },
+                        Err(_err) => {
+                            // log.warn("failed to read input file err={}", .{err});
+                            Err(Error)
+                        }
+                    },
+                };
+                if queued.is_err() {
+                    // (log.warn for the string/file queue failures — see the
+                    // reference arms above; both return `error.InputFailed`.)
+                    // errdefer self.backend.threadExit(data);
+                    //
+                    // SAFETY: `data` is fully initialized (backend.threadEnter
+                    // succeeded); the read thread has NOT yet been joined, so
+                    // `threadExit` (which writes the quit pipe + joins) is the
+                    // correct teardown.
+                    unsafe { (*self_).backend.threadExit(&mut *data) };
+                    return Err(Error);
+                }
+            }
+
+            Ok(())
+        };
+
+        let result = body();
+
+        // defer if (self.thread_enter_state) |v| { v.destroy(); self.thread_enter_state = null; };
+        if let Some(v) = unsafe { (*self_).thread_enter_state.take() } {
+            v.destroy();
+        }
+
+        result
     }
 
     pub fn threadExit(&mut self, data: &mut ThreadData<M>) {
@@ -1369,6 +1742,21 @@ impl core::fmt::Write for FixedWriter<'_> {
 // (cf_release log-helper precedent).
 fn log_warn_input_open_failed(_path: &[u8], _err: &std::io::Error) {
     // log.warn("failed to open input file={s} err={}", .{ path, err });
+}
+
+/// PORT: `std.fs.File.readToEndAlloc(alloc, max_bytes)` — reads the whole file
+/// into an owned buffer, erroring if it exceeds `max_bytes` (the reference's
+/// `error.FileTooBig`). Consumed by `Termio::threadEnter`'s input-file arm,
+/// whose caller maps any error to `error.InputFailed`.
+fn read_input_file(f: std::fs::File, max_bytes: usize) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    // Read up to `max_bytes + 1` so an over-limit file is detectable.
+    let mut buf = Vec::new();
+    f.take(max_bytes as u64 + 1).read_to_end(&mut buf)?;
+    if buf.len() > max_bytes {
+        return Err(std::io::Error::other("input file exceeds 10 MiB limit"));
+    }
+    Ok(buf)
 }
 
 /// Convert raw path bytes to an `OsStr`.

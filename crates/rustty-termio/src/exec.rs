@@ -1569,6 +1569,38 @@ impl ThreadData {
     #[allow(dead_code)]
     pub(crate) const WRITE_REQ_PREALLOC: usize = usize::pow(2, 5);
 
+    /// PORT NOTE (Rust-only glue, xev B4): the reference `Termio.threadEnter`
+    /// initializes `ThreadData.backend = undefined` and `Exec.threadEnter` then
+    /// OVERWRITES it (`td.backend = .{ .exec = ... }`). Zig assigns over
+    /// `undefined` with no cleanup; Rust's `td.backend = ...` DROPS the old value
+    /// (B2's chosen move-assign shape), so the slot must hold a *droppable*
+    /// placeholder rather than genuine garbage. This is that inert placeholder —
+    /// the exact shape the B2 write-path KAT constructs inline: an
+    /// already-finished dummy thread + inert (`-1`) fds + empty pools, so its drop
+    /// (on the `Exec.threadEnter` overwrite) is a cheap no-op. It is never observed
+    /// (the write path only touches it after `Exec.threadEnter` has replaced it).
+    #[cfg(not(windows))]
+    pub(crate) fn placeholder() -> ThreadData {
+        ThreadData {
+            start: std::time::Instant::now(),
+            exited: false,
+            write_stream: xev::Stream::init_fd(-1),
+            process: None,
+            write_req_pool: SegmentedPool::new(0),
+            write_buf_pool: SegmentedPool::new(0),
+            write_queue: xev::WriteQueue::default(),
+            process_wait_c: xev::Completion::default(),
+            flatpak_wait_c: FlatpakHostCommandCompletion::default(),
+            read_thread: std::thread::spawn(|| {}),
+            read_thread_pipe: -1,
+            read_thread_fd: -1,
+            termios_timer: xev::Timer::init().expect("placeholder Timer::init"),
+            termios_timer_c: xev::Completion::default(),
+            termios_timer_running: false,
+            termios_mode: ptypkg::Mode::default(),
+        }
+    }
+
     // pub fn deinit(self: *ThreadData, alloc: Allocator) void {
     pub fn deinit(&mut self, alloc: Allocator) {
         // posix.close(self.read_thread_pipe);
