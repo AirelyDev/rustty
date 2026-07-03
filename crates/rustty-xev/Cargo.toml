@@ -31,3 +31,11 @@ workspace = true
 # @import("../global.zig").xev` seam anchor — `rustty_global::seam::Xev` is the
 # deferred backend package exactly as `global.zig`'s `pub const xev` is.
 rustty-global = { workspace = true }
+
+# XEV_BLUEPRINT §3/§5 chunk C2: libxev binds `std.c` / `std.posix` directly
+# (it depends on NO ghostty os layer), so `rustty-xev` binds `libc` directly and
+# stays a self-contained low leaf (deps = { rustty-global, libc } only —
+# acyclic, no edge to termio/core/os). Provides kqueue/kevent64/kevent64_s, the
+# `EVFILT_*`/`EV_*`/`NOTE_*` consts, and the mach primitives ([ADV-FIX F4]);
+# the mach APIs libc lacks are `extern "C"` in `src/darwin.rs`.
+libc = "0.2"

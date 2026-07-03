@@ -43,6 +43,18 @@ mod queue;
 #[allow(dead_code)]
 mod queue_mpsc;
 
+// XEV_BLUEPRINT §3 chunk C2: the darwin/syscall layer (`darwin.zig` ported
+// byte-faithfully) — the mach-port / `mach_msg` bindings + `KernE`/`MachMsgE`
+// the kqueue `Wakeup` (C3) and `Async`(mach) (C4) ride. macOS/kqueue-only, so
+// `#[cfg(target_os = "macos")]`. `allow(dead_code)`: sequenced ahead of its
+// first consumer (C3/C4), so the lib-only build sees it as unused. The kqueue
+// syscall consts (`EVFILT_*`/`EV_*`/`NOTE_*`) + `kevent64`/`kevent64_s` come
+// from `libc` directly ([ADV-FIX F4]); this module binds only the mach APIs
+// libc lacks.
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+mod darwin;
+
 /// PORT: `xev.Loop` (the per-thread event loop; termio Thread owns one and
 /// `Termio.ThreadData.loop` points at it).
 pub struct Loop {}

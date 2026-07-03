@@ -671,6 +671,11 @@ MAP = {
     "xev_queue":         ([f"{GHXEV}/queue.zig"], [f"{RSXEV}/queue.rs"], 0),
     "xev_queue_mpsc":    ([f"{GHXEV}/queue_mpsc.zig"], [f"{RSXEV}/queue_mpsc.rs"], 0),
     "xev_heap":          ([f"{GHXEV}/heap.zig"], [f"{RSXEV}/heap.rs"], 0),
+    # rustty-xev C2 (XEV_BLUEPRINT §3) — the darwin/syscall layer. darwin.zig has
+    # 0 test{} (mach/KernE/MachMsgE bindings only), so zig=0 == rust=0; the G3b
+    # comment-coverage gate carries its fidelity. Later chunks add the kqueue/
+    # async/timer/process/stream mappings.
+    "xev_darwin":        ([f"{GHXEV}/darwin.zig"], [f"{RSXEV}/darwin.rs"], 0),
 }
 
 def expand(globs):
