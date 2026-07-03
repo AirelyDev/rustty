@@ -43,3 +43,16 @@ rustty-cfg-fmt = { workspace = true }
 # `file.tryLock(.exclusive)`/`unlock` over `flock(2)`. R3: `libc` binds the SAME
 # system call the reference's Zig std uses (no reimplementation).
 libc = "0.2"
+# C4 (CLI_BLUEPRINT.md §2 / ADV-FIX 6): new_window / toggle_quick_terminal build
+# `apprt.performIpc` args from the ipc value types (`ipc::{Target, Action,
+# NewWindow}`); rustty-apprt does NOT re-export apprt-api, so name it directly.
+# apprt-api is member 16 (strictly-earlier) — the crate graph stays acyclic (G7),
+# and there is NO apprt->cli back-edge (detection lives in the bin, ADV-FIX 2).
+rustty-apprt-api = { workspace = true }
+# C4: `none::App::perform_ipc` takes a passed-in `std.mem.Allocator`, modeled by
+# the workspace-standard allocator-api2 `Allocator` trait; the headless CLI passes
+# `Global` (none ignores it, returning Ok(false)).
+allocator-api2 = { workspace = true }
+# C4: new_window's `checkArg` uses `lib.cutPrefix` (`--class=` / `--working-directory=`
+# prefix cuts). rustty-lib is a low, strictly-earlier member — acyclic (G7).
+rustty-lib = { workspace = true }

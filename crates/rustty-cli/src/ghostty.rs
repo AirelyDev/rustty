@@ -46,6 +46,13 @@ pub enum Error {
     /// `Config.load(alloc)` errors folded into each action `run`'s inferred `!u8`
     /// error set.
     Config(rustty_config::config_struct::LoadError),
+    /// An XDG directory lookup failed. Reference: `crash.defaultDir(alloc)`'s
+    /// `xdg.state` error, folded into `crash_report`'s `runInner` `!u8`.
+    Xdg(rustty_os::xdg::DirError),
+    /// A config file-path resolution failed. Reference:
+    /// `configpkg.preferredDefaultFilePath(alloc)`, folded into `edit_config`'s
+    /// `runInner` `!u8`.
+    FileLoad(rustty_config::file_load::FileLoadError),
 }
 
 impl From<std::io::Error> for Error {
@@ -77,6 +84,27 @@ impl From<rustty_os::args::InitError> for Error {
 impl From<rustty_config::config_struct::LoadError> for Error {
     fn from(e: rustty_config::config_struct::LoadError) -> Self {
         Error::Config(e)
+    }
+}
+
+impl From<rustty_os::xdg::DirError> for Error {
+    fn from(e: rustty_os::xdg::DirError) -> Self {
+        Error::Xdg(e)
+    }
+}
+
+impl From<rustty_config::file_load::FileLoadError> for Error {
+    fn from(e: rustty_config::file_load::FileLoadError) -> Self {
+        Error::FileLoad(e)
+    }
+}
+
+impl From<std::convert::Infallible> for Error {
+    // `rustty_os::getenv` (edit_config) returns `Result<_, Infallible>` (the
+    // reference's `Allocator.Error` collapses to `Infallible` in Rust); `?`
+    // through it is statically unreachable.
+    fn from(e: std::convert::Infallible) -> Self {
+        match e {}
     }
 }
 

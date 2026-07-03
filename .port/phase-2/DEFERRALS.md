@@ -2483,20 +2483,21 @@ detection lives in the bin, ADV-FIX 2). New cli Cargo deps: `rustty-build-config
   — ADV-FIX 3 — and enables `+help` / `show_config --docs` / `list_keybinds
   --docs`, all 0-test).
 
-- **C4–C5 action-impl sequencing stubs (0 tests, no MAP entry yet).** The 10
+- **C5 action-impl sequencing stubs (0 tests, no MAP entry yet).** The 6
   not-yet-ported action impls (`list_fonts`, `list_keybinds`, `list_themes`,
-  `list_colors`, `edit_config`, `crash_report`, `show_face`, `boo`,
-  `new_window`, `toggle_quick_terminal`) are faithful sequencing stubs — each
+  `list_colors`, `show_face`, `boo`) are faithful sequencing stubs — each
   `pub fn run() -> Result<u8, ghostty::Error>` with the reference signature +
   `unimplemented!()` body — so `runMain` compiles. Their full logic, comment
-  coverage (scoped-G3b), and `check_test_counts.py` MAP entries land with their
-  owning chunks (C4–C5 per CLI_BLUEPRINT.md §7). Until then, the WHOLE-CRATE
+  coverage (scoped-G3b), and `check_test_counts.py` MAP entries land with chunk
+  C5 (per CLI_BLUEPRINT.md §7 — the vaxis/zf-blocked plain/enumeration paths +
+  the deferred TUI render leaves). Until then, the WHOLE-CRATE
   `check_comment_coverage.py --crate rustty-cli` reports their reference comments
-  as "missing" — this is EXPECTED per the DEFERRALS "Rule"; the C1/C2/C3
+  as "missing" — this is EXPECTED per the DEFERRALS "Rule"; the C1–C4
   scoped-G3b (ported files) is missing=0. (C2 landed show_config /
   validate_config / list_actions / explain_config + Pager; C3 landed the ssh
-  subsystem — ssh / ssh_cache / DiskCache / Entry — so all four are no longer
-  stubs.)
+  subsystem — ssh / ssh_cache / DiskCache / Entry; C4 landed crash_report /
+  edit_config + the none-backed IPC actions new_window / toggle_quick_terminal +
+  the tui.zig `can_pretty_print` seam — so all are no longer stubs.)
 
 - **vaxis/zf TUI leaves (C5, forward-scheduled — not in C1).** `boo` (pure vaxis
   animation), `list_themes`' interactive picker (vaxis+zf), and the

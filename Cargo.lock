@@ -569,8 +569,10 @@ version = "0.1.0"
 name = "rustty-cli"
 version = "0.1.0"
 dependencies = [
+ "allocator-api2",
  "libc",
  "rustty-apprt",
+ "rustty-apprt-api",
  "rustty-args",
  "rustty-build-config",
  "rustty-cfg-fmt",
@@ -580,6 +582,7 @@ dependencies = [
  "rustty-font",
  "rustty-identity",
  "rustty-input",
+ "rustty-lib",
  "rustty-os",
  "rustty-terminfo",
  "rustty-vt",

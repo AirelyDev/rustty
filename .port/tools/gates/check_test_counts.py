@@ -287,6 +287,19 @@ MAP = {
     "cli_ssh_cache_diskcache": ([f"{GHC}/ssh-cache/DiskCache.zig"], [f"{RSCLI}/ssh_cache/disk_cache.rs"], 0),
     "cli_ssh_cache":        ([f"{GHC}/ssh_cache.zig"], [f"{RSCLI}/ssh_cache.rs"], 0),
     "cli_ssh":              ([f"{GHC}/ssh.zig"], [f"{RSCLI}/ssh.rs"], 0),
+    # rustty-cli C4 (CLI_BLUEPRINT.md §7): the apprt-backed + misc actions. All
+    # 0-test: crash_report (rustty-crash defaultDir + Report iterator),
+    # edit_config (rustty-config + rustty-os getenv/ShellEscapeWriter/exec), the
+    # none-backed IPC actions new_window (full parseManuallyHook: --class /
+    # --working-directory realpath+~ / -e capture / cwd) + toggle_quick_terminal,
+    # and the tui.zig `can_pretty_print` seam. new_window/toggle deliver over
+    # `none::App::perform_ipc` (Ok(false)) -> print "not supported" + exit 1
+    # (faithful, ADV-FIX 4 / Risk 4 — NOT a stub).
+    "cli_crash_report":     ([f"{GHC}/crash_report.zig"], [f"{RSCLI}/crash_report.rs"], 0),
+    "cli_edit_config":      ([f"{GHC}/edit_config.zig"], [f"{RSCLI}/edit_config.rs"], 0),
+    "cli_new_window":       ([f"{GHC}/new_window.zig"], [f"{RSCLI}/new_window.rs"], 0),
+    "cli_toggle_quick_terminal": ([f"{GHC}/toggle_quick_terminal.zig"], [f"{RSCLI}/toggle_quick_terminal.rs"], 0),
+    "cli_tui":              ([f"{GHC}/tui.zig"], [f"{RSCLI}/tui.rs"], 0),
     # Stage C — rustty-terminfo (GH base = src/terminfo, not src/terminal).
     # Source.zig (2t: "xtgettcap map" + "encode") -> source.rs.
     # ghostty.zig (1t: "encode") -> entry.rs (the terminfo entry; names carry
