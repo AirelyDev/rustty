@@ -100,6 +100,10 @@ RSAP = "/Users/gael/projects/rustty/crates/rustty-apprt-api/src"
 # §7. Same GH base = src/apprt as GHAP above (the backend files, not the seam). The
 # libghostty C ABI wrappers live in the separate rustty-apprt-c top-sink crate.
 RSAPPRT = "/Users/gael/projects/rustty/crates/rustty-apprt/src"
+# rustty-apprt-c: the libghostty C ABI top-sink crate. Ports embedded.zig's `CAPI`
+# block (the extern structs, chunk E5 -> capi.rs; the 71 `ghostty_*` exports,
+# E6..E10) + the main_c.zig C API hub (lib.rs). All 0-test reference files.
+RSAPPRTC = "/Users/gael/projects/rustty/crates/rustty-apprt-c/src"
 # renderer.zig is at src/renderer.zig (crate root), one level above GHR (src/renderer).
 GHSRC = "/Users/gael/projects/ghostty/src"
 
@@ -454,8 +458,10 @@ MAP = {
     # embedded.zig: 0 test{} -> zig=0 (documented 0-test module, EMBEDDED_BLUEPRINT
     # §6.5). E1 lands the `App` backend + `impl apprt_api::App` (+ the E1->E2
     # Surface sequencing stub) in embedded.rs; E2..E10 fill the rest of the same
-    # file. rust >= zig always holds.
-    "apprt_embedded":    ([f"{GHAP}/embedded.zig"], [f"{RSAPPRT}/embedded.rs"], 0),
+    # file. embedded.zig's `CAPI` block is split into the apprt-c top-sink crate:
+    # the extern structs land in capi.rs (E5), the `ghostty_*` exports in E6..E10
+    # (glob `{RSAPPRTC}/**/*.rs`). rust >= zig always holds (0-test reference).
+    "apprt_embedded":    ([f"{GHAP}/embedded.zig"], [f"{RSAPPRT}/embedded.rs", f"{RSAPPRTC}/**/*.rs"], 0),
     # rustty-crash (integration-tier stage 1). dir.zig: no test{} -> zig=0.
     "crash_dir":         ([f"{GHCR}/dir.zig"], [f"{RSCR}/dir.rs"], 0),
     # sentry.zig: no test{} -> zig=0; the pkg/sentry binding package files are

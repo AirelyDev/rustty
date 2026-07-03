@@ -27,6 +27,14 @@
 
 use libc::{c_char, c_int};
 
+// The `apprt.embedded.CAPI` block's extern structs (`KeyEvent`/`SurfaceSize`/
+// `Text`/`Point`/`Selection` + their D2 const-size/align-asserts). The reference
+// nests these in `pub const CAPI = struct { ... }` alongside the exports; the
+// exports (E6..E10) are authored as `#[no_mangle]` free fns in this crate, the
+// extern structs live in the `capi` module (E5). `ClipboardContent` (a backend
+// field type) stays in `rustty-apprt`; `capi` only re-asserts its ABI.
+pub mod capi;
+
 // ===================================================================
 // C API exports — 1:1 with the reference `pub export fn ghostty_*` /
 // `@export(..., .{ .name = "ghostty_*" })` lines (rustty_ prefix per R2).

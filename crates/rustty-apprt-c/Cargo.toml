@@ -30,6 +30,13 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 rustty-apprt = { workspace = true }
+# The reference `CAPI` extern structs' conversion methods reach the terminal types
+# directly (`Point.pin` -> `terminal.Screen`/`Pin`/`point.{Tag,Point,Coordinate}`/
+# `size.CellCountInt`; `Selection.core` -> `terminal.Selection`/`Bounds`;
+# `KeyEvent.keyEvent` -> `input.{Action,Mods}`), so apprt-c names `rustty-vt`
+# directly (E5). This is a forward edge to a crate far below apprt-c in the graph
+# (apprt-c stays the top sink), so `check_acyclic.sh` remains GREEN.
+rustty-vt = { workspace = true }
 # Same libc the reference's C API binds (R3): the `c_int`/`c_char` types the
 # `ghostty_*` (rustty `rustty_*`) exports cross the ABI with.
 libc = "0.2"
