@@ -303,10 +303,10 @@ impl Action {
             // `self` by name to index `help_strings.Action.<field>`; the Rust
             // runtime equivalent is a direct lookup ([`Action::help_text`]). The
             // per-action help strings come from the build-generated `help_strings`
-            // doc table — a DEFERRED stub in rustty (config formatter_file.rs:142 /
-            // input helpgen_actions NoHelpStrings; DEFERRALS.md) — so `help_text`
-            // is "" until that codegen lands. The control flow (write text + "\n",
-            // flush, exit 0; warn + exit 1 on IO failure) is preserved verbatim.
+            // doc table (`crate::help_strings::action_help`, the faithful analog of
+            // ghostty's helpgen build step — landed 2026-07-03). The control flow
+            // (write text + "\n", flush, exit 0; warn + exit 1 on IO failure) is
+            // preserved verbatim.
             // help_error => err: {
             Err(Error::ActionHelpRequested) => {
                 use std::io::Write;
