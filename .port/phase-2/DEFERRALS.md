@@ -2867,3 +2867,35 @@ DEFERRED (documented; not needed to unit-prove the loop):
   libxev base-path / in-repo manifest is added in C7 with the full in-scope
   contract). The per-crate `cargo test -p rustty-xev` count (21 = 8 C1 + 12
   kqueue + KAT 2) is the authoritative backstop today.
+
+## rustty-xev C4 (Async mach-port wakeup: wait/drain + tests) — deferrals
+
+Chunk C4 completes `watcher/async.zig`'s `AsyncMachPort` on macOS: `wait` (the
+`.machport`-op trampoline — a monomorphized `wait::<UD, CB>` with a ZST comptime
+`cb`, `Completion::new_op` reset, `loop.add`) + `drain` (the `MACH_RCV_MSG |
+MACH_RCV_TIMEOUT` receive loop that coalesces N queued notifies → 1 wakeup,
+discarding message bodies) + the 3 reference `AsyncTests` (`async`, `async: notify
+first`, `async batches multiple notifications`) + rustty KAT 1 (cross-thread
+wakeup round-trip: `notify` from a spawned thread — the [ADV-FIX F2] `Async`
+`port:u32` auto-`Send` handle — then `run(.once)` wakes exactly once). The loop
+`machport` op arm + `Wakeup` wiring were already ported in C3. A `pub(crate)`
+`Completion::new_op(op, userdata, callback)` helper was added to `kqueue.rs` (the
+faithful equivalent of the reference `c.* = .{ .op, .userdata, .callback }` full
+reset) so the sibling `async_watcher` module builds a completion without seeing
+the module-private internal fields. `xev_async` (zig=3, rust=4) added to
+`check_test_counts.py`. Per-crate count now 25 (21 + async×3 + KAT 1).
+
+DEFERRED (documented; not needed to boot a shell on macOS):
+
+- **The non-Darwin `Async` variants** — `AsyncEventFd` (Unix/Linux eventfd,
+  `waitRead`/`waitPoll`), `AsyncLoopState` (WASI loop-state), `AsyncIOCP`
+  (Windows), and `AsyncDynamic` (multi-backend union). Comptime-elided on macOS
+  (§0: the single kqueue+Darwin candidate selects `AsyncMachPort` only) and
+  deferred with their whole backends (§1). Their reference doc comments are
+  preserved verbatim in `async.rs` (R3; G3b on `async.zig` is missing=0), and each
+  variant's `test { _ = AsyncTests(xev, Self); }` is an anon refAllDecls block that
+  `zig_count` skips (only the 3 quoted `AsyncTests` count).
+- **MIRI:** `async.rs` `wait`/`drain` + all 4 tests issue live mach syscalls
+  (`mach_port_*`, `mach_msg`) — not runnable under Miri (documented in
+  MIRI_EXCEPTIONS.md alongside the C3 kqueue/mach entry); the live KAT is the
+  correctness backstop.

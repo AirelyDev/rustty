@@ -1507,6 +1507,28 @@ impl Default for Completion {
     }
 }
 
+impl Completion {
+    /// PORT: the `c.* = .{ .op, .userdata, .callback }` initialization the watcher
+    /// `wait`/`run` methods perform (e.g. `async.zig:326`, `timer.zig`) — a FULL
+    /// reset with the internal fields (`next`/`result`/`flags`/`task`/`task_loop`)
+    /// taking their `Default` values. Exposed `pub(crate)` so sibling watcher
+    /// modules (`async_watcher`, …) can build a completion without seeing the
+    /// module-private internal fields (Zig accesses those freely within the
+    /// package; C4 `Async::wait` is the first cross-module consumer).
+    pub(crate) fn new_op(
+        op: Operation,
+        userdata: *mut core::ffi::c_void,
+        callback: Callback,
+    ) -> Completion {
+        Completion {
+            op,
+            userdata,
+            callback,
+            ..Completion::default()
+        }
+    }
+}
+
 // PORT NOTE [ADV-FIX F2]: `Completion` holds raw-ptr links (`next`/`task_loop`) +
 // an fn-ptr → auto-`!Send`; it rides the `Loop` moved onto the termio thread.
 // SAFETY / single-thread affinity: after the move a completion is touched by

@@ -134,3 +134,14 @@ million-values), `queue::tests::intrusive`, `queue_mpsc::tests::intrusive` → a
 pass (the crate Miri-compiles clean; the FFI-bearing loop functions are compiled
 but not interpreted when those tests run). This is the same split as the FFI crates
 (Miri for pure code, native/ASan for the C-boundary).
+
+## rustty-xev C4 (Async mach-port wakeup) — MIRI exception
+
+C4's `async.rs` `wait`/`drain` + all 4 tests (`async`, `async: notify first`,
+`async batches multiple notifications`, KAT 1) issue live mach syscalls
+(`mach_port_allocate`/`mach_port_insert_right`/`mach_port_set_attributes`/
+`mach_msg`/`mach_port_destroy`) via the kqueue loop — the same foreign-function
+class as the C3 exception above, so they **run natively**, not under Miri. KAT 1
+(cross-thread `notify` → `run(.once)` wakes exactly once) is the memory-safety +
+coalescing-correctness proof for the raw-ptr `machport` trampoline. The pure C1
+structures stay the Miri-gated surface.

@@ -676,6 +676,15 @@ MAP = {
     # comment-coverage gate carries its fidelity. Later chunks add the kqueue/
     # async/timer/process/stream mappings.
     "xev_darwin":        ([f"{GHXEV}/darwin.zig"], [f"{RSXEV}/darwin.rs"], 0),
+    # rustty-xev C4 (XEV_BLUEPRINT §4/§7) — the Darwin mach-port async wakeup.
+    # async.zig has 3 quoted `test{}` (`async`, `async: notify first`, `async
+    # batches multiple notifications`, inside `AsyncTests`; the per-variant `test {
+    # _ = AsyncTests(...); }` are anon refAllDecls, zig_count-skipped) → zig=3.
+    # async.rs ports all 3 as live #[test] + rustty KAT 1 (cross-thread wakeup
+    # round-trip) → rust=4 >= 3. The non-Darwin AsyncEventFd/LoopState/IOCP/Dynamic
+    # variants are comptime-elided on macOS (§0) and deferred (§1); their doc
+    # comments are preserved in async.rs (R3, G3b-covered).
+    "xev_async":         ([f"{GHXEV}/watcher/async.zig"], [f"{RSXEV}/async.rs"], 0),
 }
 
 def expand(globs):
