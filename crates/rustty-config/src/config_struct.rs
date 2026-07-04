@@ -8163,8 +8163,8 @@ impl Config {
             // @"font-shaping-break": FontShapingBreak (packed struct)
             b"font-shaping-break" => f_entry!(font_shaping_break),
 
-            // @"alpha-blending": AlphaBlending (bare enum)
-            b"alpha-blending" => f_enum!(alpha_blending),
+            // @"alpha-blending": AlphaBlending (bare enum, external)
+            b"alpha-blending" => f_enum!(alpha_blending, alpha_blending_to_name),
 
             // @"adjust-*": ?MetricModifier
             b"adjust-cell-width" => f_opt_metric_modifier!(adjust_cell_width),
@@ -8584,8 +8584,8 @@ impl Config {
 // returns `!deepEqual(field.type, old, new)`. That per-`Key` `deepEqual` dispatch
 // is the EQUAL/DIFF (CHANGED) pass: it requires `DeepEqual` on every config field
 // type, including the foreign leaf types (`MetricModifier`/`KeyRemapSet`/
-// `CursorStyle`/`WindowPaddingBalance`/`OptionAsAlt`/`ReleaseChannel`), whose
-// impls live in their own crates per the orphan rule. The pass has landed:
+// `CursorStyle`/`WindowPaddingBalance`/`AlphaBlending`/`OptionAsAlt`/`ReleaseChannel`),
+// whose impls live in their own crates per the orphan rule. The pass has landed:
 // `Config::changed` is fully implemented above (the per-`Key` `c!` match), and
 // both the `changed = false` and `changed = true` `FileFormatter` modes (and the
 // `format default config changed` test) are exercised.
@@ -8649,6 +8649,17 @@ fn window_padding_balance_string_to_enum(input: &[u8]) -> Option<WindowPaddingBa
     }
 }
 
+/// `std.meta.stringToEnum(config.AlphaBlending, input)`.
+// pub const AlphaBlending = enum { native, linear, "linear-corrected" };
+fn alpha_blending_string_to_enum(input: &[u8]) -> Option<AlphaBlending> {
+    match input {
+        b"native" => Some(AlphaBlending::Native),
+        b"linear" => Some(AlphaBlending::Linear),
+        b"linear-corrected" => Some(AlphaBlending::LinearCorrected),
+        _ => None,
+    }
+}
+
 // ===========================================================================
 // `@tagName` maps for the EXTERNAL enums used by Config fields (FORMAT side).
 //
@@ -8703,6 +8714,16 @@ fn window_padding_balance_to_name(v: WindowPaddingBalance) -> &'static [u8] {
     }
 }
 
+/// `@tagName(config.AlphaBlending)`.
+// pub const AlphaBlending = enum { native, linear, "linear-corrected" };
+fn alpha_blending_to_name(v: AlphaBlending) -> &'static [u8] {
+    match v {
+        AlphaBlending::Native => b"native",
+        AlphaBlending::Linear => b"linear",
+        AlphaBlending::LinearCorrected => b"linear-corrected",
+    }
+}
+
 // ===========================================================================
 // Foreign-enum `@tagName` NUL-terminated name maps (the C-API `c_get` `.@"enum"`
 // arm). Symmetric with the `*_to_name` maps above, but each literal is
@@ -8752,6 +8773,15 @@ pub(crate) fn window_padding_balance_to_name_z(
         WindowPaddingBalance::False => c"false".as_ptr(),
         WindowPaddingBalance::True => c"true".as_ptr(),
         WindowPaddingBalance::Equal => c"equal".as_ptr(),
+    }
+}
+
+/// `@tagName(config.AlphaBlending)`, NUL-terminated for the C API.
+pub(crate) fn alpha_blending_to_name_z(v: AlphaBlending) -> *const std::os::raw::c_char {
+    match v {
+        AlphaBlending::Native => c"native".as_ptr(),
+        AlphaBlending::Linear => c"linear".as_ptr(),
+        AlphaBlending::LinearCorrected => c"linear-corrected".as_ptr(),
     }
 }
 
@@ -9133,8 +9163,8 @@ impl Target for Config {
                 Ok(())
             }
 
-            // @"alpha-blending": AlphaBlending (bare enum)
-            b"alpha-blending" => field_enum!(alpha_blending, AlphaBlending::string_to_enum),
+            // @"alpha-blending": AlphaBlending (bare enum, external)
+            b"alpha-blending" => field_enum!(alpha_blending, alpha_blending_string_to_enum),
 
             // @"adjust-*": ?MetricModifier (parseCLI value, 1-arg)
             b"adjust-cell-width" => field_opt_metric_modifier!(adjust_cell_width),

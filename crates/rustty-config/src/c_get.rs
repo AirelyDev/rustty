@@ -22,8 +22,8 @@
 //!   - anything else            -> `false` (not yet supported by the C API)
 
 use crate::config_struct::{
-    cursor_style_to_name_z, option_as_alt_to_name_z, release_channel_to_name_z,
-    window_padding_balance_to_name_z, Config, Key,
+    alpha_blending_to_name_z, cursor_style_to_name_z, option_as_alt_to_name_z,
+    release_channel_to_name_z, window_padding_balance_to_name_z, Config, Key,
 };
 
 /// Get a value from the config by key into the given pointer. This is
@@ -243,7 +243,7 @@ pub unsafe fn get(config: &Config, k: Key, ptr_raw: *mut std::ffi::c_void) -> bo
         Key::AdjustStrikethroughThickness => false,
         Key::AdjustUnderlinePosition => false,
         Key::AdjustUnderlineThickness => false,
-        Key::AlphaBlending => g_enum!(alpha_blending),
+        Key::AlphaBlending => g_enum_fn!(alpha_blending, alpha_blending_to_name_z),
         Key::AppNotifications => g_packed!(app_notifications),
         Key::AsyncBackend => g_enum!(async_backend),
         Key::AutoUpdate => g_opt_enum!(auto_update),

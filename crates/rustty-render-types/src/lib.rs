@@ -50,6 +50,48 @@ impl rustty_datastruct::comparison::DeepEqual for PaddingBalance {
     }
 }
 
+// pub const AlphaBlending = enum { native, linear, "linear-corrected"; pub fn isLinear };
+//
+// PORT NOTE (A1 hoist): `AlphaBlending` is DEFINED in ghostty `config/Config.zig`
+// (`pub const AlphaBlending`), but the renderer (`Metal.zig` initShaders/initTarget/
+// textureOptions) branches on `blending.isLinear()` to pick the sRGB pixel format.
+// Because `rustty-config` depends on `rustty-renderer` (the Message::ChangeConfig
+// back-edge), the renderer cannot name a config type. So the enum + `is_linear` are
+// hoisted to this leaf (depended on by BOTH config and renderer) — the same hoist as
+// `PaddingBalance`/`Size`/`Health`. `rustty-config` re-exports it so its public path
+// (`value_types::AlphaBlending`) and every use-site keep working. Its config-facing
+// PARSE/FORMAT (`string_to_enum`/`to_name`) stays a CONFIG concern (free fns there).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlphaBlending {
+    Native,
+    Linear,
+    LinearCorrected,
+}
+
+impl AlphaBlending {
+    // pub fn isLinear(self: AlphaBlending) bool
+    pub fn is_linear(self) -> bool {
+        // return switch (self) {
+        //     .native => false,
+        //     .linear, .@"linear-corrected" => true,
+        // };
+        match self {
+            AlphaBlending::Native => false,
+            AlphaBlending::Linear | AlphaBlending::LinearCorrected => true,
+        }
+    }
+}
+
+// `AlphaBlending` is used as the `alpha-blending` config field type. The reference's
+// `Config.changed` resolves its `deepEqual` via the `.@"enum"` arm (`old == new`). The
+// orphan rule requires this `DeepEqual` impl to live in `AlphaBlending`'s home crate
+// (rustty-render-types), mirroring `PaddingBalance` above.
+impl rustty_datastruct::comparison::DeepEqual for AlphaBlending {
+    fn deep_equal(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 /// All relevant sizes for a rendered terminal. These are all the sizes that
 /// any functionality should need to know about the terminal in order to
 /// convert between any coordinate systems.

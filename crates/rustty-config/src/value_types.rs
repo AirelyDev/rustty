@@ -593,26 +593,17 @@ pub enum GraphemeWidthMethod {
 }
 
 // pub const AlphaBlending = enum { native, linear, "linear-corrected"; pub fn isLinear };
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AlphaBlending {
-    Native,
-    Linear,
-    LinearCorrected,
-}
-
-impl AlphaBlending {
-    // pub fn isLinear(self: AlphaBlending) bool
-    pub fn is_linear(self: AlphaBlending) -> bool {
-        // return switch (self) {
-        //     .native => false,
-        //     .linear, .@"linear-corrected" => true,
-        // };
-        match self {
-            AlphaBlending::Native => false,
-            AlphaBlending::Linear | AlphaBlending::LinearCorrected => true,
-        }
-    }
-}
+//
+// PORT NOTE (A1 hoist): DEFINED in ghostty `config/Config.zig`, but the renderer branches
+// on `blending.isLinear()` to select the sRGB pixel format (Metal.zig). Because rustty-config
+// depends on rustty-renderer, the renderer cannot name a config type; so the enum + `is_linear`
+// + `DeepEqual` are hoisted to the rustty-render-types leaf (both config and renderer depend on
+// it) — the `PaddingBalance`/`Size`/`Health` precedent. Re-exported here so `value_types::
+// AlphaBlending`, the field/TypeId/defaults/Key use-sites, and the `alpha_blending_is_linear`
+// test all keep resolving. The config-facing PARSE/FORMAT stays here as free fns in
+// `config_struct.rs` (`alpha_blending_{string_to_enum,to_name,to_name_z}`), mirroring
+// `window_padding_balance_*` (a config-local free fn over a foreign type is legal).
+pub use rustty_render_types::AlphaBlending;
 
 // pub const BackgroundImagePosition = enum { "top-left", "top-center", "top-right", "center-left", "center-center", "center-right", "bottom-left", "bottom-center", "bottom-right", center };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1053,13 +1044,6 @@ bare_enum_names!(QuickTerminalKeyboardInteractivity {
 bare_enum_names!(GraphemeWidthMethod {
     Legacy => b"legacy",
     Unicode => b"unicode",
-});
-
-// pub const AlphaBlending = enum { native, linear, "linear-corrected" };
-bare_enum_names!(AlphaBlending {
-    Native => b"native",
-    Linear => b"linear",
-    LinearCorrected => b"linear-corrected",
 });
 
 // pub const BackgroundImagePosition = enum { "top-left", "top-center", "top-right", "center-left", "center-center", "center-right", "bottom-left", "bottom-center", "bottom-right", center };

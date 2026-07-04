@@ -25,8 +25,8 @@
 //!
 //! SCOPE: every config-OWNED value type. Foreign leaf types used as config
 //! fields (`MetricModifier`/`KeyRemapSet`/`CursorStyle`/`WindowPaddingBalance`/
-//! `OptionAsAlt`/`ReleaseChannel`) are defined in other crates; the orphan rule
-//! requires their `DeepEqual` impls to live in those crates and they are added
+//! `AlphaBlending`/`OptionAsAlt`/`ReleaseChannel`) are defined in other crates;
+//! the orphan rule requires their `DeepEqual` impls to live in those crates and
 //! there when the CHANGED pass that needs them lands (see notes/DEFERRALS).
 
 use rustty_datastruct::comparison::DeepEqual;
@@ -97,7 +97,6 @@ deep_equal_via_eq!(
     QuickTerminalSpaceBehavior,
     QuickTerminalKeyboardInteractivity,
     GraphemeWidthMethod,
-    AlphaBlending,
     BackgroundImagePosition,
     BackgroundImageFit,
     LinuxCgroup,
