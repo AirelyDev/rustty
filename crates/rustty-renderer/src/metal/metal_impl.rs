@@ -1,0 +1,794 @@
+//! Graphics API wrapper for Metal.
+//!
+//! PORTS: ghostty `src/renderer/Metal.zig` — the `Metal = @This()` graphics-API
+//! wrapper that `GenericRenderer(Metal)` is monomorphized over. Per the GPU R-d
+//! sub-blueprint (`GPU_RD_TRAIT_DESIGN.md`) the port is MONOMORPHIC: the concrete
+//! `Metal` leaf, no `GraphicsApi` trait hierarchy.
+//!
+//! PORT NOTE (R3/objc2): ghostty's `pkg/objc` (`objc.Object` / manual message
+//! sends / `objc.AutoreleasePool`) → `objc2` (`Retained`/`ProtocolObject`, ARC via
+//! `Drop`, `objc2::ffi::objc_autoreleasePool{Push,Pop}`); `pkg/macos.graphics` (the
+//! `graphics.Rect` layer-bounds read in `surfaceSize`) → the windowing-host seam
+//! (deferred, needs `objc2-core-graphics`); `metal/api.zig` → `objc2-metal` under
+//! ghostty's names (`super::api`); `metal/IOSurfaceLayer.zig` → the windowing-host
+//! layer seam (not ported in the offscreen scope).
+//!
+//! PORT NOTE (R1 ledger, Metal.zig:21-30 — the GraphicsAPI self-alias + leaf-type
+//! re-exports): ghostty declares
+//!     pub const GraphicsAPI = Metal;                          // (line 21)
+//!     pub const Target = @import("metal/Target.zig");         // (22)
+//!     pub const Frame = @import("metal/Frame.zig");           // (23)
+//!     pub const RenderPass = @import("metal/RenderPass.zig");  // (24)
+//!     pub const Pipeline = @import("metal/Pipeline.zig");      // (25)
+//!     const bufferpkg = @import("metal/buffer.zig");          // (26)
+//!     pub const Buffer = bufferpkg.Buffer;                    // (27)
+//!     pub const Sampler = @import("metal/Sampler.zig");        // (28)
+//!     pub const Texture = @import("metal/Texture.zig");        // (29)
+//!     pub const shaders = @import("metal/shaders.zig");        // (30)
+//! In the MONOMORPHIC port `GraphicsAPI = Metal` is the identity self-alias (Chunk
+//! 3's generic names `crate::metal::Metal` directly, so no alias is emitted); the
+//! eight leaf re-exports route to the already-landed leaf modules
+//! `super::{target::Target, frame::Frame, render_pass::RenderPass,
+//! pipeline::Pipeline, buffer::Buffer, sampler::Sampler, texture::Texture,
+//! shaders}` (Chunks 0/1a/1b) — reached via the `use super::…` imports below (and
+//! `crate::metal::*` from the generic), rather than re-declared here. This comment
+//! is the R1 every-line ledger for lines 21-30.
+//!
+//! PORT NOTE (self: Metal by-value → &self): Metal.zig's option factories take
+//! `self: Metal` (a struct copy sharing ObjC refs with no retain). `Metal` holds
+//! `Retained` (not `Copy`) in Rust, so every read-only method takes `&self` and
+//! `.clone()`s the device into the owned-device Options (a refcount bump on a
+//! short-lived Options — behavior-equivalent). `*const Metal` → `&self`,
+//! `*Metal` → `&mut self`.
+//!
+//! DEFERRED (windowing-host seams M-1..M-5, offscreen scope): the `layer:
+//! IOSurfaceLayer` field (M-1), `init(alloc, opts)`'s NSView/IOSurfaceLayer attach
+//! half (M-2), `surfaceSize`'s layer-bounds read (M-3), `loopEnter`+`displayCallback`
+//! (M-4), and `present`'s layer `setSurface` (M-5). Each is an R5-preserved
+//! `unimplemented!("windowing-host")` or offscreen stub with the verbatim Zig body
+//! kept as a comment. The offscreen entry point is `init_offscreen`.
+
+use std::ffi::CStr;
+
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
+use objc2_metal::{MTLCommandQueue, MTLDevice, MTLGPUFamily};
+
+use rustty_render_types::AlphaBlending; // ← Part A hoist (no config edge)
+
+use super::api;
+use super::buffer::BufferOptions;
+use super::frame::{self, CompletionFn, Frame};
+use super::sampler::SamplerOptions;
+use super::shaders::{self, Shaders};
+use super::target::{self, Target};
+use super::texture::{self, Texture, TextureOptions};
+
+// const std = @import("std");
+// const assert = @import("../quirks.zig").inlineAssert;  → rustty_util::quirks::inlineAssert
+// const Allocator = std.mem.Allocator;
+// const builtin = @import("builtin");                    → #[cfg(target_os = "macos")]
+// const log = std.log.scoped(.metal);
+// PORT NOTE: no logging facade is wired in the port yet, so the `log.debug`
+// call sites (in `init`) are preserved as comments (mirrors the tree-wide
+// `std.log.scoped` handling in e.g. `shadertoy.rs`).
+
+/// Names the anonymous `struct { width: u32, height: u32 }` that `surfaceSize`
+/// returns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfaceSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Metal-local error. Ports `Metal.zig`'s `error{NoMetalDevice}` (the only Metal-
+/// *originated* error; the resource constructors return their own leaf `Error`s,
+/// matching Zig's per-call inferred unions). The aggregate `RendererError` that
+/// `generic.zig` maps leaf errors into is a CHUNK-3 concern
+/// (`GPU_RD_TRAIT_DESIGN.md` §A shared vocabulary), not introduced here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Error {
+    /// `Metal.zig` `error{NoMetalDevice}` — `chooseDevice` found no usable
+    /// MTLDevice.
+    NoMetalDevice,
+}
+
+/// Graphics API wrapper for Metal. Ports `Metal.zig`'s `Metal = @This()` struct.
+pub struct Metal {
+    // DEFERRED (windowing-host seam M-1): `layer: IOSurfaceLayer,` (Metal.zig:41).
+    //   `metal/IOSurfaceLayer.zig` is a windowing-host leaf (CALayer attach /
+    //   display callback / setSurface present) not ported in the offscreen scope.
+    //   The field is omitted from the Chunk-2 struct; it (and `Metal::init`) land
+    //   with the windowing-host tier. Offscreen `surface_size` reads
+    //   `offscreen_size` (below) and `present` is a stub — neither touches a layer.
+    //   The verbatim Zig field decl is preserved in this comment (R1/R5).
+    /// MTLDevice
+    pub device: Retained<ProtocolObject<dyn MTLDevice>>,
+    /// MTLCommandQueue
+    pub queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+
+    /// Alpha blending mode.
+    // Metal.zig: `blending: configpkg.Config.AlphaBlending`. Now the Part-A hoisted
+    // `rustty_render_types::AlphaBlending` (no config edge). Drives sRGB pixel-format
+    // selection in init_shaders/init_target/texture_options via `blending.is_linear()`.
+    pub blending: AlphaBlending,
+
+    /// The default storage mode to use for resources created with our device.
+    ///
+    /// This is based on whether the device is a discrete GPU or not, since
+    /// discrete GPUs do not have unified memory and therefore do not support
+    /// the "shared" storage mode, instead we have to use the "managed" mode.
+    pub default_storage_mode: api::StorageMode,
+
+    /// The maximum 2D texture width and height supported by the device.
+    pub max_texture_size: u32,
+
+    /// We start an AutoreleasePool before `drawFrame` and end it afterwards.
+    // Metal.zig: `autorelease_pool: ?*objc.AutoreleasePool = null`.
+    // `objc.AutoreleasePool` wraps `objc_autoreleasePoolPush()`/`Pop()`; objc2
+    // exposes those same two runtime fns as `objc2::ffi::objc_autoreleasePoolPush()
+    // -> *mut c_void` / `objc_autoreleasePoolPop(ptr)`. The token is the pushed pool
+    // pointer.
+    autorelease_pool: Option<*mut core::ffi::c_void>,
+
+    /// OFFSCREEN seam M-3: the fixed surface size (replaces `layer.bounds` in
+    /// `surfaceSize`). Set by `init_offscreen`; returned (clamped to
+    /// `max_texture_size`) by `surface_size`.
+    offscreen_size: SurfaceSize,
+}
+
+impl Metal {
+    // Metal.zig: `pub const custom_shader_target: shadertoy.Target = .msl;`
+    pub const CUSTOM_SHADER_TARGET: crate::shadertoy::Target = crate::shadertoy::Target::Msl;
+    // The fragCoord for Metal shaders is +Y = down.
+    // Metal.zig: `pub const custom_shader_y_is_down = true;`
+    pub const CUSTOM_SHADER_Y_IS_DOWN: bool = true;
+    /// Triple buffering.
+    // Metal.zig: `pub const swap_chain_count = 3;`
+    pub const SWAP_CHAIN_COUNT: usize = 3;
+}
+
+/// `Metal.zig` `fn chooseDevice() error{NoMetalDevice}!objc.Object`.
+fn choose_device() -> Result<Retained<ProtocolObject<dyn MTLDevice>>, Error> {
+    let mut chosen_device: Option<Retained<ProtocolObject<dyn MTLDevice>>> = None;
+
+    // .macos arm (this module is `#[cfg(target_os = "macos")]`). The Zig `.ios`
+    // arm (`MTLCreateSystemDefaultDevice`) and `else => @compileError` are dead
+    // comptime arms preserved as comments (R1):
+    //     .ios => chosen_device = objc.Object.fromId(mtl.MTLCreateSystemDefaultDevice());
+    //     else => @compileError("unsupported target for Metal");
+    // Zig `defer devices.release()` → ARC: the `Retained` array drops at end of
+    // scope. Zig `var iter = devices.iterate(); while (iter.next()) |device|` maps
+    // to indexed `count()`/`objectAtIndex()` (each returns an owned `Retained`).
+    let devices = api::MTLCopyAllDevices(); // Retained<NSArray<ProtocolObject<dyn MTLDevice>>>
+    let n = devices.count();
+    for i in 0..n {
+        // `objectAtIndex` returns Retained<ProtocolObject<dyn MTLDevice>>.
+        let device = devices.objectAtIndex(i);
+        // We want a GPU that's connected to a display.
+        if device.isHeadless() {
+            continue;
+        }
+        chosen_device = Some(device.clone());
+        // If the user has an eGPU plugged in, they probably want to use it.
+        // Otherwise, integrated GPUs are better for battery life and thermals.
+        if device.isRemovable() || device.isLowPower() {
+            break;
+        }
+    }
+
+    // Zig `const device = chosen_device orelse return error.NoMetalDevice; return
+    // device.retain();` — the `Retained` already owns the +1 (objc2 ARC), so
+    // returning it *is* the `retain()`; no explicit retain needed.
+    chosen_device.ok_or(Error::NoMetalDevice)
+}
+
+/// Determines the maximum 2D texture size supported by the device.
+/// We need to clamp our frame size to this if it's larger.
+// Metal.zig `fn queryMaxTextureSize(device: objc.Object) u32`.
+fn query_max_texture_size(device: &ProtocolObject<dyn MTLDevice>) -> u32 {
+    // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf
+    if device.supportsFamily(MTLGPUFamily::Apple10) {
+        return 32768;
+    }
+    if device.supportsFamily(MTLGPUFamily::Apple3) {
+        return 16384;
+    }
+    8192
+}
+
+impl Metal {
+    /// OFFSCREEN constructor (CHUNK-2 golden/smoke entry point). Runs the
+    /// offscreen-portable half of `Metal.zig`'s `init`: chooseDevice +
+    /// newCommandQueue + device metadata, WITHOUT the NSView/IOSurfaceLayer half
+    /// (windowing-host seam M-2). Takes `blending` + the fixed offscreen size
+    /// directly, so CHUNK 2 needs neither `renderer::Options` nor `apprt`.
+    pub fn init_offscreen(
+        blending: AlphaBlending,
+        width: u32,
+        height: u32,
+    ) -> Result<Metal, Error> {
+        // comptime switch (builtin.os.tag) { .macos, .ios => {}, else => @compileError(...) };
+        //   → the module cfg `#[cfg(target_os = "macos")]` is that comptime gate.
+
+        // Choose our MTLDevice and create a MTLCommandQueue for that device.
+        let device = choose_device()?;
+        // errdefer device.release() — ARC via Retained Drop on the early return below.
+        let queue = device.newCommandQueue().ok_or(Error::NoMetalDevice)?;
+        // errdefer queue.release() — ARC via Retained Drop.
+        // (Zig `newCommandQueue` cannot fail in practice; the `?*anyopaque` null
+        // maps to None → NoMetalDevice.)
+
+        // Grab metadata about the device.
+        //   .ios => .shared;  else => hasUnifiedMemory ? .shared : .managed
+        // (the `.ios` arm — manage mode is not supported by iOS — is a dead
+        //  comptime arm preserved in this comment, R1.)
+        let default_storage_mode = if device.hasUnifiedMemory() {
+            api::StorageMode::Shared
+        } else {
+            api::StorageMode::Managed
+        };
+        let max_texture_size = query_max_texture_size(&device);
+        // log.debug("device properties default_storage_mode={} max_texture_size={}",
+        //           .{ default_storage_mode, max_texture_size });
+
+        // DEFERRED (windowing-host seam M-2): the reference here fetches the
+        // underlying view (`opts.rt_surface.platform.nsview`) + scale factor and
+        // builds/attaches an `IOSurfaceLayer` (wantsLayer / addSublayer /
+        // clipsToBounds / contentsScale / needsDisplayOnBoundsChange). None of that
+        // is offscreen-portable; see `Metal::init` for the verbatim body.
+
+        Ok(Metal {
+            device,
+            queue,
+            blending,
+            default_storage_mode,
+            max_texture_size,
+            autorelease_pool: None,
+            offscreen_size: SurfaceSize { width, height },
+        })
+    }
+
+    /// DEFERRED (windowing-host seam M-2): the real `Metal.zig` `init(alloc, opts)`.
+    ///
+    /// Needs `opts.rt_surface.platform.nsview` (a live NSView) + `IOSurfaceLayer` +
+    /// the wantsLayer/addSublayer/clipsToBounds/contentsScale/
+    /// needsDisplayOnBoundsChange attach. None of that is offscreen-portable; it
+    /// lands with the windowing-host tier. The offscreen ctor is `init_offscreen`.
+    ///
+    /// Verbatim Zig body (Metal.zig:64-156), preserved for R1/R5:
+    // pub fn init(alloc: Allocator, opts: rendererpkg.Options) !Metal {
+    //     comptime switch (builtin.os.tag) {
+    //         .macos, .ios => {},
+    //         else => @compileError("unsupported platform for Metal"),
+    //     };
+    //     _ = alloc;
+    //     // Choose our MTLDevice and create a MTLCommandQueue for that device.
+    //     const device = try chooseDevice();
+    //     errdefer device.release();
+    //     const queue = device.msgSend(objc.Object, objc.sel("newCommandQueue"), .{});
+    //     errdefer queue.release();
+    //     // Grab metadata about the device.
+    //     const default_storage_mode: mtl.MTLResourceOptions.StorageMode = switch (comptime builtin.os.tag) {
+    //         .ios => .shared,
+    //         else => if (device.getProperty(bool, "hasUnifiedMemory")) .shared else .managed,
+    //     };
+    //     const max_texture_size = queryMaxTextureSize(device);
+    //     log.debug("device properties default_storage_mode={} max_texture_size={}",
+    //         .{ default_storage_mode, max_texture_size });
+    //     const ViewInfo = struct { view: objc.Object, scaleFactor: f64 };
+    //     // Get the metadata about our underlying view that we'll be rendering to.
+    //     const info: ViewInfo = switch (apprt.runtime) {
+    //         apprt.embedded => .{
+    //             .scaleFactor = @floatCast(opts.rt_surface.content_scale.x),
+    //             .view = switch (opts.rt_surface.platform) {
+    //                 .macos => |v| v.nsview,
+    //                 .ios => |v| v.uiview,
+    //             },
+    //         },
+    //         else => @compileError("unsupported apprt for metal"),
+    //     };
+    //     // Create an IOSurfaceLayer which we can assign to the view to make
+    //     // it in to a "layer-hosting view", so that we can manually control
+    //     // the layer contents.
+    //     var layer = try IOSurfaceLayer.init();
+    //     errdefer layer.release();
+    //     // Add our layer to the view.
+    //     //
+    //     // On macOS we do this by making the view "layer-hosting"
+    //     // by assigning it to the view's `layer` property BEFORE
+    //     // setting `wantsLayer` to `true`.
+    //     //
+    //     // On iOS, views are always layer-backed, and `layer`
+    //     // is readonly, so instead we add it as a sublayer.
+    //     switch (comptime builtin.os.tag) {
+    //         .macos => {
+    //             info.view.setProperty("layer", layer.layer.value);
+    //             info.view.setProperty("wantsLayer", true);
+    //         },
+    //         .ios => {
+    //             const view_layer = objc.Object.fromId(info.view.getProperty(?*anyopaque, "layer"));
+    //             view_layer.msgSend(void, objc.sel("addSublayer:"), .{layer.layer.value});
+    //         },
+    //         else => @compileError("unsupported target for Metal"),
+    //     }
+    //     // Ensure that if our layer is oversized it
+    //     // does not overflow the bounds of the view.
+    //     info.view.setProperty("clipsToBounds", true);
+    //     // Ensure that our layer has a content scale set to
+    //     // match the scale factor of the window. This avoids
+    //     // magnification issues leading to blurry rendering.
+    //     layer.layer.setProperty("contentsScale", info.scaleFactor);
+    //     // This makes it so that our display callback will actually be called.
+    //     layer.layer.setProperty("needsDisplayOnBoundsChange", true);
+    //     return .{
+    //         .layer = layer,
+    //         .device = device,
+    //         .queue = queue,
+    //         .blending = opts.config.blending,
+    //         .default_storage_mode = default_storage_mode,
+    //         .max_texture_size = max_texture_size,
+    //     };
+    // }
+    pub fn init(/* alloc, opts */) -> Result<Metal, Error> {
+        unimplemented!(
+            "windowing-host: Metal::init needs a live NSView + IOSurfaceLayer (offscreen path is init_offscreen)"
+        )
+    }
+
+    /// Actions taken before doing anything in `drawFrame`.
+    ///
+    /// Right now we use this to start an AutoreleasePool.
+    // pub fn drawFrameStart(self: *Metal) void
+    pub fn draw_frame_start(&mut self) {
+        // Metal.zig: `assert(self.autorelease_pool == null);`
+        rustty_util::quirks::inlineAssert(self.autorelease_pool.is_none());
+        // Zig `self.autorelease_pool = .init()` == objc_autoreleasePoolPush().
+        // SAFETY: objc2's ObjC runtime autorelease-pool push; the returned token is
+        // paired with the pop in `draw_frame_end` (balance asserted above/there,
+        // matching Zig).
+        self.autorelease_pool = Some(unsafe { objc2::ffi::objc_autoreleasePoolPush() });
+    }
+
+    /// Actions taken after `drawFrame` is done.
+    ///
+    /// Right now we use this to end our AutoreleasePool.
+    // pub fn drawFrameEnd(self: *Metal) void
+    pub fn draw_frame_end(&mut self) {
+        // Metal.zig: `assert(self.autorelease_pool != null);`
+        rustty_util::quirks::inlineAssert(self.autorelease_pool.is_some());
+        // Zig `self.autorelease_pool.?.deinit(); self.autorelease_pool = null;` == pop.
+        let pool = self.autorelease_pool.take().unwrap();
+        // SAFETY: `pool` is the exact token returned by the matching
+        // `objc_autoreleasePoolPush` in `draw_frame_start` (we just `take`-cleared
+        // the field), popped exactly once.
+        unsafe { objc2::ffi::objc_autoreleasePoolPop(pool) };
+    }
+
+    /// DEFERRED (windowing-host seam M-4). Metal is the ONLY backend that declares
+    /// `loopEnter` (the other 7 apprt/thread `@hasDecl` hooks are no-ops); it
+    /// installs the layer display callback.
+    // pub fn loopEnter(self: *Metal) void {
+    //     const renderer: *align(1) Renderer = @fieldParentPtr("api", self);
+    //     self.layer.setDisplayCallback(
+    //         @ptrCast(&displayCallback),
+    //         @ptrCast(renderer),
+    //     );
+    // }
+    // fn displayCallback(renderer: *Renderer) align(8) void {
+    //     renderer.drawFrame(true) catch |err| {
+    //         log.warn("Error drawing frame in display callback, err={}", .{err});
+    //     };
+    // }
+    pub fn loop_enter(&mut self) {
+        unimplemented!(
+            "windowing-host: Metal::loop_enter installs the IOSurfaceLayer display callback"
+        )
+    }
+
+    // The other apprt/thread hooks (`surfaceInit`/`finalizeSurfaceInit`/
+    // `threadEnter`/`threadExit`/`loopExit`/`displayRealized`/`displayUnrealized`)
+    // are NOT declared on `Metal.zig` → in the monomorphic port they simply do not
+    // exist as methods; `generic.zig`'s `@hasDecl` probes for them resolve to the
+    // no-op default at the call site (a Chunk-3 concern).
+
+    /// Returns the options to use when constructing buffers.
+    // pub inline fn bufferOptions(self: Metal) bufferpkg.Options
+    fn buffer_options(&self) -> BufferOptions {
+        BufferOptions {
+            device: self.device.clone(),
+            resource_options: api::MTLResourceOptions {
+                // Indicate that the CPU writes to this resource but never reads it.
+                cpu_cache_mode: api::CPUCacheMode::WriteCombined,
+                storage_mode: self.default_storage_mode,
+                hazard_tracking_mode: api::HazardTrackingMode::Default, // Zig field-default `.default`
+            },
+        }
+    }
+
+    // The six Zig `pub const … = bufferOptions;` aliases (Metal.zig:278-283) → six
+    // forwarders (PORT NOTE: Rust cannot alias methods by `pub const`,
+    // `GPU_RD_TRAIT_DESIGN.md` §C). Names MUST match what generic.zig/image.zig call.
+    pub fn instance_buffer_options(&self) -> BufferOptions {
+        self.buffer_options()
+    }
+    pub fn uniform_buffer_options(&self) -> BufferOptions {
+        self.buffer_options()
+    }
+    pub fn fg_buffer_options(&self) -> BufferOptions {
+        self.buffer_options()
+    }
+    pub fn bg_buffer_options(&self) -> BufferOptions {
+        self.buffer_options()
+    }
+    pub fn image_buffer_options(&self) -> BufferOptions {
+        self.buffer_options()
+    }
+    pub fn bg_image_buffer_options(&self) -> BufferOptions {
+        self.buffer_options()
+    }
+
+    /// Returns the options to use when constructing textures.
+    // pub inline fn textureOptions(self: Metal) Texture.Options
+    pub fn texture_options(&self) -> TextureOptions {
+        TextureOptions {
+            device: self.device.clone(),
+            // Using an `*_srgb` pixel format makes Metal gamma encode the pixels
+            // written to it *after* blending, which means we get linear alpha
+            // blending rather than gamma-incorrect blending.
+            pixel_format: if self.blending.is_linear() {
+                api::MTLPixelFormat::BGRA8Unorm_sRGB
+            } else {
+                api::MTLPixelFormat::BGRA8Unorm
+            },
+            resource_options: api::MTLResourceOptions {
+                // Indicate that the CPU writes to this resource but never reads it.
+                cpu_cache_mode: api::CPUCacheMode::WriteCombined,
+                storage_mode: self.default_storage_mode,
+                hazard_tracking_mode: api::HazardTrackingMode::Default,
+            },
+            usage: api::MTLTextureUsage {
+                // textureOptions is currently only used for custom shaders, which
+                // require both the shader read (for when multiple shaders are
+                // chained) and render target (for the final output) usage.
+                // Disabling either of these will lead to metal validation errors
+                // in Xcode.
+                shader_read: true,
+                render_target: true,
+                ..api::MTLTextureUsage::default()
+            },
+        }
+    }
+
+    // pub inline fn samplerOptions(self: Metal) Sampler.Options
+    pub fn sampler_options(&self) -> SamplerOptions {
+        SamplerOptions {
+            device: self.device.clone(),
+            // These parameters match Shadertoy behaviors.
+            min_filter: api::MTLSamplerMinMagFilter::Linear,
+            mag_filter: api::MTLSamplerMinMagFilter::Linear,
+            s_address_mode: api::MTLSamplerAddressMode::ClampToEdge,
+            t_address_mode: api::MTLSamplerAddressMode::ClampToEdge,
+        }
+    }
+
+    /// Returns the options to use when constructing textures for images.
+    // pub inline fn imageTextureOptions(self, format, srgb) Texture.Options
+    pub fn image_texture_options(&self, format: ImageTextureFormat, srgb: bool) -> TextureOptions {
+        TextureOptions {
+            device: self.device.clone(),
+            pixel_format: format.to_pixel_format(srgb),
+            resource_options: api::MTLResourceOptions {
+                // Indicate that the CPU writes to this resource but never reads it.
+                cpu_cache_mode: api::CPUCacheMode::WriteCombined,
+                storage_mode: self.default_storage_mode,
+                hazard_tracking_mode: api::HazardTrackingMode::Default,
+            },
+            usage: api::MTLTextureUsage {
+                // We only need to read from this texture from a shader.
+                shader_read: true,
+                ..api::MTLTextureUsage::default()
+            },
+        }
+    }
+
+    /// Initializes a Texture suitable for the provided font atlas.
+    // pub fn initAtlasTexture(self: *const Metal, atlas: *const font.Atlas) Texture.Error!Texture
+    //
+    // PORT NOTE: `rustty_font::atlas::Atlas` exposes `format`/`size` as accessor
+    // methods (`atlas.format()`/`atlas.size()`) — the Zig public fields are
+    // narrowed to `pub(crate)`/private in the font crate, so the renderer reads
+    // them through the accessors. `atlas.size` is `u32`; `Texture::init` takes
+    // `usize`, so it is widened with `as usize` (Zig widens u32→usize implicitly).
+    pub fn init_atlas_texture(
+        &self,
+        atlas: &rustty_font::atlas::Atlas,
+    ) -> Result<Texture, texture::Error> {
+        let pixel_format = match atlas.format() {
+            rustty_font::atlas::Format::Grayscale => api::MTLPixelFormat::R8Unorm,
+            rustty_font::atlas::Format::Bgra => api::MTLPixelFormat::BGRA8Unorm_sRGB,
+            // Zig `else => @panic("unsupported atlas format for Metal texture")` —
+            // catches `.bgr` (Format::Bgr).
+            _ => panic!("unsupported atlas format for Metal texture"),
+        };
+
+        Texture::init(
+            TextureOptions {
+                device: self.device.clone(),
+                pixel_format,
+                resource_options: api::MTLResourceOptions {
+                    // Indicate that the CPU writes to this resource but never reads it.
+                    cpu_cache_mode: api::CPUCacheMode::WriteCombined,
+                    storage_mode: self.default_storage_mode,
+                    hazard_tracking_mode: api::HazardTrackingMode::Default,
+                },
+                usage: api::MTLTextureUsage {
+                    // We only need to read from this texture from a shader.
+                    shader_read: true,
+                    ..api::MTLTextureUsage::default()
+                },
+            },
+            atlas.size() as usize,
+            atlas.size() as usize,
+            None,
+        )
+    }
+
+    /// Initialize a new render target which can be presented by this API.
+    // pub fn initTarget(self: *const Metal, width: usize, height: usize) !Target
+    pub fn init_target(&self, width: usize, height: usize) -> Result<Target, target::Error> {
+        Target::init(target::Options {
+            // deref-coerces &Retained<..> → &ProtocolObject<..> (struct-field site)
+            device: &self.device,
+            // Using an `*_srgb` pixel format makes Metal gamma encode the pixels
+            // written to it *after* blending, which means we get linear alpha
+            // blending rather than gamma-incorrect blending.
+            pixel_format: if self.blending.is_linear() {
+                api::MTLPixelFormat::BGRA8Unorm_sRGB
+            } else {
+                api::MTLPixelFormat::BGRA8Unorm
+            },
+            storage_mode: self.default_storage_mode,
+            width,
+            height,
+        })
+    }
+
+    /// Initialize our shader set (uses `blending.is_linear()` → sRGB pixel format
+    /// for the shader pipelines).
+    // pub fn initShaders(self: *const Metal, alloc, custom_shaders: []const [:0]const u8) !Shaders
+    //
+    // PORT NOTE: the reference `alloc` param is ELIDED — the already-landed
+    // `Shaders::init` leaf (`metal/shaders.rs`) does not thread an Allocator
+    // (objc2/Vec-managed), matching how the leaf was ported in Chunk 1b.
+    // `custom_shaders: []const [:0]const u8` → `&[&CStr]`.
+    pub fn init_shaders(&self, custom_shaders: &[&CStr]) -> Result<Shaders, shaders::Error> {
+        Shaders::init(
+            &self.device,
+            custom_shaders,
+            // Using an `*_srgb` pixel format makes Metal gamma encode the pixels
+            // written to it *after* blending, which means we get linear alpha
+            // blending rather than gamma-incorrect blending.
+            if self.blending.is_linear() {
+                api::MTLPixelFormat::BGRA8Unorm_sRGB
+            } else {
+                api::MTLPixelFormat::BGRA8Unorm
+            },
+        )
+    }
+
+    /// Get the current size of the runtime surface.
+    // pub fn surfaceSize(self: *const Metal) !struct { width: u32, height: u32 }
+    //
+    // OFFSCREEN seam M-3: the reference reads `layer.bounds * contentsScale`.
+    // Offscreen there is no layer, so we return the fixed `offscreen_size` set at
+    // construction — still clamped to `max_texture_size` (the reference's clamp: we
+    // can't create a screen texture larger). The deferred layer-bounds path (needs
+    // `pkg/macos.graphics.Rect`) is the windowing-host seam. Verbatim Zig body
+    // (Metal.zig:216-232):
+    //     const bounds = self.layer.layer.getProperty(graphics.Rect, "bounds");
+    //     const scale = self.layer.layer.getProperty(f64, "contentsScale");
+    //     // We need to clamp our runtime surface size to the maximum
+    //     // possible texture size since we can't create a screen buffer (texture)
+    //     // larger than that.
+    //     return .{
+    //         .width = @min(@as(u32, @intFromFloat(bounds.size.width * scale)), self.max_texture_size),
+    //         .height = @min(@as(u32, @intFromFloat(bounds.size.height * scale)), self.max_texture_size),
+    //     };
+    pub fn surface_size(&self) -> Result<SurfaceSize, Error> {
+        Ok(SurfaceSize {
+            width: self.offscreen_size.width.min(self.max_texture_size),
+            height: self.offscreen_size.height.min(self.max_texture_size),
+        })
+    }
+
+    /// Begin a frame.
+    // pub inline fn beginFrame(self: *const Metal, renderer: *Renderer, target: *Target) !Frame
+    //
+    // PORT NOTE: the reference `renderer: *Renderer` (= `GenericRenderer(Metal)`) is
+    // not ported in Chunk 2; `Frame::begin` (landed 1b) takes the type-erased
+    // `renderer: *mut ()` PLUS an `on_completed: CompletionFn` (the type-erased
+    // `&bufferCompleted`, which Chunk-3 `drawFrame` supplies). So `begin_frame`
+    // forwards both. Raw `*mut` (NOT `&mut`) per the container_of /
+    // `rust-mut-args-strongly-protected` aliasing model ([FIX-2]).
+    //
+    // Reference doc-comments on the params (R1):
+    //   renderer — Once the frame has been completed, the `frameCompleted` method
+    //              on the renderer is called with the health status of the frame.
+    //   target   — The target is presented via the provided renderer's API when
+    //              completed.
+    pub fn begin_frame(
+        &self,
+        renderer: *mut (),
+        target: *mut Target,
+        on_completed: CompletionFn,
+    ) -> Result<Frame, frame::Error> {
+        Frame::begin(
+            frame::Options { queue: &self.queue },
+            renderer,
+            target,
+            on_completed,
+        )
+    }
+
+    /// Present the provided target.
+    // pub inline fn present(self: *Metal, target: Target, sync: bool) !void
+    //
+    // OFFSCREEN seam M-5: the reference calls `layer.setSurfaceSync(target.surface)`
+    // / `layer.setSurface(...)`. Offscreen has no layer; the IOSurface is read back
+    // via `Target::read_bgra` (landed 1b) instead, so `present` is a no-op stub
+    // offscreen. The Chunk-3 offscreen completion path reads back rather than
+    // presenting, so this is never exercised in the offscreen golden. Verbatim Zig
+    // body (Metal.zig:253-259):
+    //     if (sync) {
+    //         self.layer.setSurfaceSync(target.surface);
+    //     } else {
+    //         try self.layer.setSurface(target.surface);
+    //     }
+    pub fn present(&mut self, _target: &Target, _sync: bool) -> Result<(), Error> {
+        Ok(())
+    }
+
+    /// Present the last presented target again. (noop for Metal)
+    // pub inline fn presentLastTarget(self: *Metal) !void { _ = self; }
+    pub fn present_last_target(&self) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+impl Drop for Metal {
+    // pub fn deinit(self: *Metal) void {
+    //     self.queue.release();
+    //     self.device.release();
+    //     self.layer.release();
+    // }
+    fn drop(&mut self) {
+        // ARC: `queue`/`device` (Retained) release automatically on drop; the
+        // `layer` release is part of seam M-1. Release order is immaterial under
+        // ARC. If a pool is still pushed here it would leak — but
+        // drawFrameStart/End are balanced (matching Zig, whose deinit also does not
+        // pop the pool). No explicit body required.
+    }
+}
+
+/// Pixel format for image texture options.
+// pub const ImageTextureFormat = enum { gray, rgba, bgra };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageTextureFormat {
+    /// 1 byte per pixel grayscale.
+    Gray,
+    /// 4 bytes per pixel RGBA.
+    Rgba,
+    /// 4 bytes per pixel BGRA.
+    Bgra,
+}
+
+impl ImageTextureFormat {
+    // fn toPixelFormat(self: ImageTextureFormat, srgb: bool) mtl.MTLPixelFormat
+    fn to_pixel_format(self, srgb: bool) -> api::MTLPixelFormat {
+        use api::MTLPixelFormat as F;
+        match self {
+            ImageTextureFormat::Gray => {
+                if srgb {
+                    F::R8Unorm_sRGB
+                } else {
+                    F::R8Unorm
+                }
+            }
+            ImageTextureFormat::Rgba => {
+                if srgb {
+                    F::RGBA8Unorm_sRGB
+                } else {
+                    F::RGBA8Unorm
+                }
+            }
+            ImageTextureFormat::Bgra => {
+                if srgb {
+                    F::BGRA8Unorm_sRGB
+                } else {
+                    F::BGRA8Unorm
+                }
+            }
+        }
+    }
+}
+
+// PORT NOTE (rustty-only smoke test, NOT a ghostty parity test): there is no
+// reference `test{}` over `Metal.zig`. This CHUNK-2 gate
+// (`GPU_RD_CHUNK2_DESIGN.md` §B.8) drives the offscreen `Metal` (not the raw
+// leaves): `init_offscreen` (chooseDevice + newCommandQueue + device metadata) →
+// `init_shaders` (all five pipelines) → `init_target` (offscreen IOSurface) →
+// `begin_frame` → a trivial clear RenderPass → `complete(sync=true)` → the
+// `read_bgra` readback. It asserts no panic + the readback is `w*h*4` bytes.
+// Skipped cleanly on hosts with no Metal device (headless CI), like the landed
+// leaf smoke tests.
+#[cfg(test)]
+mod tests {
+    use objc2::runtime::ProtocolObject;
+    use objc2_metal::MTLCommandBuffer;
+
+    use super::super::render_pass::{Attachment, AttachmentTarget};
+    use super::*;
+
+    #[test]
+    fn metal_offscreen_construct_and_begin_frame() {
+        // Headless CI may lack a Metal device.
+        let metal = match Metal::init_offscreen(AlphaBlending::Native, 4, 4) {
+            Ok(m) => m,
+            Err(Error::NoMetalDevice) => {
+                eprintln!("no Metal device; skipping");
+                return;
+            }
+        };
+        // Apple Silicon (hasUnifiedMemory) → Shared; an Intel/discrete host would be
+        // Managed. Accept either (per ADV-FIX B.8) so the test skips-or-passes on
+        // any Metal host rather than failing on Intel.
+        assert!(matches!(
+            metal.default_storage_mode,
+            api::StorageMode::Shared | api::StorageMode::Managed
+        ));
+        assert!(metal.max_texture_size >= 8192);
+        assert_eq!(
+            metal.surface_size().unwrap(),
+            SurfaceSize {
+                width: 4,
+                height: 4
+            }
+        );
+
+        // initShaders (load pipelines) → initTarget → beginFrame → trivial clear
+        // pass → complete(sync).
+        let shaders = metal.init_shaders(&[]).expect("init_shaders");
+        assert!(shaders.post_pipelines.is_empty());
+        let mut target = metal.init_target(4, 4).expect("init_target");
+
+        // A no-op completion fn (the Chunk-3 `drawFrame` installs the real one).
+        unsafe fn noop(_c: &frame::CompletionContext, _b: &ProtocolObject<dyn MTLCommandBuffer>) {}
+
+        // Raw `*mut` target; the pointer does not hold the borrow, so `target`
+        // stays usable below. Null renderer + no-op completion (Chunk-2 does not
+        // exercise the container_of trampoline).
+        let tp: *mut Target = &mut target;
+        let mut frame = metal
+            .begin_frame(core::ptr::null_mut(), tp, noop)
+            .expect("begin_frame");
+
+        // A trivial RenderPass: clear the target, begin/complete (no draw step).
+        {
+            let attachments = [Attachment {
+                target: AttachmentTarget::Target(&target),
+                clear_color: Some([0.0, 0.0, 0.0, 1.0]),
+            }];
+            let pass = frame.render_pass(&attachments);
+            pass.complete();
+        }
+
+        // Complete synchronously: commit → waitUntilCompleted → invoke the (no-op)
+        // completion fn directly.
+        frame.complete(true);
+
+        // Golden-support readback: `w*h*4` BGRA bytes out of the offscreen surface.
+        let px = target.read_bgra();
+        assert_eq!(px.len(), 4 * 4 * 4);
+    }
+}

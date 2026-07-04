@@ -38,12 +38,18 @@
 pub mod api;
 pub mod buffer;
 pub mod frame;
+pub mod metal_impl;
 pub mod pipeline;
 pub mod render_pass;
 pub mod sampler;
 pub mod shaders;
 pub mod target;
 pub mod texture;
+
+// The `Metal` graphics-API wrapper (ports `src/renderer/Metal.zig`). Re-exported
+// at `metal::` so the crate-root `pub type Renderer = GenericRenderer<Metal>` alias
+// (Chunk 3) can name `crate::metal::Metal`.
+pub use metal_impl::Metal;
 
 // PORT NOTE (rustty-only smoke test, NOT a ghostty parity test): the reference
 // has no unit `test{}` block over these ObjC resource wrappers. This is the
