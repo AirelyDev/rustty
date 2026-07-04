@@ -45,6 +45,7 @@
 
 pub mod cell;
 pub mod cursor;
+pub mod generic;
 pub mod link;
 pub mod message;
 pub mod shaders;
@@ -87,26 +88,32 @@ pub use rustty_render_types as size;
 // pub const Message = message.Message;
 pub use message::Message;
 
-/// PORT NOTE (DEFERRED SEAM): the reference crate root comptime-selects the GPU
-/// renderer implementation:
-///
-/// /// The implementation to use for the renderer. This is comptime chosen
-/// /// so that every build has exactly one renderer implementation.
-/// pub const Renderer = switch (build_config.renderer) {
-///     .metal => GenericRenderer(Metal),
-///     .opengl => GenericRenderer(OpenGL),
-///     .webgl => WebGL,
-/// };
-///
-/// The GPU draw path (renderer/generic.zig, which defines the nested
-/// `Renderer.DerivedConfig`, plus Metal/OpenGL/WebGL) is R-d/Phase 3. Only the
-/// nested `DerivedConfig` is named by the cross-thread message surface
-/// (`Message::ChangeConfig`), and the real `DerivedConfig.init` takes
-/// `*const configpkg.Config` (a renderer -> config edge would cycle, G7). Until
-/// the GPU renderer lands, this uninhabited placeholder stands in for
-/// `renderer.Renderer.DerivedConfig` (precedent: `state::Inspector`;
-/// DEFERRALS.md).
-pub enum RendererDerivedConfig {}
+// PORT NOTE: the reference crate root comptime-selects the GPU renderer
+// implementation:
+//
+//     /// The implementation to use for the renderer. This is comptime chosen
+//     /// so that every build has exactly one renderer implementation.
+//     pub const Renderer = switch (build_config.renderer) {
+//         .metal => GenericRenderer(Metal),
+//         .opengl => GenericRenderer(OpenGL),
+//         .webgl => WebGL,
+//     };
+//
+// Ported MONOMORPHICALLY (GPU_RD_TRAIT_DESIGN.md §D): a set of one — the concrete
+// `generic::Renderer` over the concrete `Metal` leaf types (OpenGL is
+// Linux-deferred, WebGL wasm-deferred). macOS-gated because `Renderer` names
+// `crate::metal::Metal`; the GPU draw path (the big CPU methods) lands in a later
+// chunk (GPU_RD_CHUNK3A_DESIGN §B).
+#[cfg(target_os = "macos")]
+pub use generic::Renderer;
+
+// The `renderer.Renderer.DerivedConfig` nested config, named by the cross-thread
+// message surface (`Message::ChangeConfig`). It names no Metal type (its 9
+// config-typed fields use inhabited placeholders — GPU_RD_CHUNK3A_DESIGN §B.1), so
+// it is NOT macOS-gated. This replaces the earlier uninhabited
+// `RendererDerivedConfig` placeholder (now that the real, inhabited struct exists);
+// `DerivedConfig::init` remains a deferred generic-`C` seam (config-coupled, G7).
+pub use generic::DerivedConfig;
 
 /// The health status of a renderer. These must be shared across all
 /// renderers even if some states aren't reachable so that our API users

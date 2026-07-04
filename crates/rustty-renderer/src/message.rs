@@ -28,7 +28,7 @@ use rustty_font_shaper::{SharedGrid, SharedGridSet};
 use rustty_vt::highlight;
 
 use crate::thread;
-use crate::RendererDerivedConfig;
+use crate::DerivedConfig;
 
 /// The messages that can be sent to a renderer thread.
 //
@@ -87,13 +87,14 @@ pub enum Message {
     // heap-allocates both pointers via `alloc.create` and frees them in
     // `deinit` — precedent: rustty-os cf_release_thread's `Message.Release`
     // alloc collapse). `impl` is a Rust keyword, kept as the raw identifier
-    // `r#impl` (precedent: rustty-lib's `r#enum` module). Both pointee types
-    // are deferred-seam placeholders today (`thread::DerivedConfig` — inhabited
-    // since core C0 [ADV-FIX 2] — and the still-uninhabited
-    // [`RendererDerivedConfig`]), so this variant is not yet constructible.
+    // `r#impl` (precedent: rustty-lib's `r#enum` module). Both pointee types are
+    // inhabited (`thread::DerivedConfig` since core C0 [ADV-FIX 2]; the GPU
+    // renderer's [`DerivedConfig`] since GPU R-d Chunk 3a), but the variant is
+    // still not constructible via the public API because `initChangeConfig` is a
+    // deferred config-coupled seam (below).
     ChangeConfig {
         thread: Box<thread::DerivedConfig>,
-        r#impl: Box<RendererDerivedConfig>,
+        r#impl: Box<DerivedConfig>,
     },
 
     /// Matches for the current viewport from the search thread. These happen
@@ -142,11 +143,12 @@ impl Message {
     // but `rustty-config` already depends on `rustty-renderer` so the edge
     // would cycle (G7) — hence the generic `C` on the placeholder signature
     // below (the concrete instantiation, `C` = `rustty_config::Config`,
-    // happens in the crates above: core's updateConfig, Surface.zig:1782) —
-    // and `RendererDerivedConfig` (`renderer.Renderer.DerivedConfig`) is still
-    // an uninhabited GPU-tier placeholder. The reference function + comments
-    // are preserved verbatim so nothing is lost (R1); the implementation lands
-    // with the DerivedConfig types (see .port/phase-2/DEFERRALS.md).
+    // happens in the crates above: core's updateConfig, Surface.zig:1782). The
+    // `DerivedConfig` (`renderer.Renderer.DerivedConfig`) type is now the real,
+    // inhabited GPU-tier struct (Chunk 3a), but its own `init` is likewise a
+    // deferred config-coupled seam. The reference function + comments are
+    // preserved verbatim so nothing is lost (R1); the implementation lands with
+    // the DerivedConfig `init` bodies (see .port/phase-2/DEFERRALS.md).
     //
     // /// Initialize a change_config message.
     // pub fn initChangeConfig(alloc: Allocator, config: *const configpkg.Config) !Message {
@@ -188,10 +190,11 @@ impl Message {
     // PORT NOTE: the reference `deinit` destroys the `change_config` heap
     // allocations (`v.impl.deinit(); v.alloc.destroy(v.impl);
     // v.alloc.destroy(v.thread);`). With the alloc collapse those frees are the
-    // `Box` drops below; `v.impl.deinit()` (the GPU renderer DerivedConfig's own
-    // deinit) is deferred WITH its placeholder type — `RendererDerivedConfig`
-    // is uninhabited today, so a `ChangeConfig` message cannot be constructed
-    // and this arm is statically unreachable until it lands.
+    // `Box` drops below; the reference `v.impl.deinit()` (the GPU renderer
+    // `DerivedConfig::deinit`, now real) is left to land WITH `initChangeConfig`:
+    // that constructor is a deferred config-coupled seam, so a `ChangeConfig`
+    // message is not constructible via the public API and this arm stays
+    // statically unreachable until the pair lands together.
     // PARITY: the reference body is an exhaustive `switch` with an `else => {}`
     // arm; the `match` mirrors that shape, so `single_match` is silenced.
     #[allow(clippy::single_match)]

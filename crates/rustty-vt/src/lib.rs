@@ -126,6 +126,7 @@ pub mod screen;
 // pub const ScreenSet = @import("ScreenSet.zig");
 pub mod screen_set;
 // pub const Scrollbar = PageList.Scrollbar;
+pub use pagelist::grow::Scrollbar;
 // pub const Selection = @import("Selection.zig");
 pub mod selection;
 pub mod selection_codepoints;

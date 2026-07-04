@@ -1172,7 +1172,7 @@ impl Image {
 //
 // PORT NOTE (§7 risk #1): `Image::convert` is the only source of this error and
 // is an R5 seam, so no variant is reachable. Modeled as an uninhabited enum
-// placeholder (precedent: `RendererDerivedConfig`).
+// placeholder (precedent: `state::Inspector`).
 #[derive(Debug)]
 pub enum WuffsError {}
 
