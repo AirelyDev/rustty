@@ -52,6 +52,17 @@ pub mod shadertoy;
 pub mod state;
 pub mod thread;
 
+// PORT STATUS (GPU R-d, macOS-only): the Metal graphics-API backend. Chunk 0
+// lands only the Metal API vocabulary (`metal::api`, ghostty `metal/api.zig`
+// re-exported over `objc2-metal`) + the shader build infra (`build.rs` compiles
+// `src/shaders/shaders.metal` into `$OUT_DIR/rustty.metallib`). The `metal/*`
+// leaf wrappers + the monomorphic `GenericRenderer(Metal)` draw path are the
+// golden-image-gated Chunk 1+ work (GPU_RD_BLUEPRINT.md / GPU_RD_TRAIT_DESIGN.md).
+// `pub` so the Chunk-0 vocabulary is reachable public API (nothing consumes it
+// yet — the draw path lands in Chunk 1).
+#[cfg(target_os = "macos")]
+pub mod metal;
+
 // renderer/size.zig lives in the rustty-render-types leaf (A1 hoist). The
 // reference `renderer.zig` re-exports these size types (`GridSize`, `Size`,
 // `ScreenSize`, `CellSize`, `Padding`, `Coordinate`, ...); mirror that re-export.

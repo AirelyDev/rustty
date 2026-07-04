@@ -774,6 +774,9 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "glslang-sys",
+ "objc2",
+ "objc2-foundation",
+ "objc2-metal",
  "rustty-crash",
  "rustty-datastruct",
  "rustty-font",

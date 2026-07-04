@@ -57,6 +57,57 @@ spirv-cross-sys = { workspace = true }
 # cell/cursor tests, which drive a real `Terminal`/`RenderState`.
 allocator-api2 = { workspace = true }
 
+# macOS: the Metal graphics-API backend (GPU R-d). R3/objc2: the crates.io objc2
+# framework crates REPLACE ghostty's `pkg/objc` + `pkg/macos` bindings — exactly
+# as `rustty-font-shaper` replaced them for CoreText. `metal/api.zig`'s hand-rolled
+# `extern`/`enum` Metal declarations -> `objc2-metal` (bindings to the SAME
+# Metal.framework — identical Apple constants, not a reimplementation); `objc.Object`
+# / manual message sends -> `objc2` (`Retained`/`ProtocolObject`); Foundation
+# (`NSString`/`NSArray`/`NSError`/`NSRange`) -> `objc2-foundation`.
+[target.'cfg(target_os = "macos")'.dependencies]
+# objc2: the ObjC runtime (`Retained`/`ProtocolObject` ownership; ARC via `Drop`).
+objc2 = { version = "0.6" }
+# objc2-foundation: the Foundation types the Metal wrappers pass across the FFI.
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSError", "NSRange"] }
+# objc2-metal: Metal.framework bindings. `default-features = false` + the exact
+# PER-TYPE features `metal/api.rs` re-exports (objc2-metal's `[features]` are
+# per-type — e.g. `MTLPixelFormat` gates `generated/MTLPixelFormat.rs`; the
+# `bitflags`/`objc2-foundation/NS*` sub-deps are pulled transitively by these).
+# Only Chunk-0 vocabulary is enabled:
+#   MTLCommandBuffer        -> MTLCommandBufferStatus
+#   MTLRenderPass           -> MTLLoadAction, MTLStoreAction, MTLClearColor
+#   MTLRenderCommandEncoder -> MTLPrimitiveType, MTLRenderStages, MTLViewport
+#   MTLArgument             -> MTLIndexType
+#   MTLVertexDescriptor     -> MTLVertexFormat, MTLVertexStepFunction
+#   MTLResource             -> MTLResourceOptions (+ CPUCacheMode/StorageMode/
+#                              HazardTrackingMode), MTLPurgeableState
+#   MTLSampler              -> MTLSamplerMinMagFilter, MTLSamplerAddressMode
+#   MTLRenderPipeline       -> MTLBlendFactor, MTLBlendOperation
+#   MTLCommandEncoder       -> MTLBarrierScope
+#   MTLTexture              -> MTLTextureUsage
+#   MTLPixelFormat          -> MTLPixelFormat
+#   MTLDevice               -> MTLGPUFamily, MTLCopyAllDevices,
+#                              MTLCreateSystemDefaultDevice
+#   MTLTypes                -> MTLRegion, MTLOrigin, MTLSize
+# Chunk 1/4 ADD (not yet): objc2-io-surface + objc2-core-graphics (Target
+# IOSurface), block2 (addCompletedHandler), dispatch2 (DispatchData for
+# newLibraryWithData), and the `png` dev-dep (golden-image decode).
+objc2-metal = { version = "0.3", default-features = false, features = [
+    "MTLCommandBuffer",
+    "MTLRenderPass",
+    "MTLRenderCommandEncoder",
+    "MTLArgument",
+    "MTLVertexDescriptor",
+    "MTLResource",
+    "MTLSampler",
+    "MTLRenderPipeline",
+    "MTLCommandEncoder",
+    "MTLTexture",
+    "MTLPixelFormat",
+    "MTLDevice",
+    "MTLTypes",
+] }
+
 [dev-dependencies]
 # The crate-root `Health` enum (hoisted from `renderer.zig`) carries the
 # `ghostty.h Health` -> `checkGhosttyHEnum` test, which uses the `enum_type`/
