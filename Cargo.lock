@@ -800,6 +800,7 @@ dependencies = [
  "rustty-unicode",
  "rustty-util",
  "rustty-vt",
+ "rustty-z2d",
  "rustty-zigstd",
  "spirv-cross-sys",
 ]

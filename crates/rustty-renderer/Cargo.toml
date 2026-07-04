@@ -24,6 +24,12 @@ rustty-util = { workspace = true }
 rustty-crash = { workspace = true }
 rustty-font = { workspace = true }
 rustty-render-types = { workspace = true }
+# renderer/Overlay.zig renders the debug overlay on the CPU via z2d (surface +
+# context + pixel). rustty-z2d is a pure-Rust LEAF (its [dependencies] is empty)
+# and is already an established sink below rustty-font (`rustty-font/Cargo.toml:42`),
+# so this is a downward, acyclic edge parallel to font->z2d. No new FFI (pure
+# Rust), so G6/check_leaks.sh is unaffected. (GPU_RD_P1_DESIGN.md §1.2.)
+rustty-z2d = { workspace = true }
 # rustty-font-shaper supplies the `SharedGrid` of rendered glyphs that the
 # renderer's cell-vertex assembly reads from (per the R-a task scope). The
 # headless cell/cursor/link/State/size logic ported in this milestone does not

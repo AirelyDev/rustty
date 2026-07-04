@@ -3029,3 +3029,58 @@ DEFERRED (documented; not needed to boot a shell on macOS — the permanent fina
   `Subprocess.start`/`ReadThread`/`queueWrite` + the core `Async::notify()` leaves —
   capped with a live-shell KAT. `renderer.Thread` stays Phase-3 GPU tier (GPU-and-xev
   blocked; landing rustty-xev does not unblock it). See NEXT_PHASE_PLAN.md.
+
+## rustty-renderer GPU R-d P1 (Chunk-3 prereqs) — `image.zig` + `Overlay.zig`
+
+Ports `src/renderer/image.zig` → `crates/rustty-renderer/src/image.rs` and
+`src/renderer/Overlay.zig` → `crates/rustty-renderer/src/overlay.rs`
+(both `#[cfg(target_os = "macos")]`, per `GPU_RD_P1_DESIGN.md`). New crate edge
+`rustty-renderer → rustty-z2d` (pure-Rust sink; acyclic — G7 GREEN, no new FFI).
+
+BOTH reference files carry **0** `test{}` blocks (confirmed by grep) — this tier
+is **golden-image-gated** (the Chunk-4 offscreen `drawFrame` is the binding gate).
+The rustty-side smoke `#[test]`s are NOT ghostty parity tests: `image_empty_lifecycle`
+(FULL container path over the empty map + `None` overlay — exercised for real when a
+Metal device is present), `id_z_less_than_ordering`, `pixel_format_bpp`,
+`overlay_surface_roundtrip` (pure z2d), `overlay_invalid_dimensions`, `color_alpha_pixels`.
+
+DEFERRED (R5 `unimplemented!()` seams — verbatim Zig body preserved as a leading
+block comment at each; golden never runs any of them):
+
+- **`Image::convert`** (image.rs) — the `wuffs.swizzle.{g,ga,rgb,bgr,bgra}ToRgba`
+  pixel path. `wuffs` has **no Rust home** (grep: only a `rustty-font` comment
+  references it) — the one HARD dep gap. NOTE (adversary fix): the `.rgba => return`
+  early-out lives INSIDE `convert`'s body, so this whole-method seam swallows it —
+  `Image::upload`/`prep_for_upload` are FULL wiring but ALWAYS reach this panic if
+  ever run, even for already-RGBA data (e.g. the overlay). Golden-SAFE (empty map +
+  `None` overlay + no `background-image` never reach `upload`). Un-seaming needs a
+  pure-Rust g/ga/rgb/bgr/bgra→rgba swizzle (also unblocks the pre-Kitty `bg_image`
+  path — `prepBackgroundImage` builds `Pending{.rgba}` and `uploadBackgroundImage`
+  → `prep_for_upload` → `convert`; §7 OPEN RISK #1). Offscreen golden config MUST
+  NOT set `background-image` (solid bg → `bg_color`, not a texture).
+- **`State::{kitty_update, prep_kitty_placement, prep_kitty_virtual_placement,
+  prep_kitty_image}`** (image.rs) — the Kitty terminal-walk (viewport pins, per-
+  placement `rect`/`pixelSize`/`pointFromPin`, `unicode.placementIterator`/
+  `renderPlacement`, z-sort, bg/text split). Never run by the no-image golden;
+  feeds only each other + `kitty_placements`.
+- **`Overlay::{highlight_hyperlinks, highlight_semantic_prompts, highlight_grid_rect,
+  highlight_pixel_rect}`** (overlay.rs) — the four z2d CPU render leaves. Doubly
+  forced: (1) the ported z2d `Context` subset lacks `set_anti_aliasing_mode`/
+  `set_hairline`; (2) the `RenderState` row/cell `.hyperlink`/`.semantic_*` metadata
+  is not yet exposed; (3) no overlay feature is enabled by the golden.
+
+FULL (ported, compiles against the landed metal leaves + z2d, no `GenericRenderer`):
+`State::{empty, deinit, upload, draw, overlay_update, kitty_requires_update,
+prep_image}`, all of `Image`'s state machine incl. `upload`/`prep_for_upload`
+(FULL wiring above the `convert` seam), and Overlay's `Color`/`init`/`deinit`/
+`pending_image`/`reset`/`apply_features`. Seam count = **9** (1 `convert` + 4 Kitty +
+4 overlay render; the design prose's "6" is a doc miscount — the enumerated method
+list, ported here, governs).
+
+PORT-NOTE divergences from the design (both R1-driven, documented in-source):
+- `State::overlay_update` takes `Option<&Overlay>` (NOT the design's by-value
+  `Option<Overlay>`): Zig passes a shallow `?Overlay` copy that SHARES the caller's
+  z2d buffer and never deinits it; a Rust by-value move would drop/free that buffer.
+  Chunk-3 `rebuildOverlay` passes `self.overlay.as_ref()`.
+- `State::draw` is `&self` (no mutation; the Zig `*State` is non-mutating).
+- `Overlay::init`/`deinit` drop the Zig `alloc` (the z2d subset owns its buffer).

@@ -63,6 +63,22 @@ pub mod thread;
 #[cfg(target_os = "macos")]
 pub mod metal;
 
+// GPU R-d Chunk-3 prerequisites (macOS-gated): the Kitty-graphics + overlay image
+// render state (`image.zig`) and the CPU/z2d debug overlay (`Overlay.zig`). Both
+// are macOS-only because `image::Image` embeds `crate::metal::Texture` (the
+// `Ready` variant) and `overlay` returns `image::Pending`. Neither names
+// `GenericRenderer`, so both compile standalone before Chunk 3 (GPU_RD_P1_DESIGN.md
+// §1.1). The new `rustty-renderer -> rustty-z2d` edge (Overlay's z2d) is a
+// downward, acyclic edge to a pure-Rust sink (check_acyclic.sh stays GREEN).
+#[cfg(target_os = "macos")]
+pub mod image;
+#[cfg(target_os = "macos")]
+pub mod overlay;
+// The GPU_RD_TRAIT_DESIGN §D field names `overlay: Option<Overlay>` via
+// `crate::Overlay`.
+#[cfg(target_os = "macos")]
+pub use overlay::Overlay;
+
 // renderer/size.zig lives in the rustty-render-types leaf (A1 hoist). The
 // reference `renderer.zig` re-exports these size types (`GridSize`, `Size`,
 // `ScreenSize`, `CellSize`, `Padding`, `Coordinate`, ...); mirror that re-export.
