@@ -1,0 +1,27 @@
+export const meta = {
+  name: 'renderer-ra',
+  description: 'R-a: the unit-portable renderer core into rustty-renderer. cell.zig(5t, cell vertex-data assembly over SharedGrid) + cursor.zig(4t) + link.zig(3t) + State.zig(2t) + size.zig(6t, renderer GridSize/ScreenSize) + the CellText/CellBg/Uniforms vertex structs. Headless (no GPU). Deps vt + font-shaper (SharedGrid) + render-types. GPU backends (R-d) defer to Phase 3.',
+  phases: [
+    { title: 'Port', detail: 'cell/cursor/link/State/size + vertex structs -> rustty-renderer (add rustty-font-shaper dep)' },
+    { title: 'Verify', detail: 'count-gate + tests + Miri/ASan + G3b + faithfulness' },
+  ],
+}
+const G = '/Users/gael/projects/ghostty', R = '/Users/gael/projects/rustty'
+const GR = G + '/src/renderer'
+const GATES = R + '/.port/tools/gates'
+const RULES = 'OBEY: PARITY CONSTITUTION + ' + R + '/.port/PORT_RULES.md. R1 = PORT EVERY test{} (count is a CONTRACT); EVERY line/comment verbatim; assertion-for-assertion, INDEPENDENT expected values. R3 faithful; R5 NO weakening. Reference READ-ONLY ' + GR + '/. Fills rustty-renderer (crates/rustty-renderer/, stub; deps vt/os/datastruct/unicode/util/crash/font/render-types — ADD rustty-font-shaper for SharedGrid). Plan: memory heavy-tier-strategy (R-a — the unit-portable renderer leaves; GPU backends R-d -> Phase 3). '
+  + 'KEY: cell.zig (680loc, 5t — assembles per-cell vertex data [CellText fg glyph + CellBg] from the terminal Screen + the font SharedGrid`s rendered glyphs); cursor.zig (154, 4t); link.zig (322, 3t — link/hover highlight rects); State.zig (161, 2t — renderer State/mailbox); size.zig (458, 6t — renderer GridSize/ScreenSize/CellSize/padding — check if partly in render-types via the A1 hoist, port the renderer-specific rest). The CellText/CellBg/Uniforms vertex structs (in opengl/ or shaders/) that cell.zig fills -> port the struct definitions (repr(C) vertex data). These are HEADLESS (no GPU/Metal/GL — the GPU draw path is R-d/Phase 3; seam any GPU-backend calls). [:0]const u8->Vec<u8>. SOUNDNESS (memory): raw-ptr discipline. MIRI per MIRI_EXCEPTIONS.md ISOLATED (pure -> Miri-clean; any FFI -> ASan). Run gates FOREGROUND. Commit trailer "Co-Authored-By: Claude Opus 4.8 (1M context)". '
+async function robust(p, o) { let r = await agent(p, o); if (!r) r = await agent(p, { ...o, label: (o.label || 'a') + '-retry' }); return r }
+const STEP = { type: 'object', additionalProperties: true, required: ['ok', 'blockers'], properties: { ok: { type: 'boolean' }, tests_added: { type: 'integer' }, builds: { type: 'boolean' }, commit: { type: 'string' }, notes: { type: 'string' }, blockers: { type: 'array', items: { type: 'string' } } } }
+const VERIFY = { type: 'object', additionalProperties: true, required: ['verdict', 'blockers'], properties: { verdict: { type: 'string', enum: ['GREEN', 'RED'] }, tests_passing: { type: 'integer' }, count_ok: { type: 'boolean' }, miri_or_asan_clean: { type: 'boolean' }, g3b_missing: { type: 'integer' }, tautological_tests: { type: 'array', items: { type: 'string' } }, notes: { type: 'string' }, blockers: { type: 'array', items: { type: 'string' } } } }
+
+phase('Port')
+const port = await robust(RULES +
+  'TASK (renderer R-a). Add rustty-font-shaper to crates/rustty-renderer/Cargo.toml. Port FULLY (every test) into rustty-renderer: ' + GR + '/{cell.zig 5t, cursor.zig 4t, link.zig 3t, State.zig 2t, size.zig 6t} + the CellText/CellBg/Uniforms vertex structs cell.zig fills (find them in ' + GR + '/opengl/ or shaders/). Seam any GPU-backend (Metal/OpenGL) calls as deferred (R-d/Phase 3) — port the HEADLESS cell/cursor/link/state/size logic + the vertex-data assembly. Wire lib.rs. GATES FOREGROUND: cargo build -p rustty-renderer; cargo test -p rustty-renderer (~20 pass); cargo +nightly miri test -p rustty-renderer on 2-3 pure tests ISOLATED (0 UB/leak); clippy -p rustty-renderer --all-targets -D; fmt; check_comment_coverage.py scoped to the ported .zig missing=0; check_acyclic.sh. Commit "rustty: renderer R-a — cell/cursor/link/State/size + vertex structs (~20 tests, headless)". Return ok+tests_added+builds+commit+blockers.',
+  { schema: STEP, effort: 'high', label: 'port', phase: 'Port' })
+
+phase('Verify')
+const verify = await robust(RULES + 'Port: ' + JSON.stringify(port && port.commit) + '\n'
+  + 'TASK (independent verify — default RED). Add rustty-renderer R-a module mappings to ' + GATES + '/check_test_counts.py (GHR=src/renderer; cell 5, cursor 4, link 3, State 2, size 6). Confirm FOREGROUND: cargo build --workspace; `python3 ' + GATES + '/check_test_counts.py` => renderer R-a modules rust>=zig + WHOLE gate GREEN (count_ok); cargo test -p rustty-renderer (~20 pass) + no workspace regression (vt 2019, font-shaper 110); cargo +nightly miri test -p rustty-renderer ~3 ISOLATED (0 UB/leak) OR ASan if FFI (miri_or_asan_clean); clippy --all-targets -D + fmt --check + ' + GATES + '/check_acyclic.sh; G3b the ported .zig missing=0. Update NEXT_PHASE_PLAN (renderer R-a done; R-b/R-c shader/image + R-d GPU sequenced; apprt-api next on the embedded-milestone path). Spot-check 3 (a cell fg/bg vertex assembly, a cursor rect, a link highlight) faithful, not tautological. Verdict GREEN only if count_ok + build + tests + Miri/ASan + g3b=0 + clippy + fmt + acyclic AND no regression. Report verdict + tests_passing + count_ok + miri_or_asan_clean + g3b_missing + tautological_tests + blockers.',
+  { schema: VERIFY, effort: 'high', label: 'verify', phase: 'Verify' })
+return { port, verify }

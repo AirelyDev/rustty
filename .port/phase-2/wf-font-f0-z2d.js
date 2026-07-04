@@ -1,0 +1,41 @@
+export const meta = {
+  name: 'font-f0-z2d',
+  description: 'Heavy-tier F0-z2d (font-pure rendering, source-available, no C-lib): port the z2d subset ghostty uses (Context/Path/StaticPath/Surface/painter.fill+stroke/Transformation/rasterizer) from the cached z2d-0.10.0 source into a new rustty-z2d crate (pixel-faithful), then glyf_rasterize.zig (14t+1 PNG) + sprite/{canvas,Face,draw/*} (2t + PNG known-answer suite) into rustty-font. PNG known-answer tests decode references via the pure-Rust png crate (NOT wuffs). Pixel-exactness gates parity.',
+  phases: [
+    { title: 'Z2d', detail: 'port the z2d subset (Context/Path/Surface/painter) -> new rustty-z2d crate, pixel-faithful' },
+    { title: 'GlyfRasterize', detail: 'glyf_rasterize.zig (14t + PNG) -> rustty-font, using rustty-z2d' },
+    { title: 'Sprite', detail: 'sprite/{canvas,Face,draw/*} (2t + PNG known-answer suite) -> rustty-font' },
+    { title: 'Verify', detail: 'count-gate + tests + Miri + PNG pixel-exactness + G3b + font_no_vt_edge' },
+  ],
+}
+const G = '/Users/gael/projects/ghostty', R = '/Users/gael/projects/rustty'
+const GF = G + '/src/font'
+const Z2D = '/Users/gael/.cache/zig/p/z2d-0.10.0-j5P_Hu-6FgBsZNgwphIqh17jDnj8_yPtD8yzjO6PpHRQ'
+const GATES = R + '/.port/tools/gates'
+const RULES = 'OBEY: PARITY CONSTITUTION + ' + R + '/.port/PORT_RULES.md. R1 = PORT EVERY ghostty test{} (count is a CONTRACT); EVERY line/comment verbatim; assertion-for-assertion, INDEPENDENT expected values. R3 faithful (PIXEL-EXACT for the PNG known-answer tests). R4: rustty-font stays PURE & BELOW vt (memory apc-glyf-font-layering-d1). Reference READ-ONLY ' + GF + '/ + the z2d source at ' + Z2D + ' (READ-ONLY). Plan: memory heavy-tier-strategy (F0). '
+  + 'Z2D: ghostty`s glyf_rasterize.zig + sprite/canvas.zig use z2d (vancluever/z2d 0.10.0, MIT, PURE-Zig 2D vector graphics) APIs: Context/Context.init, Path/StaticPath/Path.Error, Surface/Surface.initPixel, Transformation, painter.{fill,stroke,FillOptions,StrokeOptions,FillError,StrokeError}. Port THIS SUBSET (+ its transitive internals: the path flattener + the polygon rasterizer/painter — the pixel-producing core) into a new crate crates/rustty-z2d (pure Rust, no deps). z2d is a DEP not ghostty code, so its OWN tests are not the parity contract — but its rasterization must be PIXEL-EXACT so the ghostty glyf/sprite PNG known-answer tests pass byte-for-byte. Add a Cargo workspace member + a couple of z2d-internal sanity tests. '
+  + 'PNG: the sprite/glyf known-answer tests compare rendered pixels to ghostty`s sprite/testdata/*.png (already in ' + R + '/crates/rustty-font/res/ or copy from ghostty res, READ-ONLY). Decode the reference PNGs in the TEST via the pure-Rust `png` crate (dev-dependency) — do NOT pull wuffs-sys (that is ghostty`s runtime emoji decode, separate). [:0]const u8->Vec<u8>. SOUNDNESS (memory): raw-ptr discipline. MIRI per MIRI_EXCEPTIONS.md ISOLATED. PROCESS LESSONS: port ALL tests (count enforces), scoped-G3b. Run gates FOREGROUND. Commit trailer "Co-Authored-By: Claude Opus 4.8 (1M context)". '
+async function robust(p, o) { let r = await agent(p, o); if (!r) r = await agent(p, { ...o, label: (o.label || 'a') + '-retry' }); return r }
+const STEP = { type: 'object', additionalProperties: true, required: ['ok', 'blockers'], properties: { ok: { type: 'boolean' }, tests_added: { type: 'integer' }, builds: { type: 'boolean' }, pixel_exact: { type: 'boolean' }, commit: { type: 'string' }, notes: { type: 'string' }, blockers: { type: 'array', items: { type: 'string' } } } }
+const VERIFY = { type: 'object', additionalProperties: true, required: ['verdict', 'blockers'], properties: { verdict: { type: 'string', enum: ['GREEN', 'RED'] }, tests_passing: { type: 'integer' }, count_ok: { type: 'boolean' }, pixel_exact: { type: 'boolean' }, font_no_vt_edge: { type: 'boolean' }, miri_subset_clean: { type: 'boolean' }, g3b_missing: { type: 'integer' }, tautological_tests: { type: 'array', items: { type: 'string' } }, notes: { type: 'string' }, blockers: { type: 'array', items: { type: 'string' } } } }
+
+phase('Z2d')
+const z2d = await robust(RULES +
+  'TASK (port the z2d subset). Read ' + Z2D + ' (the z2d 0.10.0 source). Port the SUBSET ghostty uses (Context/Path/StaticPath/Surface/Transformation/painter.fill+stroke + the path flattener + the polygon rasterizer = the pixel-producing core) into a NEW crate crates/rustty-z2d (add to the workspace Cargo.toml members; pure Rust, no deps). Faithful to z2d`s rasterization algorithm (pixel-exact is the goal). Add a few z2d-internal sanity tests (fill a rect, stroke a line, check pixel buffer) to anchor correctness. GATES FOREGROUND: cargo build -p rustty-z2d; cargo test -p rustty-z2d (the sanity tests pass); cargo +nightly miri test -p rustty-z2d 2 ISOLATED (0 UB/leak); clippy -p rustty-z2d --all-targets -D; fmt; check_acyclic.sh. Commit "rustty: port z2d subset (2D vector rasterizer) -> rustty-z2d". Return ok+tests_added+builds+pixel_exact+commit+blockers(if z2d scope is larger than expected).',
+  { schema: STEP, effort: 'high', label: 'z2d', phase: 'Z2d' })
+
+phase('GlyfRasterize')
+const glyf = await robust(RULES + 'z2d landed: ' + JSON.stringify(z2d && z2d.commit) + '\n'
+  + 'TASK (glyf rasterizer). Port ' + GF + '/glyf_rasterize.zig (825loc, 14t) + glyf_rasterize_png_test.zig (1t) into rustty-font (src/glyf_rasterize.rs) using rustty-z2d (the glyf outline -> z2d path -> rasterized bitmap). The PNG test compares to a reference PNG -> decode it via the `png` dev-dependency + assert pixel-exact. GATES FOREGROUND: cargo build -p rustty-font; cargo test -p rustty-font glyf_rasterize (15 pass incl the PNG known-answer); Miri-subset 2 ISOLATED; clippy --all-targets -D; fmt; G3b glyf_rasterize.zig missing=0. Commit "rustty: font glyf_rasterize + 15 tests (z2d, pixel-exact)". Return ok+tests_added+builds+pixel_exact+commit+blockers.',
+  { schema: STEP, effort: 'high', label: 'glyf', phase: 'GlyfRasterize' })
+
+phase('Sprite')
+const sprite = await robust(RULES + 'Prior: ' + JSON.stringify([z2d, glyf].map(s => s && s.commit)) + '\n'
+  + 'TASK (sprite glyphs). Port ' + GF + '/sprite/{canvas.zig, Face.zig, draw/*.zig} (the box-drawing/braille/powerline/legacy-computing sprite renderer; 2 inline tests + the sprite/testdata PNG known-answer suite) into rustty-font (src/sprite/) using rustty-z2d. PNG known-answer: decode the sprite/testdata/*.png references via the `png` dev-dependency + assert pixel-exact. (sprite/Face uses wuffs for runtime emoji PNG -> that runtime path can defer/feature-gate; the TEST comparison uses png crate.) GATES FOREGROUND: cargo build -p rustty-font; cargo test -p rustty-font sprite (the tests + PNG suite pass); Miri-subset 2 ISOLATED; clippy --all-targets -D; fmt; G3b sprite/*.zig missing=0. Commit "rustty: font sprite glyphs + PNG known-answer suite (z2d)". Return ok+tests_added+builds+pixel_exact+commit+blockers.',
+  { schema: STEP, effort: 'high', label: 'sprite', phase: 'Sprite' })
+
+phase('Verify')
+const verify = await robust(RULES + 'Phases: ' + JSON.stringify([z2d, glyf, sprite].map(s => s && s.commit)) + '\n'
+  + 'TASK (independent verify — default RED). Add font_glyf_rasterize + font_sprite mappings to ' + GATES + '/check_test_counts.py (GHF=src/font). Confirm FOREGROUND: cargo build --workspace; `python3 ' + GATES + '/check_test_counts.py` => font glyf_rasterize/sprite rust>=zig + WHOLE gate GREEN (count_ok); cargo test -p rustty-font + -p rustty-z2d (all pass incl the PNG known-answer suites — pixel_exact); cargo +nightly miri test ~4 ISOLATED (0 UB/leak); clippy --all-targets -D + fmt --check + ' + GATES + '/check_acyclic.sh + CONFIRM rustty-font STILL has NO rustty-vt edge (font_no_vt_edge, D1); G3b glyf_rasterize.zig + sprite/*.zig missing=0. Spot-check 3 tests (a glyf-outline raster, a box-drawing sprite, a PNG known-answer compare) faithful + pixel-exact, not tautological. Verdict GREEN only if count_ok + pixel_exact + font_no_vt_edge + build + tests + Miri + g3b=0 + clippy + fmt + acyclic green AND no regression. Report verdict + tests_passing + count_ok + pixel_exact + font_no_vt_edge + miri_subset_clean + g3b_missing + tautological_tests + blockers.',
+  { schema: VERIFY, effort: 'high', label: 'verify', phase: 'Verify' })
+return { z2d, glyf, sprite, verify }

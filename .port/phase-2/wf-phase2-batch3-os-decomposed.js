@@ -1,0 +1,54 @@
+export const meta = {
+  name: 'phase2-batch3-os-decomposed',
+  description: 'Phase 2 batch 3 (decomposed): port rustty-os (34 files, 58 tests) via prep (deps + gettext-sys + pty.c + lib.rs skeleton) then dependency-ordered sequential file-groups, then integrate (58 tests + G3b-0 + Miri/native/ASan) + adversarial review. Template for the large rustty-vt crate. Null-guarded.',
+  phases: [
+    { title: 'Prep', detail: 'deps + gettext-sys crate + pty.c vendor + lib.rs module skeleton (stub files)' },
+    { title: 'Groups', detail: 'sequential dependency-ordered file-group ports, each a compiling committed increment' },
+    { title: 'Integrate', detail: 'full crate: 58 tests + G3b + Miri/native/ASan + clippy/fmt + PORT STATUS done' },
+    { title: 'Review', detail: 'adversarial: tautologies, comments, FFI soundness, Miri-exclusion justification' },
+  ],
+}
+const G='/Users/gael/projects/ghostty', R='/Users/gael/projects/rustty'
+const INV=R+'/.port/phase-0/inventory', GATES=R+'/.port/tools/gates'
+const RULES='PARITY CONSTITUTION + '+R+'/.port/PORT_RULES.md. R1=100% fidelity: EVERY line ported; EVERY comment VERBATIM (retarget ghostty->rustty only, R2); EVERY test{} as #[test] ASSERTION-FOR-ASSERTION; NOTHING dropped/reworded/weakened/stubbed/tautologized. TAUTOLOGY TRAP (hit unicode): a test`s expected value MUST come from an independent source, never re-derived from the code under test. G3b (check_comment_coverage.py) deterministically catches dropped comments. R3: NO dependency on the ghostty tree; copy C sources; crates.io bindings to the SAME system libs (libc, objc2) are allowed (not pure-Rust substitution). MEMORY GATE right-tool: native `cargo test` runs ALL tests (correctness oracle); Miri runs pure-logic tests (mark real-OS-I/O/syscall tests `#[cfg_attr(miri, ignore)]` — native still runs them, so NOT weakening); ASan for C FFI (gettext localename.c). Reference READ-ONLY '+G+'/src (pinned 4749c4e). Contract: '+INV+'/tests-summary.json crate_map "os" (58), tests.jsonl, comments-census.json. Capture output to a var THEN grep (`| tail` masks exit codes). Never claim an unrun green. '
+
+async function robust(p,o){let r=await agent(p,o);if(!r)r=await agent(p,{...o,label:(o.label||'a')+'-retry'});return r}
+const PORTED={type:'object',additionalProperties:true,required:['ok','blockers'],properties:{ok:{type:'boolean'},files_done:{type:'array',items:{type:'string'}},tests_passing:{type:'integer'},notes:{type:'string'},blockers:{type:'array',items:{type:'string'}}}}
+const INTEG={type:'object',additionalProperties:true,required:['verdict','blockers'],properties:{verdict:{type:'string',enum:['GREEN','RED']},tests_ported:{type:'integer'},g3b_missing:{type:'integer'},miri_excluded:{type:'array',items:{type:'string'}},ci_pass:{type:'boolean'},commit:{type:'string'},blockers:{type:'array',items:{type:'string'}}}}
+const REVIEW={type:'object',additionalProperties:true,required:['verdict','blockers'],properties:{verdict:{type:'string',enum:['PARITY','NOT_PARITY']},tautological_or_neutered_tests:{type:'array',items:{type:'string'}},dropped_comments:{type:'array',items:{type:'string'}},unsound_unsafe_or_ub:{type:'array',items:{type:'string'}},miri_exclusions_justified:{type:'string'},notes:{type:'string'},blockers:{type:'array',items:{type:'string'}}}}
+
+phase('Prep')
+const prep = await robust(RULES +
+ 'TASK (prep rustty-os for decomposed porting). (1) Add to crates/rustty-os/Cargo.toml: `libc` (target_family="unix"), `objc2`+`objc2-foundation`+`objc2-core-foundation` (target_os="macos"). These already resolve (verified). (2) Create a new R3 -sys crate `crates-sys/gettext-sys` (follow crates-sys/README.md + the proven zlib-sys pattern): vendor the gnulib `localename.c` (gl_locale_name_canonicalize / _libintl_locale_name_canonicalize, macOS variant) + needed config.h/libgnuintl.h from ghostty/pkg/libintl as the build template (source also at the zig cache gettext-runtime/intl/gnulib-lib/localename.c); build via cc; bindgen the canonicalize symbol; a trivial link test. Add it as a rustty-os dep (cfg target_os=macos). (3) Vendor ghostty/src/pty.c into crates/rustty-os/ (cc-built) for pty.zig. (4) Create crates/rustty-os/src/lib.rs as the module skeleton: a `//! PORT STATUS: stub` header (keep stub until integrate) + the verbatim-retargeted module-level doc comment from os/main.zig, and `pub mod <name>;` for EVERY os/*.zig file (env, hostname, mach, shell, string_encoding, uri, path, file, tempdir(TempDir), xdg, homedir, desktop, kernel_info, passwd, macos, args, cf_release_thread, i18n, locale, resourcesdir, pty, flatpak, systemd, open, pipe, dbus, cgroup, mouse, windows, wasm, i18n_locales) + the wasm/ subdir as a module; create each src/<name>.rs as a MINIMAL compiling stub (empty or just a doc line) so `cargo build -p rustty-os` is green. Use platform cfg gates faithfully. (5) `cargo build -p rustty-os` GREEN. Commit "rustty: os prep — deps + gettext-sys + pty.c + module skeleton" + Co-Authored-By: Claude Opus 4.8 (1M context). Return ok + blockers.',
+ {schema:PORTED,effort:'high',label:'prep',phase:'Prep'})
+
+phase('Groups')
+const GROUPS=[
+ {id:'A-pure', desc:'Pure-logic os files (no real I/O, Miri-clean): env.zig, hostname.zig, mach.zig, shell.zig, string_encoding.zig, uri.zig. NOTE uri.zig wraps Zig std.Uri — faithfully reimplement std.Uri.parse/parseAfterScheme + Component semantics in-crate (the `url` crate has DIFFERENT semantics, do NOT use it); the 3 uri tests` expected slices come from std.Uri`s exact RFC-3986 behavior — port that behavior so the tests are real (independent oracle = the reimplemented parser following the documented std.Uri algorithm, cross-checked against the reference test expectations).'},
+ {id:'B-fs', desc:'Filesystem/env + libc os files: path.zig, file.zig, TempDir.zig, xdg.zig, homedir.zig, desktop.zig, kernel_info.zig, passwd.zig (passwd uses libc getpwuid_r). Mark real-I/O/syscall tests #[cfg_attr(miri, ignore)] (native still runs them).'},
+ {id:'C-platform', desc:'Platform FFI + i18n os files: macos.zig (objc2 NSFileManager etc.), args.zig (objc2 NSProcessInfo), cf_release_thread.zig, i18n.zig (uses gettext-sys canonicalize for non-zh; pure fixZhLocale for zh), locale.zig, resourcesdir.zig. FFI tests use ASan not Miri (mark #[cfg_attr(miri, ignore)] + note ffi).'},
+ {id:'D-rest', desc:'pty.zig (+ vendored pty.c wiring, 1 test) AND all remaining no-test files for G3b comment coverage: flatpak.zig, systemd.zig, open.zig, pipe.zig, dbus.zig, cgroup.zig, mouse.zig, windows.zig, wasm.zig + wasm/ subdir, i18n_locales.zig, and main.zig (the aggregator — port LAST, re-exports). Preserve EVERY comment verbatim in these large files (flatpak ~520 lines).'},
+]
+const groupResults=[]
+for(let i=0;i<GROUPS.length;i++){
+ const g=GROUPS[i]
+ const r= await robust(RULES +
+  'TASK: port the **'+g.id+'** file-group of rustty-os into crates/rustty-os/src/ (the lib.rs skeleton + stubs already exist from prep; FILL your files, do NOT edit lib.rs mod-decls or other groups` files). FILES: '+g.desc+'\n'+
+  'For EACH file: port ALL code to idiomatic parity-preserving Rust, preserve EVERY comment verbatim (retarget only), port EVERY test{} as #[test] assertion-for-assertion with INDEPENDENT expected values (no tautologies). After porting your files, verify: `cargo build -p rustty-os` GREEN and `cargo test -p rustty-os` passes (the tests ported so far, incl. yours); `python3 '+GATES+'/check_comment_coverage.py --crate rustty-os` — your files` comments must be covered (missing count should drop as you add files; do not introduce drops in your files); `cargo clippy -p rustty-os --all-targets -- -D warnings` for your code (parity #[allow] + // PARITY note only). Then commit "rustty: os group '+g.id+' (phase 2)" + Co-Authored-By: Claude Opus 4.8 (1M context). Keep lib.rs PORT STATUS: stub (integrate flips it). Return ok + files_done + tests_passing + blockers. If a file genuinely cannot be ported to verified parity (e.g. needs an unavailable oracle), STOP with a precise blocker — do NOT stub/tautologize/drop comments.',
+  {schema:PORTED,effort:'high',label:'group:'+g.id,phase:'Groups'})
+ groupResults.push({group:g.id,r})
+ if(r && r.ok===false && r.blockers && r.blockers.length) break  // surface blocker, stop chaining
+}
+
+phase('Integrate')
+const integ = await robust(RULES +
+ 'TASK (integrate rustty-os to verified parity). All file-groups have ported their files. Now: (1) `cargo build -p rustty-os` GREEN; fix any cross-file integration issues faithfully. (2) Set crates/rustty-os/src/lib.rs `//! PORT STATUS: done`. (3) Run + LOOP to green (real exit codes): `cargo test -p rustty-os` (ALL 58 pass natively); `python3 '+GATES+'/check_tests_ported.py --crate rustty-os --strict` (==58, names match); `check_assertions.py --crate rustty-os --strict`; `check_comments_fidelity.py --crate rustty-os --strict`; `check_comment_coverage.py --crate rustty-os` (G3b missing=0 — restore any dropped/reworded reference comment across ALL files); `cargo clippy -p rustty-os --all-targets -- -D warnings`; `cargo fmt -p rustty-os -- --check`; `check_acyclic.sh`; `check_leaks.sh --crate rustty-os` (Miri on non-#[cfg_attr(miri,ignore)] tests: 0 UB/leaks); ASan for the gettext FFI test. (4) Run full '+R+'/.port/tools/ci.sh -> CI RESULT: PASS (incl. G4-uni still 0 diffs). (5) Commit "rustty: complete rustty-os (phase 2, batch 3) — 58 tests, G3b green" + trailer. (6) Write '+R+'/.port/phase-2/batch3-REPORT.md + batch3-report.json. Return verdict GREEN only if all of the above truly green; else RED with precise blockers (NEVER weaken). Report miri_excluded list + tests_ported + g3b_missing.',
+ {schema:INTEG,effort:'high',label:'integrate-os',phase:'Integrate'})
+
+phase('Review')
+const review = await robust(RULES +
+ 'TASK (adversarial parity review of rustty-os — default NOT_PARITY when uncertain). Integrate claims: '+JSON.stringify(integ)+'\n'+
+ 'Independently vs '+G+'/src/os + '+G+'/src/pty.c: (1) EVERY of the 58 test{} ported, NONE tautological/neutered/stubbed — SPECIFICALLY re-examine uri (3) [is the expected from an independent std.Uri-faithful parser, not self?], passwd/homedir/xdg [real values, not echoing input?], i18n canonicalizeLocale [gettext FFI result, not hardcoded-from-table?]. (2) run `check_comment_coverage.py --crate rustty-os` yourself: missing=0; vet REVIEW-band. (3) unsound unsafe/UB in libc/objc2/pty FFI + the gettext cc binding. (4) behavior/layout/platform-cfg divergence. (5) Miri exclusions: each #[cfg_attr(miri,ignore)] test genuinely does real I/O (not a pure-logic test hidden from Miri)? (6) RE-RUN all gates with captured exit codes. Any tautology/drop/weakening/unsound-FFI/unjustified-Miri-skip/non-green => NOT_PARITY with specifics.',
+ {schema:REVIEW,effort:'high',label:'review-os',phase:'Review'})
+
+return {prep, groupResults, integ, review}
