@@ -8039,6 +8039,12 @@ impl Config {
             ($f:ident) => {
                 FormatEntry::format_entry(&self.$f, key, writer)
             };
+            // 2-arg arm for a Chunk-3a-hoisted type whose `FormatEntry` impl would
+            // orphan (foreign cfg-fmt trait on a foreign render-types type): dispatch to
+            // the config-local free fn instead.
+            ($f:ident, $fmt_fn:expr) => {
+                $fmt_fn(self.$f, key, writer)
+            };
         }
         // `.optional` arm for a child whose type prints via `{}` (`.bool`/`.int`):
         // `Some` -> `format_entry_display`; `None` -> `name = \n`.
@@ -8161,7 +8167,7 @@ impl Config {
             b"font-thicken-strength" => f_display!(font_thicken_strength),
 
             // @"font-shaping-break": FontShapingBreak (packed struct)
-            b"font-shaping-break" => f_entry!(font_shaping_break),
+            b"font-shaping-break" => f_entry!(font_shaping_break, font_shaping_break_format_entry),
 
             // @"alpha-blending": AlphaBlending (bare enum, external)
             b"alpha-blending" => f_enum!(alpha_blending, alpha_blending_to_name),
@@ -8203,10 +8209,12 @@ impl Config {
             b"background-image" => f_opt_entry!(background_image),
             // @"background-image-opacity": f32
             b"background-image-opacity" => f_float!(background_image_opacity),
-            // @"background-image-position": BackgroundImagePosition (bare enum)
-            b"background-image-position" => f_enum!(background_image_position),
-            // @"background-image-fit": BackgroundImageFit (bare enum)
-            b"background-image-fit" => f_enum!(background_image_fit),
+            // @"background-image-position": BackgroundImagePosition (bare enum, external)
+            b"background-image-position" => {
+                f_enum!(background_image_position, background_image_position_to_name)
+            }
+            // @"background-image-fit": BackgroundImageFit (bare enum, external)
+            b"background-image-fit" => f_enum!(background_image_fit, background_image_fit_to_name),
             // @"background-image-repeat": bool
             b"background-image-repeat" => f_display!(background_image_repeat),
 
@@ -8259,7 +8267,7 @@ impl Config {
             // @"background-opacity-cells": bool
             b"background-opacity-cells" => f_display!(background_opacity_cells),
             // @"background-blur": BackgroundBlur (union, FormatEntry)
-            b"background-blur" => f_entry!(background_blur),
+            b"background-blur" => f_entry!(background_blur, background_blur_format_entry),
 
             // @"unfocused-split-opacity": f64
             b"unfocused-split-opacity" => f_float!(unfocused_split_opacity),
@@ -8335,8 +8343,8 @@ impl Config {
             b"window-padding-balance" => {
                 f_enum!(window_padding_balance, window_padding_balance_to_name)
             }
-            // @"window-padding-color": WindowPaddingColor (bare enum)
-            b"window-padding-color" => f_enum!(window_padding_color),
+            // @"window-padding-color": WindowPaddingColor (bare enum, external)
+            b"window-padding-color" => f_enum!(window_padding_color, window_padding_color_to_name),
             // @"window-vsync": bool
             b"window-vsync" => f_display!(window_vsync),
             // @"window-inherit-working-directory": bool
@@ -8355,8 +8363,8 @@ impl Config {
             b"window-subtitle" => f_enum!(window_subtitle),
             // @"window-theme": WindowTheme (bare enum)
             b"window-theme" => f_enum!(window_theme),
-            // @"window-colorspace": WindowColorspace (bare enum)
-            b"window-colorspace" => f_enum!(window_colorspace),
+            // @"window-colorspace": WindowColorspace (bare enum, external)
+            b"window-colorspace" => f_enum!(window_colorspace, window_colorspace_to_name),
             // @"window-height": u32
             b"window-height" => f_display!(window_height),
             // @"window-width": u32
@@ -8584,7 +8592,9 @@ impl Config {
 // returns `!deepEqual(field.type, old, new)`. That per-`Key` `deepEqual` dispatch
 // is the EQUAL/DIFF (CHANGED) pass: it requires `DeepEqual` on every config field
 // type, including the foreign leaf types (`MetricModifier`/`KeyRemapSet`/
-// `CursorStyle`/`WindowPaddingBalance`/`AlphaBlending`/`OptionAsAlt`/`ReleaseChannel`),
+// `CursorStyle`/`WindowPaddingBalance`/`AlphaBlending`/`OptionAsAlt`/`ReleaseChannel`,
+// and the Chunk-3a-hoisted `WindowPaddingColor`/`WindowColorspace`/
+// `BackgroundImagePosition`/`BackgroundImageFit`/`FontShapingBreak`/`BackgroundBlur`),
 // whose impls live in their own crates per the orphan rule. The pass has landed:
 // `Config::changed` is fully implemented above (the per-`Key` `c!` match), and
 // both the `changed = false` and `changed = true` `FileFormatter` modes (and the
@@ -8660,6 +8670,62 @@ fn alpha_blending_string_to_enum(input: &[u8]) -> Option<AlphaBlending> {
     }
 }
 
+// The six Chunk-3a-hoisted config value-types are external (rustty-render-types), so —
+// exactly like AlphaBlending above — their `bare_enum_names!` `string_to_enum` becomes a
+// config-local free fn (the orphan rule forbids the macro's inherent impl on a foreign
+// type). Literals identical to the former `bare_enum_names!` invocations.
+
+/// `std.meta.stringToEnum(config.WindowPaddingColor, input)`.
+// pub const WindowPaddingColor = enum { background, extend, "extend-always" };
+fn window_padding_color_string_to_enum(input: &[u8]) -> Option<WindowPaddingColor> {
+    match input {
+        b"background" => Some(WindowPaddingColor::Background),
+        b"extend" => Some(WindowPaddingColor::Extend),
+        b"extend-always" => Some(WindowPaddingColor::ExtendAlways),
+        _ => None,
+    }
+}
+
+/// `std.meta.stringToEnum(config.WindowColorspace, input)`.
+// pub const WindowColorspace = enum { srgb, "display-p3" };
+fn window_colorspace_string_to_enum(input: &[u8]) -> Option<WindowColorspace> {
+    match input {
+        b"srgb" => Some(WindowColorspace::Srgb),
+        b"display-p3" => Some(WindowColorspace::DisplayP3),
+        _ => None,
+    }
+}
+
+/// `std.meta.stringToEnum(config.BackgroundImagePosition, input)`.
+// pub const BackgroundImagePosition = enum { "top-left", "top-center", "top-right", "center-left", "center-center", "center-right", "bottom-left", "bottom-center", "bottom-right", center };
+fn background_image_position_string_to_enum(input: &[u8]) -> Option<BackgroundImagePosition> {
+    match input {
+        b"top-left" => Some(BackgroundImagePosition::TopLeft),
+        b"top-center" => Some(BackgroundImagePosition::TopCenter),
+        b"top-right" => Some(BackgroundImagePosition::TopRight),
+        b"center-left" => Some(BackgroundImagePosition::CenterLeft),
+        b"center-center" => Some(BackgroundImagePosition::CenterCenter),
+        b"center-right" => Some(BackgroundImagePosition::CenterRight),
+        b"bottom-left" => Some(BackgroundImagePosition::BottomLeft),
+        b"bottom-center" => Some(BackgroundImagePosition::BottomCenter),
+        b"bottom-right" => Some(BackgroundImagePosition::BottomRight),
+        b"center" => Some(BackgroundImagePosition::Center),
+        _ => None,
+    }
+}
+
+/// `std.meta.stringToEnum(config.BackgroundImageFit, input)`.
+// pub const BackgroundImageFit = enum { contain, cover, stretch, none };
+fn background_image_fit_string_to_enum(input: &[u8]) -> Option<BackgroundImageFit> {
+    match input {
+        b"contain" => Some(BackgroundImageFit::Contain),
+        b"cover" => Some(BackgroundImageFit::Cover),
+        b"stretch" => Some(BackgroundImageFit::Stretch),
+        b"none" => Some(BackgroundImageFit::None),
+        _ => None,
+    }
+}
+
 // ===========================================================================
 // `@tagName` maps for the EXTERNAL enums used by Config fields (FORMAT side).
 //
@@ -8724,6 +8790,56 @@ fn alpha_blending_to_name(v: AlphaBlending) -> &'static [u8] {
     }
 }
 
+// The six Chunk-3a-hoisted config value-types are external; their `bare_enum_names!`
+// `to_name` (== `@tagName`) becomes a config-local free fn here (orphan rule).
+
+/// `@tagName(config.WindowPaddingColor)`.
+// pub const WindowPaddingColor = enum { background, extend, "extend-always" };
+fn window_padding_color_to_name(v: WindowPaddingColor) -> &'static [u8] {
+    match v {
+        WindowPaddingColor::Background => b"background",
+        WindowPaddingColor::Extend => b"extend",
+        WindowPaddingColor::ExtendAlways => b"extend-always",
+    }
+}
+
+/// `@tagName(config.WindowColorspace)`.
+// pub const WindowColorspace = enum { srgb, "display-p3" };
+fn window_colorspace_to_name(v: WindowColorspace) -> &'static [u8] {
+    match v {
+        WindowColorspace::Srgb => b"srgb",
+        WindowColorspace::DisplayP3 => b"display-p3",
+    }
+}
+
+/// `@tagName(config.BackgroundImagePosition)`.
+// pub const BackgroundImagePosition = enum { "top-left", "top-center", "top-right", "center-left", "center-center", "center-right", "bottom-left", "bottom-center", "bottom-right", center };
+fn background_image_position_to_name(v: BackgroundImagePosition) -> &'static [u8] {
+    match v {
+        BackgroundImagePosition::TopLeft => b"top-left",
+        BackgroundImagePosition::TopCenter => b"top-center",
+        BackgroundImagePosition::TopRight => b"top-right",
+        BackgroundImagePosition::CenterLeft => b"center-left",
+        BackgroundImagePosition::CenterCenter => b"center-center",
+        BackgroundImagePosition::CenterRight => b"center-right",
+        BackgroundImagePosition::BottomLeft => b"bottom-left",
+        BackgroundImagePosition::BottomCenter => b"bottom-center",
+        BackgroundImagePosition::BottomRight => b"bottom-right",
+        BackgroundImagePosition::Center => b"center",
+    }
+}
+
+/// `@tagName(config.BackgroundImageFit)`.
+// pub const BackgroundImageFit = enum { contain, cover, stretch, none };
+fn background_image_fit_to_name(v: BackgroundImageFit) -> &'static [u8] {
+    match v {
+        BackgroundImageFit::Contain => b"contain",
+        BackgroundImageFit::Cover => b"cover",
+        BackgroundImageFit::Stretch => b"stretch",
+        BackgroundImageFit::None => b"none",
+    }
+}
+
 // ===========================================================================
 // Foreign-enum `@tagName` NUL-terminated name maps (the C-API `c_get` `.@"enum"`
 // arm). Symmetric with the `*_to_name` maps above, but each literal is
@@ -8782,6 +8898,51 @@ pub(crate) fn alpha_blending_to_name_z(v: AlphaBlending) -> *const std::os::raw:
         AlphaBlending::Native => c"native".as_ptr(),
         AlphaBlending::Linear => c"linear".as_ptr(),
         AlphaBlending::LinearCorrected => c"linear-corrected".as_ptr(),
+    }
+}
+
+/// `@tagName(config.WindowPaddingColor)`, NUL-terminated for the C API.
+pub(crate) fn window_padding_color_to_name_z(v: WindowPaddingColor) -> *const std::os::raw::c_char {
+    match v {
+        WindowPaddingColor::Background => c"background".as_ptr(),
+        WindowPaddingColor::Extend => c"extend".as_ptr(),
+        WindowPaddingColor::ExtendAlways => c"extend-always".as_ptr(),
+    }
+}
+
+/// `@tagName(config.WindowColorspace)`, NUL-terminated for the C API.
+pub(crate) fn window_colorspace_to_name_z(v: WindowColorspace) -> *const std::os::raw::c_char {
+    match v {
+        WindowColorspace::Srgb => c"srgb".as_ptr(),
+        WindowColorspace::DisplayP3 => c"display-p3".as_ptr(),
+    }
+}
+
+/// `@tagName(config.BackgroundImagePosition)`, NUL-terminated for the C API.
+pub(crate) fn background_image_position_to_name_z(
+    v: BackgroundImagePosition,
+) -> *const std::os::raw::c_char {
+    match v {
+        BackgroundImagePosition::TopLeft => c"top-left".as_ptr(),
+        BackgroundImagePosition::TopCenter => c"top-center".as_ptr(),
+        BackgroundImagePosition::TopRight => c"top-right".as_ptr(),
+        BackgroundImagePosition::CenterLeft => c"center-left".as_ptr(),
+        BackgroundImagePosition::CenterCenter => c"center-center".as_ptr(),
+        BackgroundImagePosition::CenterRight => c"center-right".as_ptr(),
+        BackgroundImagePosition::BottomLeft => c"bottom-left".as_ptr(),
+        BackgroundImagePosition::BottomCenter => c"bottom-center".as_ptr(),
+        BackgroundImagePosition::BottomRight => c"bottom-right".as_ptr(),
+        BackgroundImagePosition::Center => c"center".as_ptr(),
+    }
+}
+
+/// `@tagName(config.BackgroundImageFit)`, NUL-terminated for the C API.
+pub(crate) fn background_image_fit_to_name_z(v: BackgroundImageFit) -> *const std::os::raw::c_char {
+    match v {
+        BackgroundImageFit::Contain => c"contain".as_ptr(),
+        BackgroundImageFit::Cover => c"cover".as_ptr(),
+        BackgroundImageFit::Stretch => c"stretch".as_ptr(),
+        BackgroundImageFit::None => c"none".as_ptr(),
     }
 }
 
@@ -9090,6 +9251,16 @@ impl Target for Config {
                 self.$f.parse_cli(value)?;
                 Ok(())
             }};
+            // fn-form arm for a Chunk-3a-hoisted type whose `parse_cli` is now a
+            // config-local free fn (the inherent method would orphan on the foreign
+            // render-types type): `$fn(&mut self.$f, value)`.
+            ($f:ident, $parse_fn:expr) => {{
+                if is_empty {
+                    reset_default!($f);
+                }
+                $parse_fn(&mut self.$f, value)?;
+                Ok(())
+            }};
         }
         // parseCLI self-form whose `parse_cli` returns a type-specific error
         // (not the args error union); `$map` converts it, mirroring the
@@ -9158,8 +9329,14 @@ impl Target for Config {
                 if is_empty {
                     reset_default!(font_shaping_break);
                 }
-                self.font_shaping_break =
-                    rustty_args::args::parse_packed_struct(value.ok_or(Error::ValueRequired)?)?;
+                // FontShapingBreak is hoisted to rustty-render-types (Chunk 3a), so its
+                // `PackedStruct` impl (rustty-args trait) is carried by the config-local
+                // `FontShapingBreakParse` newtype; `parse_packed_struct` is reused
+                // verbatim and `.0` unwraps to the hoisted value.
+                self.font_shaping_break = rustty_args::args::parse_packed_struct::<
+                    crate::value_types::FontShapingBreakParse,
+                >(value.ok_or(Error::ValueRequired)?)?
+                .0;
                 Ok(())
             }
 
@@ -9260,16 +9437,16 @@ impl Target for Config {
             }
             // @"background-image-opacity": f32
             b"background-image-opacity" => field_float!(background_image_opacity, f32),
-            // @"background-image-position": BackgroundImagePosition (bare enum)
+            // @"background-image-position": BackgroundImagePosition (bare enum, external)
             b"background-image-position" => {
                 field_enum!(
                     background_image_position,
-                    BackgroundImagePosition::string_to_enum
+                    background_image_position_string_to_enum
                 )
             }
-            // @"background-image-fit": BackgroundImageFit (bare enum)
+            // @"background-image-fit": BackgroundImageFit (bare enum, external)
             b"background-image-fit" => {
-                field_enum!(background_image_fit, BackgroundImageFit::string_to_enum)
+                field_enum!(background_image_fit, background_image_fit_string_to_enum)
             }
             // @"background-image-repeat": bool
             b"background-image-repeat" => field_bool!(background_image_repeat),
@@ -9350,7 +9527,7 @@ impl Target for Config {
             // @"background-opacity-cells": bool
             b"background-opacity-cells" => field_bool!(background_opacity_cells),
             // @"background-blur": BackgroundBlur (parseCLI self)
-            b"background-blur" => field_parsecli_self!(background_blur),
+            b"background-blur" => field_parsecli_self!(background_blur, background_blur_parse_cli),
 
             // @"unfocused-split-opacity": f64
             b"unfocused-split-opacity" => field_float!(unfocused_split_opacity, f64),
@@ -9513,9 +9690,9 @@ impl Target for Config {
                     window_padding_balance_string_to_enum
                 )
             }
-            // @"window-padding-color": WindowPaddingColor (bare enum)
+            // @"window-padding-color": WindowPaddingColor (bare enum, external)
             b"window-padding-color" => {
-                field_enum!(window_padding_color, WindowPaddingColor::string_to_enum)
+                field_enum!(window_padding_color, window_padding_color_string_to_enum)
             }
             // @"window-vsync": bool
             b"window-vsync" => field_bool!(window_vsync),
@@ -9535,9 +9712,9 @@ impl Target for Config {
             b"window-subtitle" => field_enum!(window_subtitle, WindowSubtitle::string_to_enum),
             // @"window-theme": WindowTheme (bare enum)
             b"window-theme" => field_enum!(window_theme, WindowTheme::string_to_enum),
-            // @"window-colorspace": WindowColorspace (bare enum)
+            // @"window-colorspace": WindowColorspace (bare enum, external)
             b"window-colorspace" => {
-                field_enum!(window_colorspace, WindowColorspace::string_to_enum)
+                field_enum!(window_colorspace, window_colorspace_string_to_enum)
             }
             // @"window-height": u32
             b"window-height" => field_int!(window_height, u32),

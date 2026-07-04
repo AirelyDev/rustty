@@ -25,8 +25,10 @@
 //!
 //! SCOPE: every config-OWNED value type. Foreign leaf types used as config
 //! fields (`MetricModifier`/`KeyRemapSet`/`CursorStyle`/`WindowPaddingBalance`/
-//! `AlphaBlending`/`OptionAsAlt`/`ReleaseChannel`) are defined in other crates;
-//! the orphan rule requires their `DeepEqual` impls to live in those crates and
+//! `AlphaBlending`/`OptionAsAlt`/`ReleaseChannel`, and the Chunk-3a-hoisted
+//! `WindowPaddingColor`/`WindowColorspace`/`BackgroundImagePosition`/
+//! `BackgroundImageFit`/`FontShapingBreak`/`BackgroundBlur`) are defined in other
+//! crates; the orphan rule requires their `DeepEqual` impls to live in those crates and
 //! there when the CHANGED pass that needs them lands (see notes/DEFERRALS).
 
 use rustty_datastruct::comparison::DeepEqual;
@@ -62,7 +64,6 @@ deep_equal_via_eq!(
     CustomShaderAnimation,
     NonNativeFullscreen,
     Fullscreen,
-    WindowPaddingColor,
     WindowSubtitle,
     LinkPreviews,
     CopyOnSelect,
@@ -71,7 +72,6 @@ deep_equal_via_eq!(
     ShellIntegration,
     OSCColorReportFormat,
     WindowTheme,
-    WindowColorspace,
     MacWindowButtons,
     MacTitlebarStyle,
     MacTitlebarProxyIcon,
@@ -97,8 +97,6 @@ deep_equal_via_eq!(
     QuickTerminalSpaceBehavior,
     QuickTerminalKeyboardInteractivity,
     GraphemeWidthMethod,
-    BackgroundImagePosition,
-    BackgroundImageFit,
     LinuxCgroup,
     AsyncBackend,
     AutoUpdate,
@@ -120,7 +118,6 @@ deep_equal_via_eq!(
 
 deep_equal_via_eq!(
     FontSyntheticStyle,
-    FontShapingBreak,
     ShellIntegrationFeatures,
     SplitPreserveZoom,
     AppNotifications,
@@ -274,18 +271,11 @@ impl DeepEqual for FontStyle {
 // background-blur: BackgroundBlur
 // (union(enum) { false, true, macos-glass-regular, macos-glass-clear,
 //   radius: u8 }). No `equal` decl.
-impl DeepEqual for BackgroundBlur {
-    fn deep_equal(&self, other: &Self) -> bool {
-        match (self, other) {
-            (BackgroundBlur::False, BackgroundBlur::False) => true,
-            (BackgroundBlur::True, BackgroundBlur::True) => true,
-            (BackgroundBlur::MacosGlassRegular, BackgroundBlur::MacosGlassRegular) => true,
-            (BackgroundBlur::MacosGlassClear, BackgroundBlur::MacosGlassClear) => true,
-            (BackgroundBlur::Radius(a), BackgroundBlur::Radius(b)) => a.deep_equal(b),
-            _ => false,
-        }
-    }
-}
+//
+// PORT NOTE (Chunk 3a): `BackgroundBlur` is hoisted to rustty-render-types (the
+// config->renderer cycle break); the orphan rule requires its `DeepEqual` impl (a
+// datastruct trait on the now-foreign type) to live in that crate, so the `.@"union"`-
+// arm impl moved there verbatim.
 
 // quick-terminal-size: QuickTerminalSize
 // (struct { primary: ?Size, secondary: ?Size }; no `equal` decl -> struct arm,

@@ -92,6 +92,137 @@ impl rustty_datastruct::comparison::DeepEqual for AlphaBlending {
     }
 }
 
+// ===========================================================================
+// Chunk 3a Part A — `DerivedConfig` config-type hoists (break config->renderer).
+//
+// PORT NOTE (A1 hoist, GPU_RD_CHUNK3A_DESIGN.md Part A): these six value-types
+// are DEFINED in ghostty `config/Config.zig` but named as `renderer/generic.zig`
+// `DerivedConfig` field types. Because `rustty-config` depends on `rustty-renderer`
+// (the Message::ChangeConfig back-edge), the renderer cannot name a config type; so
+// each plain value-type + its `DeepEqual` (+ `FontShapingBreak`'s `Default`) is
+// hoisted to this leaf (depended on by BOTH config and renderer) — the same hoist as
+// `PaddingBalance`/`Size`/`Health`/`AlphaBlending`. `rustty-config` re-exports each so
+// `value_types::X`, the field/TypeId/defaults/Key use-sites keep resolving. Every
+// config-facing PARSE/FORMAT/C-API projection stays a CONFIG concern (config-local
+// free fns), so NO new crate edge is introduced (check_acyclic stays GREEN):
+// `TerminalColor`/`Path`/`RepeatablePath` are NOT here — they would drag
+// `rustty-vt`/`rustty-args`/`rustty-cfg-fmt` and cycle (see the design's Part B).
+// ===========================================================================
+
+// pub const WindowPaddingColor = enum { background, extend, "extend-always" };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowPaddingColor {
+    Background,
+    Extend,
+    ExtendAlways,
+}
+
+impl rustty_datastruct::comparison::DeepEqual for WindowPaddingColor {
+    fn deep_equal(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+// pub const WindowColorspace = enum { srgb, "display-p3" };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowColorspace {
+    Srgb,
+    DisplayP3,
+}
+
+impl rustty_datastruct::comparison::DeepEqual for WindowColorspace {
+    fn deep_equal(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+// pub const BackgroundImagePosition = enum { "top-left", "top-center", "top-right", "center-left", "center-center", "center-right", "bottom-left", "bottom-center", "bottom-right", center };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundImagePosition {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    CenterLeft,
+    CenterCenter,
+    CenterRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+    Center,
+}
+
+impl rustty_datastruct::comparison::DeepEqual for BackgroundImagePosition {
+    fn deep_equal(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+// pub const BackgroundImageFit = enum { contain, cover, stretch, none };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundImageFit {
+    Contain,
+    Cover,
+    Stretch,
+    None,
+}
+
+impl rustty_datastruct::comparison::DeepEqual for BackgroundImageFit {
+    fn deep_equal(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// See "font-shaping-break" for documentation
+// pub const FontShapingBreak = packed struct { cursor: bool = true };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontShapingBreak {
+    pub cursor: bool,
+}
+
+impl Default for FontShapingBreak {
+    fn default() -> Self {
+        Self { cursor: true }
+    }
+}
+
+// `FontShapingBreak` is a packed-flag struct field; the reference's `Config.changed`
+// resolves its `deepEqual` via the `.@"struct"` arm (recurse field-by-field). All
+// fields are `bool`, so field-by-field `deep_equal` collapses to `==`.
+impl rustty_datastruct::comparison::DeepEqual for FontShapingBreak {
+    fn deep_equal(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+// pub const BackgroundBlur = union(enum) { false, true, "macos-glass-regular", "macos-glass-clear", radius: u8 };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundBlur {
+    False,
+    True,
+    MacosGlassRegular,
+    MacosGlassClear,
+    Radius(u8),
+}
+
+// background-blur: BackgroundBlur
+// (union(enum) { false, true, macos-glass-regular, macos-glass-clear,
+//   radius: u8 }). No `equal` decl -> the reference's `.@"union"` arm: compare the
+// active tag, then `deepEqual` the active payload.
+impl rustty_datastruct::comparison::DeepEqual for BackgroundBlur {
+    fn deep_equal(&self, other: &Self) -> bool {
+        match (self, other) {
+            (BackgroundBlur::False, BackgroundBlur::False) => true,
+            (BackgroundBlur::True, BackgroundBlur::True) => true,
+            (BackgroundBlur::MacosGlassRegular, BackgroundBlur::MacosGlassRegular) => true,
+            (BackgroundBlur::MacosGlassClear, BackgroundBlur::MacosGlassClear) => true,
+            (BackgroundBlur::Radius(a), BackgroundBlur::Radius(b)) => {
+                rustty_datastruct::comparison::DeepEqual::deep_equal(a, b)
+            }
+            _ => false,
+        }
+    }
+}
+
 /// All relevant sizes for a rendered terminal. These are all the sizes that
 /// any functionality should need to know about the terminal in order to
 /// convert between any coordinate systems.

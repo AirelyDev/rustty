@@ -263,12 +263,16 @@ pub enum Fullscreen {
 }
 
 // pub const WindowPaddingColor = enum { background, extend, "extend-always" };
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowPaddingColor {
-    Background,
-    Extend,
-    ExtendAlways,
-}
+//
+// PORT NOTE (Chunk 3a A1 hoist — GPU_RD_CHUNK3A_DESIGN.md): named as a
+// `renderer/generic.zig` `DerivedConfig` field type (`padding_color`); because
+// rustty-config depends on rustty-renderer, the renderer cannot name a config type,
+// so the enum + `DeepEqual` are hoisted to the rustty-render-types leaf (the
+// `AlphaBlending` precedent). Re-exported here so `value_types::WindowPaddingColor`
+// and every field/defaults/Key use-site keep resolving. The config-facing PARSE/
+// FORMAT stays here as free fns in `config_struct.rs`
+// (`window_padding_color_{string_to_enum,to_name,to_name_z}`).
+pub use rustty_render_types::WindowPaddingColor;
 
 // pub const WindowSubtitle = enum { false, "working-directory" };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -357,11 +361,13 @@ pub enum WindowTheme {
 }
 
 // pub const WindowColorspace = enum { srgb, "display-p3" };
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowColorspace {
-    Srgb,
-    DisplayP3,
-}
+//
+// PORT NOTE (Chunk 3a A1 hoist — GPU_RD_CHUNK3A_DESIGN.md): named as a
+// `renderer/generic.zig` `DerivedConfig` field type (`colorspace`); hoisted to the
+// rustty-render-types leaf (the `AlphaBlending` precedent) to break the
+// config->renderer cycle. Re-exported here; the config-facing PARSE/FORMAT stays as
+// free fns in `config_struct.rs` (`window_colorspace_{string_to_enum,to_name,to_name_z}`).
+pub use rustty_render_types::WindowColorspace;
 
 // pub const MacWindowButtons = enum { visible, hidden };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -606,28 +612,23 @@ pub enum GraphemeWidthMethod {
 pub use rustty_render_types::AlphaBlending;
 
 // pub const BackgroundImagePosition = enum { "top-left", "top-center", "top-right", "center-left", "center-center", "center-right", "bottom-left", "bottom-center", "bottom-right", center };
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BackgroundImagePosition {
-    TopLeft,
-    TopCenter,
-    TopRight,
-    CenterLeft,
-    CenterCenter,
-    CenterRight,
-    BottomLeft,
-    BottomCenter,
-    BottomRight,
-    Center,
-}
+//
+// PORT NOTE (Chunk 3a A1 hoist — GPU_RD_CHUNK3A_DESIGN.md): named as a
+// `renderer/generic.zig` `DerivedConfig` field type (`bg_image_position`); hoisted to
+// the rustty-render-types leaf (the `AlphaBlending` precedent) to break the
+// config->renderer cycle. Re-exported here; the config-facing PARSE/FORMAT stays as
+// free fns in `config_struct.rs`
+// (`background_image_position_{string_to_enum,to_name,to_name_z}`).
+pub use rustty_render_types::BackgroundImagePosition;
 
 // pub const BackgroundImageFit = enum { contain, cover, stretch, none };
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BackgroundImageFit {
-    Contain,
-    Cover,
-    Stretch,
-    None,
-}
+//
+// PORT NOTE (Chunk 3a A1 hoist — GPU_RD_CHUNK3A_DESIGN.md): named as a
+// `renderer/generic.zig` `DerivedConfig` field type (`bg_image_fit`); hoisted to the
+// rustty-render-types leaf (the `AlphaBlending` precedent) to break the
+// config->renderer cycle. Re-exported here; the config-facing PARSE/FORMAT stays as
+// free fns in `config_struct.rs` (`background_image_fit_{string_to_enum,to_name,to_name_z}`).
+pub use rustty_render_types::BackgroundImageFit;
 
 // pub const LinuxCgroup = enum { never, always, "single-instance" };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -787,12 +788,9 @@ bare_enum_names!(Fullscreen {
     NonNativePaddedNotch => b"non-native-padded-notch",
 });
 
-// pub const WindowPaddingColor = enum { background, extend, "extend-always" };
-bare_enum_names!(WindowPaddingColor {
-    Background => b"background",
-    Extend => b"extend",
-    ExtendAlways => b"extend-always",
-});
+// WindowPaddingColor: hoisted to rustty-render-types (Chunk 3a); its bare-enum
+// parse/format is now config-local free fns in config_struct.rs
+// (`window_padding_color_{string_to_enum,to_name,to_name_z}`).
 
 // pub const WindowSubtitle = enum { false, "working-directory" };
 bare_enum_names!(WindowSubtitle {
@@ -856,11 +854,9 @@ bare_enum_names!(WindowTheme {
     Ghostty => b"ghostty",
 });
 
-// pub const WindowColorspace = enum { srgb, "display-p3" };
-bare_enum_names!(WindowColorspace {
-    Srgb => b"srgb",
-    DisplayP3 => b"display-p3",
-});
+// WindowColorspace: hoisted to rustty-render-types (Chunk 3a); its bare-enum
+// parse/format is now config-local free fns in config_struct.rs
+// (`window_colorspace_{string_to_enum,to_name,to_name_z}`).
 
 // pub const MacWindowButtons = enum { visible, hidden };
 bare_enum_names!(MacWindowButtons {
@@ -1046,27 +1042,13 @@ bare_enum_names!(GraphemeWidthMethod {
     Unicode => b"unicode",
 });
 
-// pub const BackgroundImagePosition = enum { "top-left", "top-center", "top-right", "center-left", "center-center", "center-right", "bottom-left", "bottom-center", "bottom-right", center };
-bare_enum_names!(BackgroundImagePosition {
-    TopLeft => b"top-left",
-    TopCenter => b"top-center",
-    TopRight => b"top-right",
-    CenterLeft => b"center-left",
-    CenterCenter => b"center-center",
-    CenterRight => b"center-right",
-    BottomLeft => b"bottom-left",
-    BottomCenter => b"bottom-center",
-    BottomRight => b"bottom-right",
-    Center => b"center",
-});
+// BackgroundImagePosition: hoisted to rustty-render-types (Chunk 3a); its bare-enum
+// parse/format is now config-local free fns in config_struct.rs
+// (`background_image_position_{string_to_enum,to_name,to_name_z}`).
 
-// pub const BackgroundImageFit = enum { contain, cover, stretch, none };
-bare_enum_names!(BackgroundImageFit {
-    Contain => b"contain",
-    Cover => b"cover",
-    Stretch => b"stretch",
-    None => b"none",
-});
+// BackgroundImageFit: hoisted to rustty-render-types (Chunk 3a); its bare-enum
+// parse/format is now config-local free fns in config_struct.rs
+// (`background_image_fit_{string_to_enum,to_name,to_name_z}`).
 
 // pub const LinuxCgroup = enum { never, always, "single-instance" };
 bare_enum_names!(LinuxCgroup {
@@ -1126,16 +1108,17 @@ impl Default for FontSyntheticStyle {
 
 /// See "font-shaping-break" for documentation
 // pub const FontShapingBreak = packed struct { cursor: bool = true };
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FontShapingBreak {
-    pub cursor: bool,
-}
-
-impl Default for FontShapingBreak {
-    fn default() -> Self {
-        Self { cursor: true }
-    }
-}
+//
+// PORT NOTE (Chunk 3a A1 hoist — GPU_RD_CHUNK3A_DESIGN.md): named as a
+// `renderer/generic.zig` `DerivedConfig` field type (`font_shaping_break`); the struct
+// + its `Default` (`cursor: true`) + `DeepEqual` are hoisted to the rustty-render-types
+// leaf (the `AlphaBlending` precedent) to break the config->renderer cycle. Re-exported
+// here so `value_types::FontShapingBreak` and the field/defaults/Key use-sites keep
+// resolving. The config-facing machinery stays here as config-local free fns / a
+// parse newtype (`FontShapingBreakParse` / `font_shaping_break_{to_c_uint,format_entry}`
+// below) because `PackedStruct` (rustty-args) / `FormatEntry` (rustty-cfg-fmt) impls on
+// the now-foreign type would violate the orphan rule.
+pub use rustty_render_types::FontShapingBreak;
 
 // pub const ShellIntegrationFeatures = packed struct { cursor, sudo, title, "ssh-env", "ssh-terminfo", path };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1303,13 +1286,22 @@ impl PackedStruct for FontSyntheticStyle {
 }
 
 // packed struct { cursor }
-impl PackedStruct for FontShapingBreak {
+//
+// PORT NOTE (Chunk 3a): `FontShapingBreak` is hoisted to rustty-render-types, so
+// `impl PackedStruct for FontShapingBreak` (a rustty-args trait on a now-foreign type)
+// would violate the orphan rule. This config-local NEWTYPE carries the `PackedStruct`
+// contract (a local type -> legal) so the single ported `parse_packed_struct` is reused
+// verbatim; the parse handler unwraps `.0`. Pure cycle-break glue (R1 no-loss).
+#[derive(Default)]
+pub(crate) struct FontShapingBreakParse(pub FontShapingBreak);
+
+impl PackedStruct for FontShapingBreakParse {
     fn set_all(&mut self, b: bool) {
-        self.cursor = b;
+        self.0.cursor = b;
     }
     fn set_field(&mut self, part: &[u8], value: bool) -> bool {
         match part {
-            b"cursor" => self.cursor = value,
+            b"cursor" => self.0.cursor = value,
             _ => return false,
         }
         true
@@ -1481,7 +1473,19 @@ packed_to_c_uint!(FontSyntheticStyle {
     italic,
     bold_italic
 });
-packed_to_c_uint!(FontShapingBreak { cursor });
+// PORT NOTE (Chunk 3a): `FontShapingBreak` is hoisted to rustty-render-types, so the
+// `packed_to_c_uint!`-generated inherent method would orphan on the foreign type. It
+// becomes this config-local free fn (the `@bitCast` packed-struct backing-integer
+// projection for `c_get`'s `.@"struct"` packed arm); the `g_packed_fn!` C-API arm calls
+// it. Same bit layout as `packed_to_c_uint!` (declaration-order OR of each `bool`).
+pub(crate) fn font_shaping_break_to_c_uint(v: FontShapingBreak) -> std::os::raw::c_uint {
+    let mut bits: std::os::raw::c_uint = 0;
+    let mut shift: u32 = 0;
+    bits |= (v.cursor as std::os::raw::c_uint) << shift;
+    shift += 1;
+    let _ = shift;
+    bits
+}
 packed_to_c_uint!(ShellIntegrationFeatures {
     cursor,
     sudo,
@@ -1542,10 +1546,17 @@ impl FormatEntry for FontSyntheticStyle {
 }
 
 // packed struct { cursor }
-impl FormatEntry for FontShapingBreak {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
-        format_entry_packed_struct(name, &[(b"cursor", self.cursor)], writer)
-    }
+//
+// PORT NOTE (Chunk 3a): `FontShapingBreak` is hoisted to rustty-render-types, so
+// `impl FormatEntry for FontShapingBreak` (a rustty-cfg-fmt trait on a now-foreign
+// type) would orphan. It becomes this config-local free fn; the `f_entry!(field, fn)`
+// arm calls it. Body identical to the former `FormatEntry` impl.
+pub(crate) fn font_shaping_break_format_entry<W: Writer>(
+    v: FontShapingBreak,
+    name: &[u8],
+    writer: &mut W,
+) -> Result<(), W::Error> {
+    format_entry_packed_struct(name, &[(b"cursor", v.cursor)], writer)
 }
 
 // packed struct { cursor, sudo, title, "ssh-env", "ssh-terminfo", path }
@@ -2201,156 +2212,160 @@ impl FormatEntry for FontStyle {
 }
 
 // pub const BackgroundBlur = union(enum) { false, true, "macos-glass-regular", "macos-glass-clear", radius: u8 };
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BackgroundBlur {
-    False,
-    True,
-    MacosGlassRegular,
-    MacosGlassClear,
-    Radius(u8),
-}
+//
+// PORT NOTE (Chunk 3a A1 hoist — GPU_RD_CHUNK3A_DESIGN.md): named as a
+// `renderer/generic.zig` `DerivedConfig` field type (`background_blur`); the union +
+// its `DeepEqual` (hand `.@"union"` arm) are hoisted to the rustty-render-types leaf
+// (the `AlphaBlending` precedent) to break the config->renderer cycle. Re-exported here
+// so `value_types::BackgroundBlur` and the field/defaults/Key use-sites keep resolving.
+// The reference's value methods `parse_cli`/`enabled`/`cval`/`format_entry` stay CONFIG-
+// local as free fns below (they are config/cfg-fmt-coupled and carry distinctive
+// reference comments that must remain in config provenance; the renderer never calls
+// them — it matches the variants directly, `generic.zig:1399`).
+pub use rustty_render_types::BackgroundBlur;
 
-impl BackgroundBlur {
-    // pub fn parseCLI(self: *BackgroundBlur, input: ?[]const u8) !void
-    pub fn parse_cli(&mut self, input: Option<&[u8]>) -> Result<(), ParseError> {
-        // const input_ = input orelse {
-        //     // Emulate behavior for bools
-        //     self.* = .true;
-        //     return;
-        // };
-        let input_ = match input {
-            Some(v) => v,
-            None => {
-                // Emulate behavior for bools
-                *self = BackgroundBlur::True;
-                return Ok(());
-            }
-        };
-
-        // Try to parse normal bools
-        // if (cli.args.parseBool(input_)) |b| {
-        //     self.* = if (b) .true else .false;
-        //     return;
-        // } else |_| {}
-        if let Ok(b) = parse_bool(input_) {
-            *self = if b {
-                BackgroundBlur::True
-            } else {
-                BackgroundBlur::False
-            };
+// pub fn parseCLI(self: *BackgroundBlur, input: ?[]const u8) !void
+pub(crate) fn background_blur_parse_cli(
+    v: &mut BackgroundBlur,
+    input: Option<&[u8]>,
+) -> Result<(), ParseError> {
+    // const input_ = input orelse {
+    //     // Emulate behavior for bools
+    //     self.* = .true;
+    //     return;
+    // };
+    let input_ = match input {
+        Some(x) => x,
+        None => {
+            // Emulate behavior for bools
+            *v = BackgroundBlur::True;
             return Ok(());
         }
+    };
 
-        // Try to parse enums
-        // if (std.meta.stringToEnum(std.meta.Tag(BackgroundBlur), input_)) |v| switch (v) {
-        //     inline else => |tag| tag: {
-        //         // We can only parse void types
-        //         const info = std.meta.fieldInfo(BackgroundBlur, tag);
-        //         if (info.type != void) break :tag;
-        //         self.* = @unionInit(BackgroundBlur, @tagName(tag), {});
-        //         return;
-        //     },
-        // };
-        //
-        // PORT NOTE: the comptime `stringToEnum` over the tag enum + the
-        // `if (info.type != void) break :tag` guard only ever matches the four
-        // void-payload tags (`false`/`true`/`macos-glass-regular`/
-        // `macos-glass-clear`); the `radius: u8` tag has a non-void payload so its
-        // `break :tag` falls through to the int parse below. (`false`/`true` were
-        // already consumed by `parseBool` above, but are listed for fidelity.)
-        match input_ {
-            b"false" => {
-                *self = BackgroundBlur::False;
-                return Ok(());
-            }
-            b"true" => {
-                *self = BackgroundBlur::True;
-                return Ok(());
-            }
-            b"macos-glass-regular" => {
-                *self = BackgroundBlur::MacosGlassRegular;
-                return Ok(());
-            }
-            b"macos-glass-clear" => {
-                *self = BackgroundBlur::MacosGlassClear;
-                return Ok(());
-            }
-            _ => {}
-        }
-
-        // self.* = .{ .radius = std.fmt.parseInt(u8, input_, 0) catch return error.InvalidValue };
-        *self =
-            BackgroundBlur::Radius(parse_int_u8_base0(input_).map_err(|_| Error::InvalidValue)?);
-        Ok(())
+    // Try to parse normal bools
+    // if (cli.args.parseBool(input_)) |b| {
+    //     self.* = if (b) .true else .false;
+    //     return;
+    // } else |_| {}
+    if let Ok(b) = parse_bool(input_) {
+        *v = if b {
+            BackgroundBlur::True
+        } else {
+            BackgroundBlur::False
+        };
+        return Ok(());
     }
 
-    // pub fn enabled(self: BackgroundBlur) bool
-    pub fn enabled(self: BackgroundBlur) -> bool {
-        // return switch (self) {
-        match self {
-            // .false => false,
-            BackgroundBlur::False => false,
-            // .true => true,
-            BackgroundBlur::True => true,
-            // .radius => |v| v > 0,
-            BackgroundBlur::Radius(v) => v > 0,
-            // We treat these as true because they both imply some blur!
-            // This has the effect of making the standard blur happen on
-            // Linux.
-            // .@"macos-glass-regular", .@"macos-glass-clear" => true,
-            BackgroundBlur::MacosGlassRegular | BackgroundBlur::MacosGlassClear => true,
+    // Try to parse enums
+    // if (std.meta.stringToEnum(std.meta.Tag(BackgroundBlur), input_)) |v| switch (v) {
+    //     inline else => |tag| tag: {
+    //         // We can only parse void types
+    //         const info = std.meta.fieldInfo(BackgroundBlur, tag);
+    //         if (info.type != void) break :tag;
+    //         self.* = @unionInit(BackgroundBlur, @tagName(tag), {});
+    //         return;
+    //     },
+    // };
+    //
+    // PORT NOTE: the comptime `stringToEnum` over the tag enum + the
+    // `if (info.type != void) break :tag` guard only ever matches the four
+    // void-payload tags (`false`/`true`/`macos-glass-regular`/
+    // `macos-glass-clear`); the `radius: u8` tag has a non-void payload so its
+    // `break :tag` falls through to the int parse below. (`false`/`true` were
+    // already consumed by `parseBool` above, but are listed for fidelity.)
+    match input_ {
+        b"false" => {
+            *v = BackgroundBlur::False;
+            return Ok(());
         }
+        b"true" => {
+            *v = BackgroundBlur::True;
+            return Ok(());
+        }
+        b"macos-glass-regular" => {
+            *v = BackgroundBlur::MacosGlassRegular;
+            return Ok(());
+        }
+        b"macos-glass-clear" => {
+            *v = BackgroundBlur::MacosGlassClear;
+            return Ok(());
+        }
+        _ => {}
     }
 
-    // pub fn cval(self: BackgroundBlur) i16
-    pub fn cval(self: BackgroundBlur) -> i16 {
-        // return switch (self) {
-        match self {
-            // .false => 0,
-            BackgroundBlur::False => 0,
-            // .true => 20,
-            BackgroundBlur::True => 20,
-            // .radius => |v| v,
-            BackgroundBlur::Radius(v) => v as i16,
-            // I hate sentinel values like this but this is only for
-            // our macOS application currently. We can switch to a proper
-            // tagged union if we ever need to.
-            // .@"macos-glass-regular" => -1,
-            BackgroundBlur::MacosGlassRegular => -1,
-            // .@"macos-glass-clear" => -2,
-            BackgroundBlur::MacosGlassClear => -2,
-        }
-    }
+    // self.* = .{ .radius = std.fmt.parseInt(u8, input_, 0) catch return error.InvalidValue };
+    *v = BackgroundBlur::Radius(parse_int_u8_base0(input_).map_err(|_| Error::InvalidValue)?);
+    Ok(())
+}
 
-    // pub fn formatEntry(self: BackgroundBlur, formatter: anytype) !void
-    pub fn format_entry<W: Writer>(
-        self: BackgroundBlur,
-        name: &[u8],
-        writer: &mut W,
-    ) -> Result<(), W::Error> {
-        // switch (self) {
-        match self {
-            // .false => try formatter.formatEntry(bool, false),
-            BackgroundBlur::False => format_entry_display(name, &false, writer),
-            // .true => try formatter.formatEntry(bool, true),
-            BackgroundBlur::True => format_entry_display(name, &true, writer),
-            // .radius => |v| try formatter.formatEntry(u8, v),
-            BackgroundBlur::Radius(v) => format_entry_display(name, &v, writer),
-            // .@"macos-glass-regular" => try formatter.formatEntry([]const u8, "macos-glass-regular"),
-            BackgroundBlur::MacosGlassRegular => {
-                format_entry_string(name, b"macos-glass-regular", writer)
-            }
-            // .@"macos-glass-clear" => try formatter.formatEntry([]const u8, "macos-glass-clear"),
-            BackgroundBlur::MacosGlassClear => {
-                format_entry_string(name, b"macos-glass-clear", writer)
-            }
-        }
+// pub fn enabled(self: BackgroundBlur) bool
+//
+// PORT NOTE (Chunk 3a): R1-ported verbatim but currently has NO in-tree caller (the
+// apprt blur-enable path is not yet ported); `#[allow(dead_code)]` keeps the
+// `-D warnings` gate green until that path lands. Not a stub — the body is faithful.
+#[allow(dead_code)]
+pub(crate) fn background_blur_enabled(v: BackgroundBlur) -> bool {
+    // return switch (self) {
+    match v {
+        // .false => false,
+        BackgroundBlur::False => false,
+        // .true => true,
+        BackgroundBlur::True => true,
+        // .radius => |v| v > 0,
+        BackgroundBlur::Radius(r) => r > 0,
+        // We treat these as true because they both imply some blur!
+        // This has the effect of making the standard blur happen on
+        // Linux.
+        // .@"macos-glass-regular", .@"macos-glass-clear" => true,
+        BackgroundBlur::MacosGlassRegular | BackgroundBlur::MacosGlassClear => true,
     }
 }
 
-impl FormatEntry for BackgroundBlur {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
-        BackgroundBlur::format_entry(*self, name, writer)
+// pub fn cval(self: BackgroundBlur) i16
+pub(crate) fn background_blur_cval(v: BackgroundBlur) -> i16 {
+    // return switch (self) {
+    match v {
+        // .false => 0,
+        BackgroundBlur::False => 0,
+        // .true => 20,
+        BackgroundBlur::True => 20,
+        // .radius => |v| v,
+        BackgroundBlur::Radius(r) => r as i16,
+        // I hate sentinel values like this but this is only for
+        // our macOS application currently. We can switch to a proper
+        // tagged union if we ever need to.
+        // .@"macos-glass-regular" => -1,
+        BackgroundBlur::MacosGlassRegular => -1,
+        // .@"macos-glass-clear" => -2,
+        BackgroundBlur::MacosGlassClear => -2,
+    }
+}
+
+// pub fn formatEntry(self: BackgroundBlur, formatter: anytype) !void
+//
+// PORT NOTE (Chunk 3a): the former `impl FormatEntry for BackgroundBlur` (a
+// rustty-cfg-fmt trait on the now-foreign hoisted type) would orphan; this config-local
+// free fn carries the identical body and is dispatched by the `f_entry!(field, fn)` arm.
+pub(crate) fn background_blur_format_entry<W: Writer>(
+    v: BackgroundBlur,
+    name: &[u8],
+    writer: &mut W,
+) -> Result<(), W::Error> {
+    // switch (self) {
+    match v {
+        // .false => try formatter.formatEntry(bool, false),
+        BackgroundBlur::False => format_entry_display(name, &false, writer),
+        // .true => try formatter.formatEntry(bool, true),
+        BackgroundBlur::True => format_entry_display(name, &true, writer),
+        // .radius => |v| try formatter.formatEntry(u8, v),
+        BackgroundBlur::Radius(r) => format_entry_display(name, &r, writer),
+        // .@"macos-glass-regular" => try formatter.formatEntry([]const u8, "macos-glass-regular"),
+        BackgroundBlur::MacosGlassRegular => {
+            format_entry_string(name, b"macos-glass-regular", writer)
+        }
+        // .@"macos-glass-clear" => try formatter.formatEntry([]const u8, "macos-glass-clear"),
+        BackgroundBlur::MacosGlassClear => format_entry_string(name, b"macos-glass-clear", writer),
     }
 }
 
@@ -8076,40 +8091,52 @@ mod tests {
     #[test]
     fn parse_background_blur() {
         // var v: BackgroundBlur = undefined;
+        // PORT NOTE (Chunk 3a): `parseCLI` is now the config-local free fn
+        // `background_blur_parse_cli` (the type is hoisted to rustty-render-types); the
+        // test calls it identically. Test stays in config (Config.zig provenance).
         let mut v = BackgroundBlur::False;
 
         // try v.parseCLI(null);
-        v.parse_cli(None).unwrap();
+        background_blur_parse_cli(&mut v, None).unwrap();
         // try testing.expectEqual(.true, v);
         assert_eq!(BackgroundBlur::True, v);
 
         // try v.parseCLI("true");
-        v.parse_cli(Some(b"true")).unwrap();
+        background_blur_parse_cli(&mut v, Some(b"true")).unwrap();
         assert_eq!(BackgroundBlur::True, v);
 
         // try v.parseCLI("false");
-        v.parse_cli(Some(b"false")).unwrap();
+        background_blur_parse_cli(&mut v, Some(b"false")).unwrap();
         assert_eq!(BackgroundBlur::False, v);
 
         // try v.parseCLI("42");
-        v.parse_cli(Some(b"42")).unwrap();
+        background_blur_parse_cli(&mut v, Some(b"42")).unwrap();
         // try testing.expectEqual(42, v.radius);
         assert_eq!(BackgroundBlur::Radius(42), v);
 
         // try v.parseCLI("macos-glass-regular");
-        v.parse_cli(Some(b"macos-glass-regular")).unwrap();
+        background_blur_parse_cli(&mut v, Some(b"macos-glass-regular")).unwrap();
         assert_eq!(BackgroundBlur::MacosGlassRegular, v);
 
         // try v.parseCLI("macos-glass-clear");
-        v.parse_cli(Some(b"macos-glass-clear")).unwrap();
+        background_blur_parse_cli(&mut v, Some(b"macos-glass-clear")).unwrap();
         assert_eq!(BackgroundBlur::MacosGlassClear, v);
 
         // try testing.expectError(error.InvalidValue, v.parseCLI(""));
-        assert_eq!(Err(Error::InvalidValue), v.parse_cli(Some(b"")));
+        assert_eq!(
+            Err(Error::InvalidValue),
+            background_blur_parse_cli(&mut v, Some(b""))
+        );
         // try testing.expectError(error.InvalidValue, v.parseCLI("aaaa"));
-        assert_eq!(Err(Error::InvalidValue), v.parse_cli(Some(b"aaaa")));
+        assert_eq!(
+            Err(Error::InvalidValue),
+            background_blur_parse_cli(&mut v, Some(b"aaaa"))
+        );
         // try testing.expectError(error.InvalidValue, v.parseCLI("420"));
-        assert_eq!(Err(Error::InvalidValue), v.parse_cli(Some(b"420")));
+        assert_eq!(
+            Err(Error::InvalidValue),
+            background_blur_parse_cli(&mut v, Some(b"420"))
+        );
     }
 
     // -----------------------------------------------------------------------

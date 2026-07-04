@@ -22,9 +22,15 @@
 //!   - anything else            -> `false` (not yet supported by the C API)
 
 use crate::config_struct::{
-    alpha_blending_to_name_z, cursor_style_to_name_z, option_as_alt_to_name_z,
-    release_channel_to_name_z, window_padding_balance_to_name_z, Config, Key,
+    alpha_blending_to_name_z, background_image_fit_to_name_z, background_image_position_to_name_z,
+    cursor_style_to_name_z, option_as_alt_to_name_z, release_channel_to_name_z,
+    window_colorspace_to_name_z, window_padding_balance_to_name_z, window_padding_color_to_name_z,
+    Config, Key,
 };
+// Chunk-3a-hoisted value-types: their C-API numeric projections (`cval`/`to_c_uint`)
+// are config-local free fns in `value_types` (the inherent methods would orphan on the
+// foreign render-types type).
+use crate::value_types::{background_blur_cval, font_shaping_break_to_c_uint};
 
 /// Get a value from the config by key into the given pointer. This is
 /// specifically for C-compatible APIs. If you're using Zig, just access
@@ -190,6 +196,17 @@ pub unsafe fn get(config: &Config, k: Key, ptr_raw: *mut std::ffi::c_void) -> bo
             true
         }};
     }
+    // `cval` for a Chunk-3a-hoisted type whose `cval` is now a config-local free fn
+    // (the inherent method would orphan on the foreign render-types type).
+    macro_rules! g_cval_fn {
+        ($f:ident, $cval_fn:expr) => {{
+            let cv = $cval_fn(config.$f);
+            unsafe {
+                std::ptr::write(ptr_raw.cast(), cv);
+            }
+            true
+        }};
+    }
     // `.optional` over a `cval` struct/union: unwrap (write `cval()`) or `false`.
     //
     // If an optional has no value we return false.
@@ -216,6 +233,16 @@ pub unsafe fn get(config: &Config, k: Key, ptr_raw: *mut std::ffi::c_void) -> bo
         ($f:ident) => {{
             unsafe {
                 *(ptr_raw as *mut std::os::raw::c_uint) = config.$f.to_c_uint();
+            }
+            true
+        }};
+    }
+    // packed struct whose `to_c_uint` is now a config-local free fn (a Chunk-3a-hoisted
+    // type: the `packed_to_c_uint!`-generated inherent method would orphan).
+    macro_rules! g_packed_fn {
+        ($f:ident, $bits_fn:expr) => {{
+            unsafe {
+                *(ptr_raw as *mut std::os::raw::c_uint) = $bits_fn(config.$f);
             }
             true
         }};
@@ -249,11 +276,16 @@ pub unsafe fn get(config: &Config, k: Key, ptr_raw: *mut std::ffi::c_void) -> bo
         Key::AutoUpdate => g_opt_enum!(auto_update),
         Key::AutoUpdateChannel => g_opt_enum_fn!(auto_update_channel, release_channel_to_name_z),
         Key::Background => g_cval!(background),
-        Key::BackgroundBlur => g_cval!(background_blur),
+        Key::BackgroundBlur => g_cval_fn!(background_blur, background_blur_cval),
         Key::BackgroundImage => false,
-        Key::BackgroundImageFit => g_enum!(background_image_fit),
+        Key::BackgroundImageFit => g_enum_fn!(background_image_fit, background_image_fit_to_name_z),
         Key::BackgroundImageOpacity => g_float!(background_image_opacity, f32),
-        Key::BackgroundImagePosition => g_enum!(background_image_position),
+        Key::BackgroundImagePosition => {
+            g_enum_fn!(
+                background_image_position,
+                background_image_position_to_name_z
+            )
+        }
         Key::BackgroundImageRepeat => g_bool!(background_image_repeat),
         Key::BackgroundOpacity => g_float!(background_opacity, f64),
         Key::BackgroundOpacityCells => g_bool!(background_opacity_cells),
@@ -294,7 +326,7 @@ pub unsafe fn get(config: &Config, k: Key, ptr_raw: *mut std::ffi::c_void) -> bo
         Key::FontFamilyBoldItalic => false,
         Key::FontFamilyItalic => false,
         Key::FontFeature => false,
-        Key::FontShapingBreak => g_packed!(font_shaping_break),
+        Key::FontShapingBreak => g_packed_fn!(font_shaping_break, font_shaping_break_to_c_uint),
         Key::FontSize => g_float!(font_size, f32),
         Key::FontStyle => false,
         Key::FontStyleBold => false,
@@ -408,7 +440,7 @@ pub unsafe fn get(config: &Config, k: Key, ptr_raw: *mut std::ffi::c_void) -> bo
         Key::UnfocusedSplitOpacity => g_float!(unfocused_split_opacity, f64),
         Key::VtKamAllowed => g_bool!(vt_kam_allowed),
         Key::WaitAfterCommand => g_bool!(wait_after_command),
-        Key::WindowColorspace => g_enum!(window_colorspace),
+        Key::WindowColorspace => g_enum_fn!(window_colorspace, window_colorspace_to_name_z),
         Key::WindowDecoration => g_enum!(window_decoration),
         Key::WindowHeight => g_uint!(window_height),
         Key::WindowInheritFontSize => g_bool!(window_inherit_font_size),
@@ -417,7 +449,7 @@ pub unsafe fn get(config: &Config, k: Key, ptr_raw: *mut std::ffi::c_void) -> bo
         Key::WindowPaddingBalance => {
             g_enum_fn!(window_padding_balance, window_padding_balance_to_name_z)
         }
-        Key::WindowPaddingColor => g_enum!(window_padding_color),
+        Key::WindowPaddingColor => g_enum_fn!(window_padding_color, window_padding_color_to_name_z),
         Key::WindowPaddingX => false,
         Key::WindowPaddingY => false,
         Key::WindowPositionX => g_opt_i16!(window_position_x),
