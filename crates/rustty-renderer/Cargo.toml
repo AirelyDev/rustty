@@ -89,7 +89,18 @@ objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSErro
 #   MTLDevice               -> MTLGPUFamily, MTLCopyAllDevices,
 #                              MTLCreateSystemDefaultDevice
 #   MTLTypes                -> MTLRegion, MTLOrigin, MTLSize
-# Chunk 1/4 ADD (not yet): objc2-io-surface + objc2-core-graphics (Target
+# Chunk-1a ADD (the PURE Metal resource leaves — buffer/texture/sampler):
+#   MTLBuffer               -> the `MTLBuffer` protocol (contents/length/
+#                              didModifyRange) + MTLDevice newBufferWithLength:/
+#                              newBufferWithBytes: (buffer.rs). NSRange (for
+#                              didModifyRange:) comes from objc2-foundation above.
+#   MTLAllocation          -> MTLBuffer's supertrait; also gates MTLDevice's
+#                              newBufferWith*/newTextureWithDescriptor: methods.
+#   MTLCommandQueue        -> MTLDevice newCommandQueue (smoke test only — proves
+#                              the device is live).
+# (MTLTexture already covers MTLTextureDescriptor + replaceRegion:…; MTLSampler
+#  already covers MTLSamplerDescriptor + newSamplerStateWithDescriptor:.)
+# Chunk 1b/4 ADD (not yet): objc2-io-surface + objc2-core-graphics (Target
 # IOSurface), block2 (addCompletedHandler), dispatch2 (DispatchData for
 # newLibraryWithData), and the `png` dev-dep (golden-image decode).
 objc2-metal = { version = "0.3", default-features = false, features = [
@@ -106,6 +117,9 @@ objc2-metal = { version = "0.3", default-features = false, features = [
     "MTLPixelFormat",
     "MTLDevice",
     "MTLTypes",
+    "MTLBuffer",
+    "MTLAllocation",
+    "MTLCommandQueue",
 ] }
 
 [dev-dependencies]
