@@ -100,9 +100,18 @@ objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSErro
 #                              the device is live).
 # (MTLTexture already covers MTLTextureDescriptor + replaceRegion:…; MTLSampler
 #  already covers MTLSamplerDescriptor + newSamplerStateWithDescriptor:.)
-# Chunk 1b/4 ADD (not yet): objc2-io-surface + objc2-core-graphics (Target
-# IOSurface), block2 (addCompletedHandler), dispatch2 (DispatchData for
-# newLibraryWithData), and the `png` dev-dep (golden-image decode).
+# Chunk 1b ADD (the draw-plumbing leaves — Pipeline/RenderPass/Target/Frame/
+# shaders):
+#   MTLLibrary       -> newLibraryWithData:/Source:, newFunctionWithName:,
+#                       MTLFunction (shaders.rs library load + pipeline.rs funcs).
+#   dispatch2        -> newLibraryWithData:error: (DispatchData → dispatch_data_t
+#                       for the embedded metallib bytes; pulls the dispatch2 crate).
+#   block2           -> addCompletedHandler: / MTLCommandBufferHandler (the async
+#                       present seam; pulls block2 + gates DispatchData::from_bytes).
+#   objc2-io-surface -> newTextureWithDescriptor:iosurface:plane: (Target's
+#                       IOSurface-backed MTLTexture; pulls objc2-io-surface).
+# Chunk 4 ADD (not yet): objc2-core-graphics (Target DisplayP3 setColorSpace, the
+# deferred on-screen seam), and the `png` dev-dep (golden-image decode).
 objc2-metal = { version = "0.3", default-features = false, features = [
     "MTLCommandBuffer",
     "MTLRenderPass",
@@ -120,7 +129,41 @@ objc2-metal = { version = "0.3", default-features = false, features = [
     "MTLBuffer",
     "MTLAllocation",
     "MTLCommandQueue",
+    "MTLLibrary",
+    "dispatch2",
+    "block2",
+    "objc2-io-surface",
 ] }
+
+# IOSurface create/lock/readback (Target). The explicit per-feature set keeps the
+# objc2 per-feature style: IOSurfaceRef (create/lock/base_address/bytes_per_row +
+# the `kIOSurface*` CFString keys, under `objc2-core-foundation`), IOSurfaceTypes
+# (IOSurfaceLockOptions), objc2 (Encode/RefEncode impls), objc2-core-foundation
+# (the CFString keys), libc (lock/unlock -> kern_return_t).
+objc2-io-surface = { version = "0.3", features = [
+    "IOSurfaceRef",
+    "IOSurfaceTypes",
+    "objc2",
+    "objc2-core-foundation",
+    "libc",
+] }
+
+# CoreFoundation: the IOSurface property dictionary (CFDictionary + CFNumber over
+# the `kIOSurface*` CFString keys) that Target.init hands to IOSurfaceCreate.
+objc2-core-foundation = { version = "0.3", features = [
+    "CFBase",
+    "CFDictionary",
+    "CFNumber",
+    "CFString",
+] }
+
+# DispatchData for newLibraryWithData: (the embedded metallib bytes wrapped in a
+# dispatch_data_t). `DispatchData::from_bytes` is gated on the block2 feature.
+dispatch2 = { version = "0.3", features = ["block2"] }
+
+# The addCompletedHandler: completion block (RcBlock) — the deferred async present
+# seam (Frame.complete's `!sync` path). Also brought in transitively by dispatch2.
+block2 = { version = "0.6" }
 
 [dev-dependencies]
 # The crate-root `Health` enum (hoisted from `renderer.zig`) carries the

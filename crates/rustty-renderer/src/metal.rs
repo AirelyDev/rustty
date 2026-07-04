@@ -22,14 +22,27 @@
 //! CHUNK 1a lands the three PURE resource-leaf wrappers (`buffer`/`texture`/
 //! `sampler`) over `objc2`/`objc2-metal` (`GPU_RD_TRAIT_DESIGN.md` §B/§C).
 //!
-//! DEFERRED (Chunk 1b+, `GPU_RD_BLUEPRINT.md`): the remaining `metal/*` leaf
-//! wrappers (`Pipeline`/`RenderPass`/`Target`/`Frame`/`shaders`), the `Metal`
-//! impl, and the `generic.zig` renderer body — the golden-image-gated
-//! offscreen draw path.
+//! CHUNK 1b lands the five draw-plumbing leaves (`pipeline`/`render_pass`/
+//! `target`/`frame`/`shaders`) — the `Pipeline`/`RenderPass` step machinery, the
+//! IOSurface-backed offscreen `Target`, the `Frame` completion contract, and the
+//! `Shaders` backend container (metallib load + the pipeline collection). These
+//! compile + link against Chunk-1a + `crate::shaders` with no reference to the
+//! not-yet-existing `GenericRenderer`/`Metal` (Frame's completion callback is a
+//! forward-declared fn-pointer contract; the concrete wiring lands in Chunk 3).
+//!
+//! DEFERRED (Chunk 2/3+, `GPU_RD_BLUEPRINT.md`): the `Metal` impl and the
+//! `generic.zig` renderer body — the golden-image-gated offscreen draw path; the
+//! Frame async `addCompletedHandler` present (windowing-host seam); and Target's
+//! DisplayP3 `set_color_space` (needs objc2-core-graphics, Chunk 4).
 
 pub mod api;
 pub mod buffer;
+pub mod frame;
+pub mod pipeline;
+pub mod render_pass;
 pub mod sampler;
+pub mod shaders;
+pub mod target;
 pub mod texture;
 
 // PORT NOTE (rustty-only smoke test, NOT a ghostty parity test): the reference
@@ -132,5 +145,96 @@ mod tests {
             t_address_mode: MTLSamplerAddressMode::ClampToEdge,
         })
         .expect("Sampler::init");
+    }
+
+    // PORT NOTE (rustty-only smoke test, NOT a ghostty parity test): the Chunk-1b
+    // gate from `GPU_RD_BLUEPRINT.md` / `GPU_RD_CHUNK1B_DESIGN §7`. It drives the
+    // five draw-plumbing leaves against a real Metal device: `Shaders::init` (loads
+    // the metallib + builds all five render pipelines — exercising `pipeline.rs`,
+    // the hand-written vertex-attribute tables, and `shaders.rs`'s library load), a
+    // `Target::init` OFFSCREEN (exercises the HARD-SPOT-1 IOSurface CFDictionary
+    // path — a wrong dict makes `IOSurfaceCreate` return null → `Error::MetalFailed`,
+    // so a successful init proves the dict is correct at runtime), a `Frame::begin`
+    // + a trivial `RenderPass` (clear) begin/complete, `Frame::complete(sync=true)`
+    // (the HARD-SPOT-2 invoke-directly path, with a no-op `CompletionFn`), and the
+    // `read_bgra` golden-support readback. The ordered-step draw loop is Chunk 3 and
+    // the golden pixel comparison is Chunk 4; here we only assert no panic + the
+    // readback buffer is `w*h*4` bytes. Skipped cleanly on hosts with no Metal
+    // device (headless CI), like the landed resource-leaf smoke test.
+    #[test]
+    fn draw_plumbing_smoke() {
+        use objc2::runtime::ProtocolObject;
+        use objc2_metal::{MTLCommandBuffer, MTLDevice};
+
+        use super::api::{MTLCreateSystemDefaultDevice, MTLPixelFormat, StorageMode};
+        use super::frame::{CompletionContext, Frame, Options as FrameOptions};
+        use super::render_pass::{Attachment, AttachmentTarget};
+        use super::shaders::Shaders;
+        use super::target::{Options as TargetOptions, Target};
+
+        let Some(device) = MTLCreateSystemDefaultDevice() else {
+            eprintln!("no Metal device available; skipping Metal draw-plumbing smoke test");
+            return;
+        };
+
+        let queue = device
+            .newCommandQueue()
+            .expect("device should vend a command queue");
+
+        // Shaders::init loads the metallib (or the source fallback) and builds all
+        // five render pipelines. No post-shaders.
+        let shaders =
+            Shaders::init(&device, &[], MTLPixelFormat::BGRA8Unorm).expect("Shaders::init");
+        assert!(shaders.post_pipelines.is_empty());
+
+        // Target::init OFFSCREEN — exercises the IOSurface CFDictionary path.
+        let w = 4usize;
+        let h = 4usize;
+        let mut target = Target::init(TargetOptions {
+            device: &device,
+            width: w,
+            height: h,
+            // Golden pins BGRA8Unorm (non-sRGB) + .Shared (Apple Silicon).
+            pixel_format: MTLPixelFormat::BGRA8Unorm,
+            storage_mode: StorageMode::Shared,
+        })
+        .expect("Target::init (IOSurface offscreen)");
+        assert_eq!(target.width, w);
+        assert_eq!(target.height, h);
+
+        // A no-op completion fn (the Chunk-3 `drawFrame` installs the real one).
+        unsafe fn noop_completed(
+            _ctx: &CompletionContext,
+            _buffer: &ProtocolObject<dyn MTLCommandBuffer>,
+        ) {
+        }
+
+        // Frame::begin: type-erased null renderer ptr; raw `*mut` target. The raw
+        // pointer does not hold the borrow, so `target` stays usable below.
+        let target_ptr: *mut Target = &mut target;
+        let mut frame = Frame::begin(
+            FrameOptions { queue: &queue },
+            core::ptr::null_mut(),
+            target_ptr,
+            noop_completed,
+        )
+        .expect("Frame::begin");
+
+        // A trivial RenderPass: clear the target, begin/complete (no draw step).
+        {
+            let attachments = [Attachment {
+                target: AttachmentTarget::Target(&target),
+                clear_color: Some([0.0, 0.0, 0.0, 1.0]),
+            }];
+            let pass = frame.render_pass(&attachments);
+            pass.complete();
+        }
+
+        // Complete synchronously: commit → waitUntilCompleted → invoke `on_completed`.
+        frame.complete(true);
+
+        // Golden-support readback: `w*h*4` BGRA bytes out of the offscreen surface.
+        let pixels = target.read_bgra();
+        assert_eq!(pixels.len(), w * h * 4);
     }
 }
