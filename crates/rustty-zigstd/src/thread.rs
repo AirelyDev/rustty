@@ -1,5 +1,8 @@
 //! PORTS: Zig stdlib `std.Thread.Mutex` AS THE PORT USES IT — the GUARD-LESS
-//! manual `lock()`/`tryLock()`/`unlock()` mutex.
+//! manual `lock()`/`tryLock()`/`unlock()` mutex — and `std.Thread.Semaphore`,
+//! the counting semaphore `generic.zig`'s `SwapChain` uses for triple-buffer
+//! GPU-frame backpressure (`frame_sema: std.Thread.Semaphore = .{ .permits =
+//! buf_count }`).
 //!
 //! Ghostty's core tier is riddled with manual lock/unlock patterns that Rust's
 //! guard-based `std::sync::Mutex` cannot express from the borrowing frame
@@ -25,6 +28,7 @@
 //! the exact observable semantics of the Zig API as ghostty uses it.
 
 use std::sync::{Condvar, Mutex as StdMutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 /// Zig `std.Thread.Mutex`: a guard-less mutual-exclusion lock.
 ///
@@ -113,6 +117,163 @@ impl Mutex {
 impl Default for Mutex {
     fn default() -> Mutex {
         Mutex::new()
+    }
+}
+
+/// Zig `std.Thread.Semaphore.timedWait` error set `error{Timeout}` — the wait
+/// expired before a permit became available.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timeout;
+
+/// Zig `std.Thread.Semaphore`: "A semaphore is an unsigned integer that blocks
+/// the kernel thread if the number would become negative. This API supports
+/// static initialization and does not require deinitialization."
+///
+/// Ghostty's `generic.zig` `SwapChain` holds one as `frame_sema:
+/// std.Thread.Semaphore = .{ .permits = buf_count }` for triple-buffer
+/// backpressure: `nextFrame` [`wait`](Semaphore::wait)s a permit before handing
+/// out a frame, and `releaseFrame`/`deinit` [`post`](Semaphore::post) it back —
+/// so at most `buf_count` frames are ever in flight (the GPU draw path's flow
+/// control).
+///
+/// Backing (mirroring the sibling [`Mutex`]): a `std::sync::Mutex<usize>`
+/// guarding the `permits` count plus a `Condvar`. Zig's struct is `mutex + cond
+/// + permits` with the mutex guarding the plain `permits` field; folding
+/// `permits` INTO the std mutex is the faithful mapping — the std mutex plays
+/// the role of Zig's `mutex`, held only for the count check/update, never across
+/// user code. Like [`Mutex`] this is Zig STDLIB glue, not ghostty src/, so it is
+/// NOT in the parity test contract; the faithfulness target is the exact
+/// observable semantics of `std.Thread.Semaphore` as ghostty uses it.
+///
+/// Example (the Zig source's runnable consumer/producer example, translated —
+/// Zig shares a `var s` global; Rust shares via `Arc`):
+///
+/// ```
+/// use rustty_zigstd::thread::Semaphore;
+/// use std::sync::Arc;
+///
+/// let s = Arc::new(Semaphore::new());
+///
+/// // fn producer() { s.post(); }
+/// let producer = {
+///     let s = Arc::clone(&s);
+///     std::thread::spawn(move || s.post())
+/// };
+///
+/// // fn consumer() { s.wait(); }  — blocks until the producer posts.
+/// s.wait();
+///
+/// producer.join().unwrap();
+/// ```
+pub struct Semaphore {
+    /// The permit count. Zig: `permits: usize = 0` guarded by `mutex`; here the
+    /// std mutex IS that guard. "It is OK to initialize this field to any value."
+    permits: StdMutex<usize>,
+
+    /// Zig: `cond: Condition = .{}` — signalled on [`post`](Semaphore::post) and
+    /// on the permit-handoff chain in [`wait`](Semaphore::wait) so blocked
+    /// waiters wake.
+    cond: Condvar,
+}
+
+impl Semaphore {
+    /// Zig `Semaphore{}` — a new semaphore with `permits = 0`.
+    pub const fn new() -> Semaphore {
+        Semaphore::with_permits(0)
+    }
+
+    /// Zig `Semaphore{ .permits = n }` — static initialization to `n` permits
+    /// (`SwapChain` uses `.{ .permits = buf_count }`).
+    pub const fn with_permits(permits: usize) -> Semaphore {
+        Semaphore {
+            permits: StdMutex::new(permits),
+            cond: Condvar::new(),
+        }
+    }
+
+    /// Acquire the count guard, IGNORING std poisoning: Zig has no poisoning (a
+    /// Zig panic aborts the process), and the count is always valid — the guard
+    /// is never held across user code. Mirrors [`Mutex::flag`].
+    #[inline]
+    fn count(&self) -> MutexGuard<'_, usize> {
+        match self.permits.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    /// Zig `Semaphore.wait`: blocks the caller until a permit is available, then
+    /// consumes one. When a surplus remains, hands the signal on so another
+    /// blocked waiter can wake (`if (sem.permits > 0) sem.cond.signal();`).
+    pub fn wait(&self) {
+        let mut permits = self.count();
+
+        while *permits == 0 {
+            permits = match self.cond.wait(permits) {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+        }
+
+        *permits -= 1;
+        if *permits > 0 {
+            self.cond.notify_one();
+        }
+    }
+
+    /// Zig `Semaphore.timedWait`: like [`wait`](Semaphore::wait) but returns
+    /// [`Timeout`] if no permit becomes available within `timeout_ns`
+    /// nanoseconds. (Unused by ghostty's `SwapChain`, which only `wait`/`post`s;
+    /// ported for fidelity to the stdlib type.)
+    pub fn timed_wait(&self, timeout_ns: u64) -> Result<(), Timeout> {
+        // `std.time.Timer.start()` — a monotonic stopwatch started now.
+        let timeout_timer = Instant::now();
+
+        let mut permits = self.count();
+
+        while *permits == 0 {
+            let elapsed = timeout_timer.elapsed().as_nanos();
+            if elapsed > u128::from(timeout_ns) {
+                return Err(Timeout);
+            }
+
+            // `elapsed <= timeout_ns` here, so the subtraction and the cast back
+            // to u64 cannot overflow.
+            let local_timeout_ns = timeout_ns - elapsed as u64;
+            let (guard, res) = match self
+                .cond
+                .wait_timeout(permits, Duration::from_nanos(local_timeout_ns))
+            {
+                Ok(pair) => pair,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            permits = guard;
+            // Zig `try sem.cond.timedWait(...)` propagates `error.Timeout` on
+            // expiry; a spurious/real wake falls through to re-check `permits`.
+            if res.timed_out() {
+                return Err(Timeout);
+            }
+        }
+
+        *permits -= 1;
+        if *permits > 0 {
+            self.cond.notify_one();
+        }
+        Ok(())
+    }
+
+    /// Zig `Semaphore.post`: releases a permit and signals one waiter. Signalled
+    /// while the count guard is held (Zig signals under `defer mutex.unlock()`).
+    pub fn post(&self) {
+        let mut permits = self.count();
+        *permits += 1;
+        self.cond.notify_one();
+    }
+}
+
+impl Default for Semaphore {
+    fn default() -> Semaphore {
+        Semaphore::new()
     }
 }
 
@@ -218,5 +379,64 @@ mod tests {
         // reference's `defer` guarantees.
         assert!(!m.try_lock());
         m.unlock();
+    }
+
+    // Worker context for the ported `test Semaphore`: a semaphore + a shared
+    // non-atomic counter (Zig's `sem: *Semaphore, n: *i32`). The permits=1
+    // semaphore serialises the increments, so the raw `*n += 1` is race-free.
+    struct SemCtx {
+        sem: Semaphore,
+        n: UnsafeCell<i32>,
+    }
+    // SAFETY (test-only): every access to `n` happens while a permit is held —
+    // the mutual exclusion under test.
+    unsafe impl Sync for SemCtx {}
+
+    // Ported from Zig std `test Semaphore` (the `single_threaded` skip is N/A —
+    // rustty is always multi-threaded): three workers each `wait` a permit,
+    // increment the shared counter, then `post`; after they join, the main
+    // thread's `wait` proves all three ran.
+    #[test]
+    fn semaphore() {
+        const NUM_THREADS: usize = 3;
+        let ctx = Arc::new(SemCtx {
+            sem: Semaphore::with_permits(1),
+            n: UnsafeCell::new(0),
+        });
+
+        let threads: Vec<_> = (0..NUM_THREADS)
+            .map(|_| {
+                let ctx = Arc::clone(&ctx);
+                std::thread::spawn(move || {
+                    ctx.sem.wait();
+                    // SAFETY: the permit is held → exclusive access to `n`.
+                    unsafe { *ctx.n.get() += 1 };
+                    ctx.sem.post();
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        ctx.sem.wait();
+        // SAFETY: the final permit is held and every worker has joined.
+        let n = unsafe { *ctx.n.get() };
+        assert_eq!(n, NUM_THREADS as i32);
+    }
+
+    // Ported from Zig std `test timedWait`: a fresh (0-permit) semaphore times
+    // out; after a `post` the permit is taken without blocking.
+    #[test]
+    fn timed_wait() {
+        let sem = Semaphore::new();
+        assert_eq!(*sem.count(), 0);
+
+        assert_eq!(sem.timed_wait(1), Err(Timeout));
+
+        sem.post();
+        assert_eq!(*sem.count(), 1);
+
+        assert_eq!(sem.timed_wait(1), Ok(()));
+        assert_eq!(*sem.count(), 0);
     }
 }

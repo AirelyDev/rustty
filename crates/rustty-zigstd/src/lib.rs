@@ -19,7 +19,9 @@
 //!     `getOrPut`/`put`/`swapRemove`/`orderedRemove`/`count`/`keys`/`values`.
 //!   * thread — `std.Thread.Mutex`: the GUARD-LESS manual lock/try_lock/unlock
 //!     mutex (no RAII guard, no poisoning) the core-tier mutex model requires
-//!     (CORE_BLUEPRINT §3; renderer `State.mutex`).
+//!     (CORE_BLUEPRINT §3; renderer `State.mutex`); and `std.Thread.Semaphore`,
+//!     the counting semaphore `generic.zig`'s `SwapChain` uses for triple-buffer
+//!     GPU-frame backpressure.
 //!
 //! Backing memory is the Rust system allocator (`std::alloc`), the faithful map
 //! of Zig's `gpa`/`page_allocator`. This crate is unsafe-heavy; its UB/leak gate
