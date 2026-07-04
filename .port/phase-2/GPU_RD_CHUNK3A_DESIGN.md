@@ -1,5 +1,8 @@
 # GPU R-d — Chunk 3a: `DerivedConfig` prerequisites for `GenericRenderer`
 
+> **COUNT CORRECTION (post-validation):** the reference `generic.zig` DerivedConfig has **8** `TerminalColor`-typed fields (not 7), so **10** non-hoistable config-typed fields (8 TerminalColor + `Path` + `RepeatablePath`), and 6 hoisted + 1 `AlphaBlending` + 10 = **17** total. Earlier prose in this doc (and commits bd2c2eb/82e6a34) said ×7 / 9 — an arithmetic slip; the ported CODE correctly declares all 8 fields. Counts corrected throughout.
+
+
 **Sub-decision architect deliverable.** Parents: `GPU_RD_BLUEPRINT.md` (ACCEPT-WITH-FIXES),
 `GPU_RD_TRAIT_DESIGN.md` (monomorphic decision, §D struct field list). This doc pins the
 *prerequisite* work that must land before `generic.zig`'s `Renderer` struct (§D) can be
@@ -47,7 +50,7 @@ rustty-renderer` (28 pass), `check_acyclic.sh`, `check_test_counts.py`, `check_c
 ### A.0 Why only 6, and the exact precedent
 
 `generic.zig`'s `DerivedConfig` (536–651) names these config value-types as field types:
-`FontShapingBreak`, `TerminalColor`×7 (`cursor_color`/`cursor_text`/`selection_background`/
+`FontShapingBreak`, `TerminalColor`×8 (`cursor_color`/`cursor_text`/`selection_background`/
 `selection_foreground`/`search_background`/`search_foreground`/`search_selected_background`/
 `search_selected_foreground`), `WindowPaddingColor`, `RepeatablePath` (`custom_shaders`), `Path`
 (`bg_image`), `BackgroundImagePosition`, `BackgroundImageFit`, `WindowColorspace`, `AlphaBlending`
@@ -58,7 +61,7 @@ fixes exist (both are in-tree precedents): **hoist** the type to the `rustty-ren
 
 A type is **hoistable** iff it is a plain value with **no dependency the leaf cannot take** and its
 foreign-trait impls can be relocated without an orphan-rule violation. Exactly the 6 above qualify
-(+ `AlphaBlending`, done). The other 9 do **not** (§B.1) and take the generic-`C` route.
+(+ `AlphaBlending`, done). The other 10 do **not** (§B.1) and take the generic-`C` route.
 
 The precedent is commit `5b9eb65` (`AlphaBlending`), verified end-to-end:
 1. Move the type def (+ its doc/`// pub const …` comments) to `rustty-render-types/src/lib.rs`.
@@ -177,9 +180,9 @@ force `render-types -> vt`, a cycle since `vt -> render-types` already exists,
 
 ## Part B — the `GenericRenderer` struct prerequisites (DESIGNED, deferred)
 
-### B.1 The 9 NON-hoistable `DerivedConfig` fields — generic-`C` associated extraction
+### B.1 The 10 NON-hoistable `DerivedConfig` fields — generic-`C` associated extraction
 
-`TerminalColor` (7 fields), `Path` (`bg_image`), `RepeatablePath` (`custom_shaders`) are **not
+`TerminalColor` (8 fields), `Path` (`bg_image`), `RepeatablePath` (`custom_shaders`) are **not
 hoistable**:
 - `TerminalColor = enum { Color(Color), CellForeground, CellBackground }` and `Color::to_terminal_rgb()`
   returns `rustty_vt::color::RGB` (`value_types.rs:1822,2021`). Hoisting it drags `Color`, which
@@ -206,7 +209,7 @@ pinned by FIX-1 and satisfied by the **hoisted** `AlphaBlending`/`WindowColorspa
 `padding_color` (2344,2634), `bg_image*` (1749,1981–2000). Therefore **any golden corpus that
 exercises a cursor/selection/search-colored cell reads a real `TerminalColor`**; a
 zero/`undefined` placeholder would render wrong pixels and fail the gate. **Conclusion:** when
-`DerivedConfig::init` and the golden gate land (Chunk 4), the 9 fields MUST carry **real values via
+`DerivedConfig::init` and the golden gate land (Chunk 4), the 10 fields MUST carry **real values via
 the generic-`C` extraction** (`init<C>` reading `config.@"cursor-color"` etc., concrete-bound in
 core), NOT a placeholder. For Part B (struct only, `init` deferred) the inhabited placeholder is
 sound *because nothing reads it yet* — the PORT NOTE records the Chunk-4 obligation. The default

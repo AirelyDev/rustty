@@ -14,7 +14,7 @@
 //!   cycle is broken by (a) hoisting the 6 clean config value-types to
 //!   `rustty-render-types` (Part A, landed), and (b) porting `DerivedConfig`
 //!   generic over `C` (the `renderer/Thread.zig` `DerivedConfig::init<C>`
-//!   precedent, `thread.rs`); the 9 non-hoistable fields (`TerminalColor`×7,
+//!   precedent, `thread.rs`); the 10 non-hoistable fields (`TerminalColor`×8,
 //!   `Path`, `RepeatablePath`) use inhabited default-constructible placeholders
 //!   until `init<C>` and the golden gate land (GPU_RD_CHUNK3A_DESIGN §B.1).
 //! - The `Renderer` struct (all fields, comments preserved) + nested
@@ -55,7 +55,7 @@ use crate::size::Size;
 use crate::Health;
 
 // ===========================================================================
-// DerivedConfig config-type placeholders (§B.1 — the 9 non-hoistable fields)
+// DerivedConfig config-type placeholders (§B.1 — the 10 non-hoistable fields)
 // ===========================================================================
 
 /// PORT NOTE (DEFERRED CONFIG TYPE — inhabited placeholder): reference
@@ -290,7 +290,8 @@ pub struct Options {
     /// The size of everything.
     pub size: Size,
     // DEFERRED (surface-mailbox seam §B.2):
-    //   /// The mailbox for sending the surface messages. ...
+    //   /// The mailbox for sending the surface messages. This is only valid
+    //   /// once the thread has started and should not be used outside of the thread.
     //   surface_mailbox: apprt.surface.Mailbox,
     //   /// The apprt surface.
     //   rt_surface: *apprt.Surface,
