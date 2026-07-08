@@ -345,6 +345,13 @@ includes the un-deferred CellText test.
 
 ## §8 Chunked execution plan + risks
 
+> **STATUS: Chunks 0-4 DONE + committed; Chunk 5 (this finale) DONE.** The offscreen
+> R-d slice RENDERS and is golden-gated (`golden_renders_cursor_fg_bg`). Chunk 5
+> audited the seams (**18** live `unimplemented!()` call sites — the earlier "~27"
+> estimate predated the Chunk-2/3/4 fills — **all deferred, zero reachable-bug**),
+> retained an honest `PORT STATUS: in progress` (see below), and updated the docs.
+> Full audit: `.port/phase-2/GPU_RD_CHUNK5_DESIGN.md`.
+
 **Chunk 0 — trait + api aliases + build.rs (compile-only).** `trait GraphicsApi` (assoc types),
 `api.rs` re-export/alias of objc2-metal enums to ghostty names, `build.rs` metallib (+ source
 fallback), copy `shaders.metal`. Gate: `cargo build -p rustty-renderer` on macOS.
@@ -366,9 +373,18 @@ inspecting `Contents`/`Uniforms` against a constructed terminal (optional dev as
 deterministic in-test frame; readback + PNG diff; generate + human-verify + commit the reference
 PNG. Gate: `rd_golden_frame` green. **This is the R-d gate.**
 
-**Chunk 5 — seams + docs.** R5-preserve deferred bodies (IOSurfaceLayer, CVDisplayLink, async
-present, `renderer.Thread` loop) as `unimplemented!("windowing-host")`; update `lib.rs` header,
-DEFERRALS.md (golden-gated modules, un-deferred CellText test), MEMORY.
+**Chunk 5 — seams + docs. DONE.** Audited every live `unimplemented!()` in
+`rustty-renderer/src` (**18** call sites: `generic.rs` 4, `metal/*` 3, `image.rs` 5,
+`overlay.rs` 4, `message.rs` 1, `thread.rs` 1) and PROVED none is reachable from the
+tested offscreen path → **all 18 legitimately DEFERRED** to five named Goal-2 tiers,
+each with a verbatim R5 body, **zero reachable-bug**. Deferred bodies (IOSurfaceLayer,
+CVDisplayLink, async present, `renderer.Thread` loop) stay `unimplemented!(...)`.
+Updated the `lib.rs` header (the sole, behavior-preserving code touch), DEFERRALS.md
+(new R-d subsection: golden-gated modules, un-deferred CellText==32 test, the 5
+deferred tiers), and the Chunk-4 doc. **PORT STATUS/G3b decision:** kept an honest
+`in progress` (the crate is not wholly ported) — G3b comment-coverage stays SKIPPED;
+R1 backstop = adversary + golden (heavy-tier doctrine). Flipping to `done` purely to
+activate the gate was rejected as dishonest. See `GPU_RD_CHUNK5_DESIGN.md`.
 
 ### Risks
 
@@ -386,10 +402,12 @@ DEFERRALS.md (golden-gated modules, un-deferred CellText test), MEMORY.
   last `(format, offset)` + size equals `size_of::<Vertex>()` (and the CellText==32 test).
 - **objc2 `MTLCopyAllDevices` gap** — one declared extern; low risk, offscreen uses
   `CreateSystemDefaultDevice` anyway.
-- **Offscreen ≠ on-screen honesty**: the golden image proves the *renderer emits correct
-  pixels into a texture*; it does NOT prove CAMetalLayer presentation, vsync, or resize. Those
-  are explicitly the windowing-host milestone. State this in the PR so "R-d green" is not
-  mis-read as "shows a window."
+- **Offscreen ≠ on-screen honesty** *(MET — the golden is now the evidence)*: the golden test
+  `golden_renders_cursor_fg_bg` proves the *renderer emits correct pixels into an IOSurface
+  texture*; it does NOT prove CAMetalLayer presentation, vsync, or resize. Those remain
+  explicitly the windowing-host milestone (the deferred `Metal::{init,loop_enter}` / async
+  present / display-link seams). Standing caveat retained: "R-d green" means correct offscreen
+  pixels, NOT "shows a window."
 - **Semaphore/mutex fidelity**: `frame_sema`/`draw_mutex` must match the Zig blocking semantics
   (triple-buffer backpressure). Verify a zigstd `Semaphore` exists; if not, port one leaf-side
   before Chunk 3.

@@ -8,30 +8,40 @@
 //! CONCRETE `Renderer` over the concrete `Metal` leaf types (a set of one — no
 //! `GraphicsAPI` trait hierarchy; OpenGL is Linux-deferred, WebGL wasm-deferred).
 //!
-//! PORT STATUS (Chunk 3a — struct + swap-chain/frame-state skeleton):
+//! PORT STATUS (GPU R-d OFFSCREEN slice — Chunks 3a–4, DONE):
 //!
 //! - `DerivedConfig` (struct + `init<C>`/`deinit`) — the `config -> renderer`
 //!   cycle is broken by (a) hoisting the 6 clean config value-types to
-//!   `rustty-render-types` (Part A, landed), and (b) porting `DerivedConfig`
-//!   generic over `C` (the `renderer/Thread.zig` `DerivedConfig::init<C>`
-//!   precedent, `thread.rs`); the 10 non-hoistable fields (`TerminalColor`×8,
-//!   `Path`, `RepeatablePath`) use inhabited default-constructible placeholders
-//!   until `init<C>` and the golden gate land (GPU_RD_CHUNK3A_DESIGN §B.1).
+//!   `rustty-render-types` (Part A, landed), and (b) the `C`-generic seam (the
+//!   `renderer/Thread.zig` `DerivedConfig::init<C>` precedent, `thread.rs`).
+//!   `TerminalColor` is now a real renderer-local enum (Chunk 3b); `init<C>`
+//!   stays an `unimplemented!()` config-coupled seam (the golden/test build
+//!   `DerivedConfig` directly via a fixture). `Path`/`RepeatablePath` stay
+//!   inhabited placeholders (GPU_RD_CHUNK3A_DESIGN §B.1).
 //! - The `Renderer` struct (all fields, comments preserved) + nested
 //!   `SwapChain`/`FrameState`/`CustomShaderState` (+ the semaphore-backpressure
-//!   method set: `SwapChain::{init,deinit,next_frame,release_frame}` using
-//!   `frame_sema.wait()`/`post()`; `FrameState::{init,resize}`;
-//!   `CustomShaderState::{init,resize,swap}`).
+//!   method set: `SwapChain::{init,deinit,next_frame,release_frame}`;
+//!   `FrameState::{init,resize}`; `CustomShaderState::{init,resize,swap}`).
+//! - The full offscreen DRAW PATH: `rebuild_cells`/`rebuild_row`/`add_*` (the CPU
+//!   cell-fill, Chunk 3b), `update_frame` + the uniforms math (Chunk 3c),
+//!   `draw_frame`/`frame_completed`/`sync_atlas_texture`/`init_shaders`/
+//!   `deinit_shaders` (Metal encode+submit -> IOSurface readback, Chunk 4).
+//!   Golden-gated by `macos_impl::tests::golden_renders_cursor_fg_bg`. The
+//!   raw-pointer aliasing (the shaper hook + the completion trampoline) is proven
+//!   SB+TB-clean on the isolated Miri harness `.port/phase-2/mirihar-chunk3b/`
+//!   (see MIRI_EXCEPTIONS.md).
 //!
-//! DEFERRED (the draw path — a later chunk): `updateFrame`/`rebuildCells`/
-//! `drawFrame`/`uniforms` math + `initShaders`/`deinitShaders`/`updateFontGrid*`
-//! are NOT declared here; `Renderer::{init,deinit}` are `unimplemented!()` seams
-//! with the verbatim reference body preserved (R5). See DEFERRALS.md.
+//! DEFERRED (a later tier — R5 `unimplemented!()` seams, verbatim body preserved):
+//! `Renderer::{init,deinit}` (need a live NSView/apprt surface), `changeConfig`/
+//! `setScreenSize`/`setFontGrid` (resize + config-swap), the real windowed
+//! layer-present path, `prepBackgroundImage`/custom-shader load, and the
+//! inspector/kitty-pixel/overlay-render tiers. See DEFERRALS.md.
 //!
 //! DEAD-CODE (`-D warnings`): the reference `SwapChain`/`FrameState`/
-//! `CustomShaderState` are Renderer-private (`const … = struct`) and their
-//! methods are reachable only from the deferred `Renderer::init`/`drawFrame`, so
-//! rustc would flag them "never used". They are WIDENED to `pub` (the
+//! `CustomShaderState` are Renderer-private (`const … = struct`). Some of their
+//! methods are now reachable from the landed `draw_frame`; the rest are reachable
+//! only from the deferred `Renderer::init`/`deinit`, so rustc would flag those
+//! "never used". They are WIDENED to `pub` (the
 //! GPU_RD_CHUNK3A_DESIGN §B.4 sanctioned "make pub" route — pub items reachable
 //! from the crate root are dead-code-exempt), which avoids per-item
 //! `#[allow(dead_code)]`. The visibility widening is documented per type.

@@ -4,44 +4,49 @@
 //! Overlay, State, Thread, backend, cell, cursor, generic, ...); links
 //! glslang/spirv-cross/wuffs/libpng/zlib-sys; apprt via surface trait (breaks #10, #11).
 //!
-//! PORT STATUS: in progress (R-a headless slice). Ported so far:
+//! PORT STATUS: in progress. Two slices are complete; substantial surface deferred.
 //!
-//! - `cell` — renderer/cell.zig (5 tests): `Contents`, `constraintWidth`,
-//!   symbol/graphics-element classification.
-//! - `cursor` — renderer/cursor.zig (4 tests): the renderer `Style` + `style()`.
-//! - `state` — renderer/State.zig (2 tests): the render `State`/`Preedit`.
-//! - `shaders` — the CPU-side vertex-data structs (`CellText`/`CellBg`/`Uniforms`)
-//!   that `cell.zig` fills, from renderer/opengl/shaders.zig.
-//! - `shadertoy` — renderer/shadertoy.zig (4 tests): the custom-shader transpile
-//!   path GLSL -> (glslang) -> SPIR-V -> (spirv-cross) -> MSL/GLSL, over the
-//!   vendored `glslang-sys` + `spirv-cross-sys` FFI.
-//! - `link` — renderer/link.zig (3 tests): the `oni.Regex`-backed renderer link
-//!   `Set`/`renderCellMap` (Oniguruma deferral now RESOLVED).
+//! DONE — the R-a headless slice: cell (renderer/cell.zig, 5 tests), cursor
+//!   (renderer/cursor.zig, 4 tests), state (renderer/State.zig, 2 tests), shaders
+//!   (the CPU-side `CellText`/`CellBg`/`Uniforms` vertex-data structs), shadertoy
+//!   (renderer/shadertoy.zig, 4 tests — the GLSL -> glslang -> SPIR-V -> spirv-cross
+//!   -> MSL/GLSL transpile), link (renderer/link.zig, 3 tests — the `oni.Regex`
+//!   renderer link `Set`/`renderCellMap`), Health (the crate-root `renderer.zig`
+//!   `Health` enum, 1 test), message (renderer/message.zig — the cross-thread
+//!   `Message` union), thread (renderer/Thread.zig — the MINIMAL cross-thread
+//!   surface only: `Thread::Mailbox` + the `DerivedConfig` seam placeholder), and
+//!   size (renderer/size.zig, 6 tests — the A1 hoist in `rustty-render-types`,
+//!   re-exported below).
 //!
-//! - `Health` — the crate-root `renderer.zig` `Health` enum (1 test): a
-//!   2-variant `enum(c_int)` with zero GPU dependency, hoisted to the crate root
-//!   (like the render-types A1 `size` hoist) so `rustty-apprt-api`'s
-//!   `Action::renderer_health` can name it without a GPU-renderer edge.
-//! - `message` — renderer/message.zig (0 tests): the cross-thread `Message`
-//!   union sent to a renderer thread (integration-tier stage 2 — the surface
-//!   termio's `renderer_mailbox` consumes).
-//! - `thread` — renderer/Thread.zig, MINIMAL cross-thread surface ONLY
-//!   (integration-tier stage 2): `Thread::Mailbox` (= `BlockingQueue<Message,
-//!   64>`) + the `DerivedConfig` deferred-seam placeholder. The event loop is
-//!   NOT ported (D6 xev + GPU tier; DEFERRALS.md).
+//! DONE — the GPU R-d OFFSCREEN slice (macOS/Metal, Chunks 0-4): the monomorphic
+//!   `Renderer` over the concrete `Metal` backend RENDERS a terminal state offscreen.
+//!   The whole `metal/*` backend (device/queue/buffer/texture/pipeline/render-pass/
+//!   target/frame), `SwapChain`/`FrameState`, `update_frame`, the `rebuild_cells` CPU
+//!   cell-fill, the uniforms math, and `draw_frame` (Metal encode+submit -> IOSurface
+//!   readback) are ported and gated by the golden test
+//!   `generic::macos_impl::tests::golden_renders_cursor_fg_bg` ("Ab" + cursor, real
+//!   pixel asserts). The `draw_frame` raw-ptr aliasing is proven clean under Stacked
+//!   AND Tree Borrows by `.port/phase-2/mirihar-chunk3b`.
 //!
-//! renderer/size.zig (6 tests) is already ported in the `rustty-render-types`
-//! leaf (the A1 hoist) and re-exported below.
+//! DEFERRED (named Goal-2 tiers — R5 `unimplemented!()` seams, verbatim bodies kept):
+//!   - windowing-host / apprt-surface: `Renderer::{init,deinit}` (live NSView),
+//!     `Metal::{init,loop_enter}`, the async `Frame::complete` present half, the real
+//!     CAMetalLayer/IOSurfaceLayer + display-link windowed present, and the
+//!     resize/config-swap (`changeConfig`/`setScreenSize`/`setFontGrid`).
+//!   - renderer<->config (G7 cycle): `Renderer.DerivedConfig::init`,
+//!     `Message::initChangeConfig`, `Thread.DerivedConfig::init`,
+//!     `shadertoy::load_from_files`/`load_from_file`, `prep_background_image` file I/O.
+//!   - Kitty-pixel: `image` `kitty_update`/`prep_kitty_*`/`convert` (wuffs swizzle).
+//!   - overlay-render: the z2d `Overlay` `highlight_*` rect draws.
+//!   - rustty-inspector: `overlayFeatures` (uninhabited inspector placeholder).
+//!   - OpenGL/WebGL backends (Linux/wasm) and GTK — out of the monomorphic Metal scope.
 //!
-//! DEFERRED:
-//!
-//! - `shadertoy`'s `loadFromFiles`/`loadFromFile` — they take
-//!   `configpkg.RepeatablePath`, but `rustty-config` already depends on
-//!   `rustty-renderer`, so a `renderer -> config` edge would cycle (G7). The
-//!   verbatim bodies are preserved in `shadertoy.rs` (R5) and are NOT exercised
-//!   by any test. See .port/phase-2/DEFERRALS.md.
-//! - The GPU draw path (OpenGL/Metal backends, pipelines, generic renderer,
-//!   images, custom shaders) — R-d/Phase 3.
+//! G3b comment-coverage SKIPS this crate while it is marked `in progress` (only a
+//! `done` status activates the whole-crate fuzzy match); it stays `in progress` while
+//! the above is deferred (honest). R1 fidelity for the ported slices is backstopped by
+//! the adversary + verify panel + the golden gate (heavy-tier doctrine), and MAY be
+//! spot-checked with a scoped `check_comment_coverage.py --port-glob` run.
+//! See .port/phase-2/DEFERRALS.md and .port/phase-2/GPU_RD_CHUNK5_DESIGN.md.
 
 pub mod cell;
 pub mod cursor;

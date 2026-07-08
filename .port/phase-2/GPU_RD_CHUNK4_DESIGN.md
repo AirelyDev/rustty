@@ -1,5 +1,18 @@
 # GPU R-d Chunk 4 — the OFFSCREEN GOLDEN-IMAGE GATE (the R-d contract)
 
+> **LANDED.** The golden is GREEN:
+> `generic::macos_impl::tests::golden_renders_cursor_fg_bg` builds a deterministic
+> terminal state ("Ab" + cursor), runs `update_frame` → `draw_frame(true)` through the
+> real Metal encode/submit path into an offscreen IOSurface-backed `BGRA8Unorm` target,
+> reads the pixels back, and asserts the render structure (bg/fg/cursor). The
+> `draw_frame` raw-ptr aliasing discipline is proven clean under **both** Stacked and
+> Tree Borrows by `.port/phase-2/mirihar-chunk3b` (`drawframe_shipped` clean;
+> `drawframe_naive` demonstrates the SB UB it avoids). Determinism pins:
+> `AlphaBlending::Native` ⇒ `BGRA8Unorm`, `colorspace = Srgb` ⇒ `use_display_p3 = false`,
+> `offscreen_size == size.screen` ⇒ `size_changed == false`. The seam audit + the
+> honest `PORT STATUS`/G3b decision are the Chunk-5 finale
+> (`.port/phase-2/GPU_RD_CHUNK5_DESIGN.md`).
+
 **Design doc. Design ONLY — touches NO `crates/`.** Architect deliverable for the
 Chunk-4 workflow (`.port/phase-2/wf-gpu-rd-chunk4-golden.js`). Ports (from
 `ghostty/src/renderer/generic.zig` + `metal/shaders.zig` + `metal/{Frame,Target,RenderPass}.zig`

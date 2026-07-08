@@ -7,33 +7,29 @@
 //! one — OpenGL is Linux-deferred, WebGL is wasm-deferred; the trait is a
 //! documented Goal-2 seam only).
 //!
-//! PORT STATUS: Chunk 0 (the Metal API vocabulary + shader build infra) only:
+//! PORT STATUS (GPU R-d OFFSCREEN slice — Chunks 0–4, DONE):
 //!
 //! - `api` — `metal/api.zig`: the Metal enum/extern-struct/extern-fn vocabulary,
 //!   ported as `objc2-metal` re-exports under ghostty's names (R3: identical
 //!   Apple constants), with the two `packed struct` bit-field types
 //!   (`MTLResourceOptions`/`MTLTextureUsage`) re-shaped to compose objc2's
-//!   bitflags ([ADV-FIX F3]).
+//!   bitflags ([ADV-FIX F3]). (Chunk 0)
+//! - The shader library (`build.rs` compiles `src/shaders/shaders.metal` into
+//!   `$OUT_DIR/rustty.metallib` via `xcrun metal`/`metallib`, setting the
+//!   `rustty_metallib` cfg on success), embedded by the runtime. (Chunk 0)
+//! - The resource-leaf wrappers `buffer`/`texture`/`sampler` (Chunk 1a) and the
+//!   draw-plumbing leaves `pipeline`/`render_pass`/`target` (IOSurface-backed
+//!   offscreen)/`frame` (the completion contract)/`shaders` (metallib load + the
+//!   pipeline collection) (Chunk 1b).
+//! - The `Metal` impl (`metal_impl.rs`: `init_offscreen`/`init_shaders`/the
+//!   resource-option factories/the frame lifecycle, Chunk 2) + `gpu_abi` (the
+//!   byte-faithful GPU-struct ABI, Chunk 4). The offscreen draw path is LIVE and
+//!   golden-gated (`generic::macos_impl::tests::golden_renders_cursor_fg_bg`).
 //!
-//! The shader library (`build.rs` compiles `src/shaders/shaders.metal` into
-//! `$OUT_DIR/rustty.metallib` via `xcrun metal`/`metallib`, setting the
-//! `rustty_metallib` cfg on success) is embedded by the Chunk-1 runtime.
-//!
-//! CHUNK 1a lands the three PURE resource-leaf wrappers (`buffer`/`texture`/
-//! `sampler`) over `objc2`/`objc2-metal` (`GPU_RD_TRAIT_DESIGN.md` §B/§C).
-//!
-//! CHUNK 1b lands the five draw-plumbing leaves (`pipeline`/`render_pass`/
-//! `target`/`frame`/`shaders`) — the `Pipeline`/`RenderPass` step machinery, the
-//! IOSurface-backed offscreen `Target`, the `Frame` completion contract, and the
-//! `Shaders` backend container (metallib load + the pipeline collection). These
-//! compile + link against Chunk-1a + `crate::shaders` with no reference to the
-//! not-yet-existing `GenericRenderer`/`Metal` (Frame's completion callback is a
-//! forward-declared fn-pointer contract; the concrete wiring lands in Chunk 3).
-//!
-//! DEFERRED (Chunk 2/3+, `GPU_RD_BLUEPRINT.md`): the `Metal` impl and the
-//! `generic.zig` renderer body — the golden-image-gated offscreen draw path; the
-//! Frame async `addCompletedHandler` present (windowing-host seam); and Target's
-//! DisplayP3 `set_color_space` (needs objc2-core-graphics, Chunk 4).
+//! DEFERRED (a later tier, `GPU_RD_BLUEPRINT.md`): the Frame async
+//! `addCompletedHandler` present + the real windowed layer-present path
+//! (windowing-host seam); `Metal::init` (needs a live NSView/IOSurfaceLayer);
+//! Target's DisplayP3 `set_color_space`; and the OpenGL/WebGL/GTK backends.
 
 pub mod api;
 pub mod buffer;

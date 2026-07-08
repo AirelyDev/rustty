@@ -502,6 +502,45 @@ The `TERMINAL_TEST_LOCK` + `terminal_test_guard()` + the 8 `let _terminal_guard`
 call sites have been deleted. The unrelated `SHADER_FFI_LOCK` (glslang/spirv-cross
 ARE genuinely non-reentrant) is intentionally retained.
 
+### rustty-renderer R-d — offscreen Metal draw path (Chunks 0-4) DONE; on-screen + config + Kitty + overlay DEFERRED
+
+**DONE.** The monomorphic `Renderer<Metal>` RENDERS a terminal state offscreen
+(macOS/Metal). The whole `metal/*` backend (device/queue/buffer/texture/pipeline/
+render-pass/target/frame), `SwapChain`/`FrameState`, `update_frame`, the
+`rebuild_cells` CPU cell-fill, the uniforms math, and `draw_frame` (Metal
+encode+submit → IOSurface readback) are ported and gated by the golden test
+`generic::macos_impl::tests::golden_renders_cursor_fg_bg` ("Ab" + cursor, real pixel
+asserts). The `size_of::<CellText>()==32` un-defer landed. The `draw_frame` raw-ptr
+aliasing discipline is proven clean under **both** Stacked and Tree Borrows by
+`.port/phase-2/mirihar-chunk3b`.
+
+**DEFERRED (five named Goal-2 tiers — 18 live `unimplemented!()` call sites, each
+with its verbatim Zig body preserved, R5; the full seam audit is
+`.port/phase-2/GPU_RD_CHUNK5_DESIGN.md` §1).** Zero of the 18 is reachable from the
+tested offscreen path (proven by walking `draw_frame` against the golden's static
+pins: `overlay/inspector/images/bg_image = None`, empty images, `sync = true`,
+`size_changed = false`, direct struct construction with no `Drop`):
+- **windowing-host / apprt-surface:** `Renderer::{init,deinit}` (live NSView),
+  `Metal::{init,loop_enter}`, the async `Frame::complete` present half, the real
+  CAMetalLayer/IOSurfaceLayer + display-link windowed present, and the
+  resize/config-swap (`changeConfig`/`setScreenSize`/`setFontGrid`).
+- **renderer↔config (G7 cycle):** `Renderer.DerivedConfig::init`,
+  `Message::initChangeConfig`, `Thread.DerivedConfig::init`,
+  `shadertoy::load_from_files`/`load_from_file` (commented verbatim, no live fn), and
+  `prep_background_image` file I/O (subsumed by the `Renderer::init` seam).
+- **Kitty-pixel / image-upload:** `image` `kitty_update`/`prep_kitty_*`/`convert`
+  (wuffs swizzle).
+- **overlay-render:** the z2d `Overlay` `highlight_*` rect draws.
+- **rustty-inspector:** `overlayFeatures` (uninhabited inspector placeholder).
+- the **OpenGL/WebGL** backends (Linux/wasm) and **GTK** — out of the monomorphic
+  Metal scope.
+
+**G3b.** The crate remains `PORT STATUS: in progress` ⇒ G3b comment-coverage keeps
+SKIPPING it (honest — the crate is not wholly ported). R1 for the ported slice is
+backstopped by the adversary + verify panel + the golden gate (heavy-tier doctrine);
+a scoped `check_comment_coverage.py --port-glob` run is available on the done slice
+as an optional on-demand check.
+
 ## rustty-crash (integration-tier stage 1) — `ThreadStateSurface` seam; concrete `ThreadState` impl deferred
 
 `src/crash/` is ported in full (dir.zig + main.zig + sentry.zig +
