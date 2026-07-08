@@ -393,9 +393,21 @@ mod macos_impl {
         collection, shape, Metrics, Presentation, Shaper, ShaperCache, SharedGrid, SPRITE_INDEX,
     };
     use rustty_render_types::WindowPaddingColor;
+    // PORT NOTE (Chunk 3c §B.2 COMPILE-BLOCKER): the bare name `OutOfMemory` in this
+    // module is `rustty_font::atlas::OutOfMemory` (imported above). `update_frame`'s
+    // sole propagated `?` is `terminal_state.update(...)`, whose error is the DISTINCT
+    // `rustty_vt::pagelist::OutOfMemory`; there is no `From` between them, so it is
+    // imported here under a distinct alias and returned directly so `?` needs no
+    // conversion.
+    use rustty_util::math;
+    use rustty_vt::input::key;
+    use rustty_vt::input::key_mods::Mods;
+    use rustty_vt::modes::Mode;
+    use rustty_vt::pagelist::OutOfMemory as VtOutOfMemory;
     use rustty_vt::render::{self, CellSet, Dirty, Highlight, RenderState};
     use rustty_vt::size::CellCountInt;
     use rustty_vt::style::{Fg, Style};
+    use rustty_vt::terminal::ScrollViewport;
     use rustty_vt::Scrollbar;
     use rustty_vt::{color, page, point, sgr};
     use rustty_zigstd::thread::{Mutex, Semaphore};
@@ -413,10 +425,14 @@ mod macos_impl {
     use crate::metal::Metal;
     use crate::row::never_extend_bg;
     use crate::shaders::{
-        Atlas, BgImage, CellBg, CellText, CellTextBools, Uniforms, UniformsPaddingExtend,
+        Atlas, BgImage, BgImageInfo, BgImageInfoFit, BgImageInfoPosition, CellBg, CellText,
+        CellTextBools, Uniforms, UniformsPaddingExtend,
     };
     use crate::shadertoy;
-    use crate::size::Size;
+    use crate::size::{
+        BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, CellSize, GridSize, Padding,
+        ScreenSize, Size,
+    };
     use crate::state;
     use crate::Overlay;
 
@@ -427,6 +443,16 @@ mod macos_impl {
     // buffering). Used as the `[FrameState; SWAP_CHAIN_COUNT]` array length + the
     // `frame_sema` permit count (GPU_RD_CHUNK3A_DESIGN §B.5).
     const SWAP_CHAIN_COUNT: usize = Metal::SWAP_CHAIN_COUNT;
+
+    /// Whether +Y points down in the custom-shader coordinate space.
+    //
+    // PORT NOTE (Chunk 3c §E.5): reference `GraphicsAPI.custom_shader_y_is_down`
+    // (Metal.zig `pub const custom_shader_y_is_down = true;`). Monomorphized to the
+    // concrete `Metal::CUSTOM_SHADER_Y_IS_DOWN` (the `SWAP_CHAIN_COUNT` const-collapse
+    // precedent above). `update_custom_shader_uniforms_for_frame` keeps BOTH reference
+    // `if` branches verbatim (R1 branch fidelity); the const-collapse keeps them,
+    // matching the comptime source (do NOT hand-drop the dead branch).
+    const CUSTOM_SHADER_Y_IS_DOWN: bool = Metal::CUSTOM_SHADER_Y_IS_DOWN;
 
     /// PORT: the aggregate renderer error. Reference `generic.zig` methods return
     /// Zig `!T` (inferred error unions of the Metal leaf errors + OOM). Rust `?`
@@ -2896,6 +2922,752 @@ mod macos_impl {
     }
 
     // =======================================================================
+    // Chunk 3c — the frame orchestrator + uniforms math (GPU_RD_CHUNK3C_DESIGN)
+    // =======================================================================
+
+    impl Renderer {
+        /// Update the frame data.
+        //
+        // Zig: pub fn updateFrame(self, state: *renderer.State, cursor_blink_visible: bool)
+        //      Allocator.Error!void
+        // WIDENED to `pub` (dead-code-exempt entry point; also the crate's frame driver).
+        // It is the SOLE caller of the already-ported `rebuild_cells` (:1364) /
+        // `rebuild_overlay` (:1349), retiring their 3b "real caller lands in 3c"
+        // placeholders. `state: *renderer.State` -> `&state::State` (Chunk 3c §B.2):
+        // `update_frame` never mutates a `State` *field* — it only locks `state.mutex`
+        // (`lock(&self)`) and mutates THROUGH the stored `*mut Terminal` (a disjoint
+        // allocation), so a shared `&State` suffices. The ONLY propagated `?` is
+        // `terminal_state.update`, whose error is `VtOutOfMemory`
+        // (`rustty_vt::pagelist::OutOfMemory`, aliased — see the import PORT NOTE); Zig
+        // `Allocator.Error!void` -> `Result<(), VtOutOfMemory>`.
+        pub fn update_frame(
+            &mut self,
+            state: &state::State,
+            cursor_blink_visible: bool,
+        ) -> Result<(), VtOutOfMemory> {
+            // const start = std.time.Instant.now() catch unreachable;
+            // const start_micro = std.time.microTimestamp();
+            // defer {
+            //     const end = std.time.Instant.now() catch unreachable;
+            //     log.warn(
+            //         "[updateFrame time] start_micro={} duration={}ns",
+            //         .{ start_micro, end.since(start) / std.time.ns_per_us },
+            //     );
+            // }
+
+            // We fully deinit and reset the terminal state every so often
+            // so that a particularly large terminal state doesn't cause
+            // the renderer to hold on to retained memory.
+            //
+            // Frame count is ~12 minutes at 120Hz.
+            let max_terminal_state_frame_count = 100_000;
+            if self.terminal_state_frame_count >= max_terminal_state_frame_count {
+                self.terminal_state.deinit(self.alloc);
+                self.terminal_state = RenderState::empty();
+            }
+            self.terminal_state_frame_count += 1;
+
+            // Create an arena for all our temporary allocations while rebuilding
+            //
+            // PORT NOTE (Chunk 3c §D.6): the reference opens `var arena =
+            // ArenaAllocator.init(self.alloc)` and threads `arena_alloc` into
+            // `preedit.clone`, `link_cells`, and `render_cell_map`. In rustty every one
+            // of those owns its result as a `Global` `Vec`/`CellSet` freed by `Drop`
+            // (the arena-collapse precedent — message.rs `SearchMatches`), so the
+            // explicit `ArenaAllocator` is omitted and `Global` is passed where the
+            // reference passes `arena_alloc` (nothing leaks — the former arena tenants
+            // are now `Drop`-freed).
+            // var arena = ArenaAllocator.init(self.alloc);
+            // defer arena.deinit();
+            // const arena_alloc = arena.allocator();
+
+            // Data we extract out of the critical area.
+            struct Critical {
+                links: CellSet,
+                // §C.5: written (`:1275 .mouse = state.mouse`) but never READ after the
+                // block in the reference (post-block code reads `state.mouse.point/.mods`
+                // directly, :1289/1290). Mirrored (R1) as a faithful write-only field.
+                #[allow(dead_code)]
+                mouse: state::Mouse,
+                preedit: Option<state::Preedit>,
+                scrollbar: Scrollbar,
+                overlay_features: Vec<crate::overlay::Feature>,
+            }
+
+            // The renderer-thread state carries its terminal behind a `*mut Terminal`
+            // (a separate allocation, disjoint from `self`). Copy the stored raw
+            // pointer and re-deref it FRESH at every use (never cache a reference
+            // across an interleaving `&mut`), matching the Zig `state.terminal.…`
+            // re-walk (Chunk 3c §C.2).
+            let t = state.terminal; // *mut Terminal
+
+            // Hand-rolled `defer state.mutex.unlock()` (Chunk 3c §C.4/RISK-5): the
+            // guard-less `rustty_zigstd::thread::Mutex` has no RAII drop, and the lock
+            // is held across THREE exits — the sync-output early `return`, the
+            // `terminal_state.update(...)?` propagation (the sole propagating `?`,
+            // INSIDE the lock), and normal fall-through. This `Drop` over `&Mutex`
+            // fires on all three. Sound: it borrows the mutex allocation behind
+            // `state.mutex`, disjoint from `self`, so it does not clash with the
+            // `&mut self.terminal_state` / `&mut *t` uses inside the block.
+            struct Unlock<'a>(&'a Mutex);
+            impl Drop for Unlock<'_> {
+                fn drop(&mut self) {
+                    self.0.unlock();
+                }
+            }
+
+            // Update all our data as tightly as possible within the mutex.
+            let mut critical: Critical = {
+                // const start = try std.time.Instant.now();
+                // const start_micro = std.time.microTimestamp();
+                // defer {
+                //     const end = std.time.Instant.now() catch unreachable;
+                //     std.log.err("[updateFrame critical time] start={}\tduration={} us", .{ start_micro, end.since(start) / std.time.ns_per_us });
+                // }
+
+                unsafe {
+                    (*state.mutex).lock();
+                }
+                let _mutex_guard = Unlock(unsafe { &*state.mutex });
+
+                // If we're in a synchronized output state, we pause all rendering.
+                if unsafe { (*t).modes.get(Mode::SynchronizedOutput) } {
+                    // log.debug("synchronized output started, skipping render", .{});
+                    return Ok(());
+                }
+
+                // If scroll-to-bottom on output is enabled, check if the final line
+                // changed by comparing the bottom-right pin. If the node pointer or
+                // y offset changed, new content was added to the screen.
+                // Update this BEFORE we update our render state so we can
+                // draw the new scrolled data immediately.
+                if self.config.scroll_to_bottom_on_output {
+                    'scroll: {
+                        let active = unsafe { (*t).screens.active };
+                        let br =
+                            match unsafe { (*active).pages.get_bottom_right(point::Tag::Screen) } {
+                                Some(br) => br,
+                                None => break 'scroll,
+                            };
+
+                        // If the pin hasn't changed, then don't scroll.
+                        if self.last_bottom_node == Some(br.node as usize)
+                            && self.last_bottom_y == br.y
+                        {
+                            break 'scroll;
+                        }
+
+                        // Update tracked pin state for next frame
+                        self.last_bottom_node = Some(br.node as usize);
+                        self.last_bottom_y = br.y;
+
+                        // Scroll
+                        unsafe {
+                            (*t).scroll_viewport(ScrollViewport::Bottom);
+                        }
+                    }
+                }
+
+                // Update our terminal state
+                self.terminal_state.update(self.alloc, unsafe { &mut *t })?;
+
+                // If our terminal state is dirty at all we need to redo
+                // the viewport search.
+                if self.terminal_state.dirty != Dirty::False {
+                    unsafe {
+                        (*t).flags.search_viewport_dirty = true;
+                    }
+                }
+
+                // Get our scrollbar out of the terminal. We synchronize
+                // the scrollbar read with frame data updates because this
+                // naturally limits the number of calls to this method (it
+                // can be expensive) and also makes it so we don't need another
+                // cross-thread mailbox message within the IO path.
+                //
+                // (§C.1-#9: re-read `active` FRESH — do NOT reuse the scroll block's
+                // `active` across the `&mut *t` update above.)
+                let active = unsafe { (*t).screens.active };
+                let scrollbar = unsafe { (*active).pages.scrollbar() };
+
+                // Get our preedit state
+                let preedit: Option<state::Preedit> = state.preedit.as_ref().map(|p| p.clone());
+
+                // If we have Kitty graphics data, we enter a SLOW SLOW SLOW path.
+                // We only do this if the Kitty image state is dirty meaning only if
+                // it changes.
+                //
+                // If we have any virtual references, we must also rebuild our
+                // kitty state on every frame because any cell change can move
+                // an image.
+                if self.images.kitty_requires_update(unsafe { &*t }) {
+                    // We need to grab the draw mutex since this updates
+                    // our image state that drawFrame uses.
+                    self.draw_mutex.lock();
+                    self.images.kitty_update(
+                        self.alloc,
+                        unsafe { &*t },
+                        CellSize {
+                            width: self.grid_metrics.cell_width,
+                            height: self.grid_metrics.cell_height,
+                        },
+                    );
+                    self.draw_mutex.unlock();
+                }
+
+                // Get our OSC8 links we're hovering if we have a mouse.
+                // This requires terminal state because of URLs.
+                let links: CellSet = match state.mouse.point {
+                    // If our mouse isn't hovering, we have no links.
+                    None => CellSet::new(),
+                    Some(vp) => {
+                        // If the right mods aren't pressed, then we can't match.
+                        if !state.mouse.mods.equal(key::ctrl_or_super(Mods::default())) {
+                            CellSet::new()
+                        } else {
+                            self.terminal_state
+                                .link_cells(Global, vp)
+                                .unwrap_or_else(|_err| {
+                                    // log.warn("error searching for OSC8 links err={}", .{err});
+                                    CellSet::new()
+                                })
+                        }
+                    }
+                };
+
+                let overlay_features: Vec<crate::overlay::Feature> = match state.inspector {
+                    None => Vec::new(),
+                    // DEFERRED R5 SEAM (§C.7): `state.inspector` is the uninhabited
+                    // `enum {}` placeholder (state.rs) ⇒ statically the `None` arm; the
+                    // reference logic is kept verbatim as the unreachable arm.
+                    //   const insp = state.inspector orelse break :overlay &.{};
+                    //   const renderer_info = insp.rendererInfo();
+                    //   break :overlay renderer_info.overlayFeatures(arena_alloc) catch &.{};
+                    Some(_insp) => unimplemented!(
+                        "inspector.rendererInfo().overlayFeatures — deferred \
+                         (rustty-inspector stub); verbatim body above"
+                    ),
+                };
+
+                Critical {
+                    links,
+                    mouse: state.mouse,
+                    preedit,
+                    scrollbar,
+                    overlay_features,
+                }
+            };
+
+            // Outside the critical area we can update our links to contain
+            // our regex results.
+            let _ = self.config.links.render_cell_map(
+                Global,
+                &mut critical.links,
+                &self.terminal_state,
+                state.mouse.point,
+                state.mouse.mods,
+            );
+            // catch |err| log.warn("error searching for regex links err={}", .{err});
+
+            // Clear our highlight state and update.
+            if self.search_matches_dirty || self.terminal_state.dirty != Dirty::False {
+                self.search_matches_dirty = false;
+
+                // Clear the prior highlights
+                let mut any_dirty: bool = false;
+                for row in self.terminal_state.row_data.iter_mut() {
+                    if !row.highlights.is_empty() {
+                        row.highlights.clear();
+                        row.dirty = true;
+                        any_dirty = true;
+                    }
+                }
+                if any_dirty && self.terminal_state.dirty == Dirty::False {
+                    self.terminal_state.dirty = Dirty::Partial;
+                }
+
+                // NOTE: The order below matters. Highlights added earlier
+                // will take priority.
+
+                if let Some(m) = &self.search_selected_match {
+                    let _ = self.terminal_state.update_highlights_flattened(
+                        self.alloc,
+                        HighlightTag::SearchMatchSelected as u8,
+                        core::slice::from_ref(&m.r#match),
+                    );
+                    // catch |err| {
+                    //     // Not a critical error, we just won't show highlights.
+                    //     log.warn("error updating search selected highlight err={}", .{err});
+                    // }
+                }
+
+                if let Some(m) = &self.search_matches {
+                    let _ = self.terminal_state.update_highlights_flattened(
+                        self.alloc,
+                        HighlightTag::SearchMatch as u8,
+                        &m.matches,
+                    );
+                    // catch |err| {
+                    //     // Not a critical error, we just won't show highlights.
+                    //     log.warn("error updating search highlights err={}", .{err});
+                    // }
+                }
+            }
+
+            // From this point forward no more errors.
+            // errdefer comptime unreachable;
+
+            // Reset our dirty state after updating.
+            // defer self.terminal_state.dirty = .false;
+            //
+            // PORT NOTE (§C.4/RISK-3): the reference `defer` fires at function scope
+            // exit — i.e. AFTER `updateCustomShaderUniformsFromState` (:1418, which
+            // GATES on `dirty != .false`) and `endFrame` (:1423). So the reset is the
+            // LAST statement of this fn (after `end_frame`), NOT here; the post-region
+            // is infallible so a plain final assignment is faithful.
+
+            // Rebuild the overlay image if we have one. We can do this
+            // outside of any critical areas.
+            let _ = self.rebuild_overlay(&critical.overlay_features);
+            // catch |err| log.warn("error rebuilding overlay surface err={}", .{err});
+
+            // Acquire the draw mutex for all remaining state updates.
+            {
+                self.draw_mutex.lock();
+
+                // Build our GPU cells.
+                //
+                // `critical.preedit` is MOVED into `rebuild_cells`, but
+                // `critical.preedit != null` is read FIRST for `cursor::style` — so
+                // compute the cursor style (reading `is_some()`) before the move.
+                let cs = cursor::style(
+                    &self.terminal_state,
+                    cursor::StyleOptions {
+                        preedit: critical.preedit.is_some(),
+                        focused: self.focused,
+                        blink_visible: cursor_blink_visible,
+                    },
+                );
+                self.rebuild_cells(critical.preedit, cs, &critical.links);
+                // catch |err| {
+                //     // This means we weren't able to allocate our buffer
+                //     // to update the cells. In this case, we continue with
+                //     // our old buffer (frozen contents) and log it.
+                //     comptime assert(@TypeOf(err) == error{OutOfMemory});
+                //     log.warn("error rebuilding GPU cells err={}", .{err});
+                // }
+                // (rebuild_cells is infallible in rustty — its sole OOM source aborts
+                // via the Global allocator, so the reference's "continue with frozen
+                // contents" catch path above is unreachable here; §3b §C.4.)
+
+                // The scrollbar is only emitted during draws so we also
+                // check the scrollbar cache here and update if needed.
+                // This is pretty fast.
+                if !self.scrollbar.eql(critical.scrollbar) {
+                    self.scrollbar = critical.scrollbar;
+                    self.scrollbar_dirty = true;
+                }
+
+                // Update our background color
+                self.uniforms.bg_color = [
+                    self.terminal_state.colors.background.r,
+                    self.terminal_state.colors.background.g,
+                    self.terminal_state.colors.background.b,
+                    (self.config.background_opacity * 255.0).round() as u8,
+                ];
+
+                // If we're on macOS and have glass styles, we remove
+                // the background opacity because the glass effect handles
+                // it.
+                //
+                // PORT NOTE (§C.1-#24): the reference guards this with `if (comptime
+                // builtin.os.tag == .macos)`; the whole `macos_impl` module is already
+                // `#[cfg(target_os = "macos")]`-gated, so the comptime guard collapses
+                // to the bare `switch`.
+                match self.config.background_blur {
+                    BackgroundBlur::MacosGlassRegular | BackgroundBlur::MacosGlassClear => {
+                        self.uniforms.bg_color[3] = 0
+                    }
+                    _ => {}
+                }
+
+                // Prepare our overlay image for upload (or unload). This
+                // has to use our general allocator since it modifies
+                // state that survives frames.
+                let _ = self
+                    .images
+                    .overlay_update(self.alloc, self.overlay.as_ref());
+                // catch |err| log.warn("error updating overlay images err={}", .{err});
+
+                // Update custom shader uniforms that depend on terminal state.
+                self.update_custom_shader_uniforms_from_state();
+
+                self.draw_mutex.unlock();
+            }
+
+            // Notify our shaper we're done for the frame. For some shapers,
+            // such as CoreText, this triggers off-thread cleanup logic.
+            self.font_shaper.end_frame();
+
+            // Reset our dirty state after updating (the reference `defer
+            // self.terminal_state.dirty = .false`, fired at fn scope exit — §C.4).
+            self.terminal_state.dirty = Dirty::False;
+
+            Ok(())
+        }
+
+        /// Update uniforms that are based on the font grid.
+        ///
+        /// Caller must hold the draw mutex.
+        //
+        // Zig: fn updateFontGridUniforms(self) void — widened to `pub` for dead-code
+        // exemption (no 3c caller; its caller `setFontGrid`/`Renderer::init` land later).
+        pub fn update_font_grid_uniforms(&mut self) {
+            self.uniforms.cell_size = [
+                self.grid_metrics.cell_width as f32,
+                self.grid_metrics.cell_height as f32,
+            ];
+        }
+
+        /// Update uniforms that are based on the screen size.
+        ///
+        /// Caller must hold the draw mutex.
+        //
+        // Zig: fn updateScreenSizeUniforms(self) void — `pub` (no 3c caller).
+        // PARITY: the reference multiplies the left/top padding by `-1`
+        // (`-1 * @as(f32, @floatFromInt(self.size.padding.left))`); the `-1 *` form is
+        // kept verbatim rather than the `-(x)` clippy rewrite.
+        #[allow(clippy::neg_multiply)]
+        pub fn update_screen_size_uniforms(&mut self) {
+            let terminal_size: ScreenSize = self.size.terminal();
+
+            // Blank space around the grid.
+            let blank: Padding = self
+                .size
+                .screen
+                .blank_padding(
+                    self.size.padding,
+                    GridSize {
+                        columns: self.cells.size.columns,
+                        rows: self.cells.size.rows,
+                    },
+                    CellSize {
+                        width: self.grid_metrics.cell_width,
+                        height: self.grid_metrics.cell_height,
+                    },
+                )
+                .add(self.size.padding);
+
+            // Setup our uniforms
+            self.uniforms.projection_matrix = math::ortho2d(
+                -1.0 * self.size.padding.left as f32,
+                (terminal_size.width + self.size.padding.right) as f32,
+                (terminal_size.height + self.size.padding.bottom) as f32,
+                -1.0 * self.size.padding.top as f32,
+            );
+            self.uniforms.grid_padding = [
+                blank.top as f32,
+                blank.right as f32,
+                blank.bottom as f32,
+                blank.left as f32,
+            ];
+            self.uniforms.screen_size = [
+                self.size.screen.width as f32,
+                self.size.screen.height as f32,
+            ];
+        }
+
+        /// Update the background image vertex buffer (CPU-side).
+        ///
+        /// This should be called if and when configs change that
+        /// could affect the background image.
+        ///
+        /// Caller must hold the draw mutex.
+        //
+        // Zig: fn updateBgImageBuffer(self) void — `pub` (no 3c caller).
+        pub fn update_bg_image_buffer(&mut self) {
+            self.bg_image_buffer = BgImage {
+                opacity: self.config.bg_image_opacity,
+                info: BgImageInfo {
+                    position: match self.config.bg_image_position {
+                        BackgroundImagePosition::TopLeft => BgImageInfoPosition::Tl,
+                        BackgroundImagePosition::TopCenter => BgImageInfoPosition::Tc,
+                        BackgroundImagePosition::TopRight => BgImageInfoPosition::Tr,
+                        BackgroundImagePosition::CenterLeft => BgImageInfoPosition::Ml,
+                        BackgroundImagePosition::CenterCenter | BackgroundImagePosition::Center => {
+                            BgImageInfoPosition::Mc
+                        }
+                        BackgroundImagePosition::CenterRight => BgImageInfoPosition::Mr,
+                        BackgroundImagePosition::BottomLeft => BgImageInfoPosition::Bl,
+                        BackgroundImagePosition::BottomCenter => BgImageInfoPosition::Bc,
+                        BackgroundImagePosition::BottomRight => BgImageInfoPosition::Br,
+                    },
+                    fit: match self.config.bg_image_fit {
+                        BackgroundImageFit::Contain => BgImageInfoFit::Contain,
+                        BackgroundImageFit::Cover => BgImageInfoFit::Cover,
+                        BackgroundImageFit::Stretch => BgImageInfoFit::Stretch,
+                        BackgroundImageFit::None => BgImageInfoFit::None,
+                    },
+                    repeat: self.config.bg_image_repeat,
+                },
+            };
+            // Signal that the buffer was modified.
+            self.bg_image_buffer_modified = self.bg_image_buffer_modified.wrapping_add(1);
+        }
+
+        /// Update custom shader uniforms that depend on terminal state.
+        ///
+        /// This should be called in `updateFrame` when terminal state changes.
+        //
+        // Zig: fn updateCustomShaderUniformsFromState(self) void — `pub` (called by
+        // `update_frame` + directly unit-tested).
+        pub fn update_custom_shader_uniforms_from_state(&mut self) {
+            // We only need to do this if we have custom shaders.
+            if !self.has_custom_shaders {
+                return;
+            }
+
+            // Only update when terminal state is dirty.
+            if self.terminal_state.dirty == Dirty::False {
+                return;
+            }
+
+            let uniforms: &mut shadertoy::Uniforms = &mut self.custom_shader_uniforms;
+            let colors: &render::Colors = &self.terminal_state.colors;
+
+            // 256-color palette
+            for (i, color) in colors.palette.iter().enumerate() {
+                uniforms.palette[i] = [
+                    color.r as f32 / 255.0,
+                    color.g as f32 / 255.0,
+                    color.b as f32 / 255.0,
+                    1.0,
+                ];
+            }
+
+            // Background color
+            uniforms.background_color = [
+                colors.background.r as f32 / 255.0,
+                colors.background.g as f32 / 255.0,
+                colors.background.b as f32 / 255.0,
+                1.0,
+            ];
+
+            // Foreground color
+            uniforms.foreground_color = [
+                colors.foreground.r as f32 / 255.0,
+                colors.foreground.g as f32 / 255.0,
+                colors.foreground.b as f32 / 255.0,
+                1.0,
+            ];
+
+            // Cursor color
+            if let Some(cursor_color) = colors.cursor {
+                uniforms.cursor_color = [
+                    cursor_color.r as f32 / 255.0,
+                    cursor_color.g as f32 / 255.0,
+                    cursor_color.b as f32 / 255.0,
+                    1.0,
+                ];
+            }
+
+            // NOTE: the following could be optimized to follow a change in
+            // config for a slight optimization however this is only 12 bytes
+            // each being updated and likely isn't a cause for concern
+
+            // Cursor text color
+            //
+            // PORT NOTE (§E.3/RISK-1): the reference reads `cursor_text.color.r` on a
+            // `?TerminalColor` — a raw Zig union `.color` field access that is
+            // SAFETY-CHECKED as a TAG-ASSERT (panics on the `cell-foreground`/
+            // `cell-background` specials). A plain `if let Some(TerminalColor::Color(c))`
+            // would SILENTLY SKIP the specials (a third behavior matching neither the
+            // reference panic nor the 3b special-resolution path), so the faithful port
+            // destructures the `Option`, then TAG-ASSERTs with `_ => unreachable!()`.
+            if let Some(cursor_text) = self.config.cursor_text {
+                match cursor_text {
+                    TerminalColor::Color(c) => {
+                        uniforms.cursor_text = [
+                            c.r as f32 / 255.0,
+                            c.g as f32 / 255.0,
+                            c.b as f32 / 255.0,
+                            1.0,
+                        ];
+                    }
+                    _ => unreachable!(),
+                }
+            }
+
+            // Selection background color
+            if let Some(selection_bg) = self.config.selection_background {
+                match selection_bg {
+                    TerminalColor::Color(c) => {
+                        uniforms.selection_background_color = [
+                            c.r as f32 / 255.0,
+                            c.g as f32 / 255.0,
+                            c.b as f32 / 255.0,
+                            1.0,
+                        ];
+                    }
+                    _ => unreachable!(),
+                }
+            }
+
+            // Selection foreground color
+            if let Some(selection_fg) = self.config.selection_foreground {
+                match selection_fg {
+                    TerminalColor::Color(c) => {
+                        uniforms.selection_foreground_color = [
+                            c.r as f32 / 255.0,
+                            c.g as f32 / 255.0,
+                            c.b as f32 / 255.0,
+                            1.0,
+                        ];
+                    }
+                    _ => unreachable!(),
+                }
+            }
+
+            // Cursor visibility
+            uniforms.cursor_visible = self.terminal_state.cursor.visible as i32;
+
+            // Cursor style
+            let cursor_style: cursor::Style =
+                cursor::Style::from_terminal(self.terminal_state.cursor.visual_style);
+            uniforms.previous_cursor_style = uniforms.current_cursor_style;
+            uniforms.current_cursor_style = cursor_style as i32;
+        }
+
+        /// Update per-frame custom shader uniforms.
+        ///
+        /// This should be called exactly once per frame, inside `drawFrame`.
+        //
+        // Zig: fn updateCustomShaderUniformsForFrame(self) !void — the sole `try`
+        // (`std.time.Instant.now()`) is infallible in Rust ⇒ `()`. `pub` (no 3c caller —
+        // its caller is `drawFrame`/Chunk 4; directly unit-tested here). It issues ZERO
+        // GPU calls (self-contained uniform math over `self.size` +
+        // `self.cells.get_cursor_glyph()` + timing), so it lands cleanly in 3c.
+        pub fn update_custom_shader_uniforms_for_frame(&mut self) {
+            // We only need to do this if we have custom shaders.
+            if !self.has_custom_shaders {
+                return;
+            }
+
+            let now = Instant::now();
+            // defer self.last_frame_time = now; (set as the LAST statement — §E.6)
+            let first_frame_time = match self.first_frame_time {
+                Some(t) => t,
+                None => {
+                    self.first_frame_time = Some(now);
+                    now
+                }
+            };
+            let last_frame_time = self.last_frame_time.unwrap_or(now);
+
+            let u: &mut shadertoy::Uniforms = &mut self.custom_shader_uniforms;
+
+            let since_ns: f32 = now.duration_since(first_frame_time).as_nanos() as f32;
+            u.time = since_ns / 1_000_000_000.0;
+
+            let delta_ns: f32 = now.duration_since(last_frame_time).as_nanos() as f32;
+            u.time_delta = delta_ns / 1_000_000_000.0;
+
+            u.frame += 1;
+
+            let screen = self.size.screen;
+            let padding = self.size.padding;
+            let cell = self.size.cell;
+
+            u.resolution = [screen.width as f32, screen.height as f32, 1.0];
+            u.channel_resolution[0] = [screen.width as f32, screen.height as f32, 1.0, 0.0];
+
+            if let Some(cursor) = self.cells.get_cursor_glyph() {
+                let cursor_width: f32 = cursor.glyph_size[0] as f32;
+                let cursor_height: f32 = cursor.glyph_size[1] as f32;
+
+                // Left edge of the cell the cursor is in.
+                //
+                // PORT NOTE (§E.6 IMPLEMENTER FLAG): `cursor.grid_pos: [u16; 2]` but
+                // `cell.{width,height}` / `padding.{left,top}` are `u32` — the reference
+                // `grid_pos[0] * cell.width + padding.left` relies on Zig's implicit
+                // widening. Rust has no implicit widening, so widen `grid_pos` to `u32`
+                // BEFORE the `as f32`.
+                let mut pixel_x: f32 =
+                    (cursor.grid_pos[0] as u32 * cell.width + padding.left) as f32;
+                // Top edge, relative to the top of the
+                // screen, of the cell the cursor is in.
+                let mut pixel_y: f32 =
+                    (cursor.grid_pos[1] as u32 * cell.height + padding.top) as f32;
+
+                // If +Y is up in our shaders, we need to flip the coordinate
+                // so that it's instead the top edge of the cell relative to
+                // the *bottom* of the screen.
+                if !CUSTOM_SHADER_Y_IS_DOWN {
+                    pixel_y = screen.height as f32 - pixel_y;
+                }
+
+                // Add the X bearing to get the -X (left) edge of the cursor.
+                pixel_x += cursor.bearings[0] as f32;
+
+                // How we deal with the Y bearing depends on which direction
+                // is "up", since we want our final `pixel_y` value to be the
+                // +Y edge of the cursor.
+                if CUSTOM_SHADER_Y_IS_DOWN {
+                    // As a reminder, the Y bearing is the distance from the
+                    // bottom of the cell to the top of the glyph, so to get
+                    // the +Y edge we need to add the cell height, subtract
+                    // the Y bearing, and add the glyph height to get the +Y
+                    // (bottom) edge of the cursor.
+                    pixel_y += cell.height as f32;
+                    pixel_y -= cursor.bearings[1] as f32;
+                    pixel_y += cursor.glyph_size[1] as f32;
+                } else {
+                    // If the Y direction is reversed though, we instead want
+                    // the *top* edge of the cursor, which means we just need
+                    // to subtract the cell height and add the Y bearing.
+                    pixel_y -= cell.height as f32;
+                    pixel_y += cursor.bearings[1] as f32;
+                }
+
+                let new_cursor: [f32; 4] = [pixel_x, pixel_y, cursor_width, cursor_height];
+                let cursor_color: [f32; 4] = [
+                    cursor.color[0] as f32 / 255.0,
+                    cursor.color[1] as f32 / 255.0,
+                    cursor.color[2] as f32 / 255.0,
+                    cursor.color[3] as f32 / 255.0,
+                ];
+
+                let cursor_changed: bool =
+                    new_cursor != u.current_cursor || cursor_color != u.current_cursor_color;
+
+                if cursor_changed {
+                    u.previous_cursor = u.current_cursor;
+                    u.previous_cursor_color = u.current_cursor_color;
+                    u.current_cursor = new_cursor;
+                    u.current_cursor_color = cursor_color;
+                    u.cursor_change_time = u.time;
+                }
+            }
+
+            // Update focus uniforms
+            u.focus = self.focused as i32;
+
+            // If we need to update the time our focus state changed
+            // then update it to our current frame time. This may not be
+            // exactly correct since it is frame time, not exact focus
+            // time, but focus time on its own isn't exactly correct anyways
+            // since it comes async from a message.
+            if self.custom_shader_focused_changed && self.focused {
+                u.time_focus = u.time;
+                self.custom_shader_focused_changed = false;
+            }
+
+            // defer self.last_frame_time = now; (Zig fn-scope-exit defer — §E.6)
+            self.last_frame_time = Some(now);
+        }
+    }
+
+    // =======================================================================
     // Chunk 3b unit tests (macOS-gated, Metal-skip; GPU_RD_CHUNK3B_DESIGN §G)
     // =======================================================================
     #[cfg(test)]
@@ -3212,6 +3984,215 @@ mod macos_impl {
             // and clearing removes it
             r.rebuild_overlay(&[]).unwrap();
             assert!(r.overlay.is_none());
+        }
+
+        // ===================================================================
+        // Chunk 3c unit tests (macOS-gated, Metal-skip; GPU_RD_CHUNK3C_DESIGN §F)
+        // ===================================================================
+
+        // §F.2(1) — the headline orchestrator test: build a live `state::State` +
+        // `Terminal`, drive `update_frame` end-to-end, and assert the same
+        // Contents/uniforms the direct `rebuild_cells` test checks, now reached
+        // through the mutex/critical-section walk, plus the bg_color + scrollbar.
+        #[test]
+        fn update_frame_fills_cells_uniforms_scrollbar() {
+            let mut r = match test_renderer(10, 3) {
+                Some(r) => r,
+                None => return,
+            };
+
+            let mut mutex = Mutex::new();
+            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            {
+                let mut s = t.vt_stream();
+                s.next_slice(b"Ab");
+                s.deinit();
+            }
+            let st = state::State {
+                mutex: &mut mutex,
+                terminal: &mut t,
+                inspector: None,
+                preedit: None,
+                mouse: state::Mouse::default(),
+            };
+            r.update_frame(&st, true).unwrap();
+
+            // Contents filled (same asserts as rebuild_cells_fills_bg_fg_cursor,
+            // now driven end-to-end):
+            let bg = r.terminal_state.colors.background;
+            assert_eq!(*r.cells.bg_cell(0, 0), [bg.r, bg.g, bg.b, 0]);
+            assert!(!r.cells.fg_rows.lists[1].is_empty());
+            let cur = r.cells.get_cursor_glyph().expect("cursor present");
+            assert!(cur.bools.is_cursor_glyph);
+            assert_eq!(cur.grid_pos, [2, 0]);
+            // written by rebuild_cells inside update_frame
+            assert_eq!(r.uniforms.cursor_pos, [2, 0]);
+
+            // bg_color uniform (§C.1-#23): opacity 1.0 → alpha 255.
+            assert_eq!(r.uniforms.bg_color, [bg.r, bg.g, bg.b, 255]);
+
+            // The scrollbar snapshot happened inside the critical section; on a
+            // small non-scrolling screen the cache matches the terminal's
+            // scrollbar (recomputed from the same PageList).
+            let expected_scrollbar = unsafe { (*t.screens.active).pages.scrollbar() };
+            assert!(r.scrollbar.eql(expected_scrollbar));
+
+            t.deinit(Global);
+        }
+
+        // §F.2(2) — direct: `screen_size`/`grid_padding`/`projection_matrix`.
+        // (`-1 *` mirrors `update_screen_size_uniforms`'s reference form.)
+        #[test]
+        #[allow(clippy::neg_multiply)]
+        fn update_screen_size_uniforms_projection() {
+            let mut r = match test_renderer(10, 3) {
+                Some(r) => r,
+                None => return,
+            };
+            r.update_screen_size_uniforms();
+
+            assert_eq!(
+                r.uniforms.screen_size,
+                [r.size.screen.width as f32, r.size.screen.height as f32]
+            );
+
+            // The fixture has all-zero padding and screen = cols*cell x rows*cell,
+            // so there is no leftover and the blank padding is all zero.
+            assert_eq!(r.uniforms.grid_padding, [0.0, 0.0, 0.0, 0.0]);
+
+            // Spot-check the projection matrix against `ortho2d` recomputed from
+            // the fixture.
+            let terminal_size = r.size.terminal();
+            let expected = math::ortho2d(
+                -1.0 * r.size.padding.left as f32,
+                (terminal_size.width + r.size.padding.right) as f32,
+                (terminal_size.height + r.size.padding.bottom) as f32,
+                -1.0 * r.size.padding.top as f32,
+            );
+            assert_eq!(r.uniforms.projection_matrix, expected);
+        }
+
+        // §F.2(3) — direct: `cell_size`.
+        #[test]
+        fn update_font_grid_uniforms_cell_size() {
+            let mut r = match test_renderer(10, 3) {
+                Some(r) => r,
+                None => return,
+            };
+            r.update_font_grid_uniforms();
+            assert_eq!(
+                r.uniforms.cell_size,
+                [
+                    r.grid_metrics.cell_width as f32,
+                    r.grid_metrics.cell_height as f32
+                ]
+            );
+        }
+
+        // §F.2(4) — direct: config → bg-image-buffer mapping + the modified counter.
+        #[test]
+        fn update_bg_image_buffer_maps_config() {
+            let mut r = match test_renderer(10, 3) {
+                Some(r) => r,
+                None => return,
+            };
+            r.config.bg_image_position = BackgroundImagePosition::CenterCenter;
+            r.config.bg_image_fit = BackgroundImageFit::Cover;
+            r.config.bg_image_repeat = true;
+            r.update_bg_image_buffer();
+            assert_eq!(r.bg_image_buffer.info.position, BgImageInfoPosition::Mc);
+            assert_eq!(r.bg_image_buffer.info.fit, BgImageInfoFit::Cover);
+            assert!(r.bg_image_buffer.info.repeat);
+            assert_eq!(r.bg_image_buffer_modified, 1);
+        }
+
+        // §F.2(5) — direct: custom-shader-from-state palette/colors/cursor.
+        #[test]
+        fn update_custom_shader_uniforms_from_state_palette() {
+            let mut r = match test_renderer(10, 3) {
+                Some(r) => r,
+                None => return,
+            };
+            r.has_custom_shaders = true;
+
+            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            r.terminal_state.update(Global, &mut t).unwrap(); // dirty = Full
+            r.update_custom_shader_uniforms_from_state();
+
+            let bg = r.terminal_state.colors.background;
+            let fg = r.terminal_state.colors.foreground;
+            assert_eq!(
+                r.custom_shader_uniforms.background_color,
+                [
+                    bg.r as f32 / 255.0,
+                    bg.g as f32 / 255.0,
+                    bg.b as f32 / 255.0,
+                    1.0
+                ]
+            );
+            assert_eq!(
+                r.custom_shader_uniforms.foreground_color,
+                [
+                    fg.r as f32 / 255.0,
+                    fg.g as f32 / 255.0,
+                    fg.b as f32 / 255.0,
+                    1.0
+                ]
+            );
+            let p0 = r.terminal_state.colors.palette[0];
+            assert_eq!(
+                r.custom_shader_uniforms.palette[0],
+                [
+                    p0.r as f32 / 255.0,
+                    p0.g as f32 / 255.0,
+                    p0.b as f32 / 255.0,
+                    1.0
+                ]
+            );
+            assert_eq!(
+                r.custom_shader_uniforms.cursor_visible,
+                r.terminal_state.cursor.visible as i32
+            );
+            let expected_style =
+                cursor::Style::from_terminal(r.terminal_state.cursor.visual_style) as i32;
+            assert_eq!(
+                r.custom_shader_uniforms.current_cursor_style,
+                expected_style
+            );
+
+            t.deinit(Global);
+        }
+
+        // §F.2(6) — direct: per-frame timing/resolution/focus. Per §RISK-7 the
+        // `Contents` is empty (no prior `rebuild_cells`) so `get_cursor_glyph()`
+        // is `None` and the cursor block is skipped; assert only the timing/
+        // resolution/focus fields.
+        #[test]
+        fn update_custom_shader_uniforms_for_frame_timing() {
+            let mut r = match test_renderer(10, 3) {
+                Some(r) => r,
+                None => return,
+            };
+            r.has_custom_shaders = true;
+            r.update_custom_shader_uniforms_for_frame();
+
+            assert_eq!(r.custom_shader_uniforms.frame, 1);
+            assert_eq!(
+                r.custom_shader_uniforms.resolution,
+                [r.size.screen.width as f32, r.size.screen.height as f32, 1.0]
+            );
+            assert_eq!(
+                r.custom_shader_uniforms.channel_resolution[0],
+                [
+                    r.size.screen.width as f32,
+                    r.size.screen.height as f32,
+                    1.0,
+                    0.0
+                ]
+            );
+            assert_eq!(r.custom_shader_uniforms.focus, 1);
+            assert!(r.first_frame_time.is_some());
+            assert!(r.last_frame_time.is_some());
         }
     }
 }

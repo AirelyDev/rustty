@@ -67,7 +67,11 @@ pub struct State {
     pub mouse: Mouse,
 }
 
-#[derive(Default)]
+// PORT NOTE (GPU R-d Chunk 3c §B.3): `#[derive(Clone, Copy)]` added beside the
+// reference's implicit trivially-copyable `Mouse` so `updateFrame`'s `Critical`
+// snapshot can do `critical.mouse = state.mouse` (:1275) by value. Sound POD glue:
+// `Coordinate` is Copy and `Mods` is Copy+Default, so both fields are Copy.
+#[derive(Clone, Copy, Default)]
 pub struct Mouse {
     /// The point on the viewport where the mouse currently is. We use
     /// viewport points to avoid the complexity of mapping the mouse to
