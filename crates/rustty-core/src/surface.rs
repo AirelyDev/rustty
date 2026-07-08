@@ -487,11 +487,33 @@ pub struct Search {
     pub state: terminal::search::thread::Thread,
     // thread: std.Thread,
     //
-    // PORT NOTE: unlike `renderer_thr`/`io_thr`, this handle is never
-    // `undefined` (a `Search` is only constructed whole after the spawn), so
-    // it stays a bare `JoinHandle`; the join-consumes constraint moves to the
-    // `deinit` receiver below.
-    pub thread: std::thread::JoinHandle<()>,
+    // PORT NOTE: retyped `JoinHandle` -> `Option<JoinHandle>` for the
+    // construct-then-spawn two-phase store (the reference `.thread = undefined`
+    // then `s.thread = try .spawn(...)`): a bare `JoinHandle` cannot be
+    // `undefined`, so `None` is the placeholder written when the `Search` is
+    // stored, and `Some(handle)` is assigned once the spawn returns
+    // (SEARCH_BINDING_ARM_DESIGN §2.3). `deinit` `take()`s it to join.
+    pub thread: Option<std::thread::JoinHandle<()>>,
+
+    // -- rustty-only decoupled producer handles (SEARCH_BINDING_ARM_DESIGN §3) --
+    //
+    // PORT NOTE: these carry NO reference field — they exist because the search
+    // thread runs `thread_main(&mut self)` holding a `&mut Thread` (a raw
+    // `*mut Thread`) for its ENTIRE life, so ANY post-spawn main-thread access
+    // that reborrows `&mut Search`/`&mut Thread` over `state` (e.g.
+    // `self.search.as_mut().unwrap().state.mailbox…`) is Stacked-Borrows UB
+    // (proven `mirihar-chunk3b` `search_naive`). Every post-spawn producer
+    // reaches the running thread ONLY through these decoupled handles, which
+    // address memory OUTSIDE the `Thread` struct's SB coverage:
+    //   * `mailbox` — the `Box<Mailbox>` pointee, DERIVED FROM THE POST-SPAWN
+    //     `state_ptr` LINEAGE (the same provenance the child derefs
+    //     `self.mailbox` through; a pre-move `addr_of!` alias would be popped by
+    //     the child's `Box` noalias — proven `search_naive`/`search_shipped`).
+    //   * `wakeup`/`stop` — `xev::Notifier`s holding the loop's `Arc<Shared>`
+    //     (heap-refcounted, outside the struct).
+    mailbox: *const terminal::search::thread::Mailbox,
+    wakeup: terminal::search::thread::xev::Notifier,
+    stop: terminal::search::thread::xev::Notifier,
 }
 
 impl Search {
@@ -506,13 +528,26 @@ impl Search {
         //     "error notifying search thread to stop, may stall err={}",
         //     .{err},
         // );
-        if let Err(_err) = self.state.stop.notify() {
+        //
+        // PORT NOTE (SEARCH_BINDING_ARM_DESIGN §3.3): route the stop-notify
+        // through the DECOUPLED `self.stop` notifier, NOT `self.state.stop` —
+        // the child still holds its `&mut Thread` here (stop-then-join), so a
+        // `self.state.stop` reborrow of `state` would be SB UB. `self.stop`
+        // touches only the loop's `Arc<Shared>` (outside `state`).
+        if let Err(_err) = self.stop.notify() {
             // log.err("error notifying search thread to stop, may stall err={}", .{err});
         }
 
         // Wait for the OS thread to quit
         // self.thread.join();
-        self.thread.join().unwrap();
+        //
+        // (`take()` the `Option<JoinHandle>` placeholder; the child is now dead,
+        // so the subsequent `state` deinit has exclusive access.)
+        self.thread
+            .take()
+            .expect("search thread spawned")
+            .join()
+            .unwrap();
 
         // Now it is safe to deinit the state
         self.state.deinit();
@@ -1180,6 +1215,11 @@ pub enum Error {
     /// The xev `Async.notify` leaves (`searchCallback_`'s renderer wakeups,
     /// `queueRender`) — the D6 placeholder seam.
     Xev(rustty_xev::NotifyError),
+    /// `terminal.search.Thread.init`'s xev-handle init (`performBindingAction`'s
+    /// `.search` arm — the vt search-loop shim's `xev::Error`, a DIFFERENT type
+    /// from the renderer-thread `rustty_xev::Error` above; the reference `try
+    /// .init(...)` folds it into `performBindingAction`'s inferred `!bool`).
+    SearchXev(terminal::search::thread::xev::Error),
     /// vt terminal/highlight storage failures (`searchCallback_`'s
     /// `Flattened.clone`, `mouseRefreshLinks`'s `selectionString`) — Zig
     /// `Allocator.Error` surfaced as vt `OutOfMemory` (the vt convention).
@@ -1238,6 +1278,12 @@ impl From<rustty_xev::NotifyError> for Error {
     }
 }
 
+impl From<terminal::search::thread::xev::Error> for Error {
+    fn from(err: terminal::search::thread::xev::Error) -> Error {
+        Error::SearchXev(err)
+    }
+}
+
 impl From<terminal::pagelist::OutOfMemory> for Error {
     fn from(err: terminal::pagelist::OutOfMemory) -> Error {
         Error::OutOfMemory(err)
@@ -1285,6 +1331,7 @@ impl core::fmt::Display for Error {
         match self {
             Error::Apprt(err) => err.fmt(f),
             Error::Xev(err) => write!(f, "core surface operation failed: {err:?}"),
+            Error::SearchXev(err) => write!(f, "core surface operation failed: {err:?}"),
             Error::OutOfMemory(err) => write!(f, "core surface operation failed: {err:?}"),
             Error::FontGrid(err) => write!(f, "core surface operation failed: {err:?}"),
             Error::InitChangeConfig(err) => write!(f, "core surface operation failed: {err:?}"),
@@ -2627,7 +2674,12 @@ where
     /// Returns a mailbox that can be used to send messages to this surface.
     // inline fn surfaceMailbox(self: *Surface) Mailbox {
     //
-    // PORT NOTE: reference `inline fn` -> `#[inline]`.
+    // PORT NOTE: reference `inline fn` -> `#[inline]`. The `&mut self` form is
+    // preserved verbatim (R1) but currently dead — its sole reached caller,
+    // `searchCallback_`, now uses the raw `surface_mailbox_raw` variant (§3.3a,
+    // to avoid a whole `&mut Surface` reborrow on the search thread). Future
+    // main-thread callers of other ported arms use this `&mut self` form.
+    #[allow(dead_code)]
     #[inline]
     fn surfaceMailbox(&mut self) -> Mailbox<A> {
         // return .{
@@ -2639,6 +2691,28 @@ where
             app: crate::app::Mailbox {
                 rt_app: self.rt_app,
                 mailbox: unsafe { &raw mut (*self.app).mailbox },
+            },
+        }
+    }
+
+    /// Raw-`*mut Surface` variant of [`surfaceMailbox`](Self::surfaceMailbox).
+    //
+    // PORT NOTE (SEARCH_BINDING_ARM_DESIGN §3.3a): the search-thread callback
+    // (`searchCallback_`) must NOT form a whole `&mut Surface` — that reborrow,
+    // fired ON THE SEARCH THREAD while the main thread holds `&mut self` (every
+    // `performBindingAction` arm), is Stacked-Borrows UB (mirihar `callback_naive`).
+    // `surfaceMailbox` takes `&mut self` only to coerce `self` into the
+    // `SurfaceMailbox { surface: *mut Surface, .. }` literal, whose fields are all
+    // raw projections — so this variant builds the SAME literal directly from a
+    // raw `*mut Surface` with NO `&mut Surface`/`&Surface` (mirihar `callback_shipped`,
+    // SB + TB clean).
+    #[inline]
+    unsafe fn surface_mailbox_raw(self_: *mut Surface<A>) -> Mailbox<A> {
+        SurfaceMailbox {
+            surface: self_,
+            app: crate::app::Mailbox {
+                rt_app: unsafe { (*self_).rt_app },
+                mailbox: unsafe { &raw mut (*(*self_).app).mailbox },
             },
         }
     }
@@ -3707,9 +3781,7 @@ where
     //
     // PORT NOTE: the C14 `performBindingAction` search arm registers this as
     // the vt `search::thread::Options.event_cb` fn pointer (`?*anyopaque` ->
-    // the seam's bare `*mut c_void`) — the allow is removed when that
-    // callsite lands.
-    #[allow(dead_code)]
+    // the seam's bare `*mut c_void`). Now LIVE (the `.search` arm registers it).
     fn searchCallback(event: SearchThreadEvent<'_>, ud: *mut core::ffi::c_void) {
         // IMPORTANT: This function is run on the SEARCH THREAD! It is NOT SAFE
         // to access anything other than values that never change on the surface.
@@ -3723,7 +3795,11 @@ where
         // self.searchCallback_(event) catch |err| {
         //     log.warn("error in search callback err={}", .{err});
         // };
-        if let Err(_err) = unsafe { &mut *self_ }.searchCallback_(event) {
+        //
+        // PORT NOTE (§3.3a): pass the RAW `self_` (NOT `&mut *self_`) — a whole
+        // `&mut Surface` reborrow here, on the search thread, races the main
+        // thread's `&mut self` = SB UB (mirihar `callback_naive`).
+        if let Err(_err) = unsafe { Self::searchCallback_(self_, event) } {
             // log.warn("error in search callback err={}", .{err});
         }
     }
@@ -3733,10 +3809,17 @@ where
     //     event: terminal.search.Thread.Event,
     // ) !void {
     //
-    // (reached only via `searchCallback` above until the C14 registration —
-    // same allow.)
-    #[allow(dead_code)]
-    fn searchCallback_(&mut self, event: SearchThreadEvent<'_>) -> Result<(), Error> {
+    // PORT NOTE (§3.3a): the reference `self: *Surface` (a raw ptr) is retyped
+    // off `&mut self` to `self_: *mut Surface` — the callback fires on the SEARCH
+    // THREAD while the main thread holds `&mut self`, so a whole `&mut Surface`
+    // reborrow is SB UB. Every access below is a NARROW raw field projection off
+    // `self_` (never a whole `&mut Surface`/`&Surface`); verdict SB + TB clean
+    // (mirihar `callback_shipped`). This preserves the reference's cross-thread
+    // Surface access — only the Rust `&mut`-exclusivity narrowing changes.
+    unsafe fn searchCallback_(
+        self_: *mut Surface<A>,
+        event: SearchThreadEvent<'_>,
+    ) -> Result<(), Error> {
         // NOTE: This runs on the search thread.
 
         // switch (event) {
@@ -3769,14 +3852,14 @@ where
                 //     } },
                 //     .forever,
                 // );
-                let _ = unsafe { &*self.renderer_thread.mailbox }.push(
+                let _ = unsafe { &*(*self_).renderer_thread.mailbox }.push(
                     rendererpkg::Message::SearchViewportMatches(
                         rendererpkg::message::SearchMatches { matches },
                     ),
                     Timeout::Forever,
                 );
                 // try self.renderer_thread.wakeup.notify();
-                self.renderer_thread.wakeup.notify()?;
+                unsafe { &(*self_).renderer_thread.wakeup }.notify()?;
             }
 
             // .selected_match => |selected_| {
@@ -3800,7 +3883,7 @@ where
                     //     } },
                     //     .forever,
                     // );
-                    let _ = unsafe { &*self.renderer_thread.mailbox }.push(
+                    let _ = unsafe { &*(*self_).renderer_thread.mailbox }.push(
                         rendererpkg::Message::SearchSelectedMatch(Some(
                             rendererpkg::message::SearchMatch { r#match: match_ },
                         )),
@@ -3812,8 +3895,7 @@ where
                     //     .{ .search_selected = sel.idx },
                     //     .forever,
                     // );
-                    let _ = self
-                        .surfaceMailbox()
+                    let _ = unsafe { Self::surface_mailbox_raw(self_) }
                         .push(Message::SearchSelected(Some(sel.idx)), Timeout::Forever);
                 } else {
                     // Reset our selected match
@@ -3821,7 +3903,7 @@ where
                     //     .{ .search_selected_match = null },
                     //     .forever,
                     // );
-                    let _ = unsafe { &*self.renderer_thread.mailbox }.push(
+                    let _ = unsafe { &*(*self_).renderer_thread.mailbox }.push(
                         rendererpkg::Message::SearchSelectedMatch(None),
                         Timeout::Forever,
                     );
@@ -3831,13 +3913,12 @@ where
                     //     .{ .search_selected = null },
                     //     .forever,
                     // );
-                    let _ = self
-                        .surfaceMailbox()
+                    let _ = unsafe { Self::surface_mailbox_raw(self_) }
                         .push(Message::SearchSelected(None), Timeout::Forever);
                 }
 
                 // try self.renderer_thread.wakeup.notify();
-                self.renderer_thread.wakeup.notify()?;
+                unsafe { &(*self_).renderer_thread.wakeup }.notify()?;
             }
 
             // .total_matches => |total| {
@@ -3848,8 +3929,7 @@ where
                 // );
                 //
                 // (Zig coerces the `usize` into the `?usize` payload.)
-                let _ = self
-                    .surfaceMailbox()
+                let _ = unsafe { Self::surface_mailbox_raw(self_) }
                     .push(Message::SearchTotal(Some(total)), Timeout::Forever);
             }
 
@@ -3860,7 +3940,7 @@ where
                 //     .{ .search_selected_match = null },
                 //     .forever,
                 // );
-                let _ = unsafe { &*self.renderer_thread.mailbox }.push(
+                let _ = unsafe { &*(*self_).renderer_thread.mailbox }.push(
                     rendererpkg::Message::SearchSelectedMatch(None),
                     Timeout::Forever,
                 );
@@ -3871,7 +3951,7 @@ where
                 //     } },
                 //     .forever,
                 // );
-                let _ = unsafe { &*self.renderer_thread.mailbox }.push(
+                let _ = unsafe { &*(*self_).renderer_thread.mailbox }.push(
                     rendererpkg::Message::SearchViewportMatches(
                         rendererpkg::message::SearchMatches {
                             matches: Vec::new(),
@@ -3880,22 +3960,20 @@ where
                     Timeout::Forever,
                 );
                 // try self.renderer_thread.wakeup.notify();
-                self.renderer_thread.wakeup.notify()?;
+                unsafe { &(*self_).renderer_thread.wakeup }.notify()?;
 
                 // Reset search totals in the surface
                 // _ = self.surfaceMailbox().push(
                 //     .{ .search_total = null },
                 //     .forever,
                 // );
-                let _ = self
-                    .surfaceMailbox()
+                let _ = unsafe { Self::surface_mailbox_raw(self_) }
                     .push(Message::SearchTotal(None), Timeout::Forever);
                 // _ = self.surfaceMailbox().push(
                 //     .{ .search_selected = null },
                 //     .forever,
                 // );
-                let _ = self
-                    .surfaceMailbox()
+                let _ = unsafe { Self::surface_mailbox_raw(self_) }
                     .push(Message::SearchSelected(None), Timeout::Forever);
             }
 
@@ -10411,81 +10489,202 @@ where
             }
 
             // .search => |text| search: {
-            binding::ScopedSurface::Search(_text) => {
-                // DEFERRED (DEFERRALS.md "core C14a"): the reference body
-                // constructs and spawns the vt search thread, sharing
-                // `self.renderer_state.mutex` into `terminal.search.Thread`'s
-                // `Options.mutex`. Two blockers keep this out of C14a:
-                //   1. Mutex-type unification: the search `Options.mutex` is
-                //      still `*const std::sync::Mutex<()>` (ported before the
-                //      C0 renderer-mutex retype) while the shared renderer
-                //      mutex is `*mut rustty_zigstd::thread::Mutex`. The
-                //      reference shares ONE `*std.Thread.Mutex`, so the search
-                //      thread's `Options.mutex` + its guard-based lock sites
-                //      must be retyped to the guard-less zigstd mutex.
-                //   2. Self-referential long-lived spawn: the thread receives
-                //      `&s.state` where `s = &self.search.?` (a stable pointer
-                //      into the stored `Search`), but the ported `Search.thread`
-                //      is a bare `JoinHandle` (not `undefined`-able), so the
-                //      construct-then-spawn order needs a dedicated design.
-                // Preserved verbatim:
-                //
+            //
+            // PORT NOTE (SEARCH_BINDING_ARM_DESIGN): the two blockers are
+            // resolved — (a) the vt `search::thread::Options.mutex` is retyped to
+            // the shared guard-less `rustty_zigstd::thread::Mutex` (so
+            // `self.renderer_state.mutex` is type-compatible), and (b) the
+            // self-referential construct-then-spawn lands via a stable-address
+            // raw-ptr discipline: the `Search` is stored FIRST (`thread: None` ==
+            // `.thread = undefined`), a stable `*mut Thread` is projected from the
+            // stored state, the thread is spawned on THAT raw pointer, and the
+            // returned handle is written back through a disjoint raw sub-place.
+            // Post-spawn producers reach the running thread ONLY through decoupled
+            // handles (§3; proven SB+TB clean on `mirihar-chunk3b`
+            // `search_shipped`/`callback_shipped`).
+            binding::ScopedSurface::Search(text) => {
                 // const s: *Search = if (self.search) |*s| s else init: {
-                //     // If we're stopping the search and we had no prior search,
-                //     // then there is nothing to do.
-                //     if (text.len == 0) return false;
-                //
-                //     // We need to assign directly to self.search because we need
-                //     // a stable pointer back to the thread state.
-                //     self.search = .{
-                //         .state = try .init(self.alloc, .{
-                //             .mutex = self.renderer_state.mutex,
-                //             .terminal = self.renderer_state.terminal,
-                //             .event_cb = &searchCallback,
-                //             .event_userdata = self,
-                //         }),
-                //         .thread = undefined,
-                //     };
-                //     const s: *Search = &self.search.?;
-                //     errdefer s.state.deinit();
-                //
-                //     s.thread = try .spawn(
-                //         .{},
-                //         terminal.search.Thread.threadMain,
-                //         .{&s.state},
-                //     );
-                //     s.thread.setName("search") catch {};
-                //
-                //     break :init s;
-                // };
-                //
-                // // Zero-length text means stop searching.
+                if self.search.is_none() {
+                    // init: {
+                    //     // If we're stopping the search and we had no prior search,
+                    //     // then there is nothing to do.
+                    //     if (text.len == 0) return false;
+                    if text.is_empty() {
+                        return Ok(false);
+                    }
+
+                    // Stable base address of the pinned Surface: `init` writes it
+                    // through a `*mut Surface`, the same address `searchCallback`
+                    // casts `event_userdata` back to. The thread re-enters through
+                    // it via NARROW raw field projections only (§3.3a).
+                    let surface_ptr: *mut Surface<A> = self;
+
+                    // We need to assign directly to self.search because we need
+                    // a stable pointer back to the thread state.
+                    // self.search = .{
+                    //     .state = try .init(self.alloc, .{
+                    //         .mutex = self.renderer_state.mutex,
+                    //         .terminal = self.renderer_state.terminal,
+                    //         .event_cb = &searchCallback,
+                    //         .event_userdata = self,
+                    //     }),
+                    //     .thread = undefined,
+                    // };
+                    //
+                    // ONE-SHOT BUILD (§2.4): build `state` as a LOCAL, arm its
+                    // wakeup/stop waits + capture the decoupled wakeup/stop
+                    // notifiers OFF the local (Arc<Shared>-backed, move-stable),
+                    // THEN move it whole into `self.search`. `thread: None` is the
+                    // `.thread = undefined` placeholder; `mailbox` is filled from
+                    // the POST-MOVE `state_ptr` lineage below (a pre-move
+                    // `addr_of!` alias would be popped by the child's
+                    // `Box<Mailbox>` noalias — mirihar `search_shipped`).
+                    let mut state = terminal::search::thread::Thread::init(
+                        self.alloc,
+                        terminal::search::thread::Options {
+                            // .mutex = self.renderer_state.mutex,
+                            mutex: self.renderer_state.mutex, // *mut -> *const (§1)
+                            // .terminal = self.renderer_state.terminal,
+                            terminal: self.renderer_state.terminal,
+                            // .event_cb = &searchCallback,
+                            event_cb: Some(Self::searchCallback),
+                            // .event_userdata = self,
+                            event_userdata: surface_ptr as *mut core::ffi::c_void,
+                        },
+                    )?; // needs From<..search::thread::xev::Error> (added above)
+
+                    // Arm the wakeup/stop waits ON THE LOCAL + capture the
+                    // decoupled notifiers BEFORE the move (identical to the vt
+                    // `search_thread` test setup; `thread_main` re-arms them
+                    // idempotently).
+                    state.wakeup.wait(
+                        &state.loop_,
+                        &mut state.wakeup_c,
+                        terminal::search::thread::xev::Callback::Wakeup,
+                    );
+                    state.stop.wait(
+                        &state.loop_,
+                        &mut state.stop_c,
+                        terminal::search::thread::xev::Callback::Stop,
+                    );
+                    let wn = state.wakeup.notifier(); // holds Arc<Shared>
+                    let sn = state.stop.notifier();
+
+                    // self.search = .{ .state = <local>, .thread = undefined };
+                    self.search = Some(Search {
+                        state,
+                        thread: None,               // == `.thread = undefined`
+                        mailbox: core::ptr::null(), // set from state_ptr below
+                        wakeup: wn,
+                        stop: sn,
+                    });
+
+                    // const s: *Search = &self.search.?;   — ONE transient &mut,
+                    // taken at birth (nothing aliases `state` yet), lowered
+                    // immediately to raw. After this NO &mut Search / &mut Thread
+                    // is ever formed again.
+                    let search_ptr: *mut Search = &raw mut *self.search.as_mut().unwrap();
+                    let state_ptr: *mut terminal::search::thread::Thread =
+                        unsafe { &raw mut (*search_ptr).state };
+                    // Decoupled mailbox = the Box<Mailbox> pointee, via the
+                    // POST-MOVE state_ptr lineage (mirihar `search_shipped`).
+                    unsafe {
+                        (*search_ptr).mailbox = &raw const *(*state_ptr).mailbox;
+                    }
+
+                    // errdefer s.state.deinit();
+                    // s.thread = try .spawn(
+                    //     .{},
+                    //     terminal.search.Thread.threadMain,
+                    //     .{&s.state},
+                    // );
+                    // s.thread.setName("search") catch {};
+                    struct SendState(*mut terminal::search::thread::Thread);
+                    unsafe impl Send for SendState {}
+                    let send = SendState(state_ptr);
+                    let spawned = std::thread::Builder::new()
+                        .name("search".into()) // == setName("search")
+                        .spawn(move || {
+                            let s = send;
+                            unsafe { (*s.0).thread_main() };
+                        });
+                    let handle = match spawned {
+                        Ok(h) => h,
+                        Err(e) => {
+                            // errdefer s.state.deinit(); + the `try` unwinds
+                            // performBindingAction's `!bool` (`Ok(false)` would
+                            // SWALLOW the spawn error — not faithful). Deviation
+                            // (§2.4): also clear `self.search` — a `Some` holding a
+                            // deinit'd state + `thread: None` is a dangling hazard;
+                            // `None` is the Rust empty. `Builder::spawn`'s
+                            // `io::Error` already has `From` for surface `Error`.
+                            unsafe {
+                                (*state_ptr).deinit();
+                            }
+                            self.search = None;
+                            return Err(e.into());
+                        }
+                    };
+                    // s.thread = handle;  — through the disjoint `thread` sub-place
+                    // of search_ptr (no &mut Search reborrow, so the child's live
+                    // state_ptr tag is not popped; SB-clean).
+                    unsafe {
+                        (*search_ptr).thread = Some(handle);
+                    }
+                    // break :init s;
+                }
+
+                // Zero-length text means stop searching.
                 // if (text.len == 0) {
                 //     s.deinit();
                 //     self.search = null;
                 //     break :search;
                 // }
-                //
-                // _ = s.state.mailbox.push(
-                //     .{ .change_needle = try .init(
-                //         self.alloc,
-                //         text,
-                //     ) },
-                //     .forever,
-                // );
-                // s.state.wakeup.notify() catch {};
-                unimplemented!(
-                    "Surface.performBindingAction .search arm — deferred on search-thread \
-                     mutex-type unification + self-referential spawn (DEFERRALS.md core C14a; \
-                     Surface.zig:4933)"
-                )
+                if text.is_empty() {
+                    // `take()` is the reference's `deinit` + `= null`; `deinit`
+                    // stop-notifies (decoupled handle) THEN joins THEN frees the
+                    // state (§3.3). After `take()` the child is dead — no alias.
+                    self.search.take().unwrap().deinit();
+                    // break :search
+                } else {
+                    // _ = s.state.mailbox.push(
+                    //     .{ .change_needle = try .init(
+                    //         self.alloc,
+                    //         text,
+                    //     ) },
+                    //     .forever,
+                    // );
+                    // s.state.wakeup.notify() catch {};
+                    //
+                    // PRODUCER PATH: reach the mailbox + wakeup through the
+                    // DECOUPLED handles, NEVER `self.search.as_mut().state` (a
+                    // &mut Thread reborrow while the child holds a live &mut self
+                    // → SB UB; mirihar `search_naive`).
+                    let s = self.search.as_ref().unwrap(); // &Search: sibling handles only
+                    let mailbox = s.mailbox;
+                    let wakeup = s.wakeup.clone();
+                    let needle = terminal::search::thread::WriteReq::init(text);
+                    let _ = unsafe {
+                        (*mailbox).push(
+                            terminal::search::thread::Message::ChangeNeedle(needle),
+                            Timeout::Forever,
+                        )
+                    };
+                    let _ = wakeup.notify();
+                }
             }
 
             // .navigate_search => |nav| {
             binding::ScopedSurface::NavigateSearch(nav) => {
                 // const s: *Search = if (self.search) |*s| s else return false;
-                let s = match self.search.as_mut() {
-                    Some(s) => s,
+                //
+                // PORT NOTE (§3.3 retrofit): `as_ref` (not `as_mut`) — the
+                // producer reaches the running thread through the DECOUPLED
+                // `s.mailbox`/`s.wakeup` handles, NEVER `s.state.mailbox`
+                // (a &mut Thread reborrow while the child holds a live &mut self
+                // → SB UB; mirihar `search_naive`).
+                let (mailbox, wakeup) = match self.search.as_ref() {
+                    Some(s) => (s.mailbox, s.wakeup.clone()),
                     None => return Ok(false),
                 };
                 // _ = s.state.mailbox.push(
@@ -10495,15 +10694,19 @@ where
                 //     } },
                 //     .forever,
                 // );
-                let _ = s.state.mailbox.push(
-                    terminal::search::thread::Message::Select(match nav {
-                        binding::NavigateSearch::Next => terminal::search::screen::Select::Next,
-                        binding::NavigateSearch::Previous => terminal::search::screen::Select::Prev,
-                    }),
-                    Timeout::Forever,
-                );
+                let _ = unsafe {
+                    (*mailbox).push(
+                        terminal::search::thread::Message::Select(match nav {
+                            binding::NavigateSearch::Next => terminal::search::screen::Select::Next,
+                            binding::NavigateSearch::Previous => {
+                                terminal::search::screen::Select::Prev
+                            }
+                        }),
+                        Timeout::Forever,
+                    )
+                };
                 // s.state.wakeup.notify() catch {};
-                let _ = s.state.wakeup.notify();
+                let _ = wakeup.notify();
             }
 
             // .copy_to_clipboard => |format| {

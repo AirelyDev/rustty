@@ -66,6 +66,12 @@ use crate::terminal::Terminal;
 use allocator_api2::alloc::Global as Allocator;
 use rustty_datastruct::message_data::MessageData;
 use rustty_datastruct::BlockingQueue;
+// PORT NOTE: the shared search/renderer mutex is now the guard-less
+// `rustty_zigstd::thread::Mutex` (Options.mutex, C0 model); std's `Mutex`
+// remains ONLY for the test `TestUserData` fields (`reset_done`/`selected`/
+// `viewport`), so this import is `#[cfg(test)]`-gated to avoid an unused-import
+// warning in non-test builds.
+#[cfg(test)]
 use std::sync::Mutex;
 
 // const log = std.log.scoped(.search_thread);
@@ -87,6 +93,30 @@ use std::sync::Mutex;
 /// we hold the terminal lock too often.
 // const REFRESH_INTERVAL = 24; // 40 FPS
 const REFRESH_INTERVAL: u64 = 24; // 40 FPS
+
+// Additive infra (R1 — necessary glue): realizes the reference's
+// `self.opts.mutex.lock(); defer self.opts.mutex.unlock();` for the guard-less
+// zigstd `Mutex` (which returns NO RAII guard). A tiny local `defer`-unlock
+// guard keeps the existing early-`return`/`?` exits inside the locked regions
+// (e.g. `select`) transparent — the unlock fires on the guard's `Drop`, exactly
+// like the Zig `defer`. This is the same `defer`-unlock convention core uses for
+// the shared renderer mutex.
+struct MutexUnlock<'a>(&'a rustty_zigstd::thread::Mutex);
+impl Drop for MutexUnlock<'_> {
+    fn drop(&mut self) {
+        self.0.unlock();
+    }
+}
+#[inline]
+fn lock_deferred(m: *const rustty_zigstd::thread::Mutex) -> MutexUnlock<'static> {
+    // SAFETY: `m` is the shared renderer mutex (`self.opts.mutex`), valid for the
+    // thread's whole lifetime (the reference's shared `*std.Thread.Mutex`).
+    // Locked here; unlocked on the returned guard's drop.
+    unsafe {
+        (*m).lock();
+        MutexUnlock(&*m)
+    }
+}
 
 /// The background search thread.
 //
@@ -415,7 +445,7 @@ impl Thread {
                 //     s.feed(self.alloc, self.opts.terminal);
                 // },
                 Search_Tick::Blocked => {
-                    let _guard = unsafe { (*self.opts.mutex).lock().unwrap() };
+                    let _guard = lock_deferred(self.opts.mutex);
                     let alloc = self.alloc;
                     let terminal = self.opts.terminal;
                     self.search.as_mut().unwrap().feed(alloc, terminal);
@@ -517,7 +547,7 @@ impl Thread {
 
         // self.opts.mutex.lock();
         // defer self.opts.mutex.unlock();
-        let _guard = unsafe { (*self.opts.mutex).lock().unwrap() };
+        let _guard = lock_deferred(self.opts.mutex);
 
         // Make the selection. Ignore the result because we don't
         // care if the selection didn't change.
@@ -656,7 +686,7 @@ impl Thread {
         // We need to grab the terminal lock and do an initial feed.
         // self.opts.mutex.lock();
         // defer self.opts.mutex.unlock();
-        let _guard = unsafe { (*self.opts.mutex).lock().unwrap() };
+        let _guard = lock_deferred(self.opts.mutex);
         // self.search.?.feed(self.alloc, self.opts.terminal);
         let alloc = self.alloc;
         let terminal = self.opts.terminal;
@@ -773,7 +803,7 @@ impl Thread {
         let terminal = self.opts.terminal;
         let mutex = self.opts.mutex;
         if let Some(s) = self.search.as_mut() {
-            let _guard = unsafe { (*mutex).lock().unwrap() };
+            let _guard = lock_deferred(mutex);
             s.feed(alloc, terminal);
         }
 
@@ -832,12 +862,13 @@ impl From<crate::pagelist::OutOfMemory> for DrainError {
 // pub const Options = struct {
 pub struct Options {
     /// Mutex that must be held while reading/writing the terminal.
-    // mutex: *Mutex,
+    // mutex: *Mutex,   where  Mutex = std.Thread.Mutex
     //
-    // PORT NOTE: the reference holds a `*std.Thread.Mutex` shared with the
-    // caller; the raw pointer mirrors that shared-mutability and is locked under
-    // `unsafe` at the same sites the reference calls `mutex.lock()`.
-    pub mutex: *const Mutex<()>,
+    // PORT NOTE: the shared renderer/search mutex is the guard-less Zig-shaped
+    // `rustty_zigstd::thread::Mutex` (the core C0 mutex-model decision). The raw
+    // pointer mirrors the reference's shared `*std.Thread.Mutex`; it is locked
+    // under `unsafe` at the same sites the reference calls `mutex.lock()`.
+    pub mutex: *const rustty_zigstd::thread::Mutex,
 
     /// The terminal data to search.
     // terminal: *Terminal,
@@ -2095,7 +2126,7 @@ mod tests {
         // const alloc = testing.allocator;
         let alloc = Allocator;
         // var mutex: std.Thread.Mutex = .{};
-        let mutex: Mutex<()> = Mutex::new(());
+        let mutex = rustty_zigstd::thread::Mutex::new();
         // var t: Terminal = try .init(alloc, .{ .cols = 20, .rows = 2 });
         // defer t.deinit(alloc);
         let mut t: Terminal = Terminal::init(alloc, terminal_opts(20, 2, 10_000)).unwrap();
@@ -2123,7 +2154,7 @@ mod tests {
         let mut thread: Thread = Thread::init(
             alloc,
             Options {
-                mutex: &mutex as *const Mutex<()>,
+                mutex: &mutex as *const rustty_zigstd::thread::Mutex,
                 terminal: &mut t as *mut Terminal,
                 event_cb: Some(TestUserData::callback),
                 event_userdata: ud_ptr as *mut core::ffi::c_void,

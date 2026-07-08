@@ -60,3 +60,45 @@ takes raw self + raw texture (the texture aliases into `self.swap_chain`, so a `
 receiver + `&mut Texture` arg would freeze-then-mutate the same bytes); (d) the trampoline's
 `&self frame_completed` whole-shared reborrow is clean because `frame` is never used after
 `complete()` (the reference's last frame use is `frame_ctx.complete`).
+
+## SEARCH_BINDING_ARM candidates (construct-then-spawn-then-produce + callback)
+
+Added for SEARCH_BINDING_ARM_DESIGN §3.4 — the Surface `.search` arm's DETACHED
+store-then-spawn-then-join-LATER lifetime, which is NOT the GPU cell-fill / draw-frame
+shape. Unlike the green vt `search_thread` test (which uses `std::thread::scope` = join
+BEFORE the borrow ends), these model a STORED `JoinHandle` joined at `deinit`, with the
+main thread producing to the running thread AFTER spawn returns and the search thread
+re-entering the surface via a `searchCallback`. A deterministic mpsc handshake sequences
+the two threads' borrow ops (channels give happens-before, so there is no data race to
+mask the tag verdict). Selected by argv `search_naive` / `search_shipped` /
+`callback_naive` / `callback_shipped`.
+
+| candidate | models | SB | TB |
+|---|---|---|---|
+| `search_naive` | MAIN→child producer via a whole-`&mut Search` reborrow (`self.search.as_mut().unwrap().state.mailbox…`) reaching `st` while the child holds its `thread_main(&mut self)` `&mut st` | **UB** | **UB** |
+| `search_shipped` | **shipped**: producer via a decoupled `*const Mailbox` (Box pointee) DERIVED FROM THE POST-MOVE `state_ptr` LINEAGE; `thread: None` placeholder; handle stored + joined LATER at deinit | **CLEAN** | **CLEAN** |
+| `callback_naive` | child→MAIN re-entry via `unsafe { &mut *self_ }.searchCallback_(event)` — a whole `&mut Surface` reborrow — concurrent with the main thread's held `&mut self` (performBindingAction) | **UB** | **UB** |
+| `callback_shipped` | **shipped**: `searchCallback_(self_: *mut Surface)` — narrow raw field projections only (`(*sp).mailbox` external push + `&(*sp).wakeup` narrow shared notify), never a whole `&mut Surface`/`&Surface`, while main holds `&mut self` | **CLEAN** | **CLEAN** |
+
+**Load-bearing finding (corrects design §2.4):** the decoupled `*const Mailbox` must be
+derived from the POST-MOVE `state_ptr` lineage (`&raw const *(*state_ptr).mailbox`), NOT
+captured off the pre-move local (`addr_of!(*state.mailbox)`). `Mailbox` is a `Box`, which
+asserts noalias: a pointer carrying the PRE-MOVE Box provenance is popped when the search
+thread later derefs `self.mailbox` through its held `thread_main(&mut self)` `&mut self`
+(the Box re-asserts its own provenance), so the stale alias is use-after-invalidation
+under BOTH SB and TB. Deriving the decoupled pointer from the same `state_ptr` the child
+derefs through makes the two compatible raw siblings — CLEAN under both. The core arm was
+implemented to this corrected lineage; §2.4's `addr_of!(*state.mailbox)` would ship SB+TB
+UB. The `callback_shipped` result independently confirms §3.3a: a narrow `&(*sp).wakeup`
+shared notify + a `*const` external mailbox push, taken fresh per callback, do NOT pop the
+main thread's held `&mut self` (whereas the naive whole-`&mut Surface` reborrow does).
+
+Run:
+
+```sh
+for c in search_naive search_shipped callback_naive callback_shipped; do
+  echo "== $c =="
+  cargo +nightly miri run --quiet -- "$c"                          # Stacked Borrows
+  MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri run -q -- "$c" # Tree Borrows
+done
+```

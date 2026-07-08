@@ -574,6 +574,286 @@ unsafe fn trampoline2(ctx: *mut ()) {
     }
 }
 
+// ============================================================================
+// SEARCH_BINDING_ARM_DESIGN §3.4: the construct-then-spawn-then-produce shape.
+//
+// This is NOT the GPU cell-fill / draw-frame borrow structure — it is the
+// Surface `.search` arm's DETACHED store-then-spawn-then-join-LATER lifetime:
+//   * a `Search { state: T, thread: Option<JoinHandle>, mailbox: *const Mbx }`
+//     is stored in a PINNED slot (a Box; the reference's `self.search.?` inline
+//     field of the pinned Surface);
+//   * the search thread runs `thread_main(&mut state)` via a raw `*mut T`
+//     (`state_ptr`) held for its ENTIRE life — the handle is STORED and joined
+//     LATER at deinit (NOT `std::thread::scope`, which the green vt test uses);
+//   * AFTER the spawn returns, the MAIN thread PRODUCES to the running thread
+//     (the `.search`-else push / `.navigate_search`) and, in the reverse
+//     direction, the thread re-enters the surface via a `searchCallback`.
+//
+// Two directions, each a naive/shipped pair. A deterministic mpsc handshake
+// sequences the two threads' borrow operations so the SB verdict is stable
+// (Miri only checks executed borrow ops; the channels give happens-before, so
+// there is no data race to mask the tag violation).
+//
+//   search_naive / search_shipped   — MAIN→child producer (§3.2)
+//   callback_naive / callback_shipped — child→MAIN re-entry (§3.3a)
+//
+// Pass criterion (both shipped): CLEAN under BOTH -Zmiri-stacked-borrows and
+// -Zmiri-tree-borrows. Only then do the core arm + the retyped callback land.
+// ============================================================================
+
+use std::sync::atomic::{AtomicU32, Ordering as AOrd};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex as SMutex};
+
+// ---- MAIN→child producer model (search_naive / search_shipped) ----
+
+// BlockingQueue<Message,64> analogue: internally synchronized, `push(&self)`.
+struct Mbx {
+    inner: SMutex<Vec<u32>>,
+}
+impl Mbx {
+    fn push(&self, v: u32) {
+        self.inner.lock().unwrap().push(v);
+    }
+    fn drain_len(&self) -> usize {
+        self.inner.lock().unwrap().len()
+    }
+}
+
+// `terminal.search.Thread` analogue: the child mutates `counter` through
+// `&mut self` (== `state_ptr`) and drains its OWN mailbox (the `Box<Mbx>`
+// pointee, a heap address OUTSIDE this struct's SB coverage).
+struct Tstate {
+    mailbox: Box<Mbx>,
+    counter: u32,
+}
+impl Tstate {
+    // thread_main's per-iteration work: a `&mut self` touch of `counter`
+    // (the held-state mutation the naive main-thread reborrow would pop) PLUS a
+    // drain of the mailbox — the real `thread_main_` loop does
+    // `while let Some(m) = self.mailbox.pop()` (thread.rs:370/493), a SHARED
+    // (`&self`) `pop` reached through the `Box<Mailbox>` while `&mut self` is held.
+    fn tick(&mut self) {
+        self.counter = self.counter.wrapping_add(1);
+        let _ = self.mailbox.drain_len();
+    }
+    fn deinit(&mut self) {
+        self.counter = 0;
+    }
+}
+
+// `Surface.Search` analogue (§2.3): stored whole in a pinned Box.
+struct Search {
+    st: Tstate,
+    thread: Option<std::thread::JoinHandle<()>>,
+    // decoupled producer handle — the Box<Mbx> pointee (move-stable, outside
+    // the `Tstate` struct's SB coverage). The shipped producer reaches the
+    // running thread ONLY through this.
+    mailbox: *const Mbx,
+}
+
+struct SendT(*mut Tstate);
+unsafe impl Send for SendT {}
+
+fn run_search(shipped: bool) {
+    let (go_tx, go_rx): (Sender<u8>, Receiver<u8>) = channel(); // main -> child
+    let (ack_tx, ack_rx): (Sender<u8>, Receiver<u8>) = channel(); // child -> main
+
+    // Build `state` as a LOCAL and move it whole into the pinned Search
+    // (`thread: None` == the reference `.thread = undefined`).
+    let st = Tstate {
+        mailbox: Box::new(Mbx { inner: SMutex::new(Vec::new()) }),
+        counter: 0,
+    };
+    // NOTE (harness finding — corrects design §2.4): the decoupled `*const Mbx`
+    // must NOT be captured off the PRE-MOVE local `st.mailbox`
+    // (`addr_of!(*st.mailbox)`). `Mailbox` is a `Box`, which asserts noalias; a
+    // pointer with the pre-move Box provenance is INVALIDATED when the child
+    // later derefs `self.mailbox` through its held `&mut self` (thread_main),
+    // popping that provenance (→ SB+TB UB, proven by `search_naive`-style runs).
+    // The decoupled pointer must instead be derived from the POST-MOVE
+    // `state_ptr` lineage — the SAME lineage the child derefs the Box through —
+    // so the two are compatible raw siblings. So `mailbox` is null at
+    // construction and set from `state_ptr` below.
+    let mut boxed: Box<Search> = Box::new(Search {
+        st,
+        thread: None,
+        mailbox: core::ptr::null(),
+    });
+
+    // ONE transient &mut taken at birth, lowered immediately to raw (§2.4).
+    let sp: *mut Search = &raw mut *boxed;
+    let state_ptr: *mut Tstate = unsafe { &raw mut (*sp).st };
+    // Derive the decoupled mailbox from the post-move `state_ptr` lineage (the
+    // Box<Mbx> pointee, reached through the same provenance the child uses).
+    unsafe { (*sp).mailbox = &raw const *(*state_ptr).mailbox }
+
+    let send = SendT(state_ptr);
+    let handle = std::thread::Builder::new()
+        .name("search".into())
+        .spawn(move || {
+            let s = send;
+            let go = go_rx;
+            let ack = ack_tx;
+            // `thread_main(&mut self)` takes `&mut self` ONCE and HOLDS it for the
+            // whole thread life (the reference `threadMain(self: *Thread)` → the
+            // loop). Model that: a single long-lived `&mut Tstate` reborrow of
+            // `state_ptr`, reused across every phase.
+            let st: &mut Tstate = unsafe { &mut *s.0 };
+            // phase 1: first use of the held `&mut st`.
+            let _ = go.recv();
+            st.tick(); // held-&mut use #1
+            ack.send(1).unwrap();
+            // phase 2: reuse the SAME held `&mut st`, AFTER main's producer access.
+            let _ = go.recv();
+            st.tick(); // held-&mut use #2 — NAIVE: use-after-pop
+            ack.send(2).unwrap();
+            // phase 3: stop.
+            let _ = go.recv();
+        })
+        .unwrap();
+    // s.thread = handle — written through its OWN disjoint raw projection; no
+    // &mut Search reborrow, so the child's live state_ptr tag is not popped.
+    unsafe { (*sp).thread = Some(handle) }
+
+    // let the child establish its tag (phase 1).
+    go_tx.send(0).unwrap();
+    let _ = ack_rx.recv();
+
+    // PRODUCER (the `.search`-else push / `.navigate_search`), issued between the
+    // child's two state uses.
+    if shipped {
+        // decoupled *const Mbx (Box pointee): a Copy raw field read + a deref of
+        // memory OUTSIDE `st` — NO reborrow of `st`.
+        let mailbox: *const Mbx = unsafe { (*sp).mailbox };
+        unsafe { (*mailbox).push(42) }
+    } else {
+        // NAIVE: a whole `&mut Search` reborrow reaching `st.mailbox`
+        // (`self.search.as_mut().unwrap().state.mailbox…`). The `&mut *sp` retag
+        // pops the child's state_ptr Unique.
+        let s: &mut Search = unsafe { &mut *sp };
+        s.st.mailbox.push(42);
+    }
+
+    // release child phase 2 (touches state_ptr again → NAIVE use-after-pop).
+    go_tx.send(0).unwrap();
+    let _ = ack_rx.recv();
+
+    // deinit (§3.3): release phase 3, join (child now dead → no alias), THEN
+    // exclusive access to `st`.
+    go_tx.send(0).unwrap();
+    unsafe { (*sp).thread.take().unwrap().join().unwrap() }
+    unsafe { (*sp).st.deinit() }
+
+    let counter = unsafe { (*sp).st.counter };
+    println!(
+        "search_{}: counter={counter}",
+        if shipped { "shipped" } else { "naive" }
+    );
+    drop(boxed);
+}
+
+// ---- child→MAIN re-entry model (callback_naive / callback_shipped) ----
+
+// The renderer mailbox (external heap alloc, reached via a raw `*const`).
+struct Ext {
+    inner: SMutex<Vec<u32>>,
+}
+impl Ext {
+    fn push(&self, v: u32) {
+        self.inner.lock().unwrap().push(v);
+    }
+}
+
+// `xev.Async` analogue: `notify(&self)` reads only `self.shared` (an Arc, heap-
+// backed). Modeled as an INLINE field of the surface so `notify` forms a narrow
+// `&(*sp).wakeup` shared ref INTO the surface (the real `renderer_thread.wakeup`).
+struct Wakeup {
+    shared: Arc<AtomicU32>,
+}
+impl Wakeup {
+    fn notify(&self) {
+        self.shared.fetch_add(1, AOrd::SeqCst);
+    }
+}
+
+// `Surface` analogue for the callback direction.
+struct S2 {
+    field: u32,          // the main thread's `&mut self` (performBindingAction) touches this
+    wakeup: Wakeup,      // inline (renderer_thread.wakeup)
+    mailbox: *const Ext, // raw → external (renderer_thread.mailbox)
+}
+impl S2 {
+    // NAIVE `searchCallback_(&mut self, …)`: a whole `&mut Surface` receiver.
+    fn callback_naive_method(&mut self) {
+        self.field = self.field.wrapping_add(100);
+        unsafe { (*self.mailbox).push(7) }
+        self.wakeup.notify();
+    }
+}
+
+struct SendS(*mut S2);
+unsafe impl Send for SendS {}
+
+fn run_callback(shipped: bool) {
+    let ext = Box::new(Ext { inner: SMutex::new(Vec::new()) });
+    let ext_ptr: *const Ext = &*ext;
+    let mut boxed: Box<S2> = Box::new(S2 {
+        field: 0,
+        wakeup: Wakeup { shared: Arc::new(AtomicU32::new(0)) },
+        mailbox: ext_ptr,
+    });
+    let sp: *mut S2 = &raw mut *boxed;
+
+    let (go_tx, go_rx): (Sender<u8>, Receiver<u8>) = channel();
+    let (ack_tx, ack_rx): (Sender<u8>, Receiver<u8>) = channel();
+
+    let send = SendS(sp);
+    let handle = std::thread::spawn(move || {
+        let s = send;
+        let go = go_rx;
+        let ack = ack_tx;
+        // fires WHILE the main thread is holding its &mut self (performBindingAction).
+        let _ = go.recv();
+        if shipped {
+            // SHIPPED searchCallback_(self_: *mut Surface): narrow raw field
+            // projections only — never a whole `&mut Surface`/`&Surface`.
+            unsafe {
+                let mb: *const Ext = (*s.0).mailbox; // Copy raw field read
+                (*mb).push(7); // renderer_thread.mailbox.push (external)
+                let wk: &Wakeup = &(*s.0).wakeup; // narrow &(*sp).renderer_thread.wakeup
+                wk.notify();
+            }
+        } else {
+            // NAIVE: `unsafe { &mut *self_ }.searchCallback_(event)` — a whole
+            // `&mut Surface` reborrow, concurrent with the main thread's `&mut self`.
+            unsafe { (*s.0).callback_naive_method() }
+        }
+        ack.send(1).unwrap();
+        let _ = go.recv(); // stop
+    });
+
+    // MAIN: performBindingAction holds `&mut self` ACROSS the arm body.
+    let main_ref: &mut S2 = unsafe { &mut *sp };
+    main_ref.field = main_ref.field.wrapping_add(1); // arm body use #1
+    // fire the callback WHILE main_ref is live.
+    go_tx.send(0).unwrap();
+    let _ = ack_rx.recv();
+    // main CONTINUES using its `&mut self` after the callback.
+    main_ref.field = main_ref.field.wrapping_add(1); // arm body use #2 — NAIVE: use-after-pop
+    let out = main_ref.field;
+
+    go_tx.send(0).unwrap();
+    handle.join().unwrap();
+
+    println!(
+        "callback_{}: field={out}",
+        if shipped { "shipped" } else { "naive" }
+    );
+    drop(boxed);
+    drop(ext);
+}
+
 fn main() {
     let which = std::env::args().nth(1).unwrap_or_default();
     match which.as_str() {
@@ -596,6 +876,27 @@ fn main() {
             unsafe {
                 drop(Box::from_raw(r2.font_grid));
             }
+            return;
+        }
+        _ => {}
+    }
+
+    // SEARCH_BINDING_ARM_DESIGN §3.4 candidates (own detached-spawn model).
+    match which.as_str() {
+        "search_shipped" => {
+            run_search(true);
+            return;
+        }
+        "search_naive" => {
+            run_search(false);
+            return;
+        }
+        "callback_shipped" => {
+            run_callback(true);
+            return;
+        }
+        "callback_naive" => {
+            run_callback(false);
             return;
         }
         _ => {}

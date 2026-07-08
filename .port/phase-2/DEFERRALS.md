@@ -1534,37 +1534,51 @@ missing=0. No new tests (0 in the reference; Surface<A> is untested-by-construct
   EVERY exit — the C9..C13 convention; the copy_to_clipboard/copy_url fallible
   calls unlock before propagating/returning.
 
-### DEFERRED (within C14a) — `.search` arm (Surface.zig:4933) — the ONLY unported first-half arm
+### RESOLVED (`.search` arm, Surface.zig:4933) — SEARCH_BINDING_ARM_DESIGN
 
-The `.search` arm body is preserved VERBATIM as comments above an
-`unimplemented!()` (the GPU/xev-leaf precedent), blocked on TWO cross-cutting
-issues out of scope for this chunk:
+The `.search` arm now lands LIVE (the `unimplemented!()` + its verbatim body
+are replaced by the faithful translation, reference lines preserved as `//`
+comments — R1). Both blockers are resolved per
+`.port/phase-2/SEARCH_BINDING_ARM_DESIGN.md`:
 
-1. **Search-thread mutex-type unification.** The reference constructs the vt
-   search thread with `.mutex = self.renderer_state.mutex`. In the Rust port the
-   renderer `State.mutex` was retyped (C0) to the guard-less
-   `rustty_zigstd::thread::Mutex`, but `terminal::search::thread::Options.mutex`
-   is still `*const std::sync::Mutex<()>` (ported before C0) and its four
-   internal lock sites use std's RAII guard (`select`/`change_needle`/`feed`/
-   `refresh`, several spanning `?`-carrying scopes). The reference shares ONE
-   `*std.Thread.Mutex`, so `Options.mutex` + those lock sites + the search-thread
-   test must be retyped to the shared zigstd mutex (rustty-vt already deps
-   rustty-zigstd — no new crate edge). **Target: a focused rustty-vt follow-up
-   before/with C14b or C15.**
-2. **Self-referential long-lived spawn.** The reference stores the search state
-   into `self.search` FIRST (`.thread = undefined`), then spawns the OS thread
-   with `&s.state` (a stable pointer into the stored `Search`), then assigns the
-   handle. The ported `Search.thread` is a bare `JoinHandle` (not
-   `undefined`-able), so the construct-then-spawn order needs a dedicated design
-   (e.g. `Box`-ing the state for a location-independent address, or an
-   `Option<JoinHandle>`), settled together with (1).
+1. **Search-thread mutex-type unification — DONE.**
+   `terminal::search::thread::Options.mutex` is retyped from
+   `*const std::sync::Mutex<()>` to `*const rustty_zigstd::thread::Mutex` (the
+   shared guard-less C0 mutex, so `self.renderer_state.mutex` is
+   type-compatible). The four internal lock sites (`thread_main_loop`/`select`/
+   `change_needle`/`refresh_callback`) use a local `defer`-unlock guard
+   (`lock_deferred`, exit-safe across `?`/early-`return`); the vt `search_thread`
+   test's `mutex` local is retyped (still GREEN, the load-bearing regression
+   gate). No new crate edge (rustty-vt already deps rustty-zigstd — R4 clean).
+2. **Self-referential construct-then-spawn — DONE.** `Search.thread` retyped to
+   `Option<JoinHandle>` (`None` == the reference `.thread = undefined`); the
+   `Search` is stored FIRST, a stable `*mut Thread` is projected from the stored
+   state (`&raw mut (*search_ptr).state`), the thread is spawned on THAT raw
+   pointer, and the handle is written back through a disjoint raw sub-place
+   (`(*search_ptr).thread = Some(handle)`), never a `&mut Search` reborrow. Post-
+   spawn producers reach the running thread ONLY through DECOUPLED handles on
+   `Search` (`mailbox: *const Mailbox`, `wakeup`/`stop: xev::Notifier`) — proven
+   SB+TB clean on `.port/phase-2/mirihar-chunk3b/` (`search_shipped`). The
+   producer/deinit/`navigate_search` retrofits + the reverse-direction
+   `searchCallback_` retype off `&mut Surface` to `*mut Surface` (narrow raw
+   projections, proven `callback_shipped`) are the substantive part. **Harness
+   finding (corrected design §2.4):** the decoupled mailbox pointer must be
+   derived from the POST-MOVE `state_ptr` lineage, NOT `addr_of!(*state.mailbox)`
+   off the pre-move local — the pre-move Box provenance is popped by the child's
+   `Box<Mailbox>` noalias (SB+TB UB); the corrected lineage is what shipped.
 
-Every OTHER search-related first-half arm ports LIVE: `.start_search` /
+Testability: the vt search-thread machinery is exercised by the retyped
+`search_thread` test (spawn-search-over-a-Screen, GREEN); the Surface-level arm
+is COMPILE-faithful (a full `Surface` is windowing-blocked at
+`Renderer::surfaceInit`, so it cannot be driven headlessly) with its two risky
+ingredients independently verified (the vt test for the machinery, the mirihar
+harness for the borrow shape). No `unimplemented!()` remains on the arm.
+
+Every OTHER search-related first-half arm was already LIVE: `.start_search` /
 `.search_selection` (apprt-only notify), `.end_search` (`self.search.take()` +
-`deinit` + apprt notify), `.navigate_search` (`mailbox.push` + `wakeup.notify`
-on an existing search). With `.search` deferred, `self.search` is always `None`,
-so those arms' Some-branches are faithfully present but dormant until `.search`
-lands.
+`deinit` + apprt notify), `.navigate_search` (now retrofit to the decoupled
+producer handles). Their Some-branches, dormant while `self.search == None`, now
+run against a real thread once `.search` spawns one.
 
 ## rustty-core C14b (core tier) — performBindingAction second half + closingAction
 
@@ -1768,9 +1782,9 @@ carries no `test{}` on any deferred surface.
 **`unimplemented!()` audit (C-F, surface.rs + app.rs):** every production
 `unimplemented!()` is a documented placeholder leaf or a DEFERRALS entry below;
 NO stragglers.
-- `surface.rs` — **3**, all tracked here: `activateInspector` /
-  `deactivateInspector` (Phase-3 inspector, §4) + `performBindingAction .search`
-  arm (search-thread mutex/spawn, C14a).
+- `surface.rs` — **2** (was 3; the `performBindingAction .search` arm now lands
+  LIVE — see "RESOLVED (`.search` arm)" above): `activateInspector` /
+  `deactivateInspector` (Phase-3 inspector, §4).
 - `app.rs` — **8**, ALL inside `#[cfg(test)] mod test_runtime` (the §7
   TestSurface fake methods the C4 seam tests do not drive — honest test glue,
   NOT production leaves and NOT deferrals).
@@ -1788,17 +1802,16 @@ GPU renderer / D6 libxev port):**
    (The `keyCallback` inspector defer-block ports REAL — None-arm live, Some-arm
    unreachable until Phase 3, per §4.)
 
-2. **`performBindingAction .search` arm (C14a, Surface.zig:4933).** The ONLY
-   unported switch arm, verbatim above `unimplemented!()`. Blocked on (a)
-   search-thread mutex-type unification — `terminal::search::thread::Options.mutex`
-   is still `*const std::sync::Mutex<()>` (ported pre-C0) and must retype to the
-   shared guard-less `rustty_zigstd::thread::Mutex` the reference passes as
-   `self.renderer_state.mutex`; and (b) the self-referential construct-then-spawn
-   order (store `Search` first with `.thread = undefined`, spawn with a stable
-   `&s.state`, then assign the handle). **Target: a focused rustty-vt search
-   follow-up.** Every OTHER search arm (`start_search`/`search_selection`/
-   `end_search`/`navigate_search`) ports LIVE; `self.search` is always `None`
-   until this lands, so their Some-branches are present but dormant.
+2. **`performBindingAction .search` arm (Surface.zig:4933) — RESOLVED.** Landed
+   LIVE per SEARCH_BINDING_ARM_DESIGN: (a) the vt `Options.mutex` retyped to the
+   shared guard-less `rustty_zigstd::thread::Mutex`; (b) the self-referential
+   construct-then-spawn via a stable-address raw-ptr discipline (store `Search`
+   first with `thread: None`, spawn on a `*mut Thread` projected from the stored
+   state, assign the handle through a disjoint raw sub-place) + decoupled
+   producer handles (SB+TB clean on `mirihar-chunk3b`). See "RESOLVED
+   (`.search` arm)" above for the full detail. `navigate_search`/`end_search`/
+   `deinit` retrofit to the decoupled handles; `searchCallback_` retyped off
+   `&mut Surface` to `*mut Surface`.
 
 3. **`renderer_seam.rs` dependency placeholders (C3, §5).** Inhabited structs
    with `unimplemented!()` bodies (termio `xev_seam` precedent; no reference
