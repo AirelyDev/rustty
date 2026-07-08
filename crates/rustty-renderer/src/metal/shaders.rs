@@ -28,10 +28,14 @@ use objc2_metal::{MTLDevice, MTLLibrary};
 use crate::metal::api;
 use crate::metal::api::MTLVertexFormat as F;
 use crate::metal::api::MTLVertexStepFunction as SF;
+// The GPU-ABI POD types (`crate::metal::gpu_abi`) are what is LITERALLY in the
+// per-instance buffers (§2.2), so the `VertexLayout` tables + drift guards pin
+// THEM. `Image` STAYS `crate::shaders::Image` — it is already ABI, no `ImageGpu`.
+use crate::metal::gpu_abi::{BgImageGpu, CellTextGpu};
 use crate::metal::pipeline::{
     Attachment, Options as PipelineOptions, Pipeline, VertexAttribute as VA, VertexLayoutRef,
 };
-use crate::shaders::{BgImage, CellText, Image};
+use crate::shaders::Image;
 
 // const log = std.log.scoped(.metal);
 // PORT NOTE: no logging facade is wired in the port yet (see `buffer.rs`); the
@@ -61,7 +65,13 @@ pub trait VertexLayout: Sized {
     const LAYOUT: VertexLayoutRef;
 }
 
-impl VertexLayout for CellText {
+// PORT NOTE (§2.2 re-pin): the `VertexLayout` for the `cell_text` vertex is on
+// `CellTextGpu` (the ABI POD literally in `FrameState.cells`), NOT the ergonomic
+// `crate::shaders::CellText`. Offsets/stride are byte-identical to the pre-Chunk-4
+// `CellText` table (`[0,8,16,20,24,28,29]`, stride 32) — the GPU vertex-fetch
+// behavior is UNCHANGED; only the *content* of byte 29 (`is_cursor_glyph` now in
+// bit 1) is ABI-fixed by the `gpu_abi` serializer.
+impl VertexLayout for CellTextGpu {
     const LAYOUT: VertexLayoutRef = VertexLayoutRef {
         attrs: &[
             VA {
@@ -93,7 +103,7 @@ impl VertexLayout for CellText {
                 offset: 29,
             }, // bools:      packed(u8) -> u8
         ],
-        stride: core::mem::size_of::<CellText>(),
+        stride: core::mem::size_of::<CellTextGpu>(),
     };
 }
 
@@ -121,7 +131,8 @@ impl VertexLayout for Image {
     };
 }
 
-impl VertexLayout for BgImage {
+// §2.3 re-pin: on `BgImageGpu` (byte-identical `[0,4]`, stride 8).
+impl VertexLayout for BgImageGpu {
     const LAYOUT: VertexLayoutRef = VertexLayoutRef {
         attrs: &[
             VA {
@@ -133,7 +144,7 @@ impl VertexLayout for BgImage {
                 offset: 4,
             }, // info:    Info packed(u8) -> u8
         ],
-        stride: core::mem::size_of::<BgImage>(),
+        stride: core::mem::size_of::<BgImageGpu>(),
     };
 }
 
@@ -148,19 +159,30 @@ impl VertexLayout for BgImage {
 // struct is important, so we test it in order to be aware of any changes.") is
 // preserved in `crate::shaders`.
 //
-// CAVEAT (does NOT block 1b, blocks the Chunk-4 golden): the offsets are correct,
-// but the `atlas`/`bools`/`info` *bytes* are only shader-correct once
-// `crate::shaders`'s packed-bool sub-structs serialize to a single `packed
-// struct(u8)` byte — see GPU_RD_CHUNK1B_DESIGN §OPEN RISKS #1.
+// CHUNK-4 UN-DEFER: the `atlas`/`bools`/`info` bytes are now shader-correct — the
+// layout/offset guards below pin `CellTextGpu`/`BgImageGpu` (what is LITERALLY in
+// the buffer, §2.2/§2.3) whose `From` serializers pack the packed-bool byte, and
+// the `gpu_abi` byte unit-test asserts the exact bit values. (GPU_RD_CHUNK1B_DESIGN
+// §OPEN RISKS #1 is now closed.)
+//
+// PORT NOTE (R1 — do NOT lose the reference test{}): `metal/shaders.zig`'s lone
+// `test { expectEqual(32, @sizeOf(CellText)) }` stands on the ERGONOMIC struct, so
+// the standalone `size_of::<crate::shaders::CellText>() == 32` guard below is KEPT
+// (G3b does not gate this crate — this const guard is its only enforcement; the
+// re-pin to `CellTextGpu` must not drop it).
 const _: () = {
-    assert!(core::mem::size_of::<CellText>() == 32); // un-defers the reference test{}
-    assert!(core::mem::offset_of!(CellText, glyph_pos) == 0);
-    assert!(core::mem::offset_of!(CellText, glyph_size) == 8);
-    assert!(core::mem::offset_of!(CellText, bearings) == 16);
-    assert!(core::mem::offset_of!(CellText, grid_pos) == 20);
-    assert!(core::mem::offset_of!(CellText, color) == 24);
-    assert!(core::mem::offset_of!(CellText, atlas) == 28);
-    assert!(core::mem::offset_of!(CellText, bools) == 29);
+    // The reference test{} (on the ergonomic type).
+    assert!(core::mem::size_of::<crate::shaders::CellText>() == 32);
+
+    // The buffer-ABI layout guards (on the POD literally in the vertex buffer).
+    assert!(core::mem::size_of::<CellTextGpu>() == 32);
+    assert!(core::mem::offset_of!(CellTextGpu, glyph_pos) == 0);
+    assert!(core::mem::offset_of!(CellTextGpu, glyph_size) == 8);
+    assert!(core::mem::offset_of!(CellTextGpu, bearings) == 16);
+    assert!(core::mem::offset_of!(CellTextGpu, grid_pos) == 20);
+    assert!(core::mem::offset_of!(CellTextGpu, color) == 24);
+    assert!(core::mem::offset_of!(CellTextGpu, atlas) == 28);
+    assert!(core::mem::offset_of!(CellTextGpu, bools) == 29);
 
     assert!(core::mem::size_of::<Image>() == 40);
     assert!(core::mem::offset_of!(Image, grid_pos) == 0);
@@ -168,9 +190,9 @@ const _: () = {
     assert!(core::mem::offset_of!(Image, source_rect) == 16);
     assert!(core::mem::offset_of!(Image, dest_size) == 32);
 
-    assert!(core::mem::size_of::<BgImage>() == 8);
-    assert!(core::mem::offset_of!(BgImage, opacity) == 0);
-    assert!(core::mem::offset_of!(BgImage, info) == 4);
+    assert!(core::mem::size_of::<BgImageGpu>() == 8);
+    assert!(core::mem::offset_of!(BgImageGpu, opacity) == 0);
+    assert!(core::mem::offset_of!(BgImageGpu, info) == 4);
 };
 
 /// All the comptime-known info about a pipeline, so that
@@ -243,7 +265,7 @@ const PIPELINE_DESCS: &[(&str, PipelineDescription)] = &[
     (
         "cell_text",
         PipelineDescription {
-            vertex_attributes: Some(<CellText as VertexLayout>::LAYOUT),
+            vertex_attributes: Some(<CellTextGpu as VertexLayout>::LAYOUT),
             vertex_fn: "cell_text_vertex",
             fragment_fn: "cell_text_fragment",
             step_fn: SF::PerInstance,
@@ -263,7 +285,7 @@ const PIPELINE_DESCS: &[(&str, PipelineDescription)] = &[
     (
         "bg_image",
         PipelineDescription {
-            vertex_attributes: Some(<BgImage as VertexLayout>::LAYOUT),
+            vertex_attributes: Some(<BgImageGpu as VertexLayout>::LAYOUT),
             vertex_fn: "bg_image_vertex",
             fragment_fn: "bg_image_fragment",
             step_fn: SF::PerInstance,

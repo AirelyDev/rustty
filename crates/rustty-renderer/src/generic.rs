@@ -412,12 +412,25 @@ mod macos_impl {
     use rustty_vt::{color, page, point, sgr};
     use rustty_zigstd::thread::{Mutex, Semaphore};
 
+    use core::ptr::addr_of_mut;
+    use std::ffi::CStr;
+
+    use objc2::runtime::ProtocolObject;
+    use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus};
+
     use super::{AtomicHealth, DerivedConfig, Options, TerminalColor};
     use crate::cell::{self, Contents, Key};
     use crate::cursor;
-    use crate::image;
+    use crate::image::{self, DrawPlacements};
     use crate::message::{SearchMatch, SearchMatches};
+    use crate::metal::api::MTLPrimitiveType;
     use crate::metal::buffer::{self, Buffer};
+    use crate::metal::frame::{CompletionContext, Frame};
+    use crate::metal::render_pass::{Attachment, AttachmentTarget, Draw, Step};
+    // The Metal-ABI POD serializers (§2): `FrameState`'s GPU buffers hold these
+    // byte-faithful types; `draw_frame` converts the ergonomic `crate::shaders`
+    // structs at the `sync` boundary.
+    use crate::metal::gpu_abi::{BgImageGpu, CellTextGpu, UniformsGpu};
     use crate::metal::sampler::{self, Sampler};
     use crate::metal::shaders::Shaders;
     use crate::metal::target::{self, Target};
@@ -466,6 +479,10 @@ mod macos_impl {
         MetalFailed,
         /// An allocation failed (the font `Atlas` allocation).
         OutOfMemory,
+        /// The swap chain is defunct (its GPU state was torn down by
+        /// `displayUnrealized`). `drawFrame`'s `swap_chain.next_frame()` surfaces
+        /// this; reference `error{Defunct}` (part of `drawFrame`'s error set).
+        Defunct,
     }
 
     impl From<buffer::Error> for Error {
@@ -493,6 +510,32 @@ mod macos_impl {
             Error::OutOfMemory
         }
     }
+    impl From<Defunct> for Error {
+        fn from(_: Defunct) -> Self {
+            Error::Defunct
+        }
+    }
+    // The Metal graphics-API leaf errors `drawFrame` propagates: `Metal::{surface_size,
+    // present, present_last_target}` return `metal_impl::Error` (`NoMetalDevice`), and
+    // `Metal::begin_frame` returns `frame::Error` (`MetalFailed`). Both fold into the
+    // aggregate `MetalFailed` (the reference `!void` inferred-union member).
+    impl From<crate::metal::metal_impl::Error> for Error {
+        fn from(_: crate::metal::metal_impl::Error) -> Self {
+            Error::MetalFailed
+        }
+    }
+    impl From<crate::metal::frame::Error> for Error {
+        fn from(_: crate::metal::frame::Error) -> Self {
+            Error::MetalFailed
+        }
+    }
+    // `Metal::init_shaders` (via `Renderer::init_shaders`) returns
+    // `crate::metal::shaders::Error` (`MetalFailed`).
+    impl From<crate::metal::shaders::Error> for Error {
+        fn from(_: crate::metal::shaders::Error) -> Self {
+            Error::MetalFailed
+        }
+    }
 
     /// Returned by [`SwapChain::next_frame`] when the swap chain is defunct.
     //
@@ -512,6 +555,31 @@ mod macos_impl {
     /// mailbox trait bound to `AppMailbox` in core (GPU_RD_CHUNK3A_DESIGN §B.2).
     #[derive(Clone, Copy, Debug, Default)]
     pub struct SurfaceMailbox;
+
+    /// PORT NOTE (DEFERRED SEAM — mailbox push timeout): the `apprt.surface.Mailbox`
+    /// push timeout mode. The reference uses `.instant` at `drawFrame` (:1454) and
+    /// `.{ .forever = {} }` at `frameCompleted` (:1735). Inhabited placeholder
+    /// preserving the two reference modes (R1); the real timeout routing lands with
+    /// the apprt tier.
+    #[derive(Clone, Copy, Debug)]
+    pub enum MailboxTimeout {
+        Instant,
+        Forever,
+    }
+
+    impl SurfaceMailbox {
+        /// PORT NOTE (DEFERRED SEAM — no-op): `apprt.surface.Mailbox.push(msg,
+        /// timeout)` returns the number of messages pushed. This placeholder returns
+        /// 0 so the two verbatim reference push sites (`drawFrame`'s `.scrollbar`
+        /// :1454 and `frameCompleted`'s `.renderer_health` :1735) port unchanged as
+        /// harmless no-ops: `if (push(...) > 0)` is never taken offscreen, so the
+        /// golden observes no mailbox. Generic over the message payload `M` (the
+        /// faithful `Scrollbar`/`Health` value is threaded through and dropped — the
+        /// real routing is the deferred apprt seam).
+        pub fn push<M>(&self, _msg: M, _timeout: MailboxTimeout) -> usize {
+            0
+        }
+    }
 
     /// PORT NOTE (DEFERRED SEAM — macOS display link): reference
     /// `const DisplayLink = switch (builtin.os.tag) { .macos => *macos.video.DisplayLink,
@@ -875,8 +943,12 @@ mod macos_impl {
     // `CellTextBuffer = Buffer(...CellText)`, `BgImageBuffer = Buffer(...BgImage)`)
     // are inlined as the concrete `Buffer<T>` field types below.
     pub struct FrameState {
-        pub uniforms: Buffer<Uniforms>,
-        pub cells: Buffer<CellText>,
+        // §2.6: the GPU buffers hold the Metal-ABI POD serializer types (byte-
+        // faithful to what the `.metal` shaders read), NOT the ergonomic
+        // `crate::shaders` structs. `cells_bg` is UNCHANGED — `CellBg = [u8;4]` is
+        // already the exact `uchar4` ABI.
+        pub uniforms: Buffer<UniformsGpu>,
+        pub cells: Buffer<CellTextGpu>,
         pub cells_bg: Buffer<CellBg>,
 
         pub grayscale: Texture,
@@ -892,7 +964,7 @@ mod macos_impl {
         ///
         /// TODO: Make this an optional and only create it
         ///       if we actually have a background image.
-        pub bg_image_buffer: Buffer<BgImage>,
+        pub bg_image_buffer: Buffer<BgImageGpu>,
         /// See property of same name on Renderer for explanation.
         pub bg_image_buffer_modified: usize,
 
@@ -908,7 +980,7 @@ mod macos_impl {
             // (Zig `errdefer uniforms.deinit()` — the `Retained` releases on the
             //  `?` early-return `Drop`; no manual errdefer needed. Same for each
             //  resource below.)
-            let uniforms = Buffer::<Uniforms>::init(api.uniform_buffer_options(), 1)?;
+            let uniforms = Buffer::<UniformsGpu>::init(api.uniform_buffer_options(), 1)?;
 
             // Create GPU buffers for our cells.
             //
@@ -916,11 +988,11 @@ mod macos_impl {
             // too small, but they will be resized as needed. This is a bit
             // wasteful but since it's a one-time thing it's not really a
             // huge concern.
-            let cells = Buffer::<CellText>::init(api.fg_buffer_options(), 1)?;
+            let cells = Buffer::<CellTextGpu>::init(api.fg_buffer_options(), 1)?;
             let cells_bg = Buffer::<CellBg>::init(api.bg_buffer_options(), 1)?;
 
             // Create a GPU buffer for our background image info.
-            let bg_image_buffer = Buffer::<BgImage>::init(api.bg_image_buffer_options(), 1)?;
+            let bg_image_buffer = Buffer::<BgImageGpu>::init(api.bg_image_buffer_options(), 1)?;
 
             // Initialize our textures for our font atlas.
             //
@@ -3668,6 +3740,847 @@ mod macos_impl {
     }
 
     // =======================================================================
+    // Chunk 4 — the offscreen draw path (GPU_RD_CHUNK4_DESIGN)
+    // =======================================================================
+
+    /// `= Frame.zig` `bufferCompleted` (the `@fieldParentPtr` / container_of
+    /// re-entry). Matches `crate::metal::frame::CompletionFn`.
+    //
+    // PORT NOTE ([FIX-2] / `rust-mut-args-strongly-protected` / vtc-effects-trampoline-
+    // seam-d3): the renderer pointer is recovered as a RAW `*mut Renderer` (NOT
+    // `&mut`) and deref'd HERE — inside `Frame::complete`, which runs inside
+    // `draw_frame` while `draw_frame`'s `&mut self` (the raw root `self_ptr`) is still
+    // live on the stack. A `&mut` reborrow held across this callback would be UB. This
+    // exact structure (`&mut api.present` + `&self frame_completed` fired while the
+    // outer `self_ptr` + `frame` raw roots are live) is PROVEN clean under Stacked
+    // Borrows AND Tree Borrows on `.port/phase-2/mirihar-chunk3b` (`drawframe_shipped`).
+    unsafe fn metal_buffer_completed(
+        ctx: &CompletionContext,
+        buffer: &ProtocolObject<dyn MTLCommandBuffer>,
+    ) {
+        // const buffer = objc.Object.fromId(buffer_id);
+        // Get our command buffer status to pass back to the generic renderer.
+        // const status = buffer.getProperty(mtl.MTLCommandBufferStatus, "status");
+        let status = buffer.status();
+        // const health: Health = switch (status) { .@"error" => .unhealthy, else => .healthy };
+        let health = match status {
+            MTLCommandBufferStatus::Error => crate::Health::Unhealthy,
+            _ => crate::Health::Healthy,
+        };
+        // container_of: the type-erased renderer pointer back to *mut Renderer.
+        let renderer = ctx.renderer as *mut Renderer;
+        // If the frame is healthy, present it.
+        if health == crate::Health::Healthy {
+            // R1 — the reference logs a present failure (Frame.zig :82-88):
+            //   `block.renderer.api.present(block.target.*, block.sync) catch |err|
+            //        log.err("Failed to present render target: err={}", .{err});`
+            // `present` is a no-op offscreen (always `Ok` ⇒ no err to surface), but the
+            // error-log site is preserved verbatim as this comment for fidelity; when
+            // the real layer-path `present` un-defers, restore
+            // `if let Err(err) = … { log::error!(…) }`. `&mut api` reborrow through the
+            // raw ptr; `&*ctx.target` is the `*mut Target` back to `&Target`.
+            let _ = unsafe { (*renderer).api.present(&*ctx.target, ctx.sync) };
+        }
+        // block.renderer.frameCompleted(health);
+        unsafe { (*renderer).frame_completed(health) };
+    }
+
+    impl Renderer {
+        // fn deinitShaders(self: *Self) void { self.shaders.deinit(self.alloc); }
+        //
+        // PORT NOTE (dead-code / `-D warnings`, GPU_RD_CHUNK4_DESIGN §6.4 following the
+        // GPU_RD_CHUNK3A_DESIGN §B.4 "make pub, ZERO #[allow(dead_code)]" precedent):
+        // `deinit_shaders`'s SOLE reference is `Renderer::deinit` (ref generic.zig
+        // :825), which stays the `unimplemented!()` seam (§1). `draw_frame`'s reinit
+        // branch calls `self.shaders.deinit()` DIRECTLY (ref :1500), NOT
+        // `self.deinit_shaders()` — so it has no live caller in Chunk 4 and a private
+        // `fn` would trip `-D warnings`. Widened to `pub fn` (a pub method on the
+        // re-exported `Renderer` is reachable ⇒ dead-code-exempt) until
+        // `Renderer::deinit` un-defers. Zig `alloc` param dissolves (`Shaders::deinit`
+        // is objc2/Vec-managed).
+        pub fn deinit_shaders(&mut self) {
+            self.shaders.deinit();
+        }
+
+        /// True if our renderer has animations so that a higher frequency
+        /// timer is used.
+        // pub fn hasAnimations(self: *const Self) bool
+        fn has_animations(&self) -> bool {
+            self.has_custom_shaders
+        }
+
+        fn init_shaders(&mut self) -> Result<(), Error> {
+            // var arena = ArenaAllocator.init(self.alloc);
+            // defer arena.deinit();
+            // const arena_alloc = arena.allocator();
+            //
+            // Load our custom shaders
+            // const custom_shaders: []const [:0]const u8 = shadertoy.loadFromFiles(
+            //     arena_alloc,
+            //     self.config.custom_shaders,
+            //     GraphicsAPI.custom_shader_target,
+            // ) catch |err| err: {
+            //     log.warn("error loading custom shaders err={}", .{err});
+            //     break :err &.{};
+            // };
+            //
+            // DEFERRED SEAM (R5): `shadertoy::load_from_files` is UN-PORTED (grep
+            // confirms it is absent from `crate::shadertoy`) AND `config.custom_shaders`
+            // is the `RepeatablePath` placeholder ZST — so the custom-shader load is a
+            // deferred seam that yields the empty list. This is faithful to BOTH the
+            // reference's `catch |err| break :err &.{}` (an error ⇒ no custom shaders)
+            // AND the placeholder (an empty path list ⇒ no custom shaders). The verbatim
+            // Zig loader body is preserved above (R5); when `shadertoy::load_from_files`
+            // + a real `RepeatablePath` land, restore the load.
+            let custom_shaders: &[&CStr] = &[];
+
+            // const has_custom_shaders = custom_shaders.len > 0;
+            let has_custom_shaders = !custom_shaders.is_empty();
+
+            // var shaders = try self.api.initShaders(self.alloc, custom_shaders);
+            // errdefer shaders.deinit(self.alloc);  → the `?` early-return `Drop`.
+            // self.shaders = shaders;
+            self.shaders = self.api.init_shaders(custom_shaders)?;
+            // self.has_custom_shaders = has_custom_shaders;
+            self.has_custom_shaders = has_custom_shaders;
+            Ok(())
+        }
+
+        /// Sync the atlas data to the given texture. This copies the bytes
+        /// associated with the atlas to the given texture. If the atlas no
+        /// longer fits into the texture, the texture will be resized.
+        //
+        // PORT NOTE (raw-ptr — MIRIHAR-PROVEN deviation from GPU_RD_CHUNK4_DESIGN
+        // §6.3's literal signature): the reference is `syncAtlasTexture(self: *const
+        // Self, atlas: *const font.Atlas, texture: *Texture)` — `self` and `texture`
+        // are RAW pointers. The design §6.3's Rust signature `fn sync_atlas_texture(
+        // &self, atlas: &Atlas, texture: &mut Texture)` is UNSOUND: `texture` is `&mut
+        // frame.grayscale`, which aliases INTO `self.swap_chain`, so a `&self` receiver
+        // FREEZES the texture bytes and the subsequent `*texture` write pops that frozen
+        // tag — UB under BOTH Stacked Borrows AND Tree Borrows (PROVEN on
+        // `.port/phase-2/mirihar-chunk3b`'s `atlas_self_isolated` candidate; the raw-self
+        // form is proven clean by `drawframe_shipped`). Ported as raw self + raw texture
+        // (the faithful Zig shape): it reborrows only `self.api` (narrow, disjoint from
+        // `swap_chain`) and writes `*texture`. `atlas` stays a real `&FontAtlas` — it
+        // lives in the `*mut SharedGrid` (a SEPARATE allocation, no aliasing with self).
+        unsafe fn sync_atlas_texture(
+            self_raw: *const Renderer,
+            atlas: &FontAtlas,
+            texture: *mut Texture,
+        ) -> Result<(), Error> {
+            // if (atlas.size > texture.width) {
+            if atlas.size() as usize > unsafe { (*texture).width } {
+                // Free our old texture / Reallocate. The reassignment drops the old
+                // `Texture` (Retained release) — the reference `texture.*.deinit()`.
+                // texture.* = try self.api.initAtlasTexture(atlas);
+                unsafe {
+                    *texture = (*self_raw).api.init_atlas_texture(atlas)?;
+                }
+            }
+
+            // try texture.replaceRegion(0, 0, atlas.size, atlas.size, atlas.data);
+            unsafe {
+                (*texture).replace_region(
+                    0,
+                    0,
+                    atlas.size() as usize,
+                    atlas.size() as usize,
+                    atlas.data(),
+                );
+            }
+            Ok(())
+        }
+
+        // fn uploadBackgroundImage(self: *Self) !void
+        fn upload_background_image(&mut self) -> Result<(), Error> {
+            // Make sure our bg image is uploaded if it needs to be.
+            // if (self.bg_image) |*bg| {
+            if let Some(bg) = self.bg_image.as_mut() {
+                // if (bg.isUnloading()) { bg.deinit(self.alloc); self.bg_image = null; return; }
+                if bg.is_unloading() {
+                    // `Image::deinit` consumes `self` by value (the reference
+                    // `bg.deinit(self.alloc)`), so take the image OUT of the Option to
+                    // move it into `deinit`; then the Option is left `None`.
+                    let img = self.bg_image.take().unwrap();
+                    img.deinit(self.alloc);
+                    return Ok(());
+                }
+                // if (bg.isPending()) try bg.upload(self.alloc, &self.api);
+                if bg.is_pending() {
+                    bg.upload(self.alloc, &self.api)
+                        .map_err(|_| Error::MetalFailed)?;
+                }
+            }
+            Ok(())
+        }
+
+        /// Callback from the graphics API when a frame is completed.
+        //
+        // PORT NOTE (`&self` narrowing, faithful): reference `pub fn frameCompleted(
+        // self: *Self, health)`. Every op it performs is `&self`-safe — `health.store`
+        // (AtomicHealth, &self), the `surface_mailbox.push` (a no-op placeholder), and
+        // `swap_chain.release_frame` (&self, posts the semaphore). Narrowing `*Self →
+        // &self` is faithful (no mutation of a non-atomic field) AND makes the
+        // trampoline's reborrow a SHARED reborrow (SB/TB-cleaner; frame is unused after
+        // `complete()`, so the whole-`&self` reborrow is clean — mirihar).
+        pub fn frame_completed(&self, health: crate::Health) {
+            // If our health value hasn't changed, then we do nothing. We don't
+            // do a cmpxchg here because strict atomicity isn't important.
+            // if (self.health.load(.seq_cst) != health) {
+            if self.health.load() != health {
+                // self.health.store(health, .seq_cst);
+                self.health.store(health);
+
+                // Our health value changed, so we notify the surface so that it
+                // can do something about it.
+                // _ = self.surface_mailbox.push(.{ .renderer_health = health }, .{ .forever = {} });
+                //   — SurfaceMailbox is the deferred no-op placeholder (§ generic.rs
+                //     seam); the real mailbox routing lands with the apprt tier. The
+                //     faithful `health` payload is threaded through and dropped (push
+                //     returns 0).
+                let _ = self.surface_mailbox.push(health, MailboxTimeout::Forever);
+            }
+
+            // Always release our semaphore
+            // self.swap_chain.releaseFrame();
+            self.swap_chain.release_frame();
+        }
+
+        /// Draw the frame to the screen.
+        ///
+        /// If `sync` is true, this will synchronously block until
+        /// the frame is finished drawing and has been presented.
+        //
+        // PORT NOTE (raw-ptr discipline, GPU_RD_CHUNK4_DESIGN §5.2 / MIRIHAR-PROVEN):
+        // the whole body drives `self` through the SINGLE raw root `self_ptr = self`
+        // with NARROW field reborrows (`(*self_ptr).field`), and re-derives the frame
+        // raw root `frame` FRESH via `addr_of_mut!((*self_ptr).swap_chain.frames[idx])`
+        // AFTER every whole-`&mut self` call (`upload_background_image`,
+        // `update_custom_shader_uniforms_for_frame`, `update_screen_size_uniforms`,
+        // `init_shaders`) — because a whole `&mut *self_ptr` reborrow POPS a held
+        // `frame` tag (H1: SB UB, PROVEN by the `drawframe_naive` mirihar candidate).
+        // The trampoline (`Frame::complete`) re-enters through the type-erased
+        // `self_ptr` (H2). The full structure is clean under SB AND TB
+        // (`drawframe_shipped`). `swap_chain.frames` is a fixed ARRAY (place-projected
+        // `[idx]`, no `Index` autoref).
+        pub fn draw_frame(&mut self, sync: bool) -> Result<(), Error> {
+            // const start = std.time.Instant.now() catch unreachable;
+            // const start_micro = std.time.microTimestamp();
+            // defer {
+            //     const end = std.time.Instant.now() catch unreachable;
+            //     log.warn(
+            //         "[drawFrame time] start_micro={} duration={}ns",
+            //         .{ start_micro, end.since(start) / std.time.ns_per_us },
+            //     );
+            // }
+
+            // We hold a the draw mutex to prevent changes to any
+            // data we access while we're in the middle of drawing.
+            // self.draw_mutex.lock();
+            // defer self.draw_mutex.unlock();
+            let self_ptr: *mut Renderer = self;
+            unsafe { (*self_ptr).draw_mutex.lock() };
+
+            // Hand-rolled `defer`s as RAII guards, each holding the raw root `self_ptr`
+            // and performing its cleanup via a NARROW field reborrow on `drop` (so no
+            // guard holds a live `&`/`&mut` across the body). Declared so they drop
+            // LIFO in the reference order: `draw_frame_end` → scrollbar → unlock (Rust
+            // drops locals in reverse declaration order). `frame_ctx.complete(sync)` is
+            // the reference's LAST-registered `defer` (fires FIRST); it is called
+            // explicitly at the end of the body, before these guards drop.
+            struct UnlockGuard(*mut Renderer);
+            impl Drop for UnlockGuard {
+                fn drop(&mut self) {
+                    // self.draw_mutex.unlock();
+                    unsafe { (*self.0).draw_mutex.unlock() };
+                }
+            }
+            struct ScrollbarGuard(*mut Renderer);
+            impl Drop for ScrollbarGuard {
+                fn drop(&mut self) {
+                    // After the graphics API is complete (so we defer) we want to
+                    // update our scrollbar state.
+                    // defer if (self.scrollbar_dirty) {
+                    //     // Fail instantly if the surface mailbox if full, we'll just
+                    //     // get it on the next frame.
+                    //     if (self.surface_mailbox.push(.{ .scrollbar = self.scrollbar },
+                    //         .instant) > 0) self.scrollbar_dirty = false;
+                    // };
+                    // (push is the no-op placeholder ⇒ returns 0 ⇒ the branch is never
+                    //  taken offscreen — the golden observes no mailbox.)
+                    unsafe {
+                        if (*self.0).scrollbar_dirty
+                            && (*self.0)
+                                .surface_mailbox
+                                .push((*self.0).scrollbar, MailboxTimeout::Instant)
+                                > 0
+                        {
+                            (*self.0).scrollbar_dirty = false;
+                        }
+                    }
+                }
+            }
+            struct DrawEndGuard(*mut Renderer);
+            impl Drop for DrawEndGuard {
+                fn drop(&mut self) {
+                    // defer self.api.drawFrameEnd();
+                    unsafe { (*self.0).api.draw_frame_end() };
+                }
+            }
+            // errdefer-only guard: releases the swap-chain semaphore ONLY on an early
+            // error return after `next_frame`. On the success path it is disarmed (the
+            // frame's `frameCompleted` releases instead — else a double-release).
+            struct ReleaseGuard {
+                r: *mut Renderer,
+                armed: bool,
+            }
+            impl Drop for ReleaseGuard {
+                fn drop(&mut self) {
+                    // errdefer self.swap_chain.releaseFrame();
+                    if self.armed {
+                        unsafe { (*self.r).swap_chain.release_frame() };
+                    }
+                }
+            }
+
+            let _unlock = UnlockGuard(self_ptr);
+            let _scrollbar = ScrollbarGuard(self_ptr);
+
+            // Let our graphics API do any bookkeeping, etc.
+            // that it needs to do before / after `drawFrame`.
+            // self.api.drawFrameStart();
+            // defer self.api.drawFrameEnd();
+            unsafe { (*self_ptr).api.draw_frame_start() };
+            let _draw_end = DrawEndGuard(self_ptr);
+
+            // Retrieve the most up-to-date surface size from the Graphics API
+            // const surface_size = try self.api.surfaceSize();
+            let surface_size = unsafe { (*self_ptr).api.surface_size() }?;
+
+            // If either of our surface dimensions is zero
+            // then drawing is absurd, so we just return.
+            if surface_size.width == 0 || surface_size.height == 0 {
+                return Ok(());
+            }
+
+            let size_changed = unsafe {
+                (*self_ptr).size.screen.width != surface_size.width
+                    || (*self_ptr).size.screen.height != surface_size.height
+            };
+
+            // Conditions under which we need to draw the frame, otherwise we
+            // don't need to since the previous frame should be identical.
+            let needs_redraw = size_changed
+                || unsafe { (*self_ptr).cells_rebuilt }
+                || unsafe { (*self_ptr).has_animations() }
+                || sync;
+
+            if !needs_redraw {
+                // We still need to present the last target again, because the
+                // apprt may be swapping buffers and display an outdated frame
+                // if we don't draw something new.
+                // try self.api.presentLastTarget();
+                unsafe { (*self_ptr).api.present_last_target() }?;
+                return Ok(());
+            }
+            // self.cells_rebuilt = false;
+            unsafe { (*self_ptr).cells_rebuilt = false };
+
+            // Wait for a frame to be available.
+            // const frame = try self.swap_chain.nextFrame();
+            // errdefer self.swap_chain.releaseFrame();
+            //
+            // `next_frame` is called for its side effects (semaphore wait + index
+            // bump + defunct check); the returned `&mut FrameState` is dropped
+            // immediately and `frame` is re-derived FRESH from `self_ptr` at each use
+            // (§5.2 — a held frame raw root is popped by any whole-`&mut self`
+            // reborrow). `frame_index` now holds the chosen index.
+            match unsafe { (*self_ptr).swap_chain.next_frame() } {
+                Ok(_) => {}
+                Err(e) => return Err(e.into()),
+            }
+            let mut release_guard = ReleaseGuard {
+                r: self_ptr,
+                armed: true,
+            };
+            let idx = unsafe { (*self_ptr).swap_chain.frame_index as usize };
+            // log.debug("drawing frame index={}", .{self.swap_chain.frame_index});
+
+            // If we need to reinitialize our shaders, do so.
+            // if (self.reinitialize_shaders) {
+            //     self.reinitialize_shaders = false;
+            //     self.shaders.deinit(self.alloc);
+            //     try self.initShaders();
+            // }
+            if unsafe { (*self_ptr).reinitialize_shaders } {
+                unsafe {
+                    (*self_ptr).reinitialize_shaders = false;
+                    // `drawFrame` deinits `self.shaders` DIRECTLY (ref :1500), NOT via
+                    // `self.deinit_shaders()` — keeping `deinit_shaders` referenced only
+                    // by the deferred `Renderer::deinit` (§6.4).
+                    (*self_ptr).shaders.deinit();
+                    (*self_ptr).init_shaders()?; // whole-&mut self
+                }
+            }
+
+            // Our shaders should not be defunct at this point.
+            // assert(!self.shaders.defunct);
+            assert!(!unsafe { (*self_ptr).shaders.defunct });
+
+            // If we have custom shaders, make sure we have the custom shader state in
+            // our frame state, otherwise if we have a state but don't need it we remove
+            // it. (Golden: has_custom_shaders=false + custom_shader_state=None ⇒ no-op.)
+            {
+                let frame: *mut FrameState =
+                    unsafe { addr_of_mut!((*self_ptr).swap_chain.frames[idx]) };
+                // if (self.has_custom_shaders) {
+                if unsafe { (*self_ptr).has_custom_shaders } {
+                    // if (frame.custom_shader_state == null) {
+                    //     frame.custom_shader_state = try .init(self.api);
+                    //     try frame.custom_shader_state.?.resize(self.api, w, h);
+                    // }
+                    if unsafe { (*frame).custom_shader_state.is_none() } {
+                        unsafe {
+                            (*frame).custom_shader_state =
+                                Some(CustomShaderState::init(&(*self_ptr).api)?);
+                            (*frame).custom_shader_state.as_mut().unwrap().resize(
+                                &(*self_ptr).api,
+                                surface_size.width as usize,
+                                surface_size.height as usize,
+                            )?;
+                        }
+                    }
+                }
+                // } else if (frame.custom_shader_state) |*state| {
+                //     state.deinit();
+                //     frame.custom_shader_state = null;
+                // }
+                else if unsafe { (*frame).custom_shader_state.is_some() } {
+                    // `state.deinit()` is the `CustomShaderState` field `Drop`; nulling
+                    // the Option drops it.
+                    unsafe { (*frame).custom_shader_state = None };
+                }
+            }
+
+            // If our stored size doesn't match the surface size we need to update it.
+            // if (size_changed) {
+            //     self.size.screen = .{ .width = w, .height = h };
+            //     self.updateScreenSizeUniforms();
+            // }
+            // (Golden: size_changed=false ⇒ skipped. `update_screen_size_uniforms` is a
+            //  whole-&mut self call, so no `frame` raw root is held across this.)
+            if size_changed {
+                unsafe {
+                    (*self_ptr).size.screen = ScreenSize {
+                        width: surface_size.width,
+                        height: surface_size.height,
+                    };
+                    (*self_ptr).update_screen_size_uniforms();
+                }
+            }
+
+            // If this frame's target isn't the correct size, or the target config has
+            // changed (such as when the blending mode changes), remove it and replace
+            // it with a new one with the right values.
+            // if (frame.target.width != self.size.screen.width or
+            //     frame.target.height != self.size.screen.height or
+            //     frame.target_config_modified != self.target_config_modified) {
+            //     try frame.resize(self.api, self.size.screen.width, self.size.screen.height);
+            //     frame.target_config_modified = self.target_config_modified;
+            // }
+            {
+                let frame: *mut FrameState =
+                    unsafe { addr_of_mut!((*self_ptr).swap_chain.frames[idx]) };
+                let need_resize = unsafe {
+                    (*frame).target.width != (*self_ptr).size.screen.width as usize
+                        || (*frame).target.height != (*self_ptr).size.screen.height as usize
+                        || (*frame).target_config_modified != (*self_ptr).target_config_modified
+                };
+                if need_resize {
+                    unsafe {
+                        (*frame).resize(
+                            &(*self_ptr).api,
+                            (*self_ptr).size.screen.width as usize,
+                            (*self_ptr).size.screen.height as usize,
+                        )?;
+                        (*frame).target_config_modified = (*self_ptr).target_config_modified;
+                    }
+                }
+            }
+
+            // Upload images to the GPU as necessary.
+            // _ = self.images.upload(self.alloc, &self.api);
+            //   (narrow: &mut self.images + &self.api — disjoint fields.)
+            let _ = unsafe {
+                (*self_ptr)
+                    .images
+                    .upload((*self_ptr).alloc, &(*self_ptr).api)
+            };
+
+            // Upload the background image to the GPU as necessary.
+            // try self.uploadBackgroundImage();      (whole-&mut self)
+            unsafe { (*self_ptr).upload_background_image()? };
+
+            // Update per-frame custom shader uniforms.
+            // try self.updateCustomShaderUniformsForFrame();   (whole-&mut self)
+            unsafe { (*self_ptr).update_custom_shader_uniforms_for_frame() };
+
+            // Re-derive the frame raw root FRESH: the two whole-`&mut self` calls above
+            // (`upload_background_image`, `update_custom_shader_uniforms_for_frame`)
+            // popped any earlier frame tag. From here to `complete()` there are NO
+            // whole-`&mut self` reborrows (only narrow field reborrows + raw
+            // `self_ptr`/`frame`), so this root survives to the end.
+            let frame: *mut FrameState =
+                unsafe { addr_of_mut!((*self_ptr).swap_chain.frames[idx]) };
+
+            // Setup our frame data. The serialization boundary (§2): the ergonomic
+            // `crate::shaders` structs are converted to their Metal-ABI POD images.
+            // try frame.uniforms.sync(&.{self.uniforms});
+            unsafe {
+                (*frame)
+                    .uniforms
+                    .sync(&[UniformsGpu::from(&(*self_ptr).uniforms)])?;
+            }
+            // try frame.cells_bg.sync(self.cells.bg_cells);  (CellBg is already ABI)
+            unsafe {
+                (*frame).cells_bg.sync(&(*self_ptr).cells.bg_cells)?;
+            }
+            // const fg_count = try frame.cells.syncFromArrayLists(self.cells.fg_rows.lists);
+            //
+            // PORT NOTE (§6.2, accepted deviation — OPEN RISK #4): the reference's
+            // `syncFromArrayLists` is a zero-copy memcpy of the `extern struct`s. Rust's
+            // ergonomic `CellText` in-memory layout is NOT the packed-`u8` ABI (byte 29),
+            // so we FUSE the row concatenation (order-preserving) with the `CellText ->
+            // CellTextGpu` ABI serialization into one transient `Vec` (NOT a GPU-buffer
+            // realloc — `sync` still reuses `frame.cells`). The one transient `Vec` per
+            // frame deviates from the reference's "keep this around so we don't
+            // reallocate" intent; forced by the layout mismatch, fine for the offscreen
+            // golden. Documented; the repr(C)-pack-in-place alternative (§2.0) would
+            // remove it at the cost of 3b/3c churn.
+            let flat: Vec<CellTextGpu> = unsafe {
+                (*self_ptr)
+                    .cells
+                    .fg_rows
+                    .lists
+                    .iter()
+                    .flat_map(|row| row.iter().map(CellTextGpu::from))
+                    .collect()
+            };
+            unsafe { (*frame).cells.sync(&flat)? };
+            let fg_count = flat.len();
+
+            // If our background image buffer has changed, sync it. (Golden: modified
+            // stays 0 ⇒ skipped.)
+            // if (frame.bg_image_buffer_modified != self.bg_image_buffer_modified) {
+            //     try frame.bg_image_buffer.sync(&.{self.bg_image_buffer});
+            //     frame.bg_image_buffer_modified = self.bg_image_buffer_modified;
+            // }
+            if unsafe { (*frame).bg_image_buffer_modified != (*self_ptr).bg_image_buffer_modified }
+            {
+                unsafe {
+                    (*frame)
+                        .bg_image_buffer
+                        .sync(&[BgImageGpu::from(&(*self_ptr).bg_image_buffer)])?;
+                    (*frame).bg_image_buffer_modified = (*self_ptr).bg_image_buffer_modified;
+                }
+            }
+
+            // If our font atlas changed, sync the texture data. Load-bearing: without
+            // it the `cell_text` shader samples an empty texture → no glyphs. The
+            // `*mut SharedGrid` is a SEPARATE allocation (`&*self.font_grid`); the
+            // shared read lock is the reference `lock.lockShared()`. `sync_atlas_texture`
+            // takes raw self + raw texture (see its PORT NOTE — the texture aliases into
+            // `self.swap_chain`).
+            // texture: {
+            //     const modified = self.font_grid.atlas_grayscale.modified.load(.monotonic);
+            //     if (modified <= frame.grayscale_modified) break :texture;
+            //     self.font_grid.lock.lockShared();
+            //     defer self.font_grid.lock.unlockShared();
+            //     frame.grayscale_modified = self.font_grid.atlas_grayscale.modified.load(.monotonic);
+            //     try self.syncAtlasTexture(&self.font_grid.atlas_grayscale, &frame.grayscale);
+            // }
+            {
+                let grid = unsafe { &*(*self_ptr).font_grid };
+                let modified = grid.atlas_grayscale().modified();
+                if modified > unsafe { (*frame).grayscale_modified } {
+                    let _guard = grid.lock.read().unwrap();
+                    unsafe {
+                        (*frame).grayscale_modified = grid.atlas_grayscale().modified();
+                        Renderer::sync_atlas_texture(
+                            self_ptr,
+                            grid.atlas_grayscale(),
+                            addr_of_mut!((*frame).grayscale),
+                        )?;
+                    }
+                }
+            }
+            // texture: {
+            //     const modified = self.font_grid.atlas_color.modified.load(.monotonic);
+            //     if (modified <= frame.color_modified) break :texture;
+            //     self.font_grid.lock.lockShared();
+            //     defer self.font_grid.lock.unlockShared();
+            //     frame.color_modified = self.font_grid.atlas_color.modified.load(.monotonic);
+            //     try self.syncAtlasTexture(&self.font_grid.atlas_color, &frame.color);
+            // }
+            {
+                let grid = unsafe { &*(*self_ptr).font_grid };
+                let modified = grid.atlas_color().modified();
+                if modified > unsafe { (*frame).color_modified } {
+                    let _guard = grid.lock.read().unwrap();
+                    unsafe {
+                        (*frame).color_modified = grid.atlas_color().modified();
+                        Renderer::sync_atlas_texture(
+                            self_ptr,
+                            grid.atlas_color(),
+                            addr_of_mut!((*frame).color),
+                        )?;
+                    }
+                }
+            }
+
+            // Get a frame context from the graphics API.
+            // var frame_ctx = try self.api.beginFrame(self, &frame.target);
+            // defer frame_ctx.complete(sync);
+            //   — `self` is the type-erased `*mut ()` renderer root; the target is the
+            //     raw `addr_of_mut!((*frame).target)`; the completion fn is the
+            //     trampoline. `begin_frame` is `&self.api` (narrow).
+            let mut frame_ctx: Frame = unsafe {
+                (*self_ptr).api.begin_frame(
+                    self_ptr as *mut (),
+                    addr_of_mut!((*frame).target),
+                    metal_buffer_completed,
+                )
+            }?;
+
+            {
+                // var pass = frame_ctx.renderPass(&.{.{
+                //     .target = if (frame.custom_shader_state) |state|
+                //         .{ .texture = state.back_texture } else .{ .target = frame.target },
+                //     .clear_color = .{ 0.0, 0.0, 0.0, 0.0 },
+                // }});
+                // defer pass.complete();
+                let attach_target = match unsafe { (*frame).custom_shader_state.as_ref() } {
+                    Some(state) => AttachmentTarget::Texture(&state.back_texture),
+                    None => AttachmentTarget::Target(unsafe { &(*frame).target }),
+                };
+                let pass = frame_ctx.render_pass(&[Attachment {
+                    target: attach_target,
+                    clear_color: Some([0.0, 0.0, 0.0, 0.0]),
+                }]);
+
+                // First we draw our background image, if we have one. The bg image
+                // shader also draws the main bg color. Otherwise, if we don't have a
+                // background image, we draw the background color by itself in its own
+                // step.
+                //
+                // NOTE: We don't use the clear_color for this because that would require
+                //       us to do color space conversion on the CPU-side. In the future
+                //       when we have utilities for that we should remove this step and
+                //       use clear_color.
+                // if (self.bg_image) |img| switch (img) {
+                //     .ready => |texture| pass.step(.{ .pipeline = bg_image, ... }),
+                //     else => {},
+                // } else { pass.step(.{ .pipeline = bg_color, ... }); }
+                match unsafe { (*self_ptr).bg_image.as_ref() } {
+                    Some(image::Image::Ready(texture)) => pass.step(Step {
+                        pipeline: unsafe { &(*self_ptr).shaders.pipelines.bg_image },
+                        uniforms: Some(unsafe { (*frame).uniforms.raw() }),
+                        buffers: &[Some(unsafe { (*frame).bg_image_buffer.raw() })],
+                        textures: &[Some(texture)],
+                        samplers: &[],
+                        draw: Draw {
+                            kind: MTLPrimitiveType::Triangle,
+                            vertex_count: 3,
+                            instance_count: 1,
+                        },
+                    }),
+                    Some(_) => {}
+                    None => {
+                        pass.step(Step {
+                            pipeline: unsafe { &(*self_ptr).shaders.pipelines.bg_color },
+                            uniforms: Some(unsafe { (*frame).uniforms.raw() }),
+                            buffers: &[None, Some(unsafe { (*frame).cells_bg.raw() })],
+                            textures: &[],
+                            samplers: &[],
+                            draw: Draw {
+                                kind: MTLPrimitiveType::Triangle,
+                                vertex_count: 3,
+                                instance_count: 1,
+                            },
+                        });
+                    }
+                }
+
+                // Then we draw any kitty images that need to be behind text AND cell
+                // backgrounds.
+                // self.images.draw(&self.api, self.shaders.pipelines.image, &pass, .kitty_below_bg);
+                unsafe {
+                    (*self_ptr).images.draw(
+                        &(*self_ptr).api,
+                        &(*self_ptr).shaders.pipelines.image,
+                        &pass,
+                        DrawPlacements::KittyBelowBg,
+                    );
+                }
+
+                // Then we draw any opaque cell backgrounds.
+                // pass.step(.{ .pipeline = cell_bg, .uniforms, .buffers = &.{ null, frame.cells_bg.buffer }, .draw = {triangle, 3} });
+                pass.step(Step {
+                    pipeline: unsafe { &(*self_ptr).shaders.pipelines.cell_bg },
+                    uniforms: Some(unsafe { (*frame).uniforms.raw() }),
+                    buffers: &[None, Some(unsafe { (*frame).cells_bg.raw() })],
+                    textures: &[],
+                    samplers: &[],
+                    draw: Draw {
+                        kind: MTLPrimitiveType::Triangle,
+                        vertex_count: 3,
+                        instance_count: 1,
+                    },
+                });
+
+                // Kitty images between cell backgrounds and text.
+                // self.images.draw(..., .kitty_below_text);
+                unsafe {
+                    (*self_ptr).images.draw(
+                        &(*self_ptr).api,
+                        &(*self_ptr).shaders.pipelines.image,
+                        &pass,
+                        DrawPlacements::KittyBelowText,
+                    );
+                }
+
+                // Text.
+                // pass.step(.{ .pipeline = cell_text, .uniforms,
+                //     .buffers = &.{ frame.cells.buffer, frame.cells_bg.buffer },
+                //     .textures = &.{ frame.grayscale, frame.color },
+                //     .draw = .{ .type = .triangle_strip, .vertex_count = 4, .instance_count = fg_count } });
+                pass.step(Step {
+                    pipeline: unsafe { &(*self_ptr).shaders.pipelines.cell_text },
+                    uniforms: Some(unsafe { (*frame).uniforms.raw() }),
+                    buffers: &[
+                        Some(unsafe { (*frame).cells.raw() }),
+                        Some(unsafe { (*frame).cells_bg.raw() }),
+                    ],
+                    textures: &[
+                        Some(unsafe { &(*frame).grayscale }),
+                        Some(unsafe { &(*frame).color }),
+                    ],
+                    samplers: &[],
+                    draw: Draw {
+                        kind: MTLPrimitiveType::TriangleStrip,
+                        vertex_count: 4,
+                        instance_count: fg_count,
+                    },
+                });
+
+                // Kitty images in front of text.
+                // self.images.draw(..., .kitty_above_text);
+                unsafe {
+                    (*self_ptr).images.draw(
+                        &(*self_ptr).api,
+                        &(*self_ptr).shaders.pipelines.image,
+                        &pass,
+                        DrawPlacements::KittyAboveText,
+                    );
+                }
+
+                // Debug overlay. We do this before any custom shader state
+                // because our debug overlay is aligned with the grid.
+                // if (self.overlay != null) self.images.draw(..., .overlay);
+                if unsafe { (*self_ptr).overlay.is_some() } {
+                    unsafe {
+                        (*self_ptr).images.draw(
+                            &(*self_ptr).api,
+                            &(*self_ptr).shaders.pipelines.image,
+                            &pass,
+                            DrawPlacements::Overlay,
+                        );
+                    }
+                }
+
+                // defer pass.complete();
+                pass.complete();
+            }
+
+            // If we have custom shaders, then we render them. (Golden:
+            // custom_shader_state=None ⇒ skipped.)
+            // if (frame.custom_shader_state) |*state| {
+            if unsafe { (*frame).custom_shader_state.is_some() } {
+                let state: *mut CustomShaderState =
+                    unsafe { (*frame).custom_shader_state.as_mut().unwrap() };
+                // Sync our uniforms.
+                // try state.uniforms.sync(&.{self.custom_shader_uniforms});
+                //   (CustomShaderState.uniforms stays `Buffer<shadertoy::Uniforms>` — no
+                //    ABI serializer; the ergonomic shadertoy uniforms sync directly.)
+                unsafe {
+                    (*state)
+                        .uniforms
+                        .sync(&[(*self_ptr).custom_shader_uniforms])?;
+                }
+
+                // for (self.shaders.post_pipelines, 0..) |pipeline, i| {
+                //   (the slice ref is hoisted so `[i]` does not autoref through the raw
+                //    `self_ptr` — a narrow shared reborrow of `self.shaders.post_pipelines`,
+                //    disjoint from the `state`/`frame` the loop touches.)
+                let post_pipelines: &[crate::metal::pipeline::Pipeline] =
+                    unsafe { &(*self_ptr).shaders.post_pipelines };
+                let n = post_pipelines.len();
+                for (i, pipeline) in post_pipelines.iter().enumerate() {
+                    // var pass = frame_ctx.renderPass(&.{.{
+                    //     .target = if (i < post_pipelines.len - 1)
+                    //         .{ .texture = state.front_texture } else .{ .target = frame.target },
+                    //     .clear_color = .{ 0.0, 0.0, 0.0, 0.0 },
+                    // }});
+                    // defer pass.complete();
+                    let target = if i < n - 1 {
+                        AttachmentTarget::Texture(unsafe { &(*state).front_texture })
+                    } else {
+                        AttachmentTarget::Target(unsafe { &(*frame).target })
+                    };
+                    let pass = frame_ctx.render_pass(&[Attachment {
+                        target,
+                        clear_color: Some([0.0, 0.0, 0.0, 0.0]),
+                    }]);
+
+                    // pass.step(.{ .pipeline = pipeline, .uniforms = state.uniforms.buffer,
+                    //     .textures = &.{state.back_texture}, .samplers = &.{state.sampler},
+                    //     .draw = .{ .type = .triangle, .vertex_count = 3 } });
+                    pass.step(Step {
+                        pipeline,
+                        uniforms: Some(unsafe { (*state).uniforms.raw() }),
+                        buffers: &[],
+                        textures: &[Some(unsafe { &(*state).back_texture })],
+                        samplers: &[Some(unsafe { &(*state).sampler })],
+                        draw: Draw {
+                            kind: MTLPrimitiveType::Triangle,
+                            vertex_count: 3,
+                            instance_count: 1,
+                        },
+                    });
+                    // defer pass.complete();
+                    pass.complete();
+                    // defer state.swap();
+                    unsafe { (*state).swap() };
+                }
+            }
+
+            // Disarm the errdefer: from here we always reach `frame_ctx.complete`, whose
+            // trampoline calls `frame_completed` → `release_frame` (releasing the
+            // semaphore). Leaving the guard armed would double-release.
+            release_guard.armed = false;
+
+            // defer frame_ctx.complete(sync);  — the reference's LAST-registered defer;
+            // on the sync path it commits → waitUntilCompleted → invokes
+            // `metal_buffer_completed` directly (H2). `frame` is NOT used after this.
+            frame_ctx.complete(sync);
+
+            Ok(())
+            // The three RAII guards drop here in the reference LIFO order:
+            // draw_frame_end → scrollbar → unlock.
+        }
+    }
+
+    // =======================================================================
     // Chunk 3b unit tests (macOS-gated, Metal-skip; GPU_RD_CHUNK3B_DESIGN §G)
     // =======================================================================
     #[cfg(test)]
@@ -3902,6 +4815,266 @@ mod macos_impl {
                 terminal_state_frame_count: 0,
                 overlay: None,
             })
+        }
+
+        // GPU_RD_CHUNK4_DESIGN §3.2/§6.5: the GOLDEN harness = `test_renderer` with the
+        // offscreen size PINNED to the grid's pixel size (`size.screen`), so
+        // `draw_frame`'s `surface_size == self.size.screen` ⇒ `size_changed == false`
+        // (no in-`draw_frame` resize / `update_screen_size_uniforms` surprise;
+        // projection 1:1; cell (x,y) lands at pixel [x*cw..(x+1)*cw) × [y*ch..(y+1)*ch)
+        // — trivial pixel math). So we build the font grid + metrics + `size` FIRST,
+        // THEN call `init_offscreen(blending, size.screen.width, size.screen.height)`.
+        fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
+            // Probe: skip cleanly on hosts with no Metal device (headless CI), BEFORE
+            // the (Metal-independent) font-grid build. `init_offscreen` returns
+            // `Err(NoMetalDevice)` on a headless host (the `metal.rs` / `test_renderer`
+            // precedent).
+            if Metal::init_offscreen(AlphaBlending::Native, 1, 1).is_err() {
+                eprintln!("no Metal device; skipping golden");
+                return None;
+            }
+
+            // Real font grid over the embedded JetBrains Mono Regular (built FIRST so
+            // its metrics fix the offscreen size). Leaked so the `*mut SharedGrid`
+            // stays valid for the test's scope.
+            let font_grid: *mut SharedGrid = {
+                let lib = Library::init().unwrap();
+                let mut c = Collection::init();
+                c.load_options = Some(LoadOptions {
+                    library: lib,
+                    ..Default::default()
+                });
+                c.add(
+                    Face::init(
+                        lib,
+                        rustty_font::embedded::REGULAR,
+                        FaceOptions {
+                            size: DesiredSize {
+                                points: 12.0,
+                                xdpi: 96,
+                                ydpi: 96,
+                            },
+                            freetype_load_flags: FREETYPE_LOAD_FLAGS_DEFAULT,
+                        },
+                    )
+                    .unwrap(),
+                    AddOptions {
+                        style: FontStyle::Regular,
+                        fallback: false,
+                        size_adjustment: SizeAdjustment::None,
+                    },
+                )
+                .unwrap();
+                let resolver = CodepointResolver {
+                    collection: c,
+                    styles: StyleStatus::init_fill(true),
+                    discover: None,
+                    codepoint_map: None,
+                    descriptor_cache: DescriptorCache::default(),
+                    sprite: None,
+                };
+                let grid = SharedGrid::init(Global, resolver).unwrap();
+                Box::leak(Box::new(grid)) as *mut SharedGrid
+            };
+
+            let grid_metrics = unsafe { (*font_grid).metrics };
+            let font_shaper = Shaper::init(shape::Options::default()).expect("shaper");
+
+            let cell = CellSize {
+                width: grid_metrics.cell_width,
+                height: grid_metrics.cell_height,
+            };
+            let size = Size {
+                screen: ScreenSize {
+                    width: cell.width * cols as u32,
+                    height: cell.height * rows as u32,
+                },
+                cell,
+                padding: Padding {
+                    top: 0,
+                    bottom: 0,
+                    right: 0,
+                    left: 0,
+                },
+            };
+
+            // OFFSCREEN size PINNED to `size.screen` (§3.2). `AlphaBlending::Native` ⇒
+            // `blending.is_linear() == false` ⇒ the target is `BGRA8Unorm` (NOT
+            // `_sRGB`), so the readback bytes are the shader's gamma-encoded output
+            // DIRECTLY (no implicit sRGB re-encode on store). Metal was probed above.
+            let api =
+                Metal::init_offscreen(AlphaBlending::Native, size.screen.width, size.screen.height)
+                    .expect("init_offscreen (Metal probed above)");
+            let shaders = api.init_shaders(&[]).expect("init_shaders");
+            let swap_chain = SwapChain::init(&api, false).expect("swap_chain");
+
+            let mut cells = Contents::default();
+            cells.resize(GridSize {
+                rows,
+                columns: cols,
+            });
+
+            let mut r = Renderer {
+                alloc: Global,
+                draw_mutex: Mutex::new(),
+                config: derived_config_for_test(),
+                surface_mailbox: SurfaceMailbox,
+                grid_metrics,
+                size,
+                focused: true,
+                custom_shader_focused_changed: false,
+                scrollbar: Scrollbar::ZERO,
+                scrollbar_dirty: false,
+                last_bottom_node: None,
+                last_bottom_y: 0,
+                search_matches: None,
+                search_selected_match: None,
+                search_matches_dirty: false,
+                cells,
+                cells_rebuilt: false,
+                uniforms: unsafe { core::mem::zeroed() },
+                custom_shader_uniforms: unsafe { core::mem::zeroed() },
+                first_frame_time: None,
+                last_frame_time: None,
+                font_grid,
+                font_shaper,
+                font_shaper_cache: ShaperCache::init(),
+                images: image::State::empty(),
+                bg_image: None,
+                bg_image_changed: false,
+                bg_image_buffer: unsafe { core::mem::zeroed() },
+                bg_image_buffer_modified: 0,
+                api,
+                display_link: None,
+                health: AtomicHealth::new(crate::Health::Healthy),
+                swap_chain,
+                target_config_modified: 0,
+                reinitialize_shaders: false,
+                has_custom_shaders: false,
+                shaders,
+                terminal_state: RenderState::empty(),
+                terminal_state_frame_count: 0,
+                overlay: None,
+            };
+
+            // `Renderer::init` (deferred) ends with `updateFontGridUniforms()` +
+            // `updateScreenSizeUniforms()` to fix the `undefined` projection/screen/
+            // cell/grid_padding uniform fields (generic.zig :1233-1234). The direct-
+            // construction harness must call them itself — else `projection_matrix`
+            // stays zeroed and every vertex collapses to the origin (nothing renders).
+            // `update_frame` does NOT set these (it only fills grid_size/cursor/bg via
+            // `rebuild_cells`), and `draw_frame` sets them only on `size_changed`, which
+            // is pinned FALSE here (§3.2).
+            r.update_font_grid_uniforms();
+            r.update_screen_size_uniforms();
+            Some(r)
+        }
+
+        // Sample the BGRA byte 4-tuple at pixel (x, y) in a tight `w*h*4` readback
+        // (`read_bgra` returns `[B,G,R,A]` per pixel, rows tight). Returns (b,g,r,a).
+        fn px_at(px: &[u8], w: usize, x: usize, y: usize) -> (u8, u8, u8, u8) {
+            let i = (y * w + x) * 4;
+            (px[i], px[i + 1], px[i + 2], px[i + 3])
+        }
+
+        // GPU_RD_CHUNK4_DESIGN §3 — the R-d contract's FIRST real GPU-output assertion:
+        // render a deterministic terminal state OFFSCREEN (Metal → IOSurface), read the
+        // pixels back, and assert the STRUCTURE the port is responsible for (§3.1: not an
+        // exact-PNG gate — that would be flaky across FreeType/metal-compiler versions —
+        // but structural asserts with thresholds lenient enough to survive the P3
+        // conversion / premultiply / BGRA8Unorm rounding, yet non-vacuous). macOS +
+        // `#[cfg(test)]`; Metal-skip on a headless host.
+        //
+        // DETERMINISM PINS (§3.2 / OPEN RISK #5, load-bearing): `AlphaBlending::Native`
+        // (⇒ `BGRA8Unorm`, no store-time sRGB re-encode), `colorspace = Srgb` (⇒
+        // `use_display_p3 = false`), and `offscreen_size == size.screen` (⇒
+        // `size_changed == false`). If a future change flips blending to linear the
+        // target becomes `_sRGB` and the readback semantics shift.
+        #[test]
+        fn golden_renders_cursor_fg_bg() {
+            let mut r = match golden_renderer(10, 3) {
+                Some(r) => r,
+                None => return, // Metal-skip
+            };
+
+            // "Ab" on a 10×3 grid ⇒ a block cursor at grid (2,0) (the empty cell after
+            // "Ab"; focused + blink_visible ⇒ block). Verified by the 3b test.
+            let mut mutex = Mutex::new();
+            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            {
+                let mut s = t.vt_stream();
+                s.next_slice(b"Ab");
+                s.deinit();
+            }
+            let st = state::State {
+                mutex: &mut mutex,
+                terminal: &mut t,
+                inspector: None,
+                preedit: None,
+                mouse: state::Mouse::default(),
+            };
+            // Drive the full pipeline through update_frame (3c): fills cells + uniforms;
+            // rebuild_cells sets dirty. cursor_blink_visible=true ⇒ visible block cursor.
+            r.update_frame(&st, true).unwrap();
+            // sync ⇒ commit + waitUntilCompleted + the completion trampoline runs.
+            r.draw_frame(true).unwrap();
+
+            // Read back the IOSurface pixels of the frame just drawn (all fields pub;
+            // read_bgra handles bytesPerRow).
+            let idx = r.swap_chain.frame_index as usize;
+            let px = r.swap_chain.frames[idx].target.read_bgra();
+
+            let w = r.size.screen.width as usize;
+            let cw = r.grid_metrics.cell_width as usize;
+            let ch = r.grid_metrics.cell_height as usize;
+            assert_eq!(px.len(), w * (r.size.screen.height as usize) * 4);
+
+            // (A) CURSOR CELL — solid red block at grid (2,0). Sample the cell interior
+            //     center. Can only pass if `cell_text` ran with `is_cursor_glyph` set +
+            //     `cursor_color` red reached the shader ⇒ proves the packed `bools` byte
+            //     (bit 1) AND the uniform serialization.
+            let (b, g, rr, _a) = px_at(&px, w, 2 * cw + cw / 2, ch / 2);
+            assert!(rr > 128, "cursor cell not bright-red (R={rr})");
+            assert!(
+                rr > g && rr > b,
+                "cursor cell not red-dominant (R={rr} G={g} B={b})"
+            );
+
+            // (B) BACKGROUND — config bg is black (0,0,0), opacity 1.0 ⇒ bg_color =
+            //     [0,0,0,255]. Sample an empty cell far from glyphs/cursor (grid (8,2),
+            //     bottom row): cell_bg is transparent there (alpha 0) ⇒ the opaque
+            //     full-screen bg_color layer shows through. The RGB check ALONE is
+            //     VACUOUS here (config bg RGB == clear RGB == 0; bg_color_fragment
+            //     premultiplies rgb*a ⇒ also RGB 0), so we ALSO assert the ALPHA: the
+            //     bg_color step writes an opaque layer (a=255) whereas the render-pass
+            //     clear leaves a=0 ⇒ `ba > 128` can only pass if the full-screen bg_color
+            //     step ran AND `bg_color.a = 255` serialized (byte 131 = offset 128 + 3).
+            let (bb, bg2, br, ba) = px_at(&px, w, 8 * cw + cw / 2, 2 * ch + ch / 2);
+            assert!(
+                br < 96 && bg2 < 96 && bb < 96,
+                "background not dark (R={br} G={bg2} B={bb})"
+            );
+            assert!(
+                ba > 128,
+                "bg_color step absent / bg alpha not opaque (A={ba})"
+            );
+
+            // (C) FOREGROUND GLYPH present in row 0 — "A" at grid (0,0) is white. Scan
+            //     the cell for a bright mark (antialiased glyph ⇒ max luminance over the
+            //     cell). Proves the atlas sync + `cell_text` glyph sampling.
+            let mut maxlum = 0u32;
+            for yy in 0..ch {
+                for xx in 0..cw {
+                    let (b3, g3, r3, _) = px_at(&px, w, xx, yy);
+                    maxlum = maxlum.max((r3 as u32 + g3 as u32 + b3 as u32) / 3);
+                }
+            }
+            assert!(
+                maxlum > 128,
+                "no fg glyph rendered in cell (0,0) (maxlum={maxlum})"
+            );
+
+            t.deinit(Global);
         }
 
         #[test]

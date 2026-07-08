@@ -16,6 +16,20 @@
 //! DEFERRED to R-d/Phase 3 (the GPU-backend milestone). Only the CPU-side vertex
 //! data structs that `cell.zig` assembles are needed by the headless R-a port.
 
+// ⚠ METAL-vs-OpenGL ABI CLARIFICATION (GPU_RD_CHUNK4_DESIGN §2.0 FLAG). The PORT
+// NOTEs below describe the `Bools`/`PaddingExtend`/`Info` packed sub-fields as
+// `packed struct(u32)`. That is the **OpenGL** (`opengl/shaders.zig`) layout, where
+// `bools`/`padding_extend` are each a 4-byte `u32`. The MONOMORPHIC port targets
+// **Metal**, whose `metal/shaders.zig` (and the `.metal` shaders that read it) has
+// `padding_extend: packed struct(u8)` (a SINGLE byte) and `bools: extern struct {
+// 4× bool align(1) }` (FOUR separate bytes, NOT a u32); `CellText.bools` is a
+// `packed struct(u8)`. The exact Metal byte image these structs serialize to is
+// applied by the backend serializer `crate::metal::gpu_abi` (`UniformsGpu` /
+// `CellTextGpu` / `BgImageGpu` + their `From` impls + drift guards + byte test) —
+// see that module's PORT NOTE. The "u32" phrasing in the notes below is retained as
+// the OpenGL-source description; the MONOMORPHIC (Metal) byte layout is the u8/
+// 4-separate-bytes form in `gpu_abi`. Do NOT read the "u32" notes as the Metal ABI.
+
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;
 // const assert = @import("../../quirks.zig").inlineAssert;

@@ -269,8 +269,338 @@ impl Renderer {
     }
 }
 
+// ============================================================================
+// Chunk 4: draw_frame + completion-trampoline aliasing model.
+//
+// Models the three GPU_RD_CHUNK4_DESIGN §5.2 hazards that do NOT appear in the 3b
+// add_cursor pattern:
+//   (H1) `frame: *mut FrameSt` (a raw root into `self.swap_chain.frames[i]`) is
+//        re-deref'd across `&mut self` method calls (upload_background_image /
+//        update_csu). A whole `&mut *self` reborrow pops the frame tag.
+//   (H2) the completion trampoline derefs `self_ptr: *mut Rndr` (== self) to call
+//        `&mut (*self).api.present(...)` (+ `&self frame_completed`) WHILE
+//        draw_frame's raw roots (self_ptr, frame) are still live on the stack.
+//   (mix) between creating the raw roots and firing the trampoline, the render-pass
+//        steps take SHARED `&self` reborrows (self.shaders / self.images.draw(&self.api))
+//        interleaved with the live self_ptr + frame raw roots (which are re-read as
+//        (*frame).uniforms / (*frame).target). The candidate reproduces this shared-vs-
+//        raw mix, not just `&mut`-only interleaving.
+//
+// Pass criterion: clean under BOTH -Zmiri-stacked-borrows and -Zmiri-tree-borrows.
+// ============================================================================
+
+use std::cell::Cell as ICell;
+
+struct Tex {
+    width: usize,
+    data: Vec<u8>,
+}
+struct FrameSt {
+    uniforms: Vec<u8>,
+    cells_bg: Vec<u8>,
+    fg_cells: Vec<u8>,
+    grayscale: Tex,
+    target: u32,
+    grayscale_modified: usize,
+}
+struct Api {
+    started: bool,
+}
+impl Api {
+    fn draw_frame_start(&mut self) {
+        self.started = true;
+    }
+    fn draw_frame_end(&mut self) {
+        self.started = false;
+    }
+    fn present(&mut self, _sync: bool) {
+        let _ = self.started;
+    }
+    fn surface_size(&self) -> (u32, u32) {
+        (2, 2)
+    }
+    fn init_atlas_texture(&self) -> Tex {
+        Tex { width: 4, data: vec![0u8; 16] }
+    }
+}
+struct Sh {
+    pipelines: u32,
+    defunct: bool,
+}
+struct Im {
+    count: u32,
+}
+impl Im {
+    fn upload(&mut self, _api: &Api) {
+        self.count = self.count.wrapping_add(1);
+    }
+    // draw is &self on image::State; reads &self + &api (both narrow renderer fields)
+    fn draw(&self, _api: &Api) -> u32 {
+        self.count
+    }
+}
+struct GridAtlas {
+    modified: usize,
+    size: u32,
+    data: Vec<u8>,
+}
+struct Grid2 {
+    atlas_grayscale: GridAtlas,
+}
+struct Cells {
+    bg: Vec<u8>,
+    fg: Vec<Vec<u8>>,
+}
+
+struct Rndr2 {
+    swap_chain: [FrameSt; 3],
+    frame_index: usize,
+    api: Api,
+    shaders: Sh,
+    images: Im,
+    font_grid: *mut Grid2,
+    health: ICell<u32>,
+    sema: ICell<u32>,
+    cells: Cells,
+    cells_rebuilt: bool,
+    other: u32,
+    size_screen: u32,
+}
+impl Rndr2 {
+    fn new() -> Self {
+        let mk = || FrameSt {
+            uniforms: Vec::new(),
+            cells_bg: Vec::new(),
+            fg_cells: Vec::new(),
+            grayscale: Tex { width: 1, data: vec![0u8; 1] },
+            target: 0,
+            grayscale_modified: 0,
+        };
+        Rndr2 {
+            swap_chain: [mk(), mk(), mk()],
+            frame_index: 0,
+            api: Api { started: false },
+            shaders: Sh { pipelines: 7, defunct: false },
+            images: Im { count: 0 },
+            font_grid: Box::into_raw(Box::new(Grid2 {
+                atlas_grayscale: GridAtlas { modified: 5, size: 4, data: vec![1u8; 16] },
+            })),
+            health: ICell::new(0),
+            sema: ICell::new(3),
+            cells: Cells { bg: vec![0u8; 4], fg: vec![vec![1u8, 2], vec![3u8]] },
+            cells_rebuilt: true,
+            other: 0,
+            size_screen: 2,
+        }
+    }
+
+    // whole-&mut-self methods (upload_background_image / update_csu / init_shaders)
+    fn upload_background_image(&mut self) {
+        self.other = self.other.wrapping_add(1);
+    }
+    fn update_csu(&mut self) {
+        self.other = self.other.wrapping_add(2);
+    }
+    // whole-&self method (has_animations)
+    fn has_animations(&self) -> bool {
+        self.shaders.pipelines == 0
+    }
+
+    // frame_completed: reference `self: *Self` (raw). Ported &self; accesses are
+    // interior-mutable (health Cell / sema Cell) so a narrow &self is faithful.
+    fn frame_completed(&self, health: u32) {
+        if self.health.get() != health {
+            self.health.set(health);
+        }
+        self.sema.set(self.sema.get() + 1); // release_frame (post)
+    }
+
+    // sync_atlas_texture: reference `self: *const Self, atlas: *const Atlas,
+    // texture: *Texture` — ALL raw. `texture` aliases into self.swap_chain, so a
+    // `&self` receiver + `&mut Texture` arg would freeze-then-mutate the same bytes
+    // (SB UB). Ported raw-self + raw-texture (the faithful Zig shape); it reborrows
+    // ONLY self.api (narrow, disjoint from swap_chain) and writes *texture.
+    unsafe fn sync_atlas_texture_raw(
+        self_raw: *const Rndr2,
+        atlas: *const GridAtlas,
+        texture: *mut Tex,
+    ) {
+        unsafe {
+            if (*atlas).size as usize > (*texture).width {
+                // init_atlas_texture reads only self.api (narrow &self.api)
+                *texture = (*self_raw).api.init_atlas_texture();
+            }
+            // replace_region: copy atlas.data into texture.data
+            (*texture).data.clear();
+            (*texture).data.extend_from_slice(&(*atlas).data);
+        }
+    }
+
+    // A `&self`-RECEIVER atlas sync (the design §6.3 literal signature) writing a
+    // `*mut Tex` that aliases into self.swap_chain — EVIDENCE for whether the `&self`
+    // form is SB-clean or whether raw-self is required.
+    fn sync_atlas_self(&self, atlas: *const GridAtlas, texture: *mut Tex) {
+        unsafe {
+            if (*atlas).size as usize > (*texture).width {
+                *texture = self.api.init_atlas_texture();
+            }
+            (*texture).data.clear();
+            (*texture).data.extend_from_slice(&(*atlas).data);
+        }
+    }
+    // Isolated: `&self` receiver whole-freeze + `&mut`-into-self texture write.
+    fn atlas_self_isolated(&mut self) {
+        let self_ptr: *mut Rndr2 = self;
+        unsafe {
+            let idx = 1usize;
+            let frame = std::ptr::addr_of_mut!((*self_ptr).swap_chain[idx]);
+            let atlas: *const GridAtlas = &(*(*self_ptr).font_grid).atlas_grayscale;
+            (*self_ptr).sync_atlas_self(atlas, std::ptr::addr_of_mut!((*frame).grayscale));
+            let _ = (*frame).grayscale.data.len();
+        }
+    }
+
+    // ---- SHIPPED draw_frame structure (single raw root + re-derived frame) ----
+    fn draw_frame_shipped(&mut self, sync: bool) {
+        let self_ptr: *mut Rndr2 = self;
+        unsafe {
+            (*self_ptr).api.draw_frame_start(); // narrow &mut api
+            let (w, h) = (*self_ptr).api.surface_size(); // narrow &api
+            if w == 0 || h == 0 {
+                return;
+            }
+            let size_changed = (*self_ptr).size_screen != w;
+            let needs_redraw =
+                size_changed || (*self_ptr).cells_rebuilt || (*self_ptr).has_animations() || sync;
+            if !needs_redraw {
+                return;
+            }
+            (*self_ptr).cells_rebuilt = false; // narrow &mut field
+
+            // next_frame side effects: sema wait + index bump; keep only the index.
+            (*self_ptr).sema.set((*self_ptr).sema.get() - 1);
+            (*self_ptr).frame_index = ((*self_ptr).frame_index + 1) % 3;
+            let idx = (*self_ptr).frame_index;
+
+            // target-resize: fresh narrow frame reborrow + &self.api
+            {
+                let frame = std::ptr::addr_of_mut!((*self_ptr).swap_chain[idx]);
+                if (*frame).target != (*self_ptr).size_screen {
+                    (*frame).target = (*self_ptr).size_screen;
+                }
+            }
+
+            // images.upload: narrow &mut self.images + narrow &self.api (disjoint fields)
+            (*self_ptr).images.upload(&(*self_ptr).api);
+
+            // WHOLE &mut self calls — these pop any live narrow frame tag, so frame
+            // is re-derived AFTER them (the "reborrow-per-cluster" idiom).
+            (*self_ptr).upload_background_image();
+            (*self_ptr).update_csu();
+
+            // Re-derive the frame raw root fresh, hold it through the sync/atlas/
+            // render-pass/complete region (which takes ONLY narrow field reborrows).
+            let frame = std::ptr::addr_of_mut!((*self_ptr).swap_chain[idx]);
+
+            // syncs (serialization boundary): re-read frame + narrow &self.cells
+            (*frame).uniforms.clear();
+            (*frame).uniforms.push(0xAB);
+            (*frame).cells_bg.clear();
+            (*frame).cells_bg.extend_from_slice(&(*self_ptr).cells.bg);
+            let flat: Vec<u8> = (*self_ptr).cells.fg.iter().flatten().copied().collect();
+            (*frame).fg_cells.clear();
+            (*frame).fg_cells.extend_from_slice(&flat);
+
+            // atlas sync: atlas is in *font_grid (separate alloc); sync via raw self.
+            let atlas: *const GridAtlas = &(*(*self_ptr).font_grid).atlas_grayscale;
+            if (*atlas).modified > (*frame).grayscale_modified {
+                (*frame).grayscale_modified = (*atlas).modified;
+                Rndr2::sync_atlas_texture_raw(self_ptr, atlas, &mut (*frame).grayscale);
+            }
+
+            // begin_frame: &self.api + type-erased self_ptr + raw addr of frame.target
+            let ctx: *mut () = self_ptr as *mut ();
+            let _target_ptr: *mut u32 = std::ptr::addr_of_mut!((*frame).target);
+
+            // render pass: shared &self.shaders + self.images.draw(&self.api) mixed
+            // with the live raw frame + self_ptr roots (re-read (*frame).*).
+            let _ = (*self_ptr).shaders.pipelines; // narrow &self.shaders
+            let _drawn = (*self_ptr).images.draw(&(*self_ptr).api); // &self.images + &self.api
+            let _u = (*frame).uniforms.len(); // raw frame re-read
+            let _c = (*frame).fg_cells.len();
+            let _g = (*frame).grayscale.data.len();
+            let _t = (*frame).target; // raw frame re-read
+
+            // complete(sync): the SYNC path invokes the trampoline directly, while
+            // self_ptr + frame raw roots are still live.
+            trampoline2(ctx);
+            let _ = sync;
+
+            // frame is NOT used after complete (matches the reference: frame_ctx.complete
+            // is the last frame use; drawFrameEnd/scrollbar/unlock touch only self).
+            (*self_ptr).api.draw_frame_end(); // narrow &mut api
+            (*self_ptr).other = (*self_ptr).other.wrapping_add(10); // scrollbar (narrow)
+        }
+    }
+
+    // ---- NAIVE structure (expect UB): frame held (as a &mut-derived raw) across
+    // the whole-&mut-self calls, then re-deref'd. ----
+    fn draw_frame_naive(&mut self, sync: bool) {
+        unsafe {
+            self.api.draw_frame_start();
+            let idx = 1usize;
+            // frame derived from a &mut self reborrow, held across whole-self calls
+            let frame: *mut FrameSt = &mut self.swap_chain[idx];
+            self.upload_background_image(); // &mut *self — pops frame's tag
+            self.update_csu();
+            (*frame).uniforms.push(0xAB); // use-after-pop under SB
+            let _ = sync;
+            self.api.draw_frame_end();
+        }
+    }
+}
+
+// The completion trampoline (models metal_buffer_completed). ctx is the type-erased
+// *mut Rndr2 (== self_ptr). Reborrows &mut (*r).api (present) + calls frame_completed
+// (&self) — while the outer draw_frame raw roots are live.
+unsafe fn trampoline2(ctx: *mut ()) {
+    let r = ctx as *mut Rndr2;
+    let health = 0u32; // buffer.status() -> healthy
+    unsafe {
+        if health == 0 {
+            (*r).api.present(true); // narrow &mut api
+        }
+        (*r).frame_completed(health); // &self (whole shared, but frame unused after)
+    }
+}
+
 fn main() {
     let which = std::env::args().nth(1).unwrap_or_default();
+    match which.as_str() {
+        // Chunk-4 draw_frame / completion candidates (own Rndr2 model)
+        "drawframe_shipped" | "drawframe_naive" | "atlas_self_isolated" => {
+            let mut r2 = Rndr2::new();
+            match which.as_str() {
+                "drawframe_shipped" => r2.draw_frame_shipped(true),
+                "drawframe_naive" => r2.draw_frame_naive(true),
+                "atlas_self_isolated" => r2.atlas_self_isolated(),
+                _ => unreachable!(),
+            }
+            println!(
+                "{}: other={} sema={} frame0_uni={:?}",
+                which,
+                r2.other,
+                r2.sema.get(),
+                r2.swap_chain[1].uniforms
+            );
+            unsafe {
+                drop(Box::from_raw(r2.font_grid));
+            }
+            return;
+        }
+        _ => {}
+    }
+
     let mut r = Renderer::new();
     match which.as_str() {
         "row_current" => r.rebuild_row_current(),

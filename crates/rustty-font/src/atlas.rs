@@ -202,6 +202,18 @@ impl<A: Allocator + Copy> Atlas<A> {
         self.format
     }
 
+    /// The modification counter, incremented on every write to the atlas. The GPU
+    /// renderer reads this to know if a frame's cached texture is stale (its
+    /// `drawFrame` atlas-sync compares `atlas.modified() > frame.grayscale_modified`).
+    // PORT NOTE: the reference `modified` is a public field the renderer reads with
+    // a `.monotonic` atomic load (`self.font_grid.atlas_grayscale.modified.load(
+    // .monotonic)`); rustty keeps the field private and exposes this accessor (the
+    // `data`/`size`/`format` accessor precedent). `.monotonic` → `Ordering::Relaxed`
+    // (the tree-wide mapping used at the `fetch_add` call sites in this file).
+    pub fn modified(&self) -> usize {
+        self.modified.load(Ordering::Relaxed)
+    }
+
     pub fn init(alloc: A, size: u32, format: Format) -> Result<Atlas<A>, OutOfMemory> {
         // const tw = init_tw;
 

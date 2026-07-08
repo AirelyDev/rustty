@@ -193,6 +193,23 @@ fn render_glyph_tw_check(point: RenderGlyphFp) -> Result<(), RenderError> {
 }
 
 impl<A: Allocator + Copy> SharedGrid<A> {
+    /// The grayscale font atlas.
+    //
+    // PORT NOTE: the reference `atlas_grayscale` field is PUBLIC — the renderer's
+    // `drawFrame` reads `self.font_grid.atlas_grayscale` directly (to check
+    // `.modified` and to sync it into the GPU texture). rustty narrowed the field
+    // to private, so the renderer reads it through this accessor (the same narrowing
+    // precedent as `metal_impl.rs::init_atlas_texture`, whose PORT NOTE says "the
+    // Zig public fields are narrowed … the renderer reads them through the accessors").
+    pub fn atlas_grayscale(&self) -> &Atlas<A> {
+        &self.atlas_grayscale
+    }
+
+    /// The color (emoji) font atlas. See [`atlas_grayscale`](Self::atlas_grayscale).
+    pub fn atlas_color(&self) -> &Atlas<A> {
+        &self.atlas_color
+    }
+
     /// Initialize the grid.
     ///
     /// The resolver must have a collection that supports deferred loading

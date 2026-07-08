@@ -386,3 +386,67 @@ crossed value (`page::Cell`/`Style`/`RGB`/`shape::Cell`/`Colors` scalars) is `Co
 > (harness `row_shaper_idiom`), but is never Miri-checked (harfbuzz/CoreText FFI). It works
 > in practice (the Shaper never moves). Not fixed here (out of Chunk-3b scope); flagged so a
 > future shaper Miri pass routes shape through `run_iter.hooks.shaper` the same way.
+
+## GPU R-d Chunk 4 (draw_frame + completion-trampoline raw-ptr sites) — MIRI exception, SB/TB-clean by construction
+
+Chunk 4's offscreen draw path (`crates/rustty-renderer/src/generic.rs`, `mod macos_impl`:
+`Renderer::{draw_frame, frame_completed, sync_atlas_texture}` + the free `metal_buffer_completed`
+trampoline) is written around raw pointers into `self` and into `self.swap_chain.frames[i]`,
+faithfully mirroring the reference (`src/renderer/generic.zig` `drawFrame`/`frameCompleted`/
+`syncAtlasTexture`, whose methods take `self: *Self` and pass `*Texture` raw pointers). **Like
+the Chunk-3b entry, the borrow structure here is Stacked-Borrows AND Tree-Borrows clean by
+construction — PROVEN on the same isolated, non-FFI Miri harness** (`.port/phase-2/mirihar-chunk3b`,
+argv candidates `drawframe_shipped` / `drawframe_naive` / `atlas_self_isolated`), which reproduces
+the exact borrow shape and flags the naive structures as UB while passing the shipped one:
+
+| candidate | models | SB | TB |
+|---|---|---|---|
+| `drawframe_naive` | hold `frame` (a `&mut self.swap_chain[i]`-derived raw) across a whole-`&mut self` call, then re-deref (H1) | **UB** | clean |
+| `drawframe_shipped` | **shipped** structure (below) | **CLEAN** | **CLEAN** |
+| `atlas_self_isolated` | the design §6.3 LITERAL `fn sync_atlas_texture(&self, …, texture: &mut Texture)` — `&self` receiver + `&mut`-into-`self.swap_chain` texture | **UB** | **UB** |
+
+The raw-ptr sites, per GPU_RD_CHUNK4_DESIGN §5.2 (H1/H2) + the mirihar evidence:
+
+- **`draw_frame` single raw root `self_ptr: *mut Renderer` + re-derived `frame` (H1).** All of
+  `draw_frame`'s `self`-access goes through `self_ptr` with NARROW field reborrows
+  (`(*self_ptr).field`). The frame raw root `frame: *mut FrameState` is re-derived FRESH via
+  `addr_of_mut!((*self_ptr).swap_chain.frames[idx])` AFTER every whole-`&mut self` call
+  (`upload_background_image`, `update_custom_shader_uniforms_for_frame`,
+  `update_screen_size_uniforms`, `init_shaders`) — because a whole `&mut *self_ptr` reborrow
+  RETAGS the entire `Renderer` allocation and POPS a held `frame` tag (the deref then UB; the
+  harness `drawframe_naive` reproduces this exactly under SB). `swap_chain.frames` is a fixed
+  ARRAY, so `[idx]` is a place projection (no `Index` autoref that would re-introduce a whole
+  reborrow). Narrow field reborrows retag only the field's byte range, so a held `frame`
+  (pointing into `swap_chain`, a disjoint range from `images`/`api`/`shaders`) survives them.
+- **The completion trampoline `metal_buffer_completed` (H2).** `Frame::complete(sync=true)` (the
+  golden path) commits → `waitUntilCompleted` → invokes the trampoline DIRECTLY, INSIDE
+  `draw_frame`, while `draw_frame`'s `&mut self` (the raw root `self_ptr`) is still live on the
+  stack. The trampoline recovers the renderer as a RAW `*mut Renderer` (`ctx.renderer as *mut
+  Renderer`, the container_of / `@fieldParentPtr` re-entry) — NEVER a `&mut` held across the
+  callback (`rust-mut-args-strongly-protected` / [FIX-2]) — and reborrows `&mut (*renderer).api`
+  (present, narrow) + `&(*renderer)` (`frame_completed`, whole-shared). The whole-shared
+  `frame_completed` reborrow is clean because `frame` is NEVER used after `complete()` (the
+  reference's last frame use is `frame_ctx.complete`), so popping the frame tag is harmless.
+- **`sync_atlas_texture(self_raw: *const Renderer, atlas: &FontAtlas, texture: *mut Texture)` —
+  raw self + raw texture (NOT the design §6.3 `&self`+`&mut Texture`).** The `texture` is
+  `&mut frame.grayscale`, which aliases INTO `self.swap_chain`; a `&self` RECEIVER freezes the
+  texture bytes (SharedReadOnly) and the subsequent `*texture` write pops that frozen tag — UB
+  under BOTH SB and TB (harness `atlas_self_isolated` reproduces it under both). Ported raw
+  (matching the Zig `self: *const Self, texture: *Texture`), it reborrows only `self.api`
+  (narrow, disjoint from `swap_chain`) and writes `*texture`. `atlas` stays a real `&FontAtlas`
+  — it lives in the `*mut SharedGrid`, a SEPARATE allocation (no aliasing with `self`).
+
+**Why Miri can't run the actual test:** the ONLY test that exercises this code
+(`generic::macos_impl::tests::golden_renders_cursor_fg_bg`) is macOS/Metal-gated — it builds an
+offscreen `Metal` (`MTLCreateSystemDefaultDevice` + `newCommandQueue`), `init_shaders` (metallib
+load), a `SwapChain`, a CoreText `Shaper`/`SharedGrid`, and then ENCODES + SUBMITS a real GPU
+frame (`commit`/`waitUntilCompleted`) and reads the IOSurface back. Miri cannot execute the
+Metal/CoreText/IOSurface foreign functions (same "can't call foreign function" class as the
+rustty-xev C3–C6 / rustty-termio B1–B5 / Chunk-3b exceptions). So it **runs natively**, not under
+Miri. The teeth: the borrow structure is Miri-proven SB/TB-clean on the isolated harness that
+mirrors it exactly (the aliasing IS Miri-checked, on the non-FFI reproduction), and the native
+golden run ASSERTS real GPU output (cursor red at grid (2,0); opaque dark bg; a fg glyph in cell
+(0,0)) — a wrong `is_cursor_glyph` bit or a popped `frame`/`self` tag would surface as a visible
+pixel/behavior failure. Any future edit that holds a `frame` raw root across a whole-`&mut self`
+call, reverts `sync_atlas_texture` to a `&self`+`&mut Texture` signature, or holds a `&mut
+Renderer` across the completion callback re-opens the hazard — re-run the harness.
