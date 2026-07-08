@@ -60,6 +60,13 @@ pub mod shadertoy;
 pub mod state;
 pub mod thread;
 
+// Shared `#[cfg(test)]` mock `C` (impl `RendererConfig`) exercising the
+// `RendererConfig`-bounded seams (`DerivedConfig::init`,
+// `thread::DerivedConfig::init`, `Message::initChangeConfig`) without depping
+// `rustty-config` (that IS the R4 cycle).
+#[cfg(test)]
+mod test_support;
+
 // PORT STATUS (GPU R-d, macOS-only): the Metal graphics-API backend. Chunk 0
 // lands only the Metal API vocabulary (`metal::api`, ghostty `metal/api.zig`
 // re-exported over `objc2-metal`) + the shader build infra (`build.rs` compiles

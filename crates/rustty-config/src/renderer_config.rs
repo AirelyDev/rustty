@@ -23,6 +23,7 @@ use std::ffi::CString;
 
 use rustty_renderer::config::RendererConfig;
 use rustty_renderer::generic::{Color as RColor, TerminalColor as RTerminalColor};
+use rustty_renderer::thread::CustomShaderAnimation as RCustomShaderAnimation;
 
 use rustty_render_types::{
     AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, FontShapingBreak,
@@ -31,7 +32,7 @@ use rustty_render_types::{
 use rustty_vt::style::BoldColor;
 
 use crate::config_struct::Config;
-use crate::value_types::{Color, FontStyle, TerminalColor};
+use crate::value_types::{Color, CustomShaderAnimation, FontStyle, TerminalColor};
 
 /// Map the config's own `Color` (`{r,g,b}: u8`) to the renderer-local `Color`.
 fn map_color(c: Color) -> RColor {
@@ -48,6 +49,18 @@ fn map_terminal_color(t: TerminalColor) -> RTerminalColor {
         TerminalColor::Color(c) => RTerminalColor::Color(map_color(c)),
         TerminalColor::CellForeground => RTerminalColor::CellForeground,
         TerminalColor::CellBackground => RTerminalColor::CellBackground,
+    }
+}
+
+/// Map the config's own `CustomShaderAnimation` to the renderer-local mirror
+/// (`rustty_renderer::thread::CustomShaderAnimation`). The exhaustive `match` is
+/// the drift backstop: adding a config variant fails to compile until this map
+/// (and the renderer-local mirror) are updated.
+fn map_custom_shader_animation(a: CustomShaderAnimation) -> RCustomShaderAnimation {
+    match a {
+        CustomShaderAnimation::False => RCustomShaderAnimation::False,
+        CustomShaderAnimation::True => RCustomShaderAnimation::True,
+        CustomShaderAnimation::Always => RCustomShaderAnimation::Always,
     }
 }
 
@@ -204,5 +217,10 @@ impl RendererConfig for Config {
     fn links(&self) -> &[rustty_input::link::Link] {
         // config.link.links.items
         &self.link.links
+    }
+
+    fn custom_shader_animation(&self) -> RCustomShaderAnimation {
+        // config.@"custom-shader-animation"
+        map_custom_shader_animation(self.custom_shader_animation)
     }
 }

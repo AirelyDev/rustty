@@ -113,4 +113,9 @@ pub trait RendererConfig {
     // link.links.items -> `link::Set::from_config(alloc, &[InputLink])`.
     // Borrow tied to &self; renderer names InputLink (input is a dep).
     fn links(&self) -> &[InputLink];
+
+    // custom-shader-animation: config `CustomShaderAnimation` mapped to the
+    // renderer-local mirror (thread.rs). Feeds `thread::DerivedConfig::init` — the
+    // draw/animation loop reads it to decide whether custom shaders animate.
+    fn custom_shader_animation(&self) -> crate::thread::CustomShaderAnimation;
 }
