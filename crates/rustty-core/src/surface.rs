@@ -1324,9 +1324,14 @@ pub enum InitError {
     /// `DerivedConfig.init` — the config link `oniRegex()` compile failures.
     Oni(oni::Error),
     /// The placeholder GPU renderer entry points (`Renderer.surfaceInit`/
-    /// `init`/`finalizeSurfaceInit`, renderer `DerivedConfig.init`, `draw`'s
-    /// `drawFrame`) — Phase-3 R-d (CORE_BLUEPRINT §5).
+    /// `init`/`finalizeSurfaceInit`, `draw`'s `drawFrame`) — Phase-3 R-d
+    /// (CORE_BLUEPRINT §5).
     Renderer(crate::renderer_seam::RendererError),
+    /// The renderer `DerivedConfig.init` — the config-link `oniRegex()` compile
+    /// failures + arena OOM (`rendererpkg::generic::DerivedConfigError`). Now the
+    /// REAL `rustty_renderer::DerivedConfig::init` (swapped in from the former
+    /// seam placeholder), constructed at the `Surface::init` derivation.
+    RendererDerivedConfig(rendererpkg::generic::DerivedConfigError),
     /// The apprt seam (`getContentScale`/`getSize`/`performAction`) — the
     /// opaque apprt-api growth marker.
     Apprt(apprt::ApprtError),
@@ -1355,6 +1360,12 @@ impl From<oni::Error> for InitError {
 impl From<crate::renderer_seam::RendererError> for InitError {
     fn from(err: crate::renderer_seam::RendererError) -> InitError {
         InitError::Renderer(err)
+    }
+}
+
+impl From<rendererpkg::generic::DerivedConfigError> for InitError {
+    fn from(err: rendererpkg::generic::DerivedConfigError) -> InitError {
+        InitError::RendererDerivedConfig(err)
     }
 }
 
@@ -1405,6 +1416,7 @@ impl core::fmt::Display for InitError {
         match self {
             InitError::Oni(err) => write!(f, "surface init: {err:?}"),
             InitError::Renderer(err) => err.fmt(f),
+            InitError::RendererDerivedConfig(err) => write!(f, "surface init: {err:?}"),
             InitError::Apprt(err) => err.fmt(f),
             InitError::FontGrid(err) => write!(f, "surface init: {err:?}"),
             InitError::Xev(err) => write!(f, "surface init: {err:?}"),
@@ -1740,7 +1752,7 @@ where
         //     .rt_surface = rt_surface,
         //     .thread = &self.renderer_thread,
         // });
-        let renderer_config = match crate::renderer_seam::DerivedConfig::init(alloc, config) {
+        let renderer_config = match rendererpkg::DerivedConfig::init(alloc, config) {
             Ok(v) => v,
             Err(err) => {
                 // (errdefer derived_config.deinit() — Surface.zig:490)
@@ -13298,5 +13310,60 @@ mod zig_base64 {
         }
         // return dest[0..out_len];
         &dest[0..out_len]
+    }
+}
+
+// PORT NOTE (rustty-only, CORE_RENDERER_CONFIG_INTEGRATION_DESIGN §4): these
+// tests have NO Zig `test{}` counterpart — they exercise the core-side
+// consequence of the non-windowing renderer `DerivedConfig` swap. Core deps
+// BOTH `rustty-config` (for `Config`) AND `rustty-renderer`, and binds the
+// concrete `C = rustty_config::Config`, so it is the FIRST place anywhere the
+// real `impl RendererConfig for Config` (rustty-config's `renderer_config.rs`)
+// executes: the renderer crate can only test `init<C>` with its `MockConfig`
+// (it cannot dep `rustty-config` — that is the G7 cycle, R4). Both are headless
+// (no Metal, no NSView, no thread); `Surface::init` itself stays untestable
+// (it panics earlier at the `Renderer::surfaceInit` windowing seam, §3).
+#[cfg(test)]
+mod renderer_config_tests {
+    use super::*;
+    // The renderer-defined accessor trait (`config.<field>()`); the concrete
+    // `impl RendererConfig for Config` lives in rustty-config.
+    use rendererpkg::config::RendererConfig;
+
+    // T1 — a real `DerivedConfig` derived from a real `Config`.
+    #[test]
+    fn renderer_derived_config_from_real_config() {
+        // OnceLock C-init guard (memory `parallel-cargo-test-exposes-c-init-races`):
+        // `init<C>` reaches `link::Set::from_config`, which compiles the default
+        // config's link regex through the non-thread-safe oniguruma C FFI.
+        oni::testing::ensure_init().unwrap();
+        let cfg = configpkg::Config::default_config();
+        let d = rendererpkg::DerivedConfig::init(Allocator, &cfg).expect("init");
+        // Assert the extracted fields track the `Config` defaults, proving the
+        // config-side `impl RendererConfig for Config` accessors + `init<C>`'s
+        // clamps/casts:
+        assert_eq!(d.font_thicken, cfg.font_thicken()); // bool passthrough
+        assert!((0.0..=1.0).contains(&d.background_opacity)); // init clamps [0,1]
+        assert_eq!(d.faint_opacity, (cfg.faint_opacity() * 255.0).ceil() as u8);
+        // frees `links`' onig handles (no `Drop`) — no leak.
+        let mut d = d;
+        d.deinit();
+    }
+
+    // T2 — a real `Message::ChangeConfig` end-to-end (no `Surface` needed).
+    #[test]
+    fn init_change_config_from_real_config() {
+        // OnceLock C-init guard (see T1).
+        oni::testing::ensure_init().unwrap();
+        let cfg = configpkg::Config::default_config();
+        let msg =
+            rendererpkg::Message::initChangeConfig(Allocator, &cfg).expect("initChangeConfig");
+        match msg {
+            // both `DerivedConfig`s (renderer + thread) built.
+            rendererpkg::Message::ChangeConfig { .. } => {}
+            _ => panic!("expected ChangeConfig"),
+        }
+        // frees `impl.links` onig handles then drops both boxes.
+        msg.deinit();
     }
 }

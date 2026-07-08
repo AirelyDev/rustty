@@ -26,7 +26,11 @@
 //! callbacks, `DRAW_INTERVAL`/`CURSOR_BLINK_INTERVAL`,
 //! `must_draw_from_app_thread`). Already REAL elsewhere:
 //! `rustty_renderer::state::State` and `rustty_renderer::thread::Mailbox`
-//! (this placeholder `Thread<A>` points at both).
+//! (this placeholder `Thread<A>` points at both), and now the renderer's
+//! `DerivedConfig` — the config plane is landed, so this module re-exports the
+//! real `rustty_renderer::DerivedConfig` (crate-root re-export) for the
+//! `Options<A>.config` field below; only the windowing `Renderer`/xev `Thread`
+//! shapes remain placeholders here.
 //!
 //! PORT STATUS: placeholder (core chunk C3; filled by Phase-3 R-d + D6).
 
@@ -43,6 +47,13 @@ use rustty_font_shaper::SharedGrid;
 use rustty_renderer::size::Size;
 use rustty_renderer::state::State;
 use rustty_renderer::thread;
+// PORT NOTE: the real cross-platform `renderer.Renderer.DerivedConfig`
+// (`rustty_renderer::DerivedConfig`, crate-root re-export of `generic.rs`) —
+// swapped in for the former core-local placeholder (the config plane is landed;
+// `Options<A>.config` below carries it). `init<C: RendererConfig>` runs headless
+// with `C = rustty_config::Config`, the type core binds that the renderer crate
+// cannot.
+use rustty_renderer::DerivedConfig;
 use rustty_xev as xev;
 
 use crate::surface::SurfaceMailbox;
@@ -64,42 +75,15 @@ impl core::fmt::Display for RendererError {
 
 impl std::error::Error for RendererError {}
 
-/// The configuration for this renderer that is derived from the main
-/// configuration. This must be exported so that we don't need to
-/// pass around Config pointers which makes memory management a pain.
-//
-// PORT NOTE (DEPENDENCY PLACEHOLDER): `renderer.Renderer.DerivedConfig`
-// (generic.zig:536) — the arena + the ~35 config/font/link-derived fields
-// type against the unported GPU/link/shader surface and land with Phase-3
-// R-d. Inhabited field-less struct with `unimplemented!()` methods
-// ([ADV-FIX 2] doctrine). NOT to be confused with the renderer THREAD's own
-// `rustty_renderer::thread::DerivedConfig` (`custom_shader_animation`), which
-// `Thread<A>.config` below embeds.
-pub struct DerivedConfig {
-    // (generic.zig:536 fields — arena, font_thicken.., cursor_.., links,
-    // custom_shaders, bg_image.., vsync/colorspace/blending.. — deferred WITH
-    // the Phase-3 R-d renderer they configure.)
-}
-
-impl DerivedConfig {
-    // PORT NOTE: reference `pub fn init(alloc_gpa: Allocator, config: *const
-    // configpkg.Config) !DerivedConfig` (generic.zig:574). Core CAN name
-    // `rustty_config::Config` directly (no G7 cycle from up here), so the
-    // placeholder keeps the concrete signature. Callsite: Surface.zig:552
-    // `.config = try .init(alloc, config)`.
-    pub fn init(
-        alloc_gpa: Allocator,
-        config: &rustty_config::Config,
-    ) -> Result<DerivedConfig, RendererError> {
-        let _ = (alloc_gpa, config);
-        unimplemented!("renderer.Renderer.DerivedConfig placeholder (Phase-3 R-d)")
-    }
-
-    // PORT NOTE: `pub fn deinit(self: *DerivedConfig) void` (generic.zig:651).
-    pub fn deinit(&mut self) {
-        unimplemented!("renderer.Renderer.DerivedConfig placeholder (Phase-3 R-d)")
-    }
-}
+// PORT NOTE (SWAP LANDED): the `renderer.Renderer.DerivedConfig`
+// (generic.zig:536, `pub fn init` generic.zig:574, `pub fn deinit`
+// generic.zig:651) is no longer a core-local placeholder — it is the REAL
+// cross-platform `rustty_renderer::DerivedConfig` imported above (its
+// `init<C>`/`deinit` bodies live in `rustty_renderer::generic`). Core
+// constructs it directly at `Surface::init` (surface.rs) with
+// `C = rustty_config::Config`. NOT to be confused with the renderer THREAD's
+// own `rustty_renderer::thread::DerivedConfig` (`custom_shader_animation`),
+// which `Thread<A>.config` below embeds.
 
 /// The renderer implementation.
 //
@@ -129,6 +113,13 @@ impl Renderer {
     // `pub fn init(alloc: Allocator, options: renderer.Options) !Self`
     // (generic.zig:658) — so the alloc STAYS on the placeholder. Callsite
     // Surface.zig:551.
+    //
+    // PHASE-3 R-d ERRDEFER PARITY (flagged): `options.config` is now the REAL
+    // `rustty_renderer::DerivedConfig` (moved in). The reference frees a
+    // partially-built config via its own errdefer on the `init` error path;
+    // `DerivedConfig` has NO `Drop` (its `links` onig handles free only via
+    // explicit `deinit()`), so when this body lands it MUST call
+    // `options.config.deinit()` on its error path (reference errdefer parity).
     pub fn init<A: apprt::App + 'static>(
         alloc: Allocator,
         options: Options<A>,
@@ -189,8 +180,11 @@ impl Renderer {
 pub struct Options<A: apprt::App + 'static> {
     /// The derived configuration for this renderer implementation.
     //
-    // PORT NOTE: `config: renderer.Renderer.DerivedConfig` — the placeholder
-    // `DerivedConfig` above.
+    // PORT NOTE: `config: renderer.Renderer.DerivedConfig` — now the real
+    // `rustty_renderer::DerivedConfig` (crate-root re-export, imported above);
+    // the seam `Options<A>` still carries it because the real
+    // `rustty_renderer::Options` cannot hold the 3 apprt-typed fields below
+    // (`rustty-apprt-api -> rustty-renderer` would cycle).
     pub config: DerivedConfig,
 
     /// The font grid that should be used along with the key for deref-ing.
