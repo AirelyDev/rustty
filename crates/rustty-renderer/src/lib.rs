@@ -49,6 +49,7 @@
 //! See .port/phase-2/DEFERRALS.md and .port/phase-2/GPU_RD_CHUNK5_DESIGN.md.
 
 pub mod cell;
+pub mod config;
 pub mod cursor;
 pub mod generic;
 pub mod link;

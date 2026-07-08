@@ -52,6 +52,7 @@ use std::ffi::CString;
 
 use rustty_font_shaper::codepoint_resolver::StyleStatus;
 use rustty_font_shaper::SharedGrid;
+use rustty_font_shaper::Style;
 use rustty_render_types::{
     AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, FontShapingBreak,
     WindowColorspace, WindowPaddingColor,
@@ -60,6 +61,7 @@ use rustty_vt::color::RGB;
 use rustty_vt::style::BoldColor;
 use rustty_zigstd::arena_allocator::ArenaAllocator;
 
+use crate::config::RendererConfig;
 use crate::link;
 use crate::size::Size;
 use crate::Health;
@@ -280,13 +282,105 @@ impl DerivedConfig {
     //         .arena = arena,
     //     };
     // }
-    #[allow(clippy::extra_unused_type_parameters)]
-    pub fn init<C>(alloc_gpa: Global, config: &C) -> Result<DerivedConfig, DerivedConfigError> {
-        let _ = (alloc_gpa, config);
-        unimplemented!(
-            "renderer.Renderer.DerivedConfig.init deferred (config-coupled placeholder; \
-             the generic `C` binds `rustty_config::Config` in core); verbatim body above"
-        )
+    //
+    // PORT: the reference reads `config.@"…"` fields directly off `*const
+    // configpkg.Config`; here the `renderer -> config` edge would cycle (R4/G7), so
+    // the reads go through the renderer-defined [`RendererConfig`] accessor trait
+    // (`crate::config`), impl-ed by `Config` IN rustty-config. `C` is bare-bounded
+    // by `RendererConfig`; the concrete `C = rustty_config::Config` binds in core.
+    // The two placeholder-typed fields (`custom_shaders`/`bg_image`) are the only
+    // divergence — the background-image + custom-shader features are deferred
+    // end-to-end (real arena `Path`/`RepeatablePath`, `prepBackgroundImage`, wuffs
+    // decode), documented in-body.
+    pub fn init<C: RendererConfig>(
+        alloc_gpa: Global,
+        config: &C,
+    ) -> Result<DerivedConfig, DerivedConfigError> {
+        // var arena = ArenaAllocator.init(alloc_gpa);
+        // errdefer arena.deinit();
+        // const alloc = arena.allocator();
+        //
+        // PORT NOTE: `Global` is a ZST — the reference arena backs the config string
+        // clones; here `custom_shaders`/`bg_image` are placeholders and
+        // `font_features` is an owned `Vec`, so the arena owns nothing but is
+        // preserved as a struct field for fidelity. `errdefer arena.deinit()` maps to
+        // the `ArenaAllocator` `Drop` on the error path (the local `arena` is dropped
+        // if we return `Err` before moving it into the struct).
+        let arena = ArenaAllocator::init();
+        let _ = alloc_gpa;
+
+        // Copy our shaders
+        //
+        // DEFERRED (placeholder): `custom_shaders = config.@"custom-shader".clone(alloc)`.
+        // `RepeatablePath` is an inhabited placeholder (custom-shader feature is
+        // deferred end-to-end); the real clone lands when `Path`/`RepeatablePath`
+        // become real types (generic.rs:120-130, DEFERRALS.md).
+        let custom_shaders = RepeatablePath;
+
+        // Copy our background image
+        //
+        // DEFERRED (placeholder): `bg_image = if config.@"background-image" |bg|
+        // bg.clone else null`. The background-image pipeline (real `Path` +
+        // `prepBackgroundImage` + wuffs decode) is deferred; constructed `None` so
+        // the whole feature is a coherent no-op (keeps `changeConfig`'s
+        // `bg_image_changed` false => the deferred prep is unreachable, §4.3).
+        let bg_image: Option<Path> = None;
+
+        // Copy our font features (clone -> owned Vec<CString>).
+        let font_features = config.font_features();
+
+        // Get our font styles
+        let mut font_styles = StyleStatus::init_fill(true);
+        font_styles.set(Style::Bold, config.font_style_bold());
+        font_styles.set(Style::Italic, config.font_style_italic());
+        font_styles.set(Style::BoldItalic, config.font_style_bold_italic());
+
+        // Our link configs
+        let links =
+            link::Set::from_config(Global, config.links()).map_err(|_| DerivedConfigError)?;
+
+        Ok(DerivedConfig {
+            background_opacity: config.background_opacity().clamp(0.0, 1.0),
+            background_opacity_cells: config.background_opacity_cells(),
+            font_thicken: config.font_thicken(),
+            font_thicken_strength: config.font_thicken_strength(),
+            font_features,
+            font_styles,
+            font_shaping_break: config.font_shaping_break(),
+
+            cursor_color: config.cursor_color(),
+            cursor_text: config.cursor_text(),
+            cursor_opacity: config.cursor_opacity().clamp(0.0, 1.0),
+
+            background: config.background().to_terminal_rgb(),
+            foreground: config.foreground().to_terminal_rgb(),
+            bold_color: config.bold_color(),
+            faint_opacity: (config.faint_opacity() * 255.0).ceil() as u8,
+
+            min_contrast: config.minimum_contrast() as f32,
+            padding_color: config.window_padding_color(),
+
+            selection_background: config.selection_background(),
+            selection_foreground: config.selection_foreground(),
+            search_background: config.search_background(),
+            search_foreground: config.search_foreground(),
+            search_selected_background: config.search_selected_background(),
+            search_selected_foreground: config.search_selected_foreground(),
+
+            custom_shaders,
+            bg_image,
+            bg_image_opacity: config.background_image_opacity(),
+            bg_image_position: config.background_image_position(),
+            bg_image_fit: config.background_image_fit(),
+            bg_image_repeat: config.background_image_repeat(),
+            links,
+            vsync: config.window_vsync(),
+            colorspace: config.window_colorspace(),
+            blending: config.alpha_blending(),
+            background_blur: config.background_blur(),
+            scroll_to_bottom_on_output: config.scroll_to_bottom_output(),
+            arena,
+        })
     }
 
     // pub fn deinit(self: *DerivedConfig) void {
@@ -301,6 +395,200 @@ impl DerivedConfig {
     // which runs when the caller drops `self`.
     pub fn deinit(&mut self) {
         self.links.deinit(Global);
+    }
+}
+
+// ===========================================================================
+// DerivedConfig::init<C> tests — cross-platform (no Metal), mock-`C` (§5).
+// ===========================================================================
+//
+// The renderer CANNOT dep rustty-config even as a dev-dependency (that IS the
+// cycle, R4). So `DerivedConfig::init<C>` is exercised through a `#[cfg(test)]`
+// mock `C` impl-ing [`RendererConfig`], returning fixed values; the test asserts
+// the extracted `DerivedConfig` fields (the config-side `impl RendererConfig for
+// Config` is compile-verified separately by `cargo build -p rustty-config`).
+#[cfg(test)]
+mod derived_config_tests {
+    use super::*;
+    use rustty_input::link::Link as InputLink;
+
+    /// A mock `C` returning fixed values (mirrors the `derived_config_for_test`
+    /// oracle used by the macOS draw-path tests). The values chosen exercise the
+    /// non-trivial transforms: `font-style != .false` (all `true`), the
+    /// `@ceil(x*255)` cast (`faint_opacity` -> 255), the `@floatCast` (min_contrast
+    /// f64 -> f32), and `Color::to_terminal_rgb`.
+    struct MockConfig;
+
+    impl RendererConfig for MockConfig {
+        fn font_thicken(&self) -> bool {
+            false
+        }
+        fn font_thicken_strength(&self) -> u8 {
+            0
+        }
+        fn background_opacity(&self) -> f64 {
+            1.0
+        }
+        fn background_opacity_cells(&self) -> bool {
+            false
+        }
+        fn cursor_opacity(&self) -> f64 {
+            1.0
+        }
+        fn faint_opacity(&self) -> f64 {
+            1.0
+        }
+        fn minimum_contrast(&self) -> f64 {
+            1.0
+        }
+        fn background_image_opacity(&self) -> f32 {
+            1.0
+        }
+        fn background_image_repeat(&self) -> bool {
+            false
+        }
+        fn window_vsync(&self) -> bool {
+            false
+        }
+        fn scroll_to_bottom_output(&self) -> bool {
+            false
+        }
+        fn font_features(&self) -> Vec<CString> {
+            Vec::new()
+        }
+        fn font_style_bold(&self) -> bool {
+            true
+        }
+        fn font_style_italic(&self) -> bool {
+            true
+        }
+        fn font_style_bold_italic(&self) -> bool {
+            true
+        }
+        fn background(&self) -> Color {
+            Color { r: 0, g: 0, b: 0 }
+        }
+        fn foreground(&self) -> Color {
+            Color {
+                r: 0xFF,
+                g: 0xFF,
+                b: 0xFF,
+            }
+        }
+        fn cursor_color(&self) -> Option<TerminalColor> {
+            Some(TerminalColor::Color(Color {
+                r: 0xFF,
+                g: 0,
+                b: 0,
+            }))
+        }
+        fn cursor_text(&self) -> Option<TerminalColor> {
+            None
+        }
+        fn selection_background(&self) -> Option<TerminalColor> {
+            None
+        }
+        fn selection_foreground(&self) -> Option<TerminalColor> {
+            None
+        }
+        fn search_background(&self) -> TerminalColor {
+            TerminalColor::Color(Color {
+                r: 0xFF,
+                g: 0xE0,
+                b: 0x82,
+            })
+        }
+        fn search_foreground(&self) -> TerminalColor {
+            TerminalColor::Color(Color { r: 0, g: 0, b: 0 })
+        }
+        fn search_selected_background(&self) -> TerminalColor {
+            TerminalColor::Color(Color {
+                r: 0xF2,
+                g: 0xA5,
+                b: 0x7E,
+            })
+        }
+        fn search_selected_foreground(&self) -> TerminalColor {
+            TerminalColor::Color(Color { r: 0, g: 0, b: 0 })
+        }
+        fn bold_color(&self) -> Option<BoldColor> {
+            None
+        }
+        fn font_shaping_break(&self) -> FontShapingBreak {
+            FontShapingBreak::default()
+        }
+        fn window_padding_color(&self) -> WindowPaddingColor {
+            WindowPaddingColor::Background
+        }
+        fn background_image_position(&self) -> BackgroundImagePosition {
+            BackgroundImagePosition::TopLeft
+        }
+        fn background_image_fit(&self) -> BackgroundImageFit {
+            BackgroundImageFit::Contain
+        }
+        fn window_colorspace(&self) -> WindowColorspace {
+            WindowColorspace::Srgb
+        }
+        fn alpha_blending(&self) -> AlphaBlending {
+            AlphaBlending::Native
+        }
+        fn background_blur(&self) -> BackgroundBlur {
+            BackgroundBlur::False
+        }
+        fn links(&self) -> &[InputLink] {
+            &[]
+        }
+    }
+
+    #[test]
+    fn derived_config_init_extracts_fields() {
+        let cfg = MockConfig;
+        let d = DerivedConfig::init(Global, &cfg).expect("init");
+
+        assert!(!d.font_thicken);
+        assert_eq!(d.font_thicken_strength, 0);
+        assert!(d.font_features.is_empty());
+        // `!= .false` => every style enabled.
+        assert!(d.font_styles.get(Style::Bold));
+        assert!(d.font_styles.get(Style::Italic));
+        assert!(d.font_styles.get(Style::BoldItalic));
+
+        // `@ceil(1.0 * 255)` => 255 (u8); `@floatCast(f64)` => f32.
+        assert_eq!(d.faint_opacity, 255);
+        assert_eq!(d.min_contrast, 1.0f32);
+
+        // `@max(0, @min(1, x))` clamps.
+        assert_eq!(d.background_opacity, 1.0);
+        assert_eq!(d.cursor_opacity, 1.0);
+
+        // `Color::to_terminal_rgb`.
+        assert_eq!(d.background, RGB { r: 0, g: 0, b: 0 });
+        assert_eq!(
+            d.foreground,
+            RGB {
+                r: 0xFF,
+                g: 0xFF,
+                b: 0xFF
+            }
+        );
+        assert_eq!(
+            d.cursor_color,
+            Some(TerminalColor::Color(Color {
+                r: 0xFF,
+                g: 0,
+                b: 0
+            }))
+        );
+        assert_eq!(d.cursor_text, None);
+
+        assert_eq!(d.blending, AlphaBlending::Native);
+        assert_eq!(d.colorspace, WindowColorspace::Srgb);
+        assert_eq!(d.padding_color, WindowPaddingColor::Background);
+        assert!(!d.scroll_to_bottom_on_output);
+
+        // Deferred placeholders.
+        assert!(d.bg_image.is_none());
+        assert!(d.links.links.is_empty());
     }
 }
 
@@ -453,8 +741,8 @@ mod macos_impl {
     };
     use crate::shadertoy;
     use crate::size::{
-        BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, CellSize, GridSize, Padding,
-        ScreenSize, Size,
+        AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, CellSize,
+        GridSize, Padding, ScreenSize, Size, WindowColorspace,
     };
     use crate::state;
     use crate::Overlay;
@@ -544,6 +832,15 @@ mod macos_impl {
     impl From<crate::metal::shaders::Error> for Error {
         fn from(_: crate::metal::shaders::Error) -> Self {
             Error::MetalFailed
+        }
+    }
+    // `font.Shaper.init` (`changeConfig`, and the deferred `Renderer::init`) fails
+    // with the platform shaper's error (`shape::coretext::Error` — an atlas OOM or a
+    // font `Collection` failure). It folds into the aggregate `OutOfMemory` member of
+    // the reference `!void` inferred union (a font-resource failure, not a Metal one).
+    impl From<shape::coretext::Error> for Error {
+        fn from(_: shape::coretext::Error) -> Self {
+            Error::OutOfMemory
         }
     }
 
@@ -1371,6 +1668,291 @@ mod macos_impl {
                 "renderer.Renderer.deinit deferred (verbatim body above; the draw-path \
                  teardown — deinitShaders/api.deinit/font_shaper.deinit/terminal_state \
                  etc. — lands with those methods)"
+            )
+        }
+
+        /// Mark the full screen as dirty so that we redraw everything.
+        //
+        // Zig: pub inline fn markDirty(self: *Self) void {
+        //          self.terminal_state.dirty = .full;
+        //      }
+        pub fn mark_dirty(&mut self) {
+            self.terminal_state.dirty = Dirty::Full;
+        }
+
+        /// Set the new font grid.
+        ///
+        /// Must be called on the render thread.
+        //
+        // Zig: pub fn setFontGrid(self: *Self, grid: *font.SharedGrid) void
+        // The reference takes a safe `*font.SharedGrid` arg it dereferences; keep the
+        // faithful safe `pub fn` signature (the raw deref is the external shared-grid
+        // handle, §4.4 — not the `rust-mut-args-strongly-protected` pattern).
+        #[allow(clippy::not_unsafe_ptr_arg_deref)]
+        pub fn set_font_grid(&mut self, grid: *mut SharedGrid) {
+            self.draw_mutex.lock();
+            // `defer self.draw_mutex.unlock()`: this body is INFALLIBLE (no `?`), so
+            // the single unlock at the natural end is reached on every non-panic path
+            // — faithful to the reference `defer`, which (Zig, no unwind) likewise
+            // runs only on the normal return.
+
+            // Update our grid
+            self.font_grid = grid;
+
+            // Update all our textures so that they sync on the next frame.
+            // We can modify this without a lock because the GPU does not
+            // touch this data.
+            for frame in &mut self.swap_chain.frames {
+                frame.grayscale_modified = 0;
+                frame.color_modified = 0;
+            }
+
+            // Get our metrics from the grid. This doesn't require a lock because
+            // the metrics are never recalculated.
+            //
+            // SAFETY: `grid` is the external `*mut SharedGrid` handle (not reborrowed
+            // from `&mut self`); `(*grid).metrics` is a shared read through a raw
+            // pointer with no `&mut` alias to `*grid` — not the
+            // `rust-mut-args-strongly-protected` pattern, no SB hazard (§4.4).
+            let metrics = unsafe { (*grid).metrics };
+            self.grid_metrics = metrics;
+
+            // Reset our shaper cache. If our font changed (not just the size) then
+            // the data in the shaper cache may be invalid and cannot be used, so we
+            // always clear the cache just in case.
+            //
+            // Zig: `self.font_shaper_cache.deinit(self.alloc)` — the ported
+            // `ShaperCache::deinit(&mut self)` takes NO allocator arg (cache.rs:112).
+            let font_shaper_cache = ShaperCache::init();
+            self.font_shaper_cache.deinit();
+            self.font_shaper_cache = font_shaper_cache;
+
+            // Update cell size.
+            self.size.cell = CellSize {
+                width: metrics.cell_width,
+                height: metrics.cell_height,
+            };
+
+            // Update relevant uniforms
+            self.update_font_grid_uniforms();
+
+            // Force a full rebuild, because cached rows may still reference
+            // an outdated atlas from the old grid and this can cause garbage
+            // to be rendered.
+            self.mark_dirty();
+
+            self.draw_mutex.unlock();
+        }
+
+        /// Resize the screen.
+        //
+        // Zig: pub fn setScreenSize(self: *Self, size: renderer.Size) void
+        pub fn set_screen_size(&mut self, size: Size) {
+            self.draw_mutex.lock();
+            // `defer self.draw_mutex.unlock()`: INFALLIBLE body (no `?`) => the end
+            // unlock is reached on every non-panic path (as in `set_font_grid`).
+
+            // We only actually need the padding from this,
+            // everything else is derived elsewhere.
+            self.size.padding = size.padding;
+
+            self.update_screen_size_uniforms();
+
+            // log.debug("screen size size={}", .{size});
+
+            self.draw_mutex.unlock();
+        }
+
+        // pub fn changeConfig(self: *Self, config: *DerivedConfig) !void
+        //
+        // SIGNATURE PORT (§4.3): the reference does a shallow `self.config = config.*`
+        // (a Zig move-by-copy) and relies on the caller's later `Message.deinit`. In
+        // Rust `DerivedConfig` is non-`Copy` (owns `ArenaAllocator`/`Vec`/`link::Set`),
+        // so this is ported as by-value ownership transfer; the `Message::ChangeConfig`
+        // payload holds `Box<DerivedConfig>`, so the caller passes ownership (the
+        // reference `v.impl.deinit()` collapses into the old-config drop).
+        //
+        // `defer self.draw_mutex.unlock()` FIDELITY: the reference releases the mutex
+        // on EVERY exit — including the `try font.Shaper.init(...)` error return. The
+        // ported `Mutex` is bare lock/unlock with NO RAII guard; a scope-guard holding
+        // `&self.draw_mutex` would conflict with the body's `&mut self` calls
+        // (`update_bg_image_buffer`/`mark_dirty`/field writes) once those reborrow
+        // `self` mutably. So `defer` is replicated by explicit unlock on every early
+        // return (unlock-before-`?`) plus the unlock at the natural end.
+        /// Update the configuration.
+        pub fn change_config(&mut self, config: DerivedConfig) -> Result<(), Error> {
+            self.draw_mutex.lock();
+
+            // We always redo the font shaper in case font features changed. We
+            // could check to see if there was an actual config change but this is
+            // easier and rare enough to not cause performance issues.
+            {
+                // Zig: `var font_shaper = try font.Shaper.init(self.alloc, .{
+                //          .features = config.font_features.items });`
+                // The `[:0]const u8` items -> the shaper's `Vec<Vec<u8>>` features
+                // (`CString::as_bytes` = the bytes without the NUL sentinel, matching
+                // the Zig `.len`-based content). unlock-before-`?` (defer-equivalent).
+                let font_shaper = match Shaper::init(shape::Options {
+                    features: config
+                        .font_features
+                        .iter()
+                        .map(|c| c.as_bytes().to_vec())
+                        .collect(),
+                }) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        self.draw_mutex.unlock();
+                        return Err(e.into());
+                    }
+                };
+                // errdefer font_shaper.deinit();
+                self.font_shaper.deinit();
+                self.font_shaper = font_shaper;
+            }
+
+            // We also need to reset the shaper cache so shaper info
+            // from the previous font isn't reused for the new font.
+            //
+            // Zig: `self.font_shaper_cache.deinit(self.alloc)` — NO arg (cache.rs:112).
+            let font_shaper_cache = ShaperCache::init();
+            self.font_shaper_cache.deinit();
+            self.font_shaper_cache = font_shaper_cache;
+
+            // Set our new minimum contrast
+            self.uniforms.min_contrast = config.min_contrast;
+
+            // Set our new color space and blending
+            self.uniforms.bools.use_display_p3 = config.colorspace == WindowColorspace::DisplayP3;
+            self.uniforms.bools.use_linear_blending = config.blending.is_linear();
+            self.uniforms.bools.use_linear_correction =
+                config.blending == AlphaBlending::LinearCorrected;
+
+            let bg_image_config_changed = self.config.bg_image_fit != config.bg_image_fit
+                || self.config.bg_image_position != config.bg_image_position
+                || self.config.bg_image_repeat != config.bg_image_repeat
+                || self.config.bg_image_opacity != config.bg_image_opacity;
+
+            // Zig: `if (self.config.bg_image) |old| if (config.bg_image) |new|
+            //          !old.equal(new) else true else config.bg_image != null`.
+            // `Path` is a deferred placeholder deriving `PartialEq`, so `old != new`
+            // == `!old.equal(new)`. `bg_image` is always `None` (feature deferred,
+            // §3) => this is always `false`.
+            let bg_image_changed = match (&self.config.bg_image, &config.bg_image) {
+                (Some(old), Some(new)) => old != new,
+                (Some(_), None) => true,
+                (None, Some(_)) => true,
+                (None, None) => false,
+            };
+
+            let old_blending = self.config.blending;
+            // Zig: `!self.config.custom_shaders.equal(config.custom_shaders)`.
+            // `RepeatablePath` placeholder derives `PartialEq` => `!=` is the same;
+            // always `false` (custom shaders deferred).
+            let custom_shaders_changed = self.config.custom_shaders != config.custom_shaders;
+
+            // Zig: `self.config.deinit(); self.config = config.*;` -> replace the
+            // config (moving the new one in), then `deinit` + drop the old one.
+            let mut old = mem::replace(&mut self.config, config);
+            old.deinit();
+
+            // If our background image path changed, prepare the new bg image.
+            //
+            // DEFERRED CALL (unreachable under the `bg_image == None` invariant,
+            // §3/§3.1): `prep_background_image` is the R5 seam (the whole
+            // background-image pipeline is deferred). unlock-before-`?` for
+            // defer-fidelity even though this branch never executes at runtime.
+            if bg_image_changed {
+                if let Err(e) = self.prep_background_image() {
+                    self.draw_mutex.unlock();
+                    return Err(e);
+                }
+            }
+
+            // If our background image config changed, update the vertex buffer.
+            if bg_image_config_changed {
+                self.update_bg_image_buffer();
+            }
+
+            // Reset our viewport to force a rebuild, in case of a font change.
+            self.mark_dirty();
+
+            // FIDELITY (§4.3): the reference reads `config.blending` here (the local
+            // param), which — after the move into `self.config` above — equals
+            // `self.config.blending`; the Rust `mem::replace` moved `config`, so the
+            // trailing reads use `self.config` (== the new config), the same values.
+            let blending_changed = old_blending != self.config.blending;
+
+            if blending_changed {
+                // We update our API's blending mode.
+                self.api.blending = self.config.blending;
+                // And indicate that we need to reinitialize our shaders.
+                self.reinitialize_shaders = true;
+                // And indicate that our swap chain targets need to
+                // be re-created to account for the new blending mode.
+                // Zig `+%=` -> `wrapping_add`.
+                self.target_config_modified = self.target_config_modified.wrapping_add(1);
+            }
+
+            if custom_shaders_changed {
+                self.reinitialize_shaders = true;
+            }
+
+            self.draw_mutex.unlock();
+            Ok(())
+        }
+
+        // fn prepBackgroundImage(self: *Self) !void {  (ref generic.zig:1747)
+        //     // Then we try to load the background image if we have a path.
+        //     if (self.config.bg_image) |p| load_background: {
+        //         const path = switch (p) { .required, .optional => |slice| slice };
+        //         // Open the file
+        //         var file = std.fs.openFileAbsolute(path, .{}) catch |err| {
+        //             log.warn("error opening background image file \"{s}\": {}", .{ path, err });
+        //             break :load_background;
+        //         };
+        //         defer file.close();
+        //         // Read it
+        //         const contents = file.readToEndAlloc(self.alloc, std.math.maxInt(u32)) catch |err| {
+        //             log.warn("error reading background image file \"{s}\": {}", .{ path, err });
+        //             break :load_background;
+        //         };
+        //         defer self.alloc.free(contents);
+        //         // Figure out what type it probably is.
+        //         const file_type = switch (FileType.detect(contents)) {
+        //             .unknown => FileType.guessFromExtension(std.fs.path.extension(path)),
+        //             else => |t| t,
+        //         };
+        //         // Decode it if we know how.
+        //         const image_data = switch (file_type) {
+        //             .png => try wuffs.png.decode(self.alloc, contents),
+        //             .jpeg => try wuffs.jpeg.decode(self.alloc, contents),
+        //             .unknown => { log.warn("Cannot determine file type ...", .{path}); break :load_background; },
+        //             else => |f| { log.warn("Unsupported file type {} ...", .{ f, path }); break :load_background; },
+        //         };
+        //         const image: imagepkg.Image = .{ .pending = .{
+        //             .width = image_data.width, .height = image_data.height,
+        //             .pixel_format = .rgba, .data = image_data.data.ptr } };
+        //         // If we have an existing background image, replace it. Otherwise set directly.
+        //         if (self.bg_image) |*img| { img.markForReplace(self.alloc, image); }
+        //         else { self.bg_image = image; }
+        //     } else {
+        //         // If we don't have a background image path, mark for unload if we have one.
+        //         if (self.bg_image) |*img| img.markForUnload();
+        //     }
+        // }
+        //
+        // R5 SEAM (§3.1): the whole background-image pipeline is deferred (the real
+        // arena `Path`, the file I/O, and the `wuffs` PNG/JPEG decode are not ported).
+        // This method exists ONLY so `change_config` compiles + its
+        // deferred-but-unreachable call is a real, documented seam. It is provably
+        // unreachable at runtime while `DerivedConfig.bg_image` is always `None`
+        // (§3/§4.3/RISK-2), so this `unimplemented!()` never executes. `Error` is the
+        // return type so the `change_config` call site's `?`-shaped handling type-checks.
+        fn prep_background_image(&mut self) -> Result<(), Error> {
+            unimplemented!(
+                "prepBackgroundImage — background-image pipeline deferred (real Path + \
+                 file I/O + wuffs decode); verbatim body above. Unreachable while \
+                 DerivedConfig.bg_image is always None (§3/§4.3/RISK-2)."
             )
         }
     }
@@ -5376,6 +5958,97 @@ mod macos_impl {
             assert_eq!(r.custom_shader_uniforms.focus, 1);
             assert!(r.first_frame_time.is_some());
             assert!(r.last_frame_time.is_some());
+        }
+
+        // RESIZE (§5): `set_screen_size` stores the new padding + recomputes the
+        // screen-size uniforms. Offscreen-testable directly.
+        #[test]
+        #[allow(clippy::neg_multiply)]
+        fn set_screen_size_updates_padding_and_uniforms() {
+            let mut r = match test_renderer(10, 3) {
+                Some(r) => r,
+                None => return,
+            };
+            let mut size = r.size;
+            size.padding = Padding {
+                top: 4,
+                bottom: 4,
+                left: 4,
+                right: 4,
+            };
+            r.set_screen_size(size);
+            assert_eq!(
+                r.size.padding,
+                Padding {
+                    top: 4,
+                    bottom: 4,
+                    left: 4,
+                    right: 4,
+                }
+            );
+            // The projection is recomputed with the new padding
+            // (`-1 * padding.left/top`, mirroring `update_screen_size_uniforms`).
+            let ts = r.size.terminal();
+            let expected = math::ortho2d(
+                -1.0 * r.size.padding.left as f32,
+                (ts.width + r.size.padding.right) as f32,
+                (ts.height + r.size.padding.bottom) as f32,
+                -1.0 * r.size.padding.top as f32,
+            );
+            assert_eq!(r.uniforms.projection_matrix, expected);
+        }
+
+        // RESIZE (§5): `set_font_grid` swaps the grid handle, resets each frame's
+        // atlas-sync counters, recomputes the cell size + font-grid uniforms, and
+        // marks the screen dirty.
+        #[test]
+        fn set_font_grid_swaps_grid_and_resets_modified() {
+            let mut r = match test_renderer(10, 3) {
+                Some(r) => r,
+                None => return,
+            };
+            // Dirty a frame's modified counters, then confirm the reset.
+            r.swap_chain.frames[0].grayscale_modified = 7;
+            r.swap_chain.frames[0].color_modified = 5;
+            let grid = r.font_grid; // reuse the same live grid handle
+            r.set_font_grid(grid);
+            assert_eq!(r.swap_chain.frames[0].grayscale_modified, 0);
+            assert_eq!(r.swap_chain.frames[0].color_modified, 0);
+            let m = unsafe { (*grid).metrics };
+            assert_eq!(
+                r.size.cell,
+                CellSize {
+                    width: m.cell_width,
+                    height: m.cell_height,
+                }
+            );
+            assert_eq!(
+                r.uniforms.cell_size,
+                [m.cell_width as f32, m.cell_height as f32]
+            );
+            assert_eq!(r.terminal_state.dirty, Dirty::Full); // mark_dirty
+        }
+
+        // CONFIG-SWAP (§5): `change_config` reinits the shaper, updates the
+        // blending/contrast uniforms, bumps `target_config_modified`, and marks
+        // dirty. `bg_image`/`custom_shaders` stay placeholders so the deferred
+        // `prep_background_image` seam is unreachable (`bg_image_changed == false`).
+        #[test]
+        fn change_config_updates_blending_uniforms() {
+            let mut r = match test_renderer(10, 3) {
+                Some(r) => r,
+                None => return,
+            };
+            let mut d = derived_config_for_test();
+            d.blending = AlphaBlending::LinearCorrected;
+            d.min_contrast = 2.0;
+            r.change_config(d).expect("change_config");
+            assert!(r.uniforms.bools.use_linear_blending);
+            assert!(r.uniforms.bools.use_linear_correction);
+            assert_eq!(r.uniforms.min_contrast, 2.0);
+            assert!(r.reinitialize_shaders); // blending changed
+            assert_eq!(r.target_config_modified, 1); // +%= 1
+            assert_eq!(r.terminal_state.dirty, Dirty::Full);
         }
     }
 }

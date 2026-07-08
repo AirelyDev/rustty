@@ -26,6 +26,7 @@ pub mod formatter_file;
 pub mod help_strings;
 pub mod io;
 pub mod path;
+pub mod renderer_config;
 pub mod repeatable_string_map;
 pub mod string;
 pub mod theme;
