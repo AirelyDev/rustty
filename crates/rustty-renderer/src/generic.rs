@@ -239,16 +239,30 @@ fn basename_posix(path: &[u8]) -> &[u8] {
     &path[start_index + 1..end_index]
 }
 
-/// PORT NOTE (DEFERRED CONFIG TYPE — inhabited placeholder): reference
-/// `configpkg.RepeatablePath` (the `custom_shaders` field) — the same heap/arena
-/// coupling the sibling `Path` (now promoted to a real enum above) once had, but
-/// custom shaders are a separate deferred feature so this stays a placeholder; the
-/// real `RepeatablePath` clone lands with `DerivedConfig::init<C>` (§B.1). Note that
-/// `Renderer::init` reads `options.config.custom_shaders.value.items.len`
-/// (generic.zig:667), so this placeholder is one reason `Renderer::init` itself
-/// is deferred.
+/// Reference `configpkg.RepeatablePath` = `struct { value: ArrayListUnmanaged(Path) }`
+/// (config/path.zig) — the `custom_shaders` config field.
+///
+/// R4/G7: renderer-local (the renderer may NOT name `rustty_config::path::RepeatablePath`
+/// — config already deps renderer, so a `renderer -> config` edge would cycle). `Config`
+/// maps its own `RepeatablePath` into this via `RendererConfig::custom_shaders`
+/// (config-side, acyclic — the exact background-image `Path` pattern). Byte-faithful:
+/// each element is the renderer-local [`Path`] (a `CString`, never a lossy `String`).
+/// `load_from_files` reads the path bytes; `init_shaders` transpiles them into the
+/// post-process pipelines.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RepeatablePath;
+pub struct RepeatablePath {
+    // value: std.ArrayListUnmanaged(Path)
+    pub value: Vec<Path>,
+}
+
+impl RepeatablePath {
+    /// Reference `RepeatablePath.equal` (`len` then per-element `a.equal(b)`). The
+    /// derived `PartialEq` on `Vec<Path>` is exactly this; kept for R1 parity and
+    /// named-call fidelity (`change_config` change-detects via `!=`).
+    pub fn equal(&self, other: &RepeatablePath) -> bool {
+        self == other
+    }
+}
 
 /// PORT: the inferred error set of [`DerivedConfig::init`] (`ArenaAllocator`
 /// OOM + the config clones + `link::Set::from_config`'s `oni::Error`) — an
@@ -274,9 +288,10 @@ pub struct DerivedConfigError;
 // the REAL renderer-local `TerminalColor` enum (promoted in Chunk 3b — the cell
 // fill destructures it, GPU_RD_CHUNK3B_DESIGN §E); `bg_image` now carries the REAL
 // renderer-local `Path` enum (promoted in the background-image milestone — the
-// `prepBackgroundImage` decode consumes it, RENDERER_BG_IMAGE_DESIGN §1). Only
-// `custom_shaders` (`RepeatablePath`) is still an inhabited placeholder above
-// (custom-shader feature deferred end-to-end) — the fill never reads it.
+// `prepBackgroundImage` decode consumes it, RENDERER_BG_IMAGE_DESIGN §1).
+// `custom_shaders` now carries the REAL renderer-local `RepeatablePath` (a
+// `Vec<Path>`, promoted in the custom-shader milestone — `init_shaders` reads it to
+// load + transpile + build the post-process pipelines).
 pub struct DerivedConfig {
     pub arena: ArenaAllocator,
 
@@ -411,8 +426,8 @@ impl DerivedConfig {
     // by `RendererConfig`; the concrete `C = rustty_config::Config` binds in core.
     // `bg_image` is now REAL (config `?Path` -> the renderer-local `Path` via
     // `RendererConfig::bg_image`, feeding `prepBackgroundImage` + wuffs decode);
-    // only `custom_shaders` (`RepeatablePath`) remains a placeholder divergence
-    // (custom-shader feature deferred end-to-end), documented in-body.
+    // `custom_shaders` is likewise REAL (config `RepeatablePath` -> the renderer-local
+    // `RepeatablePath` via `RendererConfig::custom_shaders`, feeding `init_shaders`).
     pub fn init<C: RendererConfig>(
         alloc_gpa: Global,
         config: &C,
@@ -422,21 +437,23 @@ impl DerivedConfig {
         // const alloc = arena.allocator();
         //
         // PORT NOTE: `Global` is a ZST — the reference arena backs the config string
-        // clones; here `custom_shaders` is a placeholder, `bg_image` owns its
-        // `CString` and `font_features` is an owned `Vec`, so the arena owns nothing
-        // but is preserved as a struct field for fidelity. `errdefer arena.deinit()` maps to
-        // the `ArenaAllocator` `Drop` on the error path (the local `arena` is dropped
-        // if we return `Err` before moving it into the struct).
+        // clones; here `custom_shaders`/`bg_image` own their `CString`s and
+        // `font_features` is an owned `Vec`, so the arena owns nothing but is preserved
+        // as a struct field for fidelity. `errdefer arena.deinit()` maps to the
+        // `ArenaAllocator` `Drop` on the error path (the local `arena` is dropped if we
+        // return `Err` before moving it into the struct).
         let arena = ArenaAllocator::init();
         let _ = alloc_gpa;
 
         // Copy our shaders
         //
-        // DEFERRED (placeholder): `custom_shaders = config.@"custom-shader".clone(alloc)`.
-        // `RepeatablePath` is an inhabited placeholder (custom-shader feature is
-        // deferred end-to-end); the real clone lands when `Path`/`RepeatablePath`
-        // become real types (generic.rs:120-130, DEFERRALS.md).
-        let custom_shaders = RepeatablePath;
+        // Reference: `const custom_shaders = try config.@"custom-shader".clone(alloc);`.
+        // The config `RepeatablePath` is read through the renderer-defined
+        // `RendererConfig::custom_shaders` accessor (R4/G7 — the renderer may not name
+        // `rustty_config::path::RepeatablePath`), which maps each element arm-for-arm
+        // into the renderer-local `Path` (a `CString` over the same path bytes). The
+        // accessor's per-element `CString` clone + `.collect()` IS the reference clone.
+        let custom_shaders = config.custom_shaders();
 
         // Copy our background image
         //
@@ -539,12 +556,14 @@ mod derived_config_tests {
     /// oracle used by the macOS draw-path tests). The values chosen exercise the
     /// non-trivial transforms: `font-style != .false` (all `true`), the
     /// `@ceil(x*255)` cast (`faint_opacity` -> 255), the `@floatCast` (min_contrast
-    /// f64 -> f32), and `Color::to_terminal_rgb`. `bg_image` is configurable so the
-    /// Path/config-mapping test can flow a `Some(Path::Required(..))` through
-    /// `DerivedConfig::init` (the base mock defaults it to `None`).
+    /// f64 -> f32), and `Color::to_terminal_rgb`. `bg_image`/`custom_shaders` are
+    /// configurable so the Path/config-mapping tests can flow a `Some(Path::Required(..))`
+    /// / a `vec![Path::Required(..)]` through `DerivedConfig::init` (the base mock
+    /// defaults them to `None`/empty).
     #[derive(Default)]
     struct MockConfig {
         bg_image: Option<super::Path>,
+        custom_shaders: Vec<super::Path>,
     }
 
     impl RendererConfig for MockConfig {
@@ -659,6 +678,13 @@ mod derived_config_tests {
             // to `Some(Path::Required(CString::new(..)))`.
             self.bg_image.clone()
         }
+        fn custom_shaders(&self) -> super::RepeatablePath {
+            // Configurable (defaults to empty); the mapping test overrides it to a
+            // `vec![Path::Required(CString::new(..))]`.
+            super::RepeatablePath {
+                value: self.custom_shaders.clone(),
+            }
+        }
         fn window_colorspace(&self) -> WindowColorspace {
             WindowColorspace::Srgb
         }
@@ -737,6 +763,7 @@ mod derived_config_tests {
         let cstr = CString::new(b"/tmp/bg.png".to_vec()).unwrap();
         let cfg = MockConfig {
             bg_image: Some(Path::Required(cstr.clone())),
+            ..Default::default()
         };
         let d = DerivedConfig::init(Global, &cfg).expect("init");
         match &d.bg_image {
@@ -760,6 +787,32 @@ mod derived_config_tests {
         assert!(!req_a.equal(&req_b)); // Some -> different bytes
         assert!(!req_a.equal(&opt)); // Some -> different variant (same bytes)
         assert_eq!(req_a.len(), 1); // the byte length of the arm's slice
+    }
+
+    // RENDERER_CUSTOM_SHADERS_DESIGN §4.3: the config `RepeatablePath` -> the
+    // renderer-local `RepeatablePath` (a `Vec<Path>`) mapping flows through
+    // `DerivedConfig::init` byte-faithfully. The renderer canNOT dep rustty-config, so
+    // a mock returning `RepeatablePath { value: vec![Path::Required(..)] }` stands in
+    // for the config-side accessor; assert the arm + bytes round-trip.
+    #[test]
+    fn derived_config_maps_custom_shaders() {
+        use super::Path;
+        use std::ffi::CString;
+
+        let cfg = MockConfig {
+            custom_shaders: vec![Path::Required(CString::new("/x/shader.glsl").unwrap())],
+            ..Default::default()
+        };
+        let d = DerivedConfig::init(Global, &cfg).expect("init");
+        assert_eq!(d.custom_shaders.value.len(), 1);
+        match &d.custom_shaders.value[0] {
+            Path::Required(p) => assert_eq!(p.to_bytes(), b"/x/shader.glsl"),
+            other => panic!("wrong arm: {other:?}"),
+        }
+
+        // Default mock => empty list.
+        let d0 = DerivedConfig::init(Global, &MockConfig::default()).expect("init");
+        assert!(d0.custom_shaders.value.is_empty());
     }
 
     // path_extension (F4 — the `std.fs.path.extension` byte port that feeds
@@ -2112,8 +2165,9 @@ mod macos_impl {
 
             let old_blending = self.config.blending;
             // Zig: `!self.config.custom_shaders.equal(config.custom_shaders)`.
-            // `RepeatablePath` placeholder derives `PartialEq` => `!=` is the same;
-            // always `false` (custom shaders deferred).
+            // The derived `PartialEq` on `RepeatablePath` (`Vec<Path>` — length +
+            // per-element variant + `CString` bytes) reproduces the reference `equal`
+            // exactly, so `!=` is `!equal(...)`.
             let custom_shaders_changed = self.config.custom_shaders != config.custom_shaders;
 
             // Zig: `self.config.deinit(); self.config = config.*;` -> replace the
@@ -4761,23 +4815,29 @@ mod macos_impl {
             //     break :err &.{};
             // };
             //
-            // DEFERRED SEAM (R5): `shadertoy::load_from_files` is UN-PORTED (grep
-            // confirms it is absent from `crate::shadertoy`) AND `config.custom_shaders`
-            // is the `RepeatablePath` placeholder ZST — so the custom-shader load is a
-            // deferred seam that yields the empty list. This is faithful to BOTH the
-            // reference's `catch |err| break :err &.{}` (an error ⇒ no custom shaders)
-            // AND the placeholder (an empty path list ⇒ no custom shaders). The verbatim
-            // Zig loader body is preserved above (R5); when `shadertoy::load_from_files`
-            // + a real `RepeatablePath` land, restore the load.
-            let custom_shaders: &[&CStr] = &[];
+            // The reference arena is subsumed by owned `Vec<CString>` (dropped after
+            // `init_shaders` returns — `init_post_pipeline` copies the sources into an
+            // `NSString`). The `catch |err| break :err &.{}` (any load error ⇒ no
+            // custom shaders, never block the renderer) maps to `unwrap_or_else`.
+            let custom_shaders: Vec<CString> = shadertoy::load_from_files(
+                &self.config.custom_shaders,
+                Metal::CUSTOM_SHADER_TARGET,
+            )
+            .unwrap_or_else(|_err| {
+                // log.warn("error loading custom shaders err={}", .{err});  // no facade
+                Vec::new()
+            });
+
+            // GraphicsAPI.initShaders takes `[]const [:0]const u8`; build the borrow slice.
+            let custom_refs: Vec<&CStr> = custom_shaders.iter().map(|c| c.as_c_str()).collect();
 
             // const has_custom_shaders = custom_shaders.len > 0;
-            let has_custom_shaders = !custom_shaders.is_empty();
+            let has_custom_shaders = !custom_refs.is_empty();
 
             // var shaders = try self.api.initShaders(self.alloc, custom_shaders);
             // errdefer shaders.deinit(self.alloc);  → the `?` early-return `Drop`.
             // self.shaders = shaders;
-            self.shaders = self.api.init_shaders(custom_shaders)?;
+            self.shaders = self.api.init_shaders(&custom_refs)?;
             // self.has_custom_shaders = has_custom_shaders;
             self.has_custom_shaders = has_custom_shaders;
             Ok(())
@@ -5604,7 +5664,7 @@ mod macos_impl {
                 faint_opacity: 255,
                 min_contrast: 1.0,
                 padding_color: WindowPaddingColor::Background,
-                custom_shaders: RepeatablePath,
+                custom_shaders: RepeatablePath::default(),
                 bg_image: None,
                 bg_image_opacity: 1.0,
                 bg_image_position: BackgroundImagePosition::TopLeft,
@@ -6151,6 +6211,104 @@ mod macos_impl {
                 bb > nb + 64,
                 "bg-image blue not distinct from bg_color (bg B={bb} vs none B={nb})"
             );
+        }
+
+        // RENDERER_CUSTOM_SHADERS_DESIGN §4.2 — the offscreen end-to-end proof that the
+        // custom-shader (shadertoy) post-process path executes. Point the config at an
+        // on-disk pass-through shader, run `init_shaders` (load + transpile MSL + build
+        // the post pipelines + flip `has_custom_shaders`), then drive one frame with
+        // visible text. The Chunk-4 `draw_frame` passes (retarget the cell pass to
+        // `back_texture`, then the ping-pong post loop blitting back to `frame.target`)
+        // run for the FIRST time here. Assert the per-frame `CustomShaderState` was
+        // created, the post pipelines were built, and the pass-through preserved the
+        // cells (non-black AND not a uniform fill — a black frame is the empty-
+        // `post_pipelines` failure mode in OPEN RISK R1). macOS/Metal-gated; Metal-skip.
+        //
+        // Assertion strategy (§4.2): the "recognizable" contract is the robustness
+        // check — a non-black pixel AND a non-uniform frame — NOT an exact baseline
+        // diff (the pass-through samples `texture(iChannel0, gl_FragCoord/iResolution)`
+        // through a Metal sampler, so sub-LSB filtering can perturb an exact match while
+        // leaving the image recognizable). Both halves still fail the real regressions:
+        // an empty-pipeline black frame fails non-black; a uniform fill fails non-uniform.
+        #[test]
+        fn golden_renders_custom_shader() {
+            use std::ffi::CString;
+            let mut r = match golden_renderer(10, 3) {
+                Some(r) => r,
+                None => return, // Metal-skip
+            };
+
+            // Write the pass-through shadertoy body to a nanos-suffixed temp file
+            // (mirrors the bg-image golden).
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("rustty_shader_{nanos}.glsl"));
+            std::fs::write(
+                &path,
+                b"void mainImage(out vec4 fragColor, in vec2 fragCoord){\n\
+                  fragColor = texture(iChannel0, fragCoord / iResolution.xy);\n}\n",
+            )
+            .unwrap();
+
+            // Point the config at the on-disk pass-through shader (required arm),
+            // byte-faithful path -> CString (mirrors the bg-image golden).
+            let cpath = CString::new(path.as_os_str().as_encoded_bytes().to_vec()).unwrap();
+            r.config.custom_shaders = RepeatablePath {
+                value: vec![crate::generic::Path::Required(cpath)],
+            };
+
+            // Load + transpile + build the post pipelines + flip has_custom_shaders.
+            r.init_shaders().expect("init_shaders");
+            assert!(r.has_custom_shaders, "custom shaders not activated");
+            assert!(
+                !r.shaders.post_pipelines.is_empty(),
+                "post pipelines not built"
+            );
+
+            // Drive one frame with a non-empty terminal (write visible text so the cell
+            // pass produces a recognizable, non-black image the pass-through preserves).
+            let mut mutex = Mutex::new();
+            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            t.print_string(b"HELLO").unwrap();
+            let st = state::State {
+                mutex: &mut mutex,
+                terminal: &mut t,
+                inspector: None,
+                preedit: None,
+                mouse: state::Mouse::default(),
+            };
+            r.update_frame(&st, true).unwrap();
+            r.draw_frame(true).unwrap();
+
+            // The draw_frame branch lazily created the per-frame CustomShaderState.
+            let idx = r.swap_chain.frame_index as usize;
+            assert!(
+                r.swap_chain.frames[idx].custom_shader_state.is_some(),
+                "custom_shader_state not created by draw_frame"
+            );
+
+            // Pass-through = identity: the cells survive to frame.target.
+            let px = r.swap_chain.frames[idx].target.read_bgra();
+            // Non-black: some pixel has a bright channel (the white "HELLO" glyphs).
+            let non_black = px
+                .chunks_exact(4)
+                .any(|p| p[0] > 64 || p[1] > 64 || p[2] > 64);
+            assert!(
+                non_black,
+                "cells not visible through the pass-through shader"
+            );
+            // Not uniform: at least one pixel differs from the first (glyph vs bg).
+            let first = &px[0..4];
+            let non_uniform = px.chunks_exact(4).any(|p| p != first);
+            assert!(
+                non_uniform,
+                "frame is a uniform fill (post-process did not preserve the image)"
+            );
+
+            t.deinit(Global);
+            let _ = std::fs::remove_file(&path);
         }
 
         // RENDERER_KITTY_IMAGE_PATH_DESIGN §4 — the offscreen APC-driven proof that

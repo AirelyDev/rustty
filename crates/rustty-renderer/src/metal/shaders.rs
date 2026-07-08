@@ -496,7 +496,12 @@ fn init_post_pipeline(
     // is not needed for `NSString`. The `checkError` on `newLibraryWithSource:` is the
     // `.map_err` below; the `errdefer post_library.release()` dissolves into `Retained`
     // Drop (`post_library` drops at end of scope, mirroring Zig's `defer release`).
-    let src = NSString::from_str(&data.to_string_lossy());
+    // R1 (byte-faithful shader sources): the transpiled MSL is C-string text; decode
+    // its bytes as UTF-8 WITHOUT lossy replacement. spirv-cross emits ASCII so this
+    // never fails in practice, but an invalid byte is surfaced as an error rather than
+    // silently corrupted to U+FFFD (the reference passes the exact `[:0]const u8` bytes).
+    let text = std::str::from_utf8(data.to_bytes()).map_err(|_| Error::MetalFailed)?;
+    let src = NSString::from_str(text);
     let post_library = device
         .newLibraryWithSource_options_error(&src, None)
         .map_err(|_nserr| Error::MetalFailed)?;

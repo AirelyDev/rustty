@@ -171,6 +171,26 @@ impl RendererConfig for Config {
             crate::path::Path::Required(b) => CString::new(b.clone()).ok().map(RPath::Required),
         }
     }
+    fn custom_shaders(&self) -> rustty_renderer::generic::RepeatablePath {
+        use rustty_renderer::generic::{Path as RPath, RepeatablePath as RRepeatablePath};
+        // config `self.custom_shader` is `RepeatablePath { value: Vec<crate::path::Path> }`
+        // (path.rs). Map each arm into the renderer-local `Path` (a `CString` over the
+        // same bytes). The parsed bytes carry no interior NUL (`Path::parse` dupeZ'd
+        // them), so `CString::new` cannot fail on well-formed config; map defensively
+        // (an interior NUL => drop that entry, matching the reference "path won't open"
+        // degradation). Byte-faithful (never a lossy `String`). This IS the reference
+        // `config.@"custom-shader".clone(alloc)` — the per-element clone is the collect.
+        let value = self
+            .custom_shader
+            .value
+            .iter()
+            .filter_map(|p| match p {
+                crate::path::Path::Optional(b) => CString::new(b.clone()).ok().map(RPath::Optional),
+                crate::path::Path::Required(b) => CString::new(b.clone()).ok().map(RPath::Required),
+            })
+            .collect();
+        RRepeatablePath { value }
+    }
     fn window_colorspace(&self) -> WindowColorspace {
         self.window_colorspace
     }

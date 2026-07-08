@@ -8,14 +8,15 @@
 //! `test{}` blocks (`spirv`, `spirv invalid`, `shadertoy to msl`,
 //! `shadertoy to glsl`).
 //!
-//! DEFERRED (see .port/phase-2/DEFERRALS.md): `loadFromFiles` / `loadFromFile`.
-//! They take a `configpkg.RepeatablePath` (`@import("../config.zig")`), but in
-//! the rustty crate split `rustty-config` ALREADY depends on `rustty-renderer`
-//! (config/Cargo.toml), so a `rustty-renderer -> rustty-config` edge would form
-//! a crate cycle (G7 RED). The two functions are NOT GPU-coupled and NOT
-//! exercised by any of the 4 tests; their verbatim bodies are preserved below
-//! (R5, never a silent drop) and land once the renderer<->config custom-shader
-//! load layering is resolved (the surface/apprt wiring milestone).
+//! `loadFromFiles` / `loadFromFile` are ALSO ported now (custom-shader milestone).
+//! They take a `configpkg.RepeatablePath` (`@import("../config.zig")`); the crate
+//! split forbids a `rustty-renderer -> rustty-config` edge (`rustty-config` ALREADY
+//! deps `rustty-renderer` — the `Message::ChangeConfig` back-edge — so it would
+//! cycle, G7 RED). Resolved the same way as the background-image `Path`: the load
+//! path takes the renderer-local [`crate::generic::RepeatablePath`] (a `Vec<Path>`
+//! over the renderer-local byte-faithful `CString` `Path`), and `Config` maps its
+//! own `RepeatablePath` into it via `RendererConfig::custom_shaders` (config-side,
+//! acyclic). No new crate edge; `check_acyclic.sh` stays green.
 //
 // const std = @import("std");
 // const builtin = @import("builtin");
@@ -36,9 +37,14 @@
 use glslang_sys as gl;
 use spirv_cross_sys as spvc;
 
+use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+
+// The renderer-local config types the load path consumes (acyclic — see the module
+// doc): `RepeatablePath` is a `Vec<Path>` over the byte-faithful `CString` `Path`.
+use crate::generic::{Path, RepeatablePath};
 
 // PORT NOTE: `cargo test` runs tests concurrently across threads, but the
 // vendored glslang / SPIRV-Cross C++ libraries carry process-global state that
@@ -108,7 +114,7 @@ pub enum Target {
 // `error.SpvcFailed`, `error.SpirvInvalid`, `error.OutOfMemory`,
 // `error.GlslangInitFailed`, `error.FileNotFound`, `error.StreamTooLong`);
 // collected here into one enum. `FileNotFound`/`StreamTooLong`/`Io` are used
-// only by the deferred `loadFromFile*` path (kept for signature fidelity).
+// by the `load_from_file*` load path.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Error {
     GlslangInitFailed,
@@ -121,107 +127,171 @@ pub enum Error {
     Io,
 }
 
-// ===========================================================================
-// DEFERRED: loadFromFiles / loadFromFile (config-coupled; would cycle
-// rustty-renderer -> rustty-config -> rustty-renderer). Bodies preserved
-// verbatim (R5). See .port/phase-2/DEFERRALS.md.
-// ===========================================================================
+/// Load a set of shaders from files and convert them to the target
+/// format. The shader order is preserved.
+// pub fn loadFromFiles(alloc_gpa, paths: configpkg.RepeatablePath, target) ![]const [:0]const u8
 //
-// /// Load a set of shaders from files and convert them to the target
-// /// format. The shader order is preserved.
-// pub fn loadFromFiles(
-//     alloc_gpa: Allocator,
-//     paths: configpkg.RepeatablePath,
-//     target: Target,
-// ) ![]const [:0]const u8 {
-//     var list: std.ArrayList([:0]const u8) = .empty;
-//     defer list.deinit(alloc_gpa);
-//     errdefer for (list.items) |shader| alloc_gpa.free(shader);
+// PORT NOTE: `paths: configpkg.RepeatablePath` -> the renderer-local
+// `&RepeatablePath` (config-coupled type routed through the renderer-local mirror,
+// acyclic — see the module doc). Returns `Vec<CString>` (the reference `[]const
+// [:0]const u8` — owned, NUL-terminated shader sources; byte-faithful, never lossy
+// `String`). The reference `alloc_gpa` + `errdefer free(shader)` dissolve into
+// `Vec`/`CString` Drop (a mid-loop error drops the already-built sources
+// automatically).
+pub fn load_from_files(paths: &RepeatablePath, target: Target) -> Result<Vec<CString>, Error> {
+    // var list: std.ArrayList([:0]const u8) = .empty;
+    // defer list.deinit(alloc_gpa);
+    // errdefer for (list.items) |shader| alloc_gpa.free(shader);
+    let mut list: Vec<CString> = Vec::new();
+
+    // for (paths.value.items) |item| {
+    for item in &paths.value {
+        // const path, const optional = switch (item) {
+        //     .optional => |path| .{ path, true },
+        //     .required => |path| .{ path, false },
+        // };
+        let (path, optional): (&CStr, bool) = match item {
+            Path::Optional(p) => (p.as_c_str(), true),
+            Path::Required(p) => (p.as_c_str(), false),
+        };
+
+        // const shader = loadFromFile(alloc_gpa, path, target) catch |err| {
+        //     if (err == error.FileNotFound and optional) {
+        //         continue;
+        //     }
+        //
+        //     return err;
+        // };
+        let shader = match load_from_file(path, target) {
+            Ok(s) => s,
+            Err(Error::FileNotFound) if optional => continue,
+            Err(err) => return Err(err),
+        };
+        // log.info("loaded custom shader path={s}", .{path});   // no logging facade (comment)
+        // try list.append(alloc_gpa, shader);
+        list.push(shader);
+    }
+
+    // return try list.toOwnedSlice(alloc_gpa);
+    Ok(list)
+}
+
+/// Load a single shader from a file and convert it to the target language
+/// ready to be used with renderers.
+// pub fn loadFromFile(alloc_gpa, path: []const u8, target) ![:0]const u8
 //
-//     for (paths.value.items) |item| {
-//         const path, const optional = switch (item) {
-//             .optional => |path| .{ path, true },
-//             .required => |path| .{ path, false },
-//         };
-//
-//         const shader = loadFromFile(alloc_gpa, path, target) catch |err| {
-//             if (err == error.FileNotFound and optional) {
-//                 continue;
-//             }
-//
-//             return err;
-//         };
-//         log.info("loaded custom shader path={s}", .{path});
-//         try list.append(alloc_gpa, shader);
-//     }
-//
-//     return try list.toOwnedSlice(alloc_gpa);
-// }
-//
-// /// Load a single shader from a file and convert it to the target language
-// /// ready to be used with renderers.
-// pub fn loadFromFile(
-//     alloc_gpa: Allocator,
-//     path: []const u8,
-//     target: Target,
-// ) ![:0]const u8 {
-//     var arena = ArenaAllocator.init(alloc_gpa);
-//     defer arena.deinit();
-//     const alloc = arena.allocator();
-//
-//     // Read it all into memory -- we don't expect shaders to be large.
-//     const src = src: {
-//         // Load the shader file
-//         const cwd = std.fs.cwd();
-//         const file = try cwd.openFile(path, .{});
-//         defer file.close();
-//
-//         break :src try file.readToEndAlloc(
-//             alloc,
-//             4 * 1024 * 1024, // 4MB
-//         );
-//     };
-//
-//     // Convert to full GLSL
-//     const glsl: [:0]const u8 = glsl: {
-//         var stream: std.Io.Writer.Allocating = .init(alloc);
-//         try glslFromShader(&stream.writer, src);
-//         try stream.writer.writeByte(0);
-//         break :glsl stream.written()[0 .. stream.written().len - 1 :0];
-//     };
-//
-//     // Convert to SPIR-V
-//     const spirv: []const u8 = spirv: {
-//         var stream: std.Io.Writer.Allocating = .init(alloc);
-//         var errlog: SpirvLog = .{ .alloc = alloc };
-//         defer errlog.deinit();
-//         spirvFromGlsl(&stream.writer, &errlog, glsl) catch |err| {
-//             if (errlog.info.len > 0 or errlog.debug.len > 0) {
-//                 log.warn("spirv error path={s} info={s} debug={s}", .{
-//                     path,
-//                     errlog.info,
-//                     errlog.debug,
-//                 });
-//             }
-//
-//             return err;
-//         };
-//
-//         // SpirV pointer must be aligned to 4 bytes since we expect
-//         // a slice of words.
-//         var list: std.ArrayListAligned(u8, .of(u32)) = .empty;
-//         try list.appendSlice(alloc, stream.written());
-//         break :spirv list.items;
-//     };
-//
-//     // Convert to MSL
-//     return switch (target) {
-//         // Important: using the alloc_gpa here on purpose because this
-//         // is the final result that will be returned to the caller.
-//         .glsl => try glslFromSpv(alloc_gpa, spirv),
-//         .msl => try mslFromSpv(alloc_gpa, spirv),
-//     };
-// }
+// PORT NOTE: `path: []const u8` -> `&CStr` (the renderer-local `Path` carries a
+// `CString`; the load reads the path bytes). Returns an owned NUL-terminated
+// `CString` (reference `[:0]const u8`). The reference arena (`src`/`glsl`/`spirv`
+// intermediates) becomes local `Vec`s dropped at scope end; the final result is an
+// owned `CString` returned to the caller.
+pub fn load_from_file(path: &CStr, target: Target) -> Result<CString, Error> {
+    // var arena = ArenaAllocator.init(alloc_gpa);
+    // defer arena.deinit();
+    // const alloc = arena.allocator();
+
+    // Read it all into memory -- we don't expect shaders to be large.
+    // const src = src: {
+    //     // Load the shader file
+    //     const cwd = std.fs.cwd();
+    //     const file = try cwd.openFile(path, .{});
+    //     defer file.close();
+    //
+    //     break :src try file.readToEndAlloc(alloc, 4 * 1024 * 1024); // 4MB
+    // };
+    //
+    // PORT NOTE: `std.fs.cwd().openFile(path)` over the raw path bytes. On unix the
+    // path bytes map to `OsStr` via `OsStrExt::from_bytes` (byte-faithful — the
+    // reference opens the exact bytes, never a lossy `String`). `error.FileNotFound`
+    // -> `Error::FileNotFound` (drives the optional-arm skip in `load_from_files`);
+    // other I/O -> `Error::Io`; exceeding the 4MB cap -> `Error::StreamTooLong`.
+    let src: Vec<u8> = read_shader_file(path)?;
+
+    // Convert to full GLSL
+    // const glsl: [:0]const u8 = glsl: {
+    //     var stream: std.Io.Writer.Allocating = .init(alloc);
+    //     try glslFromShader(&stream.writer, src);
+    //     try stream.writer.writeByte(0);
+    //     break :glsl stream.written()[0 .. stream.written().len - 1 :0];
+    // };
+    //
+    // The trailing `writeByte(0)` is the NUL sentinel (`[:0]const u8`); `glsl` keeps
+    // it (only `spirv_from_glsl`'s `src.as_ptr()` reaches C, so the sentinel byte is
+    // the C-string terminator, exactly like the reference slice-minus-one aliasing).
+    let mut glsl: Vec<u8> = Vec::new();
+    glsl_from_shader(&mut glsl, &src);
+    glsl.push(0);
+
+    // Convert to SPIR-V
+    // const spirv: []const u8 = spirv: {
+    //     var stream: std.Io.Writer.Allocating = .init(alloc);
+    //     var errlog: SpirvLog = .{ .alloc = alloc };
+    //     defer errlog.deinit();
+    //     spirvFromGlsl(&stream.writer, &errlog, glsl) catch |err| {
+    //         if (errlog.info.len > 0 or errlog.debug.len > 0) {
+    //             log.warn("spirv error path={s} info={s} debug={s}", .{
+    //                 path, errlog.info, errlog.debug,
+    //             });
+    //         }
+    //
+    //         return err;
+    //     };
+    //
+    //     // SpirV pointer must be aligned to 4 bytes since we expect
+    //     // a slice of words.
+    //     var list: std.ArrayListAligned(u8, .of(u32)) = .empty;
+    //     try list.appendSlice(alloc, stream.written());
+    //     break :spirv list.items;
+    // };
+    let mut spirv: Vec<u8> = Vec::new();
+    let mut errlog = SpirvLog::default();
+    if let Err(err) = spirv_from_glsl(&mut spirv, Some(&mut errlog), &glsl) {
+        // log.warn("spirv error path={s} info={s} debug={s}", ...);   // no facade
+        let _ = &errlog; // (info/debug observed only by the elided log.warn)
+        return Err(err);
+    }
+    // (The reference re-packs into a u32-aligned list for the `@alignCast`; the
+    // port's `spv_cross` already copies into a `Vec<u32>` internally, so `spirv` is
+    // passed directly — the same subsumption the `shadertoy_to_msl` test documents.)
+
+    // Convert to MSL
+    // return switch (target) {
+    //     // Important: using the alloc_gpa here on purpose because this
+    //     // is the final result that will be returned to the caller.
+    //     .glsl => try glslFromSpv(alloc_gpa, spirv),
+    //     .msl => try mslFromSpv(alloc_gpa, spirv),
+    // };
+    let out: Vec<u8> = match target {
+        Target::Glsl => glsl_from_spv(&spirv)?,
+        Target::Msl => msl_from_spv(&spirv)?,
+    };
+    // The transpiled source is C-string text (no interior NUL — `c_str_to_vec` stops
+    // at the first NUL), so `CString::new` cannot fail; map defensively.
+    CString::new(out).map_err(|_| Error::SpvcFailed)
+}
+
+// PORT NOTE (helper): the reference's `openFile` + `readToEndAlloc(alloc, 4MB)`.
+// Byte-faithful path handling (unix `OsStrExt::from_bytes`); 4MB cap -> StreamTooLong.
+fn read_shader_file(path: &CStr) -> Result<Vec<u8>, Error> {
+    use std::io::Read;
+    use std::os::unix::ffi::OsStrExt;
+    let os = std::ffi::OsStr::from_bytes(path.to_bytes());
+    let mut file = std::fs::File::open(os).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => Error::FileNotFound,
+        _ => Error::Io,
+    })?;
+    // readToEndAlloc(alloc, 4 * 1024 * 1024) — cap read at 4MB, else StreamTooLong.
+    const MAX: u64 = 4 * 1024 * 1024;
+    let mut buf = Vec::new();
+    file.by_ref()
+        .take(MAX + 1)
+        .read_to_end(&mut buf)
+        .map_err(|_| Error::Io)?;
+    if buf.len() as u64 > MAX {
+        return Err(Error::StreamTooLong);
+    }
+    Ok(buf)
+}
 
 /// Convert a ShaderToy shader into valid GLSL.
 ///
@@ -789,5 +859,60 @@ mod tests {
 
         // log.warn("glsl={s}", .{glsl});
         let _ = glsl;
+    }
+
+    // RENDERER_CUSTOM_SHADERS_DESIGN §4.1 — host-only (cross-platform): the
+    // `loadFromFiles`/`loadFromFile` composition reads a GLSL file, wraps + compiles
+    // + transpiles it to the target (`Glsl` here — glslang + spirv-cross are host
+    // libs, no Metal device is touched), AND both control-flow arms (optional-skip,
+    // required-error). This is the first live exercise of the un-deferred load path.
+    #[test]
+    fn load_from_files_transpiles_glsl() {
+        use std::ffi::CString;
+        // Write the pass-through shadertoy body to a nanos-suffixed temp file
+        // (mirrors the bg-image golden, generic.rs).
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("rustty_shader_{nanos}.glsl"));
+        std::fs::write(
+            &path,
+            b"void mainImage(out vec4 fragColor, in vec2 fragCoord){\n\
+              fragColor = texture(iChannel0, fragCoord / iResolution.xy);\n}\n",
+        )
+        .unwrap();
+
+        // Byte-faithful path -> CString (mirrors the bg-image golden).
+        let cpath = CString::new(path.as_os_str().as_encoded_bytes().to_vec()).unwrap();
+        let rp = RepeatablePath {
+            value: vec![Path::Required(cpath)],
+        };
+        let out = load_from_files(&rp, Target::Glsl).unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(!out[0].as_bytes().is_empty(), "transpiled source is empty");
+
+        // Optional-arm missing file is SKIPPED (not an error).
+        let rp_missing_opt = RepeatablePath {
+            value: vec![Path::Optional(
+                CString::new("/nonexistent/rustty_missing.glsl").unwrap(),
+            )],
+        };
+        assert!(load_from_files(&rp_missing_opt, Target::Glsl)
+            .unwrap()
+            .is_empty());
+
+        // Required-arm missing file is a FileNotFound error.
+        let rp_missing_req = RepeatablePath {
+            value: vec![Path::Required(
+                CString::new("/nonexistent/rustty_missing.glsl").unwrap(),
+            )],
+        };
+        assert!(matches!(
+            load_from_files(&rp_missing_req, Target::Glsl),
+            Err(Error::FileNotFound)
+        ));
+
+        let _ = std::fs::remove_file(&path);
     }
 }

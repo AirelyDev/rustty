@@ -24,7 +24,7 @@ use rustty_render_types::{
 };
 use rustty_vt::style::BoldColor;
 
-use crate::generic::{Color, Path, TerminalColor};
+use crate::generic::{Color, Path, RepeatablePath, TerminalColor};
 
 /// The accessor surface `DerivedConfig::init<C>` reads to extract the renderer's
 /// derived configuration WITHOUT naming any `rustty_config` type (R4/G7). The
@@ -98,6 +98,14 @@ pub trait RendererConfig {
     // `config.@"background-image"` read (a `configpkg.Path`) — routed through the
     // accessor because the renderer may not name `rustty_config::path::Path` (R4/G7).
     fn bg_image(&self) -> Option<Path>;
+
+    // custom-shader: config `RepeatablePath` -> the renderer-local [`RepeatablePath`]
+    // (a `Vec<Path>`). Each element's optional/required arm + null-terminated path
+    // bytes are preserved byte-faithfully (`CString`, never a lossy `String`). This
+    // replaces the reference's `config.@"custom-shader".clone(alloc)` in
+    // `DerivedConfig::init` — routed through the accessor because the renderer may not
+    // name `rustty_config::path::RepeatablePath` (R4/G7).
+    fn custom_shaders(&self) -> RepeatablePath;
     fn window_colorspace(&self) -> WindowColorspace;
     fn alpha_blending(&self) -> AlphaBlending;
     fn background_blur(&self) -> BackgroundBlur;
