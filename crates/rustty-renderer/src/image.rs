@@ -2,23 +2,25 @@
 //! overlay image render state (`State`, `Placement`, `Id`, `ImageMap`, and the
 //! per-image `Image` upload state machine).
 //!
-//! PORT STATUS (GPU R-d P1, macOS-only): the *container / dispatch / lifecycle*
-//! surface is FULL; the heavy pixel/terminal-walk leaves the offscreen golden
-//! never runs are R5 `unimplemented!()` seams (`GPU_RD_P1_DESIGN.md` §0/§4):
+//! PORT STATUS (GPU R-d, macOS-only): FULL — the *container / dispatch /
+//! lifecycle* surface plus the Kitty-graphics pixel path
+//! (`RENDERER_KITTY_IMAGE_PATH_DESIGN.md`):
 //!
 //! - FULL: `State::{empty, deinit, upload, draw, overlay_update,
 //!   kitty_requires_update, prep_image}`, all of `Image`'s state machine
 //!   (`deinit`/`mark_for_unload`/`mark_for_replace`/`is_pending`/`has_texture`/
 //!   `is_unloading`/`prep_for_upload`/`upload`/`get_pending`/`get_texture`/
 //!   `get_pending_pointer`), and the pure types.
-//! - SEAM: `Image::convert` (the `wuffs` swizzle — no Rust home) and the four
-//!   Kitty terminal-walk methods (`kitty_update`/`prep_kitty_placement`/
+//! - FILLED (R-d): `Image::convert` (the `wuffs` swizzle, re-homed as a pure-Rust
+//!   per-pixel RGBA_PREMUL loop — `wuffs` has no Rust home) and the four Kitty
+//!   terminal-walk methods (`kitty_update`/`prep_kitty_placement`/
 //!   `prep_kitty_virtual_placement`/`prep_kitty_image`). Each keeps its verbatim
-//!   Zig body as a leading block comment (R1) and panics via `unimplemented!()`.
+//!   Zig body as a leading block comment (R1).
 //!
 //! The `image.zig` reference carries **0** `test{}` blocks (golden-image-gated);
-//! the two `#[test]`s at the bottom are rustty-only smoke tests over the empty-map
-//! lifecycle, mirroring the metal-leaf smoke-test precedent.
+//! the `#[test]`s at the bottom are rustty-only smoke tests (the empty-map
+//! lifecycle + the offscreen APC-driven Kitty pixel-path test), mirroring the
+//! metal-leaf smoke-test precedent.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -35,9 +37,14 @@ use allocator_api2::alloc::{AllocError, Allocator};
 // const terminal = @import("../terminal/main.zig");
 use rustty_util::quirks::inlineAssert as assert;
 
+use rustty_vt::kitty::graphics_command::Format;
 use rustty_vt::kitty::graphics_image::Image as KittyImage;
-use rustty_vt::kitty::graphics_storage::Placement as KittyStoragePlacement;
-use rustty_vt::kitty::graphics_unicode::Placement as KittyUnicodePlacement;
+use rustty_vt::kitty::graphics_storage::{
+    ImageStorage, Location, Placement as KittyStoragePlacement,
+};
+use rustty_vt::kitty::graphics_unicode::{self, Placement as KittyUnicodePlacement};
+use rustty_vt::point;
+use rustty_vt::screen::Screen;
 use rustty_vt::terminal::Terminal;
 
 // const Renderer = @import("../renderer.zig").Renderer;
@@ -345,9 +352,9 @@ impl State {
     ///
     /// This reads/writes state used by drawing.
     //
-    // R5 SEAM (GPU_RD_P1_DESIGN.md §4): the Kitty terminal-walk (viewport pins,
-    // per-placement rects, z-sort, bg/text split). Never run by the no-image
-    // golden. Verbatim Zig body preserved:
+    // PORT (R-d, RENDERER_KITTY_IMAGE_PATH_DESIGN §1.1): the Kitty terminal-walk
+    // (viewport pins, per-placement rects, z-sort, bg/text split). Exercised by the
+    // offscreen APC-driven test. Verbatim Zig reference (also mapped inline below):
     //
     // pub fn kittyUpdate(
     //     self: *State,
@@ -458,18 +465,193 @@ impl State {
     // }
     pub fn kitty_update<A: Allocator + Copy>(
         &mut self,
-        _alloc: A,
-        _t: &Terminal,
-        _cell_size: CellSize,
+        alloc: A,
+        t: &Terminal,
+        cell_size: CellSize,
     ) {
-        unimplemented!("R-d image pixel path — kitty_update; golden renders no Kitty images")
+        // const storage = &t.screens.active.kitty_images;
+        // defer storage.dirty = false;
+        //
+        // SAFETY (memory-model, §5): `t.screens.active` is the faithful raw `*mut
+        // Screen` field. We read `kitty_images`/`pages` through the raw ptr (NOT a
+        // `&mut` derived from `&Terminal`), exactly as `kitty_requires_update`
+        // (image.rs) already does. `screen` is a COPY of the raw pointer (no borrow
+        // retained). Every shared borrow below is SCOPED so it is dropped before the
+        // final `dirty = false` write through the same raw ptr (Stacked-Borrows
+        // clean: no shared ref live across the write).
+        let screen: *mut Screen = t.screens.active;
+
+        // We always clear our previous placements no matter what because
+        // we rebuild them from scratch.
+        self.kitty_placements.clear(); // clearRetainingCapacity
+        self.kitty_virtual = false;
+
+        // Go through our known images and if there are any that are no longer
+        // in use then mark them to be freed.
+        //
+        // This never conflicts with the below because a placement can't
+        // reference an image that doesn't exist.
+        {
+            // var it = self.images.iterator();
+            // while (it.next()) |kv| switch (kv.key_ptr.*) {
+            //     .kitty => |id| if (storage.imageById(id) == null) markForUnload,
+            //     .overlay => {},
+            // };
+            //
+            // PORT NOTE: Zig mutates entries during iteration; Rust forbids a
+            // `get_mut` while `keys()` borrows `self.images`, so we collect the
+            // stale Kitty ids first (observably identical — no removal, order-free).
+            let storage: &ImageStorage = unsafe { &(*screen).kitty_images };
+            let stale: Vec<u32> = self
+                .images
+                .keys()
+                .filter_map(|id| match id {
+                    // We're only looking at Kitty images
+                    Id::Kitty(kid) if storage.image_by_id(*kid).is_none() => Some(*kid),
+                    _ => None,
+                })
+                .collect();
+            for kid in stale {
+                self.images
+                    .get_mut(&Id::Kitty(kid))
+                    .unwrap()
+                    .image
+                    .mark_for_unload();
+            }
+        }
+
+        // The top-left and bottom-right corners of our viewport in screen
+        // points. This lets us determine offsets and containment of placements.
+        // const top = t.screens.active.pages.getTopLeft(.viewport);
+        // const bot = t.screens.active.pages.getBottomRight(.viewport).?;
+        // const top_y = t.screens.active.pages.pointFromPin(.screen, top).?.screen.y;
+        // const bot_y = t.screens.active.pages.pointFromPin(.screen, bot).?.screen.y;
+        let (top, bot, top_y, bot_y) = {
+            let pages = unsafe { &(*screen).pages };
+            let top = pages.get_top_left(point::Tag::Viewport);
+            let bot = pages.get_bottom_right(point::Tag::Viewport).unwrap();
+            let top_y = pages
+                .point_from_pin(point::Tag::Screen, top)
+                .unwrap()
+                .coord()
+                .y;
+            let bot_y = pages
+                .point_from_pin(point::Tag::Screen, bot)
+                .unwrap()
+                .coord()
+                .y;
+            (top, bot, top_y, bot_y)
+        };
+
+        // Go through the placements and ensure the image is
+        // on the GPU or else is ready to be sent to the GPU.
+        {
+            let storage: &ImageStorage = unsafe { &(*screen).kitty_images };
+            // var it = storage.placements.iterator();
+            // while (it.next()) |kv| { const p = kv.value_ptr; ... }
+            for (key, p) in storage.placements.iter() {
+                // Special logic based on location
+                match p.location {
+                    Location::Pin(_) => {}
+                    Location::Virtual => {
+                        // We need to mark virtual placements on our renderer so that
+                        // we know to rebuild in more scenarios since cell changes can
+                        // now trigger placement changes.
+                        self.kitty_virtual = true;
+                        // We also continue out because virtual placements are
+                        // only triggered by the unicode placeholder, not by the
+                        // placement itself.
+                        continue;
+                    }
+                }
+
+                // Get the image for the placement
+                // const image = storage.imageById(kv.key_ptr.image_id) orelse { ...; continue; };
+                let image = match storage.image_by_id(key.image_id) {
+                    Some(img) => img,
+                    None => {
+                        // log.warn("missing image for placement, ignoring image_id={}",
+                        //     .{kv.key_ptr.image_id});
+                        continue;
+                    }
+                };
+
+                // self.prepKittyPlacement(alloc, t, top_y, bot_y, &image, p) catch |err| {
+                //     // For errors we log and continue. We try to place
+                //     // other placements even if one fails.
+                //     log.warn("error preparing kitty placement err={}", .{err});
+                // };
+                if self
+                    .prep_kitty_placement(alloc, t, top_y, bot_y, &image, p)
+                    .is_err()
+                {
+                    // log.warn("error preparing kitty placement err={}", .{err});
+                }
+            }
+        }
+
+        // If we have virtual placements then we need to scan for placeholders.
+        if self.kitty_virtual {
+            // var v_it = terminal.kitty.graphics.unicode.placementIterator(top, bot);
+            let mut v_it = graphics_unicode::placement_iterator(top, Some(bot));
+            // while (v_it.next()) |virtual_p| { ... }
+            while let Some(virtual_p) = v_it.next() {
+                if self
+                    .prep_kitty_virtual_placement(alloc, t, &virtual_p, cell_size)
+                    .is_err()
+                {
+                    // For errors we log and continue. We try to place
+                    // other placements even if one fails.
+                    // log.warn("error preparing kitty placement err={}", .{err});
+                }
+            }
+        }
+
+        // Sort the placements by their Z value.
+        // std.mem.sortUnstable(Placement, ..., lessThan);
+        //
+        // NOTE: mirrors Zig `sortUnstable` with a strict boolean `lessThan`; the
+        // comparator returns `Less`/`Greater` only (never `Equal`), which is
+        // acceptable for an UNSTABLE sort and matches Zig's boolean predicate
+        // (equal elements may reorder either way — Zig's is unstable too).
+        self.kitty_placements.sort_unstable_by(|lhs, rhs| {
+            if lhs.z < rhs.z || (lhs.z == rhs.z && Id::z_less_than(lhs.image_id, rhs.image_id)) {
+                core::cmp::Ordering::Less
+            } else {
+                core::cmp::Ordering::Greater
+            }
+        });
+
+        // Find our indices. The values are sorted by z so we can
+        // find the first placement out of bounds to find the limits.
+        let bg_limit: i32 = i32::MIN / 2;
+        let mut bg_end: Option<u32> = None;
+        let mut text_end: Option<u32> = None;
+        for (i, p) in self.kitty_placements.iter().enumerate() {
+            if bg_end.is_none() && p.z >= bg_limit {
+                bg_end = Some(i as u32);
+            }
+            if text_end.is_none() && p.z >= 0 {
+                text_end = Some(i as u32);
+            }
+        }
+        // If we didn't see any images with a z > the bg limit,
+        // then our bg end is the end of our placement list.
+        self.kitty_bg_end = bg_end.unwrap_or(self.kitty_placements.len() as u32);
+        // Same idea for the image_text_end.
+        self.kitty_text_end = text_end.unwrap_or(self.kitty_placements.len() as u32);
+
+        // `defer storage.dirty = false;` — LAST, through the raw ptr, no live borrow.
+        unsafe {
+            (*screen).kitty_images.dirty = false;
+        }
     }
 
     /// Get the viewport-relative position for this
     /// placement and add it to the placements list.
     //
-    // R5 SEAM (GPU_RD_P1_DESIGN.md §4): `rect`/`pixelSize`/`pointFromPin` walk;
-    // feeds only `kitty_update`. Verbatim Zig body preserved:
+    // PORT (R-d §1.2): `rect`/`pixelSize`/`pointFromPin` walk; called from
+    // `kitty_update`. Verbatim Zig reference (also mapped inline below):
     //
     // fn prepKittyPlacement(
     //     self: *State,
@@ -528,23 +710,96 @@ impl State {
     //     }
     // }
     #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)] // called only from the `kitty_update` seam (a comment); parity-preserved
     fn prep_kitty_placement<A: Allocator + Copy>(
         &mut self,
-        _alloc: A,
-        _t: &Terminal,
-        _top_y: u32,
-        _bot_y: u32,
-        _image: &KittyImage,
-        _p: &KittyStoragePlacement,
+        alloc: A,
+        t: &Terminal,
+        top_y: u32,
+        bot_y: u32,
+        image: &KittyImage,
+        p: &KittyStoragePlacement,
     ) -> Result<(), PrepImageError> {
-        unimplemented!(
-            "R-d image pixel path — prep_kitty_placement; golden renders no Kitty images"
-        )
+        // Get the rect for the placement. If this placement doesn't have
+        // a rect then its virtual or something so skip it.
+        // const rect = p.rect(image.*, t) orelse return;
+        let rect = match p.rect(image, t) {
+            Some(r) => r,
+            None => return Ok(()),
+        };
+
+        // This is expensive but necessary.
+        // const img_top_y = t.screens.active.pages.pointFromPin(.screen, rect.top_left).?.screen.y;
+        // const img_bot_y = t.screens.active.pages.pointFromPin(.screen, rect.bottom_right).?.screen.y;
+        let pages = unsafe { &(*t.screens.active).pages };
+        let img_top_y = pages
+            .point_from_pin(point::Tag::Screen, rect.top_left)
+            .unwrap()
+            .coord()
+            .y;
+        let img_bot_y = pages
+            .point_from_pin(point::Tag::Screen, rect.bottom_right)
+            .unwrap()
+            .coord()
+            .y;
+
+        // If the selection isn't within our viewport then skip it.
+        if img_top_y > bot_y {
+            return Ok(());
+        }
+        if img_bot_y < top_y {
+            return Ok(());
+        }
+
+        // We need to prep this image for upload if it isn't in the
+        // cache OR it is in the cache but the transmit time doesn't
+        // match meaning this image is different.
+        // try self.prepKittyImage(alloc, image);
+        self.prep_kitty_image(alloc, image)?;
+
+        // Calculate the dimensions of our image, taking in to
+        // account the rows / columns specified by the placement.
+        let dest_size = p.pixel_size(image, t);
+
+        // Calculate the source rectangle
+        let source_x = image.width.min(p.source_x);
+        let source_y = image.height.min(p.source_y);
+        let source_width = if p.source_width > 0 {
+            (image.width - source_x).min(p.source_width)
+        } else {
+            image.width
+        };
+        let source_height = if p.source_height > 0 {
+            (image.height - source_y).min(p.source_height)
+        } else {
+            image.height
+        };
+
+        // Get the viewport-relative Y position of the placement.
+        let y_pos: i32 = img_top_y as i32 - top_y as i32;
+
+        // Accumulate the placement
+        if dest_size.width > 0 && dest_size.height > 0 {
+            // try self.kitty_placements.append(alloc, .{ ... });
+            self.kitty_placements.push(Placement {
+                image_id: Id::Kitty(image.id),
+                x: rect.top_left.x as i32,
+                y: y_pos,
+                z: p.z,
+                width: dest_size.width,
+                height: dest_size.height,
+                cell_offset_x: p.x_offset,
+                cell_offset_y: p.y_offset,
+                source_x,
+                source_y,
+                source_width,
+                source_height,
+            });
+        }
+        Ok(())
     }
 
-    // R5 SEAM (GPU_RD_P1_DESIGN.md §4): `unicode.placementIterator`/
-    // `renderPlacement`; never run. Verbatim Zig body preserved:
+    // PORT (R-d §1.3): `unicode.placementIterator`/`renderPlacement` virtual walk;
+    // called from `kitty_update`. Verbatim Zig reference (also mapped inline below):
     //
     // fn prepKittyVirtualPlacement(
     //     self: *State,
@@ -599,17 +854,72 @@ impl State {
     //         .source_height = rp.source_height,
     //     });
     // }
-    #[allow(dead_code)] // called only from the `kitty_update` seam (a comment); parity-preserved
     fn prep_kitty_virtual_placement<A: Allocator + Copy>(
         &mut self,
-        _alloc: A,
-        _t: &Terminal,
-        _p: &KittyUnicodePlacement,
-        _cell_size: CellSize,
+        alloc: A,
+        t: &Terminal,
+        p: &KittyUnicodePlacement,
+        cell_size: CellSize,
     ) -> Result<(), PrepImageError> {
-        unimplemented!(
-            "R-d image pixel path — prep_kitty_virtual_placement; golden renders no Kitty images"
-        )
+        // const storage = &t.screens.active.kitty_images;
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        // const image = storage.imageById(p.image_id) orelse { ...; return; };
+        let image = match storage.image_by_id(p.image_id) {
+            Some(img) => img,
+            None => {
+                // log.warn("missing image for virtual placement, ignoring image_id={}",
+                //     .{p.image_id});
+                return Ok(());
+            }
+        };
+
+        // const rp = p.renderPlacement(storage, &image, cell_size.width, cell_size.height)
+        //     catch |err| { log.warn("error rendering virtual placement err={}", .{err}); return; };
+        let rp = match p.render_placement(storage, &image, cell_size.width, cell_size.height) {
+            Ok(rp) => rp,
+            Err(_) => {
+                // log.warn("error rendering virtual placement err={}", .{err});
+                return Ok(());
+            }
+        };
+
+        // If our placement is zero sized then we don't do anything.
+        if rp.dest_width == 0 || rp.dest_height == 0 {
+            return Ok(());
+        }
+
+        // const viewport: terminal.point.Point = t.screens.active.pages.pointFromPin(
+        //     .viewport, rp.top_left,
+        // ) orelse {
+        //     // This is unreachable with virtual placements because we should
+        //     // only ever be looking at virtual placements that are in our
+        //     // viewport in the renderer and virtual placements only ever take
+        //     // up one row.
+        //     unreachable;
+        // };
+        let viewport: point::Point = unsafe { &(*t.screens.active).pages }
+            .point_from_pin(point::Tag::Viewport, rp.top_left)
+            .expect("virtual placement in viewport");
+
+        // Prepare the image for the GPU and store the placement.
+        // try self.prepKittyImage(alloc, &image);
+        self.prep_kitty_image(alloc, &image)?;
+        // try self.kitty_placements.append(alloc, .{ ... });
+        self.kitty_placements.push(Placement {
+            image_id: Id::Kitty(image.id),
+            x: rp.top_left.x as i32,
+            y: viewport.coord().y as i32, // viewport.viewport.y
+            z: -1,
+            width: rp.dest_width,
+            height: rp.dest_height,
+            cell_offset_x: rp.offset_x,
+            cell_offset_y: rp.offset_y,
+            source_x: rp.source_x,
+            source_y: rp.source_y,
+            source_width: rp.source_width,
+            source_height: rp.source_height,
+        });
+        Ok(())
     }
 
     /// Prepare an image for upload to the GPU.
@@ -698,8 +1008,8 @@ impl State {
     /// Prepare the provided Kitty image for upload to the GPU by copying its
     /// data with our allocator and setting it to the pending state.
     //
-    // R5 SEAM (GPU_RD_P1_DESIGN.md §4): reached only from the Kitty seams; the
-    // `.png => unreachable` format switch calls `prep_image`. Verbatim Zig body:
+    // PORT (R-d §1.4): called from the Kitty walk; the `.png => unreachable`
+    // format switch feeds `prep_image`. Verbatim Zig reference (mapped inline below):
     //
     // fn prepKittyImage(
     //     self: *State,
@@ -727,13 +1037,38 @@ impl State {
     //         },
     //     );
     // }
-    #[allow(dead_code)] // called only from the Kitty seams (comments); parity-preserved
     fn prep_kitty_image<A: Allocator + Copy>(
         &mut self,
-        _alloc: A,
-        _image: &KittyImage,
+        alloc: A,
+        image: &KittyImage,
     ) -> Result<(), PrepImageError> {
-        unimplemented!("R-d image pixel path — prep_kitty_image; golden renders no Kitty images")
+        // try self.prepImage(alloc, .{ .kitty = image.id }, image.transmit_time, .{ ... });
+        //
+        // PORT NOTE: `image.transmit_time` is `Option<Instant>` in the port
+        // (Zig: non-optional `Instant`). A transmitted+placed image always has a
+        // time set, so we `expect` (open risk R-2, low).
+        self.prep_image(
+            alloc,
+            Id::Kitty(image.id),
+            image.transmit_time.expect("transmitted image has a time"),
+            Pending {
+                width: image.width,
+                height: image.height,
+                pixel_format: match image.format {
+                    Format::Gray => PixelFormat::Gray,
+                    Format::GrayAlpha => PixelFormat::GrayAlpha,
+                    Format::Rgb => PixelFormat::Rgb,
+                    Format::Rgba => PixelFormat::Rgba,
+                    Format::Png => unreachable!(), // should be decoded by now
+                },
+                // constCasts are always gross but this one is safe is because
+                // the data is only read from here and copied into its own
+                // buffer. (`image` is our owned clone (§0 R-1) so the ptr is
+                // valid for the call.)
+                // .data = @constCast(image.data.ptr),
+                data: image.data.as_ptr() as *mut u8,
+            },
+        )
     }
 }
 
@@ -1027,13 +1362,11 @@ impl Image {
     /// If the data is already in a format that can be uploaded, this is a
     /// no-op.
     //
-    // R5 SEAM (GPU_RD_P1_DESIGN.md §4, §7 risk #1): the whole method is the
-    // `wuffs` swizzle path — `wuffs` has no Rust home. NOTE (adversary fix): the
-    // `.rgba => return` early-out lives INSIDE this body, so the seam swallows it
-    // — `Image::upload`/`prep_for_upload` therefore ALWAYS reach this panic if
-    // ever run, even for already-RGBA data (e.g. the overlay). This is
-    // golden-SAFE (the golden's empty map + `None` overlay never reach `upload`).
-    // Verbatim Zig body preserved:
+    // PORT (R-d, RENDERER_KITTY_IMAGE_PATH_DESIGN §3): the `wuffs` swizzle path.
+    // `wuffs` has no Rust home, so it is re-homed as a pure-Rust per-pixel
+    // RGBA_PREMUL loop below. The `.rgba => return` early-out lives INSIDE this
+    // body (already-RGBA data is a no-op). Verbatim Zig reference (mapped inline
+    // below):
     //
     // fn convert(self: *Image, alloc: Allocator) wuffs.Error!void {
     //     const p = self.getPendingPointer().?;
@@ -1055,10 +1388,118 @@ impl Image {
     //     p.data = rgba.ptr;
     //     p.pixel_format = .rgba;
     // }
-    fn convert<A: Allocator>(&mut self, _alloc: A) -> Result<(), WuffsError> {
-        unimplemented!(
-            "R-d image pixel path — Image::convert (wuffs swizzle); golden uploads no non-RGBA pixels"
-        )
+    //
+    // PORT NOTE (§3.2): `wuffs` has NO Rust home (vendored C under `pkg/wuffs`,
+    // no rustty crate binds it), so the `wuffs.swizzle.*ToRgba` calls are
+    // re-homed as a pure-Rust per-pixel loop that reproduces wuffs's
+    // `RGBA_PREMUL` output byte-for-byte for the reachable source formats. The
+    // premultiplied sources (`gray_alpha`=YA_PREMUL, `bgra`=BGRA_PREMUL) are a
+    // straight channel copy/expand with NO alpha multiply (PREMUL→PREMUL). Metal
+    // reads a `.rgba` texture in memory order R,G,B,A.
+    fn convert<A: Allocator>(&mut self, alloc: A) -> Result<(), WuffsError> {
+        // const p = self.getPendingPointer().?;
+        let p = self.get_pending_pointer().unwrap();
+
+        // As things stand, we currently convert all images to RGBA before
+        // uploading to the GPU. This just makes things easier. In the future
+        // we may want to support other formats.
+        // if (p.pixel_format == .rgba) return;
+        if p.pixel_format == PixelFormat::Rgba {
+            return Ok(());
+        }
+
+        // If the pending data isn't RGBA we'll need to swizzle it.
+        // const data = p.dataSlice();
+        let src = p.data_slice(); // &[u8], len = w*h*src_bpp
+        let src_bpp = p.pixel_format.bpp();
+        // Pixel count.
+        let px = src.len() / src_bpp;
+        // Overflow guard mirrors wuffs `error{Overflow}` on `src.len * 4 / src_bpp`.
+        let out_len = px.checked_mul(4).ok_or(WuffsError::Overflow)?;
+
+        // Allocate the RGBA buffer with the SAME allocator model as `dupe_bytes`
+        // (align 1) so `free_data`/`Image::deinit` can release it identically.
+        let dst_ptr = alloc_bytes(&alloc, out_len).map_err(|_| WuffsError::OutOfMemory)?;
+        // SAFETY: `dst_ptr` points at `out_len` freshly-allocated bytes.
+        let dst = unsafe { core::slice::from_raw_parts_mut(dst_ptr, out_len) };
+
+        // const rgba = try switch (p.pixel_format) {
+        //     .gray => wuffs.swizzle.gToRgba(alloc, data),
+        //     .gray_alpha => wuffs.swizzle.gaToRgba(alloc, data),
+        //     .rgb => wuffs.swizzle.rgbToRgba(alloc, data),
+        //     .bgr => wuffs.swizzle.bgrToRgba(alloc, data),
+        //     .rgba => unreachable,
+        //     .bgra => wuffs.swizzle.bgraToRgba(alloc, data),
+        // };
+        match p.pixel_format {
+            PixelFormat::Gray => {
+                // Index-based per-pixel loop (faithful to the wuffs swizzle's
+                // src/dst byte-offset arithmetic); `enumerate` would obscure the
+                // parallel `src[i]`/`dst[o..]` addressing shared by all arms.
+                #[allow(clippy::needless_range_loop)]
+                for i in 0..px {
+                    let y = src[i];
+                    let o = i * 4;
+                    dst[o] = y;
+                    dst[o + 1] = y;
+                    dst[o + 2] = y;
+                    dst[o + 3] = 255;
+                }
+            }
+            PixelFormat::GrayAlpha => {
+                // YA_PREMUL source: alpha already applied → straight copy.
+                for i in 0..px {
+                    let y = src[i * 2];
+                    let a = src[i * 2 + 1];
+                    let o = i * 4;
+                    dst[o] = y;
+                    dst[o + 1] = y;
+                    dst[o + 2] = y;
+                    dst[o + 3] = a;
+                }
+            }
+            PixelFormat::Rgb => {
+                for i in 0..px {
+                    let s = i * 3;
+                    let o = i * 4;
+                    dst[o] = src[s];
+                    dst[o + 1] = src[s + 1];
+                    dst[o + 2] = src[s + 2];
+                    dst[o + 3] = 255;
+                }
+            }
+            PixelFormat::Bgr => {
+                for i in 0..px {
+                    let s = i * 3;
+                    let o = i * 4;
+                    dst[o] = src[s + 2];
+                    dst[o + 1] = src[s + 1];
+                    dst[o + 2] = src[s];
+                    dst[o + 3] = 255;
+                }
+            }
+            PixelFormat::Bgra => {
+                // BGRA_PREMUL source: alpha already applied → channel swap only.
+                for i in 0..px {
+                    let s = i * 4;
+                    let o = i * 4;
+                    dst[o] = src[s + 2];
+                    dst[o + 1] = src[s + 1];
+                    dst[o + 2] = src[s];
+                    dst[o + 3] = src[s + 3];
+                }
+            }
+            PixelFormat::Rgba => unreachable!(), // early-returned above
+        }
+
+        // alloc.free(data); p.data = rgba.ptr; p.pixel_format = .rgba;
+        //
+        // Borrow ordering (§3.2): `src`'s LAST use is `src.len()` in the free, so
+        // the free-old-buffer MUST precede the `p.data`/`p.pixel_format` writes.
+        free_raw(&alloc, p.data, src.len()); // last read of `src`
+        p.data = dst_ptr;
+        p.pixel_format = PixelFormat::Rgba;
+        Ok(())
     }
 
     /// Prepare the pending image data for upload to the GPU.
@@ -1153,10 +1594,8 @@ impl Image {
 
     // Same as getPending but returns a pointer instead of a copy.
     //
-    // PORT NOTE: used only by the `convert` seam; kept for parity. clippy would
-    // flag the returned `&mut` as unused across the crate (only the seam body,
-    // which is a comment, references it), so it is `#[allow(dead_code)]`.
-    #[allow(dead_code)]
+    // PORT NOTE: used by the `convert` swizzle to mutate the pending pixel data
+    // in place (Zig `getPendingPointer`).
     fn get_pending_pointer(&mut self) -> Option<&mut Pending> {
         match self {
             Image::Pending(p) => Some(p),
@@ -1168,18 +1607,26 @@ impl Image {
     }
 }
 
-/// The `wuffs.Error` set from the unported `wuffs` package (pixel swizzle).
+/// The `wuffs.Error` set from the (unported) `wuffs` package (pixel swizzle):
+/// `wuffs.Error = Allocator.Error || error{ WuffsError, Overflow }`.
 //
-// PORT NOTE (§7 risk #1): `Image::convert` is the only source of this error and
-// is an R5 seam, so no variant is reachable. Modeled as an uninhabited enum
-// placeholder (precedent: `state::Inspector`).
+// PORT NOTE (§3.3): the nominal set is carried in full for R1 type-fidelity to
+// Zig's `wuffs.Error`. In the pure-Rust `convert` re-home the `WuffsError`
+// (swizzler-`prepare` status) variant is unreachable — there is no
+// `pixel_swizzler__prepare` call — and `Overflow` doubles as the defensive
+// `checked_mul` guard on `px * 4`; the only genuinely-reachable failure is the
+// allocation (`OutOfMemory`).
 #[derive(Debug)]
-pub enum WuffsError {}
+pub enum WuffsError {
+    OutOfMemory,
+    WuffsError,
+    Overflow,
+}
 
 /// `Image::upload`'s error set: `wuffs.Error || error{UploadFailed}`.
 #[derive(Debug)]
 pub enum UploadError {
-    /// `wuffs.Error` — see [`WuffsError`] (uninhabited; the `convert` seam).
+    /// `wuffs.Error` — see [`WuffsError`] (the `convert` swizzle).
     Wuffs(WuffsError),
     /// Texture creation failed, usually a GPU memory issue.
     UploadFailed,
@@ -1204,11 +1651,33 @@ fn map_in_place<T>(slot: &mut T, f: impl FnOnce(T) -> T) {
     }
 }
 
+/// Allocate `len` uninitialized bytes with `align = 1`, the layout `dupe_bytes`
+/// and `free_data`/`free_raw` all agree on (so any buffer allocated here is
+/// releasable by `free_data`/`free_raw`/`Image::deinit` identically). This is
+/// the single allocation primitive shared by `dupe_bytes` (copy) and
+/// `Image::convert` (swizzle-into) so the `Layout` logic lives in one place.
+fn alloc_bytes<A: Allocator>(alloc: A, len: usize) -> Result<*mut u8, AllocError> {
+    let layout = Layout::from_size_align(len, 1).map_err(|_| AllocError)?;
+    let ptr = alloc.allocate(layout)?;
+    Ok(ptr.cast::<u8>().as_ptr())
+}
+
+/// Deallocate a raw `len`-byte buffer allocated by `alloc_bytes` (align 1). Used
+/// by `Image::convert` to free the pre-swizzle source buffer (`alloc.free(data)`).
+fn free_raw<A: Allocator>(alloc: A, data: *mut u8, len: usize) {
+    let layout = Layout::from_size_align(len, 1).expect("valid layout (matched a prior alloc)");
+    if let Some(ptr) = NonNull::new(data) {
+        // SAFETY: `ptr`/`layout` were produced by `alloc_bytes` via the same
+        // allocator; the caller owns the buffer.
+        unsafe {
+            alloc.deallocate(ptr, layout);
+        }
+    }
+}
+
 /// `alloc.dupe(u8, src)` — allocate `src.len()` bytes (align 1) and copy.
 fn dupe_bytes<A: Allocator>(alloc: A, src: &[u8]) -> Result<*mut u8, AllocError> {
-    let layout = Layout::from_size_align(src.len(), 1).map_err(|_| AllocError)?;
-    let ptr = alloc.allocate(layout)?;
-    let dst = ptr.cast::<u8>().as_ptr();
+    let dst = alloc_bytes(alloc, src.len())?;
     if !src.is_empty() {
         // SAFETY: `dst` points at `src.len()` freshly-allocated bytes; `src` is a
         // valid slice; the regions do not overlap.

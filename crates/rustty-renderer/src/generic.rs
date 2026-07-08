@@ -5669,6 +5669,94 @@ mod macos_impl {
             t.deinit(Global);
         }
 
+        // RENDERER_KITTY_IMAGE_PATH_DESIGN §4 — the offscreen APC-driven proof that
+        // the 5 filled Kitty pixel-path seams (`kitty_update` +
+        // `prep_kitty_placement`/`prep_kitty_virtual_placement`/`prep_kitty_image` +
+        // `Image::convert`) execute end-to-end: drive a real `Terminal` with a
+        // Kitty-graphics transmit+display APC, run `update_frame` (which enters
+        // `kitty_update` via the `kitty_requires_update` guard) then `draw_frame`
+        // (which uploads pending images to the GPU), and assert the STATE the path
+        // produces. macOS/Metal-gated; Metal-skip like the golden.
+        #[test]
+        fn kitty_image_pixel_path() {
+            let mut r = match golden_renderer(10, 3) {
+                Some(r) => r,
+                None => return, // Metal-skip
+            };
+
+            // Transmit AND display (a=T) a 1x2 direct RGB image (f=24), id 1, all
+            // pixels 0xFF (`////////` = 6 bytes of 0xFF). a=T places it at the
+            // cursor → a pin placement, marking storage dirty.
+            let mut mutex = Mutex::new();
+            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            // The vt `Terminal` starts with `width_px`/`height_px == 0` (the port
+            // sets them only through the surface). Kitty `pixel_size` divides by the
+            // cell size (`width_px / cols`), so pin the pixel dims to the renderer's
+            // cell metrics — exactly what a real surface resize would do — else the
+            // placement's dest size is 0 and it is (correctly) culled.
+            t.width_px = r.grid_metrics.cell_width * 10;
+            t.height_px = r.grid_metrics.cell_height * 3;
+            {
+                let mut s = t.vt_stream();
+                s.next_slice(b"\x1b_Ga=T,f=24,i=1,s=1,v=2,c=1,r=1;////////\x1b\\");
+                s.deinit();
+            }
+
+            // Sanity: the image + a placement now live in storage, dirty is set.
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            assert!(storage.image_by_id(1).is_some(), "image not in storage");
+            assert!(!storage.placements.is_empty(), "no placement in storage");
+            assert!(storage.dirty, "storage not marked dirty by the APC");
+
+            // Drive the renderer. `terminal_state.update` snapshots the terminal;
+            // `update_frame` → `kitty_requires_update` (dirty) == true → `kitty_update`.
+            r.terminal_state.update(Global, &mut t).unwrap();
+            let st = state::State {
+                mutex: &mut mutex,
+                terminal: &mut t,
+                inspector: None,
+                preedit: None,
+                mouse: state::Mouse::default(),
+            };
+            r.update_frame(&st, true).unwrap();
+
+            // (a) the terminal-walk + containment math ran → a placement was computed.
+            assert!(
+                !r.images.kitty_placements.is_empty(),
+                "kitty_update computed no placements"
+            );
+            // (b) `prep_kitty_image` queued the image (pending) or it is already up.
+            let entry = r
+                .images
+                .images
+                .get(&crate::image::Id::Kitty(1))
+                .expect("no Id::Kitty(1) image entry after kitty_update");
+            assert!(
+                entry.image.has_texture() || entry.image.is_pending(),
+                "image neither pending nor uploaded after kitty_update"
+            );
+            // (c) `kitty_update`'s tail cleared `storage.dirty` (through the raw ptr).
+            assert!(
+                !unsafe { &(*t.screens.active).kitty_images }.dirty,
+                "kitty_update did not clear storage.dirty"
+            );
+
+            // `draw_frame` uploads pending images → `convert` (rgb→rgba) +
+            // `Texture::init` run → the image is Ready with a texture.
+            r.draw_frame(true).unwrap();
+            assert!(
+                r.images
+                    .images
+                    .get(&crate::image::Id::Kitty(1))
+                    .expect("image entry vanished")
+                    .image
+                    .has_texture(),
+                "image has no GPU texture after draw_frame (convert/upload did not run)"
+            );
+
+            t.deinit(Global);
+        }
+
         #[test]
         fn rebuild_cells_fills_bg_fg_cursor() {
             let mut r = match test_renderer(10, 3) {
