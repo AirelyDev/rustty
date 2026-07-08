@@ -24,7 +24,7 @@ use rustty_render_types::{
 };
 use rustty_vt::style::BoldColor;
 
-use crate::generic::{Color, TerminalColor};
+use crate::generic::{Color, Path, TerminalColor};
 
 /// The accessor surface `DerivedConfig::init<C>` reads to extract the renderer's
 /// derived configuration WITHOUT naming any `rustty_config` type (R4/G7). The
@@ -90,6 +90,14 @@ pub trait RendererConfig {
     fn window_padding_color(&self) -> WindowPaddingColor;
     fn background_image_position(&self) -> BackgroundImagePosition;
     fn background_image_fit(&self) -> BackgroundImageFit;
+
+    // background-image: config `?Path` -> the renderer-local [`Path`] (§1.2). The
+    // optional/required arm + the null-terminated path bytes are preserved
+    // byte-faithfully (`CString`, never a lossy `String`); `None` means no
+    // background image configured. This replaces the reference's direct
+    // `config.@"background-image"` read (a `configpkg.Path`) — routed through the
+    // accessor because the renderer may not name `rustty_config::path::Path` (R4/G7).
+    fn bg_image(&self) -> Option<Path>;
     fn window_colorspace(&self) -> WindowColorspace;
     fn alpha_blending(&self) -> AlphaBlending;
     fn background_blur(&self) -> BackgroundBlur;

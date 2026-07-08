@@ -24,6 +24,14 @@ rustty-util = { workspace = true }
 rustty-crash = { workspace = true }
 rustty-font = { workspace = true }
 rustty-render-types = { workspace = true }
+# renderer/generic.zig's `prepBackgroundImage` decodes the configured background
+# image (PNG/JPEG) via `wuffs.png.decode`/`wuffs.jpeg.decode`. rustty-wuffs is the
+# faithful port of ghostty's `pkg/wuffs` package (the safe decode wrappers over the
+# `wuffs-sys` FFI leaf). A downward, acyclic edge toward the `-sys` leaf (renderer
+# -> rustty-wuffs -> wuffs-sys); adds no `renderer -> config` edge (R4/G7). It adds
+# a transitive C-FFI edge (wuffs-sys), but rustty-renderer is ALREADY an FFI crate
+# (oniguruma-sys/glslang-sys/...) in check_leaks.sh, so G6 is unaffected.
+rustty-wuffs = { workspace = true }
 # renderer/Overlay.zig renders the debug overlay on the CPU via z2d (surface +
 # context + pixel). rustty-z2d is a pure-Rust LEAF (its [dependencies] is empty)
 # and is already an established sink below rustty-font (`rustty-font/Cargo.toml:42`),
@@ -172,6 +180,11 @@ dispatch2 = { version = "0.3", features = ["block2"] }
 block2 = { version = "0.6" }
 
 [dev-dependencies]
+# Pure-Rust PNG encoder — generates the small solid-color background-image fixture
+# the offscreen bg-image golden (T3) writes to a temp file + `prepBackgroundImage`
+# decodes, and the layout-invariant test (T4) decodes. Dev-only; the same 0.18
+# stand-in rustty-font/rustty-wuffs use.
+png = { workspace = true }
 # The crate-root `Health` enum (hoisted from `renderer.zig`) carries the
 # `ghostty.h Health` -> `checkGhosttyHEnum` test, which uses the `enum_type`/
 # `check_ghostty_henum` helpers from `rustty-lib`. Test-only, so a dev-dep; the

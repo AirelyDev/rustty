@@ -48,7 +48,9 @@
 
 use allocator_api2::alloc::Global;
 use core::sync::atomic::{AtomicI32, Ordering};
-use std::ffi::CString;
+// `CStr` is named by `Path::slice()` (the byte-faithful null-terminated path
+// carrier); `CString` by the `Path::{Optional,Required}` arms + `font_features`.
+use std::ffi::{CStr, CString};
 
 use rustty_font_shaper::codepoint_resolver::StyleStatus;
 use rustty_font_shaper::SharedGrid;
@@ -112,19 +114,136 @@ pub enum TerminalColor {
     CellBackground,
 }
 
-/// PORT NOTE (DEFERRED CONFIG TYPE — inhabited placeholder): reference
-/// `configpkg.Path` — a heap/arena string type over `rustty-args` +
-/// `rustty-cfg-fmt` + `Allocator` (`path.rs`); hoisting it would add
-/// `render-types -> args/cfg-fmt` edges and break the render-types leaf
-/// invariant. Deferred as an inhabited placeholder (`bg_image` field); the real
-/// `Path` clone lands with `DerivedConfig::init<C>` (GPU_RD_CHUNK3A_DESIGN §B.1).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Path;
+/// The renderer-local mirror of the reference `configpkg.Path`
+/// (`union(enum) { required: [:0]const u8, optional: [:0]const u8 }`,
+/// `config/path.zig:18`).
+///
+/// R4/G7: the renderer may NOT name `rustty_config::path::Path` (config already
+/// deps renderer — the `Message::ChangeConfig` back-edge — so a `renderer ->
+/// config` edge would cycle), so `DerivedConfig` carries this renderer-nameable
+/// enum instead; `Config` maps its own `Path` into it via
+/// `RendererConfig::bg_image` (config-side, acyclic — the exact pattern the
+/// `background_image_{fit,position,repeat,opacity}` accessors already use).
+///
+/// Byte-faithful (MEMORY zig-byteslice-to-rust-rawbytes, paths especially): the
+/// reference type is null-terminated (`[:0]const u8`) and its byte payload is
+/// opened as an absolute file path, so `CString` is the faithful carrier — never a
+/// lossy `String`. `prepBackgroundImage` consumes only the path bytes (`switch (p)
+/// { .required, .optional => |slice| slice }` — both arms identical); the
+/// optional/required distinction is carried purely for fidelity + `equal()` (the
+/// `change_config` change-detect).
+//
+// PORT NOTE: no `Default` — the old placeholder derived it only as a ZST
+// field-filler; the real enum has no meaningful default and the field type is
+// `Option<Path>` (default `None`). `Clone` replaces the reference arena `clone`
+// (`DerivedConfig::init`'s `try bg.clone(alloc)` collapses to `.clone()` — the
+// `CString` owns its bytes, so the arena `dupeZ` is subsumed by owned `CString`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Path {
+    /// No error if the file does not exist.
+    // optional: [:0]const u8,
+    Optional(CString),
+    /// The file is required to exist.
+    // required: [:0]const u8,
+    Required(CString),
+}
+
+impl Path {
+    /// Reference `Path.len` (`switch (self) { inline else => |path| path.len }`)
+    /// — the byte length of either arm's slice.
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        match self {
+            Path::Optional(p) | Path::Required(p) => p.as_bytes().len(),
+        }
+    }
+
+    /// Reference `Path.equal` (`std.meta.eql(self, other)`) — variant + bytes equal.
+    pub fn equal(&self, other: &Path) -> bool {
+        self == other
+    }
+
+    /// The raw null-terminated path bytes both `prepBackgroundImage` arms consume
+    /// (`switch (p) { .required, .optional => |slice| slice }`).
+    pub fn slice(&self) -> &CStr {
+        match self {
+            Path::Optional(p) | Path::Required(p) => p.as_c_str(),
+        }
+    }
+}
+
+/// Port of Zig `std.fs.path.extension` (over the POSIX `basename`) — the
+/// dot-INCLUSIVE extension of the final path component, or `""`.
+///
+/// ADVERSARY F4: no port of `std.fs.path.extension` exists in `rustty-util`, and
+/// `FileType::guessFromExtension` compares dot-INCLUSIVE bytes (`".png"`/`".jpg"`),
+/// so `std::path::Path::extension` (which STRIPS the dot and mishandles a bare
+/// leading-dot filename) is unfaithful and must NOT be used. This reproduces the
+/// zigstd behavior exactly: the substring from the last `.` in the final component
+/// (after the last `/`), `""` when there is no `.` in that component, and `""` when
+/// the `.` is the component's first byte (a leading dot is not an extension).
+//
+// Reference `std.fs.path.extension`:
+//   const filename = basename(path);
+//   const index = mem.lastIndexOfScalar(u8, filename, '.') orelse return path[path.len..];
+//   if (index == 0) return path[path.len..];
+//   return filename[index..];
+//
+// Reference `std.fs.path.basenamePosix`:
+//   if (path.len == 0) return &[_]u8{};
+//   var end_index = path.len - 1;
+//   while (path[end_index] == '/') { if (end_index == 0) return &[_]u8{}; end_index -= 1; }
+//   var start_index = end_index; end_index += 1;
+//   while (path[start_index] != '/') { if (start_index == 0) return path[0..end_index]; start_index -= 1; }
+//   return path[start_index + 1 .. end_index];
+pub fn path_extension(path: &[u8]) -> &[u8] {
+    let filename = basename_posix(path);
+    // const index = mem.lastIndexOfScalar(u8, filename, '.') orelse return "";
+    let Some(index) = filename.iter().rposition(|&b| b == b'.') else {
+        return &path[path.len()..];
+    };
+    // if (index == 0) return "";
+    if index == 0 {
+        return &path[path.len()..];
+    }
+    // return filename[index..];
+    &filename[index..]
+}
+
+/// Port of Zig `std.fs.path.basenamePosix` — the final `/`-separated component
+/// (trailing slashes stripped), or `""`.
+fn basename_posix(path: &[u8]) -> &[u8] {
+    // if (path.len == 0) return &[_]u8{};
+    if path.is_empty() {
+        return &path[path.len()..];
+    }
+    // var end_index = path.len - 1; while (path[end_index] == '/') { ... end_index -= 1; }
+    let mut end_index = path.len() - 1;
+    while path[end_index] == b'/' {
+        if end_index == 0 {
+            return &path[path.len()..];
+        }
+        end_index -= 1;
+    }
+    // var start_index = end_index; end_index += 1;
+    let mut start_index = end_index;
+    end_index += 1;
+    // while (path[start_index] != '/') { if (start_index == 0) return path[0..end_index]; start_index -= 1; }
+    while path[start_index] != b'/' {
+        if start_index == 0 {
+            return &path[0..end_index];
+        }
+        start_index -= 1;
+    }
+    // return path[start_index + 1 .. end_index];
+    &path[start_index + 1..end_index]
+}
 
 /// PORT NOTE (DEFERRED CONFIG TYPE — inhabited placeholder): reference
-/// `configpkg.RepeatablePath` (the `custom_shaders` field) — same heap/arena
-/// coupling as [`Path`]. Deferred as an inhabited placeholder; the real
-/// `RepeatablePath` clone lands with `DerivedConfig::init<C>` (§B.1). Note that
+/// `configpkg.RepeatablePath` (the `custom_shaders` field) — the same heap/arena
+/// coupling the sibling `Path` (now promoted to a real enum above) once had, but
+/// custom shaders are a separate deferred feature so this stays a placeholder; the
+/// real `RepeatablePath` clone lands with `DerivedConfig::init<C>` (§B.1). Note that
 /// `Renderer::init` reads `options.config.custom_shaders.value.items.len`
 /// (generic.zig:667), so this placeholder is one reason `Renderer::init` itself
 /// is deferred.
@@ -153,9 +272,11 @@ pub struct DerivedConfigError;
 // renderer's methods; making them pub is faithful and keeps them dead-code-exempt
 // until the draw path reads them). The `TerminalColor` config-typed fields now use
 // the REAL renderer-local `TerminalColor` enum (promoted in Chunk 3b — the cell
-// fill destructures it, GPU_RD_CHUNK3B_DESIGN §E); the two `Path`/`RepeatablePath`
-// fields (`bg_image`/`custom_shaders`) still use the inhabited placeholders above
-// (§B.1) because the fill never reads them.
+// fill destructures it, GPU_RD_CHUNK3B_DESIGN §E); `bg_image` now carries the REAL
+// renderer-local `Path` enum (promoted in the background-image milestone — the
+// `prepBackgroundImage` decode consumes it, RENDERER_BG_IMAGE_DESIGN §1). Only
+// `custom_shaders` (`RepeatablePath`) is still an inhabited placeholder above
+// (custom-shader feature deferred end-to-end) — the fill never reads it.
 pub struct DerivedConfig {
     pub arena: ArenaAllocator,
 
@@ -288,10 +409,10 @@ impl DerivedConfig {
     // the reads go through the renderer-defined [`RendererConfig`] accessor trait
     // (`crate::config`), impl-ed by `Config` IN rustty-config. `C` is bare-bounded
     // by `RendererConfig`; the concrete `C = rustty_config::Config` binds in core.
-    // The two placeholder-typed fields (`custom_shaders`/`bg_image`) are the only
-    // divergence — the background-image + custom-shader features are deferred
-    // end-to-end (real arena `Path`/`RepeatablePath`, `prepBackgroundImage`, wuffs
-    // decode), documented in-body.
+    // `bg_image` is now REAL (config `?Path` -> the renderer-local `Path` via
+    // `RendererConfig::bg_image`, feeding `prepBackgroundImage` + wuffs decode);
+    // only `custom_shaders` (`RepeatablePath`) remains a placeholder divergence
+    // (custom-shader feature deferred end-to-end), documented in-body.
     pub fn init<C: RendererConfig>(
         alloc_gpa: Global,
         config: &C,
@@ -301,9 +422,9 @@ impl DerivedConfig {
         // const alloc = arena.allocator();
         //
         // PORT NOTE: `Global` is a ZST — the reference arena backs the config string
-        // clones; here `custom_shaders`/`bg_image` are placeholders and
-        // `font_features` is an owned `Vec`, so the arena owns nothing but is
-        // preserved as a struct field for fidelity. `errdefer arena.deinit()` maps to
+        // clones; here `custom_shaders` is a placeholder, `bg_image` owns its
+        // `CString` and `font_features` is an owned `Vec`, so the arena owns nothing
+        // but is preserved as a struct field for fidelity. `errdefer arena.deinit()` maps to
         // the `ArenaAllocator` `Drop` on the error path (the local `arena` is dropped
         // if we return `Err` before moving it into the struct).
         let arena = ArenaAllocator::init();
@@ -319,12 +440,14 @@ impl DerivedConfig {
 
         // Copy our background image
         //
-        // DEFERRED (placeholder): `bg_image = if config.@"background-image" |bg|
-        // bg.clone else null`. The background-image pipeline (real `Path` +
-        // `prepBackgroundImage` + wuffs decode) is deferred; constructed `None` so
-        // the whole feature is a coherent no-op (keeps `changeConfig`'s
-        // `bg_image_changed` false => the deferred prep is unreachable, §4.3).
-        let bg_image: Option<Path> = None;
+        // Reference: `const bg_image = if (config.@"background-image") |bg| try
+        // bg.clone(alloc) else null;`. The config `?Path` is read through the
+        // renderer-defined `RendererConfig::bg_image` accessor (R4/G7 — the renderer
+        // may not name `rustty_config::path::Path`), which maps arm-for-arm into the
+        // renderer-local `Path` (§1). The arena `clone` collapses to the owned
+        // `CString` inside `Path` (no separate `.clone()` needed — the accessor
+        // already returns an owned value).
+        let bg_image: Option<Path> = config.bg_image();
 
         // Copy our font features (clone -> owned Vec<CString>).
         let font_features = config.font_features();
@@ -416,8 +539,13 @@ mod derived_config_tests {
     /// oracle used by the macOS draw-path tests). The values chosen exercise the
     /// non-trivial transforms: `font-style != .false` (all `true`), the
     /// `@ceil(x*255)` cast (`faint_opacity` -> 255), the `@floatCast` (min_contrast
-    /// f64 -> f32), and `Color::to_terminal_rgb`.
-    struct MockConfig;
+    /// f64 -> f32), and `Color::to_terminal_rgb`. `bg_image` is configurable so the
+    /// Path/config-mapping test can flow a `Some(Path::Required(..))` through
+    /// `DerivedConfig::init` (the base mock defaults it to `None`).
+    #[derive(Default)]
+    struct MockConfig {
+        bg_image: Option<super::Path>,
+    }
 
     impl RendererConfig for MockConfig {
         fn font_thicken(&self) -> bool {
@@ -526,6 +654,11 @@ mod derived_config_tests {
         fn background_image_fit(&self) -> BackgroundImageFit {
             BackgroundImageFit::Contain
         }
+        fn bg_image(&self) -> Option<super::Path> {
+            // Configurable (defaults to `None`); the Path-mapping test overrides it
+            // to `Some(Path::Required(CString::new(..)))`.
+            self.bg_image.clone()
+        }
         fn window_colorspace(&self) -> WindowColorspace {
             WindowColorspace::Srgb
         }
@@ -542,7 +675,7 @@ mod derived_config_tests {
 
     #[test]
     fn derived_config_init_extracts_fields() {
-        let cfg = MockConfig;
+        let cfg = MockConfig::default();
         let d = DerivedConfig::init(Global, &cfg).expect("init");
 
         assert!(!d.font_thicken);
@@ -586,9 +719,112 @@ mod derived_config_tests {
         assert_eq!(d.padding_color, WindowPaddingColor::Background);
         assert!(!d.scroll_to_bottom_on_output);
 
-        // Deferred placeholders.
+        // `bg_image` unset by the base mock => `None`; the placeholder `links` empty.
         assert!(d.bg_image.is_none());
         assert!(d.links.links.is_empty());
+    }
+
+    // T2 (RENDERER_BG_IMAGE_DESIGN §4): the config `?Path` -> renderer-local `Path`
+    // mapping flows through `DerivedConfig::init` byte-faithfully. The renderer
+    // canNOT dep rustty-config, so a mock returning `Some(Path::Required(CString))`
+    // stands in for the config-side accessor; assert the variant + bytes round-trip
+    // and that `Path::equal` feeds the `change_config` change-detect semantics.
+    #[test]
+    fn derived_config_maps_bg_image_path() {
+        use super::Path;
+
+        // Some(Path::Required(..)) flows into DerivedConfig.bg_image unchanged.
+        let cstr = CString::new(b"/tmp/bg.png".to_vec()).unwrap();
+        let cfg = MockConfig {
+            bg_image: Some(Path::Required(cstr.clone())),
+        };
+        let d = DerivedConfig::init(Global, &cfg).expect("init");
+        match &d.bg_image {
+            Some(Path::Required(bytes)) => {
+                // Byte-faithful: the exact path bytes (no NUL, no lossy re-encode).
+                assert_eq!(bytes.as_bytes(), b"/tmp/bg.png");
+                assert_eq!(bytes, &cstr);
+            }
+            other => panic!("expected Some(Path::Required), got {other:?}"),
+        }
+
+        // None flows through as None.
+        let d_none = DerivedConfig::init(Global, &MockConfig::default()).expect("init");
+        assert!(d_none.bg_image.is_none());
+
+        // Path::equal / PartialEq semantics that drive `bg_image_changed`:
+        let opt = Path::Optional(CString::new("a").unwrap());
+        let req_a = Path::Required(CString::new("a").unwrap());
+        let req_b = Path::Required(CString::new("b").unwrap());
+        assert!(req_a.equal(&req_a)); // Some -> same
+        assert!(!req_a.equal(&req_b)); // Some -> different bytes
+        assert!(!req_a.equal(&opt)); // Some -> different variant (same bytes)
+        assert_eq!(req_a.len(), 1); // the byte length of the arm's slice
+    }
+
+    // path_extension (F4 — the `std.fs.path.extension` byte port that feeds
+    // `FileType::guessFromExtension`): dot-INCLUSIVE final-component extension.
+    #[test]
+    fn path_extension_matches_zigstd() {
+        use super::path_extension;
+        // Normal extension (dot-inclusive, so it matches `guessFromExtension`'s ".png").
+        assert_eq!(path_extension(b"/a/b/img.png"), b".png");
+        assert_eq!(path_extension(b"photo.JPEG"), b".JPEG");
+        // Last dot wins.
+        assert_eq!(path_extension(b"a.tar.gz"), b".gz");
+        // No dot in the final component -> "".
+        assert_eq!(path_extension(b"/a/b/noext"), b"");
+        assert_eq!(path_extension(b"/a.b/noext"), b""); // dot only in a parent dir
+                                                        // A leading-dot bare filename is NOT an extension (index == 0).
+        assert_eq!(path_extension(b".png"), b"");
+        assert_eq!(path_extension(b"/a/b/.hidden"), b"");
+        // Trailing slashes stripped by basename; empty stays empty.
+        assert_eq!(path_extension(b"/a/b.png/"), b".png");
+        assert_eq!(path_extension(b""), b"");
+        assert_eq!(path_extension(b"/"), b"");
+    }
+
+    // T4 (RENDERER_BG_IMAGE_DESIGN §4 / R-2): the decoded buffer length is exactly
+    // `width * height * 4` (the RGBA bpp). This is the invariant `image::Pending::len()`
+    // (`w*h*bpp`) recomputes for the later `free_data` align-1 `Layout`, so the
+    // transferred-pointer free provably matches the `rustty-wuffs` alloc (guards the
+    // one genuine UB surface — a layout mismatch = a bad free). Host test (no Metal).
+    #[test]
+    fn decoded_bg_image_len_is_wh4() {
+        use allocator_api2::alloc::Global;
+
+        // A 2×3 solid-color PNG -> the decoded RGBA buffer must be 2*3*4 = 24 bytes.
+        let png_bytes = encode_solid_png(2, 3, [0x30, 0x60, 0xC0]);
+        let img = rustty_wuffs::png::decode(Global, &png_bytes).expect("decode");
+        assert_eq!(img.width, 2);
+        assert_eq!(img.height, 3);
+        // The load-bearing invariant: len == w*h*4 (== Pending::len(), the free layout).
+        assert_eq!(
+            img.bytes().len(),
+            img.width as usize * img.height as usize * 4
+        );
+        // And the pixels are the decoded solid color (RGBA_NONPREMUL, opaque).
+        assert_eq!(&img.bytes()[0..4], &[0x30, 0x60, 0xC0, 0xFF]);
+    }
+
+    /// Encode a `w`×`h` solid-RGB PNG (8-bit) for the bg-image tests (T3/T4). The
+    /// reference `background-image` fixtures are not checked in; generate at test
+    /// time via the pure-Rust `png` encoder (the rustty-wuffs/font stand-in).
+    pub(super) fn encode_solid_png(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut out, w, h);
+            enc.set_color(png::ColorType::Rgb);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut writer = enc.write_header().expect("png header");
+            let mut data = Vec::with_capacity((w * h * 3) as usize);
+            for _ in 0..(w * h) {
+                data.extend_from_slice(&rgb);
+            }
+            writer.write_image_data(&data).expect("png data");
+            writer.finish().expect("png finish");
+        }
+        out
     }
 }
 
@@ -711,12 +947,19 @@ mod macos_impl {
     use rustty_zigstd::thread::{Mutex, Semaphore};
 
     use core::ptr::addr_of_mut;
-    use std::ffi::CStr;
+    use std::ffi::{CStr, CString, OsStr};
+    // `prepBackgroundImage` opens the config path (byte-faithful `CString` bytes ->
+    // an `OsStr` path) via `std::os::unix::ffi::OsStrExt::from_bytes` (macos_impl is
+    // macOS-gated, so unix is guaranteed) — NEVER a lossy `String`.
+    use std::os::unix::ffi::OsStrExt;
 
     use objc2::runtime::ProtocolObject;
     use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus};
+    // `FileType::detect`/`guessFromExtension` — the background-image file-type sniff
+    // (`prepBackgroundImage`). Renderer deps rustty-util.
+    use rustty_util::file_type::FileType;
 
-    use super::{AtomicHealth, DerivedConfig, Options, TerminalColor};
+    use super::{path_extension, AtomicHealth, DerivedConfig, Options, TerminalColor};
     use crate::cell::{self, Contents, Key};
     use crate::cursor;
     use crate::image::{self, DrawPlacements};
@@ -781,6 +1024,29 @@ mod macos_impl {
         /// `displayUnrealized`). `drawFrame`'s `swap_chain.next_frame()` surfaces
         /// this; reference `error{Defunct}` (part of `drawFrame`'s error set).
         Defunct,
+        /// A background-image `wuffs` decode failed (`WuffsError`/`Overflow`).
+        /// `prepBackgroundImage` propagates the wuffs `Error` via `try` (the
+        /// reference `!void` error set includes the wuffs `Error`); OOM maps to
+        /// `OutOfMemory`, the rest to this. Note: only the DECODE error propagates —
+        /// the open/read failures `break :load_background` (a warn + no-op), never
+        /// propagate (§3.3).
+        ImageDecode,
+    }
+
+    // rustty_wuffs::Error {OutOfMemory, WuffsError, Overflow} -> the renderer Error.
+    // `prepBackgroundImage` returns `!void` whose error set includes the wuffs
+    // `Error` (via `try wuffs.png.decode(...)`); this preserves "the decode error
+    // propagates out of prepBackgroundImage" (§3.3). OOM reuses `OutOfMemory`;
+    // `WuffsError`/`Overflow` map to `ImageDecode`.
+    impl From<rustty_wuffs::Error> for Error {
+        fn from(e: rustty_wuffs::Error) -> Self {
+            match e {
+                rustty_wuffs::Error::OutOfMemory => Error::OutOfMemory,
+                rustty_wuffs::Error::WuffsError | rustty_wuffs::Error::Overflow => {
+                    Error::ImageDecode
+                }
+            }
+        }
     }
 
     impl From<buffer::Error> for Error {
@@ -1834,9 +2100,9 @@ mod macos_impl {
 
             // Zig: `if (self.config.bg_image) |old| if (config.bg_image) |new|
             //          !old.equal(new) else true else config.bg_image != null`.
-            // `Path` is a deferred placeholder deriving `PartialEq`, so `old != new`
-            // == `!old.equal(new)`. `bg_image` is always `None` (feature deferred,
-            // §3) => this is always `false`.
+            // `Path` derives `PartialEq`, so `old != new` == `!old.equal(new)`. Now
+            // that `bg_image` is a real `Option<Path>` this genuinely change-detects
+            // (None->Some, Some->different, Some->same) and gates `prepBackgroundImage`.
             let bg_image_changed = match (&self.config.bg_image, &config.bg_image) {
                 (Some(old), Some(new)) => old != new,
                 (Some(_), None) => true,
@@ -1856,11 +2122,12 @@ mod macos_impl {
             old.deinit();
 
             // If our background image path changed, prepare the new bg image.
+            // if (bg_image_changed) try self.prepBackgroundImage();
             //
-            // DEFERRED CALL (unreachable under the `bg_image == None` invariant,
-            // §3/§3.1): `prep_background_image` is the R5 seam (the whole
-            // background-image pipeline is deferred). unlock-before-`?` for
-            // defer-fidelity even though this branch never executes at runtime.
+            // `prep_background_image` decodes the new path (wuffs PNG/JPEG) into a
+            // pending `bg_image`; only a DECODE error propagates (open/read failures
+            // warn + no-op — §3.3). unlock-before-`?` (the `Mutex` is guard-less, so
+            // `defer draw_mutex.unlock()` is replicated on every early return).
             if bg_image_changed {
                 if let Err(e) = self.prep_background_image() {
                     self.draw_mutex.unlock();
@@ -1901,59 +2168,137 @@ mod macos_impl {
             Ok(())
         }
 
+        /// Call this any time the background image path changes.
+        ///
+        /// Caller must hold the draw mutex.
         // fn prepBackgroundImage(self: *Self) !void {  (ref generic.zig:1747)
-        //     // Then we try to load the background image if we have a path.
-        //     if (self.config.bg_image) |p| load_background: {
-        //         const path = switch (p) { .required, .optional => |slice| slice };
-        //         // Open the file
-        //         var file = std.fs.openFileAbsolute(path, .{}) catch |err| {
-        //             log.warn("error opening background image file \"{s}\": {}", .{ path, err });
-        //             break :load_background;
-        //         };
-        //         defer file.close();
-        //         // Read it
-        //         const contents = file.readToEndAlloc(self.alloc, std.math.maxInt(u32)) catch |err| {
-        //             log.warn("error reading background image file \"{s}\": {}", .{ path, err });
-        //             break :load_background;
-        //         };
-        //         defer self.alloc.free(contents);
-        //         // Figure out what type it probably is.
-        //         const file_type = switch (FileType.detect(contents)) {
-        //             .unknown => FileType.guessFromExtension(std.fs.path.extension(path)),
-        //             else => |t| t,
-        //         };
-        //         // Decode it if we know how.
-        //         const image_data = switch (file_type) {
-        //             .png => try wuffs.png.decode(self.alloc, contents),
-        //             .jpeg => try wuffs.jpeg.decode(self.alloc, contents),
-        //             .unknown => { log.warn("Cannot determine file type ...", .{path}); break :load_background; },
-        //             else => |f| { log.warn("Unsupported file type {} ...", .{ f, path }); break :load_background; },
-        //         };
-        //         const image: imagepkg.Image = .{ .pending = .{
-        //             .width = image_data.width, .height = image_data.height,
-        //             .pixel_format = .rgba, .data = image_data.data.ptr } };
-        //         // If we have an existing background image, replace it. Otherwise set directly.
-        //         if (self.bg_image) |*img| { img.markForReplace(self.alloc, image); }
-        //         else { self.bg_image = image; }
-        //     } else {
-        //         // If we don't have a background image path, mark for unload if we have one.
-        //         if (self.bg_image) |*img| img.markForUnload();
-        //     }
-        // }
-        //
-        // R5 SEAM (§3.1): the whole background-image pipeline is deferred (the real
-        // arena `Path`, the file I/O, and the `wuffs` PNG/JPEG decode are not ported).
-        // This method exists ONLY so `change_config` compiles + its
-        // deferred-but-unreachable call is a real, documented seam. It is provably
-        // unreachable at runtime while `DerivedConfig.bg_image` is always `None`
-        // (§3/§4.3/RISK-2), so this `unimplemented!()` never executes. `Error` is the
-        // return type so the `change_config` call site's `?`-shaped handling type-checks.
         fn prep_background_image(&mut self) -> Result<(), Error> {
-            unimplemented!(
-                "prepBackgroundImage — background-image pipeline deferred (real Path + \
-                 file I/O + wuffs decode); verbatim body above. Unreachable while \
-                 DerivedConfig.bg_image is always None (§3/§4.3/RISK-2)."
-            )
+            // Then we try to load the background image if we have a path.
+            // if (self.config.bg_image) |p| load_background: { ... } else { ... }
+            let Some(p) = self.config.bg_image.as_ref() else {
+                // If we don't have a background image path, mark our
+                // background image for unload if we currently have one.
+                // if (self.bg_image) |*img| img.markForUnload();
+                if let Some(img) = self.bg_image.as_mut() {
+                    img.mark_for_unload();
+                }
+                return Ok(());
+            };
+
+            // const path = switch (p) { .required, .optional => |slice| slice };
+            //
+            // ADVERSARY F6 — borrow discipline: `p` borrows `self.config` immutably,
+            // but the load block below mutates `self.bg_image` (`mark_for_replace`/the
+            // `self.bg_image = ...` set). Copy the null-terminated path bytes into an
+            // OWNED `CString` here and drop the `&self.config` borrow before touching
+            // `self.bg_image`. Purely mechanical; no fidelity impact — the reference's
+            // `path` is a plain slice into config memory, but Rust's aliasing rules
+            // require the early copy.
+            let path: CString = p.slice().to_owned();
+
+            // `self.alloc` is a Copy `Global` ZST; capture it so the `'load_background`
+            // block reads it without holding a `&self` borrow across the later
+            // `self.bg_image` mutation.
+            let alloc = self.alloc;
+
+            // 'load_background: { ... break :load_background; } — a labeled block whose
+            // early exits (open-fail / read-fail / unknown-type) `break` with `None`
+            // ("no change"); a DECODE error `?`-propagates OUT of the whole method
+            // (the reference `try`), NOT a `break` (§3.3 asymmetry).
+            let pending: Option<image::Pending> = 'load_background: {
+                // Open the file / Read it.
+                //
+                // The reference `openFileAbsolute` + `readToEndAlloc(self.alloc,
+                // maxInt(u32))` (max size 4 GiB) collapse to `std.fs.read`; both the
+                // open failure and the read failure map to `break :load_background`
+                // (a warn + no-op). The 4 GiB cap is applied AFTER the read here (an
+                // oversize file is treated as a read failure), byte-faithfully over the
+                // `CString` path bytes (never a lossy `String`).
+                // var file = std.fs.openFileAbsolute(path, .{}) catch |err| { log.warn(...); break; };
+                // const contents = file.readToEndAlloc(self.alloc, std.math.maxInt(u32)) catch |err| { log.warn(...); break; };
+                // defer self.alloc.free(contents);
+                let contents: Vec<u8> = match std::fs::read(OsStr::from_bytes(path.to_bytes())) {
+                    Ok(b) if b.len() <= u32::MAX as usize => b,
+                    Ok(_) | Err(_) => {
+                        // log.warn("error opening/reading background image file \"{s}\": {}", ...);
+                        eprintln!(
+                            "warning(renderer): error opening/reading background image file {:?}",
+                            path
+                        );
+                        break 'load_background None;
+                    }
+                };
+
+                // Figure out what type it probably is.
+                // const file_type = switch (FileType.detect(contents)) {
+                //     .unknown => FileType.guessFromExtension(std.fs.path.extension(path)),
+                //     else => |t| t,
+                // };
+                let file_type = match FileType::detect(&contents) {
+                    FileType::Unknown => {
+                        FileType::guessFromExtension(path_extension(path.to_bytes()))
+                    }
+                    t => t,
+                };
+
+                // Decode it if we know how.
+                // const image_data = switch (file_type) {
+                //     .png => try wuffs.png.decode(self.alloc, contents),
+                //     .jpeg => try wuffs.jpeg.decode(self.alloc, contents),
+                //     .unknown => { log.warn("Cannot determine file type ...", .{path}); break; },
+                //     else => |f| { log.warn("Unsupported file type {} ...", .{ f, path }); break; },
+                // };
+                let image_data = match file_type {
+                    FileType::Png => rustty_wuffs::png::decode(alloc, &contents)?,
+                    FileType::Jpeg => rustty_wuffs::jpeg::decode(alloc, &contents)?,
+                    FileType::Unknown => {
+                        eprintln!(
+                            "warning(renderer): Cannot determine file type for background image file {:?}!",
+                            path
+                        );
+                        break 'load_background None;
+                    }
+                    f => {
+                        eprintln!(
+                            "warning(renderer): Unsupported file type {f:?} for background image file {path:?}!"
+                        );
+                        break 'load_background None;
+                    }
+                };
+
+                // const image: imagepkg.Image = .{ .pending = .{ .width, .height,
+                //     .pixel_format = .rgba, .data = image_data.data.ptr } };
+                //
+                // Transfer OWNERSHIP of the decoded RGBA buffer to `Pending` (do NOT
+                // free it here — `rustty-wuffs` allocated it over the SAME `Global`,
+                // align 1, so `image.rs::free_data`'s `Layout::from_size_align(len, 1)`
+                // frees it later without a layout mismatch — §3.2/R-2). `contents`
+                // (the encoded bytes) IS freed here, at the block's end (`Vec` drop ==
+                // the reference `defer self.alloc.free(contents)`).
+                let (width, height, buf, _len) = image_data.into_raw();
+                Some(image::Pending {
+                    width,
+                    height,
+                    pixel_format: image::PixelFormat::Rgba,
+                    data: buf.as_ptr(), // *mut u8 — freed later by Image::deinit / free_data
+                })
+            };
+
+            // If we have an existing background image, replace it.
+            // Otherwise, set this as our background image directly. A `None` pending
+            // is the `break :load_background` case — leave `self.bg_image` unchanged.
+            if let Some(pend) = pending {
+                let image = image::Image::Pending(pend);
+                // if (self.bg_image) |*img| { img.markForReplace(self.alloc, image); }
+                // else { self.bg_image = image; }
+                if let Some(img) = self.bg_image.as_mut() {
+                    img.mark_for_replace(self.alloc, image);
+                } else {
+                    self.bg_image = Some(image);
+                }
+            }
+
+            Ok(())
         }
     }
 
@@ -5569,6 +5914,26 @@ mod macos_impl {
             (px[i], px[i + 1], px[i + 2], px[i + 3])
         }
 
+        // Encode a `w`×`h` solid-RGB PNG for the bg-image golden (T3) — the reference
+        // `background-image` fixture is not checked in, so generate it at test time via
+        // the pure-Rust `png` encoder (test-helper duplication precedent — `opts`).
+        fn encode_solid_png(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
+            let mut out = Vec::new();
+            {
+                let mut enc = png::Encoder::new(&mut out, w, h);
+                enc.set_color(png::ColorType::Rgb);
+                enc.set_depth(png::BitDepth::Eight);
+                let mut writer = enc.write_header().expect("png header");
+                let mut data = Vec::with_capacity((w * h * 3) as usize);
+                for _ in 0..(w * h) {
+                    data.extend_from_slice(&rgb);
+                }
+                writer.write_image_data(&data).expect("png data");
+                writer.finish().expect("png finish");
+            }
+            out
+        }
+
         // GPU_RD_CHUNK4_DESIGN §3 — the R-d contract's FIRST real GPU-output assertion:
         // render a deterministic terminal state OFFSCREEN (Metal → IOSurface), read the
         // pixels back, and assert the STRUCTURE the port is responsible for (§3.1: not an
@@ -5667,6 +6032,125 @@ mod macos_impl {
             );
 
             t.deinit(Global);
+        }
+
+        // T3 (RENDERER_BG_IMAGE_DESIGN §4) — the offscreen proof that the whole
+        // background-image pipeline executes end-to-end: point the config at a real
+        // PNG on disk, `prep_background_image` (open + FileType sniff + wuffs decode ->
+        // `bg_image = Some(Pending)`), `update_bg_image_buffer` (opacity/fit ->
+        // `BgImageGpu`), `draw_frame` (`upload_background_image` -> `Ready(texture)` +
+        // the full-screen bg_image render step), then read back the IOSurface and
+        // assert the sampled pixels are the DECODED image color — distinct from the
+        // plain `bg_color` (black) the negative control shows. macOS/Metal-gated;
+        // Metal-skip on a headless host (same pattern as the cursor golden).
+        //
+        // DETERMINISM PINS (mirroring the cursor golden): `AlphaBlending::Native`
+        // (BGRA8Unorm, no store-time sRGB re-encode), `colorspace = Srgb`,
+        // `offscreen == size.screen`. `fit = Stretch` so the solid image fills the
+        // whole screen ⇒ every pixel is the image color (trivial sampling).
+        #[test]
+        fn golden_renders_background_image() {
+            use std::ffi::CString;
+
+            // The distinct bg-image color (blue-dominant), unambiguously != black.
+            const IMG_RGB: [u8; 3] = [0x30, 0x60, 0xC0];
+
+            // Helper: build a golden renderer, optionally with a bg image at `path`,
+            // draw one frame, and return the center-pixel BGRA of the bottom row.
+            fn draw_center(with_bg: Option<&std::path::Path>) -> Option<(u8, u8, u8, u8)> {
+                let mut r = golden_renderer(10, 3)?;
+
+                if let Some(p) = with_bg {
+                    // Point the config at the on-disk PNG (required arm) + stretch it.
+                    let bytes = p.as_os_str().as_encoded_bytes().to_vec();
+                    r.config.bg_image =
+                        Some(crate::generic::Path::Required(CString::new(bytes).unwrap()));
+                    r.config.bg_image_fit = BackgroundImageFit::Stretch;
+                    r.config.bg_image_opacity = 1.0;
+                    // Decode + build the vertex/opacity buffer (the two calls
+                    // `change_config` would make on a bg-image change).
+                    r.prep_background_image().expect("prep_background_image");
+                    r.update_bg_image_buffer();
+                    // The decode must have produced a pending bg image.
+                    assert!(
+                        matches!(r.bg_image, Some(image::Image::Pending(_))),
+                        "prep did not stage a pending bg image"
+                    );
+                }
+
+                // An (empty) terminal drives update_frame/draw_frame (as the cursor
+                // golden does); the bg-image step does not depend on cell content.
+                let mut mutex = Mutex::new();
+                let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+                let st = state::State {
+                    mutex: &mut mutex,
+                    terminal: &mut t,
+                    inspector: None,
+                    preedit: None,
+                    mouse: state::Mouse::default(),
+                };
+                r.update_frame(&st, true).unwrap();
+                r.draw_frame(true).unwrap();
+
+                if with_bg.is_some() {
+                    // After the frame, the pending image was uploaded to the GPU.
+                    assert!(
+                        matches!(r.bg_image, Some(image::Image::Ready(_))),
+                        "bg image not uploaded to a Ready texture"
+                    );
+                }
+
+                let idx = r.swap_chain.frame_index as usize;
+                let px = r.swap_chain.frames[idx].target.read_bgra();
+                let w = r.size.screen.width as usize;
+                let cw = r.grid_metrics.cell_width as usize;
+                let ch = r.grid_metrics.cell_height as usize;
+                // Sample the center of an empty cell on the bottom row (grid (5,2)).
+                let out = px_at(&px, w, 5 * cw + cw / 2, 2 * ch + ch / 2);
+                t.deinit(Global);
+                Some(out)
+            }
+
+            // Write the solid bg-image PNG to a temp file.
+            let png_bytes = encode_solid_png(2, 2, IMG_RGB);
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("rustty_bg_{nanos}.png"));
+            std::fs::write(&path, &png_bytes).unwrap();
+
+            // (bg image) — sample should be the decoded image color.
+            let bg = match draw_center(Some(&path)) {
+                Some(v) => v,
+                None => {
+                    let _ = std::fs::remove_file(&path);
+                    return; // Metal-skip
+                }
+            };
+            // (negative control) — no bg image ⇒ the plain black bg_color.
+            let none = draw_center(None).expect("Metal probed above");
+            let _ = std::fs::remove_file(&path);
+
+            // read_bgra returns (B, G, R, A). The image is blue-dominant (0x30,0x60,0xC0):
+            //   B ≈ 0xC0 (>128), R ≈ 0x30 (<128), B > R, and the layer is opaque.
+            let (bb, _bg2, br, ba) = bg;
+            assert!(bb > 128, "bg-image blue channel too low (B={bb})");
+            assert!(br < 128, "bg-image red channel too high (R={br})");
+            assert!(bb > br, "bg-image not blue-dominant (B={bb} R={br})");
+            assert!(ba > 128, "bg-image layer not opaque (A={ba})");
+
+            // The negative control is dark (black bg_color) — proves the bg-image step
+            // (not the bg_color fallback) produced the color above.
+            let (nb, ng, nr, _na) = none;
+            assert!(
+                nb < 96 && ng < 96 && nr < 96,
+                "negative control not dark (B={nb} G={ng} R={nr})"
+            );
+            assert!(
+                bb > nb + 64,
+                "bg-image blue not distinct from bg_color (bg B={bb} vs none B={nb})"
+            );
         }
 
         // RENDERER_KITTY_IMAGE_PATH_DESIGN §4 — the offscreen APC-driven proof that

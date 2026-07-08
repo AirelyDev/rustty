@@ -788,6 +788,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-io-surface",
  "objc2-metal",
+ "png",
  "rustty-crash",
  "rustty-datastruct",
  "rustty-font",
@@ -800,6 +801,7 @@ dependencies = [
  "rustty-unicode",
  "rustty-util",
  "rustty-vt",
+ "rustty-wuffs",
  "rustty-z2d",
  "rustty-zigstd",
  "spirv-cross-sys",
@@ -889,6 +891,15 @@ dependencies = [
  "rustty-lib",
  "rustty-render-types",
  "rustty-vt",
+]
+
+[[package]]
+name = "rustty-wuffs"
+version = "0.1.0"
+dependencies = [
+ "allocator-api2",
+ "png",
+ "wuffs-sys",
 ]
 
 [[package]]

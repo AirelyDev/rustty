@@ -12,3 +12,10 @@
  * "1");`, so the declared surface here matches the compiled object's modules.
  */
 #include "wuffs-v0.4.c"
+
+/* The static-inline shim's external-linkage prototypes (shim.h itself re-includes
+ * wuffs-v0.4.c under its include guard, so this is a no-op re-include followed by
+ * the `rustty_wuffs_*` declarations). bindgen only emits a binding for a symbol it
+ * PARSES, so these prototypes MUST be visible here for the `rustty_wuffs_.*`
+ * allowlist (build.rs) to yield bindings; the definitions live in shim.c. */
+#include "shim.h"

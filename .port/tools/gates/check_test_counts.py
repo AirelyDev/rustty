@@ -151,8 +151,19 @@ RSCORE = "/Users/gael/projects/rustty/crates/rustty-core/src"
 GHXEV = "/Users/gael/.cache/zig/p/libxev-0.0.0-86vtc4IcEwCqEYxEYoN_3KXmc6A9VLcm22aVImfvecYs/src"
 RSXEV = "/Users/gael/projects/rustty/crates/rustty-xev/src"
 
+# rustty-wuffs: the pkg/wuffs safe-wrapper parity crate (the renderer's
+# background-image decode path). GH base = pkg/wuffs/src (NOT ghostty src/), so it
+# is not in the 3234-test src/ contract; scoped-mapped here. png.zig/jpeg.zig carry
+# 3 named `test "..."` each (the *_decode_000000/FFFFFF + `too big` known-answer
+# tests); main.zig's only `test {}` is the anonymous refAllDecls (skipped by
+# zig_count); error.zig/swizzle.zig carry 0 (swizzle is an R5 seam). zig=6; the
+# Rust side adds the ref_all_decls compile-touch (rust=7 >= 6).
+GHWUFFS = "/Users/gael/projects/ghostty/pkg/wuffs/src"
+RSWUFFS = "/Users/gael/projects/rustty/crates/rustty-wuffs/src"
+
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
+    "wuffs":           ([f"{GHWUFFS}/png.zig", f"{GHWUFFS}/jpeg.zig", f"{GHWUFFS}/main.zig", f"{GHWUFFS}/error.zig", f"{GHWUFFS}/swizzle.zig"], [f"{RSWUFFS}/*.rs"], 0),
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
     "page":            ([f"{GH}/page.zig"], [f"{RS}/page_impl.rs", f"{RS}/page_tests.rs", f"{RS}/page.rs"], 0),
     "screen":          ([f"{GH}/Screen.zig"], [f"{RS}/screen.rs"], 0),

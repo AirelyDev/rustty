@@ -1,0 +1,45 @@
+# rustty-wuffs — R1 safe wrapper over the vendored Wuffs image codecs (wuffs-sys).
+#
+# Crate IDENTITY is `rustty-wuffs` (R4). Faithful mirror of ghostty's `pkg/wuffs`
+# package boundary (`src/{main,error,png,jpeg,swizzle}.zig`): the SAFE `decode`
+# API (`png::decode` / `jpeg::decode`) built on top of the raw `wuffs-sys` FFI
+# leaf. wuffs-sys's own lib.rs states "safe wrappers live in the parity crates" —
+# this is that crate. NO dependency on the ghostty tree (R3): the reference is an
+# external oracle only; wuffs-sys vendors the SAME single-file C library.
+#
+# The reference `pkg/wuffs/src/{png,jpeg}.zig` carry `test{}` blocks (the
+# `*_decode_000000/FFFFFF` + `too big` known-answer tests); R1 requires every
+# `test{}` be ported, so those land here. The `1x1#*` fixtures the reference
+# `@embedFile`s are ABSENT from the checkout, so the 1×1 fixtures are generated
+# (PNG via the `png` encoder dev-dep) or crafted as minimal byte literals, and the
+# `too big` cases drive a minimal image whose DECLARED header dimensions overflow
+# (not a multi-MB checked-in blob). See RENDERER_BG_IMAGE_DESIGN.md §2.3 / F5.
+[package]
+name = "rustty-wuffs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The raw Wuffs FFI leaf (the vendored single-file C image-codec library). The
+# `decode` bodies drive its `wuffs_{png,jpeg}__decoder__*` entrypoints + the
+# `rustty_wuffs_*` static-inline shims.
+wuffs-sys = { workspace = true }
+# Stable polyfill of `core::alloc::Allocator` — the faithful Rust map of Zig's
+# `std.mem.Allocator` (`decode(alloc, ..)`); `Global` == `std.alloc`. The decoded
+# RGBA buffer is allocated over the caller's allocator (align 1) so the renderer
+# can transfer the pointer into `image::Pending` and free it with the same layout.
+allocator-api2 = { workspace = true }
+
+[dev-dependencies]
+# Pure-Rust PNG encoder — generates the 1×1 solid PNG fixtures the known-answer
+# tests decode (the reference `1x1#*.png` @embedFiles are absent from the
+# checkout). Dev-only; never on a runtime path. Same 0.18 stand-in rustty-font
+# uses.
+png = { workspace = true }

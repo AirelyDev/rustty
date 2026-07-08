@@ -156,6 +156,21 @@ impl RendererConfig for Config {
     fn background_image_fit(&self) -> BackgroundImageFit {
         self.background_image_fit
     }
+    fn bg_image(&self) -> Option<rustty_renderer::generic::Path> {
+        use rustty_renderer::generic::Path as RPath;
+        // config `self.background_image` is `Option<crate::path::Path>`
+        // (`enum { Optional(Vec<u8>), Required(Vec<u8>) }`, path.rs). Map arm for
+        // arm into the renderer-local `Path` (a `CString` over the same bytes). The
+        // parsed bytes carry no interior NUL (`Path::parse` dupeZ'd them), so
+        // `CString::new` cannot fail on well-formed config — but map the `Result`
+        // defensively: an interior NUL => treat as no bg image, matching the
+        // reference's "path won't open" degradation. Byte-faithful (never a lossy
+        // `String`).
+        match self.background_image.as_ref()? {
+            crate::path::Path::Optional(b) => CString::new(b.clone()).ok().map(RPath::Optional),
+            crate::path::Path::Required(b) => CString::new(b.clone()).ok().map(RPath::Required),
+        }
+    }
     fn window_colorspace(&self) -> WindowColorspace {
         self.window_colorspace
     }

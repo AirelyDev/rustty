@@ -84,6 +84,15 @@ members = [
     # `pub const xev` seam anchor). NOT in the 3234-test contract.
     "crates/rustty-xev",
 
+    # ----- pkg/wuffs safe-wrapper parity crate: PNG/JPEG image decode -----
+    # Faithful mirror of ghostty's `pkg/wuffs` package boundary (main/error/png/
+    # jpeg/swizzle.zig) — the safe `decode` wrappers over the `wuffs-sys` FFI leaf.
+    # A leaf-ish crate (deps: wuffs-sys + allocator-api2); the renderer's
+    # background-image `prepBackgroundImage` decode path consumes it. NOT in the
+    # 3234-test contract's src/ map (its base is pkg/wuffs); scoped-mapped in
+    # check_test_counts.py.
+    "crates/rustty-wuffs",
+
     # ----- vendored pure-Rust dependency port (R3): z2d 2D vector graphics -----
     # Port of the `vancluever/z2d` 0.10.0 subset ghostty uses in its sprite/glyf
     # font rasterizers (Context/Path/StaticPath/Surface/Transformation/painter +
@@ -176,6 +185,15 @@ oniguruma-sys = { path = "crates-sys/oniguruma-sys" }
 # the reference links). The FFI leaf the PNG/JPEG image decode + pixel-swizzle
 # port builds on (ghostty's ADLER32/CRC32/DEFLATE/JPEG/PNG/ZLIB module subset).
 wuffs-sys = { path = "crates-sys/wuffs-sys" }
+# pkg/wuffs safe-wrapper parity crate (main/error/png/jpeg/swizzle.zig): the safe
+# `decode` API over the `wuffs-sys` FFI leaf. Consumed by the renderer's
+# background-image decode path.
+rustty-wuffs = { path = "crates/rustty-wuffs" }
+# Pure-Rust PNG encoder/decoder — dev-only test-fixture helper (the SAME 0.18
+# stand-in rustty-font uses). rustty-wuffs uses it to GENERATE the 1×1 solid PNG
+# fixtures at test time (the reference `1x1#*.png` @embedFiles are absent from the
+# checkout) and to cross-decode-check, NOT on any runtime path.
+png = "0.18"
 # R3: vendored libpng 1.6.43 (the SAME `glennrp/libpng` release the reference
 # links via pkg/libpng). The FFI leaf backing dcimgui-sys; zlib is provided by
 # `zlib-sys` and the ghostty-provided `pnglibconf.h` is vendored in-tree.

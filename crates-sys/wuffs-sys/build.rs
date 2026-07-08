@@ -94,6 +94,32 @@ fn main() {
     // crate declares `links = "wuffs"`, Cargo enforces a single linkage.
     build.compile("wuffs");
 
+    // The static-inline shim (shim.c): a SECOND C translation unit compiled
+    // WITHOUT `WUFFS_IMPLEMENTATION` (so it emits NO duplicate copy of the codec
+    // implementation — only its `rustty_wuffs_*` external-linkage wrappers). Each
+    // wrapper forwards to a Wuffs base-runtime `static inline` helper (fully
+    // defined inline in the header, independent of the impl), so the TU is
+    // self-contained. This exposes the ~5 `static inline` helpers the PNG/JPEG
+    // decode path needs but bindgen cannot bind (it never emits a linkable symbol
+    // for a `static inline`). Compiled into its OWN static archive; the `links =
+    // "wuffs"` uniqueness key is unaffected (it gates the -sys crate, not the
+    // count of `rustc-link-lib` directives).
+    let mut shim = cc::Build::new();
+    shim.include(&c_dir).warnings(false).flag_if_supported("-w");
+    // The SAME module gate list, WITHOUT `WUFFS_IMPLEMENTATION` (declarations +
+    // static inlines only — mirrors wrapper.h / the `@cImport`).
+    for def in MODULE_DEFINES {
+        shim.define(def, None);
+    }
+    if target_env == "msvc" {
+        shim.flag_if_supported("-fno-sanitize=undefined")
+            .flag_if_supported("-fno-sanitize-trap=undefined");
+    }
+    shim.file(manifest_dir.join("shim.c"));
+    println!("cargo:rerun-if-changed=shim.c");
+    println!("cargo:rerun-if-changed=shim.h");
+    shim.compile("wuffs_shim");
+
     // Auto-generate the FFI from `wrapper.h` (which `#include`s the same
     // `wuffs-v0.4.c` the reference's `c.zig` @cIncludes). The module defines are
     // passed here too — WITHOUT `WUFFS_IMPLEMENTATION`, mirroring the `@cImport`
@@ -111,6 +137,11 @@ fn main() {
         // `sizeof__wuffs_*` struct-size helpers, and the `WUFFS_*` constants.
         .allowlist_function("wuffs_.*")
         .allowlist_function("sizeof__wuffs_.*")
+        // The static-inline shim wrappers (shim.h prototypes, shim.c definitions)
+        // that expose the base-runtime `static inline` helpers the decode path
+        // drives. Effective ONLY because wrapper.h `#include`s shim.h (bindgen must
+        // parse a prototype to emit its binding).
+        .allowlist_function("rustty_wuffs_.*")
         .allowlist_type("wuffs_.*")
         .allowlist_var("WUFFS_.*")
         // Wuffs' generated header is enormous; block the layout-tests bindgen
