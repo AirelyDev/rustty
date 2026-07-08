@@ -384,6 +384,17 @@ impl Contour {
         self.first
     }
 
+    /// The (scaled) point stored at arena corner `idx`. Mirrors reading
+    /// `Contour.Corner.fromNode(node).point` in the Zig original.
+    pub fn corner_point(&self, idx: usize) -> crate::internal::point::Point {
+        self.nodes[idx].point
+    }
+
+    /// The next corner after `idx`, or `None` at the tail. Mirrors `node.next`.
+    pub fn corner_next(&self, idx: usize) -> Option<usize> {
+        self.nodes[idx].next
+    }
+
     /// Plots a point on the contour. If `before` is specified, the point is
     /// plotted before it.
     pub fn plot(&mut self, point: crate::internal::point::Point, before_: Option<usize>) {
@@ -495,6 +506,30 @@ impl Contour {
         other.last = None;
         other.len = 0;
         other.nodes.clear();
+    }
+}
+
+/// Convenience functionality for a set of polylines over an `ArrayList`.
+///
+/// Port of `Polygon.zig` `Contour.List` (the hairline/polyline plotter builds
+/// one of these; the multisample fill path uses `Polygon` instead). In
+/// allocator-free Rust the `std.ArrayListUnmanaged(Contour)` is a `Vec<Contour>`;
+/// the Zig `deinit` (which frees each contour's corners, then the list) is Rust
+/// `Drop`.
+#[derive(Debug, Clone, Default)]
+pub struct ContourList {
+    pub list: Vec<Contour>,
+}
+
+impl ContourList {
+    /// Port of `Contour.List.empty`.
+    pub fn empty() -> ContourList {
+        ContourList { list: Vec::new() }
+    }
+
+    /// Port of `Contour.List.append`. (`deinit` is Rust `Drop`.)
+    pub fn append(&mut self, contour: Contour) {
+        self.list.push(contour);
     }
 }
 

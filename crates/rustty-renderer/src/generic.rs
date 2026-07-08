@@ -6316,19 +6316,11 @@ mod macos_impl {
 
             // A real feature builds the overlay at the terminal size. `rebuild_overlay`
             // sets `self.overlay = Some(new)` BEFORE it calls `apply_features`, whose
-            // semantic-prompt render body is a DEFERRED R5 seam
-            // (`overlay.rs::highlight_semantic_prompts`, `unimplemented!()`; the z2d
-            // render leaves land with the Chunk-4 golden). So we drive the build path
-            // under `catch_unwind`: the OVERLAY-BUILD control flow is what 3b proves;
-            // the panic from the un-ported render leaf is expected and swallowed (the
-            // hook is silenced to keep the test output clean). Post-catch, the overlay
-            // is present regardless of whether the leaf panicked.
-            let prev_hook = std::panic::take_hook();
-            std::panic::set_hook(Box::new(|_| {}));
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = r.rebuild_overlay(&[crate::overlay::Feature::SemanticPrompts]);
-            }));
-            std::panic::set_hook(prev_hook);
+            // semantic-prompt render body now draws for real
+            // (`overlay.rs::highlight_semantic_prompts` — the z2d hairline fill landed),
+            // so we drive the build path directly. Post-build, the overlay is present.
+            r.rebuild_overlay(&[crate::overlay::Feature::SemanticPrompts])
+                .unwrap();
             assert!(r.overlay.is_some());
 
             // and clearing removes it

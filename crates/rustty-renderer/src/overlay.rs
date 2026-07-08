@@ -14,11 +14,14 @@
 //! it on the GPU as an image composited on top of the terminal output.
 //!
 //! PORT STATUS (GPU R-d P1, macOS-only): the lifecycle + dispatch surface is
-//! FULL; the four z2d render leaves are R5 `unimplemented!()` seams
-//! (`GPU_RD_P1_DESIGN.md` §5.2 — the ported z2d `Context` subset lacks
-//! `set_anti_aliasing_mode`/`set_hairline`, the `RenderState` row/cell metadata
-//! is not yet exposed, and none is run by the no-overlay golden). `Overlay.zig`
-//! carries **0** `test{}` blocks (golden-image-gated).
+//! FULL, and the four z2d render leaves are now FILLED: the ported z2d `Context`
+//! exposes `anti_aliasing_mode`/`hairline` (public fields), the z2d hairline
+//! stroking fast-path is ported, and the `RenderState` row/cell metadata is
+//! public — so `highlight_hyperlinks`/`highlight_semantic_prompts` and the
+//! `highlight_grid_rect`/`highlight_pixel_rect` rect helpers draw for real. The
+//! overlay renders on the CPU to a z2d `Surface` (no Metal). `Overlay.zig`
+//! carries **0** `test{}` blocks (golden-image-gated); the fill is covered by
+//! host-only pixel tests below.
 
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;
@@ -28,9 +31,13 @@
 // const Size = size.Size;
 // const CellSize = size.CellSize;
 // const Image = @import("image.zig").Image;
+use rustty_z2d::context::Context;
+use rustty_z2d::options::AntiAliasMode;
+use rustty_z2d::painter;
 use rustty_z2d::pixel::{Pixel, Rgb, Rgba};
 use rustty_z2d::surface::{self, Surface};
 
+use rustty_vt::page::{SemanticContent, SemanticPrompt};
 use rustty_vt::render::RenderState;
 
 use crate::image::{Pending, PixelFormat};
@@ -222,9 +229,9 @@ impl Overlay {
     /// because the render state doesn't contain this. This will be added
     /// later.
     //
-    // R5 SEAM (GPU_RD_P1_DESIGN.md §5.2): needs the `RenderState` row/cell
-    // `.hyperlink` metadata (not yet exposed) + the AA/hairline `Context`. Never
-    // run by the no-feature golden. Verbatim Zig body preserved:
+    // FILLED (was R5 SEAM): draws via the `RenderState` row/cell `.hyperlink`
+    // metadata (now public) + the AA/hairline `Context`. Verbatim Zig body
+    // preserved:
     //
     // fn highlightHyperlinks(
     //     self: *Overlay,
@@ -266,13 +273,53 @@ impl Overlay {
     //         }
     //     }
     // }
-    fn highlight_hyperlinks(&mut self, _state: &RenderState) {
-        unimplemented!(
-            "R-d overlay render — highlight_hyperlinks; needs z2d AA/hairline Context + RenderState row/cell metadata; golden renders no overlay"
-        )
+    fn highlight_hyperlinks(&mut self, state: &RenderState) {
+        let border_color = Color::Hyperlink.rect_border();
+        let fill_color = Color::Hyperlink.rect_fill();
+
+        // for (row_raw, row_cells, 0..) |row, cells, y|
+        for (y, row) in state.row_data.iter().enumerate() {
+            if !row.raw.hyperlink() {
+                continue;
+            }
+
+            let raw_cells = &row.cells;
+
+            let mut x: usize = 0;
+            while x < raw_cells.len() {
+                // Skip cells without hyperlinks
+                if !raw_cells[x].raw.hyperlink() {
+                    x += 1;
+                    continue;
+                }
+
+                // Found start of a hyperlink run
+                let start_x = x;
+
+                // Find end of contiguous hyperlink cells
+                while x < raw_cells.len() && raw_cells[x].raw.hyperlink() {
+                    x += 1;
+                }
+                let end_x = x;
+
+                if let Err(_err) = self.highlight_grid_rect(
+                    start_x,
+                    y,
+                    end_x - start_x,
+                    1,
+                    border_color,
+                    fill_color,
+                ) {
+                    // std.log.warn("Error drawing hyperlink border: {}", .{err});
+                    // PORT NOTE: no logging facade wired (see overlay.rs top);
+                    // the reference `catch |err| log.warn(...)` collapses to
+                    // swallowing the error, preserved as this comment.
+                }
+            }
+        }
     }
 
-    // R5 SEAM (GPU_RD_P1_DESIGN.md §5.2). Verbatim Zig body preserved:
+    // FILLED (was R5 SEAM). Verbatim Zig body preserved:
     //
     // fn highlightSemanticPrompts(
     //     self: *Overlay,
@@ -359,17 +406,100 @@ impl Overlay {
     //         }
     //     }
     // }
-    fn highlight_semantic_prompts(&mut self, _state: &RenderState) {
-        unimplemented!(
-            "R-d overlay render — highlight_semantic_prompts; needs z2d AA/hairline Context + RenderState row/cell metadata; golden renders no overlay"
-        )
+    fn highlight_semantic_prompts(&mut self, state: &RenderState) {
+        // Highlight the row-level semantic prompt bars. The prompts are easy
+        // because they're part of the row metadata.
+        {
+            let prompt_border = Color::SemanticPrompt.rect_border();
+            let prompt_fill = Color::SemanticPrompt.rect_fill();
+
+            let mut y: usize = 0;
+            while y < state.row_data.len() {
+                // If its not a semantic prompt row, skip it.
+                if state.row_data[y].raw.semantic_prompt() == SemanticPrompt::None {
+                    y += 1;
+                    continue;
+                }
+
+                // Find the full length of the semantic prompt row by connecting
+                // all continuations.
+                let start_y = y;
+                y += 1;
+                while y < state.row_data.len()
+                    && state.row_data[y].raw.semantic_prompt() == SemanticPrompt::PromptContinuation
+                {
+                    y += 1;
+                }
+                let end_y = y; // Exclusive
+
+                // const bar_width = @min(@as(usize, 5), self.cell_size.width);
+                let bar_width = std::cmp::min(5usize, self.cell_size.width as usize);
+                if let Err(_err) = self.highlight_pixel_rect(
+                    0,
+                    start_y,
+                    bar_width,
+                    end_y - start_y,
+                    prompt_border,
+                    prompt_fill,
+                ) {
+                    // log.warn("Error drawing semantic prompt bar: {}", .{err});
+                }
+            }
+        }
+
+        // Highlight contiguous semantic cells within rows.
+        // for (row_cells, 0..) |cells, y|
+        for (y, row) in state.row_data.iter().enumerate() {
+            let raw_cells = &row.cells;
+
+            let mut x: usize = 0;
+            while x < raw_cells.len() {
+                let content = raw_cells[x].raw.semantic_content();
+                let start_x = x;
+
+                // We skip output because its just the rest of the non-prompt
+                // parts and it makes the overlay too noisy.
+                if content == SemanticContent::Output {
+                    x += 1;
+                    continue;
+                }
+
+                // Find the end of this content.
+                x += 1;
+                while x < raw_cells.len() {
+                    let next = raw_cells[x].raw.semantic_content();
+                    if next != content {
+                        break;
+                    }
+                    x += 1;
+                }
+
+                // switch (content) { .prompt=>…, .input=>…, .output=>unreachable }
+                let color: Color = match content {
+                    SemanticContent::Prompt => Color::SemanticPrompt,
+                    SemanticContent::Input => Color::SemanticInput,
+                    SemanticContent::Output => unreachable!(),
+                };
+
+                if let Err(_err) = self.highlight_grid_rect(
+                    start_x,
+                    y,
+                    x - start_x,
+                    1,
+                    color.rect_border(),
+                    color.rect_fill(),
+                ) {
+                    // log.warn("Error drawing semantic content highlight: {}", .{err});
+                }
+            }
+        }
     }
 
     /// Creates a rectangle for highlighting a grid region. x/y/width/height
     /// are all in grid cells.
     //
-    // R5 SEAM (GPU_RD_P1_DESIGN.md §5.2): calls `ctx.setAntiAliasingMode(.none)` /
-    // `ctx.setHairline(true)` — ABSENT from the ported z2d `Context` subset.
+    // FILLED (was R5 SEAM): `ctx.anti_aliasing_mode`/`ctx.hairline` are public
+    // fields on the ported z2d `Context`, and z2d hairline stroking is ported.
     // Verbatim Zig body preserved:
     //
     // fn highlightGridRect(
@@ -431,25 +561,80 @@ impl Overlay {
     //     try ctx.stroke();
     // }
     #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)] // called only from the highlight_* seams (comments); parity-preserved
     fn highlight_grid_rect(
         &mut self,
-        _x: usize,
-        _y: usize,
-        _width: usize,
-        _height: usize,
-        _border_color: Pixel,
-        _fill_color: Pixel,
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        border_color: Pixel,
+        fill_color: Pixel,
     ) -> Result<(), OverlayError> {
-        unimplemented!(
-            "R-d overlay render — highlight_grid_rect; needs z2d Context set_anti_aliasing_mode/set_hairline; golden renders no overlay"
-        )
+        // All math below uses checked arithmetic to avoid overflows. The
+        // inputs aren't trusted and the path this is in isn't hot enough
+        // to wrarrant unsafe optimizations.
+        let cw = self.cell_size.width as usize;
+        let ch = self.cell_size.height as usize;
+
+        // Calculate our width/height in pixels.
+        // std.math.cast(i32, try std.math.mul(usize, width, cell.width)) — the
+        // `checked_mul` (usize product overflow) and `try_from` (exceeds i32::MAX)
+        // failures both collapse onto `error.Overflow`, matching the Zig.
+        let px_width: i32 = width
+            .checked_mul(cw)
+            .and_then(|v| i32::try_from(v).ok())
+            .ok_or(OverlayError::Overflow)?;
+        let px_height: i32 = height
+            .checked_mul(ch)
+            .and_then(|v| i32::try_from(v).ok())
+            .ok_or(OverlayError::Overflow)?;
+
+        // Calculate pixel coordinates
+        let start_x: f64 = x
+            .checked_mul(cw)
+            .and_then(|v| i32::try_from(v).ok())
+            .ok_or(OverlayError::Overflow)? as f64;
+        let start_y: f64 = y
+            .checked_mul(ch)
+            .and_then(|v| i32::try_from(v).ok())
+            .ok_or(OverlayError::Overflow)? as f64;
+        let end_x: f64 = start_x + px_width as f64;
+        let end_y: f64 = start_y + px_height as f64;
+
+        // Grab our context to draw
+        let mut ctx: Context = Context::init(&mut self.surface);
+
+        // Don't need AA because we use sharp edges
+        ctx.anti_aliasing_mode = AntiAliasMode::None;
+        // Can use hairline since we have 1px borders
+        ctx.hairline = true;
+
+        // Draw rectangle path. (The ported z2d subset made the managed
+        // move_to/line_to/close_path infallible — the reference `try` on those
+        // is structurally absent; only fill/stroke remain fallible.)
+        ctx.move_to(start_x, start_y);
+        ctx.line_to(end_x, start_y);
+        ctx.line_to(end_x, end_y);
+        ctx.line_to(start_x, end_y);
+        ctx.close_path();
+
+        // Fill
+        ctx.set_source_to_pixel(fill_color);
+        ctx.fill().map_err(OverlayError::Fill)?;
+
+        // Border
+        ctx.set_line_width(1.0);
+        ctx.set_source_to_pixel(border_color);
+        ctx.stroke().map_err(OverlayError::Stroke)?;
+
+        ctx.deinit(); // defer ctx.deinit()
+        Ok(())
     }
 
     /// Creates a rectangle for highlighting a region. x/y are grid cells and
     /// width/height are pixels.
     //
-    // R5 SEAM (GPU_RD_P1_DESIGN.md §5.2). Verbatim Zig body preserved:
+    // FILLED (was R5 SEAM). Verbatim Zig body preserved:
     //
     // fn highlightPixelRect(
     //     self: *Overlay,
@@ -495,29 +680,76 @@ impl Overlay {
     //     try ctx.stroke();
     // }
     #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)] // called only from the highlight_* seams (comments); parity-preserved
     fn highlight_pixel_rect(
         &mut self,
-        _x: usize,
-        _y: usize,
-        _width_px: usize,
-        _height: usize,
-        _border_color: Pixel,
-        _fill_color: Pixel,
+        x: usize,
+        y: usize,
+        width_px: usize,
+        height: usize,
+        border_color: Pixel,
+        fill_color: Pixel,
     ) -> Result<(), OverlayError> {
-        unimplemented!(
-            "R-d overlay render — highlight_pixel_rect; needs z2d Context set_anti_aliasing_mode/set_hairline; golden renders no overlay"
-        )
+        let cw = self.cell_size.width as usize;
+        let ch = self.cell_size.height as usize;
+
+        // const px_width = std.math.cast(i32, width_px) orelse return error.Overflow;
+        let px_width: i32 = i32::try_from(width_px).map_err(|_| OverlayError::Overflow)?;
+        let px_height: i32 = height
+            .checked_mul(ch)
+            .and_then(|v| i32::try_from(v).ok())
+            .ok_or(OverlayError::Overflow)?;
+
+        let start_x: f64 = x
+            .checked_mul(cw)
+            .and_then(|v| i32::try_from(v).ok())
+            .ok_or(OverlayError::Overflow)? as f64;
+        let start_y: f64 = y
+            .checked_mul(ch)
+            .and_then(|v| i32::try_from(v).ok())
+            .ok_or(OverlayError::Overflow)? as f64;
+        let end_x: f64 = start_x + px_width as f64;
+        let end_y: f64 = start_y + px_height as f64;
+
+        let mut ctx: Context = Context::init(&mut self.surface);
+        ctx.anti_aliasing_mode = AntiAliasMode::None;
+        ctx.hairline = true;
+
+        ctx.move_to(start_x, start_y);
+        ctx.line_to(end_x, start_y);
+        ctx.line_to(end_x, end_y);
+        ctx.line_to(start_x, end_y);
+        ctx.close_path();
+
+        ctx.set_source_to_pixel(fill_color);
+        ctx.fill().map_err(OverlayError::Fill)?;
+
+        ctx.set_line_width(1.0);
+        ctx.set_source_to_pixel(border_color);
+        ctx.stroke().map_err(OverlayError::Stroke)?;
+
+        ctx.deinit();
+        Ok(())
     }
 }
 
 /// The inferred error set of the overlay rect-drawing seams: `error.Overflow`
-/// (from `std.math.mul`/`cast`) plus the z2d path/fill/stroke errors. Never
-/// constructed in the ported subset (the rect methods are R5 seams).
+/// (from `std.math.mul`/`cast`) plus the z2d fill/stroke errors. In the ported
+/// z2d subset `move_to`/`line_to`/`close_path` are infallible, so only
+/// `fill`/`stroke` contribute — hence the two wrapping variants.
+//
+// PORT NOTE: the `Fill`/`Stroke` payloads carry the faithful z2d error set; the
+// reference consumes them via `log.warn("... {}", .{err})` at each rect-helper
+// call site, but no logging facade is wired in the port yet (see the file-top
+// PORT NOTE), so those sites swallow the error (`if let Err(_err)`) and the
+// payloads are carried-but-unread. `#[allow(dead_code)]` records that — the
+// variants ARE constructed (via `map_err`); only the inner error is not yet
+// read.
 #[derive(Debug)]
-#[allow(dead_code)] // only named by the rect seams' return type; never constructed (seam)
+#[allow(dead_code)]
 enum OverlayError {
     Overflow,
+    Fill(painter::FillError),
+    Stroke(painter::StrokeError),
 }
 
 // PORT NOTE (rustty-only smoke test, NOT a ghostty parity test): `Overlay.zig`
@@ -574,6 +806,127 @@ mod tests {
             Overlay::init(sz),
             Err(InitError::InvalidDimensions)
         ));
+    }
+
+    // The overlay renders on the CPU to a z2d `Surface` — no Metal, no GPU. So
+    // these are host-only: build a real `Terminal` → `RenderState`, poke the
+    // row/cell metadata bits through the already-`pub` accessors, `Overlay::init`
+    // + `apply_features`, then assert the drawn overlay-rect pixels (which now no
+    // longer panic on z2d hairline).
+    #[test]
+    fn overlay_draws_hyperlink_rect() {
+        use allocator_api2::alloc::Global;
+        use rustty_vt::kitty;
+        use rustty_vt::modes::{self as modespkg};
+        use rustty_vt::render::RenderState;
+        use rustty_vt::size as vt_size;
+        use rustty_vt::terminal::{Colors, Options, Terminal};
+
+        // Local opts helper — verbatim from cell.rs / render.rs test harness.
+        fn opts(cols: vt_size::CellCountInt, rows: vt_size::CellCountInt) -> Options {
+            Options {
+                cols,
+                rows,
+                max_scrollback: 10_000,
+                colors: Colors::default(),
+                default_modes: modespkg::ModePacked::default(),
+                kitty_image_storage_limit: 320 * 1000 * 1000,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            }
+        }
+
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"AB");
+            s.deinit();
+        }
+
+        let mut state = RenderState::empty();
+        state.update(alloc, &mut t).unwrap();
+
+        // Mark row 0 cols 0..1 as a hyperlink run.
+        state.row_data[0].raw.set_hyperlink(true);
+        state.row_data[0].cells[0].raw.set_hyperlink(true);
+        state.row_data[0].cells[1].raw.set_hyperlink(true);
+
+        let sz = size(80, 48); // cell 8x16 (existing helper) → 10x3 terminal
+        let mut o = Overlay::init(sz).unwrap();
+        o.apply_features(&state, &[Feature::HighlightHyperlinks]);
+
+        // Drawn inside cell (0,0):
+        match o.surface.get_pixel(4, 8) {
+            Some(Pixel::Rgba(px)) => assert!(px.a != 0, "hyperlink fill not drawn"),
+            other => panic!("expected rgba, got {other:?}"),
+        }
+        // Untouched cell (0,2):
+        match o.surface.get_pixel(4, 40) {
+            Some(Pixel::Rgba(px)) => assert_eq!(px.a, 0, "non-link cell drawn"),
+            other => panic!("expected rgba, got {other:?}"),
+        }
+
+        o.deinit();
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    #[test]
+    fn overlay_draws_semantic_prompt_bar() {
+        use allocator_api2::alloc::Global;
+        use rustty_vt::kitty;
+        use rustty_vt::modes::{self as modespkg};
+        use rustty_vt::page::SemanticPrompt;
+        use rustty_vt::render::RenderState;
+        use rustty_vt::size as vt_size;
+        use rustty_vt::terminal::{Colors, Options, Terminal};
+
+        fn opts(cols: vt_size::CellCountInt, rows: vt_size::CellCountInt) -> Options {
+            Options {
+                cols,
+                rows,
+                max_scrollback: 10_000,
+                colors: Colors::default(),
+                default_modes: modespkg::ModePacked::default(),
+                kitty_image_storage_limit: 320 * 1000 * 1000,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            }
+        }
+
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"AB");
+            s.deinit();
+        }
+
+        let mut state = RenderState::empty();
+        state.update(alloc, &mut t).unwrap();
+
+        // Mark row 0 as a semantic prompt row → the left-edge bar.
+        state.row_data[0]
+            .raw
+            .set_semantic_prompt(SemanticPrompt::Prompt);
+
+        let sz = size(80, 48);
+        let mut o = Overlay::init(sz).unwrap();
+        o.apply_features(&state, &[Feature::SemanticPrompts]);
+
+        // Bar width is min(5, cell_width=8) = 5, so x ∈ [0,5): sample (2,8).
+        match o.surface.get_pixel(2, 8) {
+            Some(Pixel::Rgba(px)) => assert!(px.a != 0, "prompt bar not drawn"),
+            other => panic!("expected rgba, got {other:?}"),
+        }
+        // Untouched row 2:
+        match o.surface.get_pixel(2, 40) {
+            Some(Pixel::Rgba(px)) => assert_eq!(px.a, 0, "non-prompt row drawn"),
+            other => panic!("expected rgba, got {other:?}"),
+        }
+
+        o.deinit();
+        state.deinit(alloc);
+        t.deinit(alloc);
     }
 
     #[test]

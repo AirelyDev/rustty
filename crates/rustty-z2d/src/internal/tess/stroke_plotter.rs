@@ -19,6 +19,7 @@
 use crate::internal::error::InternalError;
 use crate::internal::path_nodes::{PathCurveTo, PathLineTo, PathMoveTo, PathNode};
 use crate::internal::point::Point;
+use crate::internal::tess::dasher;
 use crate::internal::tess::face::Face;
 use crate::internal::tess::pen::Pen;
 use crate::internal::tess::point_buffer::PointBuffer;
@@ -27,21 +28,6 @@ use crate::internal::tess::slope::Slope;
 use crate::internal::tess::spline::Spline;
 use crate::options::{CapMode, JoinMode};
 use crate::transformation::Transformation;
-
-/// A port of `Dasher.validate`: returns true if `dashes` is a valid (non-empty,
-/// non-negative, at least one positive) dash array.
-fn dasher_validate(dashes: &[f64]) -> bool {
-    let mut valid = false;
-    for &d in dashes {
-        if d < 0.0 {
-            return false;
-        }
-        if d > 0.0 {
-            valid = true;
-        }
-    }
-    valid
-}
 
 pub struct PlotterOptions {
     pub cap_mode: CapMode,
@@ -56,7 +42,7 @@ pub struct PlotterOptions {
 }
 
 pub fn plot(nodes: &[PathNode], opts: PlotterOptions) -> Result<Polygon, InternalError> {
-    if dasher_validate(&opts.dashes) {
+    if dasher::validate(&opts.dashes) {
         unimplemented!("dashed stroke tessellation is not part of the z2d sprite subset");
     }
 

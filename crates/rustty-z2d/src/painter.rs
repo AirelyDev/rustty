@@ -11,19 +11,20 @@
 // fills use. The STROKE operation is ported for the (non-hairline, non-dashed)
 // path the sprite canvas exercises — `internal/tess/stroke_plotter.rs` +
 // `Pen`/`Face`/`Slope` + `Contour`, fed into the same `.none`/`.default`
-// rasterizers as fill (butt/round caps, miter/bevel/round joins). The
-// `.supersample_4x` rasterizer, hairline stroking (`polyline_plotter` +
-// `hairline` — never reached by the sprite canvas, which leaves `hairline`
-// false), and dashed stroking (`Dasher`/`dashed_plotter`) are NOT part of this
-// subset; those code paths are `unimplemented!` (and reported as blockers).
+// rasterizers as fill (butt/round caps, miter/bevel/round joins). HAIRLINE
+// stroking (`polyline_plotter` + `hairline` — the 1px thin-line fast-path used
+// by the renderer debug overlay, not the sprite canvas) IS now ported. The
+// `.supersample_4x` rasterizer and dashed stroking (`Dasher`/`dashed_plotter`)
+// are NOT part of this subset; those code paths are `unimplemented!` (and
+// reported as blockers).
 
 //! Contains unmanaged painter functions for filling and stroking.
 
 use crate::compositor::{Operator, Precision};
 use crate::internal::error::InternalError;
 use crate::internal::path_nodes::PathNode;
-use crate::internal::raster::{direct, multisample};
-use crate::internal::tess::{fill_plotter, stroke_plotter};
+use crate::internal::raster::{direct, hairline, multisample};
+use crate::internal::tess::{fill_plotter, polyline_plotter, stroke_plotter};
 use crate::options::{self, AntiAliasMode, CapMode, FillRule, JoinMode};
 use crate::pattern::Pattern;
 use crate::surface::{self, Surface, SUPERSAMPLE_SCALE};
@@ -224,7 +225,23 @@ pub fn stroke(
 
     // We can fast-path here if we're using hairline stroking.
     if opts.hairline {
-        unimplemented!("hairline stroking is not part of the z2d sprite subset");
+        // The ported tess/raster layer is allocator-free, so `plot` drops the
+        // `alloc` arg and the Zig `defer contours.deinit(alloc)` becomes Rust
+        // `Drop`. The rasterizer is passed the RAW `opts.anti_aliasing_mode`
+        // field (not the alpha1-forced `aa_mode` local), matching the reference
+        // byte-for-byte (this subset has no alpha1 surface, so they are equal
+        // anyway).
+        let contours =
+            polyline_plotter::plot(nodes, opts.tolerance, &opts.dashes, opts.dash_offset)?;
+        hairline::run(
+            surface,
+            pattern,
+            &contours,
+            opts.operator,
+            opts.precision,
+            opts.anti_aliasing_mode,
+        );
+        return Ok(());
     }
 
     let scale: f64 = match aa_mode {
