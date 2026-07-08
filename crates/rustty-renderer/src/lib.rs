@@ -48,6 +48,7 @@ pub mod cursor;
 pub mod generic;
 pub mod link;
 pub mod message;
+pub mod row;
 pub mod shaders;
 pub mod shadertoy;
 pub mod state;

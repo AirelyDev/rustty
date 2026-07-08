@@ -316,3 +316,73 @@ pre-existing B1 unit KAT `subprocess_start_spawns_and_reaps` (which spawns a log
 but has NO read thread to drain the pty) can wedge `killPid`'s `killpg`/`waitpid(WNOHANG)` reap
 loop in a headless/undrained context — a property of that no-drain KAT, unrelated to B5 (which
 drains).
+
+## GPU R-d Chunk 3b (CPU cell-fill raw-ptr sites) — MIRI exception, SB/TB-clean by construction
+
+Chunk 3b's cell-fill (`crates/rustty-renderer/src/generic.rs`, `mod macos_impl`:
+`Renderer::{rebuild_cells, rebuild_row, add_cursor, add_glyph, add_underline, add_overline,
+add_strikethrough, add_preedit_cell}`) is written around raw pointers into
+`self.terminal_state` and the shaper, faithfully mirroring the reference
+(`src/renderer/generic.zig`, whose methods take `self: *Self` — a raw pointer — and bind
+`const state = &self.terminal_state`). **Unlike a pure FFI exception, the borrow structure
+here is Stacked-Borrows AND Tree-Borrows clean by construction — PROVEN on an isolated,
+non-FFI Miri harness** (`.claude/jobs/.../mirihar`, retained under the design doc) that
+reproduces the exact borrow shape of the run loop and the cursor alias; both models flag
+the naive `&mut self` structure as UB and pass the shipped structure. The raw-ptr sites,
+per `GPU_RD_CHUNK3B_DESIGN.md` §C.3:
+
+- **`rebuild_cells` `state: *const RenderState` (§C.3(1), remedy 1).** All inline
+  `terminal_state` scalars the post-row-loop cursor/preedit blocks read
+  (`colors.{foreground,background,cursor,palette}`, `cursor.{viewport,cell}`,
+  `rows/cols/dirty`, the SGR-at-cursor `Style`) are **Copy-hoisted to locals BEFORE the
+  row loop**, so no inline-self alias read through `state` is live-crossed by a sub-call.
+  The per-row `dirty=false` write-back is a fresh `&mut self.terminal_state` BEFORE
+  `rebuild_row`.
+- **`add_cursor(self_raw: *mut Renderer, cursor_state: *const render::Cursor, ...)`
+  (§C.3/§D.6).** BOTH `self` and `cursor_state` are RAW, exactly as the reference
+  `addCursor(self: *Self, cursor_state: *const RenderState.Cursor, ...)`. The caller's
+  `cursor_ptr` aliases inline `self.terminal_state.cursor`; a `&mut self` RECEIVER would
+  retag the whole `Renderer` and pop that alias BEFORE the body derefs it (SB UB — the
+  harness `cursor_current` candidate reproduces this). Taken raw, receiver and
+  `cursor_state` coexist as two raw pointers; the body reads `self` only via NARROW
+  `(*self_raw).field`.
+- **`rebuild_row` `cells`/`highlights: *const [_]` args + the shaper hook (§C.3(2,3)).**
+  `cells`/`highlights` are HEAP-backed (the `Vec` backing buffers of `row_data[y]`, a
+  separate allocation from the `Renderer`), so a sub-call's retag never touches them. The
+  `RunIteratorHook { shaper: *mut Shaper }` aliases inline `self.font_shaper` and stays
+  live across the whole run loop. A `self.font_shaper.shape(...)` SIBLING reborrow, or a
+  `self.add_glyph(...)` WHOLE-`Renderer` receiver reborrow, POPS the hook tag — permanent
+  UB under both SB and TB (harness `row_current`/`row_shaper_idiom`/`row_rawsibling`
+  candidates all reproduce it). The shipped loop is clean because: (a) `run_iterator`
+  returns an iterator holding only raw ptrs (no `self` borrow); (b) `shape` is invoked
+  THROUGH the hook's own raw ptr `run_iter.hooks.shaper` — a CHILD reborrow that does not
+  pop the hook — never `self.font_shaper.shape`; (c) the `add_*` helpers are RAW-self
+  associated fns called via a `self_raw: *mut Renderer`, using only NARROW field access
+  (never a whole `&mut *self_raw`); (d) direct `self.field` access in the loop
+  (`self.cells.bg_cell`, `self.uniforms`, `self.font_shaper_cache`) is disjoint from
+  `font_shaper`, retagging a different location. The `shaper_cells: Option<*const
+  [shape::Cell]>` is a heap slice into the shaper `cell_buf` / cache Box: captured right
+  after `shape`/`get`, consumed within one run's glyph loop, `put` COPIES (does not free)
+  it, and `run_iter.next` nulls it first.
+
+**Why Miri can't run the actual test:** the ONLY test that exercises this code
+(`generic::macos_impl::tests::rebuild_cells_fills_bg_fg_cursor`) is macOS/Metal-gated —
+it builds an offscreen `Metal` (`MTLCreateSystemDefaultDevice` + `newCommandQueue`),
+`init_shaders`, a `SwapChain`, and a CoreText `Shaper`/`SharedGrid`. Miri cannot execute
+the Metal/CoreText foreign functions (same "can't call foreign function" class as the
+rustty-xev C3–C6 and rustty-termio B1–B5 exceptions). So it **runs natively**, not under
+Miri. The teeth (why no unsafe path is un-verified): the borrow structure is not merely
+"adversary-reviewed" — it is Miri-proven SB/TB-clean on the isolated harness that mirrors
+it exactly, so the aliasing IS Miri-checked, just on the non-FFI reproduction rather than
+the FFI-bearing test. Any future edit that re-reads `state` across a `&mut *self` sub-call,
+routes `shape` through `self.font_shaper` instead of the hook, or reverts an `add_*` helper
+to a `&mut self` receiver re-opens the hazard — re-run the harness. The native run passes
+(assertions on `bg_cells` + a foreground glyph + a red block cursor at `[2,0]`), and every
+crossed value (`page::Cell`/`Style`/`RGB`/`shape::Cell`/`Colors` scalars) is `Copy` POD.
+
+> NOTE (latent, tracked): the CoreText/harfbuzz shaper crate's OWN run-loop idiom
+> (`let sp: *mut Shaper = &mut ...; (*sp).run_iterator(); ... (*sp).shape(run)` — e.g.
+> `harfbuzz_tests.rs`) has the SAME sibling-reborrow shape and is likewise UB under SB/TB
+> (harness `row_shaper_idiom`), but is never Miri-checked (harfbuzz/CoreText FFI). It works
+> in practice (the Shaper never moves). Not fixed here (out of Chunk-3b scope); flagged so a
+> future shaper Miri pass routes shape through `run_iter.hooks.shaper` the same way.
