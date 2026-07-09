@@ -3234,12 +3234,18 @@ milestone runs. 0-test impact on the product crates.
 `ScreenClone.zig`, `TerminalParser.zig`, `TerminalStream.zig`, `cli.zig`,
 `main.zig`, `options.zig`) + `src/main_bench.zig`, together ~1441 LOC; plus the
 `export fn ghostty_benchmark_cli` C-ABI entrypoint (`src/benchmark/CApi.zig:8`).
-**Rustty counterpart:** `crates/rustty-bench` scaffold only (Cargo.toml + stub
-`lib.rs`). **Why deferred:** the micro-benchmark harness is a developer tool, not
-part of the shipping terminal; the `ghostty_benchmark_cli` export is not on the
-71-symbol libghostty product contract. Headless-feasible. **What unblocks it:**
-sub-project #3 (unused-subset, GAP_ANALYSIS §3.8) — port `rustty-bench` and its
-`rustty_benchmark_cli` export alongside the synthetic generators. 0-test impact.
+**Rustty counterpart:** `crates/rustty-bench` — **PORTED (PORT STATUS: done)**: all
+12 `src/benchmark/*.zig` files ported module-per-file, 7 `test{}` assertion-for-assertion
+(ScreenClone has none; `main.zig` `refAllDecls` dropped as a Zig reflection idiom),
+Miri-clean, `rustty_benchmark_cli` extern "C" export landed. **Residual sub-seams
+(narrow, tracked):** (1) the macOS `os_signpost` Instruments interval (`Benchmark.zig`
+44-65) — `#[cfg(target_os="macos")]` no-op with the verbatim Zig body preserved,
+awaiting the macOS binding tier; (2) the `ghostty_benchmark_cli` C-name alias —
+sub-project #2's `ghostty_*→rustty_*` alias layer (rustty exports `rustty_benchmark_cli`
+per R2); (3) `src/main_bench.zig` — the thin binary entry (re-export of the bench CLI
+main), a Phase-2 CLI-bin seam; (4) `cli.main`'s `detectArgs` replicated locally (the
+shared helper lives in the heavy `rustty-cli`; `main()` is only reached by the deferred
+`main_bench.zig` bin). 0-test regression.
 
 ## Sub-project #3 (unused-subset): `src/extra/{bash,fish,zsh,vim,sublime}.zig` — shell-completion / editor-syntax generators
 

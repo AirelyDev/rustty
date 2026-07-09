@@ -590,6 +590,9 @@ dependencies = [
 name = "rustty-bench"
 version = "0.1.0"
 dependencies = [
+ "allocator-api2",
+ "rustty-args",
+ "rustty-lib",
  "rustty-simd",
  "rustty-unicode",
  "rustty-vt",
