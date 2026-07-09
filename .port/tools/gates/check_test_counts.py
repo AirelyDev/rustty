@@ -167,9 +167,21 @@ RSXEV = "/Users/gael/projects/rustty/crates/rustty-xev/src"
 GHWUFFS = "/Users/gael/projects/ghostty/pkg/wuffs/src"
 RSWUFFS = "/Users/gael/projects/rustty/crates/rustty-wuffs/src"
 
+# rustty-zf: the vendored `zf` 0.10.3 fuzzy-finder parity crate (the theme-picker
+# rank/highlight `cli/list_themes.zig` sorts on). GH base = the content-addressed
+# zig-cache dep dir (NOT ghostty src/), so it is not in the 3234-test src/ contract;
+# scoped-mapped here. zf.zig carries 2 named `test "..."` (rank/highlight library
+# interface) + 1 anonymous refAllDecls `test {}` (skipped by zig_count); filter.zig
+# carries 4 (path iterator, segmentLen, rankToken, FixedArrayList); clib.zig carries
+# 2 (rank/highlight exported C library interface). zig=8; the Rust side adds the
+# ref_all_decls compile-touch (rust=9 >= 8).
+GHZF = "/Users/gael/.cache/zig/p/zf-0.10.3-OIRy8RuJAACKA3Lohoumrt85nRbHwbpMcUaLES8vxDnh/src/zf"
+RSZF = "/Users/gael/projects/rustty/crates/rustty-zf/src"
+
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
     "wuffs":           ([f"{GHWUFFS}/png.zig", f"{GHWUFFS}/jpeg.zig", f"{GHWUFFS}/main.zig", f"{GHWUFFS}/error.zig", f"{GHWUFFS}/swizzle.zig"], [f"{RSWUFFS}/*.rs"], 0),
+    "zf":              ([f"{GHZF}/zf.zig", f"{GHZF}/filter.zig", f"{GHZF}/clib.zig"], [f"{RSZF}/*.rs"], 0),
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
     "page":            ([f"{GH}/page.zig"], [f"{RS}/page_impl.rs", f"{RS}/page_tests.rs", f"{RS}/page.rs"], 0),
     "screen":          ([f"{GH}/Screen.zig"], [f"{RS}/screen.rs"], 0),

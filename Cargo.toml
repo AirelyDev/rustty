@@ -107,6 +107,15 @@ members = [
     # Rust, no deps. A leaf (depends on nothing in the workspace).
     "crates/rustty-z2d",
 
+    # ----- vendored pure-Rust dependency port (R3): zf 0.10.3 fuzzy finder -----
+    # Port of the `natecraddock/zf` 0.10.3 fuzzy-match ranker ghostty's
+    # `cli/list_themes.zig` sorts the theme picker with (`zf.rank(name, tokens,
+    # .{})` -> `?f64`). zf is a DEP not ghostty code, so its own tests are not the
+    # parity contract, but the RANK algorithm must be bit-faithful (list_themes
+    # sorts on the exact `f64` + the match/no-match decision). Pure Rust, no deps.
+    # A leaf. GH base = the zig-cache dep dir; scoped-mapped in check_test_counts.py.
+    "crates/rustty-zf",
+
     # ----- supporting -sys crates (R3: vendored C, cc + bindgen) -----
     "crates-sys/freetype-sys",
     "crates-sys/harfbuzz-sys",
@@ -182,6 +191,9 @@ rustty-helpgen = { path = "crates/rustty-helpgen" }
 rustty-xev = { path = "crates/rustty-xev" }
 # Vendored pure-Rust port of the z2d 2D vector graphics subset (R3). A leaf.
 rustty-z2d = { path = "crates/rustty-z2d" }
+# Vendored pure-Rust port of the zf 0.10.3 fuzzy finder (R3) — the theme-picker
+# rank/highlight algorithm (`cli/list_themes.zig`). A leaf.
+rustty-zf = { path = "crates/rustty-zf" }
 # R3: vendored zlib 1.3.1 (the SAME C library the reference links). Provides the
 # inflate (DEFLATE decompression) surface the Kitty graphics image port needs.
 zlib-sys = { path = "crates-sys/zlib-sys" }

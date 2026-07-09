@@ -1,0 +1,44 @@
+# rustty-zf — pure-Rust port of the vendored `zf` 0.10.3 fuzzy finder (R3 vendored dep).
+#
+# Crate IDENTITY is `rustty-zf` (R4). `zf` (natecraddock/zf 0.10.3, MIT) is a
+# DEPENDENCY package of ghostty — `cli/list_themes.zig` fuzzy-sorts the theme
+# picker with `zf.rank(name, tokens, .{})` (`?f64`; lower = better, `null` drops a
+# non-match) — NOT ghostty source. Like `rustty-z2d` / `rustty-wuffs` this is the
+# vendored-dep-port pattern: a PURE-RUST LEAF, no `rustty-*` deps.
+#
+# Source of truth (READ-ONLY oracle):
+#   /Users/gael/.cache/zig/p/zf-0.10.3-OIRy8RuJAACKA3Lohoumrt85nRbHwbpMcUaLES8vxDnh/src/zf/{zf,filter,clib}.zig
+#
+# R1 fidelity: every line / comment / `test {}` ported assertion-for-assertion.
+# The fuzzy-RANK algorithm is BIT-FAITHFUL — `list_themes` sorts on the exact `f64`
+# and relies on the exact match / no-match (`?f64 == null`) decision, so `rank()`
+# must reproduce zf's values. Zig byte-slices (`[]const u8`) map to `&[u8]` /
+# `Vec<u8>`, NEVER lossy `String` (zf matches over raw bytes; `std.ascii.toLower`
+# is ASCII-only). The C ABI exports the `rustty_zf_*` names (R2); the
+# `ghostty_zf_*` / `zf_*` aliases are DEFERRED to a later chunk.
+#
+# The leak/UB gate is Miri (R6, pure-Rust crate). The `clib.rs` `extern "C"` fns
+# are callable from Rust `#[test]`s under Miri (Miri only bars FFI *across* the
+# language boundary), so they run under Miri as-is.
+[package]
+name = "rustty-zf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+# Pure leaf (R4): NO workspace deps. The C tests use only `std::ffi::{CStr, c_char}`.
+[dependencies]
+
+[dev-dependencies]
+
+# list_themes consumes the RUST `zf::rank` API, not the C ABI; start rlib-only.
+# `["staticlib","cdylib"]` + a cbindgen header land only when the C alias (#2)
+# needs a linkable library. The `extern "C"` fns still compile + unit-test in-crate.
+[lib]
+crate-type = ["rlib"]
