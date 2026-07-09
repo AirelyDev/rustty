@@ -565,3 +565,47 @@ signatures. Any future edit that binds a whole `&mut *self_` in `threadMain`/a c
 whole `&mut renderer_thread` on the main thread post-spawn, re-opens the hazard — re-run the harness
 (`renderthread_shipped` must stay green under both SB and TB, `renderthread_naive` UB, BEFORE the core
 fill ships).
+
+## macOS windowing W4 (apprt-c host handshake: blur + display_id + NSWindow KAT) — MIRI exception
+
+W4 realizes the two remaining macOS `#[cfg(target_os="macos")]` C-ABI leaves in
+`crates/rustty-apprt-c/src/lib.rs` and lands the culminating integration harness
+`crates/rustty-apprt-c/tests/macos_window_host.rs`. All of it is foreign-call /
+live-render-loop territory — Miri cannot run it (the "can't call foreign function"
+class shared with the rustty-xev C3–C6, rustty-termio B1–B5, GPU Chunk-3b/4, and W0–W3
+entries). ASan-eligible on the FFI gate.
+
+- **`rustty_set_window_background_blur` (W4-2).** `window` is a foreign NSWindow id
+  (or, in the headless KAT, a plain-`NSObject` `MockHostView` double answering
+  `windowNumber`) — it is NEVER turned into a Rust `&`/`&mut`; only `objc2::msg_send!`
+  (`windowNumber`) and the private CGS SPI (`CGSSetWindowBackgroundBlurRadius`
+  /`CGSDefaultConnectionForThread`, resolved via `#[link(name="CoreGraphics",
+  kind="framework")]`) consume it ⇒ no aliasing obligation. `app` is read through
+  `&*(*app).config.get()` (an `UnsafeCell<Config>` shared read; the C host is
+  single-threaded). Foreign objc/CGS calls ⇒ Miri-excluded.
+- **`rustty_surface_set_display_id` (W4-3).** Pushes `rustty_renderer::Message::
+  MacosDisplayId` through `&*surface.renderer_thread.mailbox` (a `*mut Mailbox` Box
+  pointee OUTSIDE the Surface struct's Stacked-Borrows coverage) and wakes the loop
+  via the Copy `wakeup` `Async` handle — the SAME construct-then-spawn raw-alias
+  discipline PROVEN clean for the core render `Thread<A>` (see the W3 entry:
+  `.port/phase-2/mirihar-chunk3b`, `renderthread_shipped`=CLEAN under SB+TB). No new
+  aliasing shape is introduced (`&*mailbox` shared push + `&wakeup` narrow notify),
+  so W3's mirihar evidence covers it; the leaf itself crosses into the live xev
+  render loop + foreign wakeup ⇒ Miri-excluded.
+- **The `macos_window_host.rs` harness.** Real objc2 (`define_class!` MockHostView,
+  `msg_send!`), Metal, the private CGS SPI, `objc2_core_graphics::CGMainDisplayID`,
+  `objc2_io_surface` IOSurface lock/read, and a live surface render thread — all
+  foreign ⇒ Miri-excluded, ASan-eligible.
+
+**Deviation recorded (KAT runtime blocker).** The two harness tests that spawn a LIVE
+surface render thread (`hosts_view_layer_and_presents_live_frame`,
+`set_display_id_pushes_to_render_thread_panic_free`) are `#[ignore]`: on a host WITH
+a Metal device the render thread transitively hits
+`renderer::metal::metal_impl::Metal::loop_enter` (the M-4 IOSurfaceLayer
+display-callback install), which is STILL `unimplemented!("windowing-host")` on this
+tree. Per the governing plan that is W1-3/W2 work (plan lines 534/564/600/1001) left
+deferred — its `unimplemented!()` fires on the render thread and aborts the process.
+The W4-2 blur sub-KAT does NOT spawn a surface, so it runs GREEN headless and proves
+the realized blur leaf (real `windowNumber` msg_send + the private CGS SPI, incl. the
+`#[link] CoreGraphics` symbol resolution) end-to-end. Un-ignore the two tests once the
+`Metal::loop_enter` renderer seam lands.

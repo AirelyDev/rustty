@@ -2182,12 +2182,36 @@ pub unsafe extern "C" fn rustty_set_window_background_blur(app: *mut App, window
         //     nswindow.msgSend(usize, objc.sel("windowNumber"), .{}),
         //     @intCast(config.@"background-blur".cval()),
         // );
-        let _ = (app, window);
-        unimplemented!(
-            "rustty_set_window_background_blur — objc msgSend(windowNumber) + private \
-             CGS CGSSetWindowBackgroundBlurRadius (macOS objc/CGS Phase-3 leaf, \
-             embedded.zig:2108-2126)"
-        )
+        //
+        // SAFETY: `app` is a live *mut App (the C host is single-threaded); `window`
+        // is a live NSWindow id, only handed to msg_send!/CGS (never deref'd as a
+        // Rust reference — no aliasing obligation).
+        let config = unsafe { &*(*app).config.get() };
+
+        // Do nothing if we don't have background transparency enabled.
+        if config.background_opacity >= 1.0 {
+            return;
+        }
+
+        let nswindow: *mut objc2::runtime::AnyObject = window.cast();
+        // PARITY: `[nswindow windowNumber]` returns `NSInteger`. The reference reads
+        // it straight as `usize` (`nswindow.msgSend(usize, sel("windowNumber"), .{})`)
+        // and hands it to the CGS `window` arg. We read the ObjC value with its true
+        // signed type (`isize`/`NSInteger`) and then `as usize` — a same-width
+        // REINTERPRET of the identical bit pattern the reference passes (window
+        // numbers are always small positive ints, so the value is unchanged either
+        // way; the `as usize` documents that we are matching the reference's
+        // `msgSend(usize, …)` byte-for-byte, not performing a conversion).
+        let window_number: isize = unsafe { objc2::msg_send![nswindow, windowNumber] };
+        let _ = unsafe {
+            CGSSetWindowBackgroundBlurRadius(
+                CGSDefaultConnectionForThread(),
+                window_number as usize,
+                // @intCast(config.@"background-blur".cval())
+                rustty_config::value_types::background_blur_cval(config.background_blur)
+                    as core::ffi::c_int,
+            )
+        };
     }
 }
 
@@ -2195,13 +2219,29 @@ pub unsafe extern "C" fn rustty_set_window_background_blur(app: *mut App, window
 // extern "c" fn CGSSetWindowBackgroundBlurRadius(*anyopaque, usize, c_int) i32;
 // extern "c" fn CGSDefaultConnectionForThread() *anyopaque;
 //
-// PORT NOTE: the two private CoreGraphics `extern "c"` declarations
-// (embedded.zig:2128-2130) are the symbols the leaf above would link against in
-// Phase-3. They are preserved verbatim as comments (R1) rather than declared as
-// live `extern "C"` blocks, since nothing calls them until the objc/CGS leaf is
-// realized; declaring unused link references to private CGS symbols now would
-// only invite link/lint noise. They land as real `extern "C"` fns with the
-// blur leaf in Phase-3.
+// PORT NOTE: the two private CoreGraphics symbols (embedded.zig:2128-2130) — an
+// undocumented, non-public SkyLight/CoreGraphics SPI (the same one Terminal.app
+// uses). They are now REALIZED (W4-2) as a live `extern "C"` block. The explicit
+// `#[link(name = "CoreGraphics", kind = "framework")]` on the block is what makes
+// the cdylib link resolve them: it emits `-framework CoreGraphics` into
+// `librustty.dylib`, from which both private symbols export. This is a
+// self-contained link directive — it does NOT depend on any `objc2-core-graphics`
+// dependency (that crate is dev-only, for the harness's `CGMainDisplayID`), and it
+// does NOT rely on QuartzCore/Metal transitively pulling CoreGraphics (QuartzCore's
+// `LC_LOAD_DYLIB` on CoreGraphics is not a reexport, and rustc's cdylib link does
+// not pass `-undefined dynamic_lookup`, so the symbols would otherwise be
+// unresolved). No crate exports these two symbols, so the manual extern is faithful
+// to the reference decls.
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGSSetWindowBackgroundBlurRadius(
+        connection: *mut core::ffi::c_void,
+        window: usize,
+        radius: core::ffi::c_int,
+    ) -> i32;
+    fn CGSDefaultConnectionForThread() -> *mut core::ffi::c_void;
+}
 
 // // Darwin-only C APIs.
 // const Darwin = struct { ... };
@@ -2227,10 +2267,12 @@ pub unsafe extern "C" fn rustty_set_window_background_blur(app: *mut App, window
 // export fn ghostty_surface_set_display_id(ptr: *Surface, display_id: u32) void { ... }
 //
 // PORT NOTE: pushes a `.macos_display_id` message to the renderer thread's
-// mailbox and wakes it (`renderer_thread.wakeup.notify()`). Both the renderer
-// thread and its xev `wakeup` are Phase-3 placeholder leaves (renderer R-d +
-// D6 xev), so this is an `unimplemented!()` leaf — reached only once a live
-// surface + render thread exist. Body preserved verbatim.
+// mailbox and wakes it (`renderer_thread.wakeup.notify()`). This is now REALIZED
+// (W4-3): W2/W3 supply exactly the consumed seams — a live surface with a real
+// render thread (`renderer_thread.mailbox: *mut thread::Mailbox` +
+// `renderer_thread.wakeup: xev::Async`), and the drain side is live
+// (`renderer_seam.rs` `Message::MacosDisplayId(v) => set_macos_display_id(v)?`).
+// Body preserved verbatim above the realized code.
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_surface_set_display_id(ptr: *mut Surface, display_id: u32) {
@@ -2240,11 +2282,19 @@ pub unsafe extern "C" fn rustty_surface_set_display_id(ptr: *mut Surface, displa
     //     .{ .forever = {} },
     // );
     // surface.renderer_thread.wakeup.notify() catch {};
-    let _ = (ptr, display_id);
-    unimplemented!(
-        "rustty_surface_set_display_id — renderer_thread.mailbox.push(.macos_display_id) \
-         + xev wakeup.notify (renderer R-d + D6 xev Phase-3 leaf, embedded.zig:2134-2141)"
-    )
+    //
+    // SAFETY: `ptr` validity is the caller's contract. `renderer_thread.mailbox` is
+    // a *mut Mailbox (a Box pointee OUTSIDE the Surface struct's Stacked-Borrows
+    // coverage — the render-thread's raw-alias discipline); pushing through
+    // `&*mailbox` while the render thread holds its own raw alias is the sanctioned
+    // construct-then-spawn pattern (no `&mut *self` whole-struct reborrow).
+    let surface = unsafe { &(*ptr).core_surface };
+    let _ = unsafe { &*surface.renderer_thread.mailbox }.push(
+        rustty_renderer::Message::MacosDisplayId(display_id),
+        rustty_datastruct::blocking_queue::Timeout::Forever,
+    );
+    // surface.renderer_thread.wakeup.notify() catch {};
+    let _ = surface.renderer_thread.wakeup.notify();
 }
 
 /// C: rustty_surface_quicklook_font

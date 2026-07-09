@@ -67,3 +67,25 @@ allocator-api2 = { workspace = true }
 # Same libc the reference's C API binds (R3): the `c_int`/`c_char` types the
 # `ghostty_*` (rustty `rustty_*`) exports cross the ABI with.
 libc = "0.2"
+# W4-2/W4-3: the blur leaf's objc msgSend(windowNumber) needs the objc2 runtime;
+# the display_id leaf pushes rustty_renderer::Message::MacosDisplayId over the
+# render-thread rustty_datastruct BlockingQueue with a Timeout. Forward edges to
+# crates far below apprt-c (the top sink) — check_acyclic.sh stays GREEN.
+objc2 = { version = "0.6" }
+rustty-renderer = { workspace = true }
+rustty-datastruct = { workspace = true }
+
+[dev-dependencies]
+# W4-4 macos_window_host.rs. The HEADLESS proof hands a plain-NSObject MockHostView
+# layer-host double across the C-ABI (renderer golden_presents_frame_on_screen
+# precedent) => it needs only objc2 (already a normal dep) + quartz-core + io-surface,
+# NO app-kit and NO main-thread marker. objc2-app-kit is dev-only and consumed ONLY
+# by the #[ignore] on-device visible-window test (real NSWindow). objc2-core-graphics
+# supplies CGMainDisplayID. All 0.3 crates are the SAME family already resolved in-lock
+# by rustty-renderer against objc2 0.6.
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["CALayer", "CAMetalLayer", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3", features = ["NSGeometry"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGDirectDisplay"] }
+objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef", "IOSurfaceTypes", "objc2", "objc2-core-foundation"] }
+objc2-app-kit    = { version = "0.3", default-features = false, features = ["NSWindow", "NSView", "NSResponder", "NSGraphics"] }
+rustty-xev = { workspace = true }

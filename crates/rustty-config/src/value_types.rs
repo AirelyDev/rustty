@@ -2323,7 +2323,7 @@ pub(crate) fn background_blur_enabled(v: BackgroundBlur) -> bool {
 }
 
 // pub fn cval(self: BackgroundBlur) i16
-pub(crate) fn background_blur_cval(v: BackgroundBlur) -> i16 {
+pub fn background_blur_cval(v: BackgroundBlur) -> i16 {
     // return switch (self) {
     match v {
         // .false => 0,
