@@ -171,6 +171,21 @@ objc2-core-foundation = { version = "0.3", features = [
     "CFString",
 ] }
 
+# objc2-quartz-core: CALayer + the IOSurfaceLayer subclass (W0.T3) and, for W1,
+# CAMetalLayer. Feature gate (per upstream docs; CONFIRM via the T3 spike against
+# the resolved local crate BEFORE trusting — this crate is not yet in Cargo.lock):
+# the `CALayer` feature (NOT `CoreAnimation`, which is an empty marker) gates
+# CALayer + `kCAGravityTopLeft` + contents/setContents/contentsGravity;
+# `objc2-core-foundation` gates the bounds()/contentsScale() geometry accessors the
+# resize-discard path reads; `CAMetalLayer` is enabled now for W1 (harmless; pulls
+# objc2-metal which this crate already deps). If a gate name is wrong it is a
+# one-line feature add/rename at port time.
+objc2-quartz-core = { version = "0.3", default-features = false, features = [
+    "CALayer",
+    "CAMetalLayer",
+    "objc2-core-foundation",
+] }
+
 # DispatchData for newLibraryWithData: (the embedded metallib bytes wrapped in a
 # dispatch_data_t). `DispatchData::from_bytes` is gated on the block2 feature.
 dispatch2 = { version = "0.3", features = ["block2"] }

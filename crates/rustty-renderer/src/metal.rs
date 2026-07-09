@@ -35,6 +35,7 @@ pub mod api;
 pub mod buffer;
 pub mod frame;
 pub mod gpu_abi;
+pub mod iosurface_layer; // W0.T3 — CALayer subclass present primitive
 pub mod metal_impl;
 pub mod pipeline;
 pub mod render_pass;

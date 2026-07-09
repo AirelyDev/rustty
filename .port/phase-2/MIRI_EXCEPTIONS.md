@@ -450,3 +450,18 @@ golden run ASSERTS real GPU output (cursor red at grid (2,0); opaque dark bg; a 
 pixel/behavior failure. Any future edit that holds a `frame` raw root across a whole-`&mut self`
 call, reverts `sync_atlas_texture` to a `&self`+`&mut Texture` signature, or holds a `&mut
 Renderer` across the completion callback re-opens the hazard — re-run the harness.
+
+## macOS windowing W0 (cf_release live loop + IOSurfaceLayer) — MIRI exceptions
+
+- **`crates/rustty-os/tests/cf_release_live.rs`** (`cf_release_thread_releases_on_real_xev_loop`).
+  Drives the real `rustty-xev` kqueue `Loop`/`Async` (mach-port alloc/`kevent64`/`mach_msg`
+  syscalls) plus a `std::thread` notifier and CoreFoundation `CFString`/`CFGetRetainCount`/
+  `CFRelease`. Miri cannot execute the mach/kqueue/CF foreign functions (same class as the
+  rustty-xev C3–C6 exceptions). Runs natively; ASan-eligible (R6). The teeth: the retain-count
+  asserts the object went 2→1, proving `drainMailbox`→`CFRelease` fired on the live loop (the old
+  `unimplemented!()` placeholder would have panicked).
+- **`crates/rustty-renderer/src/metal/iosurface_layer.rs` tests** (`iosurface_layer_sets_surface_as_contents`,
+  `iosurface_layer_display_callback_fires`). Register a real ObjC `CALayer` subclass (objc2
+  `define_class!`), mint an IOSurface-backed offscreen `Metal` `Target` (`MTLCreateSystemDefaultDevice`
+  + IOSurface create), and send `-display`/`setContents:` through the ObjC runtime. Miri cannot
+  execute the objc runtime + Metal/IOSurface foreign functions. Runs natively; ASan-eligible (R6).

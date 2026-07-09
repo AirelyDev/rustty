@@ -12,14 +12,13 @@
 //! The reference has no `test {}` blocks (Phase-0 inventory:
 //! `os/cf_release_thread.zig` has 0 tests).
 //!
-//! PARITY (DEFERRED SEAM, R4): the reference imports `xev =
-//! @import("../global.zig").xev`, the libxev event-loop backend. In rustty that
-//! backend is an *upward*-tier dependency (font/event-loop tier) carried as the
-//! `rustty_global::seam::Xev` placeholder (`= ()`), exactly as `global.zig`'s
-//! `pub const xev` is a deferred seam. The full thread logic below is ported
-//! verbatim against the `xev` seam surface (`Loop`/`Async`/`Completion`/
-//! `CallbackAction`); the seam is satisfied by the real libxev binding when the
-//! upper tier lands. No reference logic, comment, or behavior is dropped.
+//! PARITY (SEAM SATISFIED, R4): the reference imports `xev =
+//! @import("../global.zig").xev`. In rustty that backend is now the real
+//! `rustty-xev` kqueue Loop/Async (Milestone A/B), a downward-acyclic macOS edge
+//! (rustty-xev deps only `{ rustty-global, libc }`). The full thread logic below
+//! is ported verbatim against the live `xev` surface (`Loop`/`Async`/`Completion`/
+//! `CallbackAction`/`WaitError=MachPortError`/`RunMode::UntilDone`). No reference
+//! logic, comment, or behavior is dropped.
 
 // PORT: `pub const Thread = @This();` — the file *is* the `Thread` struct in
 // Zig. In Rust the file is a module and `Thread` is a named struct below.
@@ -28,8 +27,8 @@
 // os/main.zig`, `xev = global.zig.xev`, `BlockingQueue = datastruct/main.zig`,
 // `Allocator = std.mem.Allocator`, and `log = std.log.scoped(.cf_release_thread)`.
 // In Rust we use the ported `crate::macos` sibling, `rustty_datastruct::BlockingQueue`,
-// the `xev` seam (see the module note above), and CoreFoundation's `CFRelease`
-// declared as `extern "C"` (R3 binding to the SAME framework).
+// the real `rustty_xev` backend, and CoreFoundation's `CFRelease` declared as
+// `extern "C"` (R3 binding to the SAME framework).
 #![allow(dead_code)]
 // PARITY: the reference's identifiers are camelCase (`threadMain`, `drainMailbox`,
 // `wakeupCallback`, `stopCallback`, ...). Preserved verbatim per R1/R2.
@@ -37,9 +36,9 @@
 
 use rustty_datastruct::BlockingQueue;
 
-// PORT: `const xev = @import("../global.zig").xev;`. See the DEFERRED SEAM note
-// in the module doc comment; the seam surface is defined in `xev_seam` below.
-use xev_seam as xev;
+// PORT: `const xev = @import("../global.zig").xev;` — now the real kqueue backend.
+#[cfg(target_os = "macos")]
+use rustty_xev as xev;
 
 // PORT: `const log = std.log.scoped(.cf_release_thread);`. Routed through the
 // log facade where used; the call sites preserve the reference's messages.
@@ -58,6 +57,11 @@ pub type Mailbox = BlockingQueue<Message, 64>;
 /// PARITY: the reference is a single struct (the file). Its fields are reproduced
 /// here, except the reference's first field (see the `alloc` PARITY note below)
 /// which Rust ownership subsumes; all remaining fields are verbatim.
+//
+// PORT: macOS-gated because `loop_`/`wakeup`/`stop` name `rustty_xev::Loop`/
+// `Async`, which are `#[cfg(target_os = "macos")]` (the kqueue backend is
+// macOS-only). `Message`/`Mailbox` (no xev) stay cross-platform below.
+#[cfg(target_os = "macos")]
 pub struct Thread {
     /// Allocator used for some state
     //
@@ -72,24 +76,25 @@ pub struct Thread {
     /// The main event loop for the thread. The user data of this loop
     /// is always the allocator used to create the loop. This is a convenience
     /// so that users of the loop always have an allocator.
-    loop_: xev::Loop,
+    pub loop_: xev::Loop,
 
     /// This can be used to wake up the thread.
-    wakeup: xev::Async,
+    pub wakeup: xev::Async,
     wakeup_c: xev::Completion,
 
     /// This can be used to stop the thread on the next loop iteration.
-    stop: xev::Async,
+    pub stop: xev::Async,
     stop_c: xev::Completion,
 
     /// The mailbox that can be used to send this thread messages. Note
     /// this is a blocking queue so if it is full you will get errors (or block).
-    mailbox: Box<Mailbox>,
+    pub mailbox: Box<Mailbox>,
 
     flags: Flags,
 }
 
 /// PORT: the reference's inline `flags: packed struct { drain: bool = false }`.
+#[cfg(target_os = "macos")]
 #[derive(Default)]
 pub struct Flags {
     /// This is set to true only when an abnormal exit is detected. It
@@ -97,6 +102,7 @@ pub struct Flags {
     drain: bool,
 }
 
+#[cfg(target_os = "macos")]
 impl Thread {
     /// Initialize the thread. This does not START the thread. This only sets
     /// up all the internal state necessary prior to starting the thread. It
@@ -141,27 +147,37 @@ impl Thread {
     }
 
     /// The main entrypoint for the thread.
+    //
+    // PORT (SB/TB, `rust-mut-args-strongly-protected`): the reference
+    // `threadMain(self: *Thread)` keeps `&mut self` here, but delegates to the
+    // raw-`*mut Thread` child so the raw aliasing (the loop simultaneously holds
+    // `&raw mut (*self_).loop_`/`(*self_).wakeup_c` as raw pointers) lives only
+    // where the loop holds it, never as a `&mut self` re-read across ticks.
     pub fn threadMain(&mut self) {
+        let self_: *mut Thread = self;
         // Call child function so we can use errors...
-        if let Err(err) = self.threadMain_() {
+        if let Err(err) = unsafe { Self::threadMain_(self_) } {
             log_warn_thread_err(&err);
         }
 
         // If our loop is not stopped, then we need to keep running so that
         // messages are drained and we can wait for the surface to send a stop
         // message.
-        if !self.loop_.stopped() {
+        if !unsafe { (*self_).loop_.stopped() } {
             log_warn_abrupt_exit();
             // defer log.debug("cf release thread fully exiting after abnormal failure", .{});
-            self.flags.drain = true;
-            if let Err(err) = self.loop_.run(xev::RunMode::UntilDone) {
+            unsafe { (*self_).flags.drain = true };
+            if let Err(err) = unsafe { (*self_).loop_.run(xev::RunMode::UntilDone) } {
                 log_err_drain_failed(&err);
             }
             log_debug_fully_exiting();
         }
     }
 
-    fn threadMain_(&mut self) -> Result<(), xev::Error> {
+    /// # Safety
+    /// `self_` must be a valid, uniquely-owned `Thread` pointer that outlives the
+    /// loop run (the loop holds its interior `loop_`/`wakeup_c`/`stop_c` raw).
+    unsafe fn threadMain_(self_: *mut Thread) -> Result<(), xev::Error> {
         // defer log.debug("cf release thread exited", .{});
 
         // Right now, on Darwin, `std.Thread.setName` can only name the current
@@ -174,28 +190,48 @@ impl Thread {
 
         // Start the async handlers. We start these first so that they're
         // registered even if anything below fails so we can drain the mailbox.
-        self.wakeup
-            .wait(&mut self.loop_, &mut self.wakeup_c, wakeupCallback);
-        self.stop
-            .wait(&mut self.loop_, &mut self.stop_c, stopCallback);
+        //
+        // PORT: `self.wakeup.wait(&self.loop, &self.wakeup_c, Thread, self,
+        // wakeupCallback)` — `wakeup` is read out by-copy as the `.wait(self, ..)`
+        // receiver (Async is Copy), which does NOT create a `&mut` to `wakeup`, so
+        // there is no aliasing with the `&raw mut (*self_).wakeup_c` argument. The
+        // loop userdata IS the `Thread` (`UD = Thread`, `userdata = self_`).
+        unsafe {
+            (*self_).wakeup.wait(
+                &raw mut (*self_).loop_,
+                &raw mut (*self_).wakeup_c,
+                self_,
+                wakeupCallback,
+            );
+            (*self_).stop.wait(
+                &raw mut (*self_).loop_,
+                &raw mut (*self_).stop_c,
+                self_,
+                stopCallback,
+            );
+        }
 
         // Run
         log_debug_starting();
         // defer log.debug("starting cf release thread shutdown", .{});
-        let result = self.loop_.run(xev::RunMode::UntilDone);
+        let result = unsafe { (*self_).loop_.run(xev::RunMode::UntilDone) };
         log_debug_shutdown();
         result
     }
 
     /// Drain the mailbox, handling all the messages in our terminal implementation.
-    fn drainMailbox(&mut self) -> Result<(), xev::Error> {
+    //
+    /// # Safety
+    /// `self_` is the loop userdata (non-null by construction); only reached from
+    /// `wakeupCallback` via the loop-held raw pointer.
+    unsafe fn drainMailbox(self_: *mut Thread) -> Result<(), xev::Error> {
         // If we're draining, we just drain the mailbox and return.
-        if self.flags.drain {
-            while self.mailbox.pop().is_some() {}
+        if unsafe { (*self_).flags.drain } {
+            while unsafe { (*self_).mailbox.pop() }.is_some() {}
             return Ok(());
         }
 
-        while let Some(message) = self.mailbox.pop() {
+        while let Some(message) = unsafe { (*self_).mailbox.pop() } {
             // log.debug("mailbox message={}", .{message});
             match message {
                 Message::Release { refs } => {
@@ -213,63 +249,80 @@ impl Thread {
     }
 }
 
+// PORT: the raw-`*mut Thread` callback ABI (matching termio thread.rs). The real
+// `Async::wait` hands the userdata + loop/completion back as raw pointers held
+// across ticks; the callback error type is `xev::MachPortError` (the wakeup
+// async's `WaitError`), NOT the deleted placeholder `AsyncWaitError`.
+#[cfg(target_os = "macos")]
 fn wakeupCallback(
-    self_: Option<&mut Thread>,
-    _loop: &mut xev::Loop,
-    _c: &mut xev::Completion,
-    r: Result<(), xev::AsyncWaitError>,
+    self_: *mut Thread,
+    _loop: *mut xev::Loop,
+    _c: *mut xev::Completion,
+    r: core::result::Result<(), xev::MachPortError>,
 ) -> xev::CallbackAction {
     if let Err(err) = r {
         log_err_wakeup(&err);
         return xev::CallbackAction::Rearm;
     }
 
-    let t = self_.unwrap();
+    // const t = self_.?;  -> the reference unwraps the optional; our UD is
+    // non-null by construction (the loop userdata IS the Thread).
 
     // When we wake up, we check the mailbox. Mailbox producers should
     // wake up our thread after publishing.
-    if let Err(err) = t.drainMailbox() {
+    if let Err(err) = unsafe { Thread::drainMailbox(self_) } {
         log_err_drain_mailbox(&err);
     }
 
     xev::CallbackAction::Rearm
 }
 
+#[cfg(target_os = "macos")]
 fn stopCallback(
-    self_: Option<&mut Thread>,
-    _loop: &mut xev::Loop,
-    _c: &mut xev::Completion,
-    r: Result<(), xev::AsyncWaitError>,
+    self_: *mut Thread,
+    _loop: *mut xev::Loop,
+    _c: *mut xev::Completion,
+    r: core::result::Result<(), xev::MachPortError>,
 ) -> xev::CallbackAction {
     // _ = r catch unreachable;
     r.unwrap_or_else(|_| unreachable!());
-    self_.unwrap().loop_.stop();
+    unsafe { (*self_).loop_.stop() };
     xev::CallbackAction::Disarm
 }
 
 // PORT: the `log.*` call sites in the reference, routed to the log facade and
 // reproduced as named helpers that preserve the reference's messages verbatim.
+// macOS-gated: several name `xev::Error`/`xev::MachPortError`, and all are only
+// reached from the macOS-gated `Thread` logic above.
+#[cfg(target_os = "macos")]
 fn log_warn_thread_err(_err: &xev::Error) {
     // log.warn("error in cf release thread err={}", .{err});
 }
+#[cfg(target_os = "macos")]
 fn log_warn_abrupt_exit() {
     // log.warn("abrupt cf release thread exit detected, starting xev to drain mailbox", .{});
 }
+#[cfg(target_os = "macos")]
 fn log_debug_fully_exiting() {
     // log.debug("cf release thread fully exiting after abnormal failure", .{});
 }
+#[cfg(target_os = "macos")]
 fn log_err_drain_failed(_err: &xev::Error) {
     // log.err("failed to start xev loop for draining err={}", .{err});
 }
+#[cfg(target_os = "macos")]
 fn log_debug_starting() {
     // log.debug("starting cf release thread", .{});
 }
+#[cfg(target_os = "macos")]
 fn log_debug_shutdown() {
     // log.debug("starting cf release thread shutdown", .{});
 }
-fn log_err_wakeup(_err: &xev::AsyncWaitError) {
+#[cfg(target_os = "macos")]
+fn log_err_wakeup(_err: &xev::MachPortError) {
     // log.err("error in wakeup err={}", .{err});
 }
+#[cfg(target_os = "macos")]
 fn log_err_drain_mailbox(_err: &xev::Error) {
     // log.err("error draining mailbox err={}", .{err});
 }
@@ -287,90 +340,3 @@ extern "C" {
 // type-checks on all targets (the `Release` path is Darwin-only in practice).
 #[cfg(not(target_os = "macos"))]
 unsafe fn CFRelease(_cf: *mut std::ffi::c_void) {}
-
-/// PARITY (DEFERRED SEAM, R4): the `xev` event-loop backend surface used by this
-/// thread. The reference's `xev` is `@import("xev").Dynamic`; here it is the
-/// `rustty_global::seam::Xev` placeholder until the upper (event-loop) tier
-/// lands. The types/methods below mirror the exact surface the reference calls
-/// (`Loop.{init,deinit,run,stop,stopped}`, `Async.{init,deinit,wait}`,
-/// `Completion`, `CallbackAction.{rearm,disarm}`, `Async.WaitError`,
-/// `Loop.RunMode.until_done`). The bodies are intentionally left as
-/// `unimplemented!()` markers: they are *dependency* placeholders (this file's
-/// `Thread` logic is fully ported), to be replaced by the real libxev binding —
-/// no reference logic of `cf_release_thread.zig` is stubbed or weakened.
-mod xev_seam {
-    // PORT: `rustty_global::seam::Xev` (= `()`), the deferred xev backend.
-    #[allow(unused_imports)]
-    use rustty_global::xev as _DeferredXevBackend;
-
-    /// PORT: `xev.Loop`.
-    pub struct Loop {
-        stopped: bool,
-    }
-
-    /// PORT: `xev.Async`.
-    pub struct Async {}
-
-    /// PORT: `xev.Completion` (default-initialized `.{}` in the reference).
-    #[derive(Default)]
-    pub struct Completion {}
-
-    /// PORT: the error set of `Loop.init`/`Async.init`/`Loop.run`.
-    #[derive(Debug)]
-    pub struct Error;
-
-    /// PORT: `xev.Async.WaitError`.
-    #[derive(Debug)]
-    pub struct AsyncWaitError;
-
-    /// PORT: `xev.CallbackAction` (`.rearm`/`.disarm`).
-    pub enum CallbackAction {
-        Rearm,
-        Disarm,
-    }
-
-    /// PORT: `xev.Loop.RunMode` (`.until_done`).
-    pub enum RunMode {
-        UntilDone,
-    }
-
-    impl Loop {
-        pub fn init() -> Result<Loop, Error> {
-            unimplemented!("xev backend deferred seam (R4): upper event-loop tier")
-        }
-        pub fn deinit(&mut self) {
-            unimplemented!("xev backend deferred seam (R4): upper event-loop tier")
-        }
-        pub fn run(&mut self, _mode: RunMode) -> Result<(), Error> {
-            unimplemented!("xev backend deferred seam (R4): upper event-loop tier")
-        }
-        pub fn stop(&mut self) {
-            unimplemented!("xev backend deferred seam (R4): upper event-loop tier")
-        }
-        pub fn stopped(&self) -> bool {
-            self.stopped
-        }
-    }
-
-    impl Async {
-        pub fn init() -> Result<Async, Error> {
-            unimplemented!("xev backend deferred seam (R4): upper event-loop tier")
-        }
-        pub fn deinit(&mut self) {
-            unimplemented!("xev backend deferred seam (R4): upper event-loop tier")
-        }
-        pub fn wait(
-            &mut self,
-            _loop: &mut Loop,
-            _c: &mut Completion,
-            _cb: fn(
-                Option<&mut super::Thread>,
-                &mut Loop,
-                &mut Completion,
-                Result<(), AsyncWaitError>,
-            ) -> CallbackAction,
-        ) {
-            unimplemented!("xev backend deferred seam (R4): upper event-loop tier")
-        }
-    }
-}

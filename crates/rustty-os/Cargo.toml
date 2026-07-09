@@ -55,8 +55,13 @@ libc = "0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = "0.3"
-objc2-core-foundation = "0.3"
+# CFBase (CFGetRetainCount/CFRetained) + CFString for the cf_release live KAT.
+objc2-core-foundation = { version = "0.3", features = ["CFBase", "CFString"] }
 gettext-sys = { path = "../../crates-sys/gettext-sys" }
+# The live libxev kqueue Loop/Async backend for cf_release_thread (macOS-gated;
+# rustty_xev::Loop/Async are #[cfg(target_os="macos")]). Acyclic: rustty-xev deps
+# only { rustty-global, libc } — strictly below rustty-os.
+rustty-xev = { workspace = true }
 
 [build-dependencies]
 # R3: compile the vendored `pty.c` standalone with the host C compiler.
