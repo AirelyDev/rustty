@@ -149,3 +149,55 @@ for c in renderthread_naive renderthread_shipped; do
   MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri run -q -- "$c" # Tree Borrows
 done
 ```
+
+## DISPLAYCB candidates (W5 §6: the `Metal::loop_enter` display-callback trampoline)
+
+Added for `W5_DESIGN.md` §6 — the LAST live-windowing seam. The CA `display` method
+(main thread, fired during a `needsDisplayOnBoundsChange` commit) drives a display
+callback that recovers `*mut Renderer` via container_of (`@fieldParentPtr`) and calls
+the RAW-self draw path, CONCURRENTLY with the render thread's own `drawFrame` — both
+serialised by `draw_mutex`. The crux W5 must resolve: is a whole-`Renderer` `&mut`
+reborrow through the raw ctx sound, or must BOTH concurrent draw callers be raw-self?
+A deterministic mpsc handshake parks the render thread INSIDE its draw call (so its
+borrow context is live across the display callback's foreign access) and orders the two
+field writes (lock/unlock + channel happens-before ⇒ no data race to mask the borrow
+verdict). The layer's display-ctx `Cell<*mut c_void>` is main-thread-only (faithful:
+both `setDisplayCallback` and CA `display` fire on the main thread), so the container_of
+ctx never crosses threads. Selected by argv `displaycb_naive` / `displaycb_shipped`.
+
+| candidate | models | SB | TB |
+|---|---|---|---|
+| `displaycb_naive` | PRE-FIX: the render thread draws through the `&mut self` `draw_frame` WRAPPER (a protected whole-`Renderer` `&mut` fn arg, renderer_seam.rs:1208 pre-fix), CONCURRENTLY with the raw display callback's `draw_frame_raw` (mutex lock + plain-field write). One protected `&mut` receiver racing a raw foreign draw. | **UB** | **UB** |
+| `displaycb_shipped` | **shipped**: BOTH concurrent callers raw-self — render thread via `&raw mut (*(*owner).renderer).0` (a raw place projection, no protector; renderer_seam.rs:1208 post-fix), display callback via the container_of round-trip (`&raw mut (*rp).api` → `byte_sub(offset_of!(FakeRenderer, api))` → `*mut c_void` in a `Cell` → back → deref ALL of Renderer, §2.4). `draw_frame_raw` locks `draw_mutex`, narrow plain-field write + nested completion re-entry, unlocks. No whole-`Renderer` `&mut` protector spans either call. | **CLEAN** | **CLEAN** |
+
+**Load-bearing findings (the actual Miri output):**
+- `displaycb_naive` — **SB**: the display callback's `draw_mutex.lock()` (a foreign
+  access through the raw ctx) is refused because it "would remove [Unique …] which is
+  strongly protected" — the render thread's `&mut self` wrapper argument. **TB**: the
+  same foreign read "would cause the protected tag (currently Unique) to become
+  Disabled — protected tags must never be Disabled." This is exactly §2.2's claim: the
+  protector is established at the wrapper's entry, BEFORE the body reaches `lock()`, so
+  the `draw_mutex` cannot rescue it — **mutex or no mutex**. The UB is at the *first*
+  foreign touch (the lock), i.e. the plain-field write is never even reached.
+- `displaycb_shipped` — CLEAN under both: with BOTH concurrent callers raw-self, no
+  whole-`Renderer` `&mut` protector ever exists; the pre-lock access is only a SHARED
+  borrow of the `Sync` `draw_mutex` (two threads shared-borrowing it is fine), and every
+  field `&mut`/`&` is transient and dropped while the current thread holds the mutex.
+  The container_of provenance round-trip (`+offset` then `−offset` on one unbroken
+  allocation provenance, ctx stored/loaded as a pointer in a `Cell` — no int round-trip)
+  legally derefs ALL of Renderer.
+
+Because `displaycb_naive` models the render-thread `&mut` receiver that §3.4a removes,
+this pair certifies the **actually-shipped** shape and proves the raw-self split of BOTH
+concurrent draw callers is **load-bearing** (not cosmetic): if the split were cosmetic,
+`displaycb_naive` would be CLEAN and the certification false-green.
+
+Run:
+
+```sh
+for c in displaycb_naive displaycb_shipped; do
+  echo "== $c =="
+  cargo +nightly miri run --quiet -- "$c"                          # Stacked Borrows
+  MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri run -q -- "$c" # Tree Borrows
+done
+```

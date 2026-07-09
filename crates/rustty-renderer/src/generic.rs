@@ -2231,11 +2231,13 @@ mod macos_impl {
         //   }
         pub fn loop_enter(&mut self, draw_now: Async) -> Result<(), Error> {
             // Metal DECLARES loopEnter ⇒ this hook fires. It installs the
-            // IOSurfaceLayer display callback and needs a live NSView — DEFERRED to
-            // W3 (metal_impl `loop_enter` is `unimplemented!("windowing-host")`).
-            // INHABITED-placeholder doctrine: the method is faithfully filled; its
-            // transitive leaf `self.api.loop_enter()` stays the deferred W3 seam.
-            self.api.loop_enter();
+            // IOSurfaceLayer display callback (W5). container_of needs WHOLE-Renderer
+            // provenance (`draw_frame_raw` derefs all of Renderer), so hand the leaf a
+            // raw `*mut Metal` derived from the whole-`Renderer` `self_ptr` — NOT a
+            // narrowing `&mut self.api` reborrow. See `W5_DESIGN §2.4`.
+            let self_ptr: *mut Renderer = self;
+            let api_ptr: *mut Metal = unsafe { &raw mut (*self_ptr).api };
+            unsafe { Metal::loop_enter(api_ptr) };
             // `if (comptime DisplayLink == void) return;` — macOS: DisplayLink is
             // never void; no early return.
             let Some(display_link) = self.display_link.as_mut() else {
@@ -5320,7 +5322,24 @@ mod macos_impl {
         // `self_ptr` (H2). The full structure is clean under SB AND TB
         // (`drawframe_shipped`). `swap_chain.frames` is a fixed ARRAY (place-projected
         // `[idx]`, no `Index` autoref).
-        pub fn draw_frame(&mut self, sync: bool) -> Result<(), Error> {
+        //
+        // W5 (`W5_DESIGN §2.3`): the raw-self ENTRY. Faithful to Zig
+        // `drawFrame(self: *Renderer)` (a raw-pointer receiver — no protector). BOTH
+        // concurrent production callers invoke THIS through a raw `*mut Renderer`:
+        // (a) the render thread's `renderer.Thread` owner (above rustty-renderer; it
+        // holds `renderer: *mut Renderer`, faithful to Zig's raw `*Renderer` field),
+        // and (b) the main-thread display callback (metal_impl `display_callback`). No
+        // whole-`Renderer` `&mut` protector ever spans the call, so the two concurrent
+        // calls never alias a protected reference; the `draw_mutex` (locked below)
+        // serialises the field accesses. Proven on mirihar-chunk3b
+        // (`displaycb_concurrent`); the `displaycb_naive` UB control shows the split is
+        // load-bearing (a protected `&mut self` receiver racing this raw draw is UB).
+        //
+        /// # Safety
+        /// `self_ptr` must be a valid, well-aligned, whole-`Renderer`-provenance
+        /// pointer, and outlive the call. Concurrent calls are permitted (serialised
+        /// by `draw_mutex`).
+        pub unsafe fn draw_frame_raw(self_ptr: *mut Renderer, sync: bool) -> Result<(), Error> {
             // const start = std.time.Instant.now() catch unreachable;
             // const start_micro = std.time.microTimestamp();
             // defer {
@@ -5335,7 +5354,7 @@ mod macos_impl {
             // data we access while we're in the middle of drawing.
             // self.draw_mutex.lock();
             // defer self.draw_mutex.unlock();
-            let self_ptr: *mut Renderer = self;
+            // (`self_ptr` is now the raw-self receiver; W5_DESIGN §2.3.)
             unsafe { (*self_ptr).draw_mutex.lock() };
 
             // Hand-rolled `defer`s as RAII guards, each holding the raw root `self_ptr`
@@ -5935,6 +5954,19 @@ mod macos_impl {
             // The three RAII guards drop here in the reference LIFO order:
             // draw_frame_end → scrollbar → unlock.
         }
+
+        /// `&mut self` convenience wrapper over [`draw_frame_raw`]. Sound **only** for
+        /// EXCLUSIVE single-threaded callers — i.e. the offscreen unit tests, where no
+        /// display link / render thread / CA `display` can fire concurrently. Every
+        /// concurrent production path uses `draw_frame_raw`; no `&mut self` draw entry
+        /// is reachable from the render thread or the main-thread present path
+        /// (`W5_DESIGN §2.5`). Adding a concurrent caller of THIS wrapper reintroduces
+        /// the protected-`&mut` UB the split exists to prevent — the `displaycb_naive`
+        /// mirihar control fails for exactly that shape.
+        pub fn draw_frame(&mut self, sync: bool) -> Result<(), Error> {
+            let self_ptr: *mut Renderer = self;
+            unsafe { Self::draw_frame_raw(self_ptr, sync) }
+        }
     }
 
     // =======================================================================
@@ -6502,6 +6534,94 @@ mod macos_impl {
                 "no fg glyph rendered in cell (0,0) (maxlum={maxlum})"
             );
 
+            t.deinit(Global);
+        }
+
+        // W5 HEADLESS KAT (`W5_DESIGN §5`): prove the display-callback trampoline
+        // end-to-end with NO window server / live render thread. Build a `Renderer`
+        // with a real (headless) `IOSurfaceLayer`, run the REAL `Metal::loop_enter`
+        // (container_of + `set_display_callback`), fire the layer's ObjC `display`
+        // method directly (exactly the message Core Animation sends on the main thread
+        // during a `needsDisplayOnBoundsChange` commit), and assert a full sync frame
+        // ran through `display_callback` → `draw_frame_raw`.
+        //
+        // Single-threaded, so it proves the FUNCTIONAL leg only — it exercises ZERO
+        // cross-thread aliasing. The concurrency soundness (§2.5's raw-self re-route)
+        // is covered SOLELY by the `mirihar-chunk3b` `displaycb_concurrent`/
+        // `displaycb_naive` candidates (§6); neither artifact substitutes for the other.
+        #[test]
+        fn loop_enter_display_callback_draws_a_frame() {
+            use crate::metal::iosurface_layer::IOSurfaceLayer;
+            use objc2::msg_send;
+            use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+
+            let mut r = match golden_renderer(10, 3) {
+                Some(r) => r,
+                None => return, // Metal-skip
+            };
+
+            // Give the terminal some content so the draw is non-trivial (mirrors golden).
+            let mut mutex = Mutex::new();
+            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            {
+                let mut s = t.vt_stream();
+                s.next_slice(b"Ab");
+                s.deinit();
+            }
+            let st = state::State {
+                mutex: &mut mutex,
+                terminal: &mut t,
+                inspector: None,
+                preedit: None,
+                mouse: state::Mouse::default(),
+            };
+            r.update_frame(&st, true).unwrap();
+
+            // Inject a headless IOSurfaceLayer (offscreen ctor leaves layer = None). All
+            // fields are pub. `IOSurfaceLayer::init()` is window-server-free (W0 tests).
+            let layer = IOSurfaceLayer::init().expect("IOSurfaceLayer::init");
+            // Size it so surface_size == size.screen (scale 1 ⇒ size_changed == false ⇒
+            // the frame draws the existing cells rather than taking the resize path).
+            layer.as_ca_layer().setContentsScale(1.0);
+            layer.as_ca_layer().setBounds(CGRect::new(
+                CGPoint::new(0.0, 0.0),
+                CGSize::new(r.size.screen.width as f64, r.size.screen.height as f64),
+            ));
+            r.api.layer = Some(layer);
+
+            // Install the display callback via the REAL seam (container_of +
+            // set_display_callback). `loop_enter` needs a whole-`Renderer`-provenance
+            // `*mut Metal` (§2.4).
+            let self_ptr: *mut Renderer = &mut r;
+            let api_ptr: *mut Metal = unsafe { &raw mut (*self_ptr).api };
+            unsafe { Metal::loop_enter(api_ptr) };
+
+            // Arm an observable: draw_frame(true) drives the sync completion trampoline,
+            // which sets health = Healthy. Pre-set Unhealthy so a no-op / early-return
+            // fails loudly.
+            r.health.store(crate::Health::Unhealthy);
+
+            // Fire the ObjC `display` method — exactly what Core Animation sends on the
+            // main thread during a needsDisplayOnBoundsChange commit. This drives
+            // display_callback → draw_frame_raw(self_ptr, true).
+            let disp_layer = r.api.layer.as_ref().unwrap();
+            let _: () = unsafe { msg_send![&*disp_layer.layer, display] };
+
+            // The trampoline ran a full sync frame: completion set health = Healthy …
+            assert_eq!(
+                r.health.load(),
+                crate::Health::Healthy,
+                "display → display_callback → draw_frame_raw must run a full frame"
+            );
+            // … and present(sync) set the layer contents to the drawn IOSurface.
+            let contents: Option<objc2::rc::Retained<objc2::runtime::AnyObject>> =
+                unsafe { r.api.layer.as_ref().unwrap().layer.contents() };
+            assert!(
+                contents.is_some(),
+                "sync present must set the layer contents"
+            );
+
+            r.deinit();
             t.deinit(Global);
         }
 

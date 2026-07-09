@@ -1385,14 +1385,23 @@ impl Surface {
     // pub fn draw(self: *Surface) void { ... }
     //
     // PORT NOTE: `draw` reaches the Phase-3 GPU renderer leaf at RUNTIME (core
-    // `Surface::draw` → `renderer_seam` `unimplemented!()`); the delegation is ported
-    // LIVE — the panic is in the leaf, not here (EMBEDDED_BLUEPRINT §1).
-    pub fn draw(&mut self) {
+    // `Surface::draw` → the raw-self `draw_frame_raw` chain, W5); the delegation is
+    // ported LIVE (EMBEDDED_BLUEPRINT §1).
+    //
+    // W5 (`W5_DESIGN §2.5` caller 2 / §3.5): RAW-self, per the Zig `self: *Surface`
+    // receiver. `core_surface` is embedded by value (`:889`), so an `&mut self`
+    // receiver would protect it against the concurrent render thread; the raw-self
+    // cascade terminates at the C-ABI caller (`rustty_surface_draw`).
+    //
+    /// # Safety
+    /// `self_` is the stable embedded Surface allocation; no protected `&mut Surface`
+    /// may span the call.
+    pub unsafe fn draw(self_: *mut Surface) {
         // self.core_surface.draw() catch |err| {
         //     log.err("error in draw err={}", .{err});
         //     return;
         // };
-        if let Err(_err) = self.core_surface.draw() {
+        if let Err(_err) = unsafe { CoreSurface::draw(&raw mut (*self_).core_surface) } {
             // log.err("error in draw err={}", .{err});
         }
     }

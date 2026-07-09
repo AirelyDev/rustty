@@ -1082,6 +1082,221 @@ fn run_renderthread(shipped: bool) {
     let _ = (wake, stopf, dnow);
 }
 
+// ============================================================================
+// W5_DESIGN §6: the `Metal::loop_enter` display-callback trampoline aliasing model.
+//
+// Models the LAST live-windowing seam: the CA `display` method (main thread) fires a
+// display callback that recovers `*mut Renderer` via container_of (@fieldParentPtr)
+// and calls the RAW-self draw path, CONCURRENTLY with the render thread's own draw —
+// both serialised by `draw_mutex`. The crux W5 must resolve: is a whole-`Renderer`
+// `&mut` reborrow through the raw ctx sound, or must BOTH concurrent draw callers be
+// raw-self? This pair answers it under Miri (not hand-reasoned).
+//
+//   displaycb_shipped — BOTH concurrent callers raw-self (the SHIPPED §3.4/§3.5 shape):
+//     * render thread reaches draw via `&raw mut (*(*owner).renderer).0` (a raw place
+//       projection off the already-raw renderer handle; renderer_seam.rs:1208 post-fix);
+//     * display callback reaches draw via the container_of round-trip
+//       (`&raw mut (*rp).api` → byte_sub(offset_of!) → *mut c_void in a Cell → back →
+//       deref ALL of Renderer), the §2.4 provenance round-trip;
+//     * draw_frame_raw locks draw_mutex, does a NARROW plain-field write (models
+//       cells_rebuilt) + a nested completion re-entry (models metal_buffer_completed),
+//       unlocks. NO whole-Renderer `&mut` protector ever spans either call.
+//     Expected: CLEAN under BOTH SB and TB.
+//
+//   displaycb_naive — the REJECTED / pre-fix shape (the UB control that makes the
+//     raw-self split load-bearing, not cosmetic): the render thread draws through the
+//     `&mut self` `draw_frame` WRAPPER (a protected whole-`Renderer` `&mut` function
+//     argument, exactly renderer_seam.rs:1208 PRE-fix), CONCURRENTLY with the raw
+//     display callback's draw_frame_raw + its plain-field write. One protected `&mut`
+//     receiver racing a raw foreign draw. The `draw_mutex` cannot rescue it — the
+//     protector is established at the wrapper's entry, BEFORE the body reaches lock().
+//     Expected: UB under BOTH SB and TB.
+//
+// A deterministic mpsc handshake parks the render thread INSIDE its draw call (so its
+// borrow context — the protected `&mut` in the naive case — is live across the display
+// callback's foreign access) and orders the two field writes (lock/unlock + channel
+// happens-before ⇒ no data race to mask the borrow verdict). The layer's display-ctx
+// Cell is main-thread-only (faithful: both setDisplayCallback and CA `display` fire on
+// the main thread in the reference), so the container_of ctx never crosses threads.
+//
+// Pass criterion (recorded in README.md "W5 candidates"): displaycb_shipped CLEAN
+// under BOTH -Zmiri-stacked-borrows and -Zmiri-tree-borrows; displaycb_naive UB under
+// both — proving the raw-self split of BOTH concurrent draw callers is load-bearing.
+// ============================================================================
+
+use core::ffi::c_void;
+
+// FakeApi models `Renderer.api : Metal` — the container_of target field.
+struct FakeApi {
+    touched: u32, // written by the completion re-entry (narrow &mut api)
+}
+
+// FakeRenderer models `generic::Renderer`. `draw_mutex` + `lead` sit BEFORE `api` so
+// `offset_of!(FakeRenderer, api) != 0` — the byte_sub container_of round-trip is a real
+// non-trivial +offset/−offset (§2.4), not an identity.
+struct FakeRenderer {
+    draw_mutex: SMutex<()>,
+    lead: u64,
+    api: FakeApi,
+    field: u64,     // plain field written under draw_mutex (models `cells_rebuilt`)
+    completed: u32, // written by the completion re-entry
+}
+impl FakeRenderer {
+    fn new() -> Self {
+        FakeRenderer {
+            draw_mutex: SMutex::new(()),
+            lead: 0,
+            api: FakeApi { touched: 0 },
+            field: 0,
+            completed: 0,
+        }
+    }
+}
+
+// `core::Renderer(pub rustty_renderer::Renderer)` newtype — the render-thread lineage
+// reaches the inner renderer via `&raw mut (*(*owner).renderer).0` (renderer_seam.rs).
+struct RNewtype(FakeRenderer);
+
+// The IOSurfaceLayer's stored display ctx: `Cell<*mut c_void>` (ptr-in-ptr, provenance
+// preserved across the store/load — NOT an int round-trip). Main-thread-only in the
+// model, exactly as in the reference where both setDisplayCallback and CA `display`
+// fire on the main thread. A SEPARATE allocation from the Renderer (the ObjC layer).
+struct FakeLayer {
+    display_ctx: ICell<*mut c_void>,
+}
+
+// The completion trampoline (models metal_buffer_completed): recovers the renderer as a
+// RAW *mut and takes only NARROW field reborrows (never a whole `&mut`/`&` self).
+unsafe fn displaycb_buffer_completed(self_ptr: *mut FakeRenderer) {
+    unsafe {
+        (*self_ptr).api.touched = (*self_ptr).api.touched.wrapping_add(1); // narrow &mut api
+        (*self_ptr).completed = (*self_ptr).completed.wrapping_add(1); // narrow &mut field
+    }
+}
+
+// draw_frame_raw: the RAW-self draw entry, faithful to Zig `drawFrame(self: *Renderer)`.
+// Locks draw_mutex, does the narrow field mutations + the completion re-entry, unlocks.
+// BOTH concurrent callers invoke THIS through a raw *mut in the shipped shape.
+unsafe fn displaycb_draw_frame_raw(self_ptr: *mut FakeRenderer) {
+    // self.draw_mutex.lock() / defer unlock (RAII guard). The ONLY pre-lock access is a
+    // SHARED borrow of the `Sync` mutex field — no `&mut` yet.
+    let _g = unsafe { (*self_ptr).draw_mutex.lock().unwrap() };
+    // narrow plain-field write (models `cells_rebuilt = false`) — the racing target.
+    unsafe { (*self_ptr).field = (*self_ptr).field.wrapping_add(1) };
+    // nested completion re-entry (transient, per-field access; mirrors the real body).
+    unsafe { displaycb_buffer_completed(self_ptr) };
+    // guard drops here → unlock
+}
+
+// The `&mut self` `draw_frame` WRAPPER (the pre-fix render-thread path). `this` is a
+// protected whole-`Renderer` `&mut` FUNCTION ARGUMENT for the entire call — the exact
+// shape §2.2 shows is unsound under concurrency. The handshake parks INSIDE this call
+// so the protector is live across the display callback's foreign draw.
+fn displaycb_draw_frame_mut(this: &mut FakeRenderer, go: &Receiver<u8>, ack: &Sender<u8>) {
+    let self_ptr: *mut FakeRenderer = this;
+    unsafe { displaycb_draw_frame_raw(self_ptr) };
+    // Still INSIDE the `&mut self` call → `this`'s protector is LIVE. Hand off to the
+    // main-thread display callback, which does its foreign raw draw while we park.
+    ack.send(1).unwrap();
+    go.recv().unwrap();
+    // Re-use the protected `&mut` lineage after the foreign access (use-after-pop under
+    // the naive shape). `this` is re-read below so its protector spans to here.
+    unsafe { (*self_ptr).field = (*self_ptr).field.wrapping_add(1) };
+    let _keep: &mut FakeRenderer = this;
+    let _ = &*_keep;
+}
+
+// loopEnter(self: *Metal): container_of → *Renderer; layer.setDisplayCallback(.., renderer).
+// The byte_sub keeps `api_ptr`'s whole-allocation provenance (§2.4) so the stored ctx
+// can later deref ALL of Renderer.
+unsafe fn displaycb_loop_enter(api_ptr: *mut FakeApi, layer: &FakeLayer) {
+    let renderer: *mut FakeRenderer = unsafe {
+        (api_ptr as *mut u8)
+            .byte_sub(core::mem::offset_of!(FakeRenderer, api))
+            .cast::<FakeRenderer>()
+    };
+    layer.display_ctx.set(renderer as *mut c_void);
+}
+
+// The CA `display` method → displayCallback(renderer): recover the ctx, RAW-self draw.
+// NEVER `(*renderer).draw_frame(&mut self)` (which would form the protected whole-
+// Renderer `&mut` that races the render thread).
+unsafe fn displaycb_display_callback(layer: &FakeLayer) {
+    let ctx: *mut c_void = layer.display_ctx.get();
+    let renderer: *mut FakeRenderer = ctx.cast::<FakeRenderer>();
+    unsafe { displaycb_draw_frame_raw(renderer) };
+}
+
+struct SendRN(*mut RNewtype);
+unsafe impl Send for SendRN {}
+
+fn run_displaycb(naive: bool) {
+    let mut owner: Box<RNewtype> = Box::new(RNewtype(FakeRenderer::new()));
+    let owner_ptr: *mut RNewtype = &raw mut *owner;
+    let rp: *mut FakeRenderer = unsafe { &raw mut (*owner_ptr).0 };
+
+    // The ObjC layer (a SEPARATE allocation), touched only on the main thread.
+    let layer = Box::new(FakeLayer { display_ctx: ICell::new(core::ptr::null_mut()) });
+
+    // loopEnter on the main thread: install the container_of ctx into the layer.
+    let api_ptr: *mut FakeApi = unsafe { &raw mut (*rp).api };
+    unsafe { displaycb_loop_enter(api_ptr, &layer) };
+
+    let (go_tx, go_rx): (Sender<u8>, Receiver<u8>) = channel(); // main → render thread
+    let (ack_tx, ack_rx): (Sender<u8>, Receiver<u8>) = channel(); // render thread → main
+
+    // The render thread (the concurrent draw caller that races the display callback).
+    let send = SendRN(owner_ptr);
+    let handle = std::thread::Builder::new()
+        .name("render".into())
+        .spawn(move || {
+            let s = send;
+            let owner_ptr = s.0;
+            let go = go_rx;
+            let ack = ack_tx;
+            if naive {
+                // PRE-FIX: draw through the `&mut self` wrapper — a protected whole-
+                // `Renderer` `&mut` (renderer_seam.rs:1208 pre-fix). Parks inside.
+                let this: &mut FakeRenderer = unsafe { &mut (*owner_ptr).0 };
+                displaycb_draw_frame_mut(this, &go, &ack);
+            } else {
+                // SHIPPED: raw-self draw via `&raw mut (*(*owner).renderer).0` — a raw
+                // place projection, NO protector (renderer_seam.rs:1208 post-fix).
+                let self_ptr: *mut FakeRenderer = unsafe { &raw mut (*owner_ptr).0 };
+                unsafe { displaycb_draw_frame_raw(self_ptr) };
+                // Park so the two draws temporally overlap (still raw — no reuse of the
+                // raw across the display callback's own draw is needed for soundness).
+                ack.send(1).unwrap();
+                go.recv().unwrap();
+            }
+        })
+        .unwrap();
+
+    // Wait until the render thread is parked inside its draw (its borrow context — the
+    // protected `&mut` in the naive case — is live).
+    let _ = ack_rx.recv();
+
+    // MAIN (display-callback path): fire the CA `display` → display_callback →
+    // draw_frame_raw. In the naive case this raw foreign draw (mutex lock + field write)
+    // hits the render thread's LIVE protected `&mut` ⇒ UB. In the shipped case both are
+    // raw ⇒ clean (draw_mutex serialises the field write; channel gives happens-before).
+    unsafe { displaycb_display_callback(&layer) };
+
+    // Release the render thread.
+    go_tx.send(0).unwrap();
+    handle.join().unwrap();
+
+    let field = unsafe { (*rp).field };
+    let completed = unsafe { (*rp).completed };
+    let touched = unsafe { (*rp).api.touched };
+    println!(
+        "displaycb_{}: field={field} completed={completed} touched={touched}",
+        if naive { "naive" } else { "shipped" }
+    );
+    drop(owner);
+    drop(layer);
+}
+
 fn main() {
     let which = std::env::args().nth(1).unwrap_or_default();
     match which.as_str() {
@@ -1133,6 +1348,14 @@ fn main() {
         }
         "renderthread_naive" => {
             run_renderthread(false);
+            return;
+        }
+        "displaycb_shipped" => {
+            run_displaycb(false);
+            return;
+        }
+        "displaycb_naive" => {
+            run_displaycb(true);
             return;
         }
         _ => {}

@@ -597,6 +597,65 @@ entries). ASan-eligible on the FFI gate.
   `objc2_io_surface` IOSurface lock/read, and a live surface render thread — all
   foreign ⇒ Miri-excluded, ASan-eligible.
 
+## macOS windowing W5 (Metal::loop_enter display-callback trampoline) — MIRI exception, SB/TB-clean by construction
+
+W5 fills the LAST live-windowing seam: `renderer::metal::metal_impl::Metal::loop_enter`
+(the `unimplemented!("windowing-host")` that aborted any live surface's render thread),
+installing the `IOSurfaceLayer` display callback so Core Animation can drive a frame,
+mirroring `ghostty/src/renderer/Metal.zig:164-176` (`loopEnter`/`displayCallback`). The
+CA `display` method (main thread, `needsDisplayOnBoundsChange` commit) recovers `*mut
+Renderer` via container_of (`@fieldParentPtr` → `offset_of!` `byte_sub`) and calls the
+RAW-self draw path (`draw_frame_raw`), CONCURRENTLY with the render thread's own
+`drawFrame` — both serialised by `draw_mutex`. **Like the Chunk-3b/4 and W3 entries, the
+borrow structure is Stacked-Borrows AND Tree-Borrows clean by construction — PROVEN on
+the same isolated, non-FFI Miri harness** (`.port/phase-2/mirihar-chunk3b`, argv
+candidates `displaycb_shipped` / `displaycb_naive`), which reproduces the two-thread
+concurrent-draw + container_of shape and flags the pre-fix structure as UB while passing
+the shipped one:
+
+| candidate | models | SB | TB |
+|---|---|---|---|
+| `displaycb_naive` | PRE-FIX: the render thread draws through the `&mut self` `draw_frame` WRAPPER (a protected whole-`Renderer` `&mut` fn arg, `renderer_seam.rs:1208` pre-fix) CONCURRENTLY with the raw display callback's `draw_frame_raw` (mutex lock + plain-field write) | **UB** | **UB** |
+| `displaycb_shipped` | **shipped**: BOTH concurrent callers raw-self — render thread via `&raw mut (*(*owner).renderer).0` (raw place projection, no protector; `renderer_seam.rs:1208` post-fix), display callback via the container_of round-trip (`&raw mut (*rp).api` → `byte_sub(offset_of!)` → `*mut c_void` in a `Cell` → back → deref ALL of Renderer, §2.4); `draw_frame_raw` locks `draw_mutex`, narrow field write + nested completion re-entry, unlocks | **CLEAN** | **CLEAN** |
+
+The raw-ptr sites, per W5_DESIGN §2 + the mirihar evidence:
+
+- **`draw_frame_raw(self_ptr: *mut Renderer)` — raw-self, faithful to Zig `drawFrame(self:
+  *Renderer)` (§2.3).** The `&mut self` `draw_frame` wrapper (a protected whole-`Renderer`
+  `&mut` function argument) is restricted to the single-threaded offscreen unit tests; it
+  is unreachable from any concurrent path. BOTH concurrent production draw callers reach
+  `draw_frame_raw` through a raw `*mut Renderer` — the render thread's `&raw mut
+  (*(*self_).renderer).0` (a raw place projection off the already-raw `renderer` handle,
+  no `&mut` retag) and the main-thread display callback's recovered ctx. No whole-
+  `Renderer` `&mut` protector ever spans either call, so the `draw_mutex` (locked inside
+  the body) legally serialises the field accesses. The naive shape's UB fires at the
+  display callback's very first foreign touch (the `draw_mutex.lock()` — a foreign access
+  that would remove/Disable the render thread's strongly-protected `Unique`), proving the
+  mutex **cannot** rescue a protector established before the lock (`displaycb_naive` UB
+  under BOTH SB and TB) — the raw-self split of both callers is load-bearing, not cosmetic.
+- **The container_of recovery `Metal::loop_enter` (§2.4).** `@fieldParentPtr("api", self)`
+  → `(api_ptr as *mut u8).byte_sub(offset_of!(Renderer, api)).cast::<Renderer>()`. The leaf
+  is handed a raw `*mut Metal` derived from the WHOLE-`Renderer` `self_ptr` (not a narrowing
+  `&mut self.api` reborrow), so the `+offset`/`−offset` round-trip keeps one unbroken
+  allocation provenance and the recovered `*mut Renderer` legally derefs ALL of Renderer.
+  The ctx is stored/loaded as a POINTER in `Cell<*mut c_void>` (no int round-trip →
+  provenance preserved). `displaycb_shipped` exercises exactly this round-trip and is CLEAN.
+
+**Why Miri can't run the actual code path:** the live `display → display_callback →
+draw_frame_raw` path (and the concurrent render thread) needs a live-Metal offscreen
+renderer + the ObjC `IOSurfaceLayer` `display` method + a real render thread — the same
+"can't call foreign function" class as the W0–W4 / Chunk-3b/4 exceptions. The new W5
+headless KAT (`loop_enter_display_callback_draws_a_frame`) drives the trampoline's
+*functional* leg natively (container_of → `set_display_callback` → `display` →
+`display_callback` → `draw_frame_raw` → a full frame) but is single-threaded and
+observes ZERO cross-thread aliasing. The concurrency soundness — the whole point of the
+raw-self re-route of both draw callers — is covered SOLELY by the `displaycb_shipped`
+mirihar candidate (with `displaycb_naive` as the UB control). Any future edit that
+routes a concurrent draw caller back through the `&mut self` `draw_frame` wrapper, or
+narrows the container_of source to `&mut self.api`, re-opens the hazard — re-run the
+harness (`displaycb_shipped` must stay green under both SB and TB, `displaycb_naive` UB,
+BEFORE the seam ships).
+
 **Deviation recorded (KAT runtime blocker).** The two harness tests that spawn a LIVE
 surface render thread (`hosts_view_layer_and_presents_live_frame`,
 `set_display_id_pushes_to_render_thread_panic_free`) are `#[ignore]`: on a host WITH

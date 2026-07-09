@@ -1150,8 +1150,10 @@ pub unsafe extern "C" fn rustty_surface_refresh(surface: *mut Surface) {
 #[no_mangle]
 pub unsafe extern "C" fn rustty_surface_draw(surface: *mut Surface) {
     // surface.draw();
-    // SAFETY: `surface` validity is the caller's contract.
-    unsafe { (*surface).draw() };
+    // SAFETY: `surface` validity is the caller's contract. W5 (`W5_DESIGN §3.5`):
+    // `Surface::draw` is now raw-self, so call it on the raw ptr directly (no
+    // `(*surface)` auto-ref, which would form a protected `&mut Surface`).
+    unsafe { Surface::draw(surface) };
 }
 
 /// C: rustty_surface_set_size

@@ -65,6 +65,13 @@ use super::shaders::{self, Shaders};
 use super::target::{self, Target};
 use super::texture::{self, Texture, TextureOptions};
 
+// W5 (`W5_DESIGN §3.2`): `loop_enter`/`display_callback` name the monomorphic
+// `Renderer` for the `offset_of!` container_of. This is an intra-crate
+// back-reference to the type `Metal` is monomorphised under — allowed
+// (`check_acyclic.sh` is crate-level; `Renderer` and `Metal` share `rustty-renderer`).
+use crate::generic::Renderer;
+use core::ffi::c_void;
+
 // const std = @import("std");
 // const assert = @import("../quirks.zig").inlineAssert;  → rustty_util::quirks::inlineAssert
 // const Allocator = std.mem.Allocator;
@@ -473,10 +480,32 @@ impl Metal {
     //         log.warn("Error drawing frame in display callback, err={}", .{err});
     //     };
     // }
-    pub fn loop_enter(&mut self) {
-        unimplemented!(
-            "windowing-host: Metal::loop_enter installs the IOSurfaceLayer display callback"
-        )
+    //
+    /// W5 (`W5_DESIGN §3.2`): the seam is filled. `loopEnter`'s receiver is a raw
+    /// `*Metal` and it recovers the whole `*Renderer` via `@fieldParentPtr` — so the
+    /// port takes `self_ptr: *mut Metal` (not `&mut self`); see the signature note
+    /// in `W5_DESIGN §3.2`. Its sole call site is `Renderer::loop_enter`, which hands
+    /// it a whole-`Renderer`-provenance `*mut Metal` (`W5_DESIGN §2.4`/§3.1).
+    ///
+    /// # Safety
+    /// `self_ptr` must be a whole-`Renderer`-provenance `*mut Metal` pointing at the
+    /// `Renderer.api` field (established by `Renderer::loop_enter`, §3.1).
+    pub unsafe fn loop_enter(self_ptr: *mut Metal) {
+        // const renderer: *align(1) Renderer = @fieldParentPtr("api", self);
+        // container_of: Metal is Renderer.api (faithful @fieldParentPtr). byte_sub
+        // keeps the whole-Renderer provenance of `self_ptr` (`W5_DESIGN §2.4`).
+        let renderer: *mut Renderer = unsafe {
+            (self_ptr as *mut u8)
+                .byte_sub(core::mem::offset_of!(Renderer, api))
+                .cast::<Renderer>()
+        };
+        // OFFSCREEN divergence: `layer` is `Option`. On-screen (loopEnter's only real
+        // caller) it is always `Some`; a defensive `if let` keeps the offscreen ctor
+        // safe.
+        if let Some(layer) = unsafe { (*self_ptr).layer.as_ref() } {
+            // self.layer.setDisplayCallback(@ptrCast(&displayCallback), @ptrCast(renderer));
+            layer.set_display_callback(Some(display_callback), renderer as *mut c_void);
+        }
     }
 
     // The other apprt/thread hooks (`surfaceInit`/`finalizeSurfaceInit`/
@@ -776,6 +805,32 @@ impl Metal {
     // pub inline fn presentLastTarget(self: *Metal) !void { _ = self; }
     pub fn present_last_target(&self) -> Result<(), Error> {
         Ok(())
+    }
+}
+
+// fn displayCallback(renderer: *Renderer) align(8) void {
+//     renderer.drawFrame(true) catch |err| {
+//         log.warn("Error drawing frame in display callback, err={}", .{err});
+//     };
+// }
+//
+// The ObjC `display` method (main thread, CA commit driven by
+// `needsDisplayOnBoundsChange`) fires this via the layer's stored callback. It
+// recovers the raw `*mut Renderer` ctx and calls the RAW-self draw path
+// (`draw_frame_raw`) — NEVER `(*renderer).draw_frame(true)`, which would form a
+// protected whole-`Renderer` `&mut` and race the render thread's own draw
+// (`W5_DESIGN §2.2`/§2.3). The `align(8)` in Zig is satisfied by the Rust fn-item
+// ABI; the signature matches `DisplayCallback = Option<unsafe extern "C-unwind"
+// fn(*mut c_void)>`.
+//
+/// # Safety
+/// `ctx` must be the whole-`Renderer`-provenance pointer installed by `loop_enter`
+/// (round-tripped through `Cell<*mut c_void>`, so provenance is preserved).
+unsafe extern "C-unwind" fn display_callback(ctx: *mut c_void) {
+    let renderer = ctx.cast::<Renderer>();
+    if let Err(_err) = unsafe { Renderer::draw_frame_raw(renderer, true) } {
+        // log.warn("Error drawing frame in display callback, err={}", .{err});
+        // (no logging facade wired in the port yet — tree-wide `log.*`-as-comment.)
     }
 }
 

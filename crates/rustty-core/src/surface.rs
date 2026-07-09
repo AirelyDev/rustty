@@ -2788,11 +2788,21 @@ where
     //
     // (the inferred `!void` is `drawFrame`'s error — the placeholder
     // `RendererError`, Phase-3 R-d.)
-    pub fn draw(&mut self) -> Result<(), crate::renderer_seam::RendererError> {
+    //
+    // W5 (`W5_DESIGN §2.5` caller 2 / §3.5): RAW-self, per the Zig `self: *Surface`
+    // receiver. An `&mut self` receiver would protect `self.renderer` (embedded by
+    // value) against the concurrent render thread's `renderer.0` writes (the render
+    // thread aliases the same Surface allocation). Raw-self finishes the raw draw
+    // chain so no protected reference over the `Renderer` bytes spans this present.
+    //
+    /// # Safety
+    /// `self_` is the stable Surface allocation (init's stability contract); no
+    /// protected `&mut Surface` may span the call.
+    pub unsafe fn draw(self_: *mut Surface<A>) -> Result<(), crate::renderer_seam::RendererError> {
         // Renderers are required to support `drawFrame` being called from
         // the main thread, so that they can update contents during resize.
         // try self.renderer.drawFrame(true);
-        self.renderer.drawFrame(true)?;
+        unsafe { crate::renderer_seam::Renderer::drawFrame(&raw mut (*self_).renderer, true)? };
         Ok(())
     }
 

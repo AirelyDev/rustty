@@ -276,8 +276,19 @@ impl Renderer {
     // PORT NOTE: `pub fn drawFrame(self: *Self, sync: bool) !void`
     // (generic.zig:1430); callsite Surface.zig:884 (`draw` — "Renderers are
     // required to support `drawFrame` being called from the main thread").
-    pub fn drawFrame(&mut self, sync: bool) -> Result<(), RendererError> {
-        self.0.draw_frame(sync)
+    //
+    // W5 (`W5_DESIGN §2.5` caller 2 / §3.4b): RAW-self, per the Zig `self: *Self`
+    // receiver. A `&mut self` receiver would be a protected `&mut` over the same
+    // bytes as `rustty_renderer::Renderer` (newtype at offset 0), UB-concurrent
+    // with the render thread's `draw_frame_raw`. The port's prior `&mut self` was
+    // the divergence; raw-self is the faithful shape.
+    //
+    /// # Safety
+    /// `self_` must be a valid, stable `*mut Renderer` (the Surface-embedded renderer,
+    /// aliased raw by the render thread). No protected `&mut` may span the call.
+    pub unsafe fn drawFrame(self_: *mut Renderer, sync: bool) -> Result<(), RendererError> {
+        // self.0.draw_frame(sync)  →  raw-self draw (no protector spans the call)
+        unsafe { rustty_renderer::Renderer::draw_frame_raw(&raw mut (*self_).0, sync) }
     }
 
     // PORT NOTE: `pub fn deinit(self: *Self) void` (generic.zig:800).
@@ -1205,7 +1216,14 @@ where
             };
         } else {
             // self.renderer.drawFrame(false) catch |err| log.warn("error drawing err={}", .{err});
-            if let Err(_err) = unsafe { (*(*self_).renderer).0.draw_frame(false) } {
+            // W5 (`W5_DESIGN §2.5` caller 1): RAW-self draw — the render thread must
+            // NOT establish a protected whole-`Renderer` `&mut` (it would race the
+            // main-thread display callback's `draw_frame_raw` under `draw_mutex`; the
+            // mutex cannot rescue a protector established before the lock).
+            // `&raw mut (*(*self_).renderer).0` is a raw place projection off the
+            // already-raw `renderer: *mut Renderer` — no reborrow, no protector.
+            let rp: *mut rustty_renderer::Renderer = unsafe { &raw mut (*(*self_).renderer).0 };
+            if let Err(_err) = unsafe { rustty_renderer::Renderer::draw_frame_raw(rp, false) } {
                 // log.warn("error drawing err={}", .{err});
             }
         }
