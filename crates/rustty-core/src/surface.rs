@@ -2308,7 +2308,12 @@ where
                 // edition-2021 disjoint captures would otherwise capture the
                 // `!Send` pointer directly.)
                 let arg = arg;
-                unsafe { (*arg.0).threadMain() }
+                // [ADV-FIX F1/F2] (E2b): `Thread::threadMain` is an associated fn
+                // taking RAW `*mut Thread<A>` (NOT `&mut`) — the child holds it for
+                // its whole life and the xev loop re-hands it into every callback;
+                // a `&mut` retag would alias those + the main thread's pre-join
+                // `stop.notify()`. The io-thread precedent below.
+                unsafe { crate::renderer_seam::Thread::<A>::threadMain(arg.0) }
             });
         let renderer_thr = unsafe { Self::initTry(self_, true, spawn_result) }?;
         unsafe { (*self_).renderer_thr = Some(renderer_thr) };
@@ -2489,7 +2494,31 @@ where
             // receiver, read back out.)
             std::ptr::read(&raw const (*self_).io_thread).deinit();
             // errdefer render_thread.deinit(); (Surface.zig:575)
-            (*self_).renderer_thread.deinit();
+            //
+            // The renderer child is LIVE on this post-spawn unwind path (spawn
+            // above, then perform_action(.set_title) can fail below —
+            // Surface.zig:743). Stop and join it BEFORE deinit so deinit()'s
+            // teardown does not race/UAF the child, then read the field out
+            // by-value (no whole `&mut renderer_thread` — E2's aliasing
+            // discipline forbids it post-spawn), matching the io half above.
+            // (The reference errdefer omits the stop/join — a latent UAF we fix
+            // on the port; the io half at :2490 reproduces the same latent bug,
+            // termio-owned and out of W3 scope — flagged for the sibling.)
+            {
+                // Stop the child via a NARROW Copy handle (no whole-struct read
+                // while it may still be live — §2.2 rule 4; Async::notify(&self)
+                // touches only the mach port).
+                let _ = (*self_).renderer_thread.stop.notify();
+                // Join the spawned handle if init still holds it on this path;
+                // else the never-started child is simply absent.
+                if let Some(handle) = (*self_).renderer_thr.take() {
+                    let _ = handle.join();
+                }
+                // Child is now dead — read the field out by-value (no `&mut`) and
+                // deinit, matching the io half above.
+                let mut rt = std::ptr::read(&raw const (*self_).renderer_thread);
+                rt.deinit();
+            }
             // errdefer alloc.destroy(mutex); (Surface.zig:564)
             drop(Box::from_raw((*self_).renderer_state.mutex));
             // errdefer renderer_impl.deinit(); (Surface.zig:559)

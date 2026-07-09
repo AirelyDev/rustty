@@ -945,6 +945,19 @@ mod macos_impl {
         ImageDecode,
     }
 
+    // PORT NOTE (W3 E1): the reference error is an inferred error union that
+    // already flows out of `drawFrame`; core's `renderer_seam::RendererError`
+    // aliases this `Error` so the real variant propagates through
+    // `Surface::draw` / `InitError::Renderer`'s `Display` delegation. Those
+    // seams need `Display` + `std::error::Error`; the enum only derives `Debug`,
+    // so bridge via the `Debug` rendering (the leaf variant name is the message).
+    impl core::fmt::Display for Error {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(f, "{self:?}")
+        }
+    }
+    impl std::error::Error for Error {}
+
     // rustty_wuffs::Error {OutOfMemory, WuffsError, Overflow} -> the renderer Error.
     // `prepBackgroundImage` returns `!void` whose error set includes the wuffs
     // `Error` (via `try wuffs.png.decode(...)`); this preserves "the decode error
@@ -5139,7 +5152,11 @@ mod macos_impl {
         /// True if our renderer has animations so that a higher frequency
         /// timer is used.
         // pub fn hasAnimations(self: *const Self) bool
-        fn has_animations(&self) -> bool {
+        //
+        // PORT NOTE (W3 E2): `pub` — the renderer thread's `syncDrawTimer` (core,
+        // `renderer_seam::Thread`) reaches it cross-crate via the reference's
+        // `@hasDecl(rendererpkg.Renderer, "hasAnimations")` probe.
+        pub fn has_animations(&self) -> bool {
             self.has_custom_shaders
         }
 
@@ -6373,6 +6390,34 @@ mod macos_impl {
         // `use_display_p3 = false`), and `offscreen_size == size.screen` (⇒
         // `size_changed == false`). If a future change flips blending to linear the
         // target becomes `_sRGB` and the readback semantics shift.
+        // W3 §5 (bounded-pump Surface::draw KAT). `Surface::draw` (core) forwards
+        // one line to `drawFrame(true)` -> the real `draw_frame(true)` ("Renderers
+        // are required to support `drawFrame` being called from the main thread",
+        // Surface.zig:884). A full core `Surface::draw` unit test needs the whole
+        // apprt mock + a live windowing host (the windowing-integration milestone),
+        // so this bounded N-frame pump lands at the renderer's offscreen harness and
+        // proves the main-thread-present leg is safe to pump repeatedly + leaves the
+        // renderer Healthy.
+        //
+        // Coverage boundary: this does NOT drive the `threadMain` event loop or any
+        // callback-driven draw — that path is proven by the xev-stubbed mirihar
+        // `renderthread_shipped` candidate + `cargo build` type-checking the real
+        // `threadMain`/callbacks against xev/renderer signatures.
+        #[test]
+        fn draw_frame_bounded_pump() {
+            let mut r = match golden_renderer(10, 3) {
+                Some(r) => r,
+                None => return, // Metal-skip
+            };
+            // bounded — never a live loop.
+            for _ in 0..8 {
+                r.draw_frame(true).expect("main-thread draw_frame(true)");
+                assert_eq!(r.health.load(), crate::Health::Healthy);
+            }
+            // deinit path clean.
+            r.deinit();
+        }
+
         #[test]
         fn golden_renders_cursor_fg_bg() {
             let mut r = match golden_renderer(10, 3) {

@@ -510,3 +510,58 @@ Renderer` across the completion callback re-opens the hazard — re-run the harn
   aliasing shape (separate `Box` allocation, `Copy`-by-value read) across the CoreVideo FFI. `#[ignore]`
   by default (on-device: requires a live WindowServer display) AND internally 2 s-bounded so a manual
   un-ignore on a headless host FAILS the assert rather than hanging.
+
+## macOS windowing W3 (renderer-Thread construct-then-spawn event loop) — MIRI exception, SB/TB-clean by construction
+
+W3 (E2a/E2b) fills the core-resident `crate::renderer_seam::Thread<A>` event loop
+(`crates/rustty-core/src/renderer_seam.rs`: `threadMain`/`threadMain_` + `wakeupCallback`/
+`drawNowCallback`/`drawCallback`/`renderCallback`/`cursorTimerCallback`/`stopCallback`/
+`drainMailbox`/`syncDrawTimer` + the `drawFrame` helper), faithfully mirroring the reference
+(`src/renderer/Thread.zig`, whose `threadMain(self: *Thread)` + callbacks take a raw `self_: ?*Thread`
+handed back by the xev loop as `userdata`). After the construct-then-spawn (`surface.rs`
+`RendererThreadArg(*mut Thread<A>)`), the child thread holds `*mut Thread<A>` for its whole life and
+the xev loop re-hands that SAME raw pointer into every callback; the main thread, post-spawn, touches
+ONLY the Copy `wakeup`/`draw_now` `Async` handles + the `*const` mailbox + a narrow `&renderer_thread.stop`
+(§2.2 rule 4, `rust-mut-args-strongly-protected`). **Like the Chunk-3b/Chunk-4 entries, the borrow
+structure here is Stacked-Borrows AND Tree-Borrows clean by construction — PROVEN on the same isolated,
+non-FFI Miri harness** (`.port/phase-2/mirihar-chunk3b`, argv candidates `renderthread_shipped` /
+`renderthread_naive`), which reproduces the construct-then-spawn + xev-loop callback-reentry shape
+(xev stubbed as a channel-driven tick sequence firing the stored callback with the raw userdata) and
+flags the naive structure as UB while passing the shipped one:
+
+| candidate | models | SB | TB |
+|---|---|---|---|
+| `renderthread_naive` | child `thread_main` binds a whole `&mut *tp` held across the loop; a callback reborrows `&mut *tp` (sibling Unique retag) → pops `t`; the next `t.field` use is use-after-pop (main producer also reborrows `&mut *tp` whole) | **UB** | **UB** |
+| `renderthread_shipped` | **shipped**: `thread_main` + every callback use raw `tp` with NARROW per-field access only (`(*self_).renderer` draw_frame, `(*self_).mailbox` drain, `(*self_).field`/`.cursor_blink_visible` writes, `(*self_).wakeup.notify()`); main uses a Copy `(*tp).wakeup` read + `*const (*tp).mailbox` push + a narrow `&(*tp).stop` notify | **CLEAN** | **CLEAN** |
+
+The raw-ptr sites, per W3_DESIGN §2.2 (the aliasing discipline) + the mirihar evidence:
+
+- **`threadMain(self_: *mut Thread<A>)` — raw self, NO whole reborrow (§2.2 rule 1).** `threadMain_`
+  and every callback take raw `self_` and project only NARROW per-field accesses `(*self_).<field>` /
+  `&(*self_).<field>` / `&mut (*self_).<field>` — never a whole `&mut *self_`/`&*self_`. A whole
+  `&mut *self_` reborrow (the naive shape) retags the entire `Thread<A>` allocation as a fresh Unique;
+  any subsequent callback that re-derefs `self_` (or reborrows `&mut *self_` again) pops the earlier
+  tag, and the next field use is use-after-pop (the harness `renderthread_naive` reproduces this under
+  BOTH SB and TB). Narrow field reborrows retag only the field's byte range, so disjoint fields
+  (`renderer`/`mailbox`/`field`/`wakeup`) survive each other's use across the loop.
+- **xev registration args stay raw (§2.2 rule 3).** `wakeup.wait(&raw mut (*self_).loop_, &raw mut
+  (*self_).wakeup_c, self_, wakeupCallback)` — `loop_`/`c` are raw (the loop re-enters `c` across ticks;
+  a `&mut` re-read would be popped), `userdata = self_` (the same raw pointer re-handed to the callback).
+- **Main thread post-spawn: Copy handles + narrow shared only (§2.2 rule 4).** After spawn the main
+  thread NEVER takes `&mut renderer_thread`. It reads the Copy `wakeup`/`draw_now` `Async` handles
+  captured pre-spawn (`Async::notify(&self)` reads only the mach-port handle), pushes to the `*const`
+  mailbox, and at deinit takes a narrow `&renderer_thread.stop` for `stop.notify()` — all compatible
+  with the child's raw-self narrow use (the `callback_shipped` wakeup-notify shape, independently proven).
+
+**Why Miri can't run the actual code path:** the live `Surface::draw → threadMain` loop needs a
+live-Metal offscreen renderer + an apprt windowing host (the windowing-integration milestone), and the
+xev loop itself makes real `kqueue`/`kevent64`/mach-port syscalls — the same "can't call foreign
+function" class as the rustty-xev C3–C6 / rustty-termio B1–B5 / Chunk-3b/4 exceptions. So there is no
+unit test that drives the live loop under Miri. The teeth (why no unsafe path is un-verified): the
+aliasing structure is Miri-proven SB/TB-clean on the isolated harness that mirrors the construct-then-
+spawn + callback-reentry shape exactly (the aliasing IS Miri-checked, on the non-FFI reproduction), and
+`cargo build --workspace` type-checks the real `threadMain` + every callback against the xev/renderer
+signatures. Any future edit that binds a whole `&mut *self_` in `threadMain`/a callback, or takes a
+whole `&mut renderer_thread` on the main thread post-spawn, re-opens the hazard — re-run the harness
+(`renderthread_shipped` must stay green under both SB and TB, `renderthread_naive` UB, BEFORE the core
+fill ships).

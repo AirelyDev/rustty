@@ -3179,3 +3179,28 @@ it PANICS if called until W3 fills the Metal hook. The KAT does NOT call
 `Renderer::loop_enter` — it drives the `DisplayLink` primitive + the callback→`Async`
 seam directly, so the deferred Metal leaf never gates the vsync proof. `loop_exit` has
 no Metal hook (`@hasDecl(Metal,"loopExit")` false) and is fully runnable.
+
+## macOS windowing W3 (E2 renderer-Thread event loop) — one deferred leaf
+
+Chunk W3 fills the core-resident `renderer_seam::Thread<A>` render event loop
+(`init`/`deinit`/`threadMain`/`threadMain_` + every callback + `drainMailbox`/
+`syncDrawTimer`/`setQosClass`/`drawFrame`/`changeConfig`/`cursorBlinkInterval`)
+over rustty-xev, driving the REAL `rustty_renderer::Renderer`. Everything is
+faithfully ported; ONE deferred leaf:
+
+**`drainMailbox` `@autoreleasepool` (Thread.zig:338–346) — deferred no-op leaf.**
+The reference wraps the mailbox drain in a Darwin `@autoreleasepool{}` block
+(`const pool = if (isDarwin) @import("objc").AutoreleasePool.init() else void;
+defer if (isDarwin) pool.deinit();`) — memory hygiene, NOT semantics. rustty-core
+does NOT dep objc2 (only rustty-renderer/os do), so adding an objc2 edge to core
+solely for the pool is heavier than the leaf. Ported as a no-op scope carrying
+the verbatim reference block as a comment (comment-coverage anchors on it). The
+drain itself + every message arm is REAL. Re-arm the pool when core gains an
+objc2 edge (or via a `rustty_os` autoreleasepool shim). This is the same
+class as the io-thread's deferred autoreleasepool.
+
+No other W3 E2 deferrals: `cursorBlinkInterval`'s valgrind `* 5` branch is kept
+verbatim-inert (no `std.valgrind` shim, in-place comment + PORT NOTE, not a
+DEFERRALS entry); the `MUST_DRAW_FROM_APP_THREAD` app-mailbox `drawFrame` arm is
+dead-but-live (`false` this milestone, flips when GTK lands) — both arms compile,
+no `unimplemented!`.

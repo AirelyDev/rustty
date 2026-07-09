@@ -854,6 +854,234 @@ fn run_callback(shipped: bool) {
     drop(ext);
 }
 
+// ============================================================================
+// W3 §2.2: renderer-Thread construct-then-spawn + xev-loop callback re-entry.
+//
+//   * A `RThread` is stored in a PINNED Box (the reference `self.renderer_thread`
+//     field of the pinned Surface), lowered to raw `tp: *mut RThread` at birth.
+//   * The child runs `thread_main(tp)` holding `tp` for its whole life; the
+//     stubbed loop fires callbacks with the SAME raw `tp` (xev userdata).
+//     Callbacks re-deref `tp` and call `(*renderer).draw_frame()` + drain the
+//     external mailbox + narrow field writes.
+//   * CONCURRENTLY the MAIN thread produces (wakeup.notify + mailbox.push) and,
+//     at deinit, does stop.notify — touching ONLY Copy handles + the *const
+//     mailbox + a narrow `&(*tp).stop`. Sequenced by mpsc for a stable verdict.
+//
+// naive: thread_main binds `let t = &mut *tp` (whole) held across the loop; a
+//        callback reborrows `&mut *tp` (sibling) -> pops t; t is re-used after
+//        -> use-after-pop. (Also: the main producer reborrows `&mut *tp` whole.)
+// shipped: thread_main + callbacks use raw `tp` with NARROW field access only;
+//          main uses narrow `&(*tp).wakeup/.stop` + `*const mailbox`.
+//
+// Pass: shipped CLEAN under BOTH -Zmiri-stacked-borrows and -Zmiri-tree-borrows;
+//       naive reports UB under at least one.
+// ============================================================================
+
+struct RRenderer {
+    draws: u32,
+}
+impl RRenderer {
+    fn draw_frame(&mut self) {
+        self.draws = self.draws.wrapping_add(1);
+    }
+    #[allow(dead_code)]
+    fn has_vsync(&self) -> bool {
+        false
+    }
+}
+
+// xev.Async analogue (Copy handle; notify(&self) reads only an Arc). Inline
+// fields of RThread == renderer_thread.wakeup/.stop/.draw_now.
+#[derive(Clone, Copy)]
+struct RAsync {
+    shared: *const AtomicU32,
+}
+impl RAsync {
+    fn notify(&self) {
+        unsafe {
+            (*self.shared).fetch_add(1, AOrd::SeqCst);
+        }
+    }
+}
+
+struct RThread {
+    // xev handles (Copy) — inline; main touches wakeup/stop/draw_now only.
+    wakeup: RAsync,
+    stop: RAsync,
+    draw_now: RAsync,
+    // external mailbox (BlockingQueue) reached via *const (outside RThread's
+    // SB/TB coverage) — the decoupled-producer lineage (search_shipped finding).
+    mailbox: *const Ext,
+    renderer: *mut RRenderer, // *rendererpkg.Renderer
+    draw_active: bool,
+    cursor_blink_visible: bool,
+    visible: bool,
+    field: u32, // stand-in for misc narrow field writes
+}
+
+// ---- callbacks: raw self_, NARROW field access (SHIPPED shape) ----
+unsafe fn render_cb_shipped(self_: *mut RThread) {
+    unsafe {
+        if !(*self_).visible {
+            return;
+        }
+        let r = (*self_).renderer; // narrow field read
+        (*r).draw_frame(); // (*renderer).draw_frame()
+        // drawFrame helper: narrow reads
+        if !(*self_).visible {
+            return;
+        }
+        let _ = (*(*self_).renderer).has_vsync();
+        (*self_).field = (*self_).field.wrapping_add(1); // narrow write
+    }
+}
+unsafe fn wakeup_cb_shipped(self_: *mut RThread) {
+    unsafe {
+        // drainMailbox: pop the EXTERNAL mailbox via *const (narrow copy of the ptr)
+        let mb: *const Ext = (*self_).mailbox;
+        (*mb).push(0); // model a drain touch
+        render_cb_shipped(self_); // renderCallback(t, undefined, …)
+    }
+}
+unsafe fn cursor_cb_shipped(self_: *mut RThread) {
+    unsafe {
+        (*self_).cursor_blink_visible = !(*self_).cursor_blink_visible; // narrow
+        (*self_).wakeup.notify(); // Copy handle
+    }
+}
+
+// ---- callbacks: whole &mut *self_ reborrow (NAIVE shape) ----
+unsafe fn wakeup_cb_naive(self_: *mut RThread) {
+    unsafe {
+        let t: &mut RThread = &mut *self_; // SIBLING whole reborrow -> pops outer
+        let mb = t.mailbox;
+        (*mb).push(0);
+        if t.visible {
+            (*t.renderer).draw_frame();
+            t.field = t.field.wrapping_add(1);
+        }
+    }
+}
+
+struct SendRT(*mut RThread);
+unsafe impl Send for SendRT {}
+
+fn run_renderthread(shipped: bool) {
+    let wake = Arc::new(AtomicU32::new(0));
+    let stopf = Arc::new(AtomicU32::new(0));
+    let dnow = Arc::new(AtomicU32::new(0));
+    let ext = Box::new(Ext { inner: SMutex::new(Vec::new()) });
+    let ext_ptr: *const Ext = &*ext;
+    let mut rndr = Box::new(RRenderer { draws: 0 });
+    let rndr_ptr: *mut RRenderer = &raw mut *rndr;
+
+    let mut boxed: Box<RThread> = Box::new(RThread {
+        wakeup: RAsync { shared: Arc::as_ptr(&wake) },
+        stop: RAsync { shared: Arc::as_ptr(&stopf) },
+        draw_now: RAsync { shared: Arc::as_ptr(&dnow) },
+        mailbox: ext_ptr,
+        renderer: rndr_ptr,
+        draw_active: false,
+        cursor_blink_visible: false,
+        visible: true,
+        field: 0,
+    });
+    // ONE transient &mut at birth, lowered to raw (§2.4 / search_shipped).
+    let tp: *mut RThread = &raw mut *boxed;
+
+    let (go_tx, go_rx): (Sender<u8>, Receiver<u8>) = channel(); // main -> child ticks
+    let (ack_tx, ack_rx): (Sender<u8>, Receiver<u8>) = channel();
+
+    let send = SendRT(tp);
+    let handle = std::thread::Builder::new()
+        .name("renderer".into())
+        .spawn(move || {
+            let s = send;
+            let go = go_rx;
+            let ack = ack_tx;
+            unsafe {
+                if shipped {
+                    // thread_main(self_: *mut RThread): NO whole reborrow. Loop the
+                    // stubbed xev: each tick fires a callback with the raw userdata.
+                    loop {
+                        match go.recv() {
+                            Ok(0) => wakeup_cb_shipped(s.0),
+                            Ok(1) => cursor_cb_shipped(s.0),
+                            _ => break,
+                        }
+                        // (No DCE-defeat write here: the callbacks already mutate
+                        // observable state — renderer.draws, mailbox, (*self_).field —
+                        // so DCE cannot elide them. A raw `(s.0 as *mut u8)` byte write
+                        // would clobber RThread's first field (`wakeup: RAsync`), a
+                        // mis-narrowed access that corrupts the very Copy handle the
+                        // shipped shape is proving CLEAN — deliberately omitted.)
+                        ack.send(1).unwrap();
+                    }
+                } else {
+                    // NAIVE: whole &mut held across the loop; callback reborrows &mut
+                    // *s.0 (sibling) -> pops t; t re-used after -> use-after-pop.
+                    let t: &mut RThread = &mut *s.0;
+                    loop {
+                        match go.recv() {
+                            Ok(0) => {
+                                wakeup_cb_naive(s.0); // pops t
+                                t.field = t.field.wrapping_add(1); // UAP
+                            }
+                            Ok(1) => {
+                                t.cursor_blink_visible = !t.cursor_blink_visible;
+                            }
+                            _ => break,
+                        }
+                        ack.send(1).unwrap();
+                    }
+                }
+            }
+        })
+        .unwrap();
+
+    // let the child arm (establish its tag) — first tick.
+    go_tx.send(0).unwrap();
+    let _ = ack_rx.recv();
+
+    // MAIN producer (steady state) — between child ticks.
+    if shipped {
+        let wk: RAsync = unsafe { (*tp).wakeup }; // Copy handle read (narrow field copy)
+        wk.notify();
+        let mb: *const Ext = unsafe { (*tp).mailbox }; // Copy *const read
+        unsafe { (*mb).push(42) };
+    } else {
+        let m: &mut RThread = unsafe { &mut *tp }; // whole reborrow -> pops child tag
+        m.field = m.field.wrapping_add(1);
+        unsafe { (*m.mailbox).push(42) };
+    }
+    go_tx.send(1).unwrap();
+    let _ = ack_rx.recv(); // cursor tick
+
+    // DEINIT: stop.notify via NARROW shared &(*tp).stop, then join (child dead).
+    if shipped {
+        let st: &RAsync = unsafe { &(*tp).stop }; // narrow shared into pinned struct
+        st.notify();
+    } else {
+        let m: &mut RThread = unsafe { &mut *tp }; // whole reborrow (naive)
+        m.stop.notify();
+    }
+    go_tx.send(2).unwrap(); // stop tick -> loop break
+    handle.join().unwrap();
+
+    let draws = unsafe { (*(*tp).renderer).draws };
+    println!(
+        "renderthread_{}: draws={draws} field={}",
+        if shipped { "shipped" } else { "naive" },
+        unsafe { (*tp).field }
+    );
+    let _ = unsafe { (*tp).draw_now }; // touch draw_now so the field is not dead
+    let _ = unsafe { (*tp).draw_active };
+    drop(boxed);
+    drop(rndr);
+    drop(ext);
+    let _ = (wake, stopf, dnow);
+}
+
 fn main() {
     let which = std::env::args().nth(1).unwrap_or_default();
     match which.as_str() {
@@ -897,6 +1125,14 @@ fn main() {
         }
         "callback_naive" => {
             run_callback(false);
+            return;
+        }
+        "renderthread_shipped" => {
+            run_renderthread(true);
+            return;
+        }
+        "renderthread_naive" => {
+            run_renderthread(false);
             return;
         }
         _ => {}

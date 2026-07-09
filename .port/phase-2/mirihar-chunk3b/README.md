@@ -102,3 +102,50 @@ for c in search_naive search_shipped callback_naive callback_shipped; do
   MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri run -q -- "$c" # Tree Borrows
 done
 ```
+
+## RENDERTHREAD candidates (W3 §4: renderer-Thread construct-then-spawn + xev callback re-entry)
+
+Added for `W3_DESIGN.md` §4 — the macOS-windowing W3 (E2a/E2b) renderer-`Thread`
+event loop: a `RThread` stored in a PINNED Box (the reference
+`self.renderer_thread` field), lowered to raw `tp: *mut RThread` at birth; the
+child runs `thread_main(tp)` HOLDING `tp` for its whole life while the stubbed
+xev loop fires callbacks with the SAME raw `tp` (xev userdata contract), each
+callback re-derefing `tp` to call `(*renderer).draw_frame()` + drain the external
+mailbox + narrow field writes; CONCURRENTLY the MAIN thread produces
+(`wakeup.notify` + `mailbox.push`) and at deinit does `stop.notify` — touching
+ONLY the Copy `Async` handles + the `*const` mailbox + a narrow `&(*tp).stop`.
+Distinct from the SEARCH candidates: this models a child `threadMain` that holds
+`self` ACROSS a loop firing callbacks that re-deref `self` (the xev
+userdata-reentry shape), not just a one-shot child→main re-entry. A deterministic
+mpsc handshake sequences the two threads' borrow ops (happens-before, no data
+race to mask the tag verdict). xev is STUBBED (non-FFI): the "loop" is a
+channel-driven tick sequence that invokes the stored callback with the raw
+userdata. Selected by argv `renderthread_naive` / `renderthread_shipped`.
+
+| candidate | models | SB | TB |
+|---|---|---|---|
+| `renderthread_naive` | child `thread_main` binds `let t = &mut *tp` (whole) held across the loop; a callback (`wakeup_cb_naive`) reborrows `&mut *tp` (sibling) → pops `t`; `t.field` re-used after → use-after-pop. (Main producer also reborrows `&mut *tp` whole.) | **UB** | **UB** |
+| `renderthread_shipped` | **shipped**: `thread_main` + every callback use raw `tp` with NARROW field access only (`(*self_).renderer`, `(*self_).mailbox`, `(*self_).field`, `(*self_).wakeup.notify()`); main uses a Copy `(*tp).wakeup` read + `*const (*tp).mailbox` + a narrow `&(*tp).stop` for `stop.notify()` | **CLEAN** | **CLEAN** |
+
+**Load-bearing finding:** the child's `threadMain` MUST NOT bind a long-lived
+whole `&mut *tp` reborrow — any callback that then reborrows `&mut *tp` (a sibling
+Unique retag) invalidates the held `t`, so the next `t.field` use is
+use-after-pop under BOTH SB (tag not in the borrow stack) and TB (`Disabled`
+child-read forbidden). The shipped shape keeps `tp` a raw pointer throughout,
+projecting only narrow per-field accesses `(*self_).<field>`, which retag
+disjoint byte ranges and never pop each other. The main thread's post-spawn
+access is likewise narrowed to Copy handles + a narrow `&(*tp).stop` shared
+notify + the `*const` external mailbox — never `&mut renderer_thread` (§2.2
+rule 4). This is the structural proof the §2 `Thread<A>` fill must match: if
+`renderthread_shipped` is not green under both models, the raw-self discipline in
+the core fill is wrong and must not ship.
+
+Run:
+
+```sh
+for c in renderthread_naive renderthread_shipped; do
+  echo "== $c =="
+  cargo +nightly miri run --quiet -- "$c"                          # Stacked Borrows
+  MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri run -q -- "$c" # Tree Borrows
+done
+```
