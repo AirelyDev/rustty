@@ -465,3 +465,33 @@ Renderer` across the completion callback re-opens the hazard — re-run the harn
   `define_class!`), mint an IOSurface-backed offscreen `Metal` `Target` (`MTLCreateSystemDefaultDevice`
   + IOSurface create), and send `-display`/`setContents:` through the ObjC runtime. Miri cannot
   execute the objc runtime + Metal/IOSurface foreign functions. Runs natively; ASan-eligible (R6).
+
+## macOS windowing W1-7 (Renderer windowed lifecycle: init/deinit) — MIRI exceptions
+
+- **`crates/rustty-renderer/src/generic.rs`**
+  (`generic::macos_impl::tests::windowed_lifecycle::windowed_renderer_init_then_deinit_round_trips`).
+  Builds an offscreen `Metal` (`MTLCreateSystemDefaultDevice` + `newCommandQueue`), `init_shaders`
+  (metallib load), a `SwapChain`, a CoreText `Shaper`/`SharedGrid`, mints a real `NSObject` through
+  the ObjC runtime (the `*mut S` for the generic surface hooks), runs `Renderer::surface_init` /
+  `finalize_surface_init` (faithful no-ops for Metal), `Renderer::init`, then `Renderer::deinit`
+  (the full verbatim teardown). Miri cannot execute the objc runtime + Metal/CoreText/IOSurface
+  foreign functions (same class as the golden-render and iosurface_layer exceptions). Runs
+  natively; ASan-eligible (R6) — ASan covers any double-free/leak across the objc/Metal FFI in the
+  init→deinit round-trip.
+
+## macOS windowing W1-6 (FIRST PIXELS: on-screen present of a golden frame) — MIRI exceptions
+
+- **`crates/rustty-renderer/src/generic.rs`**
+  (`generic::macos_impl::tests::golden_presents_frame_on_screen`). The culminating W1 KAT. Renders
+  one real terminal frame OFFSCREEN via the golden path (`MTLCreateSystemDefaultDevice` +
+  `newCommandQueue` + `init_shaders` metallib load + CoreText `Shaper`/`SharedGrid` + a real GPU
+  `commit`/`waitUntilCompleted` + IOSurface readback), then constructs a plain-`NSObject` layer-host
+  double (`RusttyMockHostView`, objc2 `define_class!` — NO AppKit, so no main-thread constraint and
+  no `class!(NSView)` panic under the default parallel `cargo test`), runs the on-screen
+  `Metal::init(view)` (creates an `IOSurfaceLayer`, sends the `setLayer:`/`setWantsLayer:`/
+  `setClipsToBounds:` layer-host selectors to the double), `present`s the golden Target
+  (`set_surface_sync` → `CALayer.setContents(surface)`), and asserts the layer's `contents` IS the
+  exact IOSurface (FIRST PIXELS) + the view hosts our layer. Miri cannot execute the objc runtime +
+  Metal / CoreText / IOSurface foreign functions (same class as the golden-render, iosurface_layer,
+  and windowed_lifecycle exceptions). Runs natively; ASan-eligible (R6). Skips gracefully on a
+  headless host (no Metal device).

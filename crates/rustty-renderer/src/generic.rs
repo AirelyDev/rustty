@@ -888,7 +888,7 @@ mod macos_impl {
     use crate::row::never_extend_bg;
     use crate::shaders::{
         Atlas, BgImage, BgImageInfo, BgImageInfoFit, BgImageInfoPosition, CellBg, CellText,
-        CellTextBools, Uniforms, UniformsPaddingExtend,
+        CellTextBools, Uniforms, UniformsBools, UniformsPaddingExtend,
     };
     use crate::shadertoy;
     use crate::size::{
@@ -1791,14 +1791,207 @@ mod macos_impl {
         //     return result;
         // }
         pub fn init(alloc: Global, options: Options) -> Result<Self, Error> {
-            let _ = (alloc, options);
-            unimplemented!(
-                "renderer.Renderer.init deferred (Chunk 3a is the struct + swap-chain/\
-                 frame-state skeleton). The full init — GraphicsAPI::init over a live \
-                 surface, font.Shaper.init, initShaders, the uniform setup + \
-                 updateFontGridUniforms/updateScreenSizeUniforms/updateBgImageBuffer/\
-                 prepBackgroundImage — lands with the draw path; verbatim body above"
-            )
+            // Initialize our graphics API wrapper, this will prepare the
+            // surface provided by the apprt and set up any API-specific
+            // GPU resources.
+            //
+            // var api = try GraphicsAPI.init(alloc, options);   (generic.zig:662)
+            // errdefer api.deinit();
+            //
+            // W1-7 DIVERGENCE (R4/apprt-free, DEFERRALS.md #3): `Options` carries no
+            // `rt_surface` (it stays in `renderer_seam::Options<A>` in core so
+            // rustty-renderer names no apprt type — R4), so `api` is built via the
+            // offscreen-portable device ctor (`init_offscreen`, layer `None`) instead
+            // of the live-surface `GraphicsAPI.init`. The on-screen layer attach is
+            // supplied by the windowing host via `Metal::init` (W1-2) at the
+            // renderer_seam wiring (W3) — behaviorally identical to ghostty across the
+            // `init` -> host-attach sequence. This is the "reuse `init_offscreen`'s
+            // shared body, do NOT duplicate" directive at the `Renderer` level.
+            let api = Metal::init_offscreen(
+                options.config.blending,
+                options.size.screen.width,
+                options.size.screen.height,
+            )?;
+
+            // const has_custom_shaders = options.config.custom_shaders.value.items.len > 0;
+            let has_custom_shaders = !options.config.custom_shaders.value.is_empty();
+
+            // Prepare our swap chain
+            let swap_chain = SwapChain::init(&api, has_custom_shaders)?; // errdefer -> Drop
+
+            // Create the font shaper.
+            //
+            // Zig: `var font_shaper = try font.Shaper.init(alloc, .{
+            //          .features = options.config.font_features.items });`
+            // The `[:0]const u8` items -> the shaper's `Vec<Vec<u8>>` features
+            // (`CString::as_bytes` = the bytes without the NUL sentinel, matching the
+            // Zig `.len`-based content; the `change_config` precedent, generic.zig).
+            let font_shaper = Shaper::init(shape::Options {
+                features: options
+                    .config
+                    .font_features
+                    .iter()
+                    .map(|c| c.as_bytes().to_vec())
+                    .collect(),
+            })?; // errdefer -> Drop
+
+            // Initialize all the data that requires a critical font section.
+            //
+            // const font_critical: struct { metrics: font.Metrics } = font_critical: {
+            //     const grid: *font.SharedGrid = options.font_grid;
+            //     grid.lock.lockShared();
+            //     defer grid.lock.unlockShared();
+            //     break :font_critical .{ .metrics = grid.metrics };
+            // };
+            //
+            // The shared-read lock is LOAD-BEARING and MUST be mirrored (R1): the
+            // reference takes `grid.lock.lockShared()` before reading `grid.metrics`.
+            // `SharedGrid` exposes `pub lock: RwLock<()>` with `.read()` (every
+            // `lockShared` site in the port is `self.lock.read().unwrap()`).
+            let grid_metrics = {
+                // const grid: *font.SharedGrid = options.font_grid;
+                let g: *mut SharedGrid = options.font_grid;
+                // grid.lock.lockShared(); defer grid.lock.unlockShared();
+                //
+                // SAFETY: `g` is the external `*mut SharedGrid` handle; `(*g).lock` /
+                // `(*g).metrics` are shared reads through a raw pointer with no `&mut`
+                // alias — the `set_font_grid` (§4.4) precedent, no SB hazard.
+                let _read = unsafe { (*g).lock.read().unwrap() };
+                unsafe { (*g).metrics }
+            };
+
+            // const display_link: ?DisplayLink = switch (builtin.os.tag) {
+            //     .macos => if (options.config.vsync)
+            //         try macos.video.DisplayLink.createWithActiveCGDisplays()
+            //     else null,
+            //     else => null,
+            // };
+            // errdefer if (display_link) |v| v.release();
+            //
+            // W1: the `.macos` vsync display link is a W2 concern -> None (DEFERRALS.md #2).
+            let display_link: Option<DisplayLink> = None;
+
+            // generic.zig:718-743 uniforms literal. The reference sets
+            // projection_matrix/cell_size/grid_size/grid_padding/screen_size (and
+            // cursor_color) to `undefined` (fixed by the `update_*` calls below /
+            // `update_frame`), and every REMAINING field to a concrete value. Rust has
+            // no `undefined`: start from zeroed POD (the `undefined` fields) then set
+            // each field the reference sets. NB (R1, corrects a design-doc note):
+            // `update_font_grid_uniforms`/`update_screen_size_uniforms` do NOT
+            // re-apply `min_contrast`/`cursor_pos`/`bg_color`/`bools`, so these MUST be
+            // set here to match the reference first-frame state.
+            let uniforms = {
+                let mut u: Uniforms = unsafe { core::mem::zeroed() };
+                // .padding_extend = .{},
+                u.padding_extend = UniformsPaddingExtend::default();
+                // .min_contrast = options.config.min_contrast,
+                u.min_contrast = options.config.min_contrast;
+                // .cursor_pos = .{ std.math.maxInt(u16), std.math.maxInt(u16) },
+                u.cursor_pos = [u16::MAX, u16::MAX];
+                // .bg_color = .{ bg.r, bg.g, bg.b, @intFromFloat(@round(bg_opacity * 255.0)) },
+                // Note that if we're on macOS with glass effects we'll disable
+                // background opacity but we handle that in updateFrame.
+                u.bg_color = [
+                    options.config.background.r,
+                    options.config.background.g,
+                    options.config.background.b,
+                    (options.config.background_opacity * 255.0).round() as u8,
+                ];
+                // .bools = .{ ... },
+                u.bools = UniformsBools {
+                    cursor_wide: false,
+                    use_display_p3: options.config.colorspace == WindowColorspace::DisplayP3,
+                    use_linear_blending: options.config.blending.is_linear(),
+                    use_linear_correction: options.config.blending
+                        == AlphaBlending::LinearCorrected,
+                };
+                u
+            };
+
+            // generic.zig:744-772 custom_shader_uniforms literal: resolution = {0,0,1},
+            // frame_rate = 60, focus = 1 (assume focused initially); every other field
+            // is 0 / @splat(0). Zeroed POD + the three non-zero fields.
+            let custom_shader_uniforms = {
+                let mut c: shadertoy::Uniforms = unsafe { core::mem::zeroed() };
+                c.resolution = [0.0, 0.0, 1.0];
+                c.frame_rate = 60.0; // not currently updated
+                c.focus = 1; // assume focused initially
+                c
+            };
+
+            // .shaders = undefined,  (generic.zig:781) — set by `result.init_shaders()`
+            // below (which reads `result.config.custom_shaders`). Rust needs a value:
+            // build the base shaders (empty custom set); `init_shaders` re-runs from
+            // the real config right after the literal (the golden-harness precedent).
+            let shaders = api.init_shaders(&[])?; // errdefer -> Drop
+
+            // .cells = .{},  (generic.zig:717) — an EMPTY Contents. The first
+            // `update_frame`/`rebuild_cells` resizes it to the terminal grid size
+            // (generic.rs `rebuild_cells`: `if grid_size_diff { self.cells.resize(..) }`).
+            let cells = Contents::default();
+
+            let mut result = Self {
+                // ---- generic.zig:701-787 (spelled out in the reference literal) ----
+                alloc,
+                config: options.config,
+                // .surface_mailbox = options.surface_mailbox,  (704) — the mailbox stays
+                // in renderer_seam::Options<A> in core (R4); the ZST placeholder here.
+                surface_mailbox: SurfaceMailbox,
+                grid_metrics, // font_critical.metrics
+                size: options.size,
+                focused: true,
+                scrollbar: Scrollbar::ZERO,
+                scrollbar_dirty: false,
+                last_bottom_node: None,
+                last_bottom_y: 0,
+                search_matches: None,
+                search_selected_match: None,
+                search_matches_dirty: false,
+                cells,
+                uniforms,
+                custom_shader_uniforms,
+                // .bg_image_buffer = undefined,  (773) — fixed by update_bg_image_buffer below.
+                bg_image_buffer: unsafe { core::mem::zeroed() },
+                font_grid: options.font_grid,
+                font_shaper,
+                font_shaper_cache: ShaperCache::init(),
+                shaders,
+                api,
+                swap_chain,
+                display_link,
+                // ---- Zig struct-decl defaults (OMITTED by 701-787; per golden_renderer) ----
+                draw_mutex: Mutex::new(),
+                custom_shader_focused_changed: false,
+                cells_rebuilt: false,
+                first_frame_time: None,
+                last_frame_time: None,
+                images: image::State::empty(),
+                bg_image: None,
+                bg_image_changed: false,
+                bg_image_buffer_modified: 0,
+                health: AtomicHealth::new(crate::Health::Healthy),
+                target_config_modified: 0,
+                reinitialize_shaders: false,
+                // = options.config.custom_shaders != empty (665). Also re-set by
+                // init_shaders below (from the loaded custom-shader set) — kept here so
+                // the field is initialized before that call, faithful to the reference.
+                has_custom_shaders,
+                terminal_state: RenderState::empty(),
+                terminal_state_frame_count: 0,
+                overlay: None,
+            };
+
+            // try result.initShaders();   (789)
+            result.init_shaders()?;
+
+            // Ensure our undefined values above are correctly initialized.
+            result.update_font_grid_uniforms(); // (792)
+            result.update_screen_size_uniforms(); // (793)
+            result.update_bg_image_buffer(); // (794)
+            result.prep_background_image()?; // (795)
+
+            // return result;
+            Ok(result)
         }
 
         // DEFERRED SEAM (the draw path). `deinit` tears down the deferred draw-path
@@ -1838,11 +2031,95 @@ mod macos_impl {
         //     self.* = undefined;
         // }
         pub fn deinit(&mut self) {
-            unimplemented!(
-                "renderer.Renderer.deinit deferred (verbatim body above; the draw-path \
-                 teardown — deinitShaders/api.deinit/font_shaper.deinit/terminal_state \
-                 etc. — lands with those methods)"
-            )
+            // if (self.overlay) |*overlay| overlay.deinit(self.alloc);   (801)
+            // Port: `Overlay::deinit(&mut self)` takes NO allocator arg (overlay.rs:176).
+            if let Some(overlay) = &mut self.overlay {
+                overlay.deinit();
+            }
+            // self.terminal_state.deinit(self.alloc);   (802)
+            self.terminal_state.deinit(self.alloc);
+            // if (self.search_selected_match) |*m| m.arena.deinit();   (803)
+            // if (self.search_matches) |*m| m.arena.deinit();   (804)
+            // Port: `SearchMatch`/`SearchMatches` DROPPED the reference `arena`
+            // field (message.rs — "same arena collapse"); the owned `Flattened` /
+            // `Vec<Flattened>` free via Rust `Drop` when `self.search_*` drops. No
+            // explicit `arena.deinit()` exists to call (faithful — the arena teardown
+            // is the automatic Option drop).
+            //
+            // self.swap_chain.deinit();   (805)
+            self.swap_chain.deinit();
+
+            // if (DisplayLink != void) {
+            //     if (self.display_link) |display_link| {
+            //         display_link.stop() catch {};
+            //         display_link.release();
+            //     }
+            // }
+            // (807-812) — W1: `display_link` is always `None` (the `.macos` vsync
+            // DisplayLink lands in W2, DEFERRALS.md #2); teardown (stop/release via
+            // ARC) is guarded until then.
+
+            // self.cells.deinit(self.alloc);   (814)
+            // Port: `Contents::deinit(&mut self)` takes NO allocator arg (cell.rs:131).
+            self.cells.deinit();
+
+            // self.font_shaper.deinit();   (816)
+            self.font_shaper.deinit();
+            // self.font_shaper_cache.deinit(self.alloc);   (817)
+            // Port: `ShaperCache::deinit(&mut self)` takes NO allocator arg (cache.rs:112).
+            self.font_shaper_cache.deinit();
+
+            // self.config.deinit();   (819)
+            self.config.deinit();
+
+            // self.images.deinit(self.alloc);   (821)
+            self.images.deinit(self.alloc);
+
+            // if (self.bg_image) |img| img.deinit(self.alloc);   (823)
+            // Port: `image::Image::deinit(self, alloc)` consumes `self` by value, so
+            // move the `Image` out of the `Option` with `.take()` (image.rs:1283).
+            if let Some(img) = self.bg_image.take() {
+                img.deinit(self.alloc);
+            }
+
+            // self.deinitShaders();   (825)
+            self.deinit_shaders();
+
+            // self.api.deinit();   (827) -> the `Metal` `Drop` releases queue/device/
+            // layer (ARC). An explicit `deinit` is unnecessary AND impossible here (a
+            // `&mut self` `deinit` cannot move `api` out); documented.
+            //
+            // self.* = undefined;   (829) -> no-op (Rust drop/ownership handles teardown).
+        }
+
+        // generic.zig:864-869 `surfaceInit`. `@hasDecl(GraphicsAPI, "surfaceInit")` is
+        // FALSE for `Metal` (it declares only `loopEnter`) ⇒ the probe's else-arm ⇒
+        // a no-op. `rt_surface` is the apprt surface the hook is generic over (never
+        // named by rustty-renderer, R4); Metal ignores it. The bare unbounded `<S>` is
+        // exactly faithful — the reference `@hasDecl` probe likewise never touches
+        // `surface` for the Metal monomorphization.
+        //
+        // pub fn surfaceInit(surface: *apprt.Surface) !void {
+        //     if (@hasDecl(GraphicsAPI, "surfaceInit"))
+        //         try GraphicsAPI.surfaceInit(surface);
+        // }
+        #[allow(clippy::not_unsafe_ptr_arg_deref)]
+        pub fn surface_init<S>(rt_surface: *mut S) -> Result<(), Error> {
+            let _ = rt_surface;
+            Ok(())
+        }
+
+        // generic.zig:873-878 `finalizeSurfaceInit`. `@hasDecl(GraphicsAPI,
+        // "finalizeSurfaceInit")` is FALSE for `Metal` ⇒ no-op (see `surface_init`).
+        //
+        // pub fn finalizeSurfaceInit(self: *Self, surface: *apprt.Surface) !void {
+        //     if (@hasDecl(GraphicsAPI, "finalizeSurfaceInit"))
+        //         try self.api.finalizeSurfaceInit(surface);
+        // }
+        #[allow(clippy::not_unsafe_ptr_arg_deref)]
+        pub fn finalize_surface_init<S>(&mut self, rt_surface: *mut S) -> Result<(), Error> {
+            let _ = rt_surface;
+            Ok(())
         }
 
         /// Mark the full screen as dirty so that we redraw everything.
@@ -4617,15 +4894,16 @@ mod macos_impl {
         let renderer = ctx.renderer as *mut Renderer;
         // If the frame is healthy, present it.
         if health == crate::Health::Healthy {
-            // R1 — the reference logs a present failure (Frame.zig :82-88):
-            //   `block.renderer.api.present(block.target.*, block.sync) catch |err|
-            //        log.err("Failed to present render target: err={}", .{err});`
-            // `present` is a no-op offscreen (always `Ok` ⇒ no err to surface), but the
-            // error-log site is preserved verbatim as this comment for fidelity; when
-            // the real layer-path `present` un-defers, restore
-            // `if let Err(err) = … { log::error!(…) }`. `&mut api` reborrow through the
-            // raw ptr; `&*ctx.target` is the `*mut Target` back to `&Target`.
-            let _ = unsafe { (*renderer).api.present(&*ctx.target, ctx.sync) };
+            // block.renderer.api.present(block.target.*, block.sync) catch |err|
+            //     log.err("Failed to present render target: err={}", .{err});   (Frame.zig:82-88)
+            // No logging facade is wired in the port yet (see the tree-wide `log.*`-as-
+            // comment convention); the present-failure `log.err` stays the R1 comment
+            // above. We still consume the now-fallible Result faithfully (the layer path
+            // can fail; W1-3). `&mut api` reborrow through the raw ptr; `&*ctx.target` is
+            // the `*mut Target` back to `&Target`.
+            if let Err(_e) = unsafe { (*renderer).api.present(&*ctx.target, ctx.sync) } {
+                // log.err("Failed to present render target: err={}", .{_e}); — no facade
+            }
         }
         // block.renderer.frameCompleted(health);
         unsafe { (*renderer).frame_completed(health) };
@@ -5669,26 +5947,20 @@ mod macos_impl {
             })
         }
 
-        // GPU_RD_CHUNK4_DESIGN §3.2/§6.5: the GOLDEN harness = `test_renderer` with the
-        // offscreen size PINNED to the grid's pixel size (`size.screen`), so
-        // `draw_frame`'s `surface_size == self.size.screen` ⇒ `size_changed == false`
-        // (no in-`draw_frame` resize / `update_screen_size_uniforms` surprise;
-        // projection 1:1; cell (x,y) lands at pixel [x*cw..(x+1)*cw) × [y*ch..(y+1)*ch)
-        // — trivial pixel math). So we build the font grid + metrics + `size` FIRST,
-        // THEN call `init_offscreen(blending, size.screen.width, size.screen.height)`.
-        fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
-            // Probe: skip cleanly on hosts with no Metal device (headless CI), BEFORE
-            // the (Metal-independent) font-grid build. `init_offscreen` returns
-            // `Err(NoMetalDevice)` on a headless host (the `metal.rs` / `test_renderer`
-            // precedent).
-            if Metal::init_offscreen(AlphaBlending::Native, 1, 1).is_err() {
-                eprintln!("no Metal device; skipping golden");
-                return None;
-            }
-
-            // Real font grid over the embedded JetBrains Mono Regular (built FIRST so
-            // its metrics fix the offscreen size). Leaked so the `*mut SharedGrid`
-            // stays valid for the test's scope.
+        // Build a leaked embedded-font `SharedGrid` + the pixel `Size` for a
+        // `cols`×`rows` grid. Factored (W1-7 de-dup) so `golden_renderer` and the
+        // windowed-lifecycle KAT share the identical grid recipe. Metal-independent
+        // (the caller does its own Metal probe). The grid is leaked so the returned
+        // `*mut SharedGrid` outlives the test scope. The `size.screen` is PINNED to the
+        // grid's pixel size so that (in `golden_renderer`) `init_offscreen`'s
+        // `offscreen_size == size.screen` ⇒ `draw_frame`'s `size_changed == false`
+        // (§3.2: projection 1:1; cell (x,y) at pixel [x*cw..(x+1)*cw) × [y*ch..(y+1)*ch)).
+        fn test_font_grid_and_size(
+            cols: CellCountInt,
+            rows: CellCountInt,
+        ) -> (*mut SharedGrid, Size) {
+            // Real font grid over the embedded JetBrains Mono Regular. Leaked so the
+            // `*mut SharedGrid` stays valid for the test's scope.
             let font_grid: *mut SharedGrid = {
                 let lib = Library::init().unwrap();
                 let mut c = Collection::init();
@@ -5730,8 +6002,6 @@ mod macos_impl {
             };
 
             let grid_metrics = unsafe { (*font_grid).metrics };
-            let font_shaper = Shaper::init(shape::Options::default()).expect("shaper");
-
             let cell = CellSize {
                 width: grid_metrics.cell_width,
                 height: grid_metrics.cell_height,
@@ -5749,77 +6019,108 @@ mod macos_impl {
                     left: 0,
                 },
             };
+            (font_grid, size)
+        }
 
-            // OFFSCREEN size PINNED to `size.screen` (§3.2). `AlphaBlending::Native` ⇒
-            // `blending.is_linear() == false` ⇒ the target is `BGRA8Unorm` (NOT
-            // `_sRGB`), so the readback bytes are the shader's gamma-encoded output
-            // DIRECTLY (no implicit sRGB re-encode on store). Metal was probed above.
-            let api =
-                Metal::init_offscreen(AlphaBlending::Native, size.screen.width, size.screen.height)
-                    .expect("init_offscreen (Metal probed above)");
-            let shaders = api.init_shaders(&[]).expect("init_shaders");
-            let swap_chain = SwapChain::init(&api, false).expect("swap_chain");
+        // GPU_RD_CHUNK4_DESIGN §3.2/§6.5: the GOLDEN harness = `test_renderer` with the
+        // offscreen size PINNED to the grid's pixel size (`size.screen`), so
+        // `draw_frame`'s `surface_size == self.size.screen` ⇒ `size_changed == false`
+        // (no in-`draw_frame` resize / `update_screen_size_uniforms` surprise;
+        // projection 1:1; cell (x,y) lands at pixel [x*cw..(x+1)*cw) × [y*ch..(y+1)*ch)
+        // — trivial pixel math). So we build the font grid + metrics + `size` FIRST,
+        // THEN call `init_offscreen(blending, size.screen.width, size.screen.height)`.
+        fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
+            // Probe: skip cleanly on hosts with no Metal device (headless CI), BEFORE
+            // the (Metal-independent) font-grid build. `init_offscreen` returns
+            // `Err(NoMetalDevice)` on a headless host (the `metal.rs` / `test_renderer`
+            // precedent).
+            if Metal::init_offscreen(AlphaBlending::Native, 1, 1).is_err() {
+                eprintln!("no Metal device; skipping golden");
+                return None;
+            }
 
-            let mut cells = Contents::default();
-            cells.resize(GridSize {
-                rows,
-                columns: cols,
-            });
+            let (font_grid, size) = test_font_grid_and_size(cols, rows);
 
-            let mut r = Renderer {
-                alloc: Global,
-                draw_mutex: Mutex::new(),
+            // DE-DUP (W1-7): delegate to the now-filled `Renderer::init` instead of
+            // hand-building the field literal. `golden_renderer` PINS
+            // `offscreen_size == size.screen` (§3.2) — EXACTLY what `Renderer::init`
+            // builds (`init_offscreen(config.blending, size.screen.width,
+            // size.screen.height)`), and `derived_config_for_test()` uses
+            // `blending = Native` (⇒ `BGRA8Unorm`, no store-time sRGB re-encode),
+            // `colorspace = Srgb`, and EMPTY `custom_shaders`, so the delegated
+            // `api`/`shaders`/`swap_chain`/`uniforms` are field-for-field identical to
+            // the former hand-built literal (bg_color/bools/min_contrast are overwritten
+            // by `update_frame` before `draw_frame`; all are no-op-equal for this
+            // config anyway). `init` also runs `update_font_grid_uniforms` +
+            // `update_screen_size_uniforms` (fixing the projection/cell uniforms — else
+            // every vertex collapses to the origin) + `update_bg_image_buffer` +
+            // `prep_background_image` (a no-op with `bg_image = None`). `cells` starts
+            // empty and is sized by the first `update_frame`/`rebuild_cells`. Metal was
+            // probed above, so `init` succeeds — the failure path is an `.expect`.
+            let opts = Options {
                 config: derived_config_for_test(),
-                surface_mailbox: SurfaceMailbox,
-                grid_metrics,
-                size,
-                focused: true,
-                custom_shader_focused_changed: false,
-                scrollbar: Scrollbar::ZERO,
-                scrollbar_dirty: false,
-                last_bottom_node: None,
-                last_bottom_y: 0,
-                search_matches: None,
-                search_selected_match: None,
-                search_matches_dirty: false,
-                cells,
-                cells_rebuilt: false,
-                uniforms: unsafe { core::mem::zeroed() },
-                custom_shader_uniforms: unsafe { core::mem::zeroed() },
-                first_frame_time: None,
-                last_frame_time: None,
                 font_grid,
-                font_shaper,
-                font_shaper_cache: ShaperCache::init(),
-                images: image::State::empty(),
-                bg_image: None,
-                bg_image_changed: false,
-                bg_image_buffer: unsafe { core::mem::zeroed() },
-                bg_image_buffer_modified: 0,
-                api,
-                display_link: None,
-                health: AtomicHealth::new(crate::Health::Healthy),
-                swap_chain,
-                target_config_modified: 0,
-                reinitialize_shaders: false,
-                has_custom_shaders: false,
-                shaders,
-                terminal_state: RenderState::empty(),
-                terminal_state_frame_count: 0,
-                overlay: None,
+                size,
             };
+            Some(Renderer::init(Global, opts).expect("Renderer::init (Metal probed above)"))
+        }
 
-            // `Renderer::init` (deferred) ends with `updateFontGridUniforms()` +
-            // `updateScreenSizeUniforms()` to fix the `undefined` projection/screen/
-            // cell/grid_padding uniform fields (generic.zig :1233-1234). The direct-
-            // construction harness must call them itself — else `projection_matrix`
-            // stays zeroed and every vertex collapses to the origin (nothing renders).
-            // `update_frame` does NOT set these (it only fills grid_size/cursor/bg via
-            // `rebuild_cells`), and `draw_frame` sets them only on `size_changed`, which
-            // is pinned FALSE here (§3.2).
-            r.update_font_grid_uniforms();
-            r.update_screen_size_uniforms();
-            Some(r)
+        // W1-7 KAT: the `Renderer` windowed lifecycle round-trip. Exercises the
+        // apprt-free surface handshake (`surface_init`/`finalize_surface_init` are
+        // FAITHFUL no-ops for the Metal monomorphization — `@hasDecl(GraphicsAPI,
+        // "surfaceInit"/"finalizeSurfaceInit")` is FALSE, Metal declares only
+        // `loopEnter`), then the now-filled `Renderer::init` (offscreen-portable device
+        // ctor, layer `None`; DEFERRALS.md #3) → `deinit` (verbatim teardown). `deinit`
+        // must not panic or leak (ASan covers UB across the objc/Metal FFI). Probe-skips
+        // on a host with no Metal device, matching the W0 KAT. FFI ⇒ Miri-excluded (R6).
+        //
+        // Placed in a `windowed_lifecycle` submodule so `.port/phase-2/MIRI_EXCEPTIONS.md`
+        // can name `generic::windowed_lifecycle::windowed_renderer_init_then_deinit_round_trips`.
+        mod windowed_lifecycle {
+            use objc2::runtime::{AnyObject, NSObject};
+
+            use super::*;
+
+            #[test]
+            fn windowed_renderer_init_then_deinit_round_trips() {
+                // Probe: skip cleanly on hosts with no Metal device (headless CI).
+                if Metal::init_offscreen(AlphaBlending::Native, 1, 1).is_err() {
+                    eprintln!("no Metal device; skipping windowed_lifecycle");
+                    return;
+                }
+
+                // A real objc object — the `*mut S` handed to the generic surface hooks.
+                // We use a bare `NSObject` (from the objc2 base crate — no AppKit
+                // framework, which the lib test binary does not link, and which R4
+                // forbids depending on) rather than a live NSView: the hooks IGNORE the
+                // pointer (Metal declares neither `@hasDecl` hook — they are faithful
+                // no-ops), and the design permits "any `*mut S`". A real objc object
+                // still keeps the KAT honest about the bare generic `<S>` (`S = NSObject`,
+                // erased to `*mut AnyObject`).
+                let obj: objc2::rc::Retained<NSObject> = NSObject::new();
+                // `&*obj` (&NSObject) → `*mut AnyObject`. The hooks never deref it, so a
+                // shared-ref-derived cross-type `*mut` is sound (no aliasing write occurs).
+                let view_ptr: *mut AnyObject = &*obj as *const NSObject as *mut AnyObject;
+
+                // The apprt-free surface handshake — faithful no-ops for Metal.
+                Renderer::surface_init(view_ptr).expect("surface_init (no-op)");
+
+                let (font_grid, size) = test_font_grid_and_size(10, 3);
+                let opts = Options {
+                    config: derived_config_for_test(),
+                    font_grid,
+                    size,
+                };
+                let mut r =
+                    Renderer::init(Global, opts).expect("Renderer::init (Metal probed above)");
+
+                // The other half of the handshake (still a no-op for Metal).
+                r.finalize_surface_init(view_ptr)
+                    .expect("finalize_surface_init (no-op)");
+
+                // The windowed teardown must not panic/leak.
+                r.deinit();
+            }
         }
 
         // Sample the BGRA byte 4-tuple at pixel (x, y) in a tight `w*h*4` readback
@@ -5944,6 +6245,178 @@ mod macos_impl {
             assert!(
                 maxlum > 128,
                 "no fg glyph rendered in cell (0,0) (maxlum={maxlum})"
+            );
+
+            t.deinit(Global);
+        }
+
+        // A minimal ObjC test-double for the host NSView. `Metal::init` (the on-screen
+        // constructor) attaches its `IOSurfaceLayer` by sending the layer-hosting
+        // selectors `setLayer:` / `setWantsLayer:` / `setClipsToBounds:` to a
+        // type-erased `&AnyObject` (R4 — never names an app-kit type), then the W1-6
+        // handshake reads `[view layer]` back. This double responds to EXACTLY those
+        // four selectors — storing the `setLayer:` id and returning it from `layer` —
+        // so `Metal::init`'s present-path msg_sends run byte-identically to a real
+        // NSView, while the object is a PLAIN `NSObject` subclass (define_class!, the
+        // W0 `IOSurfaceLayer` precedent).
+        //
+        // WHY a double instead of a real `[NSView new]` (which the W1 design sketched):
+        // the lib test binary links only QuartzCore + Metal — `NSView`/AppKit is NOT
+        // loaded (R4 forbids the `objc2-app-kit` dep), so `class!(NSView)` would panic;
+        // and even after `dlopen`-ing AppKit, `NSView` mutation (`setWantsLayer:` …)
+        // enforces MAIN-THREAD use and THROWS an ObjC exception on cargo's parallel
+        // test worker threads (an uncatchable foreign exception → `SIGABRT`), which no
+        // `dispatch_sync` can rescue (the harness main thread runs no runloop). A plain
+        // `NSObject` subclass has no AppKit main-thread constraint, so the KAT is robust
+        // under the default parallel `cargo test` — the faithful headless test vehicle
+        // (the visible NSWindow is W4). It exercises the SAME `Metal::init` code path;
+        // only the receiver of the (side-effect-free-for-Metal) attach selectors is the
+        // double rather than a live view.
+        use objc2::DefinedClass as _;
+        struct MockHostViewIvars {
+            layer: core::cell::Cell<*mut objc2::runtime::AnyObject>,
+        }
+        objc2::define_class!(
+            // SAFETY: NSObject has no subclassing requirements; no Drop impl.
+            #[unsafe(super(objc2::runtime::NSObject))]
+            #[name = "RusttyMockHostView"]
+            #[ivars = MockHostViewIvars]
+            struct MockHostView;
+
+            impl MockHostView {
+                // `[view setLayer: l]` — store the CALayer id (arrives as an object ptr).
+                #[unsafe(method(setLayer:))]
+                fn set_layer(&self, layer: *mut objc2::runtime::AnyObject) {
+                    self.ivars().layer.set(layer);
+                }
+                // `[view layer]` — return the stored layer (the W1-6 handshake reads it).
+                #[unsafe(method(layer))]
+                fn layer(&self) -> *mut objc2::runtime::AnyObject {
+                    self.ivars().layer.get()
+                }
+                // The remaining two attach selectors are no-ops for a layer double.
+                #[unsafe(method(setWantsLayer:))]
+                fn set_wants_layer(&self, _wants: bool) {}
+                #[unsafe(method(setClipsToBounds:))]
+                fn set_clips_to_bounds(&self, _clips: bool) {}
+            }
+        );
+
+        // W1-6 CULMINATING KAT — FIRST PIXELS on-screen. Render one real terminal
+        // frame OFFSCREEN (the proven golden path), then present it through the REAL
+        // windowed present path: `Metal::init(view)` (the on-screen constructor —
+        // creates an `IOSurfaceLayer`, attaches it to the host view as a layer-hosting
+        // view) → `present(target, sync)` → `IOSurfaceLayer::set_surface_sync` →
+        // `CALayer.setContents(surface)`. Then assert (a) the drawn pixels are genuine
+        // terminal red (inherits the offscreen golden gate's pixel parity via the same
+        // `px_at` cursor-cell probe), (b) the layer's `contents` IS the exact IOSurface
+        // we drew (FIRST PIXELS), and (c) the view hosts our layer. The visible
+        // NSWindow is W4 — this KAT is HEADLESS-friendly (no WindowServer / run loop):
+        // the host view is a plain-`NSObject` layer-host double (see `MockHostView`).
+        //
+        // R4/headless: `rustty-renderer` MUST NOT depend on `objc2-app-kit` (no
+        // compile-time app-kit edge, `check_acyclic.sh`). The `MockHostView` double
+        // needs no AppKit at all — it responds to the four layer-host selectors
+        // `Metal::init` sends, and is main-thread-safe under parallel `cargo test`.
+        // Skips first on no-Metal (via `golden_renderer`). FFI/objc2 ⇒ Miri-excluded,
+        // ASan-eligible (R6). SB/TB: `present` takes `&Target` from `r.swap_chain`
+        // (shared) while `r` is not mutably borrowed across the call — no `&mut` alias.
+        #[test]
+        fn golden_presents_frame_on_screen() {
+            use core::ffi::c_void;
+
+            use objc2::msg_send;
+            use objc2::rc::Retained;
+            use objc2::runtime::AnyObject;
+            use objc2::AnyThread;
+            use objc2_io_surface::IOSurfaceRef;
+            use objc2_quartz_core::CALayer;
+
+            // --- (1) DRAW one real terminal frame OFFSCREEN (the proven golden path).
+            //         Probe-skips on a host with no Metal device.
+            let mut r = match golden_renderer(10, 3) {
+                Some(r) => r,
+                None => return, // Metal-skip
+            };
+
+            // "Ab" on a 10×3 grid ⇒ a block cursor at grid (2,0) (the empty cell after
+            // "Ab") — identical to the offscreen cursor golden.
+            let mut mutex = Mutex::new();
+            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            {
+                let mut s = t.vt_stream();
+                s.next_slice(b"Ab");
+                s.deinit();
+            }
+            let st = state::State {
+                mutex: &mut mutex,
+                terminal: &mut t,
+                inspector: None,
+                preedit: None,
+                mouse: state::Mouse::default(),
+            };
+            r.update_frame(&st, true).unwrap();
+            r.draw_frame(true).unwrap();
+
+            let idx = r.swap_chain.frame_index as usize;
+
+            // --- (2) CONFIRM real pixels (reuse the offscreen golden assert). The
+            //         cursor cell (grid (2,0)) interior center is a solid red block ⇒
+            //         genuine terminal pixels, not a blank/uninitialized surface.
+            let px = r.swap_chain.frames[idx].target.read_bgra();
+            let w = r.size.screen.width as usize;
+            let cw = r.grid_metrics.cell_width as usize;
+            let ch = r.grid_metrics.cell_height as usize;
+            let (b, g, rr, _a) = px_at(&px, w, 2 * cw + cw / 2, ch / 2);
+            assert!(
+                rr > 128 && rr > g && rr > b,
+                "no real terminal pixels to present (R={rr} G={g} B={b})"
+            );
+
+            // --- (3) PRESENT on-screen via the REAL windowed path. FIRST PIXELS.
+            // Build the layer-host double (a plain NSObject subclass — no AppKit).
+            let view: Retained<MockHostView> = {
+                let this = MockHostView::alloc().set_ivars(MockHostViewIvars {
+                    layer: core::cell::Cell::new(core::ptr::null_mut()),
+                });
+                unsafe { msg_send![super(this), init] }
+            };
+            // `&*view` (`&MockHostView`) deref-coerces to `&AnyObject` (via
+            // MockHostView → NSObject → AnyObject) at the `Metal::init` call site.
+            let view_any: &AnyObject = &view;
+
+            // `present` takes `&mut self` ⇒ `let mut onscreen`.
+            let mut onscreen = Metal::init(view_any, 1.0, AlphaBlending::Native)
+                .expect("Metal::init (Metal probed above)");
+
+            // present(sync=true) → set_surface_sync → CALayer.setContents(surface).
+            onscreen
+                .present(&r.swap_chain.frames[idx].target, true)
+                .expect("present");
+
+            // --- (4) ASSERT the handshake.
+            let layer = onscreen
+                .layer
+                .as_ref()
+                .expect("on-screen Metal has a layer");
+            // (a) the layer's `contents` IS the exact IOSurface we drew. `contents()`
+            //     is an `unsafe fn` (objc2-quartz-core `CALayer.rs`).
+            let contents: Retained<AnyObject> =
+                unsafe { layer.as_ca_layer().contents() }.expect("layer contents set by present");
+            let want_surface =
+                (&*r.swap_chain.frames[idx].target.surface as *const IOSurfaceRef).cast::<c_void>();
+            let got_surface = Retained::as_ptr(&contents) as *const c_void;
+            assert_eq!(
+                got_surface, want_surface,
+                "layer contents must be the presented IOSurface (FIRST PIXELS)"
+            );
+            // (b) the view hosts our layer (Metal::init's setLayer: stored it in the
+            //     double; `[view layer]` returns that stored id).
+            let hosted: *mut AnyObject = unsafe { msg_send![&*view, layer] };
+            let want_layer = (layer.as_ca_layer() as *const CALayer).cast::<c_void>();
+            assert_eq!(
+                hosted as *const c_void, want_layer,
+                "view must host our IOSurfaceLayer"
             );
 
             t.deinit(Global);

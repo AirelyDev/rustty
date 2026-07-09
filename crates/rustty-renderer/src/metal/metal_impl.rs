@@ -59,6 +59,7 @@ use rustty_render_types::AlphaBlending; // ← Part A hoist (no config edge)
 use super::api;
 use super::buffer::BufferOptions;
 use super::frame::{self, CompletionFn, Frame};
+use super::iosurface_layer::{self, IOSurfaceLayer};
 use super::sampler::SamplerOptions;
 use super::shaders::{self, Shaders};
 use super::target::{self, Target};
@@ -91,17 +92,23 @@ pub enum Error {
     /// `Metal.zig` `error{NoMetalDevice}` — `chooseDevice` found no usable
     /// MTLDevice.
     NoMetalDevice,
+    /// Ghostty `error{ObjCFailed}` — propagated from `IOSurfaceLayer.setSurface` /
+    /// `IOSurfaceLayer.init` (main-thread objc dispatch or subclass alloc failure,
+    /// `IOSurfaceLayer.zig:138-145`). Distinct from `NoMetalDevice` (present error
+    /// set). `iosurface_layer::Error` is itself `enum Error { ObjCFailed }`
+    /// (`iosurface_layer.rs:33-34`) ⇒ the fold is an identity map.
+    ObjCFailed,
 }
 
 /// Graphics API wrapper for Metal. Ports `Metal.zig`'s `Metal = @This()` struct.
 pub struct Metal {
-    // DEFERRED (windowing-host seam M-1): `layer: IOSurfaceLayer,` (Metal.zig:41).
-    //   `metal/IOSurfaceLayer.zig` is a windowing-host leaf (CALayer attach /
-    //   display callback / setSurface present) not ported in the offscreen scope.
-    //   The field is omitted from the Chunk-2 struct; it (and `Metal::init`) land
-    //   with the windowing-host tier. Offscreen `surface_size` reads
-    //   `offscreen_size` (below) and `present` is a stub — neither touches a layer.
-    //   The verbatim Zig field decl is preserved in this comment (R1/R5).
+    // Metal.zig:41 — `layer: IOSurfaceLayer,` (non-optional in ghostty, which always
+    // has a host view). SANCTIONED DIVERGENCE (R1-documented): rustty added the
+    // offscreen golden path (`init_offscreen`, no view) BEFORE the windowing tier, so
+    // the minimal faithful encoding is `Option`: None == offscreen (present no-op,
+    // surface_size == offscreen_size), Some == on-screen (layer attached to an NSView).
+    // Placed first to match Metal.zig's field order (`layer` before `device`).
+    pub layer: Option<IOSurfaceLayer>,
     /// MTLDevice
     pub device: Retained<ProtocolObject<dyn MTLDevice>>,
     /// MTLCommandQueue
@@ -197,20 +204,24 @@ fn query_max_texture_size(device: &ProtocolObject<dyn MTLDevice>) -> u32 {
     8192
 }
 
-impl Metal {
-    /// OFFSCREEN constructor (CHUNK-2 golden/smoke entry point). Runs the
-    /// offscreen-portable half of `Metal.zig`'s `init`: chooseDevice +
-    /// newCommandQueue + device metadata, WITHOUT the NSView/IOSurfaceLayer half
-    /// (windowing-host seam M-2). Takes `blending` + the fixed offscreen size
-    /// directly, so CHUNK 2 needs neither `renderer::Options` nor `apprt`.
-    pub fn init_offscreen(
-        blending: AlphaBlending,
-        width: u32,
-        height: u32,
-    ) -> Result<Metal, Error> {
-        // comptime switch (builtin.os.tag) { .macos, .ios => {}, else => @compileError(...) };
-        //   → the module cfg `#[cfg(target_os = "macos")]` is that comptime gate.
+/// The four device-derived fields the offscreen-portable init prologue produces
+/// (`init_device`): device, command queue, default storage mode, max texture size.
+/// A named alias keeps the shared-prologue return type readable (clippy
+/// `type_complexity`).
+type DeviceParts = (
+    Retained<ProtocolObject<dyn MTLDevice>>,
+    Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    api::StorageMode,
+    u32,
+);
 
+impl Metal {
+    /// The offscreen-portable half of `Metal.zig` `init` (lines 72-88): chooseDevice,
+    /// newCommandQueue, and device metadata (`default_storage_mode`,
+    /// `max_texture_size`). Shared by `init_offscreen` (layer None) and `init`
+    /// (windowed, adds the view attach) so neither duplicates it. Returns the four
+    /// device-derived fields.
+    fn init_device() -> Result<DeviceParts, Error> {
         // Choose our MTLDevice and create a MTLCommandQueue for that device.
         let device = choose_device()?;
         // errdefer device.release() — ARC via Retained Drop on the early return below.
@@ -232,13 +243,35 @@ impl Metal {
         // log.debug("device properties default_storage_mode={} max_texture_size={}",
         //           .{ default_storage_mode, max_texture_size });
 
-        // DEFERRED (windowing-host seam M-2): the reference here fetches the
-        // underlying view (`opts.rt_surface.platform.nsview`) + scale factor and
-        // builds/attaches an `IOSurfaceLayer` (wantsLayer / addSublayer /
-        // clipsToBounds / contentsScale / needsDisplayOnBoundsChange). None of that
-        // is offscreen-portable; see `Metal::init` for the verbatim body.
+        Ok((device, queue, default_storage_mode, max_texture_size))
+    }
+
+    /// OFFSCREEN constructor (CHUNK-2 golden/smoke entry point). Runs the
+    /// offscreen-portable half of `Metal.zig`'s `init`: chooseDevice +
+    /// newCommandQueue + device metadata, WITHOUT the NSView/IOSurfaceLayer half
+    /// (windowing-host seam M-2). Takes `blending` + the fixed offscreen size
+    /// directly, so CHUNK 2 needs neither `renderer::Options` nor `apprt`.
+    pub fn init_offscreen(
+        blending: AlphaBlending,
+        width: u32,
+        height: u32,
+    ) -> Result<Metal, Error> {
+        // comptime switch (builtin.os.tag) { .macos, .ios => {}, else => @compileError(...) };
+        //   → the module cfg `#[cfg(target_os = "macos")]` is that comptime gate.
+
+        let (device, queue, default_storage_mode, max_texture_size) = Self::init_device()?;
+
+        // OFFSCREEN seam M-2: the reference here fetches the underlying view
+        // (`opts.rt_surface.platform.nsview`) + scale factor and builds/attaches an
+        // `IOSurfaceLayer` (wantsLayer / addSublayer / clipsToBounds / contentsScale /
+        // needsDisplayOnBoundsChange). None of that is offscreen-portable, so the
+        // offscreen path keeps the sanctioned no-layer divergence: `layer` is an
+        // explicit `None` (present is the no-op arm, surface_size returns
+        // `offscreen_size`). The on-screen constructor `Metal::init` performs the
+        // attach — see its verbatim body.
 
         Ok(Metal {
+            layer: None,
             device,
             queue,
             blending,
@@ -330,10 +363,70 @@ impl Metal {
     //         .max_texture_size = max_texture_size,
     //     };
     // }
-    pub fn init(/* alloc, opts */) -> Result<Metal, Error> {
-        unimplemented!(
-            "windowing-host: Metal::init needs a live NSView + IOSurfaceLayer (offscreen path is init_offscreen)"
-        )
+    /// `Metal.zig` `init(alloc, opts)` — the on-screen constructor. `view` is the
+    /// host NSView/UIView (ghostty `info.view`), `scale_factor` is
+    /// `opts.rt_surface.content_scale.x` (ghostty `info.scaleFactor`), `blending`
+    /// maps ghostty's `opts.config.blending`. `view` is type-erased
+    /// (`&objc2::runtime::AnyObject`, byte-faithful to `info.view: objc.Object`) to
+    /// keep R4 (no app-kit dep). See the verbatim Zig body above.
+    pub fn init(
+        view: &objc2::runtime::AnyObject,
+        scale_factor: f64,
+        blending: AlphaBlending,
+    ) -> Result<Metal, Error> {
+        let (device, queue, default_storage_mode, max_texture_size) = Self::init_device()?;
+
+        // Create an IOSurfaceLayer which we can assign to the view to make it in to a
+        // "layer-hosting view", so that we can manually control the layer contents.
+        // `IOSurfaceLayer::init` returns `iosurface_layer::Error::ObjCFailed` ⇒ fold
+        // to the dedicated `Error::ObjCFailed` (NOT NoMetalDevice; W1-3 present error
+        // set). errdefer layer.release() → ARC via Retained Drop on `?` early return.
+        let layer = IOSurfaceLayer::init()
+            .map_err(|iosurface_layer::Error::ObjCFailed| Error::ObjCFailed)?;
+
+        // Add our layer to the view.
+        //
+        // On macOS we do this by making the view "layer-hosting" by assigning it to
+        // the view's `layer` property BEFORE setting `wantsLayer` to `true` (the
+        // ORDER is load-bearing). The Zig `.ios` arm
+        // (`view_layer.addSublayer:(layer.layer.value)`, Metal.zig:128-131) is a dead
+        // comptime arm preserved as a comment (R1).
+        let l: *const objc2_quartz_core::CALayer = layer.as_ca_layer();
+        // SAFETY: `view` is a live NSView; `setLayer:`/`setWantsLayer:` are the
+        // standard layer-hosting AppKit selectors, reached via `msg_send!` over the
+        // type-erased `&AnyObject` (no app-kit dep, R4).
+        unsafe {
+            let _: () = objc2::msg_send![view, setLayer: l];
+            let _: () = objc2::msg_send![view, setWantsLayer: true];
+        }
+        // Ensure that if our layer is oversized it does not overflow the bounds of
+        // the view.
+        // SAFETY: `setClipsToBounds:` on the live NSView.
+        unsafe {
+            let _: () = objc2::msg_send![view, setClipsToBounds: true];
+        }
+        // Ensure that our layer has a content scale set to match the scale factor of
+        // the window. This avoids magnification issues leading to blurry rendering.
+        layer.as_ca_layer().setContentsScale(scale_factor);
+        // This makes it so that our display callback will actually be called.
+        layer.as_ca_layer().setNeedsDisplayOnBoundsChange(true);
+
+        Ok(Metal {
+            layer: Some(layer),
+            device,
+            queue,
+            blending,
+            default_storage_mode,
+            max_texture_size,
+            autorelease_pool: None,
+            // OFFSCREEN seam M-3 no longer drives surface_size on-screen (the layer
+            // branch, W1-3); keep a zeroed offscreen_size — it is never read while
+            // `layer.is_some()`.
+            offscreen_size: SurfaceSize {
+                width: 0,
+                height: 0,
+            },
+        })
     }
 
     /// Actions taken before doing anything in `drawFrame`.
@@ -580,12 +673,12 @@ impl Metal {
     /// Get the current size of the runtime surface.
     // pub fn surfaceSize(self: *const Metal) !struct { width: u32, height: u32 }
     //
-    // OFFSCREEN seam M-3: the reference reads `layer.bounds * contentsScale`.
-    // Offscreen there is no layer, so we return the fixed `offscreen_size` set at
-    // construction — still clamped to `max_texture_size` (the reference's clamp: we
-    // can't create a screen texture larger). The deferred layer-bounds path (needs
-    // `pkg/macos.graphics.Rect`) is the windowing-host seam. Verbatim Zig body
-    // (Metal.zig:216-232):
+    // seam M-3: the reference reads `layer.bounds * contentsScale`. The on-screen
+    // `Some(layer)` branch is now LIVE (`objc2_core_foundation::CGRect`/`CGFloat`
+    // replace `pkg/macos.graphics.Rect`/`f64`). Offscreen (`None`) there is no layer,
+    // so we return the fixed `offscreen_size` set at construction. Both branches
+    // clamp to `max_texture_size` (the reference's clamp: we can't create a screen
+    // buffer (texture) larger than that). Verbatim Zig body (Metal.zig:216-232):
     //     const bounds = self.layer.layer.getProperty(graphics.Rect, "bounds");
     //     const scale = self.layer.layer.getProperty(f64, "contentsScale");
     //     // We need to clamp our runtime surface size to the maximum
@@ -596,10 +689,22 @@ impl Metal {
     //         .height = @min(@as(u32, @intFromFloat(bounds.size.height * scale)), self.max_texture_size),
     //     };
     pub fn surface_size(&self) -> Result<SurfaceSize, Error> {
-        Ok(SurfaceSize {
-            width: self.offscreen_size.width.min(self.max_texture_size),
-            height: self.offscreen_size.height.min(self.max_texture_size),
-        })
+        match &self.layer {
+            Some(layer) => {
+                // bounds = layer.bounds; scale = layer.contentsScale (Metal.zig:217-218).
+                let bounds = layer.as_ca_layer().bounds(); // CGRect
+                let scale = layer.as_ca_layer().contentsScale(); // CGFloat (f64)
+                                                                 // @intFromFloat → `as u32` (trunc-toward-zero, byte-faithful); clamp each axis.
+                Ok(SurfaceSize {
+                    width: ((bounds.size.width * scale) as u32).min(self.max_texture_size),
+                    height: ((bounds.size.height * scale) as u32).min(self.max_texture_size),
+                })
+            }
+            None => Ok(SurfaceSize {
+                width: self.offscreen_size.width.min(self.max_texture_size),
+                height: self.offscreen_size.height.min(self.max_texture_size),
+            }),
+        }
     }
 
     /// Begin a frame.
@@ -634,19 +739,37 @@ impl Metal {
     /// Present the provided target.
     // pub inline fn present(self: *Metal, target: Target, sync: bool) !void
     //
-    // OFFSCREEN seam M-5: the reference calls `layer.setSurfaceSync(target.surface)`
-    // / `layer.setSurface(...)`. Offscreen has no layer; the IOSurface is read back
-    // via `Target::read_bgra` (landed 1b) instead, so `present` is a no-op stub
-    // offscreen. The Chunk-3 offscreen completion path reads back rather than
-    // presenting, so this is never exercised in the offscreen golden. Verbatim Zig
-    // body (Metal.zig:253-259):
+    // seam M-5: the on-screen `Some(layer)` branch is now LIVE — it calls
+    // `layer.setSurfaceSync(target.surface)` / `try layer.setSurface(...)`
+    // (Metal.zig:253-259). Offscreen (`None`) has no layer; the IOSurface is read
+    // back via `Target::read_bgra` (landed 1b) instead, so `present` is the no-op arm
+    // offscreen (the offscreen completion path reads back rather than presenting, so
+    // that arm is never exercised on-screen). `iosurface_layer::Error::ObjCFailed`
+    // folds into `Error::ObjCFailed` (identity — faithful to ghostty's `try
+    // setSurface` propagating `error{ObjCFailed}`). Verbatim Zig body:
     //     if (sync) {
     //         self.layer.setSurfaceSync(target.surface);
     //     } else {
     //         try self.layer.setSurface(target.surface);
     //     }
-    pub fn present(&mut self, _target: &Target, _sync: bool) -> Result<(), Error> {
-        Ok(())
+    pub fn present(&mut self, target: &Target, sync: bool) -> Result<(), Error> {
+        match &self.layer {
+            Some(layer) => {
+                if sync {
+                    layer.set_surface_sync(&target.surface);
+                } else {
+                    // try self.layer.setSurface(target.surface);  (Metal.zig:257)
+                    layer
+                        .set_surface(&target.surface)
+                        .map_err(|iosurface_layer::Error::ObjCFailed| Error::ObjCFailed)?;
+                }
+                Ok(())
+            }
+            // OFFSCREEN (layer None): no layer to set; the completion path reads back
+            // via `Target::read_bgra` instead. Preserved no-op (never exercised
+            // on-screen).
+            None => Ok(()),
+        }
     }
 
     /// Present the last presented target again. (noop for Metal)
@@ -663,11 +786,12 @@ impl Drop for Metal {
     //     self.layer.release();
     // }
     fn drop(&mut self) {
-        // ARC: `queue`/`device` (Retained) release automatically on drop; the
-        // `layer` release is part of seam M-1. Release order is immaterial under
-        // ARC. If a pool is still pushed here it would leak — but
-        // drawFrameStart/End are balanced (matching Zig, whose deinit also does not
-        // pop the pool). No explicit body required.
+        // ARC: `queue`/`device` (Retained) release automatically on drop; `layer`
+        // (the `Option<IOSurfaceLayer>`) releases via `IOSurfaceLayer`'s
+        // `Retained<CALayer>` Drop — `self.layer.release()` (Metal.zig:161) ⇒ that
+        // Drop. Release order is immaterial under ARC. If a pool is still pushed here
+        // it would leak — but drawFrameStart/End are balanced (matching Zig, whose
+        // deinit also does not pop the pool). No explicit body required.
     }
 }
 
@@ -735,7 +859,9 @@ mod tests {
         // Headless CI may lack a Metal device.
         let metal = match Metal::init_offscreen(AlphaBlending::Native, 4, 4) {
             Ok(m) => m,
-            Err(Error::NoMetalDevice) => {
+            // `init_offscreen` only ever yields `NoMetalDevice`; the `ObjCFailed`
+            // arm (W1-3) is unreachable here but keeps the match exhaustive.
+            Err(Error::NoMetalDevice | Error::ObjCFailed) => {
                 eprintln!("no Metal device; skipping");
                 return;
             }

@@ -22,8 +22,8 @@
 //! The **sync path (the golden path) needs NO ObjC block**: `complete(true)` does
 //! commit → waitUntilCompleted → set `sync=true` → call the fn-pointer directly
 //! (Zig's `CompletionBlock.invoke`). The **async path**
-//! (`addCompletedHandler:` via a `block2::RcBlock`) is the DEFERRED windowing-host
-//! seam (`unimplemented!`), with the block2 shape R5-preserved as a comment.
+//! (`addCompletedHandler:` via a `block2::RcBlock`) installs the completion block
+//! over the by-value-`Copy` `CompletionContext` (W1-4).
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -47,6 +47,11 @@ pub enum Error {
 /// per `rust-mut-args-strongly-protected` (see the module PORT NOTE). `renderer` is
 /// type-erased (`*mut ()`) so Frame compiles in 1b — Chunk-3 casts it back to
 /// `*mut GenericRenderer` inside the installed callback.
+// `Clone, Copy`: all three fields (`*mut ()`, `*mut Target`, `bool`) are `Copy`. The
+// async `RcBlock` must own a BY-VALUE copy of this context (mirrors ghostty's
+// `CompletionBlock.init(.{…})` copying the `Context` INTO the block), so the async
+// body does not borrow `self.block` — which would dangle after `complete` returns.
+#[derive(Clone, Copy)]
 pub struct CompletionContext {
     pub renderer: *mut (),
     pub target: *mut Target,
@@ -59,6 +64,12 @@ pub struct CompletionContext {
 /// stored/typed, never authored (= Zig's `&bufferCompleted`).
 pub type CompletionFn =
     unsafe fn(ctx: &CompletionContext, buffer: &ProtocolObject<dyn MTLCommandBuffer>);
+
+/// The `MTLCommandBufferHandler` closure shape `addCompletedHandler:` expects
+/// (`block2::RcBlock<CompletionHandler>` ⇒ `*const DynBlock<dyn Fn(NonNull<…>)>`).
+/// A named alias keeps the async-present block type readable (clippy
+/// `type_complexity`).
+type CompletionHandler = dyn Fn(core::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>);
 
 /// Options for beginning a frame.
 pub struct Options<'a> {
@@ -183,19 +194,34 @@ impl Frame {
         // It will be copied when we add the handler, and then the
         // copy will be deallocated by the objc runtime on success.
         if !sync {
-            // DEFERRED ([F6], §5 blueprint): the async present half is the
-            // windowing-host seam. R5-preserved shape — the completion block is a
-            // `block2::RcBlock` over the exact `MTLCommandBufferHandler` closure type
-            // (`*mut block2::DynBlock<dyn Fn(NonNull<ProtocolObject<dyn
-            // MTLCommandBuffer>>)>`):
+            // The async present half installs a completion block over the exact
+            // `MTLCommandBufferHandler` closure type (`*mut block2::DynBlock<dyn
+            // Fn(NonNull<ProtocolObject<dyn MTLCommandBuffer>>)>`).
             //
-            //     let handler: block2::RcBlock<dyn Fn(core::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>)> =
-            //         block2::RcBlock::new(move |buf: core::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
-            //             // SAFETY: buf is a valid MTLCommandBuffer for the callback's duration.
-            //             unsafe { on_completed(&ctx, buf.as_ref()); }
-            //         });
-            //     unsafe { self.buffer.addCompletedHandler(block2::RcBlock::as_ptr(&handler)); }
-            unimplemented!("windowing-host: async addCompletedHandler present");
+            // Copy the context by value + the fn-ptr by move (matches Zig's by-value
+            // Context copy — stays valid until Metal fires the handler). The block is
+            // copied when `addCompletedHandler:` retains it and dealloc'd by the objc
+            // runtime on completion (Frame.zig:106-108).
+            let ctx = self.block; // Copy
+            let on_completed = self.on_completed;
+            let handler: block2::RcBlock<CompletionHandler> = block2::RcBlock::new(
+                move |buf: core::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+                    // SAFETY: buf is a valid MTLCommandBuffer for the callback's
+                    // duration; ctx's raw ptrs are derefed NEVER as &mut (same
+                    // container_of discipline as the sync path /
+                    // metal_buffer_completed).
+                    unsafe {
+                        on_completed(&ctx, buf.as_ref());
+                    }
+                },
+            );
+            // SAFETY: `handler` matches `MTLCommandBufferHandler`; `addCompletedHandler:`
+            // retains the block (copied on install) and the objc runtime dealloc's it
+            // once fired.
+            unsafe {
+                self.buffer
+                    .addCompletedHandler(block2::RcBlock::as_ptr(&handler));
+            }
         }
 
         self.buffer.commit();

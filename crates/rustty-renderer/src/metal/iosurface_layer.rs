@@ -260,7 +260,9 @@ mod tests {
     fn iosurface_layer_sets_surface_as_contents() {
         let metal = match Metal::init_offscreen(AlphaBlending::Native, 64, 32) {
             Ok(m) => m,
-            Err(MetalError::NoMetalDevice) => {
+            // `init_offscreen` only ever yields `NoMetalDevice`; the `ObjCFailed`
+            // arm (W1-3) is unreachable here but keeps the match exhaustive.
+            Err(MetalError::NoMetalDevice | MetalError::ObjCFailed) => {
                 eprintln!("no Metal device; skipping");
                 return;
             }
