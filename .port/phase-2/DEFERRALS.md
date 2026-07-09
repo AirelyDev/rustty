@@ -3136,3 +3136,46 @@ PORT-NOTE divergences from the design (both R1-driven, documented in-source):
   Chunk-3 `rebuildOverlay` passes `self.overlay.as_ref()`.
 - `State::draw` is `&self` (no mutation; the Zig `*State` is non-mutating).
 - `Overlay::init`/`deinit` drop the Zig `alloc` (the z2d subset owns its buffer).
+
+## macOS windowing W2 (CVDisplayLink) — divergence ledger + one deferred leaf
+
+W2 lands the CoreVideo `CVDisplayLink` primitive (`crates/rustty-renderer/src/metal/
+cvdisplaylink.rs`) + the `generic.rs` display-link block (field wiring, `init` create
++ errdefer, `deinit` teardown un-defer, `loop_enter`/`loop_exit`/`thread_enter`/
+`thread_exit`/`has_vsync`/`set_macos_display_id`/`set_focus`/`set_visible`) + the vsync
+KAT. All apprt-free (R4). Build/clippy -D/fmt/acyclic/comment-coverage green; the
+on-device KAT passes (real vsync tick, TICKS>=1). Divergences (all documented in-source):
+
+- **`loop_enter(&mut self, draw_now: xev::Async)` vs reference `loopEnter(self,
+  thr: *renderer.Thread)` [R4].** The reference passes `*Thread` SOLELY to reach
+  `&thr.draw_now`; R4 forbids `rustty-renderer` naming `renderer.Thread`, so the port
+  takes that exact field — a `Copy`+`Send` leaf-crate handle (NOT an apprt/core type).
+  Behavior identical. `rustty-xev` is a leaf (deps `rustty-global`+`libc`) ⇒ the
+  renderer→xev edge is acyclic.
+- **`DisplayLink.draw_now: Option<Box<Async>>` wrapper field vs reference bare
+  `opaque` [R4, soundness].** The CoreVideo output callback needs a stable `void*`
+  userInfo; the reference is `&thr.draw_now` in the separate `renderer.Thread`. The
+  port boxes the `Async` in the wrapper — a SEPARATE heap allocation whose address is
+  stable and lies OUTSIDE the `Renderer` `&mut` footprint (the faithful analogue of the
+  reference's separate `Thread` home). Not merely a field add: the `Box` is what makes
+  the callback-aliasing shape sound under ASan (separate alloc + `Copy`-by-value read,
+  never `&mut`-reborrowed). No `Drop` on `DisplayLink` — release is manual (deinit /
+  errdefer), faithful to the Zig `opaque`.
+- **`create` error `generic::Error` (via `From<cvdisplaylink::Error>`,
+  `InvalidOperation → OutOfMemory`) vs reference `Allocator.Error` [error-channel].**
+  The renderer init error channel is `generic::Error`, not an allocator error; the
+  `From` impl folds the sole CVDisplayLink error into `OutOfMemory`, keeping the
+  reference `try … catch error.OutOfMemory` faithful.
+- **`pub use async_watcher::WaitError;` added to `rustty-xev/src/lib.rs`
+  [export-gap fix].** Same class as the existing `TimerRunError` re-export — the
+  `WaitError` alias of the already-exported `MachPortError` was un-exported; the KAT's
+  typed `Async.wait` callback names it. Not a behavioral divergence.
+
+**Deferred leaf (INHABITED-placeholder doctrine, → W3):** `Renderer::loop_enter`
+is filled and faithful, but its transitive `self.api.loop_enter()` (metal_impl.rs) stays
+`unimplemented!("windowing-host: Metal::loop_enter installs the IOSurfaceLayer display
+callback")` — it needs a live NSView layer (W3). The method compiles and is faithful;
+it PANICS if called until W3 fills the Metal hook. The KAT does NOT call
+`Renderer::loop_enter` — it drives the `DisplayLink` primitive + the callback→`Async`
+seam directly, so the deferred Metal leaf never gates the vsync proof. `loop_exit` has
+no Metal hook (`@hasDecl(Metal,"loopExit")` false) and is fully runnable.

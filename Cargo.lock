@@ -816,6 +816,7 @@ dependencies = [
  "rustty-util",
  "rustty-vt",
  "rustty-wuffs",
+ "rustty-xev",
  "rustty-z2d",
  "rustty-zigstd",
  "spirv-cross-sys",

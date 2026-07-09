@@ -186,6 +186,14 @@ pub use timer::Timer;
 // gap surfaced by Milestone B's first typed Timer callback).
 #[cfg(target_os = "macos")]
 pub use timer::RunError as TimerRunError;
+// PORT NOTE: `Async.wait`'s callback error type (`pub const WaitError =
+// xev.Sys.MachPortError;`) must be nameable by consumers — the W2 CVDisplayLink
+// KAT (and any typed `Async.wait` callback) spells its `r: Result<(), WaitError>`
+// parameter, and the `async_watcher` module is private. Re-export the alias (same
+// export gap the `TimerRunError` re-export closed; the underlying `MachPortError`
+// is already re-exported via the `kqueue` block).
+#[cfg(target_os = "macos")]
+pub use async_watcher::WaitError;
 
 // PORT: `main.zig` also forwards `File`/`TCP`/`UDP` (watchers) + `Dynamic`/
 // `DynamicXev` (the runtime backend switch) + `IO_Uring`/`Epoll`/`Kqueue`/

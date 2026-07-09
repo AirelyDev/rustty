@@ -33,6 +33,7 @@
 
 pub mod api;
 pub mod buffer;
+pub mod cvdisplaylink; // W2 — the CoreVideo CVDisplayLink loop driver
 pub mod frame;
 pub mod gpu_abi;
 pub mod iosurface_layer; // W0.T3 — CALayer subclass present primitive

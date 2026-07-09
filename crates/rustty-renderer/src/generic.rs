@@ -897,6 +897,10 @@ mod macos_impl {
     };
     use crate::state;
     use crate::Overlay;
+    // W2: the `xev::Async` (Copy+Send mach-port wakeup) `loop_enter` forwards to the
+    // CVDisplayLink output callback — the reference `thr.draw_now` field. Not an
+    // apprt type (R4); `rustty-xev` is a leaf crate.
+    use rustty_xev::Async;
 
     /// The number of buffers we use for double/triple buffering.
     //
@@ -1018,6 +1022,19 @@ mod macos_impl {
         }
     }
 
+    // `Renderer::init`'s `DisplayLink::create_with_active_cg_displays()?` and
+    // `Renderer::loop_enter`'s `display_link.set_output_callback(draw_now)?`
+    // propagate the CVDisplayLink wrapper error (W2). The reference
+    // `createWithActiveCGDisplays` maps CoreVideo failure to `error.OutOfMemory`
+    // (its `Allocator.Error`); we mirror that by folding the sole
+    // `cvdisplaylink::Error::InvalidOperation` into the aggregate `OutOfMemory`
+    // member — keeping the reference `try … catch error.OutOfMemory` faithful.
+    impl From<crate::metal::cvdisplaylink::Error> for Error {
+        fn from(_: crate::metal::cvdisplaylink::Error) -> Self {
+            Error::OutOfMemory
+        }
+    }
+
     /// Returned by [`SwapChain::next_frame`] when the swap chain is defunct.
     //
     // PORT NOTE: reference `error{Defunct}`.
@@ -1062,15 +1079,15 @@ mod macos_impl {
         }
     }
 
-    /// PORT NOTE (DEFERRED SEAM — macOS display link): reference
-    /// `const DisplayLink = switch (builtin.os.tag) { .macos => *macos.video.DisplayLink,
-    /// else => void }`, field `display_link: ?DisplayLink = null`. The CVDisplayLink
-    /// loop driver (`createWithActiveCGDisplays`/`stop`/`release`) lands with
-    /// `loopEnter`; this is an inhabited macOS placeholder for the field type.
-    #[derive(Debug)]
-    pub struct DisplayLink {
-        _seam: (),
-    }
+    // PORT NOTE (W2 — un-deferred): reference `const DisplayLink =
+    // switch (builtin.os.tag) { .macos => *macos.video.DisplayLink, else => void }`.
+    // This crate's `generic`/`metal` modules are macOS-only (`lib.rs:78,121`), so the
+    // `.macos` arm is the only one compiled and `DisplayLink` is ALWAYS the real
+    // CoreVideo wrapper — every `if (comptime DisplayLink == void) return;` guard in
+    // the methods below collapses to an unconditional non-return. The wrapper lives
+    // in `crate::metal::cvdisplaylink` (W2-T1); re-exported here so the field type
+    // `display_link: Option<DisplayLink>` (below) is unchanged.
+    pub use crate::metal::cvdisplaylink::DisplayLink;
 
     // PORT NOTE: reference `const HighlightTag = enum(u8) { search_match,
     // search_match_selected }` (Renderer-private). Widened to `pub` (dead-code
@@ -1860,16 +1877,54 @@ mod macos_impl {
                 unsafe { (*g).metrics }
             };
 
-            // const display_link: ?DisplayLink = switch (builtin.os.tag) {
-            //     .macos => if (options.config.vsync)
-            //         try macos.video.DisplayLink.createWithActiveCGDisplays()
-            //     else null,
-            //     else => null,
-            // };
-            // errdefer if (display_link) |v| v.release();
+            // generic.zig:692-699:
+            //   const display_link: ?DisplayLink = switch (builtin.os.tag) {
+            //       .macos => if (options.config.vsync)
+            //           try macos.video.DisplayLink.createWithActiveCGDisplays()
+            //       else null,
+            //       else => null,
+            //   };
+            //   errdefer if (display_link) |v| v.release();
+            // macOS-only crate ⇒ the `.macos` arm only. The `try` maps to `?`; the
+            // reference `error.OutOfMemory` becomes `generic::Error` via the
+            // `From<cvdisplaylink::Error>` impl above (`InvalidOperation -> OutOfMemory`).
             //
-            // W1: the `.macos` vsync display link is a W2 concern -> None (DEFERRALS.md #2).
-            let display_link: Option<DisplayLink> = None;
+            // errdefer: the freshly-created +1 `CVDisplayLinkRef` must be released on
+            // ANY later `?`-return in `init` (reference `errdefer if (display_link)
+            // |v| v.release();`). Rust has no `errdefer`; use a disarm-on-success RAII
+            // guard that OWNS the `Option<DisplayLink>`. `Drop` releases; `disarm()`
+            // extracts the value on success (leaving `None`, so the ensuing `Drop` is
+            // a no-op) to move into the `Renderer`. An OWNING guard (not a `&`-borrow
+            // guard) is required — a borrow would conflict with moving `display_link`
+            // into the struct literal.
+            struct DisplayLinkErrdefer {
+                dl: Option<DisplayLink>,
+            }
+            impl DisplayLinkErrdefer {
+                /// Disarm on success: take the link out (leaving `None`, so the
+                /// subsequent `Drop` releases nothing) to move into the Renderer.
+                fn disarm(mut self) -> Option<DisplayLink> {
+                    self.dl.take()
+                }
+            }
+            impl Drop for DisplayLinkErrdefer {
+                fn drop(&mut self) {
+                    // reference `errdefer if (display_link) |v| v.release();`
+                    if let Some(dl) = self.dl.as_ref() {
+                        dl.release();
+                    }
+                }
+            }
+            // The `?` inside the `Some(...)` initializer returns BEFORE the guard is
+            // built (nothing created ⇒ nothing to leak); every `?` AFTER this drops
+            // the guard ⇒ `release()`.
+            let display_link_errdefer = DisplayLinkErrdefer {
+                dl: if options.config.vsync {
+                    Some(DisplayLink::create_with_active_cg_displays()?)
+                } else {
+                    None
+                },
+            };
 
             // generic.zig:718-743 uniforms literal. The reference sets
             // projection_matrix/cell_size/grid_size/grid_padding/screen_size (and
@@ -1929,6 +1984,11 @@ mod macos_impl {
             // `update_frame`/`rebuild_cells` resizes it to the terminal grid size
             // (generic.rs `rebuild_cells`: `if grid_size_diff { self.cells.resize(..) }`).
             let cells = Contents::default();
+
+            // Disarm the errdefer just before the successful build — extract the
+            // link to move into the Renderer (any earlier `?`-return already ran
+            // the guard's `Drop` → `release()`).
+            let display_link: Option<DisplayLink> = display_link_errdefer.disarm();
 
             let mut result = Self {
                 // ---- generic.zig:701-787 (spelled out in the reference literal) ----
@@ -2049,15 +2109,20 @@ mod macos_impl {
             // self.swap_chain.deinit();   (805)
             self.swap_chain.deinit();
 
-            // if (DisplayLink != void) {
-            //     if (self.display_link) |display_link| {
-            //         display_link.stop() catch {};
-            //         display_link.release();
-            //     }
-            // }
-            // (807-812) — W1: `display_link` is always `None` (the `.macos` vsync
-            // DisplayLink lands in W2, DEFERRALS.md #2); teardown (stop/release via
-            // ARC) is guarded until then.
+            // generic.zig:807-813:
+            //   if (DisplayLink != void) {
+            //       if (self.display_link) |display_link| {
+            //           display_link.stop() catch {};
+            //           display_link.release();
+            //       }
+            //   }
+            // macOS-only crate ⇒ `DisplayLink != void` is always true (no comptime
+            // guard). `stop() catch {}` = ignore the stop error (link may never have
+            // started / its view is gone); then `release()` the +1 ref from `init`.
+            if let Some(display_link) = self.display_link.as_ref() {
+                let _ = display_link.stop(); // catch {}
+                display_link.release();
+            }
 
             // self.cells.deinit(self.alloc);   (814)
             // Port: `Contents::deinit(&mut self)` takes NO allocator arg (cell.rs:131).
@@ -2120,6 +2185,151 @@ mod macos_impl {
         pub fn finalize_surface_init<S>(&mut self, rt_surface: *mut S) -> Result<(), Error> {
             let _ = rt_surface;
             Ok(())
+        }
+
+        // generic.zig:881-886 threadEnter. `@hasDecl(Metal,"threadEnter")` is FALSE
+        // (Metal declares only loopEnter) ⇒ no api call; `surface` is the apprt
+        // surface the hook is generic over (never named, R4).
+        //   pub fn threadEnter(self, surface: *apprt.Surface) !void {
+        //       if (@hasDecl(GraphicsAPI, "threadEnter")) try self.api.threadEnter(surface);
+        //   }
+        #[allow(clippy::not_unsafe_ptr_arg_deref)]
+        pub fn thread_enter<S>(&self, rt_surface: *mut S) -> Result<(), Error> {
+            let _ = rt_surface;
+            Ok(())
+        }
+
+        // generic.zig:889-894 threadExit. `@hasDecl(Metal,"threadExit")` FALSE ⇒ no-op.
+        //   pub fn threadExit(self) void {
+        //       if (@hasDecl(GraphicsAPI, "threadExit")) self.api.threadExit();
+        //   }
+        pub fn thread_exit(&self) {}
+
+        // generic.zig:897-916 loopEnter. Adapted for R4: the reference takes
+        // `thr: *renderer.Thread` and reads `&thr.draw_now`; we cannot name
+        // `renderer.Thread` (R4), so the caller passes the `draw_now: xev::Async`
+        // field directly (Copy+Send handle — NOT an apprt type).
+        //   pub fn loopEnter(self, thr: *renderer.Thread) !void {
+        //       if (@hasDecl(GraphicsAPI, "loopEnter")) self.api.loopEnter();
+        //       if (comptime DisplayLink == void) return;      // (macOS: never)
+        //       const display_link = self.display_link orelse return;
+        //       try display_link.setOutputCallback(xev.Async, &displayLinkCallback, &thr.draw_now);
+        //       display_link.start() catch {};
+        //   }
+        pub fn loop_enter(&mut self, draw_now: Async) -> Result<(), Error> {
+            // Metal DECLARES loopEnter ⇒ this hook fires. It installs the
+            // IOSurfaceLayer display callback and needs a live NSView — DEFERRED to
+            // W3 (metal_impl `loop_enter` is `unimplemented!("windowing-host")`).
+            // INHABITED-placeholder doctrine: the method is faithfully filled; its
+            // transitive leaf `self.api.loop_enter()` stays the deferred W3 seam.
+            self.api.loop_enter();
+            // `if (comptime DisplayLink == void) return;` — macOS: DisplayLink is
+            // never void; no early return.
+            let Some(display_link) = self.display_link.as_mut() else {
+                return Ok(());
+            };
+            display_link.set_output_callback(draw_now)?;
+            let _ = display_link.start(); // catch {}
+            Ok(())
+        }
+
+        // generic.zig:919-933 loopExit. `@hasDecl(Metal,"loopExit")` FALSE ⇒ no api
+        // call ⇒ FULLY runnable (unlike loopEnter). Stop the link; error ignored.
+        //   pub fn loopExit(self) void {
+        //       if (@hasDecl(GraphicsAPI, "loopExit")) self.api.loopExit();
+        //       if (comptime DisplayLink == void) return;
+        //       const display_link = self.display_link orelse return;
+        //       display_link.stop() catch {};
+        //   }
+        pub fn loop_exit(&self) {
+            if let Some(display_link) = self.display_link.as_ref() {
+                let _ = display_link.stop(); // catch {}
+            }
+        }
+
+        // generic.zig:986-994 displayLinkCallback. The body is INLINED into the
+        // `cvdisplaylink::output_callback` trampoline (W2-T1) because a CoreVideo
+        // `extern "C"` callback cannot be a `Self` method and must run without a
+        // `Renderer` receiver. Kept as an R1 doc-anchor here; the live copy is in
+        // cvdisplaylink.rs.
+        //   fn displayLinkCallback(_: *macos.video.DisplayLink, ud: ?*xev.Async) void {
+        //       const draw_now = ud orelse return;
+        //       draw_now.notify() catch |err| log.err("error notifying draw_now err={}", .{err});
+        //   }
+
+        // generic.zig:1001-1009 setMacOSDisplayID. FULLY runnable.
+        //   pub fn setMacOSDisplayID(self, id: u32) !void {
+        //       if (comptime DisplayLink == void) return;
+        //       const display_link = self.display_link orelse return;
+        //       log.info("updating display link display id={}", .{id});
+        //       display_link.setCurrentCGDisplay(id) catch |err|
+        //           log.warn("error setting display link display id err={}", .{err});
+        //   }
+        pub fn set_macos_display_id(&self, id: u32) -> Result<(), Error> {
+            let Some(display_link) = self.display_link.as_ref() else {
+                return Ok(());
+            };
+            // log.info("updating display link display id={}", id);
+            if let Err(_err) = display_link.set_current_cg_display(id) {
+                // log.warn("error setting display link display id err={}", err);
+            }
+            Ok(())
+        }
+
+        // generic.zig:1017-1024 hasVsync. FULLY runnable.
+        //   pub fn hasVsync(self) bool {
+        //       if (comptime DisplayLink == void) return false;
+        //       const display_link = self.display_link orelse return false;
+        //       return display_link.isRunning();
+        //   }
+        pub fn has_vsync(&self) -> bool {
+            match self.display_link.as_ref() {
+                Some(display_link) => display_link.is_running(),
+                None => false,
+            }
+        }
+
+        // generic.zig:1029-1048 setFocus. FULLY runnable. NB: keeps the reference
+        // `assert(self.focused != focus)` + the custom-shader flag + start/stop.
+        //   pub fn setFocus(self, focus: bool) !void {
+        //       assert(self.focused != focus);
+        //       self.focused = focus;
+        //       self.custom_shader_focused_changed = true;
+        //       if (comptime DisplayLink != void) link: {
+        //           const display_link = self.display_link orelse break :link;
+        //           if (focus) display_link.start() catch {} else display_link.stop() catch {};
+        //       }
+        //   }
+        pub fn set_focus(&mut self, focus: bool) -> Result<(), Error> {
+            assert!(self.focused != focus);
+            self.focused = focus;
+            self.custom_shader_focused_changed = true;
+            if let Some(display_link) = self.display_link.as_ref() {
+                let _ = if focus {
+                    display_link.start()
+                } else {
+                    display_link.stop()
+                };
+            }
+            Ok(())
+        }
+
+        // generic.zig:1053-1065 setVisible. FULLY runnable.
+        //   pub fn setVisible(self, visible: bool) void {
+        //       if (comptime DisplayLink != void) link: {
+        //           const display_link = self.display_link orelse break :link;
+        //           if (visible and self.focused) display_link.start() catch {}
+        //           else display_link.stop() catch {};
+        //       }
+        //   }
+        pub fn set_visible(&self, visible: bool) {
+            if let Some(display_link) = self.display_link.as_ref() {
+                let _ = if visible && self.focused {
+                    display_link.start()
+                } else {
+                    display_link.stop()
+                };
+            }
         }
 
         /// Mark the full screen as dirty so that we redraw everything.

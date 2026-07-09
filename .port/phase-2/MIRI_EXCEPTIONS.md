@@ -495,3 +495,18 @@ Renderer` across the completion callback re-opens the hazard — re-run the harn
   Metal / CoreText / IOSurface foreign functions (same class as the golden-render, iosurface_layer,
   and windowed_lifecycle exceptions). Runs natively; ASan-eligible (R6). Skips gracefully on a
   headless host (no Metal device).
+
+## macOS windowing W2 (CVDisplayLink → xev::Async → loop vsync round-trip) — MIRI exception
+
+- **`crates/rustty-renderer/src/metal/cvdisplaylink.rs`**
+  (`metal::cvdisplaylink::tests::kat_vsync_displaylink_notifies_async`). The W2-T3 vsync KAT. Binds
+  a real CoreVideo `CVDisplayLink` to the active display(s) (`CVDisplayLinkCreateWithActiveCGDisplays`
+  + `SetOutputCallback` + `Start`), whose `output_callback` bumps a `#[cfg(test)] TICKS` counter then
+  `notify()`s a real `xev::Async` (mach port), and drains one `xev::Loop` wakeup — asserting `TICKS >= 1`
+  (a genuine display-link tick, distinct from the 2 s guard thread's fallback `notify()` which bypasses
+  the callback). Miri cannot execute the CoreVideo foreign functions or the mach-port syscalls (same
+  class as the golden-render / iosurface_layer / windowed_lifecycle exceptions). Runs natively (verified
+  on-device, TICKS>=1 in 0.14 s); ASan-eligible (R6) — ASan covers the callback→`*const Async`
+  aliasing shape (separate `Box` allocation, `Copy`-by-value read) across the CoreVideo FFI. `#[ignore]`
+  by default (on-device: requires a live WindowServer display) AND internally 2 s-bounded so a manual
+  un-ignore on a headless host FAILS the assert rather than hanging.
