@@ -3204,3 +3204,142 @@ verbatim-inert (no `std.valgrind` shim, in-place comment + PORT NOTE, not a
 DEFERRALS entry); the `MUST_DRAW_FROM_APP_THREAD` app-mailbox `drawFrame` arm is
 dead-but-live (`false` this milestone, flips when GTK lands) — both arms compile,
 no `unimplemented!`.
+
+---
+
+# Ledger-hygiene reconciliation (2026-07 — GAP_ANALYSIS drift backlog §6)
+
+The gap-analysis completeness critics found several real deferrals with NO ledger
+entry, plus one app-core over-claim. These entries reconcile that drift. Each
+maps to a GAP_ANALYSIS §3 workstream ("sub-project"); the numbering below is the
+sub-project id the critics used (macos-swift-app = #2, unused-subset = #3, gtk = #4).
+
+## Sub-project #3 (unused-subset): `src/synthetic/**` — differential-fuzzing generators
+
+**Ghostty source:** `src/synthetic/**` — 9 `.zig` files, ~1157 LOC
+(`Generator.zig`, `Bytes.zig`, `Osc.zig`, `Utf8.zig`, `cli.zig`, `main.zig`,
+`cli/**`). **Rustty counterpart:** only a 9-line scaffold in
+`crates/rustty-synthetic/src/lib.rs` (crate exists, body unported).
+**Why deferred:** these are the differential-fuzzing input generators — a
+developer/CI tool, NOT reachable from the terminal product; ghostty itself does
+not link them into the app. Headless-feasible (no GPU/GTK/windowing dependency).
+**What unblocks it:** slated for sub-project #3 (unused-subset, GAP_ANALYSIS §3.8).
+Port the generators into `rustty-synthetic` when the unused-by-ghostty subset
+milestone runs. 0-test impact on the product crates.
+
+## Sub-project #3 (unused-subset): `src/benchmark/**` + `main_bench.zig` + `ghostty_benchmark_cli`
+
+**Ghostty source:** `src/benchmark/**` (12 files: `Benchmark.zig`, `CApi.zig`,
+`CodepointWidth.zig`, `GraphemeBreak.zig`, `IsSymbol.zig`, `OscParser.zig`,
+`ScreenClone.zig`, `TerminalParser.zig`, `TerminalStream.zig`, `cli.zig`,
+`main.zig`, `options.zig`) + `src/main_bench.zig`, together ~1441 LOC; plus the
+`export fn ghostty_benchmark_cli` C-ABI entrypoint (`src/benchmark/CApi.zig:8`).
+**Rustty counterpart:** `crates/rustty-bench` scaffold only (Cargo.toml + stub
+`lib.rs`). **Why deferred:** the micro-benchmark harness is a developer tool, not
+part of the shipping terminal; the `ghostty_benchmark_cli` export is not on the
+71-symbol libghostty product contract. Headless-feasible. **What unblocks it:**
+sub-project #3 (unused-subset, GAP_ANALYSIS §3.8) — port `rustty-bench` and its
+`rustty_benchmark_cli` export alongside the synthetic generators. 0-test impact.
+
+## Sub-project #3 (unused-subset): `src/extra/{bash,fish,zsh,vim,sublime}.zig` — shell-completion / editor-syntax generators
+
+**Ghostty source:** `src/extra/bash.zig`, `fish.zig`, `zsh.zig`, `vim.zig`,
+`sublime.zig` — ~941 LOC of shell-completion + editor-syntax string constants,
+emitted by `main_build_data.zig`'s `+gen-*` actions (the `bash`/`fish`/`zsh`/
+`sublime`/`@"vim-syntax"`/`@"vim-ftdetect"`/`@"vim-ftplugin"`/`@"vim-compiler"`
+gen switch). **Rustty counterpart:** NONE (no crate, no scaffold). **Why
+deferred:** build-time codegen data for packaging (shell completions, editor
+syntax files) — not reachable from the running terminal; driven only by the
+`main_build_data` gen tooling (itself deferred, see C6). **What unblocks it:**
+sub-project #3 (unused-subset, GAP_ANALYSIS §3.8), together with the
+`main_build_data` gen-action tooling that consumes them. 0-test impact.
+
+## `src/build/mdgen/**` + `src/build/webgen/**` — man-page + website doc generators (low priority)
+
+**Ghostty source:** `src/build/mdgen/**` (`mdgen.zig`, `main_ghostty_1.zig`,
+`main_ghostty_5.zig`, the `ghostty_{1,5}_{header,footer}.md` fixtures) +
+`src/build/webgen/**` (`main_actions.zig`, `main_commands.zig`,
+`main_config.zig`) — ~345 LOC of `.zig` (plus the `.md` header/footer fixtures).
+**Rustty counterpart:** NONE. **Why deferred:** build-time documentation
+generators (man pages + website config/action/command reference) — pure packaging
+tooling, never linked into the terminal, and dependent on the same `help_strings`
+codegen the CLI already defers (C6). **What unblocks it:** LOW priority; port with
+the doc/codegen tooling milestone if/when man-page + website generation is wanted.
+0-test impact.
+
+## `src/stb/stb_image_resize.h` — glyph resize (`stbir_resize_uint8`); rustty-font does NOT yet cover it
+
+**Ghostty source:** `src/stb/stb_image_resize.h` (single-header stb library),
+invoked as `stb.stbir_resize_uint8(...)` in the FreeType glyph-resize path
+(`src/font/face/freetype.zig:640`, "resizes the glyph"). **Rustty counterpart:**
+NOT covered — `grep -rn 'stbir|stb_image_resize' crates/rustty-font/src` finds
+only `Vec::resize`/`atlas.resized` (unrelated). The glyph/atlas resize seam has no
+Rust analogue yet. **Why deferred:** the live FreeType glyph-rasterization path
+(which is itself windowing/font-face-tier and gated on the Phase-3 renderer) is
+where this resize is called; the offscreen port did not need it. **What unblocks
+it:** when the live glyph-rasterization path lands, wire glyph resize — either a
+pure-Rust resize (e.g. an image-resize crate) or a `stb-sys` cc build compiling
+`stb_image_resize.h` (a `cc` build.rs, the -sys precedent). Note a **stb-sys cc
+build may be needed** if bit-exact parity with stb's resampler is required.
+
+## Sub-project #2 (macos-swift-app): the `ghostty_*`→`rustty_*` C-ABI compatibility ALIAS layer
+
+**Context:** the reused macOS Swift app hard-codes ~163 `ghostty_`-prefixed
+symbols, but the rustty C-ABI (rustty-apprt-c, the E-series) exports `rustty_`-
+prefixed symbols (R2 identity rename). **What's deferred:** a compatibility ALIAS
+layer that re-exports each `rustty_*` C export under its original `ghostty_*` name
+(so the unmodified Swift app links against `librustty_apprt_c`). No rustty crate
+provides this yet. **Locked decisions (per the critics):** identity is
+`io.airely.rustty`; **iOS is in scope** (the alias layer + xcframework must cover
+the iOS targets too). **Why deferred:** only needed when the Swift frontend is
+actually reused (Phase-3, after R-d windowed present + D6 land). **What unblocks
+it:** sub-project #2 (macos-swift-app, GAP_ANALYSIS §3.3) — generate the ~163
+`ghostty_*` = `rustty_*` alias exports (comptime/attribute export aliases) as part
+of the Swift-app reuse milestone.
+
+## Sub-project #2 (macos-swift-app): signed `.xcframework` repackaging xtask (`GhosttyKit.xcframework`)
+
+**Context:** the Xcode project consumes a `GhosttyKit.xcframework`; the rustty
+build produces `librustty_apprt_c` (the apprt-c staticlib/dylib). **What's
+deferred:** an `xtask` (build-orchestration) subcommand that repackages
+`librustty_apprt_c` (+ the generated C header + the `ghostty_*` alias layer above)
+into a **signed** `GhosttyKit.xcframework` consumable by the Xcode project (macOS +
+iOS slices). No such xtask exists yet (the current `xtask` only does
+`header-gen-apprt` cbindgen, see E11/E-series). **Why deferred:** only needed for
+the Swift-app reuse build. **What unblocks it:** sub-project #2 (macos-swift-app,
+GAP_ANALYSIS §3.3) — add the `xtask xcframework` packaging + codesign step
+alongside the alias layer.
+
+## Sub-project #4 (gtk): the `apprt-gtk` subsystem (`src/apprt/gtk/**`)
+
+**Ghostty source:** `src/apprt/gtk/**` — ~52 `.zig` files, ~22k LOC (`App.zig`,
+`Surface.zig`, the `class/**` GObject widgets, `ext/**`, `cgroup.zig`,
+`adw_version.zig`, …) plus the `.blp` Blueprint UI + `.css` theme assets. **Rustty
+counterpart:** NONE (zero counterpart — the single largest unported chunk).
+**Why deferred:** the GTK4/libadwaita Linux frontend is a whole windowing/toolkit
+subsystem that also drives the OpenGL renderer backend; it is out of the
+monomorphic Metal/macOS scope of the current milestones (the renderer's
+OpenGL/WebGL backends + GTK were already noted out-of-scope at the R-d monomorphic
+Renderer boundary). No unit-gate is expected for the GTK tier (per the
+heavy-tier-strategy: GTK is ported LAST and accepts no unit-gate). **What unblocks
+it:** sub-project #4 (gtk, GAP_ANALYSIS §3.7) — the GTK/Linux frontend milestone,
+scheduled after the macOS windowed path is runnable. This is the dedicated ledger
+entry the drift-analysis found missing (prior GTK mentions were only in-passing
+seam notes: the `RtPreExecInfo`/`RtPostForkInfo` growth point, the C6 usage-banner
+`.gtk` guard, and the `MUST_DRAW_FROM_APP_THREAD` flip — none of which tracked the
+subsystem itself).
+
+## App-core over-claim CORRECTION — `main_gen.zig` / `main_wasm.zig` / `main_build_data.zig` are DEFERRED (already tracked at C6)
+
+The gap-analysis app-core inventory marked `src/main_gen.zig`, `src/main_wasm.zig`,
+and `src/main_build_data.zig` as done. **They are NOT ported — they are DEFERRED.**
+This is already correctly tracked in the **C6 ledger entry** (see "`main_gen.zig` /
+`main_wasm.zig` / `main_build_data.zig` (0t each) DEFERRED", above): they are
+standalone build-tool / WASM-module entrypoints, NOT on the `rustty` exe's
+`exe_entrypoint` switch (`main.zig` selects only `.ghostty` → `main_ghostty`), so
+they carry no test-count contract and have no MAP entry. This subsection exists
+solely to CONFIRM the C6 deferral is authoritative and to nullify the app-core
+over-claim; no duplicate deferral is created. **Target (unchanged from C6):** port
+with the gen/wasm-artifact tooling milestone (the same `help_strings`-codegen
+follow-up), i.e. sub-project #3 (unused-subset) for the gen tooling and a separate
+WASM-artifact milestone for `main_wasm.zig`.

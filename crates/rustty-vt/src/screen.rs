@@ -2,12 +2,12 @@
 //!
 //! PORTS: ghostty src/terminal/Screen.zig
 //!
-//! PORT STATUS: skeleton (vt-10) — Screen struct + nested types + method
-//! signatures; bodies `todo!()` land in vt-11.
-// PORT NOTE: this skeleton has `todo!()` method bodies (vt-11 lands the real
-// bodies), so the parameters/imports they will consume are not yet read. The
-// `unused_*` and `clippy::should_implement_trait` allows are skeleton-only and
-// drop out once the bodies land.
+//! PORT STATUS: done (vt-11) — Screen struct + nested types + method bodies are
+//! ported and filled; no `todo!()` bodies remain.
+// PORT NOTE: the method bodies are filled (vt-11). The `unused_*` and
+// `clippy::should_implement_trait` allows are retained from the skeleton phase
+// where the filled file still trips them (unread params/imports, trait-name
+// overlaps); they no longer imply unfinished bodies.
 #![allow(clippy::todo, dead_code, unused_variables, unused_imports)]
 #![allow(clippy::should_implement_trait)]
 // `splitCellBoundary`'s reference doc block uses `o`-prefixed sub-bullets indented

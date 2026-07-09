@@ -6,12 +6,14 @@
 //!
 //! PORTS: ghostty src/terminal/Terminal.zig
 //!
-//! PORT STATUS: skeleton (struct-first; method bodies are `todo!()`, ported in
-//! vt-12b)
+//! PORT STATUS: done (vt-12b) — struct, method bodies, and tests are ported and
+//! filled; no `todo!()` bodies remain (the only rustty-vt seam left is the
+//! dcimgui-gated `imguiKey` in `input/key.rs`).
 
-// PORT NOTE (vt-12a skeleton): every method body is `todo!()` and many fields
-// are not yet read, so we allow the lints that the skeleton trivially trips.
-// These allows are removed as vt-12b fills the bodies.
+// PORT NOTE: the method bodies are filled (vt-12b). The crate-wide allows below
+// are retained from the skeleton phase where the filled file still trips them
+// (`dead_code` on fields not yet read by every downstream tier, adapted
+// signatures); `clippy::todo` is now inert (no `todo!()` bodies remain).
 #![allow(clippy::todo)]
 #![allow(dead_code)]
 #![allow(unused_variables)]
