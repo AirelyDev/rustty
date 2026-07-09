@@ -911,6 +911,10 @@ name = "rustty-util"
 version = "0.1.0"
 
 [[package]]
+name = "rustty-vaxis"
+version = "0.1.0"
+
+[[package]]
 name = "rustty-vt"
 version = "0.1.0"
 dependencies = [
@@ -958,6 +962,10 @@ dependencies = [
 
 [[package]]
 name = "rustty-z2d"
+version = "0.1.0"
+
+[[package]]
+name = "rustty-zf"
 version = "0.1.0"
 
 [[package]]

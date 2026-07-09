@@ -24,6 +24,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+# CHUNK 1b: build.rs parses the vendored UCD 16.0.0 corpus (`ucd/`) and emits the
+# uucode-0.1.0 stage1/stage2 width/grapheme tables into OUT_DIR. std-only, NO
+# build-dependencies (keeps rustty-vaxis a dep-free R4 leaf; Miri-clean at runtime).
+build = "build.rs"
 
 [lints]
 workspace = true
