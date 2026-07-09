@@ -1,0 +1,33 @@
+# rustty-vaxis — pure-Rust port of the vendored `libvaxis` 0.5.1 subset (R3 vendored dep).
+#
+# Crate IDENTITY is `rustty-vaxis` (R4), the vendored-dep-port pattern like
+# `rustty-z2d`/`rustty-zf`. libvaxis (rockorager, 0.5.1, hash
+# `BWNV_LosCQAGmCCNOLljCIw6j6-yt53tji6n6rwJ2BhS`) is the TUI dependency of
+# ghostty's interactive CLI — a DEPENDENCY, not ghostty source; therefore its own
+# `test {}` blocks are not part of the src/ parity test contract and this crate is
+# absent from that crate_map. Its value-type semantics must nonetheless be
+# byte-faithful (the Key matchers rely on `std.meta.eql` over packed structs).
+#
+# CHUNK 1a ports the CORE VALUE TYPES only: Cell.zig (Style/Color/Segment/Cell +
+# SGR bits), Key.zig (Key + constants + matchers + Modifiers/KittyFlags packed
+# structs), Mouse.zig, GraphemeCache.zig, the Winsize struct (main.zig:38), and the
+# Image STRUCT SHAPE (zigimg/Window method bodies are R5 unimplemented!() seams).
+# gwidth.zig + unicode.zig are DEFERRED to Chunk 1b (uucode-0.1.0 width-table
+# blocker — DEFERRALS.md). Pure Rust, NO dependencies (R3/R4 acyclic leaf).
+#
+# The leak/UB gate is Miri (R6, pure-Rust crate, no FFI).
+[package]
+name = "rustty-vaxis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]

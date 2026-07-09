@@ -178,10 +178,21 @@ RSWUFFS = "/Users/gael/projects/rustty/crates/rustty-wuffs/src"
 GHZF = "/Users/gael/.cache/zig/p/zf-0.10.3-OIRy8RuJAACKA3Lohoumrt85nRbHwbpMcUaLES8vxDnh/src/zf"
 RSZF = "/Users/gael/projects/rustty/crates/rustty-zf/src"
 
+# rustty-vaxis: the vendored `libvaxis` 0.5.1 TUI-lib parity crate (the interactive
+# CLI's terminal-UI dependency). GH base = the content-addressed zig-cache dep dir
+# (NOT ghostty src/), so it is not in the 3234-test src/ contract; scoped-mapped here.
+# CHUNK 1a ports the core VALUE TYPES: Cell.zig carries 1 named `test "rgbFromSpec"`;
+# Key.zig carries 5 (matches 'a'/'shift+a'/'shift+tab'/'shift+;' + name_map);
+# Mouse.zig/GraphemeCache.zig/Image.zig carry 0. gwidth.zig (11 test) + unicode.zig are
+# DEFERRED to Chunk 1b (uucode-0.1.0 blocker) — NOT referenced here. zig=6; rust=6.
+GHVAXIS = "/Users/gael/.cache/zig/p/vaxis-0.5.1-BWNV_LosCQAGmCCNOLljCIw6j6-yt53tji6n6rwJ2BhS/src"
+RSVAXIS = "/Users/gael/projects/rustty/crates/rustty-vaxis/src"
+
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
     "wuffs":           ([f"{GHWUFFS}/png.zig", f"{GHWUFFS}/jpeg.zig", f"{GHWUFFS}/main.zig", f"{GHWUFFS}/error.zig", f"{GHWUFFS}/swizzle.zig"], [f"{RSWUFFS}/*.rs"], 0),
     "zf":              ([f"{GHZF}/zf.zig", f"{GHZF}/filter.zig", f"{GHZF}/clib.zig"], [f"{RSZF}/*.rs"], 0),
+    "vaxis":           ([f"{GHVAXIS}/Cell.zig", f"{GHVAXIS}/Key.zig", f"{GHVAXIS}/Mouse.zig", f"{GHVAXIS}/GraphemeCache.zig", f"{GHVAXIS}/Image.zig"], [f"{RSVAXIS}/*.rs"], 0),
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
     "page":            ([f"{GH}/page.zig"], [f"{RS}/page_impl.rs", f"{RS}/page_tests.rs", f"{RS}/page.rs"], 0),
     "screen":          ([f"{GH}/Screen.zig"], [f"{RS}/screen.rs"], 0),

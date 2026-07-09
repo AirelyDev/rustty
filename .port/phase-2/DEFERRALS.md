@@ -3357,3 +3357,69 @@ over-claim; no duplicate deferral is created. **Target (unchanged from C6):** po
 with the gen/wasm-artifact tooling milestone (the same `help_strings`-codegen
 follow-up), i.e. sub-project #3 (unused-subset) for the gen tooling and a separate
 WASM-artifact milestone for `main_wasm.zig`.
+
+## rustty-vaxis Chunk 1b (`gwidth.zig` + `unicode.zig`) — uucode-0.1.0 width-table blocker
+
+The vaxis port (`crates/rustty-vaxis`, vendored-dep-port of libvaxis 0.5.1) lands its
+CORE VALUE TYPES in **Chunk 1a** (`Cell`/`Key`/`Mouse`/`GraphemeCache`/`Winsize` +
+`Image` struct-shape — READY, dep-free; see `VAXIS_C1_DESIGN.md`). The two
+grapheme-width / grapheme-segmentation files are **DEFERRED to Chunk 1b** on a
+unicode-data blocker that needs a **human decision** (Option A vs B below):
+
+- `gwidth.zig` (216 LOC, **11 test{}**) → `gwidth.rs`
+- `unicode.zig` (64 LOC, 0 test) → `unicode.rs`
+
+**The blocker — vaxis reads raw uucode fields rustty-unicode does not expose.**
+`gwidth.zig` imports `uucode` **0.1.0-vanilla** (vaxis pins
+`git+https://github.com/jacobsandlund/uucode#5f05f8f83a75caea201f12cc8ea32a2d82ea9732`)
+and reads FOUR distinct uucode surfaces:
+
+| uucode surface | where | purpose |
+|---|---|---|
+| `uucode.get(.east_asian_width, cp)` → `EastAsianWidth` | `eawToWidth` | fullwidth/wide → 2 |
+| `uucode.get(.general_category, cp)` | `eawToWidth` | `mark_nonspacing`/`mark_enclosing` → 0 |
+| `uucode.get(.is_emoji_presentation, cp)` | grapheme loop | force emoji width 2 |
+| `uucode.grapheme.Iterator` + `uucode.utf8.Iterator` | `gwidth` + `unicode.zig` | grapheme-cluster segmentation |
+
+`rustty-unicode` (Ghostty's `src/unicode/` port) embeds tables generated from **uucode
+0.2.0** run through **Ghostty's stripped `uucode_config.zig`**, exposing only a
+4-field `Properties { width, width_zero_in_grapheme, grapheme_break, emoji_vs_base }`
+plus `grapheme::grapheme_break(...)`. Grep over `crates/rustty-unicode/src/` confirms
+`east_asian_width` / `general_category` / `is_emoji_presentation` appear ONLY in
+doc-comments describing how Ghostty *derives* `width` — they are **absent from the
+embedded data**, not merely un-exported. Ghostty's derived `width` is a *different*
+algorithm than vaxis's `eawToWidth` (control-char `-1` sentinels; mark→0; a hardcoded
+zero-width list; EAW fullwidth/wide→2); substituting it would be **faking widths**
+(violates R1 + the "do not fake widths" instruction).
+
+Second, independent skew: even the grapheme-segmentation rustty-unicode *can* supply is
+a **different uucode version** (0.2.0, Ghostty-folded `GraphemeBreakNoControl` break)
+than vaxis's 0.1.0-vanilla algorithm. The 11 gwidth tests + the unicode grapheme tests
+pin uucode-0.1.0-vanilla results; byte-exact reproduction on 0.2.0+Ghostty-config is
+**not guaranteed** and must be validated (or the right data sourced) before claiming parity.
+
+**Remediation options (needs human decision — do not pick unilaterally):**
+- **Option A — extend rustty-unicode** with `east_asian_width` / `general_category` /
+  `is_emoji_presentation` accessors (regenerate its embedded tables from a uucode config
+  that also emits these fields; extend the differential harness). Single shared unicode
+  crate; cost: expands a crate marked "done", and the 0.1.0-vs-0.2.0 skew still must be
+  reconciled/validated.
+- **Option B — rustty-vaxis ships its OWN uucode-0.1.0-derived tables** (EAW / GC /
+  emoji_presentation + the 0.1.0 grapheme break if it diverges), generated bit-for-bit
+  from the exact commit vaxis pins. Most faithful to what vaxis actually compiles
+  against; isolates version skew inside rustty-vaxis; cost: duplicates table-gen machinery.
+- **Option C — map eawToWidth onto Ghostty's `width` + accept rustty-unicode's break.**
+  REJECTED: not byte-exact, fakes widths, violates R1.
+
+**Recommendation to carry into the decision:** Option B is the cleanest fidelity story
+(rustty-vaxis mirrors vaxis's actual uucode-0.1.0 dependency exactly, no cross-version
+guessing) at the cost of some table-gen duplication; Option A is preferable only if we
+first confirm 0.2.0+Ghostty-config reproduces uucode-0.1.0's EAW/GC/emoji/grapheme
+results for the 11 pinned tests.
+
+**Un-defer trigger:** the above decision is made AND the chosen data source reproduces
+the 11 `gwidth` tests + `unicode.zig` grapheme results byte-exact. Chunk 1b then adds
+`gwidth.rs` (`Method` enum unicode/wcwidth/no_zwj; `eawToWidth`; `gwidth`; 11 tests) +
+`unicode.rs` (`Grapheme`/`GraphemeIterator`/`graphemeIterator`) and the
+`rustty-vaxis → rustty-unicode` dep edge (clean DAG; leaf). Test-count contract for 1b:
+**+11** (`check_test_counts.py`). Full analysis: `VAXIS_C1_DESIGN.md`.
