@@ -3253,12 +3253,20 @@ shared helper lives in the heavy `rustty-cli`; `main()` is only reached by the d
 `sublime.zig` — ~941 LOC of shell-completion + editor-syntax string constants,
 emitted by `main_build_data.zig`'s `+gen-*` actions (the `bash`/`fish`/`zsh`/
 `sublime`/`@"vim-syntax"`/`@"vim-ftdetect"`/`@"vim-ftplugin"`/`@"vim-compiler"`
-gen switch). **Rustty counterpart:** NONE (no crate, no scaffold). **Why
-deferred:** build-time codegen data for packaging (shell completions, editor
-syntax files) — not reachable from the running terminal; driven only by the
-`main_build_data` gen tooling (itself deferred, see C6). **What unblocks it:**
-sub-project #3 (unused-subset, GAP_ANALYSIS §3.8), together with the
-`main_build_data` gen-action tooling that consumes them. 0-test impact.
+gen switch). **Rustty counterpart:** **PORTED** — new crate `crates/rustty-extra`
+(PORT STATUS: done, R4-acyclic leaf over rustty-config + rustty-cli): all 5
+generators ported line-for-line as pure `-> Vec<u8>` fns (never lossy String),
+proven **byte-exact against ghostty's real `zig build` output** (golden fixtures in
+`testdata/`) for bash/zsh/vim(×4)/sublime; fish is byte-exact except the R2
+`Ghostty→rustty` brand rename inside config-doc descriptions (correct under R2,
+gated by a brand-canonicalizing compare). Both `test{}` (fish `getDescription`,
+vim anon) ported + additive golden tests; Miri-clean. Required reflection surfaces
+added faithfully next to the reified types (config_struct `config_fields()` +
+`config_completion_kind()` parallel to `value_type`; `VALUE_NAMES` on the enum
+macro; `PackedStruct::field_names()` mirroring `AutoStruct`; rustty-cli
+`Action::option_specs()` reifying the commented-out `options()`). **Residual
+deferral:** the `+gen-*` CLI/build.rs file-emit wiring (writes the scripts to disk
+at packaging time) stays deferred with `main_build_data` (C6). 2 `test{}` ported.
 
 ## `src/build/mdgen/**` + `src/build/webgen/**` — man-page + website doc generators (low priority)
 

@@ -56,7 +56,9 @@ CRATE_DIR_OVERRIDES = {
 
 # Crates listed in the inventory crate_map that are NOT part of the crates/
 # parity workspace (they are supporting / not-in-DAG per PORT_PLAN Section 4).
-NON_WORKSPACE_CRATES = {"xtask", "extra", "resources"}
+# NOTE: `extra` graduated to a real workspace crate (crates/rustty-extra) with the
+# src/extra/ generator port, so it is no longer excluded here.
+NON_WORKSPACE_CRATES = {"xtask", "resources"}
 
 
 # ---------------------------------------------------------------------------

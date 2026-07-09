@@ -58,6 +58,11 @@ members = [
     # (EMBEDDED_BLUEPRINT §3/§5). Independent of the strict port order (a sink).
     "crates/rustty-apprt-c",
     "crates/rustty-cli",           # 26
+    # Port of ghostty's src/extra/ — the shell-completion (bash/zsh/fish) + editor-
+    # syntax (vim/sublime) generators. A pure byte producer above config+cli (the
+    # `+gen-*` leaf); nothing depends on it (R4 acyclic). NOT in the 3234-test src/
+    # contract's terminal map — scoped-mapped in check_test_counts.py (base = src/extra).
+    "crates/rustty-extra",
     "crates/rustty",               # 27  <- bin (produces the `rustty` binary)
     "crates/rustty-bench",         # 28
     "crates/rustty-synthetic",     # 29
@@ -165,6 +170,8 @@ rustty-apprt = { path = "crates/rustty-apprt" }
 # The libghostty embedding C ABI top-sink (cbindgen -> include/rustty-apprt.h).
 rustty-apprt-c = { path = "crates/rustty-apprt-c" }
 rustty-cli = { path = "crates/rustty-cli" }
+# Shell-completion + editor-syntax generators (port of src/extra/). Above config+cli.
+rustty-extra = { path = "crates/rustty-extra" }
 # Additive infra glue (R1): Zig stdlib equivalents; not in the parity contract.
 rustty-zigstd = { path = "crates/rustty-zigstd" }
 # Build-time help_strings doc-table extraction (R1 port of src/helpgen.zig). A

@@ -71,7 +71,7 @@
 
 use rustty_args::args::{
     parse_field_bool, parse_field_enum, parse_field_float, parse_field_int,
-    parse_field_sentinel_string, parse_field_string, Error, ParseError, Target,
+    parse_field_sentinel_string, parse_field_string, Error, PackedStruct, ParseError, Target,
 };
 use rustty_args::diagnostics::DiagnosticList;
 use rustty_cfg_fmt::{
@@ -778,6 +778,191 @@ pub fn value_type(key: Key) -> std::any::TypeId {
         Key::AsyncBackend => TypeId::of::<AsyncBackend>(),
         Key::AutoUpdate => TypeId::of::<Option<AutoUpdate>>(),
         Key::AutoUpdateChannel => TypeId::of::<Option<rustty_build_config::ReleaseChannel>>(),
+    }
+}
+
+/// The ordered `(cli-name, Key)` config-field table — the reference's
+/// `@typeInfo(Config).@"struct".fields` iteration in declaration order, already
+/// `_`-filtered (internals are excluded at the const's construction). This is the
+/// public accessor the shell-completion / editor-syntax generators (`rustty-extra`)
+/// iterate, exactly as ghostty's `extra/*.zig` iterate the struct fields.
+pub fn config_fields() -> &'static [(&'static [u8], Key)] {
+    CONFIG_FIELDS
+}
+
+// ===========================================================================
+// Shell-completion field classification (reify `@typeInfo(field.type)` switch).
+//
+// The `extra/bash.zig` `_handle_config`, `extra/zsh.zig` `_config`, and
+// `extra/fish.zig` top loop each switch on the config field's type to decide what
+// value-completion to emit. Rust has no `@typeInfo`, so `config_completion_kind`
+// reifies that switch into a per-`Key` classifier — the direct analog of
+// `value_type` (which reifies `Config.Value`). The generators share this one
+// classifier. The name special-cases (`font-family*` / `theme` /
+// `working-directory`) stay generator-local, matching ghostty's name-before-type
+// order.
+// ===========================================================================
+
+/// The completion-relevant classification of a `Config` field's type, reifying
+/// the reference `switch (@typeInfo(field.type))` (with the `field.type ==
+/// Config.RepeatablePath` pre-check) that drives value-completion emission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigCompletionKind {
+    /// `.bool` — the flag has no value to complete (`return ;;` / no `-a`).
+    Bool,
+    /// `.@"enum"` — complete each variant name (`info.fields |f| f.name`).
+    Enum(&'static [&'static [u8]]),
+    /// packed bool struct with no `parseCLI` — complete `name`/`no-name` per flag.
+    PackedFlags(&'static [&'static [u8]]),
+    /// `field.type == Config.RepeatablePath` — complete file paths.
+    RepeatablePath,
+    /// Everything else (struct-with-`parseCLI`, non-packed struct, `?bool`, int,
+    /// float, color, path, string, optional-enum, …) — no value-completion.
+    Other,
+}
+
+// The value-name tables for the config enums NOT built via `bare_enum_names!`
+// (which now emits its own `VALUE_NAMES`). Each is `@typeInfo(E).@"enum".fields
+// |f| f.name` in declaration order; spellings are the format/parse-fidelity-gated
+// `@tagName` literals (mirrors the free `to_name` fns next to each type).
+const ALPHA_BLENDING_VALUE_NAMES: &[&[u8]] = &[b"native", b"linear", b"linear-corrected"];
+const BACKGROUND_IMAGE_POSITION_VALUE_NAMES: &[&[u8]] = &[
+    b"top-left",
+    b"top-center",
+    b"top-right",
+    b"center-left",
+    b"center-center",
+    b"center-right",
+    b"bottom-left",
+    b"bottom-center",
+    b"bottom-right",
+    b"center",
+];
+const BACKGROUND_IMAGE_FIT_VALUE_NAMES: &[&[u8]] = &[b"contain", b"cover", b"stretch", b"none"];
+const CURSOR_STYLE_VALUE_NAMES: &[&[u8]] = &[b"bar", b"block", b"underline", b"block_hollow"];
+const WINDOW_PADDING_BALANCE_VALUE_NAMES: &[&[u8]] = &[b"false", b"true", b"equal"];
+const WINDOW_PADDING_COLOR_VALUE_NAMES: &[&[u8]] = &[b"background", b"extend", b"extend-always"];
+const WINDOW_DECORATION_VALUE_NAMES: &[&[u8]] = &[b"auto", b"client", b"server", b"none"];
+const WINDOW_COLORSPACE_VALUE_NAMES: &[&[u8]] = &[b"srgb", b"display-p3"];
+
+/// Classify a config field for shell completion — the runtime analog of the
+/// reference's `field.type == Config.RepeatablePath` pre-check plus the
+/// `switch (@typeInfo(field.type))` (`.bool` / `.@"enum"` / packed-`.@"struct"` /
+/// else). `Bool` and `RepeatablePath` are decided by `value_type` equality (the
+/// `field.type` identity tests); the enum/packed cases pull their ordered name
+/// lists from `E::VALUE_NAMES` / `P::field_names()`; everything else is `Other`
+/// (incl. `?bool`, whose `@typeInfo` is `.optional`, not `.bool`).
+pub fn config_completion_kind(key: Key) -> ConfigCompletionKind {
+    use std::any::TypeId;
+
+    // `field.type == Config.RepeatablePath` (exact type identity, before the
+    // `@typeInfo` switch).
+    if value_type(key) == TypeId::of::<RepeatablePath>() {
+        return ConfigCompletionKind::RepeatablePath;
+    }
+    // `.bool` — exactly `bool` (`?bool` is `.optional` → falls through to `Other`).
+    if value_type(key) == TypeId::of::<bool>() {
+        return ConfigCompletionKind::Bool;
+    }
+
+    match key {
+        // `.@"enum"` fields — complete the variant names.
+        Key::AlphaBlending => ConfigCompletionKind::Enum(ALPHA_BLENDING_VALUE_NAMES),
+        Key::GraphemeWidthMethod => ConfigCompletionKind::Enum(GraphemeWidthMethod::VALUE_NAMES),
+        Key::BackgroundImagePosition => {
+            ConfigCompletionKind::Enum(BACKGROUND_IMAGE_POSITION_VALUE_NAMES)
+        }
+        Key::BackgroundImageFit => ConfigCompletionKind::Enum(BACKGROUND_IMAGE_FIT_VALUE_NAMES),
+        Key::CursorStyle => ConfigCompletionKind::Enum(CURSOR_STYLE_VALUE_NAMES),
+        Key::MouseShiftCapture => ConfigCompletionKind::Enum(MouseShiftCapture::VALUE_NAMES),
+        Key::Scrollbar => ConfigCompletionKind::Enum(Scrollbar::VALUE_NAMES),
+        Key::LinkPreviews => ConfigCompletionKind::Enum(LinkPreviews::VALUE_NAMES),
+        Key::NotifyOnCommandFinish => {
+            ConfigCompletionKind::Enum(NotifyOnCommandFinish::VALUE_NAMES)
+        }
+        Key::Fullscreen => ConfigCompletionKind::Enum(Fullscreen::VALUE_NAMES),
+        Key::WindowPaddingBalance => ConfigCompletionKind::Enum(WINDOW_PADDING_BALANCE_VALUE_NAMES),
+        Key::WindowPaddingColor => ConfigCompletionKind::Enum(WINDOW_PADDING_COLOR_VALUE_NAMES),
+        Key::WindowDecoration => ConfigCompletionKind::Enum(WINDOW_DECORATION_VALUE_NAMES),
+        Key::WindowSubtitle => ConfigCompletionKind::Enum(WindowSubtitle::VALUE_NAMES),
+        Key::WindowTheme => ConfigCompletionKind::Enum(WindowTheme::VALUE_NAMES),
+        Key::WindowColorspace => ConfigCompletionKind::Enum(WINDOW_COLORSPACE_VALUE_NAMES),
+        Key::WindowSaveState => ConfigCompletionKind::Enum(WindowSaveState::VALUE_NAMES),
+        Key::WindowNewTabPosition => ConfigCompletionKind::Enum(WindowNewTabPosition::VALUE_NAMES),
+        Key::WindowShowTabBar => ConfigCompletionKind::Enum(WindowShowTabBar::VALUE_NAMES),
+        Key::ResizeOverlay => ConfigCompletionKind::Enum(ResizeOverlay::VALUE_NAMES),
+        Key::ResizeOverlayPosition => {
+            ConfigCompletionKind::Enum(ResizeOverlayPosition::VALUE_NAMES)
+        }
+        Key::ClipboardRead => ConfigCompletionKind::Enum(ClipboardAccess::VALUE_NAMES),
+        Key::ClipboardWrite => ConfigCompletionKind::Enum(ClipboardAccess::VALUE_NAMES),
+        Key::CopyOnSelect => ConfigCompletionKind::Enum(CopyOnSelect::VALUE_NAMES),
+        Key::RightClickAction => ConfigCompletionKind::Enum(RightClickAction::VALUE_NAMES),
+        Key::MiddleClickAction => ConfigCompletionKind::Enum(MiddleClickAction::VALUE_NAMES),
+        Key::ConfirmCloseSurface => ConfigCompletionKind::Enum(ConfirmCloseSurface::VALUE_NAMES),
+        Key::QuickTerminalPosition => {
+            ConfigCompletionKind::Enum(QuickTerminalPosition::VALUE_NAMES)
+        }
+        Key::GtkQuickTerminalLayer => ConfigCompletionKind::Enum(QuickTerminalLayer::VALUE_NAMES),
+        Key::QuickTerminalScreen => ConfigCompletionKind::Enum(QuickTerminalScreen::VALUE_NAMES),
+        Key::QuickTerminalSpaceBehavior => {
+            ConfigCompletionKind::Enum(QuickTerminalSpaceBehavior::VALUE_NAMES)
+        }
+        Key::QuickTerminalKeyboardInteractivity => {
+            ConfigCompletionKind::Enum(QuickTerminalKeyboardInteractivity::VALUE_NAMES)
+        }
+        Key::ShellIntegration => ConfigCompletionKind::Enum(ShellIntegration::VALUE_NAMES),
+        Key::OscColorReportFormat => ConfigCompletionKind::Enum(OSCColorReportFormat::VALUE_NAMES),
+        Key::CustomShaderAnimation => {
+            ConfigCompletionKind::Enum(CustomShaderAnimation::VALUE_NAMES)
+        }
+        Key::MacosNonNativeFullscreen => {
+            ConfigCompletionKind::Enum(NonNativeFullscreen::VALUE_NAMES)
+        }
+        Key::MacosWindowButtons => ConfigCompletionKind::Enum(MacWindowButtons::VALUE_NAMES),
+        Key::MacosTitlebarStyle => ConfigCompletionKind::Enum(MacTitlebarStyle::VALUE_NAMES),
+        Key::MacosTitlebarProxyIcon => {
+            ConfigCompletionKind::Enum(MacTitlebarProxyIcon::VALUE_NAMES)
+        }
+        Key::MacosDockDropBehavior => {
+            ConfigCompletionKind::Enum(MacOSDockDropBehavior::VALUE_NAMES)
+        }
+        Key::MacosHidden => ConfigCompletionKind::Enum(MacHidden::VALUE_NAMES),
+        Key::MacosIcon => ConfigCompletionKind::Enum(MacAppIcon::VALUE_NAMES),
+        Key::MacosIconFrame => ConfigCompletionKind::Enum(MacAppIconFrame::VALUE_NAMES),
+        Key::MacosShortcuts => ConfigCompletionKind::Enum(MacShortcuts::VALUE_NAMES),
+        Key::LinuxCgroup => ConfigCompletionKind::Enum(LinuxCgroup::VALUE_NAMES),
+        Key::GtkSingleInstance => ConfigCompletionKind::Enum(GtkSingleInstance::VALUE_NAMES),
+        Key::GtkTabsLocation => ConfigCompletionKind::Enum(GtkTabsLocation::VALUE_NAMES),
+        Key::GtkToolbarStyle => ConfigCompletionKind::Enum(GtkToolbarStyle::VALUE_NAMES),
+        Key::GtkTitlebarStyle => ConfigCompletionKind::Enum(GtkTitlebarStyle::VALUE_NAMES),
+        Key::AsyncBackend => ConfigCompletionKind::Enum(AsyncBackend::VALUE_NAMES),
+
+        // packed bool structs (no `parseCLI`) — complete `name`/`no-name` flags.
+        Key::FontSyntheticStyle => {
+            ConfigCompletionKind::PackedFlags(FontSyntheticStyle::field_names())
+        }
+        Key::FontShapingBreak => {
+            ConfigCompletionKind::PackedFlags(FontShapingBreakParse::field_names())
+        }
+        Key::FreetypeLoadFlags => {
+            ConfigCompletionKind::PackedFlags(FreetypeLoadFlags::field_names())
+        }
+        Key::ScrollToBottom => ConfigCompletionKind::PackedFlags(ScrollToBottom::field_names()),
+        Key::SplitPreserveZoom => {
+            ConfigCompletionKind::PackedFlags(SplitPreserveZoom::field_names())
+        }
+        Key::NotifyOnCommandFinishAction => {
+            ConfigCompletionKind::PackedFlags(NotifyOnCommandFinishAction::field_names())
+        }
+        Key::ShellIntegrationFeatures => {
+            ConfigCompletionKind::PackedFlags(ShellIntegrationFeatures::field_names())
+        }
+        Key::BellFeatures => ConfigCompletionKind::PackedFlags(BellFeatures::field_names()),
+        Key::AppNotifications => ConfigCompletionKind::PackedFlags(AppNotifications::field_names()),
+
+        // Everything else — no value-completion (the `return ;;` / `( )` / blank arm).
+        _ => ConfigCompletionKind::Other,
     }
 }
 

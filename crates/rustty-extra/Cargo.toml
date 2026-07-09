@@ -1,0 +1,27 @@
+# rustty-extra — port crate (shell completions + editor syntax generators)
+#
+# Crate IDENTITY is `rustty-extra` (R4). This is NOT the published artifact name; the
+# library/binary artifacts are renamed to the `rustty` product identity later (R2).
+# NO dependency on the ghostty tree (R3) — reference is an external oracle only.
+#
+# Faithful port of ghostty's `src/extra/` namespace: the comptime generators that
+# reflect over `Config` fields + the CLI `Action` enum to emit bash/zsh/fish shell
+# completions and vim/sublime editor-syntax files. A pure byte producer (R6 Miri-
+# clean); the top `+gen-*` leaf — nothing depends on it. Deps: rustty-config
+# (CONFIG_FIELDS / config_completion_kind / config_help / VALUE_NAMES) + rustty-cli
+# (Action::ALL / tag_name / option_specs), both strictly-earlier members (R4).
+[package]
+name = "rustty-extra"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rustty-config = { workspace = true }
+rustty-cli = { workspace = true }

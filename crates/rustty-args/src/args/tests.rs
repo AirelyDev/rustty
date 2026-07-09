@@ -868,6 +868,9 @@ impl Default for Field {
     }
 }
 impl PackedStruct for Field {
+    fn field_names() -> &'static [&'static [u8]] {
+        &[b"a", b"b"]
+    }
     fn set_all(&mut self, b: bool) {
         self.a = b;
         self.b = b;

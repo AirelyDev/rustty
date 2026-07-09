@@ -1037,6 +1037,12 @@ pub trait PackedStruct: Default {
 
     /// Set field named `part` to `value`. Returns `true` if a field matched.
     fn set_field(&mut self, part: &[u8], value: bool) -> bool;
+
+    /// The packed field names in declaration order (`info.fields |f| f.name`),
+    /// each the Zig field-name literal (hyphenated for hyphenated fields). Mirrors
+    /// [`AutoStruct::field_names`]; consumed by the shell-completion generators
+    /// (`rustty-extra`), whose packed-flag arm emits `name`/`no-name` per entry.
+    fn field_names() -> &'static [&'static [u8]];
 }
 
 // pub fn parsePackedStruct(comptime T: type, v: []const u8) !T {

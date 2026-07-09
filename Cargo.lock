@@ -701,6 +701,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustty-extra"
+version = "0.1.0"
+dependencies = [
+ "rustty-cli",
+ "rustty-config",
+]
+
+[[package]]
 name = "rustty-font"
 version = "0.1.0"
 dependencies = [

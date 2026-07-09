@@ -40,6 +40,12 @@ RSA = "/Users/gael/projects/rustty/crates/rustty-args/src"
 # rustty-cli: GH base = src/cli (same GHC) + src/cli.zig. Phase-2 CLI milestone.
 RSCLI = "/Users/gael/projects/rustty/crates/rustty-cli/src"
 
+# rustty-extra: GH base = src/extra (shell completions + editor syntax). The five
+# comptime generators; only fish.zig (`getDescription`) + vim.zig (anon `test {}`,
+# skipped by zig_count) carry tests.
+GHX = "/Users/gael/projects/ghostty/src/extra"
+RSX = "/Users/gael/projects/rustty/crates/rustty-extra/src"
+
 # rustty-terminfo: GH base differs (src/terminfo, not src/terminal). Stage C.
 GHT = "/Users/gael/projects/ghostty/src/terminfo"
 RST = "/Users/gael/projects/rustty/crates/rustty-terminfo/src"
@@ -342,6 +348,16 @@ MAP = {
     "cli_list_keybinds":    ([f"{GHC}/list_keybinds.zig"], [f"{RSCLI}/list_keybinds.rs"], 0),
     "cli_list_themes":      ([f"{GHC}/list_themes.zig"], [f"{RSCLI}/list_themes.rs"], 0),
     "cli_boo":              ([f"{GHC}/boo.zig"], [f"{RSCLI}/boo.rs"], 0),
+    # Port of src/extra/ (shell completions + editor syntax). bash/zsh/sublime are
+    # 0-test. fish.zig has 1 named test ("getDescription") -> fish.rs (rust>=1, +the
+    # golden diff). vim.zig's sole test is the anonymous `test { _ = syntax; }`
+    # (refAllDecls-style, skipped by zig_count -> zig=0) -> vim.rs (rust=5 with the
+    # ported smoke test + golden diffs).
+    "extra_bash":        ([f"{GHX}/bash.zig"], [f"{RSX}/bash.rs"], 0),
+    "extra_zsh":         ([f"{GHX}/zsh.zig"], [f"{RSX}/zsh.rs"], 0),
+    "extra_fish":        ([f"{GHX}/fish.zig"], [f"{RSX}/fish.rs"], 0),
+    "extra_vim":         ([f"{GHX}/vim.zig"], [f"{RSX}/vim.rs"], 0),
+    "extra_sublime":     ([f"{GHX}/sublime.zig"], [f"{RSX}/sublime.rs"], 0),
     # rustty bin C6 (CLI_BLUEPRINT.md §5/§6 + ADV-FIX 2/6): the `rustty` bin.
     # main.zig (anon `test { _ = entrypoint; }`, refAllDecls-style -> skipped by
     # zig_count -> zig=0) -> main.rs (rust=1 ref_entrypoint). main_ghostty.zig (anon

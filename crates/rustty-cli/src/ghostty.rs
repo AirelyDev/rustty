@@ -396,10 +396,15 @@ impl Action {
     // @import(..) declaration.
     //
     // PORT NOTE: the reference `pub fn options(comptime self: Action) type` returns
-    // a comptime TYPE (each action's `Options` struct) for the shell-completion
-    // generator. Rust has no runtime type-returning function; the mapping is
-    // preserved verbatim below for the completions-codegen follow-up (out of this
-    // milestone's scope). Each arm maps `Action::X` -> `<x>::Options`.
+    // a comptime TYPE (each action's `Options` struct); the shell-completion
+    // generator then `@typeInfo`-reflects that struct's fields. Rust has no
+    // runtime type-returning fn and no field reflection, so the faithful analog is
+    // `option_specs` below: a per-action ordered list of `OptSpec { name, kind }`
+    // that reifies each `Options` struct's non-`_` fields + their completion-
+    // relevant type category (`@typeInfo(opt.type)`). This lives here in
+    // `rustty-cli` — next to the `Options` structs the reference reflected over —
+    // exactly as `options()` did. The mapping (`Action::X` -> `<x>::Options`) is
+    // preserved in the arm order below.
     //
     //     pub fn options(comptime self: Action) type {
     //         comptime {
@@ -425,7 +430,237 @@ impl Action {
     //             };
     //         }
     //     }
+
+    /// The completion specs for this action's `Options` struct — the reified
+    /// `@typeInfo(options()).@"struct".fields` iteration (skipping `_`-prefixed
+    /// fields) the shell-completion generators drive. Each [`OptSpec`] carries the
+    /// hyphenated CLI name + the `@typeInfo(opt.type)` classification. Actions
+    /// whose `Options` has no non-`_` fields return an empty slice (the reference's
+    /// `fields.len == 0` skip in the bash/zsh per-action `case` blocks).
+    pub fn option_specs(self) -> &'static [OptSpec] {
+        use OptCompletionKind::{Bool, Enum, OptionalEnum, OptionalOther, Other};
+        match self {
+            // version.Options = struct {}; boo/edit-config/crash-report likewise.
+            Action::Version => &[],
+            // help.Options = struct { help: bool };
+            Action::Help => &[OptSpec {
+                name: b"help",
+                kind: Bool,
+            }],
+            // list_fonts.Options: family ?str, style ?str, bold bool, italic bool.
+            Action::ListFonts => &[
+                OptSpec {
+                    name: b"family",
+                    kind: OptionalOther,
+                },
+                OptSpec {
+                    name: b"style",
+                    kind: OptionalOther,
+                },
+                OptSpec {
+                    name: b"bold",
+                    kind: Bool,
+                },
+                OptSpec {
+                    name: b"italic",
+                    kind: Bool,
+                },
+            ],
+            // list_keybinds.Options: default bool, docs bool, plain bool.
+            Action::ListKeybinds => &[
+                OptSpec {
+                    name: b"default",
+                    kind: Bool,
+                },
+                OptSpec {
+                    name: b"docs",
+                    kind: Bool,
+                },
+                OptSpec {
+                    name: b"plain",
+                    kind: Bool,
+                },
+            ],
+            // list_themes.Options: path bool, plain bool, color ColorScheme (enum).
+            Action::ListThemes => &[
+                OptSpec {
+                    name: b"path",
+                    kind: Bool,
+                },
+                OptSpec {
+                    name: b"plain",
+                    kind: Bool,
+                },
+                OptSpec {
+                    name: b"color",
+                    kind: Enum(crate::list_themes::ColorScheme::VALUE_NAMES),
+                },
+            ],
+            // list_colors.Options: plain bool.
+            Action::ListColors => &[OptSpec {
+                name: b"plain",
+                kind: Bool,
+            }],
+            // list_actions.Options: docs bool.
+            Action::ListActions => &[OptSpec {
+                name: b"docs",
+                kind: Bool,
+            }],
+            // ssh.Options: forward-env bool, terminfo bool, cache bool, ssh str,
+            // verbose bool (+ `_ssh_args` / `_diagnostics`, skipped).
+            Action::Ssh => &[
+                OptSpec {
+                    name: b"forward-env",
+                    kind: Bool,
+                },
+                OptSpec {
+                    name: b"terminfo",
+                    kind: Bool,
+                },
+                OptSpec {
+                    name: b"cache",
+                    kind: Bool,
+                },
+                OptSpec {
+                    name: b"ssh",
+                    kind: Other,
+                },
+                OptSpec {
+                    name: b"verbose",
+                    kind: Bool,
+                },
+            ],
+            // ssh_cache.Options: clear bool, add ?str, remove ?str, prune ?Duration.
+            Action::SshCache => &[
+                OptSpec {
+                    name: b"clear",
+                    kind: Bool,
+                },
+                OptSpec {
+                    name: b"add",
+                    kind: OptionalOther,
+                },
+                OptSpec {
+                    name: b"remove",
+                    kind: OptionalOther,
+                },
+                OptSpec {
+                    name: b"prune",
+                    kind: OptionalOther,
+                },
+            ],
+            // edit_config.Options = struct {}.
+            Action::EditConfig => &[],
+            // show_config.Options: default bool, changes-only bool, docs bool,
+            // no-pager bool.
+            Action::ShowConfig => &[
+                OptSpec {
+                    name: b"default",
+                    kind: Bool,
+                },
+                OptSpec {
+                    name: b"changes-only",
+                    kind: Bool,
+                },
+                OptSpec {
+                    name: b"docs",
+                    kind: Bool,
+                },
+                OptSpec {
+                    name: b"no-pager",
+                    kind: Bool,
+                },
+            ],
+            // explain_config.Options: option ?str, keybind ?str.
+            Action::ExplainConfig => &[
+                OptSpec {
+                    name: b"option",
+                    kind: OptionalOther,
+                },
+                OptSpec {
+                    name: b"keybind",
+                    kind: OptionalOther,
+                },
+            ],
+            // validate_config.Options: config-file ?str (name special-cased -> files).
+            Action::ValidateConfig => &[OptSpec {
+                name: b"config-file",
+                kind: OptionalOther,
+            }],
+            // show_face.Options: cp ?u21, string ?str, style font.Style (enum),
+            // presentation ?font.Presentation (optional enum) (+ `_diagnostics`).
+            Action::ShowFace => &[
+                OptSpec {
+                    name: b"cp",
+                    kind: OptionalOther,
+                },
+                OptSpec {
+                    name: b"string",
+                    kind: OptionalOther,
+                },
+                OptSpec {
+                    name: b"style",
+                    kind: Enum(FONT_STYLE_VALUE_NAMES),
+                },
+                OptSpec {
+                    name: b"presentation",
+                    kind: OptionalEnum(FONT_PRESENTATION_VALUE_NAMES),
+                },
+            ],
+            // crash_report.Options = struct {}.
+            Action::CrashReport => &[],
+            // boo.Options = struct {}.
+            Action::Boo => &[],
+            // new_window.Options: class ?str (+ `_working_directory_seen` /
+            // `_arguments` / `_diagnostics` / `_raw`, all skipped).
+            Action::NewWindow => &[OptSpec {
+                name: b"class",
+                kind: OptionalOther,
+            }],
+            // toggle_quick_terminal.Options: class ?str.
+            Action::ToggleQuickTerminal => &[OptSpec {
+                name: b"class",
+                kind: OptionalOther,
+            }],
+        }
+    }
 }
+
+/// The completion-relevant classification of an action `Options` field's type,
+/// reifying the reference `switch (@typeInfo(opt.type))` (`.bool` / `.@"enum"` /
+/// `.optional` with an enum or non-enum child / else) that the bash/zsh/fish
+/// per-action completion loops switch on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptCompletionKind {
+    /// `.bool` — a flag with no value.
+    Bool,
+    /// `.@"enum"` — complete the variant names.
+    Enum(&'static [&'static [u8]]),
+    /// `.optional` whose child is `.@"enum"` — complete the child's variant names.
+    OptionalEnum(&'static [&'static [u8]]),
+    /// `.optional` whose child is NOT an enum — no value-completion (but the
+    /// generators still name-special-case `config-file`; bash's optional arm emits
+    /// `return ;;` vs the non-optional arm's `_files ;;`).
+    OptionalOther,
+    /// Any other non-optional, non-enum, non-bool type — no value-completion.
+    Other,
+}
+
+/// One `Options` field's completion spec: its hyphenated CLI name (`opt.name`,
+/// with `_`-prefixed fields already omitted) and its [`OptCompletionKind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OptSpec {
+    /// The hyphenated CLI spelling of the option (the Zig field name).
+    pub name: &'static [u8],
+    /// The `@typeInfo(opt.type)` classification driving value-completion.
+    pub kind: OptCompletionKind,
+}
+
+// The `@tagName` value-name tables for the enum options, in declaration order.
+// `font.Style`/`font.Presentation` live in `rustty-font-shaper` (a `#[repr(u8)]`
+// enum without a `to_name`); these mirror `show_face`'s own `stringToEnum` arms.
+const FONT_STYLE_VALUE_NAMES: &[&[u8]] = &[b"regular", b"bold", b"italic", b"bold_italic"];
+const FONT_PRESENTATION_VALUE_NAMES: &[&[u8]] = &[b"text", b"emoji"];
 
 #[cfg(test)]
 mod tests {

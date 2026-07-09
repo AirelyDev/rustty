@@ -175,6 +175,14 @@ pub const fn name_z_array<const N: usize>(s: &[u8]) -> [u8; N] {
 macro_rules! bare_enum_names {
     ($ty:ty { $($variant:ident => $name:literal),+ $(,)? }) => {
         impl $ty {
+            /// `@typeInfo(E).@"enum".fields |f| f.name` — the ordered list of Zig
+            /// variant-name literals in declaration order. Feeds the shell-completion
+            /// generators (`rustty-extra`): the `.@"enum"` arm of the reference's
+            /// `writeBashCompletions`/`writeZshCompletions`/`writeCompletions` emits
+            /// exactly these names, space-joined. The literal table is the SAME one
+            /// `string_to_enum`/`to_name` use, so the completion bytes == `@tagName`.
+            pub const VALUE_NAMES: &'static [&'static [u8]] = &[$($name),+];
+
             /// `std.meta.stringToEnum(Self, input)` — maps the Zig variant-name
             /// literal to the variant, `None` for an unknown name.
             pub fn string_to_enum(input: &[u8]) -> Option<$ty> {
@@ -1269,6 +1277,9 @@ impl Default for NotifyOnCommandFinishAction {
 
 // packed struct { bold, italic, "bold-italic" }
 impl PackedStruct for FontSyntheticStyle {
+    fn field_names() -> &'static [&'static [u8]] {
+        &[b"bold", b"italic", b"bold-italic"]
+    }
     fn set_all(&mut self, b: bool) {
         self.bold = b;
         self.italic = b;
@@ -1296,6 +1307,9 @@ impl PackedStruct for FontSyntheticStyle {
 pub(crate) struct FontShapingBreakParse(pub FontShapingBreak);
 
 impl PackedStruct for FontShapingBreakParse {
+    fn field_names() -> &'static [&'static [u8]] {
+        &[b"cursor"]
+    }
     fn set_all(&mut self, b: bool) {
         self.0.cursor = b;
     }
@@ -1310,6 +1324,16 @@ impl PackedStruct for FontShapingBreakParse {
 
 // packed struct { cursor, sudo, title, "ssh-env", "ssh-terminfo", path }
 impl PackedStruct for ShellIntegrationFeatures {
+    fn field_names() -> &'static [&'static [u8]] {
+        &[
+            b"cursor",
+            b"sudo",
+            b"title",
+            b"ssh-env",
+            b"ssh-terminfo",
+            b"path",
+        ]
+    }
     fn set_all(&mut self, b: bool) {
         self.cursor = b;
         self.sudo = b;
@@ -1334,6 +1358,9 @@ impl PackedStruct for ShellIntegrationFeatures {
 
 // packed struct { navigation }
 impl PackedStruct for SplitPreserveZoom {
+    fn field_names() -> &'static [&'static [u8]] {
+        &[b"navigation"]
+    }
     fn set_all(&mut self, b: bool) {
         self.navigation = b;
     }
@@ -1348,6 +1375,9 @@ impl PackedStruct for SplitPreserveZoom {
 
 // packed struct { "clipboard-copy", "config-reload" }
 impl PackedStruct for AppNotifications {
+    fn field_names() -> &'static [&'static [u8]] {
+        &[b"clipboard-copy", b"config-reload"]
+    }
     fn set_all(&mut self, b: bool) {
         self.clipboard_copy = b;
         self.config_reload = b;
@@ -1364,6 +1394,9 @@ impl PackedStruct for AppNotifications {
 
 // packed struct { system, audio, attention, title, border }
 impl PackedStruct for BellFeatures {
+    fn field_names() -> &'static [&'static [u8]] {
+        &[b"system", b"audio", b"attention", b"title", b"border"]
+    }
     fn set_all(&mut self, b: bool) {
         self.system = b;
         self.audio = b;
@@ -1386,6 +1419,15 @@ impl PackedStruct for BellFeatures {
 
 // packed struct { hinting, "force-autohint", monochrome, autohint, light }
 impl PackedStruct for FreetypeLoadFlags {
+    fn field_names() -> &'static [&'static [u8]] {
+        &[
+            b"hinting",
+            b"force-autohint",
+            b"monochrome",
+            b"autohint",
+            b"light",
+        ]
+    }
     fn set_all(&mut self, b: bool) {
         self.hinting = b;
         self.force_autohint = b;
@@ -1408,6 +1450,9 @@ impl PackedStruct for FreetypeLoadFlags {
 
 // packed struct { keystroke, output }
 impl PackedStruct for ScrollToBottom {
+    fn field_names() -> &'static [&'static [u8]] {
+        &[b"keystroke", b"output"]
+    }
     fn set_all(&mut self, b: bool) {
         self.keystroke = b;
         self.output = b;
@@ -1424,6 +1469,9 @@ impl PackedStruct for ScrollToBottom {
 
 // packed struct { bell, notify }
 impl PackedStruct for NotifyOnCommandFinishAction {
+    fn field_names() -> &'static [&'static [u8]] {
+        &[b"bell", b"notify"]
+    }
     fn set_all(&mut self, b: bool) {
         self.bell = b;
         self.notify = b;

@@ -58,6 +58,11 @@ pub enum ColorScheme {
 }
 
 impl ColorScheme {
+    /// `@typeInfo(ColorScheme).@"enum".fields |f| f.name` — the ordered variant
+    /// names, consumed by the shell-completion generators (`Action::option_specs`
+    /// classifies `list-themes --color` as `Enum(ColorScheme::VALUE_NAMES)`).
+    pub const VALUE_NAMES: &'static [&'static [u8]] = &[b"all", b"dark", b"light"];
+
     // std.meta.stringToEnum(ColorScheme, value) — the `--color` value lookup.
     fn from_name(name: &[u8]) -> Option<ColorScheme> {
         Some(match name {
