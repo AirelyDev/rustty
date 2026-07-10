@@ -230,14 +230,42 @@ impl PosixTty {
         &mut self.tty_writer
     }
 
+    /// Narrow `tty_writer` projection off a raw Tty — `Loop::stop()`'s DSR-wake path.
+    /// Zig `writer(self: *PosixTty) *std.Io.Writer` is pointer-in/pointer-out; the
+    /// `&mut self` autoref of [`Self::writer`] is a whole-Tty `Unique` retag that pops
+    /// the blocked read thread's call-protected tag (VALIDATION_REPORT H1; proven by
+    /// mirihar-chunk3b `stopread_naive`), so cross-thread callers project the field
+    /// raw instead.
+    ///
+    /// # Safety
+    /// `this` must point to a live `PosixTty` (no dereference happens here — only the
+    /// in-bounds field-address computation).
+    pub unsafe fn writer_raw(this: *mut Self) -> *mut TtyWriter {
+        unsafe { std::ptr::addr_of_mut!((*this).tty_writer) }
+    }
+
     /// The file descriptor (Zig `self.tty.fd`) — the `getWinsize` argument the Loop
     /// read thread/winsize callback project out.
     pub fn fd(&self) -> c_int {
         self.fd
     }
 
-    pub fn read(&self, buf: &mut [u8]) -> Result<usize, TtyError> {
-        let n = unsafe { libc::read(self.fd, buf.as_mut_ptr() as *mut c_void, buf.len()) };
+    /// Read from the tty. Zig `read(self: *const PosixTty, buf: []u8) !usize` — a Zig
+    /// `*const` carries NO protector, and the Loop read thread sits BLOCKED in this
+    /// call while `Loop::stop()` writes the DSR wake into `tty_writer` (bytes inside
+    /// this same allocation). A Rust `&self` receiver here would be a call-protected
+    /// shared borrow of the WHOLE Tty for the duration of the blocked syscall, which
+    /// that write pops (SB/TB protector UB — proven by mirihar-chunk3b
+    /// `stopread_projonly`); the faithful-and-sound receiver is the raw `*const` with
+    /// a narrow `fd` projection.
+    ///
+    /// # Safety
+    /// `this` must point to a live `PosixTty`; concurrent access to it must stay
+    /// narrow (no whole-`&mut Tty` while this call blocks — `tty_writer`-field
+    /// projections are fine).
+    pub unsafe fn read(this: *const Self, buf: &mut [u8]) -> Result<usize, TtyError> {
+        let fd = unsafe { std::ptr::addr_of!((*this).fd).read() };
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut c_void, buf.len()) };
         if n < 0 {
             return Err(TtyError::Errno(errno()));
         }
@@ -255,6 +283,42 @@ impl PosixTty {
         state.handlers[idx] = Some(handler);
         state.idx += 1;
         Ok(())
+    }
+
+    /// Remove every registered winsize handler whose `context` matches, and
+    /// compact the array.
+    //
+    // PORT NOTE (rustty-only, VALIDATION_REPORT §3c.5): upstream libvaxis has NO
+    // deregistration — `handlers`/`handler_idx` only ever grow, so a destroyed
+    // Zig Loop leaves its `*anyopaque` context dangling in the process-global
+    // array and the next SIGWINCH is a use-after-free in signal context (a latent
+    // upstream hazard, not behavior to preserve: R1 preserves behavior, UB is not
+    // behavior). Rust's `Loop::drop` calls this with `self` as the context so the
+    // registration can never outlive its pointee (UAF reproduced + fix proven on
+    // the isolated Miri harness: .port/phase-2/mirihar-chunk3b `winch_naive` UB /
+    // `winch_shipped` CLEAN). Divergence note: after a drop+re-init cycle rustty
+    // frees the slot where Zig would keep consuming one of the 8 — strictly more
+    // permissive, and unreachable upstream (upstream loops live for the app).
+    // Locking the same Mutex `handle_winch` locks is the module's documented
+    // (Zig-faithful) non-async-signal-safe design — see the module PORT-NOTE.
+    pub fn deregister_winsize(context: *mut c_void) {
+        let mut state = HANDLERS.lock().unwrap();
+        let mut w: usize = 0;
+        for r in 0..state.idx {
+            let keep = match &state.handlers[r] {
+                Some(h) => h.context != context,
+                None => false,
+            };
+            if keep {
+                if w != r {
+                    state.handlers[w] = state.handlers[r].take();
+                }
+                w += 1;
+            } else {
+                state.handlers[r] = None;
+            }
+        }
+        state.idx = w;
     }
 
     // Used by `init` (non-windows, non-test); dead under `#[cfg(test)]` where Tty=TestTty.
@@ -360,7 +424,18 @@ mod windows_tty {
         pub fn writer(&mut self) -> &mut super::TtyWriter {
             unimplemented!("WindowsTty: R5 #[cfg(windows)] seam (DEFERRALS.md)")
         }
-        pub fn read(&self, _buf: &mut [u8]) -> Result<usize, TtyError> {
+        /// Narrow `tty_writer` projection (aliasing parity with `PosixTty::writer_raw`).
+        ///
+        /// # Safety
+        /// `this` must point to a live `WindowsTty`.
+        pub unsafe fn writer_raw(this: *mut Self) -> *mut super::TtyWriter {
+            unsafe { std::ptr::addr_of_mut!((*this).tty_writer) }
+        }
+        /// Raw-receiver read (signature parity with `PosixTty::read`, H1).
+        ///
+        /// # Safety
+        /// `this` must point to a live `WindowsTty`.
+        pub unsafe fn read(_this: *const Self, _buf: &mut [u8]) -> Result<usize, TtyError> {
             unimplemented!("WindowsTty: R5 #[cfg(windows)] seam (DEFERRALS.md)")
         }
         pub fn next_event(&mut self, _parser: &mut Parser) -> Result<(), TtyError> {
@@ -418,13 +493,29 @@ impl TestTty {
         &mut self.tty_writer
     }
 
+    /// Narrow `tty_writer` projection (API + aliasing parity with
+    /// [`PosixTty::writer_raw`] — the `Tty` alias must expose ONE surface).
+    ///
+    /// # Safety
+    /// `this` must point to a live `TestTty`.
+    pub unsafe fn writer_raw(this: *mut Self) -> *mut TtyWriter {
+        unsafe { std::ptr::addr_of_mut!((*this).tty_writer) }
+    }
+
     /// The file descriptor (API compat with [`PosixTty::fd`]).
     pub fn fd(&self) -> c_int {
         self.fd
     }
 
-    pub fn read(&self, buf: &mut [u8]) -> Result<usize, TtyError> {
-        let n = unsafe { libc::read(self.fd, buf.as_mut_ptr() as *mut c_void, buf.len()) };
+    /// Raw-receiver read (aliasing parity with [`PosixTty::read`], H1 — see the
+    /// rationale there).
+    ///
+    /// # Safety
+    /// `this` must point to a live `TestTty`; concurrent access must stay narrow (no
+    /// whole-`&mut Tty` while this call blocks).
+    pub unsafe fn read(this: *const Self, buf: &mut [u8]) -> Result<usize, TtyError> {
+        let fd = unsafe { std::ptr::addr_of!((*this).fd).read() };
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut c_void, buf.len()) };
         if n < 0 {
             return Err(TtyError::Errno(errno()));
         }
@@ -449,4 +540,56 @@ impl TestTty {
     }
 
     pub fn reset_signal_handler() {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // PORT NOTE (rustty-only, VALIDATION_REPORT §3c.5): pins the
+    // `deregister_winsize` bookkeeping that `Loop::drop` relies on — every entry
+    // with the matching context is removed and the survivors are compacted so
+    // `handle_winch`'s `while i < idx` walk stays exact. No other test touches
+    // the process-global HANDLERS (Loop::init is a no-op under cfg(test)), so no
+    // serialization lock is needed. The UAF this deregistration prevents is
+    // proven separately on the isolated Miri harness
+    // (.port/phase-2/mirihar-chunk3b `winch_naive`/`winch_shipped`).
+    #[test]
+    fn deregister_winsize_removes_and_compacts() {
+        extern "C" fn cb(_ctx: *mut c_void) {}
+        let a = 0x1000_usize as *mut c_void;
+        let b = 0x2000_usize as *mut c_void;
+
+        PosixTty::notify_winsize(SignalHandler { context: a, callback: cb }).unwrap();
+        PosixTty::notify_winsize(SignalHandler { context: b, callback: cb }).unwrap();
+        // the same context may be registered more than once (init called twice);
+        // deregistration must remove ALL of its entries.
+        PosixTty::notify_winsize(SignalHandler { context: a, callback: cb }).unwrap();
+        {
+            let st = HANDLERS.lock().unwrap();
+            assert_eq!(3, st.idx);
+        }
+
+        PosixTty::deregister_winsize(a);
+        {
+            let st = HANDLERS.lock().unwrap();
+            assert_eq!(1, st.idx);
+            // the surviving handler compacted down to slot 0
+            assert_eq!(b, st.handlers[0].as_ref().unwrap().context);
+            assert!(st.handlers[1].is_none());
+            assert!(st.handlers[2].is_none());
+        }
+
+        // deregistering an unknown context is a no-op
+        PosixTty::deregister_winsize(0x3000_usize as *mut c_void);
+        {
+            let st = HANDLERS.lock().unwrap();
+            assert_eq!(1, st.idx);
+        }
+
+        PosixTty::deregister_winsize(b);
+        let st = HANDLERS.lock().unwrap();
+        assert_eq!(0, st.idx);
+        assert!(st.handlers.iter().all(|h| h.is_none()));
+    }
 }

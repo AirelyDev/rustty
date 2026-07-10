@@ -1134,8 +1134,13 @@ impl<'a> Vaxis<'a> {
     }
 
     /// PORT-NOTE: fills the Chunk-3b placeholder leaf; `loop_.rs`'s `stop` call site
-    /// (`(*vx).device_status_report((*tty).writer())`) infers `W = TtyWriter`.
-    pub fn device_status_report<W: Write>(&self, tty: &mut W) -> io::Result<()> {
+    /// (`Vaxis::device_status_report(&mut *Tty::writer_raw(tty))`) infers
+    /// `W = TtyWriter`. SELF-LESS on purpose (H1): upstream libvaxis 0.5.1 is
+    /// `pub fn deviceStatusReport(_: Vaxis, tty: *IoWriter)` — the receiver is
+    /// UNUSED — and `stop()` calls this while the read thread may do plain raw
+    /// writes into `caps.*`; a `&self` here would be a call-protected `&Vaxis`
+    /// those writes pop (SB/TB protector UB — mirihar-chunk3b `stopread_dsrref`).
+    pub fn device_status_report<W: Write>(tty: &mut W) -> io::Result<()> {
         tty.write_all(ctlseqs::device_status_report)?;
         tty.flush()?;
         Ok(())

@@ -33,7 +33,10 @@ tracking allocator (leaks) + Miri-on-the-same-methods-via-lighter-tests (aliasin
 
 Verified GREEN by the complement: **ASan ran all 210 PageList tests in ~18 s, 0
 findings** (incl. these 23) and the **page tracking allocator** asserts all pages
-returned across grow/scroll/clone/resize-reflow churn (commit 58a5faa). The
+returned across grow/scroll/clone/resize-reflow churn (tracking allocator landed
+in commit 1a2dbd9; the ASan-210 + tracking-allocator gate run is recorded in the
+vt-3c integration commit 243d4af — re-pinned 2026-07-10, the original worktree
+hash `58a5faa` did not survive the squash into 243d4af). The
 "covering Miri-passing test(s)" column is the criterion-3 evidence: the method's
 aliasing is Miri-verified by a lighter test that DOES complete.
 
@@ -41,9 +44,9 @@ aliasing is Miri-verified by a lighter test that DOES complete.
 |---|---|---|---|
 | 1 | `compact_oversized_page` | `compact` | `compact_std_size_page_returns_null`, `compact_insufficient_savings_returns_null` |
 | 2–7 | `eraseRow_invalidates_viewport_offset_cache`, `eraseRows_invalidates_…`, `eraseRowBounded_invalidates_…`, `…_multi_page_…`, `…_full_page_shift_…`, `…_exhausts_pages_…` | `erase_row`, `erase_rows`, `erase_row_bounded`, `fixup_viewport` | the ported point-range erase tests + `erase` family that pass under Miri |
-| 8–13 | `grow_allocate`, `grow_reuses_non_standard_page_without_leak`, `grow_non_standard_page_prune_protection`, `grow_prune_required_with_a_single_page`, `grow_prune_scrollback`, `grow_prune_scrollback_with_viewport_pin_not_in_pruned_page` | `grow`, `increase_capacity`, `create_page`/non-standard alloc | `active_after_grow`, `grow_fit_in_capacity`, `grow_allows_exceeding_max_size`, `grow_prune_required_with_a_single_page`(light variants) |
+| 8–13 | `grow_allocate`, `grow_reuses_non_standard_page_without_leak`, `grow_non_standard_page_prune_protection`, `grow_prune_required_with_a_single_page`, `grow_prune_scrollback`, `grow_prune_scrollback_with_viewport_pin_not_in_pruned_page` | `grow`, `increase_capacity`, `create_page`/non-standard alloc | `active_after_grow`, `grow_fit_in_capacity`, `grow_allows_exceeding_max_size`, **`pagelist_grow_prune_miri_tractable`** (rustty-only, added 2026-07-10 — surgically-filled constant-`grow()` variant driving the PRUNE branch: `pop_first` → pin remap → buffer reset → `init_buf` reuse → `insert_after` → serial rebump; Miri-clean in ~31 s. Before it, this row self-cited its own excepted tests as coverage — VALIDATION_REPORT §3c.6) |
 | 14 | `increaseCapacity_multi_page` | `increase_capacity` | the 8 passing `increaseCapacity_*` single-page tests |
-| 15–19 | `resize_more_rows_and_cols_doesnt_fit_in_single_std_page`, `resize_no_reflow_less_rows_trims_blank_lines_erases_pages`, `resize_no_reflow_more_cols_forces_less_rows_per_page`, `…_forces_smaller_cap`, `…_remaps_pins_in_backfill_path` | `resize`, `resize_without_reflow`, `resize_without_reflow_grow_cols` | the many passing `resize_no_reflow_*` tests (incl. the 4 that just had their UB fixed + Miri-verified, c46a6a2) |
+| 15–19 | `resize_more_rows_and_cols_doesnt_fit_in_single_std_page`, `resize_no_reflow_less_rows_trims_blank_lines_erases_pages`, `resize_no_reflow_more_cols_forces_less_rows_per_page`, `…_forces_smaller_cap`, `…_remaps_pins_in_backfill_path` | `resize`, `resize_without_reflow`, `resize_without_reflow_grow_cols` | the many passing `resize_no_reflow_*` tests (incl. the 4 that just had their UB fixed + Miri-verified — commit 846c32c, "fix Stacked-Borrows UB in resize_without_reflow_grow_cols"; re-pinned 2026-07-10, the original hash `c46a6a2` did not survive the vt-3c squash) |
 | 20–23 | `resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase`, `…_exceeds_hyperlink_memory_…`, `…_exceeds_style_memory_…`, `resize_reflow_grapheme_map_capacity_exceeded` | `resize_cols`, `ReflowCursor` (reflow) | the passing `resize_reflow_*` tests (less_cols/more_cols/wrapped) |
 
 Every method appearing above is exercised by at least one Miri-PASSING test, so no
@@ -656,18 +659,36 @@ narrows the container_of source to `&mut self.api`, re-opens the hazard — re-r
 harness (`displaycb_shipped` must stay green under both SB and TB, `displaycb_naive` UB,
 BEFORE the seam ships).
 
-**Deviation recorded (KAT runtime blocker).** The two harness tests that spawn a LIVE
-surface render thread (`hosts_view_layer_and_presents_live_frame`,
-`set_display_id_pushes_to_render_thread_panic_free`) are `#[ignore]`: on a host WITH
-a Metal device the render thread transitively hits
-`renderer::metal::metal_impl::Metal::loop_enter` (the M-4 IOSurfaceLayer
-display-callback install), which is STILL `unimplemented!("windowing-host")` on this
-tree. Per the governing plan that is W1-3/W2 work (plan lines 534/564/600/1001) left
-deferred — its `unimplemented!()` fires on the render thread and aborts the process.
+**Deviation recorded (KAT runtime blocker) — RESOLVED-then-REVISED 2026-07-10
+(VALIDATION_REPORT M4).** The original blocker (`Metal::loop_enter` still
+`unimplemented!()`) is GONE — the leaf landed in W5. The instructed un-ignore was
+executed and the two live-render-thread KATs were RUN on a Metal host (this
+machine, 2026-07-10):
+- `set_display_id_pushes_to_render_thread_panic_free` PASSES — **un-ignored**
+  (live).
+- `hosts_view_layer_and_presents_live_frame` FAILS at its first assertion,
+  `host view is not layer-hosting` (macos_window_host.rs:329): the on-screen
+  host-attach never happens because `generic::Renderer::init` constructs Metal
+  via `Metal::init_offscreen` (the W1-7 apprt-free divergence) and the
+  renderer_seam wiring that was to supply `Metal::init(view)` drops
+  `rt_surface` — the still-open "live-windowing `Renderer::init`" seam. It
+  REMAINS `#[ignore]` with that honest reason (a deterministic failure, not a
+  Miri/FFI constraint) and is a triaged finding: the windowing-host wiring
+  chunk must wire the attach and un-ignore it.
+- ALSO FOUND + HANDLED (lldb-diagnosed): two tests calling `rustty_app_new` on
+  parallel libtest workers SIGABRT with zero diagnostics inside HIToolbox —
+  `App::init` -> `Keymap::init` -> `TISCopyCurrentKeyboardLayoutInputSource` ->
+  `islGetInputSourceListWithAdditions` -> `abort()` (TIS is not thread-safe;
+  the mirrored C host calls `ghostty_app_new` from the main thread only). App
+  creation in the test binary is serialized via a test-local
+  `app_new_serialized` mutex (the `parallel-cargo-test-exposes-c-init-races`
+  precedent; test-harness glue, not a port change). NOTE for the "TIS ...
+  thread-affinity verified" attestation (VALIDATION_REPORT §3c): that covered
+  single-App hosts; CONCURRENT `TISCopyCurrentKeyboardLayoutInputSource` calls
+  abort.
 The W4-2 blur sub-KAT does NOT spawn a surface, so it runs GREEN headless and proves
 the realized blur leaf (real `windowNumber` msg_send + the private CGS SPI, incl. the
-`#[link] CoreGraphics` symbol resolution) end-to-end. Un-ignore the two tests once the
-`Metal::loop_enter` renderer seam lands.
+`#[link] CoreGraphics` symbol resolution) end-to-end.
 
 ## rustty-vaxis Chunk 3b — the `tty.rs` termios/ioctl/sigaction FFI
 
@@ -694,23 +715,36 @@ FFI is excepted from Miri:
   async-signal-safe, but Zig's exact design; faithful port keeps it (ASan/native, never
   Miri).
 
-- **`loop_.rs` — the read-thread ALIASING → mirihar (`loopthread_*`).** The construct-
-  then-spawn read thread (raw-self `*mut Loop<T>`, `should_quit: AtomicBool`,
-  `thread: Cell`, the type-erased SIGWINCH winsize callback, the OWNED queued grapheme
-  text via `Key::into_owned`) cannot be Miri-checked directly (it needs a live tty +
-  the SIGWINCH handler). Its soundness is proven by the `loopthread_naive`(UB)/
-  `loopthread_shipped`(CLEAN, SB **and** TB) pair in `mirihar-chunk3b` (see that crate's
-  README "LOOPTHREAD candidates"): the shipped narrow-projection split is CLEAN under
-  both borrow models; the naive whole-`&mut *self_ptr` is UB under both (its whole-struct
-  retag races main's legitimate narrow `thread.set`). The one ported `test Loop` needs
-  the real `Vaxis` (a §5 placeholder with `unimplemented!()` leaves) so it is `#[ignore]`.
+- **`loop_.rs` — the read-thread ALIASING → mirihar (`loopthread_*` + `stopread_*`).**
+  The construct-then-spawn read thread (raw-self `*mut Loop<T>`, `should_quit:
+  AtomicBool`, `thread: Cell`, the type-erased SIGWINCH winsize callback, the OWNED
+  queued grapheme text via `Key::into_owned`) cannot be Miri-checked directly (it needs
+  a live tty + the SIGWINCH handler). Its soundness is proven by TWO mirihar-chunk3b
+  candidate sets (see that crate's README): the `loopthread_naive`(UB)/
+  `loopthread_shipped`(CLEAN, SB **and** TB) pair — the shipped narrow-projection split
+  is CLEAN under both borrow models; the naive whole-`&mut *self_ptr` is UB under both
+  (its whole-struct retag races main's legitimate narrow `thread.set`) — and the
+  `stopread_*` quartet (VALIDATION_REPORT H1 / plan T11), which pins the overlap
+  loopthread does NOT model: `stop()`'s DSR wake executing while the reader is BLOCKED
+  inside `Tty::read`. `stopread_naive` (the pre-fix `(*tty).writer()` whole-`&mut Tty`)
+  and `stopread_projonly` (writer projected but `read(&self)` kept) are UB under SB+TB;
+  `stopread_dsrref` (protected `&Vaxis` DSR vs raw caps write) is UB under SB+TB;
+  `stopread_shipped` (raw-receiver `Tty::read(this: *const Self)` + `Tty::writer_raw`
+  narrow projection + self-less `Vaxis::device_status_report`, the shape shipped in
+  tty.rs/loop_.rs/vaxis.rs) is CLEAN under SB **and** TB. The one ported `test Loop`
+  runs un-`#[ignore]`d (`loop_lifecycle`, TestTty pipe-backed) including under
+  `cargo +nightly miri test -p rustty-vaxis`.
 
 **Why the split leaves zero unsafe path unverified:** queue's ring/Condvar (the only
-non-FFI concurrency) is Miri-primary; the loop's raw-self aliasing is mirihar-proven
-under SB+TB; the tty's `unsafe` is exclusively `libc` FFI calls (ASan/native). Any future
-edit that routes a concurrent `Loop` field access through a whole `&mut Loop` re-opens the
-hazard — re-run `mirihar-chunk3b` (`loopthread_shipped` must stay green under both SB and
-TB, `loopthread_naive` UB, BEFORE the change ships).
+non-FFI concurrency) is Miri-primary; the loop's raw-self aliasing — including the
+`stop()`-vs-blocked-`read` overlap on the interactive exit path — is mirihar-proven
+under SB+TB (`loopthread_*` + `stopread_*`); the tty's `unsafe` is `libc` FFI calls
+(ASan/native) plus the raw-receiver `read`/`writer_raw` narrow projections whose
+aliasing side is the `stopread_shipped` model. Any future edit that routes a concurrent
+`Loop`/`Tty`/`Vaxis` access through a whole `&mut Loop`, a whole `&mut Tty` while the
+reader is live, or a `&Vaxis` held across the DSR wake re-opens the hazard — re-run
+`mirihar-chunk3b` (`loopthread_shipped` + `stopread_shipped` must stay green under both
+SB and TB, their naive counterparts UB, BEFORE the change ships).
 
 ---
 

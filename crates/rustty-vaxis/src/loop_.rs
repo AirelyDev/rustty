@@ -22,6 +22,11 @@
 //!    live: `next_event`/… take `&self` through the queue's interior `Mutex`; `stop`
 //!    stores `should_quit` (`AtomicBool`, `&self`) then joins; `thread` is touched by
 //!    main ONLY, via the interior-mutable [`Cell`].
+//!    3b. Nor a whole `&mut Tty`/`&Vaxis` (H1): `stop`'s DSR wake fires while the read
+//!    thread is BLOCKED inside `Tty::read` (a raw-receiver fn holding no whole-Tty
+//!    borrow), so it projects `tty_writer` raw (`Tty::writer_raw`) and calls the
+//!    self-less `Vaxis::device_status_report` (upstream's receiver is `_: Vaxis`,
+//!    unused) — proven by the mirihar `stopread_*` quartet.
 //! 4. `queue` is the internally-synchronized channel (both threads hold only `&Queue`).
 //!
 //! # The queued event OWNS its grapheme text (RESOLVED BLOCKER — §4.5/§6)
@@ -201,13 +206,20 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
             return;
         };
         self.should_quit.store(true, Ordering::Relaxed);
-        // trigger a read (narrow projections; `tty`/`vaxis` are SEPARATE allocations, so
-        // no whole-`&mut Loop` is formed). Errors ignored (Zig `catch {}`).
+        // trigger a read (Zig `self.vaxis.deviceStatusReport(self.tty.writer()) catch {}`).
+        // The read thread is BY DESIGN blocked inside `Tty::read` right now — waking it
+        // is what the DSR is for — so NO whole `&mut Tty` (nor `&Vaxis`) may be formed
+        // here: `(*tty).writer()` would be a whole-Tty `Unique` retag popping the
+        // reader's call-protected tag (SB/TB protector UB, VALIDATION_REPORT H1). The
+        // writer is a narrow raw field projection (`Tty::writer_raw`) and the DSR is
+        // self-less (upstream's receiver is `_: Vaxis`, unused) — proven by the
+        // mirihar-chunk3b `stopread_{naive,projonly,dsrref,shipped}` quartet. Errors
+        // ignored (Zig `catch {}`).
         let self_ptr: *mut Loop<'a, T> = self as *const Self as *mut Self;
         unsafe {
-            let vx = (*self_ptr).vaxis;
             let tty = (*self_ptr).tty;
-            let _ = (*vx).device_status_report((*tty).writer());
+            let w = Tty::writer_raw(tty);
+            let _ = Vaxis::device_status_report(&mut *w);
         }
         // join, leave the Cell None, reset should_quit
         handle.join().ok();
@@ -286,7 +298,10 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
             let mut read_start: usize = 0;
             // read loop
             'read_loop: while !(*sp).should_quit.load(Ordering::Relaxed) {
-                let n = match (*(*sp).tty).read(&mut buf[read_start..]) {
+                // Raw-receiver read (H1): the thread BLOCKS here while `stop()` writes
+                // the DSR wake into `tty_writer`; `Tty::read(this: *const _)` holds no
+                // whole-Tty borrow across the blocked syscall (see tty.rs).
+                let n = match Tty::read((*sp).tty, &mut buf[read_start..]) {
                     Ok(n) => n,
                     Err(_) => return,
                 };
@@ -325,6 +340,24 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
             let _ = sp;
             unimplemented!("windows tty_run — R5 #[cfg(windows)] seam (DEFERRALS.md)");
         }
+    }
+}
+
+// PORT NOTE (rustty-only, VALIDATION_REPORT §3c.5): upstream libvaxis's Loop has
+// no deinit and NEVER deregisters the SIGWINCH handler `init` registered — the
+// process-global `handlers` array keeps the dead Loop's `*anyopaque` context and
+// the next SIGWINCH dereferences it (a latent upstream use-after-free; UB is not
+// behavior R1 preserves). Rust's Drop is the natural end-of-life hook Zig lacks:
+// remove this Loop's registration (keyed on the context pointer — the SAME
+// address `init` registered, valid because the Loop is PINNED per the `new`
+// contract) before the pointee dies. Proven on the isolated Miri harness
+// (.port/phase-2/mirihar-chunk3b): `winch_naive` (no dereg) = UAF UB under both
+// SB and TB; `winch_shipped` (dereg-on-drop) = CLEAN. The cfg mirrors `init`'s:
+// on windows/test nothing was registered, so nothing is removed.
+impl<'a, T> Drop for Loop<'a, T> {
+    fn drop(&mut self) {
+        #[cfg(all(not(windows), not(test)))]
+        Tty::deregister_winsize(self as *const Self as *mut c_void);
     }
 }
 

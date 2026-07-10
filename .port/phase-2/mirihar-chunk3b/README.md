@@ -249,3 +249,77 @@ for c in loopthread_naive loopthread_shipped; do
   MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri run -q -- "$c" # Tree Borrows
 done
 ```
+
+## STOPREAD candidates (VALIDATION_REPORT H1 / realignment plan Task 11: `Loop::stop()` vs the blocked read)
+
+Added for T11 — the overlap the LOOPTHREAD pair does NOT cover (it models tty/vaxis
+as bare `*mut u32` and serializes `stop()` against the reader via handshakes): the
+read thread sits **BLOCKED inside `Tty::read`** (that is *why* `stop()` must write a
+DSR wake through the tty writer **before** joining), so `stop()`'s tty/vaxis accesses
+execute **concurrently with a live call borrow on the reader**. The blocked
+`libc::read` is modeled by an mpsc `recv()` parked inside the read fn; the DSR
+`flush()` "reaches the pty" by sending on that channel (the kernel hop of
+`libc::write`). An `entered_read` ack guarantees the reader's borrow is established
+before `stop()` runs (deterministic overlap; channels give happens-before, so the
+only reportable UB is the tag violation). Selected by argv `stopread_naive` /
+`stopread_projonly` / `stopread_dsrref` / `stopread_shipped`.
+
+| candidate | models | SB | TB |
+|---|---|---|---|
+| `stopread_naive` | the PRE-FIX loop_.rs:206-211 shape verbatim: main's `(*vx).device_status_report((*tty).writer())` — the `(*tty).writer()` autoref is a whole-Tty `Unique` retag while the reader's `read(&self)` holds a call-protected SharedReadOnly of the same Tty | **UB** (protector violation at `writer(&mut self)`) | **UB** |
+| `stopread_projonly` | main HALF-fixed: writer projected via `addr_of_mut!((*tty).tty_writer)` (no whole `&mut Tty`) but the reader still blocked in `read(&self)` — the `&mut TtyWriter` reborrow lands INSIDE the reader's protected whole-Tty range | **UB** | **UB** |
+| `stopread_dsrref` | tty side fully raw on both ends, but `device_status_report(&self)` holds a protected `&Vaxis` while the read thread does a plain raw write to `vaxis.caps.*` (a late capability event) — the foreign write pops the protected shared tag | **UB** (at the caps write) | **UB** |
+| `stopread_shipped` | **the FIXED shape**: reader blocked in `Tty::read(this: *const Self)` (narrow `fd` projection + field-narrow park, NO whole-Tty borrow); main projects `addr_of_mut!((*tty).tty_writer)` and calls the SELF-LESS `device_status_report(&mut *w)` (upstream 0.5.1 is `deviceStatusReport(_: Vaxis, tty: *IoWriter)` — receiver unused, so dropping it is the faithful form) | **CLEAN** | **CLEAN** |
+
+**Load-bearing findings:** (a) `stopread_projonly` proves the plan-sketch one-liner
+(project the writer in `stop()` alone) is NOT sufficient — `Tty::read` itself must take
+a raw receiver, because any `&self`-protected whole-Tty borrow held across the blocked
+syscall freezes the `tty_writer` bytes `stop()` must write; (b) the DSR wake stays
+upstream-faithful (a real DSR write through the tty writer, not a self-pipe) because
+upstream's `deviceStatusReport` receiver is literally `_: Vaxis` — unused — so the
+self-less Rust form is both the faithful AND the sound shape. Shipped as
+`crates/rustty-vaxis/src/tty.rs` (`read(this: *const Self)`, `writer_raw`),
+`loop_.rs::stop`, and `vaxis.rs::device_status_report` (self-less).
+
+Run:
+
+```sh
+for c in stopread_naive stopread_projonly stopread_dsrref stopread_shipped; do
+  echo "== $c =="
+  cargo +nightly miri run --quiet -- "$c"                          # Stacked Borrows
+  MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri run -q -- "$c" # Tree Borrows
+done
+```
+
+## T12 soundness-mediums candidates (VALIDATION_REPORT §3c.1 / §3c.5 / §3c.10)
+
+Added for the realignment plan Task 12 (soundness mediums batch). Three
+independent naive/shipped pairs, each reproducing one §3c hazard in isolation
+(R6: PROVE on a non-FFI harness, never hand-reason aliasing), selected by argv
+`getrow_*` / `winch_*` / `ivars_*`.
+
+| candidate | models | SB | TB |
+|---|---|---|---|
+| `getrow_naive` | §3c.1 pre-fix `Page::get_row`: `unsafe { &mut *rows.ptr(base).add(y) }` materializes a `&mut Row` (Unique tag); a second `get_row` of the SAME row pops it; the held `*Row` is used after → use-after-pop | **UB** | clean |
+| `getrow_shipped` | **shipped**: pure pointer arithmetic `rows.ptr(base).add(y)` (matches `get_row_and_cell`/`get_cells`) — both `*Row`s are compatible raw siblings off one root | **CLEAN** | **CLEAN** |
+| `winch_naive` | §3c.5 pre-fix vaxis SIGWINCH: `Loop::init` stores `context: *mut Loop` in the process-global HANDLERS; the Loop dies with no deregistration; the next `handle_winch` derefs the dangling ctx | **UB** (freed alloc) | **UB** |
+| `winch_shipped` | **shipped**: `Loop::drop` → `Tty::deregister_winsize(ctx)` removes+compacts the entry before the pointee dies; the next `handle_winch` touches only live handlers | **CLEAN** | **CLEAN** |
+| `ivars_naive` | §3c.10 pre-fix IOSurfaceLayer ivars: `Cell<*const c_void>`/`Cell<*mut c_void>` written by `set_display_callback` on one thread while the CA `display` override reads on another — non-atomic conflict | **UB** (data race) | **UB** (data race) |
+| `ivars_shipped` | **shipped**: `AtomicPtr<c_void>` SeqCst store/load — the free fix | **CLEAN** | **CLEAN** |
+
+Notes: `getrow_naive` is UB under Stacked Borrows only (Tree Borrows tolerates
+the pattern) — SB is Miri's default and the port's proof bar, and the shipped
+pure-arithmetic shape is also the more faithful port of Zig `&self.rows.ptr(self.memory)[y]`
+(a Zig `*Row` carries no protector). `winch_naive`'s UAF fires under BOTH models
+(a dangling deref is UB regardless of aliasing model). `ivars_naive`'s data race
+is reported by Miri's race detector under both models.
+
+Run:
+
+```sh
+for c in getrow_naive getrow_shipped winch_naive winch_shipped ivars_naive ivars_shipped; do
+  echo "== $c =="
+  cargo +nightly miri run --quiet -- "$c"                          # Stacked Borrows
+  MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri run -q -- "$c" # Tree Borrows
+done
+```

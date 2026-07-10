@@ -1526,8 +1526,605 @@ fn run_loopthread(shipped: bool) {
     drop(vaxis_val);
 }
 
+// ============================================================================
+// T11 / VALIDATION_REPORT H1: the Loop.stop()-vs-blocked-read overlap (stopread_*).
+//
+// Models the SHIPPED interactive exit path (`loop_.rs` `stop()` vs `tty_run`): the
+// read thread is BY DESIGN blocked inside `Tty::read` (waiting on /dev/tty bytes)
+// when the main thread calls `stop()`, which must WAKE it by writing a DSR request
+// through the tty writer (`(*vx).device_status_report((*tty).writer())`). The
+// loopthread_* pair above does NOT cover this: it models tty/vaxis as bare `*mut u32`
+// and serializes stop() against the reader via channel handshakes, so the
+// writer-retag-during-blocked-read overlap never executes. Non-FFI stand-in for the
+// blocked `libc::read`: an mpsc `recv()` parked inside the read fn; the DSR flush
+// "reaches the pty" by sending on that channel (the kernel hop of `libc::write`).
+//
+//   stopread_naive    — the pre-fix loop_.rs:206-211 shape: main forms a whole
+//     `&mut Tty` via `(*tty).writer()` (autoref Unique retag over ALL Tty bytes)
+//     while the reader is blocked in `Tty::read(&self)` holding a CALL-PROTECTED
+//     SharedReadOnly of the same Tty: expected UB (protector violation) under SB+TB.
+//   stopread_projonly — main HALF-fixed (writer projected via
+//     `addr_of_mut!((*tty).tty_writer)`, no whole `&mut Tty`) but the reader still
+//     blocked in `read(&self)`: the DSR bytes land in `tty_writer.buf` — a Vec-len
+//     write INSIDE the reader's protected whole-Tty range — so the `&mut SWriter`
+//     reborrow still pops the protected tag: expected UB under SB+TB. This is the
+//     load-bearing variant: it PROVES `Tty::read` itself must go raw-self (narrow
+//     fd projection), not just the stop() side.
+//   stopread_dsrref   — tty side fully raw on BOTH ends, but main's
+//     `device_status_report(&self)` holds a protected `&Vaxis` while the read
+//     thread does a plain raw write to `vaxis.caps.*` (a late capability event):
+//     the foreign write pops the protected shared tag: expected UB under SB+TB.
+//   stopread_shipped  — the FIXED shape: reader blocked in
+//     `Tty::read(this: *const Self)` (narrow `fd` projection + a field-narrow park,
+//     NO whole-Tty borrow), main projects `addr_of_mut!((*tty).tty_writer)` and
+//     calls a self-less `device_status_report(&mut *w)` (upstream libvaxis 0.5.1 is
+//     `pub fn deviceStatusReport(_: Vaxis, tty: *IoWriter)` — the receiver is
+//     UNUSED, so dropping it is the faithful form): expected CLEAN under SB and TB.
+//
+// Pass criterion (README): stopread_shipped CLEAN under BOTH -Zmiri-stacked-borrows
+// (default) and -Zmiri-tree-borrows; the three others UB.
+// ============================================================================
+
+/// models `TtyWriter { fd, buf }` — `flush()`'s `libc::write` is the pty hop that
+/// wakes the blocked reader; modeled by sending the bytes on the reader's `data`
+/// channel (`sink`).
+struct SWriter {
+    fd: i32,
+    buf: Vec<u8>,
+    sink: Sender<u8>,
+}
+impl SWriter {
+    fn write_all(&mut self, data: &[u8]) {
+        // the Vec len write lives INSIDE the Tty allocation (the projonly hazard)
+        self.buf.extend_from_slice(data);
+    }
+    fn flush(&mut self) {
+        for &b in &self.buf {
+            let _ = self.sink.send(b); // libc::write(self.fd, ..) → wakes the reader
+        }
+        self.buf.clear();
+    }
+}
+
+/// models `PosixTty { fd, termios, tty_writer }` + the pty read end.
+struct STty {
+    fd: i32,
+    tty_writer: SWriter,
+    /// the "pty" read end (`libc::read` stand-in)
+    data: Receiver<u8>,
+    /// ack: the reader IS inside `read()`, its borrow established
+    entered_read: Sender<u8>,
+}
+impl STty {
+    /// the PRE-FIX shape: `read(&self)` — a call-protected shared borrow of the
+    /// WHOLE Tty held for the entire blocked "syscall".
+    fn read_ref(&self, buf: &mut [u8]) -> usize {
+        let _ = self.entered_read.send(1); // reader is now inside the protected call
+        match self.data.recv() {
+            // blocked libc::read(self.fd, buf..)
+            Ok(b) => {
+                buf[0] = b;
+                1
+            }
+            Err(_) => 0,
+        }
+    }
+    /// the FIXED shape (tty.rs `read(this: *const Self)`): narrow projections only;
+    /// the park holds a borrow of the `data` FIELD only (the closest non-FFI stand-in
+    /// for "no Rust borrow held across the blocked syscall"), never the whole Tty.
+    unsafe fn read_raw(this: *const Self, buf: &mut [u8]) -> usize {
+        unsafe {
+            let _fd = std::ptr::addr_of!((*this).fd).read(); // libc::read's fd arg
+            let _ = (*std::ptr::addr_of!((*this).entered_read)).send(1);
+            match (*std::ptr::addr_of!((*this).data)).recv() {
+                Ok(b) => {
+                    buf[0] = b;
+                    1
+                }
+                Err(_) => 0,
+            }
+        }
+    }
+    /// the PRE-FIX `writer(&mut self)` — the whole-Tty Unique retag of the naive shape.
+    fn writer(&mut self) -> &mut SWriter {
+        &mut self.tty_writer
+    }
+}
+
+/// models `Vaxis { caps, .. }` — caps are PLAIN fields the read thread writes raw.
+struct SVaxis {
+    caps_kitty_keyboard: bool,
+}
+impl SVaxis {
+    /// the PRE-FIX `device_status_report(&self, w)` — a protected `&Vaxis` held
+    /// across the write+flush. The `in_dsr`/`caps_done` handshake deterministically
+    /// places the reader's caps write INSIDE the protected window (channels give
+    /// happens-before, so the ONLY reported UB is the tag violation, no data race).
+    fn dsr_ref(&self, w: &mut SWriter, in_dsr: &Sender<u8>, caps_done: &Receiver<u8>) {
+        let _ = in_dsr.send(1); // the &Vaxis protector is live NOW
+        let _ = caps_done.recv(); // the reader does its raw caps write meanwhile
+        w.write_all(b"\x1b[5n");
+        w.flush();
+    }
+    /// the PRE-FIX `device_status_report(&self, w)` verbatim (no handshake): used by
+    /// the Naive arm so the stop() line is a literal mirror of loop_.rs:210.
+    fn device_status_report(&self, w: &mut SWriter) {
+        w.write_all(b"\x1b[5n");
+        w.flush();
+    }
+}
+/// the FIXED shape: upstream `deviceStatusReport(_: Vaxis, tty)` never uses the
+/// receiver — ported self-less so no `&Vaxis` protector exists during the wake.
+fn dsr_shipped(w: &mut SWriter) {
+    w.write_all(b"\x1b[5n");
+    w.flush();
+}
+
+/// models `Loop { tty: *mut Tty, vaxis: *mut Vaxis, should_quit, thread }`.
+struct SLoop {
+    tty: *mut STty,
+    vaxis: *mut SVaxis,
+    should_quit: AtomicBool,
+    thread: ICell<Option<u32>>,
+}
+struct SendSL(*mut SLoop);
+unsafe impl Send for SendSL {}
+
+#[derive(Clone, Copy, PartialEq)]
+enum StopRead {
+    Naive,    // whole `&mut Tty` via (*tty).writer() during blocked read(&self)
+    ProjOnly, // addr_of_mut! writer projection, reader STILL in read(&self)
+    DsrRef,   // tty raw both ends, but protected &Vaxis DSR vs raw caps write
+    Shipped,  // all narrow/raw/self-less — the fixed loop_.rs shape
+}
+
+fn run_stopread(variant: StopRead) {
+    let (data_tx, data_rx): (Sender<u8>, Receiver<u8>) = channel();
+    let (entered_tx, entered_rx): (Sender<u8>, Receiver<u8>) = channel();
+    let (in_dsr_tx, in_dsr_rx): (Sender<u8>, Receiver<u8>) = channel();
+    let (caps_done_tx, caps_done_rx): (Sender<u8>, Receiver<u8>) = channel();
+
+    let mut tty = Box::new(STty {
+        fd: 7,
+        tty_writer: SWriter {
+            fd: 7,
+            buf: Vec::new(),
+            sink: data_tx,
+        },
+        data: data_rx,
+        entered_read: entered_tx,
+    });
+    let mut vx = Box::new(SVaxis {
+        caps_kitty_keyboard: false,
+    });
+    // raw ptrs once at birth (the list_themes `&raw mut` discipline)
+    let tty_ptr: *mut STty = &raw mut *tty;
+    let vx_ptr: *mut SVaxis = &raw mut *vx;
+
+    let mut lp = Box::new(SLoop {
+        tty: tty_ptr,
+        vaxis: vx_ptr,
+        should_quit: AtomicBool::new(false),
+        thread: ICell::new(None),
+    });
+    let sp: *mut SLoop = &raw mut *lp;
+
+    let send = SendSL(sp);
+    let handle = std::thread::Builder::new()
+        .name("ttyRun".into())
+        .spawn(move || {
+            let s = send;
+            unsafe {
+                if variant == StopRead::DsrRef {
+                    // the caps leg in isolation: a late capability event (parsed off
+                    // the wire) does a plain RAW write into vaxis.caps while main sits
+                    // inside the protected `device_status_report(&self)`.
+                    let _ = in_dsr_rx.recv(); // main's &Vaxis protector is live
+                    (*(*s.0).vaxis).caps_kitty_keyboard = true; // foreign write → pops it
+                    let _ = caps_done_tx.send(1);
+                    return;
+                }
+                // handle_event_generic's caps write — raw, main never borrows &Vaxis
+                // in the shipped shape, so this is conflict-free there.
+                (*(*s.0).vaxis).caps_kitty_keyboard = true;
+                // tty_run read loop (should_quit checked at loop top, Zig-faithful)
+                let mut buf = [0u8; 8];
+                while !(*s.0).should_quit.load(AOrd::Relaxed) {
+                    let n = match variant {
+                        StopRead::Shipped => STty::read_raw((*s.0).tty, &mut buf),
+                        // Naive/ProjOnly: the whole-&Tty call-protected blocked read
+                        _ => (*(*s.0).tty).read_ref(&mut buf),
+                    };
+                    if n == 0 {
+                        return;
+                    }
+                }
+            }
+        })
+        .unwrap();
+
+    // start(): the `thread` Cell is MAIN-only (narrow, interior-mutable).
+    unsafe {
+        (*sp).thread.set(Some(1));
+    }
+
+    if variant == StopRead::DsrRef {
+        // stop()'s DSR with the pre-fix `&self` receiver, writer correctly projected:
+        // UB fires at the reader's caps write while this protector is live.
+        unsafe {
+            (*sp).should_quit.store(true, AOrd::Relaxed);
+            let tty = (*sp).tty;
+            let vx = (*sp).vaxis;
+            let w = std::ptr::addr_of_mut!((*tty).tty_writer);
+            (*vx).dsr_ref(&mut *w, &in_dsr_tx, &caps_done_rx);
+        }
+        handle.join().unwrap();
+        unsafe {
+            let _ = (*sp).thread.take();
+            (*sp).should_quit.store(false, AOrd::Relaxed);
+        }
+        println!("stopread_dsrref: caps={}", vx.caps_kitty_keyboard);
+        return;
+    }
+
+    // wait until the reader IS inside read() with its borrow established — the
+    // deterministic image of "stop() runs while the reader is blocked in read".
+    let _ = entered_rx.recv();
+
+    // === stop() ===
+    unsafe {
+        (*sp).should_quit.store(true, AOrd::Relaxed);
+        // trigger a read (the DSR wake)
+        let tty = (*sp).tty;
+        let vx = (*sp).vaxis;
+        match variant {
+            StopRead::Naive => {
+                // the pre-fix loop_.rs:210 line VERBATIM: `(*tty).writer()` is a
+                // whole `&mut Tty` autoref — pops the reader's call-protected SRO →
+                // protector violation UB.
+                (*vx).device_status_report((*tty).writer());
+            }
+            StopRead::ProjOnly => {
+                // HALF-fix: narrow writer projection, but the reader still holds a
+                // protected whole-&Tty — the &mut SWriter reborrow lands inside that
+                // protected range → still UB.
+                let w = std::ptr::addr_of_mut!((*tty).tty_writer);
+                dsr_shipped(&mut *w);
+            }
+            StopRead::Shipped => {
+                // the FIXED line: narrow projection + self-less DSR.
+                let w = std::ptr::addr_of_mut!((*tty).tty_writer);
+                dsr_shipped(&mut *w);
+            }
+            StopRead::DsrRef => unreachable!(),
+        }
+    }
+    handle.join().unwrap();
+    unsafe {
+        let _ = (*sp).thread.take();
+        (*sp).should_quit.store(false, AOrd::Relaxed);
+    }
+    // reader joined → whole-object access is sound again (the deinit phase).
+    println!(
+        "stopread_{}: caps={} buf_empty={}",
+        match variant {
+            StopRead::Naive => "naive",
+            StopRead::ProjOnly => "projonly",
+            StopRead::Shipped => "shipped",
+            StopRead::DsrRef => "dsrref",
+        },
+        vx.caps_kitty_keyboard,
+        tty.tty_writer.buf.is_empty()
+    );
+    drop(lp);
+    drop(tty);
+    drop(vx);
+}
+
+// ============================================================================
+// T12 / VALIDATION_REPORT §3c.1: Page::get_row `&mut Row` materialization (getrow_*).
+//
+// Models `crates/rustty-vt/src/page_impl.rs` `get_row`: the page's rows live in
+// OFFSET-ADDRESSED backing memory (a separate allocation reached via a base ptr
+// + offset), and `getRow(self: *const Page) *Row` returns a mutable pointer into
+// it. The pre-fix Rust body materialized that pointer as `&mut *ptr` — minting a
+// Unique-derived tag over the row's bytes. Because a Zig `*Row` carries NO
+// aliasing protector, callers are free to hold one `*Row` while deriving another
+// to the SAME row; under Stacked Borrows the second `&mut` retag pops the first
+// Unique tag, so the held pointer's next use is use-after-pop. Pure pointer
+// arithmetic (the shipped shape, matching the sibling get_row_and_cell/get_cells)
+// derives both pointers from the same raw root — compatible raw siblings, no tag
+// to pop.
+//
+//   getrow_naive   — `&mut *rows_base.add(y)` twice for the same y; the first
+//                    pointer is used after the second call. Expected: UB.
+//   getrow_shipped — `rows_base.add(y)` (pure arithmetic) twice; same access
+//                    pattern. Expected: CLEAN under BOTH SB and TB.
+// ============================================================================
+
+#[derive(Clone, Copy)]
+struct MiniRow {
+    semantic_prompt: u8,
+    wrap: bool,
+}
+
+// Models Page: the struct holds only a base pointer + row count; the rows live
+// in a SEPARATE heap allocation (the offset-addressed page memory).
+struct MiniPage {
+    memory: *mut MiniRow, // models `self.rows.ptr(self.memory_ptr())`
+    rows: usize,
+}
+impl MiniPage {
+    fn new(rows: usize) -> MiniPage {
+        let v: Vec<MiniRow> = vec![
+            MiniRow {
+                semantic_prompt: 0,
+                wrap: false
+            };
+            rows
+        ];
+        let boxed: Box<[MiniRow]> = v.into_boxed_slice();
+        MiniPage {
+            memory: Box::into_raw(boxed) as *mut MiniRow,
+            rows,
+        }
+    }
+    // PRE-FIX shape: `unsafe { &mut *self.rows.ptr(self.memory_ptr()).add(y) }`
+    // — materializes a `&mut Row` (Unique tag) before decaying to *mut.
+    fn get_row_naive(&self, y: usize) -> *mut MiniRow {
+        assert!(y < self.rows);
+        unsafe { &mut *self.memory.add(y) }
+    }
+    // SHIPPED shape: pure pointer arithmetic (matches get_row_and_cell/get_cells).
+    fn get_row_shipped(&self, y: usize) -> *mut MiniRow {
+        assert!(y < self.rows);
+        unsafe { self.memory.add(y) }
+    }
+}
+impl Drop for MiniPage {
+    fn drop(&mut self) {
+        unsafe {
+            drop(Box::from_raw(core::ptr::slice_from_raw_parts_mut(
+                self.memory,
+                self.rows,
+            )));
+        }
+    }
+}
+
+fn run_getrow(naive: bool) {
+    let page = MiniPage::new(4);
+    // The latent pattern-(b) caller: hold one `*Row` while deriving another to
+    // the SAME row (a Zig `*Row` permits this freely), then use the held one.
+    let (a, b) = if naive {
+        (page.get_row_naive(2), page.get_row_naive(2))
+    } else {
+        (page.get_row_shipped(2), page.get_row_shipped(2))
+    };
+    unsafe {
+        (*b).wrap = true; // touch through the second pointer…
+        (*a).semantic_prompt = 7; // …then USE the held first pointer (naive: use-after-pop)
+    }
+    let sp = unsafe { (*page.get_row_shipped(2)).semantic_prompt };
+    println!(
+        "getrow_{}: semantic_prompt={sp}",
+        if naive { "naive" } else { "shipped" }
+    );
+}
+
+// ============================================================================
+// T12 / VALIDATION_REPORT §3c.5: vaxis SIGWINCH handler lifetime (winch_*).
+//
+// Models `crates/rustty-vaxis/src/tty.rs` + `loop_.rs`: `Loop::init` registers a
+// SignalHandler { context: *mut Loop, callback } into the process-global
+// HANDLERS array; `handle_winch` (the SIGWINCH sigaction target) iterates the
+// array and invokes every callback with its stored context. libvaxis never
+// deregisters: dropping the Loop leaves a DANGLING *mut in HANDLERS, and the
+// next SIGWINCH is a use-after-free in signal context. The shipped fix gives
+// `Loop` a `Drop` that removes its own entries (`Tty::deregister_winsize`,
+// keyed on the context pointer) before the pointee dies.
+//
+//   winch_naive   — register, drop the Loop, fire handle_winch: the callback
+//                   derefs the dangling context. Expected: UB (use of a
+//                   deallocated allocation).
+//   winch_shipped — register, DEREGISTER on drop, fire handle_winch: no entry
+//                   left, nothing dereferenced. Expected: CLEAN under SB + TB.
+// ============================================================================
+
+struct WSignalHandler {
+    context: *mut c_void,
+    callback: unsafe fn(*mut c_void),
+}
+struct WHandlerState {
+    handlers: [Option<WSignalHandler>; 8],
+    idx: usize,
+}
+// SAFETY: models tty.rs's `unsafe impl Send for SignalHandler` (raw ctx in a
+// static Mutex) — single-threaded here, the Send is Mutex-container glue only.
+unsafe impl Send for WSignalHandler {}
+// Models the `static HANDLERS: Mutex<HandlerState>` global.
+static WHANDLERS: SMutex<WHandlerState> = SMutex::new(WHandlerState {
+    handlers: [const { None }; 8],
+    idx: 0,
+});
+
+struct WLoop {
+    events: u32,
+}
+unsafe fn wloop_winsize_cb(ctx: *mut c_void) {
+    let lp = ctx as *mut WLoop;
+    unsafe { (*lp).events = (*lp).events.wrapping_add(1) }; // UAF if lp dangles
+}
+
+fn wnotify_winsize(h: WSignalHandler) {
+    let mut st = WHANDLERS.lock().unwrap();
+    let idx = st.idx;
+    assert!(idx < st.handlers.len());
+    st.handlers[idx] = Some(h);
+    st.idx += 1;
+}
+// The shipped deregistration: remove every entry whose context matches, then
+// compact (mirrors Tty::deregister_winsize).
+fn wderegister_winsize(context: *mut c_void) {
+    let mut st = WHANDLERS.lock().unwrap();
+    let mut w = 0usize;
+    for r in 0..st.idx {
+        let keep = match &st.handlers[r] {
+            Some(h) => h.context != context,
+            None => false,
+        };
+        if keep {
+            if w != r {
+                st.handlers[w] = st.handlers[r].take();
+            }
+            w += 1;
+        } else {
+            st.handlers[r] = None;
+        }
+    }
+    st.idx = w;
+}
+fn whandle_winch() {
+    let st = WHANDLERS.lock().unwrap();
+    let mut i = 0usize;
+    while i < st.idx {
+        if let Some(h) = &st.handlers[i] {
+            unsafe { (h.callback)(h.context) };
+        }
+        i += 1;
+    }
+}
+
+fn run_winch(shipped: bool) {
+    // A first, still-live loop so the handler array is non-trivially iterated.
+    let mut live = Box::new(WLoop { events: 0 });
+    let live_ptr: *mut WLoop = &raw mut *live;
+    wnotify_winsize(WSignalHandler {
+        context: live_ptr as *mut c_void,
+        callback: wloop_winsize_cb,
+    });
+
+    // The short-lived loop: register, then die.
+    {
+        let mut short = Box::new(WLoop { events: 0 });
+        let short_ptr: *mut WLoop = &raw mut *short;
+        wnotify_winsize(WSignalHandler {
+            context: short_ptr as *mut c_void,
+            callback: wloop_winsize_cb,
+        });
+        whandle_winch(); // both alive: fine in both shapes
+        if shipped {
+            // Loop::drop → Tty::deregister_winsize(self as ctx)
+            wderegister_winsize(short_ptr as *mut c_void);
+        }
+        drop(short);
+    }
+
+    // The next SIGWINCH after the short loop died.
+    whandle_winch(); // naive: derefs the dangling short_ptr → UAF
+
+    let ev = live.events;
+    // reset the global so candidates are order-independent
+    wderegister_winsize(live_ptr as *mut c_void);
+    println!(
+        "winch_{}: live_events={ev}",
+        if shipped { "shipped" } else { "naive" }
+    );
+    drop(live);
+}
+
+// ============================================================================
+// T12 / VALIDATION_REPORT §3c.10: IOSurfaceLayer display_cb/display_ctx ivars
+// (ivars_*).
+//
+// Models `crates/rustty-renderer/src/metal/iosurface_layer.rs` `Ivars`: the
+// stored display callback + context are written by `set_display_callback` and
+// read by the ObjC `display` override; nothing pins the two to one thread at
+// the type level. The pre-fix `Cell<*const c_void>`/`Cell<*mut c_void>` are
+// NON-atomic: two threads touching them unsynchronized is a data race
+// (formally UB, even though it mirrors the reference's plain ObjC ivars).
+// `AtomicPtr` is the free fix.
+//
+//   ivars_naive   — Cell written on one thread, read concurrently on another.
+//                   Expected: UB (data race) under Miri.
+//   ivars_shipped — AtomicPtr store/load (SeqCst). Expected: CLEAN.
+// ============================================================================
+
+use std::sync::atomic::AtomicPtr;
+
+struct IvarsNaive {
+    display_cb: ICell<*const c_void>,
+    display_ctx: ICell<*mut c_void>,
+}
+// SAFETY(deliberately wrong — the UB control): models the objc2 class object
+// being reachable from two threads while its ivars are plain Cells.
+unsafe impl Sync for IvarsNaive {}
+
+struct IvarsShipped {
+    display_cb: AtomicPtr<c_void>,
+    display_ctx: AtomicPtr<c_void>,
+}
+
+fn run_ivars(shipped: bool) {
+    unsafe fn cbfn(_ctx: *mut c_void) {}
+    // fn-pointer bits carried as usize so the closure capture is Send; the cast
+    // back happens on the storing thread (models the transmute round-trip).
+    let cb_bits = cbfn as usize;
+
+    let out = if shipped {
+        let ivars = IvarsShipped {
+            display_cb: AtomicPtr::new(core::ptr::null_mut()),
+            display_ctx: AtomicPtr::new(core::ptr::null_mut()),
+        };
+        let iv = &ivars; // capture the WHOLE struct ref (edition-2021 field capture)
+        std::thread::scope(|s| {
+            // renderer thread: set_display_callback
+            s.spawn(move || {
+                iv.display_cb.store(cb_bits as *mut c_void, AOrd::SeqCst);
+                iv.display_ctx
+                    .store(0xABCD_usize as *mut c_void, AOrd::SeqCst);
+            });
+            // main thread: the CA `display` override reads concurrently
+            let cb = iv.display_cb.load(AOrd::SeqCst);
+            let ctx = iv.display_ctx.load(AOrd::SeqCst);
+            (cb as usize, ctx as usize)
+        })
+    } else {
+        let ivars = IvarsNaive {
+            display_cb: ICell::new(core::ptr::null()),
+            display_ctx: ICell::new(core::ptr::null_mut()),
+        };
+        let iv = &ivars; // capture the WHOLE struct ref (edition-2021 field capture)
+        std::thread::scope(|s| {
+            s.spawn(move || {
+                iv.display_cb.set(cb_bits as *const c_void); // non-atomic write…
+                iv.display_ctx.set(0xABCD_usize as *mut c_void);
+            });
+            // …racing this non-atomic read on another thread → data race UB
+            let cb = iv.display_cb.get();
+            let ctx = iv.display_ctx.get();
+            (cb as usize, ctx as usize)
+        })
+    };
+    println!(
+        "ivars_{}: cb={:x} ctx={:x}",
+        if shipped { "shipped" } else { "naive" },
+        out.0,
+        out.1
+    );
+}
+
 fn main() {
     let which = std::env::args().nth(1).unwrap_or_default();
+    match which.as_str() {
+        "getrow_naive" => return run_getrow(true),
+        "getrow_shipped" => return run_getrow(false),
+        "winch_naive" => return run_winch(false),
+        "winch_shipped" => return run_winch(true),
+        "ivars_naive" => return run_ivars(false),
+        "ivars_shipped" => return run_ivars(true),
+        _ => {}
+    }
     match which.as_str() {
         // Chunk-4 draw_frame / completion candidates (own Rndr2 model)
         "drawframe_shipped" | "drawframe_naive" | "atlas_self_isolated" => {
@@ -1593,6 +2190,22 @@ fn main() {
         }
         "loopthread_naive" => {
             run_loopthread(false);
+            return;
+        }
+        "stopread_naive" => {
+            run_stopread(StopRead::Naive);
+            return;
+        }
+        "stopread_projonly" => {
+            run_stopread(StopRead::ProjOnly);
+            return;
+        }
+        "stopread_dsrref" => {
+            run_stopread(StopRead::DsrRef);
+            return;
+        }
+        "stopread_shipped" => {
+            run_stopread(StopRead::Shipped);
             return;
         }
         _ => {}
