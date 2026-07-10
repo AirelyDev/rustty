@@ -1162,6 +1162,16 @@ mod tests {
         assert_eq!(260, Special::Italic.osc4());
     }
 
+    // test Special {
+    //     _ = Special;
+    // }
+    #[test]
+    fn special() {
+        // Compile-touch the decl exactly like the reference identifier-test
+        // block (`_ = Special;` — refAllDecls-style touch, no assertions).
+        let _ = core::any::type_name::<Special>();
+    }
+
     #[test]
     fn next() {
         // test "next" within Dynamic
@@ -1193,6 +1203,16 @@ mod tests {
             Dynamic::TektronixCursor.next()
         );
         assert_eq!(None, Dynamic::HighlightForeground.next());
+    }
+
+    // test Dynamic {
+    //     _ = Dynamic;
+    // }
+    #[test]
+    fn dynamic() {
+        // Compile-touch the decl exactly like the reference identifier-test
+        // block (`_ = Dynamic;` — refAllDecls-style touch, no assertions).
+        let _ = core::any::type_name::<Dynamic>();
     }
 
     #[test]

@@ -224,10 +224,58 @@ pub struct DCS {
     // };
 }
 
+// Implement formatter for logging. This is mostly copied from the
+// std.fmt implementation, but we modify it slightly so that we can
+// print out custom formats for some of our primitives.
+// pub fn format(
+//     self: Action,
+//     writer: *std.Io.Writer,
+// ) !void {
+//     const T = Action;
+//     const info = @typeInfo(T).@"union";
+//
+//     try writer.writeAll(@typeName(T));
+//     if (info.tag_type) |TagType| {
+//         try writer.writeAll("{ .");
+//         try writer.writeAll(@tagName(@as(TagType, self)));
+//         try writer.writeAll(" = ");
+//
+//         inline for (info.fields) |u_field| {
+//             // If this is the active field...
+//             if (self == @field(TagType, u_field.name)) {
+//                 const value = @field(self, u_field.name);
+//                 switch (@TypeOf(value)) {
+//                     // Unicode
+//                     u21 => try writer.print("'{u}' (U+{X})", .{ value, value }),
+//
+//                     // Byte
+//                     u8 => try writer.print("0x{x}", .{value}),
+//
+//                     // Note: we don't do ASCII (u8) because there are a lot
+//                     // of invisible characters we don't want to handle right
+//                     // now.
+//
+//                     // All others do the default behavior
+//                     else => try writer.printValue(
+//                         "any",
+//                         .{},
+//                         @field(self, u_field.name),
+//                         3,
+//                     ),
+//                 }
+//             }
+//         }
+//
+//         try writer.writeAll(" }");
+//     } else {
+//         try format(writer, "@{x}", .{@intFromPtr(&self)});
+//     }
+// }
 // PORT NOTE: the `Action.format` logging implementation (a copy of the
 // `std.fmt` union formatter with custom printing for `u21`/`u8`) is
-// observability-only and has no behavioral effect; it is omitted (the Rust
-// `#[derive(Debug)]` covers the diagnostic need).
+// observability-only and has no behavioral effect; it is kept verbatim above
+// (the Rust `#[derive(Debug)]` covers the diagnostic need), matching the
+// convention used for the `CSI`/`ESC`/`DCS` format fns in this file.
 
 /// The list of separators used for CSI params. The value of the
 /// bit can be mapped to Sep. The index of this bit set specifies

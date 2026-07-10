@@ -13,7 +13,12 @@
 //! package as the `seam::Xev` (= `()`) anchor exactly as `global.zig`'s `pub
 //! const xev` is; the concrete handle types live here.
 //!
-//! CHUNK STATUS: C1 (queue/queue_mpsc/heap) + C2 (darwin) + C3 (loop core:
+//! PORT STATUS: done — the whole in-scope macOS/kqueue surface (chunks C1–C7
+//! below) is filled; the `ThreadPool` body is the one ledgered deferral
+//! (DEFERRALS.md "kqueue: file IO on thread pool", honest-skip stub).
+//! (Marker normalized from 'CHUNK STATUS' per VALIDATION_REPORT.md §3b.)
+//!
+//! CHUNK LOG: C1 (queue/queue_mpsc/heap) + C2 (darwin) + C3 (loop core:
 //! `Loop`/`Completion`/`Operation`/`Result`, the tick, `Async`(mach) wakeup
 //! subset, the `Timer` watcher run) + C4 (`Async` mach-port watcher) + C5
 //! (`Process` EVFILT_PROC watcher) + C6 (`Stream`/`WriteQueue`/`WriteRequest` +

@@ -239,12 +239,17 @@ def iter_rust_files(crate):
                 yield os.path.join(dirpath, fn)
 
 
-def _strip_rust(text):
+def _strip_rust(text, keep_strings=False):
     """Return text with string/char literals and comments blanked out (replaced
     by spaces of equal length so offsets are preserved), plus a parallel list of
     (kind, content) for every comment encountered. Handles // line comments,
     /* */ (nesting) block comments, "..." strings, r#"..."# raw strings, and
-    'c' char literals. Good enough for counting; not a full Rust lexer."""
+    'c' char literals. Good enough for counting; not a full Rust lexer.
+
+    `keep_strings=True` blanks ONLY comments and keeps string/char literals in
+    place (G9 surface-id matching: cap/action ids live in `b"..."` literals —
+    real code, unlike comments which could fake coverage via verbatim Zig
+    blocks). Default behavior is unchanged."""
     out = []
     comments = []  # (kind, text) kind in {"doc-module","doc-decl","line"}
     i = 0
@@ -299,7 +304,7 @@ def _strip_rust(text):
                     k = n
                 else:
                     k += len(close)
-                out.append(" " * (k - i))
+                out.append(text[i:k] if keep_strings else " " * (k - i))
                 i = k
                 continue
         # normal string "..."
@@ -313,14 +318,14 @@ def _strip_rust(text):
                     j += 1
                     break
                 j += 1
-            out.append(" " * (j - i))
+            out.append(text[i:j] if keep_strings else " " * (j - i))
             i = j
             continue
         # char / lifetime: only treat as char literal if it looks like 'x' or '\n'
         if c == "'":
             m = re.match(r"'(\\.|[^'\\])'", text[i:])
             if m:
-                out.append(" " * len(m.group(0)))
+                out.append(m.group(0) if keep_strings else " " * len(m.group(0)))
                 i += len(m.group(0))
                 continue
             out.append(c)

@@ -11,6 +11,10 @@
 //! Per R2 the terminfo *names* carry the rustty product identity via the
 //! `rustty-identity` crate (the reference's `ghostty.zig` exposes `ghostty`;
 //! this crate exposes [`entry::rustty`]).
+//!
+//! PORT STATUS: done (all of src/terminfo/ ported, 4/4 test blocks; marker
+//! added per VALIDATION_REPORT.md §3b — the crate previously had no
+//! `PORT STATUS:` line, so progress gates never bound it).
 
 #![forbid(unsafe_code)]
 

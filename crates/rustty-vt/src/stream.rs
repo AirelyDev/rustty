@@ -68,8 +68,24 @@ const DEBUG: bool = false;
 // The possible actions that can be emitted by the Stream
 // function for handling.
 // pub const Action = union(Key) { ... };
+//
+// /// C ABI functions.
+// const c_union = lib.TaggedUnion(
+//     lib.target,
+//     @This(),
+//     // TODO: Before shipping an ABI-compatible libghostty, verify this.
+//     // This was just arbitrarily chosen for now.
+//     [16]u64,
+// );
+// pub const Tag = c_union.Tag;
+// pub const Value = c_union.Value;
+// pub const C = c_union.C;
+// pub const CValue = c_union.CValue;
+// pub const cval = c_union.cval;
+//
 // PORT NOTE: the reference `Action` is a tagged union whose tag enum `Key` and
-// C-ABI union (`Tag`/`Value`/`C`/`CValue`/`cval`) drive the comptime `vt`
+// C-ABI union (`Tag`/`Value`/`C`/`CValue`/`cval`, kept verbatim above) drive
+// the comptime `vt`
 // dispatch. The Rust port models the dispatch surface directly as the `Handler`
 // trait (one method per union field, see below); the union's payload field
 // types are the trait method argument types. The C-ABI mirror lives in the

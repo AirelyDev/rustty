@@ -9,12 +9,11 @@
 //! dispatch), `get`/`get_multi`/`get_typed` (the non-deferred-type arms), and the
 //! 9 `Effects` trampolines (each recovers the owning `TerminalWrapper` from the
 //! stream handler via the exposed-provenance `container_of` and calls the C
-//! fn-ptr). STILL DEFERRED to the later get/set + grid_ref sub-batches:
-//! `set`/`setTyped`, the deferred-type `get_typed` arms (`color.*`/`cursor_style`/
-//! `title`/`pwd`/kitty image+graphics/`selection`), and
-//! `grid_ref`/`grid_ref_track`/`point_from_grid_ref` — those remain
-//! `todo!("vt-c <name>")`. This is the root of the irreducible mutual cluster
-//! (terminal<->grid_ref<->grid_ref_tracked<->selection).
+//! fn-ptr). The get/set + grid_ref sub-batches have LANDED (VALIDATION_REPORT
+//! M3): `set`/`setTyped`, every `get_typed` arm, and
+//! `grid_ref`/`grid_ref_track`/`point_from_grid_ref` are live — zero
+//! `todo!()` remains in this crate. The formerly irreducible mutual cluster
+//! (terminal<->grid_ref<->grid_ref_tracked<->selection) is fully resolved.
 
 // const std = @import("std");
 // const testing = std.testing;
@@ -816,11 +815,10 @@ pub enum Option_ {
 // pattern); here `option` is already a valid `#[repr(C)] Option_`. The `inline
 // else => setTyped` comptime dispatch becomes a direct `set_typed` call.
 //
-// PARTIAL FILL: only the `.selection` arm of `set_typed` is ported in this
-// sub-batch (it is exercised by `selection.zig`'s `selection_format_alloc uses
-// active selection` test and depends only on already-filled APIs). Every other
-// option arm projects a still-deferred vt-c type or terminal seam and lands in
-// the get/set sub-batch; they remain `todo!("vt-c set <option>")`.
+// PORT NOTE (formerly PARTIAL FILL): the `.selection` arm landed first (it is
+// exercised by `selection.zig`'s `selection_format_alloc uses active
+// selection` test); the get/set sub-batch has since landed every other option
+// arm — no `todo!("vt-c set <option>")` remains (VALIDATION_REPORT M3).
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle; `value`, if
 /// non-null, must point to storage of the type required by `option`
@@ -1642,9 +1640,9 @@ pub unsafe fn get(terminal_: Terminal, data: TerminalData, out: *mut c_void) -> 
 // PORT NOTE: the reference is a `comptime`-monomorphized switch whose `out` is
 // typed per arm (`*data.OutType()`). rustty erases `out` to `*mut c_void` and
 // casts to the arm's concrete pointer type before the write. Arms whose
-// `OutType` projects a still-deferred vt-c type (`color.RGB.C`/`PaletteC`,
-// `style_c.Style`, `selection_c.CSelection`, kitty image/graphics) land in the
-// later get/set sub-batch; they remain `todo!()` here.
+// `OutType` projects a vt-c type (`color.RGB.C`/`PaletteC`, `style_c.Style`,
+// `selection_c.CSelection`, kitty image/graphics) landed with the get/set
+// sub-batch — every arm below is live (VALIDATION_REPORT M3).
 //
 // # Safety
 // `terminal_`, if non-null, is a live wrapper; `out` points at storage of the

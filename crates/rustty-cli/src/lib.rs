@@ -5,17 +5,21 @@
 //! `args.zig`/`diagnostics.zig`/`CommaSplitter.zig` are the separate
 //! `rustty-args` crate (break #7) and are re-exported below, NOT re-ported here.
 //!
-//! PORT STATUS: C1–C5 (CLI_BLUEPRINT.md §3+§7). C1 landed the action dispatcher
+//! PORT STATUS: done (flipped per VALIDATION_REPORT.md §3b: C1–C5 all landed
+//! — CLI_BLUEPRINT.md §3+§7 — and the TUI-CLI wiring filled the formerly
+//! deferred interactive vaxis+zf render paths: `list_colors`/`list_keybinds`
+//! prettyPrint and the `list_themes` interactive fuzzy picker are LIVE over
+//! rustty-vaxis + rustty-zf. The crate's ONLY live seam is `boo.rs` (a pure
+//! vaxis animation leaf, DEFERRALS.md "cli C5").
+//!
+//! History: C1 landed the action dispatcher
 //! (`action.zig` 7t, `ghostty.zig` Action enum + `run`/`runMain` 4t), `help.zig`,
 //! `version.zig` (PARTIAL, ADV-FIX 1), and the `cli.zig` re-export surface. C2
 //! landed the pure config/introspection actions + Pager; C3 the ssh subsystem;
 //! C4 the apprt-backed + misc actions (`crash_report`, `edit_config`, the
 //! none-backed IPC `new_window`/`toggle_quick_terminal`, `tui.zig` seam). C5
-//! landed the vaxis/zf-touching actions' plain/enumeration paths LIVE —
-//! `list_colors`/`list_keybinds` (`--plain`/non-tty) + `list_themes`
-//! (enumeration) — with the interactive vaxis+zf render paths and `boo` (a pure
-//! vaxis animation) as documented vaxis-deferred placeholder leaves (DEFERRALS.md
-//! "cli C5"). `list_fonts` + `show_face` are now REAL ports against
+//! landed the vaxis/zf-touching actions.
+//! `list_fonts` + `show_face` are REAL ports against
 //! `rustty-font-shaper` (the D1 shaper tier that fully ports font discovery +
 //! `SharedGridSet`); the earlier "blocked on rustty-font discovery/SharedGridSet"
 //! note was a mis-attribution (that subsystem lives in the shaper crate, not

@@ -1720,10 +1720,6 @@
      "test_blocks": 0
     },
     {
-     "file": "Command.zig",
-     "test_blocks": 10
-    },
-    {
      "file": "Surface.zig",
      "test_blocks": 0
     },
@@ -1732,8 +1728,8 @@
      "test_blocks": 1
     }
    ],
-   "test_blocks": 11,
-   "file_count": 4
+   "test_blocks": 1,
+   "file_count": 3
   },
   "crash": {
    "files": [
@@ -2602,6 +2598,10 @@
   "termio": {
    "files": [
     {
+     "file": "Command.zig",
+     "test_blocks": 10
+    },
+    {
      "file": "termio.zig",
      "test_blocks": 1
     },
@@ -2642,8 +2642,8 @@
      "test_blocks": 0
     }
    ],
-   "test_blocks": 34,
-   "file_count": 10
+   "test_blocks": 44,
+   "file_count": 11
   },
   "unicode": {
    "files": [
@@ -3368,6 +3368,7 @@
  "unmapped_count": 0,
  "_amendments": [
   "A1-hoist: moved terminal/size.zig (5 tests) from crate 'vt' to 'render-types' so render-types is a leaf (->util) and the vt<->render-types size cycle is broken. Total test_blocks unchanged (3234). Documented in PORT_PLAN A1.",
-  "A5-resolution: split crate 'apprt' (was 47) into 'apprt' (27) + 'apprt-api' (20) \u2014 the break #8 interface crate carves apprt/{action,ipc,runtime,surface,structs}.zig (20 test_blocks: action 17, ipc 2, runtime 1) out of apprt. Total test_blocks unchanged (3234). Documented in PORT_PLAN A5."
+  "A5-resolution: split crate 'apprt' (was 47) into 'apprt' (27) + 'apprt-api' (20) \u2014 the break #8 interface crate carves apprt/{action,ipc,runtime,surface,structs}.zig (20 test_blocks: action 17, ipc 2, runtime 1) out of apprt. Total test_blocks unchanged (3234). Documented in PORT_PLAN A5.",
+  "13b-relocation: moved Command.zig (10 tests) from crate 'core' to 'termio' per the ratified break #13b (PORT_PLAN crates 23/24: Command-in-core would cycle; termio contract 44 = 34 + 10). Total test_blocks unchanged (3234). Applied 2026-07-10 (phase-2 payoff; the map had missed the relocation the PORT_PLAN documents)."
  ]
 }

@@ -4,12 +4,11 @@
 //! ClipboardCodepointMap, ErrorList, RepeatableStringMap, Wasm, c_get, command,
 //! conditional, edit, file_load, ...); links oniguruma-sys, themes.
 //!
-//! PORT STATUS: C1 leaf value-types ported (string/path/io/command/url/
-//! RepeatableStringMap/conditional/ClipboardCodepointMap/ErrorList/edit/
-//! file_load). The giant `Config` struct (C2) + remaining files are later.
+//! PORT STATUS: done (flipped per VALIDATION_REPORT.md M2: the config
+//! cluster is COMPLETE — C1 leaf value-types, the giant `Config` struct
+//! (C2, `config_struct.rs`), and C3 all landed; no live seams).
 //!
-//! These are the config VALUE-TYPES the giant Config struct (C2, later)
-//! composes. Each is ported leaves-first under the acyclicity gate (R4):
+//! Each file was ported leaves-first under the acyclicity gate (R4):
 //! every line/comment/test{} (R1).
 
 pub mod c_api;

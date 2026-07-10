@@ -4,10 +4,13 @@
 //! (input/key, key_encode, mouse, mouse_encode, paste) + stb/ shim. The crown jewel
 //! (2001 ported tests, ~62% of the port). Residual font/global leaks ride `sys` hooks.
 //!
-//! PORT STATUS: stub
+//! PORT STATUS: done (flipped per VALIDATION_REPORT.md M1 after the H4
+//! matcher fix; every terminal/*.zig + VT-input-slice module is landed with
+//! its tests. The single live seam is `input/key.rs` `imguiKey` — apprt
+//! dcimgui binding, tracked at DEFERRALS.md "imguiKey".)
 //!
-//! Scaffold only — no real logic yet (R1: every line/comment/test{} ported as
-//! the crate is carved, leaves-first, under the acyclicity gate per R4).
+//! (R1: every line/comment/test{} ported as the crate was carved,
+//! leaves-first, under the acyclicity gate per R4.)
 //!
 //! This crate mirrors the reference ghostty `terminal` module, whose surface is
 //! defined by `src/terminal/main.zig` (the terminal engine) plus the VT input
@@ -15,10 +18,7 @@
 //! module structure below is the verbatim-retargeted translation of
 //! `terminal/main.zig`'s `@import`/`pub const` surface: every top-level
 //! `terminal/*.zig` file gets a `pub mod`, and every `pub const` re-export gets
-//! a `pub use`. Re-exports whose target type is not yet ported (it lives in a
-//! sibling file ported by a later vt sub-batch) are kept verbatim as commented
-//! lines so this skeleton compiles (a structural blocker would be reported
-//! otherwise). The full surface goes live as the leaves land, leaves-first.
+//! a `pub use`.
 //!
 //! NOTE: `terminal/size.zig` is NOT in this crate — its types are hoisted into
 //! `rustty-render-types` (ambiguity A1) and imported from `rustty_render_types`.
@@ -171,6 +171,58 @@ pub mod options;
 // /// This is set to true when we're building the C library.
 // pub const c_api = if (options.c_abi) @import("c/main.zig") else void;
 // PORT NOTE: the C ABI surface (terminal/c/) is the separate `rustty-vt-c` crate.
+
+// ---------------------------------------------------------------------------
+// terminal/lib.zig — the terminal lib's C-ABI plumbing hub, kept verbatim
+// (0 test blocks; its decls are consumed via `rustty-lib` where the terminal/c
+// projections need them, so no live Rust module is required here).
+// ---------------------------------------------------------------------------
+// const std = @import("std");
+// const build_options = @import("terminal_options");
+// const lib = @import("../lib/main.zig");
+//
+// /// The target for the terminal lib in particular.
+// pub const target: lib.Target = if (build_options.c_abi) .c else .zig;
+//
+// /// The calling convention to use for C APIs.
+// ///
+// /// This is always .c for now. I want to make this "Zig" when we're not
+// /// building the C ABI but there are bigger issues we need to resolve to
+// /// make that possible (change it and see for yourself).
+// pub const calling_conv: std.builtin.CallingConvention = .c;
+//
+// /// Forwarded decls from lib that are used.
+// pub const alloc = lib.allocator;
+// pub const Buffer = lib.Buffer;
+// pub const Enum = lib.Enum;
+// pub const TaggedUnion = lib.TaggedUnion;
+// pub const Struct = lib.Struct;
+// pub const String = lib.String;
+// pub const checkGhosttyHEnum = lib.checkGhosttyHEnum;
+// pub const structSizedFieldFits = lib.structSizedFieldFits;
+//
+// PORT NOTE: `target`/`calling_conv` are Zig C-ABI build plumbing with no Rust
+// analogue in this pure crate (`extern "C"` declarations live in
+// `rustty-vt-c`); the forwarded `lib` decls are re-exported from the
+// `rustty-lib` crate at their use sites (e.g. `osc` uses
+// `rustty_lib::r#enum::check_ghostty_henum`).
+
+// ---------------------------------------------------------------------------
+// stb/main.zig — the stb image C-lib shim the reference kitty-graphics image
+// decode uses, kept verbatim (0 test blocks). The port replaces the stb C
+// dependency with the `sys::decode_png` seam (the wuffs binding rides a later
+// FFI crate; see kitty/graphics_image.rs), so no Rust module is required here.
+// ---------------------------------------------------------------------------
+// const c = @cImport({
+//     @cInclude("stb_image.h");
+//     @cInclude("stb_image_resize.h");
+// });
+//
+// We'll just add the exports of the functions or types we actually use
+// here, no need to export everything from the C lib if we don't use it.
+// pub const stbi_load_from_memory = c.stbi_load_from_memory;
+// pub const stbi_image_free = c.stbi_image_free;
+// pub const stbir_resize_uint8 = c.stbir_resize_uint8;
 
 // ---------------------------------------------------------------------------
 // VT input slice (ghostty src/input/*). `terminal/main` re-exports `focus`

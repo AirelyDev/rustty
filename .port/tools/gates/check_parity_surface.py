@@ -78,8 +78,13 @@ def surface_ids(surface):
 
 
 def crate_token_corpus(crates):
-    """Concatenate all ported Rust source of the given crates, comment/string
-    stripped, for token presence checks."""
+    """Concatenate all ported Rust source of the given crates, comment-stripped
+    but with STRING LITERALS KEPT, for token presence checks. Cap/action ids
+    live in `b"..."` literals (id_variants' documented quoted-string form);
+    blanking strings alongside comments made every literal-only id a false
+    MISSING (the terminfo 13/268 false RED once the crate claimed done).
+    Comments stay stripped so a verbatim-commented Zig block can never fake
+    coverage (tightening preserved)."""
     blobs = []
     for crate in crates:
         for path in G.iter_rust_files(crate):
@@ -88,14 +93,19 @@ def crate_token_corpus(crates):
                     text = fh.read()
             except Exception:  # noqa: BLE001
                 continue
-            clean, _ = G._strip_rust(text)
+            clean, _ = G._strip_rust(text, keep_strings=True)
             blobs.append(clean)
     return "\n".join(blobs)
 
 
 def crate_test_corpus(crates):
     """Same as crate_token_corpus but only the bodies of #[test] fns (so a
-    surface id is 'test-covered' if it appears inside a ported test)."""
+    surface id is 'test-covered' if it appears inside a ported test).
+
+    Structure (attrs/fn names/brace spans) is computed on the fully-stripped
+    text so braces inside string literals cannot desync the block finder; the
+    emitted body slice comes from the strings-kept text (both strippers are
+    offset-preserving, so the spans map 1:1)."""
     blobs = []
     for crate in crates:
         for path in G.iter_rust_files(crate):
@@ -105,6 +115,7 @@ def crate_test_corpus(crates):
             except Exception:  # noqa: BLE001
                 continue
             clean, _ = G._strip_rust(text)
+            kept, _ = G._strip_rust(text, keep_strings=True)
             for m in G.TEST_ATTR_RE.finditer(clean):
                 fm = G.FN_NAME_RE.search(clean, m.end())
                 if not fm:
@@ -113,8 +124,26 @@ def crate_test_corpus(crates):
                 if brace == -1:
                     continue
                 end = G._find_balanced_block(clean, brace)
-                blobs.append(clean[brace:end])
+                blobs.append(kept[brace:end])
     return "\n".join(blobs)
+
+
+# Sanctioned per-id renames: Zig ids that are NOT legal Rust identifiers
+# (digit-leading `@"..."` union fields) port under an explicitly chosen name.
+# This table is exact-match (tighter than a fuzzy candidate form: the gate
+# demands the one identifier the port committed to, with file evidence).
+# Every entry cites the ported site carrying the verbatim `// "<zig id>"`
+# marker. Adding an entry requires that marker to exist at the cited site.
+SANCTIONED_RENAMES = {
+    # rustty-vt/src/sgr.rs — Zig `@"..."` digit-leading Attribute fields.
+    "256_underline_color": "Color256Underline",  # sgr.rs:142 // "256_underline_color"
+    "8_bg": "Color8Bg",                          # sgr.rs:172 // "8_bg"
+    "8_fg": "Color8Fg",                          # sgr.rs:173 // "8_fg"
+    "8_bright_bg": "Color8BrightBg",             # sgr.rs:180 // "8_bright_bg"
+    "8_bright_fg": "Color8BrightFg",             # sgr.rs:181 // "8_bright_fg"
+    "256_bg": "Color256Bg",                      # sgr.rs:184 // "256_bg"
+    "256_fg": "Color256Fg",                      # sgr.rs:187 // "256_fg"
+}
 
 
 def id_variants(name):
@@ -125,12 +154,16 @@ def id_variants(name):
     including the composed port-slug form (non-alnum split, camel-split,
     lowercase, '_'-join) — so both gates share one matcher (H2/H4). Keeps the
     raw hyphen/space -> underscore form on top (cap/action ids that retain
-    other punctuation verbatim). Strictly a superset of the old variant set:
-    more candidate forms can only turn false MISSING into matches; presence is
-    still required for every id (tightening-safe, R5)."""
+    other punctuation verbatim), plus the SANCTIONED_RENAMES exact form for
+    digit-leading Zig ids that cannot be Rust identifiers. Strictly a superset
+    of the old variant set: more candidate forms can only turn false MISSING
+    into matches; presence is still required for every id (tightening-safe,
+    R5)."""
     out = set(G.name_candidates(name))
     # hyphen/space -> underscore on the raw token too
     out.add(re.sub(r"[-\s]", "_", name))
+    if name in SANCTIONED_RENAMES:
+        out.add(SANCTIONED_RENAMES[name])
     return {v for v in out if v}
 
 

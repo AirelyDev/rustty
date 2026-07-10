@@ -5,10 +5,11 @@
 //! projection (R3). cdylib+staticlib+rlib; cbindgen -> include/rustty.h with
 //! `rustty_*` symbols (R2).
 //!
-//! PORT STATUS: in-progress (Stage B foundation: the small/foundational c/
-//! files are ported; the heavy c/ files — terminal, render, kitty_graphics,
-//! selection*, formatter, key/mouse, sgr, osc, cell, row, style, grid_ref,
-//! size_report, types — land in later sub-batches under the acyclicity gate).
+//! PORT STATUS: done (flipped per VALIDATION_REPORT.md M3: all 34 c/
+//! modules are landed — terminal, render, kitty_graphics, selection*,
+//! formatter, key/mouse, sgr, osc, cell, row, style, grid_ref, size_report,
+//! types included — with zero live todo!(); completion ledgered in
+//! DEFERRALS.md under "vt-c").
 //!
 //! PORT NOTE: this is the crate root, the rustty analog of `terminal/c/main.zig`
 //! (the C API hub). `main.zig` declares every `c/<file>.zig` as a `pub const`

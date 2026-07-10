@@ -6,6 +6,9 @@
 //! Secondary Device Attributes). See the crate-structure design Section 6 and
 //! `.port/PORT_RULES.md` R2.
 //!
+//! PORT STATUS: done (rustty-only R2 crate, fully implemented, no live seams;
+//! marker added per VALIDATION_REPORT.md §3b).
+//!
 //! # Dual profile (R2)
 //!
 //! All *published* rustty artifacts carry the **rustty** identity (clean

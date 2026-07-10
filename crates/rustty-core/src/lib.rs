@@ -5,20 +5,14 @@
 //! (src/Command.zig is RELOCATED to rustty-termio — break #13b, Command-in-core
 //! would cycle; Surface reaches it as `rustty_termio::Command`.)
 //!
-//! PORT STATUS: stub (core chunk C0 landed: seam prep + the `type Core`
-//! decision gate below; chunk C2 landed `surface_mouse` in full — done; chunk
-//! C3 landed the `renderer_seam` dependency placeholders + the minimal
-//! `app`/`surface` module skeletons they name; chunk C4 landed ALL of App.zig
-//! in `app` (+ its rustty-only `test_runtime` seam tests); chunk C5 landed
-//! Surface.zig:1-456 in `surface` — the full `Surface<A>` field set, the
-//! `InputEffect`/`Search`/`Mouse`/`Keyboard` types, `DerivedConfig`
-//! (+`scaledPadding`) under the field-parity audit, and the
-//! `SurfaceMailbox<A>` `AppMailbox` impl; chunk C6 landed Surface.zig:457-957
-//! — `init`/`deinit`/`close`/`surfaceMailbox`/`queueIo`/`draw`/
-//! `needsConfirmQuit` live (+ the break-#1 `GlobalState`/`STATE` wiring
-//! below), with `activateInspector`/`deactivateInspector` the only verbatim
-//! deferrals; the remaining Surface function bodies land C7..C15 per
-//! CORE_BLUEPRINT §6).
+//! PORT STATUS: done (flipped per VALIDATION_REPORT.md §3b: chunks C0..C15,
+//! C-T, C-F and the W3 render-thread work all landed — App.zig, Surface.zig,
+//! surface_mouse.zig and the break-#1 `GlobalState`/`STATE` wiring are live.
+//! The ONLY live seams are the two inspector leaves
+//! `surface.rs` `activateInspector`/`deactivateInspector`
+//! (`unimplemented!()`, placeholder-leaf doctrine); the remaining
+//! `unimplemented!()` sites are rustty-only test dummies — the `app`
+//! `test_runtime` and the lib.rs prototype dummy backend below.)
 //!
 //! Carved incrementally (R1: every line/comment/test{} ported as the crate is
 //! carved, leaves-first, under the acyclicity gate per R4).

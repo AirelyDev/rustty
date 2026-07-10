@@ -15,6 +15,11 @@
 //! the ghostty sprite/glyf PNG known-answer tests (ported into `rustty-font`)
 //! can pass pixel-for-pixel.
 //!
+//! PORT STATUS: done (the ghostty-exercised z2d subset is complete; arms
+//! outside the subset — dashed strokes/polylines, supersample AA fill, the
+//! out-of-subset surface formats — are guarded `unimplemented!()` by design;
+//! marker added per VALIDATION_REPORT.md §3b).
+//!
 //! ## Ported in this subset
 //!
 //! * [`transformation::Transformation`] — the affine matrix (full).
