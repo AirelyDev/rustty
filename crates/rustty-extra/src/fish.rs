@@ -223,13 +223,13 @@ mod tests {
 
     // test "getDescription"
     #[test]
-    fn get_description_test() {
+    fn get_description() {
         // const input = "First sentence with \"quotes\"\nand newlines. Second sentence.";
         let input = b"First sentence with \"quotes\"\nand newlines. Second sentence.";
         // const expected = "First sentence with \\\"quotes\\\" and newlines.";
         let expected = b"First sentence with \\\"quotes\\\" and newlines.";
 
-        let result = get_description(input);
+        let result = super::get_description(input);
         // try testing.expectEqualStrings(expected, result);
         assert_eq!(result.as_slice(), expected.as_slice());
     }

@@ -352,6 +352,20 @@ def name_candidates(name):
     out.add(re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower())
     # hyphen/space (and any non-identifier run) -> underscore on the raw token
     out.add(re.sub(r"[^\w]+", "_", name).strip("_"))
+    # Composed port-slug form (the port's actual uniform convention):
+    # split on every non-alphanumeric run, camel-split each token, lowercase,
+    # join with '_'.  'DynamicPalette: changeDefault preserves changes'
+    #   -> dynamic_palette_change_default_preserves_changes
+    # 'bash: ENV' -> bash_env ; 'parseIntoField: bool' -> parse_into_field_bool
+    words = []
+    for tok in re.split(r"[^A-Za-z0-9]+", name):
+        if not tok:
+            continue
+        words.extend(
+            w for w in re.split(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[A-Za-z])(?=[0-9])", tok) if w
+        )
+    if words:
+        out.add("_".join(w.lower() for w in words))
     return {v for v in out if v}
 
 # In-test assertion macros / forms (count, not parse).

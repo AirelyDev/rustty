@@ -119,20 +119,16 @@ def crate_test_corpus(crates):
 
 def id_variants(name):
     """Token variants to look for: the literal, snake_case, camelCase, and the
-    quoted-string form (cap names / cli action names often appear as strings)."""
-    out = {name}
-    # split on hyphen/underscore/space (handles config 'font-size', actions, caps)
-    parts = [p for p in re.split(r"[-_ ]", name) if p]
-    if len(parts) > 1:
-        # camelCase and PascalCase
-        out.add(parts[0] + "".join(p.capitalize() for p in parts[1:]))
-        out.add("".join(p.capitalize() for p in parts))
-        # snake_case (normalize hyphen/space -> underscore)
-        out.add("_".join(p.lower() for p in parts))
-        # SCREAMING_SNAKE
-        out.add("_".join(p.upper() for p in parts))
-    # camelCase/PascalCase -> snake (for ids that arrive already camel)
-    out.add(re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower())
+    quoted-string form (cap names / cli action names often appear as strings).
+
+    Delegates to _gatelib.name_candidates — the single G1 naming convention,
+    including the composed port-slug form (non-alnum split, camel-split,
+    lowercase, '_'-join) — so both gates share one matcher (H2/H4). Keeps the
+    raw hyphen/space -> underscore form on top (cap/action ids that retain
+    other punctuation verbatim). Strictly a superset of the old variant set:
+    more candidate forms can only turn false MISSING into matches; presence is
+    still required for every id (tightening-safe, R5)."""
+    out = set(G.name_candidates(name))
     # hyphen/space -> underscore on the raw token too
     out.add(re.sub(r"[-\s]", "_", name))
     return {v for v in out if v}
