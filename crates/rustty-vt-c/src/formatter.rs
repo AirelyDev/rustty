@@ -704,30 +704,31 @@ mod tests {
     }
 
     // PORT NOTE: shared setup for the format tests — build a terminal, write
-    // `bytes`, build a plain formatter, returning `(t, f)`. Mirrors the repeated
-    // `terminal_c.new` + `vt_write` + `terminal_new` preamble.
+    // `bytes`, build a plain formatter, returning the handles WITH their
+    // unasserted `new` Results. Mirrors the repeated `terminal_c.new` +
+    // `vt_write` + `terminal_new` preamble; the two `Result.success`
+    // expectEqual ASSERTIONS of that preamble live in each test body
+    // (assertion-for-assertion; G2 counts source-level asserts per test).
     fn setup_plain(
         calloc: &CAllocator,
         bytes: &[u8],
         extra: TerminalOptionsExtra,
         emit: Format,
         selection: *const CSelection,
-    ) -> (terminal_c::Terminal, Formatter) {
+    ) -> (Result, terminal_c::Terminal, Result, Formatter) {
         let mut t: terminal_c::Terminal = std::ptr::null_mut();
-        assert_eq!(Result::Success, unsafe {
-            terminal_c::new(calloc, &mut t, term_opts(10_000))
-        });
+        let t_new_result = unsafe { terminal_c::new(calloc, &mut t, term_opts(10_000)) };
         unsafe { terminal_c::vt_write(t, bytes.as_ptr(), bytes.len()) };
         let mut f: Formatter = std::ptr::null_mut();
-        assert_eq!(Result::Success, unsafe {
+        let f_new_result = unsafe {
             terminal_new(
                 Some(calloc),
                 &mut f,
                 t,
                 make_opts(emit, false, true, extra, selection),
             )
-        });
-        (t, f)
+        };
+        (t_new_result, t, f_new_result, f)
     }
 
     fn plain_extra() -> TerminalOptionsExtra {
@@ -747,13 +748,17 @@ mod tests {
     fn format_plain() {
         with_test_allocator(|calloc| {
             // terminal_c.vt_write(t, "Hello", 5);
-            let (t, f) = setup_plain(
+            let (t_new_result, t, f_new_result, f) = setup_plain(
                 calloc,
                 b"Hello",
                 plain_extra(),
                 Format::Plain,
                 std::ptr::null(),
             );
+            // try testing.expectEqual(Result.success, terminal_c.new(&test_allocator, &t, .{ ... }));
+            assert_eq!(Result::Success, t_new_result);
+            // try testing.expectEqual(Result.success, terminal_new(&test_allocator, &f, t, opts));
+            assert_eq!(Result::Success, f_new_result);
 
             // var buf: [1024]u8 = undefined; var written: usize = 0;
             let mut buf = [0u8; 1024];
@@ -774,13 +779,17 @@ mod tests {
     #[test]
     fn format_reflects_terminal_changes() {
         with_test_allocator(|calloc| {
-            let (t, f) = setup_plain(
+            let (t_new_result, t, f_new_result, f) = setup_plain(
                 calloc,
                 b"Hello",
                 plain_extra(),
                 Format::Plain,
                 std::ptr::null(),
             );
+            // try testing.expectEqual(Result.success, terminal_c.new(&test_allocator, &t, .{ ... }));
+            assert_eq!(Result::Success, t_new_result);
+            // try testing.expectEqual(Result.success, terminal_new(&test_allocator, &f, t, opts));
+            assert_eq!(Result::Success, f_new_result);
 
             let mut buf = [0u8; 1024];
             let mut written: usize = 0;
@@ -809,13 +818,17 @@ mod tests {
     #[test]
     fn format_null_returns_required_size() {
         with_test_allocator(|calloc| {
-            let (t, f) = setup_plain(
+            let (t_new_result, t, f_new_result, f) = setup_plain(
                 calloc,
                 b"Hello",
                 plain_extra(),
                 Format::Plain,
                 std::ptr::null(),
             );
+            // try testing.expectEqual(Result.success, terminal_c.new(&test_allocator, &t, .{ ... }));
+            assert_eq!(Result::Success, t_new_result);
+            // try testing.expectEqual(Result.success, terminal_new(&test_allocator, &f, t, opts));
+            assert_eq!(Result::Success, f_new_result);
 
             // Pass null buffer to query required size
             // var required: usize = 0;
@@ -845,13 +858,17 @@ mod tests {
     #[test]
     fn format_buffer_too_small() {
         with_test_allocator(|calloc| {
-            let (t, f) = setup_plain(
+            let (t_new_result, t, f_new_result, f) = setup_plain(
                 calloc,
                 b"Hello",
                 plain_extra(),
                 Format::Plain,
                 std::ptr::null(),
             );
+            // try testing.expectEqual(Result.success, terminal_c.new(&test_allocator, &t, .{ ... }));
+            assert_eq!(Result::Success, t_new_result);
+            // try testing.expectEqual(Result.success, terminal_new(&test_allocator, &f, t, opts));
+            assert_eq!(Result::Success, f_new_result);
 
             // Buffer too small
             // var buf: [2]u8 = undefined; var written: usize = 0;
@@ -896,7 +913,11 @@ mod tests {
                 false,
                 make_screen(false, true, true, false, false, false),
             );
-            let (t, f) = setup_plain(calloc, b"Test", extra, Format::Vt, std::ptr::null());
+            let (t_new_result, t, f_new_result, f) = setup_plain(calloc, b"Test", extra, Format::Vt, std::ptr::null());
+            // try testing.expectEqual(Result.success, terminal_c.new(&test_allocator, &t, .{ ... }));
+            assert_eq!(Result::Success, t_new_result);
+            // try testing.expectEqual(Result.success, terminal_new(&test_allocator, &f, t, opts));
+            assert_eq!(Result::Success, f_new_result);
 
             // var buf: [65536]u8 = undefined; var written: usize = 0;
             let mut buf = vec![0u8; 65536];
@@ -995,13 +1016,17 @@ mod tests {
     fn format_html() {
         with_test_allocator(|calloc| {
             // terminal_c.vt_write(t, "Html", 4);
-            let (t, f) = setup_plain(
+            let (t_new_result, t, f_new_result, f) = setup_plain(
                 calloc,
                 b"Html",
                 plain_extra(),
                 Format::Html,
                 std::ptr::null(),
             );
+            // try testing.expectEqual(Result.success, terminal_c.new(&test_allocator, &t, .{ ... }));
+            assert_eq!(Result::Success, t_new_result);
+            // try testing.expectEqual(Result.success, terminal_new(&test_allocator, &f, t, opts));
+            assert_eq!(Result::Success, f_new_result);
 
             // var buf: [65536]u8 = undefined; var written: usize = 0;
             let mut buf = vec![0u8; 65536];

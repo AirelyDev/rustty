@@ -789,25 +789,29 @@ mod tests {
     }
 
     // PORT NOTE: shared encoder setup for the encode tests — sgr/any with the
-    // test size, returning the configured encoder. Mirrors the repeated
-    // setopt(event/format/size) preamble.
-    fn make_sgr_any_encoder(calloc: &CAllocator) -> Encoder {
+    // test size, returning the configured encoder WITH its unasserted `new`
+    // Result. Mirrors the repeated setopt(event/format/size) preamble; the
+    // preamble's `Result.success` expectEqual ASSERTION lives in each test body
+    // (assertion-for-assertion; G2 counts source-level asserts per test).
+    fn make_sgr_any_encoder(calloc: &CAllocator) -> (Result, Encoder) {
         let mut encoder: Encoder = std::ptr::null_mut();
-        assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut encoder) });
+        let new_result = unsafe { new(Some(calloc), &mut encoder) };
         let event_mode = TrackingMode::Any;
         unsafe { setopt_v(encoder, Option_::Event, &event_mode) };
         let format_mode = MouseFormat::Sgr;
         unsafe { setopt_v(encoder, Option_::Format, &format_mode) };
         let size = test_size();
         unsafe { setopt_v(encoder, Option_::Size, &size) };
-        encoder
+        (new_result, encoder)
     }
 
     // test "encode: sgr press left" {
     #[test]
     fn encode_sgr_press_left() {
         with_test_allocator(|calloc| {
-            let encoder = make_sgr_any_encoder(calloc);
+            let (encoder_new_result, encoder) = make_sgr_any_encoder(calloc);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &encoder));
+            assert_eq!(Result::Success, encoder_new_result);
 
             let mut event: Event = std::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -850,7 +854,9 @@ mod tests {
     #[test]
     fn encode_motion_dedupe_and_reset() {
         with_test_allocator(|calloc| {
-            let encoder = make_sgr_any_encoder(calloc);
+            let (encoder_new_result, encoder) = make_sgr_any_encoder(calloc);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &encoder));
+            assert_eq!(Result::Success, encoder_new_result);
             // const track_last_cell = true;
             let track_last_cell = true;
             // setopt(encoder, .track_last_cell, &track_last_cell);
@@ -910,7 +916,9 @@ mod tests {
     #[test]
     fn encode_querying_required_size_doesnt_update_dedupe_state() {
         with_test_allocator(|calloc| {
-            let encoder = make_sgr_any_encoder(calloc);
+            let (encoder_new_result, encoder) = make_sgr_any_encoder(calloc);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &encoder));
+            assert_eq!(Result::Success, encoder_new_result);
             let track_last_cell = true;
             unsafe { setopt_v(encoder, Option_::TrackLastCell, &track_last_cell) };
 

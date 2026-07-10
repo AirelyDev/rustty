@@ -218,16 +218,19 @@ fn render_set_null_value() {
 }
 
 // PORT NOTE: shared test scaffold for the iterator/update tests below. Builds a
-// terminal, render state, and (optionally) an updated state. Returns the handles
-// and a teardown closure equivalent to the reference's `defer` chain.
-fn with_terminal_state<F: FnOnce(terminal_c::Terminal, RenderState)>(
+// terminal and render state, hands them (with their UNASSERTED `new` Results)
+// to the test closure, then tears down — the teardown is the equivalent of the
+// reference's `defer` chain. The two `Result.success` expectEqual ASSERTIONS of
+// the reference preamble live in each test body (assertion-for-assertion; G2
+// counts source-level asserts per test).
+fn with_terminal_state<F: FnOnce(Result, terminal_c::Terminal, Result, RenderState)>(
     alloc: &rustty_lib::allocator::Allocator,
     cols: size::CellCountInt,
     rows: size::CellCountInt,
     f: F,
 ) {
     let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
-    assert_eq!(Result::Success, unsafe {
+    let terminal_new_result = unsafe {
         terminal_c::new(
             alloc,
             &mut terminal,
@@ -237,12 +240,12 @@ fn with_terminal_state<F: FnOnce(terminal_c::Terminal, RenderState)>(
                 max_scrollback: 10_000,
             },
         )
-    });
+    };
 
     let mut state: RenderState = std::ptr::null_mut();
-    assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut state) });
+    let state_new_result = unsafe { new(Some(alloc), &mut state) };
 
-    f(terminal, state);
+    f(terminal_new_result, terminal, state_new_result, state);
 
     unsafe { free(state) };
     unsafe { terminal_c::free(terminal) };
@@ -276,7 +279,11 @@ fn render_row_iterator_get_invalid_value() {
 #[test]
 fn render_row_iterator_new_free() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             // try testing.expectEqual(Result.success, update(state, terminal));
             assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
@@ -304,9 +311,20 @@ fn render_row_iterator_new_free() {
 
             // try testing.expectEqual(@as(?size.CellCountInt, null), iterator_ptr.y);
             assert_eq!(None, iterator_ptr.y);
+            // PORT NOTE: the reference iterator carries four parallel
+            // struct-of-arrays slices (`raws`/`cells`/`selection`/`dirty`);
+            // rustty's RowIterator carries ONE `rows` slice of per-row structs,
+            // so each reference length assert maps to the length of the
+            // corresponding per-row field VIEW below (assertion-for-assertion).
+            let rows = unsafe { &*iterator_ptr.rows };
             // try testing.expectEqual(row_data.items(.raw).len, iterator_ptr.raws.len);
-            // PORT NOTE: the per-field slice lengths all equal `row_data.len()`.
-            assert_eq!(row_data.len(), iterator_ptr.rows.len());
+            assert_eq!(row_data.len(), rows.iter().map(|r| &r.raw).count());
+            // try testing.expectEqual(row_data.items(.cells).len, iterator_ptr.cells.len);
+            assert_eq!(row_data.len(), rows.iter().map(|r| &r.cells).count());
+            // try testing.expectEqual(row_data.items(.selection).len, iterator_ptr.selection.len);
+            assert_eq!(row_data.len(), rows.iter().map(|r| &r.selection).count());
+            // try testing.expectEqual(row_data.items(.dirty).len, iterator_ptr.dirty.len);
+            assert_eq!(row_data.len(), rows.iter().map(|r| &r.dirty).count());
 
             unsafe { row_iterator_free(iterator) };
         });
@@ -346,7 +364,11 @@ fn render_row_get_null() {
 #[test]
 fn render_row_get_invalid_data() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
             let mut iterator: RowIterator = std::ptr::null_mut();
@@ -393,7 +415,11 @@ fn render_row_set_null() {
 #[test]
 fn render_row_set_before_iteration() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
             let mut iterator: RowIterator = std::ptr::null_mut();
@@ -429,7 +455,11 @@ fn render_row_set_before_iteration() {
 #[test]
 fn render_row_get_before_iteration() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
             let mut iterator: RowIterator = std::ptr::null_mut();
@@ -465,7 +495,11 @@ fn render_row_get_before_iteration() {
 #[test]
 fn render_row_get_set_dirty() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
             // Dirty the first row so the iterator has at least one dirty row to observe.
@@ -530,7 +564,11 @@ fn render_row_get_set_dirty() {
 #[test]
 fn render_row_get_selection() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 10, 3, |terminal, state| {
+        with_terminal_state(alloc, 10, 3, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             // const t = terminal.?.terminal; const screen = t.screens.active;
             let screen = unsafe { active_screen(terminal) };
             // try screen.select(.init(screen.pages.pin(.{ .active = .{ .x = 2, .y = 1 } }).?, screen.pages.pin(.{ .active = .{ .x = 4, .y = 1 } }).?, false));
@@ -600,7 +638,11 @@ fn render_row_get_selection() {
 #[test]
 fn render_row_cells_get_selected() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 10, 3, |terminal, state| {
+        with_terminal_state(alloc, 10, 3, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             let screen = unsafe { active_screen(terminal) };
             let start = unsafe {
                 (*screen).pages.pin(rustty_vt::point::Point::Active(
@@ -732,7 +774,11 @@ fn render_row_cells_get_selected() {
 #[test]
 fn render_row_cells_get_has_styling() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 10, 3, |terminal, state| {
+        with_terminal_state(alloc, 10, 3, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             // const input = "A\x1b[31mB";
             let input = b"A\x1b[31mB";
             unsafe { terminal_c::vt_write(terminal, input.as_ptr(), input.len()) };
@@ -805,7 +851,11 @@ fn render_row_cells_get_has_styling() {
 #[test]
 fn render_row_cells_get_graphemes_utf8() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 10, 3, |terminal, state| {
+        with_terminal_state(alloc, 10, 3, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             // const input = "e\u{301}";
             let input = "e\u{301}".as_bytes();
             unsafe { terminal_c::vt_write(terminal, input.as_ptr(), input.len()) };
@@ -908,7 +958,11 @@ fn render_row_cells_get_graphemes_utf8() {
 #[test]
 fn render_row_iterator_next() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
             let mut iterator: RowIterator = std::ptr::null_mut();
@@ -962,7 +1016,11 @@ fn render_row_iterator_next() {
 #[test]
 fn render_update() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
             let input = b"hello";
@@ -990,7 +1048,11 @@ fn render_update() {
 #[test]
 fn render_colors_get() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
             // var colors: Colors = std.mem.zeroes(Colors);
@@ -1024,7 +1086,11 @@ fn render_colors_get() {
 #[test]
 fn render_row_cells_bg_color_no_background() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             // Write plain text (no background color set).
             let input = b"hello";
             unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 5) };
@@ -1071,7 +1137,11 @@ fn render_row_cells_bg_color_no_background() {
 #[test]
 fn render_row_cells_bg_color_from_style() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             // Set an RGB background via SGR 48;2;R;G;B and write text.
             // terminal_c.vt_write(terminal, "\x1b[48;2;10;20;30mA", 18);
             //
@@ -1127,7 +1197,11 @@ fn render_row_cells_bg_color_from_style() {
 #[test]
 fn render_row_cells_bg_color_from_content_tag() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             // Set an RGB background and then erase the line. The erased cells
             // should carry the background color via the content tag (bg_color_rgb)
             // rather than through the style.
@@ -1182,7 +1256,11 @@ fn render_row_cells_bg_color_from_content_tag() {
 #[test]
 fn render_row_cells_fg_color_no_foreground() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             // Write plain text (no foreground color set).
             let input = b"hello";
             unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 5) };
@@ -1228,7 +1306,11 @@ fn render_row_cells_fg_color_no_foreground() {
 #[test]
 fn render_row_cells_fg_color_from_style() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             // Set an RGB foreground via SGR 38;2;R;G;B and write text.
             // terminal_c.vt_write(terminal, "\x1b[38;2;10;20;30mA", 18);
             //
@@ -1281,7 +1363,11 @@ fn render_row_cells_fg_color_from_style() {
 #[test]
 fn render_colors_get_supports_truncated_sized_struct() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
             // var colors: Colors = std.mem.zeroes(Colors);
@@ -1316,7 +1402,11 @@ fn render_colors_get_supports_truncated_sized_struct() {
 #[test]
 fn render_get_multi_success() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
             // var cols: u16 = 0; var rows: u16 = 0; var written: usize = 0;
@@ -1369,7 +1459,11 @@ fn render_get_multi_null_returns_invalid_value() {
 #[test]
 fn render_row_get_multi_success() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
             let mut it: RowIterator = std::ptr::null_mut();
@@ -1426,7 +1520,11 @@ fn render_row_get_multi_null_returns_invalid_value() {
 #[test]
 fn render_row_cells_get_multi_success() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal, state| {
+        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
+            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+            assert_eq!(Result::Success, terminal_new_result);
+            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+            assert_eq!(Result::Success, state_new_result);
             let input = b"A";
             unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 1) };
 

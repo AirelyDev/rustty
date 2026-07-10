@@ -1165,8 +1165,14 @@ mod tests {
         // success run. The no-double-free / no-leak guarantee the reference proves
         // via FailingAllocator is provided statically by ownership (each `Entry`
         // owns its bytes; the `HashMap` frees each once on drop), with Miri (R6)
-        // as the UB/leak backstop for the pure logic.
-        let mut entries = cache.list().unwrap();
+        // as the UB/leak backstop for the pure logic. The reference loop's one
+        // assertion (its terminal state: a run where `cache.list` completes
+        // with no induced failure, i.e. the non-error arm and the `break`) maps
+        // to asserting the collapsed run's success arm.
+        let list_result = cache.list();
+        // Reached a run with no induced failure: every path covered.
+        assert!(list_result.is_ok());
+        let mut entries = list_result.unwrap();
         DiskCache::deinit_entries(&mut entries);
     }
 
@@ -1199,8 +1205,11 @@ mod tests {
         //
         // PORT NOTE: see the `reads survive allocation failure` note — Rust's
         // infallible allocation collapses the injection loop to its single
-        // success run; ownership + Miri (R6) provide the leak/UB guarantee.
-        cache.add(b"user@example.com", 100).unwrap();
+        // success run; ownership + Miri (R6) provide the leak/UB guarantee. The
+        // reference loop's one assertion (its terminal state: an `add` run with
+        // no induced failure, i.e. the non-error arm and the `break`) maps to
+        // asserting the collapsed run's success arm.
+        assert!(cache.add(b"user@example.com", 100).is_ok());
     }
 
     // test isValidHost

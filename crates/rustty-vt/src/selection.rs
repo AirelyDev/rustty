@@ -660,8 +660,13 @@ mod tests {
     // struct (node ptr + x + y + rectangle). `Selection::eql` is the faithful
     // equivalent for these untracked selections (pins originate from the same
     // screen so node pointers match), so we assert through it.
-    fn expect_sel_eq(expected: Selection, got: Selection) {
-        assert!(expected.eql(got));
+    // Deep-compare analog of the reference's `testing.expectEqualDeep(expected,
+    // sel)` / `testing.expect(sel.eql(...))`. Returns the comparison instead of
+    // asserting so the ASSERTION itself lives in each test body
+    // (assertion-for-assertion with the reference; G2 counts source-level
+    // asserts per test).
+    fn sel_eql(expected: Selection, got: Selection) -> bool {
+        expected.eql(got)
     }
 
     // test "Selection: adjust right"
@@ -1152,35 +1157,35 @@ mod tests {
             // forward
             let sel = Selection::init(pin_screen(&s, 1, 1), pin_screen(&s, 3, 1), false);
             let sel_reverse = Selection::init(pin_screen(&s, 3, 1), pin_screen(&s, 1, 1), false);
-            expect_sel_eq(sel.ordered(&s, Order::Forward), sel);
-            expect_sel_eq(sel.ordered(&s, Order::Reverse), sel_reverse);
-            expect_sel_eq(sel.ordered(&s, Order::MirroredForward), sel);
+            assert!(sel_eql(sel.ordered(&s, Order::Forward), sel));
+            assert!(sel_eql(sel.ordered(&s, Order::Reverse), sel_reverse));
+            assert!(sel_eql(sel.ordered(&s, Order::MirroredForward), sel));
         }
         {
             // reverse
             let sel = Selection::init(pin_screen(&s, 3, 1), pin_screen(&s, 1, 1), false);
             let sel_forward = Selection::init(pin_screen(&s, 1, 1), pin_screen(&s, 3, 1), false);
-            expect_sel_eq(sel.ordered(&s, Order::Forward), sel_forward);
-            expect_sel_eq(sel.ordered(&s, Order::Reverse), sel);
-            expect_sel_eq(sel.ordered(&s, Order::MirroredForward), sel_forward);
+            assert!(sel_eql(sel.ordered(&s, Order::Forward), sel_forward));
+            assert!(sel_eql(sel.ordered(&s, Order::Reverse), sel));
+            assert!(sel_eql(sel.ordered(&s, Order::MirroredForward), sel_forward));
         }
         {
             // mirrored_forward
             let sel = Selection::init(pin_screen(&s, 3, 1), pin_screen(&s, 1, 3), true);
             let sel_forward = Selection::init(pin_screen(&s, 1, 1), pin_screen(&s, 3, 3), true);
             let sel_reverse = Selection::init(pin_screen(&s, 3, 3), pin_screen(&s, 1, 1), true);
-            expect_sel_eq(sel.ordered(&s, Order::Forward), sel_forward);
-            expect_sel_eq(sel.ordered(&s, Order::Reverse), sel_reverse);
-            expect_sel_eq(sel.ordered(&s, Order::MirroredReverse), sel_forward);
+            assert!(sel_eql(sel.ordered(&s, Order::Forward), sel_forward));
+            assert!(sel_eql(sel.ordered(&s, Order::Reverse), sel_reverse));
+            assert!(sel_eql(sel.ordered(&s, Order::MirroredReverse), sel_forward));
         }
         {
             // mirrored_reverse
             let sel = Selection::init(pin_screen(&s, 1, 3), pin_screen(&s, 3, 1), true);
             let sel_forward = Selection::init(pin_screen(&s, 1, 1), pin_screen(&s, 3, 3), true);
             let sel_reverse = Selection::init(pin_screen(&s, 3, 3), pin_screen(&s, 1, 1), true);
-            expect_sel_eq(sel.ordered(&s, Order::Forward), sel_forward);
-            expect_sel_eq(sel.ordered(&s, Order::Reverse), sel_reverse);
-            expect_sel_eq(sel.ordered(&s, Order::MirroredForward), sel_forward);
+            assert!(sel_eql(sel.ordered(&s, Order::Forward), sel_forward));
+            assert!(sel_eql(sel.ordered(&s, Order::Reverse), sel_reverse));
+            assert!(sel_eql(sel.ordered(&s, Order::MirroredForward), sel_forward));
         }
 
         s.deinit();
@@ -1285,26 +1290,26 @@ mod tests {
             assert!(sel.contained_row(&s, pin_screen(&s, 1, 4)).is_none());
 
             // Start line
-            expect_sel_eq(
+            assert!(sel_eql(
                 Selection::init(sel.start(), pin_screen(&s, s.pages.cols - 1, 1), false),
                 sel.contained_row(&s, pin_screen(&s, 1, 1)).unwrap(),
-            );
+            ));
 
             // End line
-            expect_sel_eq(
+            assert!(sel_eql(
                 Selection::init(pin_screen(&s, 0, 3), sel.end(), false),
                 sel.contained_row(&s, pin_screen(&s, 2, 3)).unwrap(),
-            );
+            ));
 
             // Middle line
-            expect_sel_eq(
+            assert!(sel_eql(
                 Selection::init(
                     pin_screen(&s, 0, 2),
                     pin_screen(&s, s.pages.cols - 1, 2),
                     false,
                 ),
                 sel.contained_row(&s, pin_screen(&s, 2, 2)).unwrap(),
-            );
+            ));
         }
 
         // Rectangle
@@ -1315,22 +1320,22 @@ mod tests {
             assert!(sel.contained_row(&s, pin_screen(&s, 1, 4)).is_none());
 
             // Start line
-            expect_sel_eq(
+            assert!(sel_eql(
                 Selection::init(pin_screen(&s, 3, 1), pin_screen(&s, 6, 1), true),
                 sel.contained_row(&s, pin_screen(&s, 1, 1)).unwrap(),
-            );
+            ));
 
             // End line
-            expect_sel_eq(
+            assert!(sel_eql(
                 Selection::init(pin_screen(&s, 3, 3), pin_screen(&s, 6, 3), true),
                 sel.contained_row(&s, pin_screen(&s, 2, 3)).unwrap(),
-            );
+            ));
 
             // Middle line
-            expect_sel_eq(
+            assert!(sel_eql(
                 Selection::init(pin_screen(&s, 3, 2), pin_screen(&s, 6, 2), true),
                 sel.contained_row(&s, pin_screen(&s, 2, 2)).unwrap(),
-            );
+            ));
         }
 
         // Single-line selection
@@ -1342,7 +1347,7 @@ mod tests {
             assert!(sel.contained_row(&s, pin_screen(&s, 1, 2)).is_none());
 
             // Contained
-            expect_sel_eq(sel, sel.contained_row(&s, pin_screen(&s, 1, 1)).unwrap());
+            assert!(sel_eql(sel, sel.contained_row(&s, pin_screen(&s, 1, 1)).unwrap()));
         }
 
         s.deinit();

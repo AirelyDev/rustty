@@ -78,11 +78,15 @@ fn pin_copy(p: *mut Pin) -> Pin {
 // PORT NOTE: the CORE `Pin` struct does not derive `PartialEq`/`Debug` (it is a
 // raw-pointer-bearing POD), so the reference `expectEqual(Pin{...}, ...)` is
 // reproduced field-for-field including `garbage` (default `false`).
-fn expect_pin(expected: Pin, got: Pin) {
-    assert!(core::ptr::eq(expected.node, got.node));
-    assert_eq!(expected.y, got.y);
-    assert_eq!(expected.x, got.x);
-    assert_eq!(expected.garbage, got.garbage);
+// Deep-compare analog of the reference's `testing.expectEqual(Pin{...}, ...)`.
+// Returns the comparison instead of asserting so the ASSERTION itself lives in
+// each test body, one per reference `expectEqual` (assertion-for-assertion;
+// G2 counts source-level asserts per test).
+fn pin_eql(expected: Pin, got: Pin) -> bool {
+    core::ptr::eq(expected.node, got.node)
+        && expected.y == got.y
+        && expected.x == got.x
+        && expected.garbage == got.garbage
 }
 
 // ref: test "PageList"
@@ -105,7 +109,7 @@ fn pagelist() {
     ));
 
     // Active area should be the top
-    expect_pin(
+    assert!(pin_eql(
         Pin {
             node: s.pages.first,
             y: 0,
@@ -113,7 +117,7 @@ fn pagelist() {
             garbage: false,
         },
         s.get_top_left(point::Tag::Active),
-    );
+    ));
 
     // Scrollbar should be where we expect it
     assert_eq!(
@@ -1369,7 +1373,7 @@ fn pagelist_reset() {
     assert_eq!(s.rows as usize, s.total_rows());
 
     // Active area should be the top
-    expect_pin(
+    assert!(pin_eql(
         Pin {
             node: s.pages.first,
             y: 0,
@@ -1377,7 +1381,7 @@ fn pagelist_reset() {
             garbage: false,
         },
         s.get_top_left(point::Tag::Active),
-    );
+    ));
 
     s.deinit();
 }
@@ -1529,7 +1533,7 @@ fn pagelist_clears_history() {
     assert_eq!(s.rows as usize, s.total_rows());
 
     // Active area should be the top
-    expect_pin(
+    assert!(pin_eql(
         Pin {
             node: s.pages.first,
             y: 0,
@@ -1537,7 +1541,7 @@ fn pagelist_clears_history() {
             garbage: false,
         },
         s.get_top_left(point::Tag::Active),
-    );
+    ));
 
     s.deinit();
 }

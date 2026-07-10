@@ -595,9 +595,18 @@ mod tests {
     // can't be `extern "C"`, so we use a `Mutex`-guarded static pair, matching
     // the Zig `var call_count`/`var total_len`. The shared GLOBAL `TEST_LOCK`
     // (held via `reset_global`) serializes them so the statics don't race.
+    //
+    // The reference nests a fresh `S` struct with its own `logCb` in EVERY
+    // logFn test; the three chunked tests' `logCb` additionally carries a
+    // per-chunk `std.debug.assert(msg_len <= 2048)`. Each Rust test mirrors
+    // that by passing its own callback (the chunked ones a locally-nested
+    // `extern "C" fn` with the per-chunk debug_assert, assertion-for-assertion
+    // with the reference's block).
     static CALL_COUNT: Mutex<usize> = Mutex::new(0);
     static TOTAL_LEN: Mutex<usize> = Mutex::new(0);
 
+    // fn logCb(...) { call_count += 1; total_len += msg_len; }
+    // (the small-message test's S.logCb — no per-chunk size assert)
     extern "C" fn counting_log_cb(
         _u: *mut std::ffi::c_void,
         _lvl: LogLevel,
@@ -608,24 +617,22 @@ mod tests {
     ) {
         *CALL_COUNT.lock().unwrap() += 1;
         *TOTAL_LEN.lock().unwrap() += msg_len;
-        // Each chunk must not exceed the buffer size.
-        debug_assert!(msg_len <= 2048);
     }
 
-    fn install_counting_log() {
+    fn install_counting_log(cb: LogFn) {
         // Recover any poison left by a previously panicking assertion (the
         // TEST_LOCK serializes us, so this is a clean reset point).
         CALL_COUNT.clear_poison();
         TOTAL_LEN.clear_poison();
         *CALL_COUNT.lock().unwrap() = 0;
         *TOTAL_LEN.lock().unwrap() = 0;
-        GLOBAL.lock().unwrap().log = Some(counting_log_cb);
+        GLOBAL.lock().unwrap().log = Some(cb);
     }
 
     #[test]
     fn logfn_small_message_single_chunk() {
         let _guard = reset_global();
-        install_counting_log();
+        install_counting_log(counting_log_cb);
 
         // logFn(.info, .default, "hello", .{});
         log_fn(StdLevel::Info, "", format_args!("hello"));
@@ -641,7 +648,25 @@ mod tests {
     #[test]
     fn logfn_message_exceeding_chunk_size_is_split() {
         let _guard = reset_global();
-        install_counting_log();
+        // The reference's per-test S.logCb (nested in the test block), whose
+        // per-chunk size check is part of this test's assertion set:
+        //   fn logCb(...) { call_count += 1; total_len += msg_len;
+        //       // Each chunk must not exceed the buffer size.
+        //       std.debug.assert(msg_len <= 2048); }
+        extern "C" fn chunked_log_cb(
+            _u: *mut std::ffi::c_void,
+            _lvl: LogLevel,
+            _sp: *const u8,
+            _sl: usize,
+            _mp: *const u8,
+            msg_len: usize,
+        ) {
+            *CALL_COUNT.lock().unwrap() += 1;
+            *TOTAL_LEN.lock().unwrap() += msg_len;
+            // Each chunk must not exceed the buffer size.
+            debug_assert!(msg_len <= 2048);
+        }
+        install_counting_log(chunked_log_cb);
 
         // Format a message larger than the 2048-byte buffer.
         // 'A' repeated 3000 times via a fill format.
@@ -665,7 +690,25 @@ mod tests {
     #[test]
     fn logfn_message_exactly_at_chunk_boundary() {
         let _guard = reset_global();
-        install_counting_log();
+        // The reference's per-test S.logCb (nested in the test block), whose
+        // per-chunk size check is part of this test's assertion set:
+        //   fn logCb(...) { call_count += 1; total_len += msg_len;
+        //       // Each chunk must not exceed the buffer size.
+        //       std.debug.assert(msg_len <= 2048); }
+        extern "C" fn chunked_log_cb(
+            _u: *mut std::ffi::c_void,
+            _lvl: LogLevel,
+            _sp: *const u8,
+            _sl: usize,
+            _mp: *const u8,
+            msg_len: usize,
+        ) {
+            *CALL_COUNT.lock().unwrap() += 1;
+            *TOTAL_LEN.lock().unwrap() += msg_len;
+            // Each chunk must not exceed the buffer size.
+            debug_assert!(msg_len <= 2048);
+        }
+        install_counting_log(chunked_log_cb);
 
         // Exactly 2048 bytes — should emit one full chunk, no remainder.
         // const fill: [2048]u8 = .{0x42} ** 2048;
@@ -687,7 +730,25 @@ mod tests {
     #[test]
     fn logfn_message_exactly_double_chunk_size() {
         let _guard = reset_global();
-        install_counting_log();
+        // The reference's per-test S.logCb (nested in the test block), whose
+        // per-chunk size check is part of this test's assertion set:
+        //   fn logCb(...) { call_count += 1; total_len += msg_len;
+        //       // Each chunk must not exceed the buffer size.
+        //       std.debug.assert(msg_len <= 2048); }
+        extern "C" fn chunked_log_cb(
+            _u: *mut std::ffi::c_void,
+            _lvl: LogLevel,
+            _sp: *const u8,
+            _sl: usize,
+            _mp: *const u8,
+            msg_len: usize,
+        ) {
+            *CALL_COUNT.lock().unwrap() += 1;
+            *TOTAL_LEN.lock().unwrap() += msg_len;
+            // Each chunk must not exceed the buffer size.
+            debug_assert!(msg_len <= 2048);
+        }
+        install_counting_log(chunked_log_cb);
 
         // Exactly 4096 bytes — should emit exactly two full chunks.
         // const fill: [4096]u8 = .{0x43} ** 4096;

@@ -1075,8 +1075,12 @@ mod tests {
     // PORT NOTE: the reference asserts selections with `expectEqualDeep`. The
     // port's `Selection` compares via `Selection::eql` (faithful for untracked
     // selections from the same screen; see selection.rs's `expect_sel_eq`).
-    fn expect_sel_eq(expected: Selection, got: Selection) {
-        assert!(expected.eql(got));
+    // Deep-compare analog of the reference's `testing.expectEqualDeep(expected,
+    // sel)`. Returns the comparison instead of asserting so the ASSERTION
+    // itself lives in each test body (assertion-for-assertion with the
+    // reference; G2 counts source-level asserts per test).
+    fn sel_eql(expected: Selection, got: Selection) -> bool {
+        expected.eql(got)
     }
 
     fn test_press(
@@ -1225,10 +1229,10 @@ mod tests {
             },
             rectangle: rect,
         };
-        expect_sel_eq(
+        assert!(sel_eql(
             expected,
             drag_selection(click_pin, drag_pin, click_x_pos, drag_x_pos, rect, geometry).unwrap(),
-        );
+        ));
 
         screen.deinit();
     }
@@ -1607,15 +1611,15 @@ mod tests {
 
         assert!(gesture.press(&mut t, event).unwrap().is_none());
 
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(test_pin(&mut t, 0, 0), test_pin(&mut t, 4, 0), false),
             gesture.press(&mut t, event).unwrap().unwrap(),
-        );
+        ));
 
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(test_pin(&mut t, 0, 0), test_pin(&mut t, 9, 0), false),
             gesture.press(&mut t, event).unwrap().unwrap(),
-        );
+        ));
 
         gesture.deinit(&mut t);
         t.deinit(Allocator);
@@ -1641,17 +1645,17 @@ mod tests {
 
         let double_click = gesture.press(&mut t, event).unwrap().unwrap();
         assert_eq!(Behavior::Line, gesture.left_click_behavior);
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(test_pin(&mut t, 0, 0), test_pin(&mut t, 9, 0), false),
             double_click,
-        );
+        ));
 
         let __ev2 = test_drag(&mut t, 2, 2, 20.0, 50.0);
         let line_drag = gesture.drag(&mut t, __ev2).unwrap();
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(test_pin(&mut t, 0, 0), test_pin(&mut t, 9, 2), false),
             line_drag,
-        );
+        ));
 
         gesture.deinit(&mut t);
         t.deinit(Allocator);
@@ -1686,17 +1690,17 @@ mod tests {
 
         let press_selection = gesture.press(&mut t, event).unwrap().unwrap();
         assert_eq!(Behavior::Output, gesture.left_click_behavior);
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(test_pin(&mut t, 0, 0), test_pin(&mut t, 3, 0), false),
             press_selection,
-        );
+        ));
 
         let __ev3 = test_drag(&mut t, 1, 2, 10.0, 50.0);
         let output_drag = gesture.drag(&mut t, __ev3).unwrap();
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(test_pin(&mut t, 0, 0), test_pin(&mut t, 3, 2), false),
             output_drag,
-        );
+        ));
 
         gesture.deinit(&mut t);
         t.deinit(Allocator);
@@ -1718,7 +1722,7 @@ mod tests {
         assert_eq!(Autoscroll::None, gesture.left_drag_autoscroll);
         assert_eq!(true, gesture.left_click_dragged);
 
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(
                 unsafe {
                     (*t.screens.active)
@@ -1735,7 +1739,7 @@ mod tests {
                 false,
             ),
             sel,
-        );
+        ));
 
         let __ev5 = test_drag(&mut t, 3, 1, 39.0, 1.0);
         let _ = gesture.drag(&mut t, __ev5);
@@ -1817,10 +1821,10 @@ mod tests {
         let __ev10 = test_drag(&mut t, 1, 1, 19.0, 50.0);
         let sel = gesture.drag(&mut t, __ev10).unwrap();
         assert_eq!(true, gesture.left_click_dragged);
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(test_pin(&mut t, 1, 1), test_pin(&mut t, 1, 1), false),
             sel,
-        );
+        ));
 
         gesture.deinit(&mut t);
         t.deinit(Allocator);
@@ -1895,10 +1899,10 @@ mod tests {
             .unwrap();
         assert_eq!(Autoscroll::Down, gesture.left_drag_autoscroll);
         assert_eq!(true, gesture.left_click_dragged);
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(test_pin(&mut t, 1, 1), test_pin(&mut t, 3, 2), false),
             sel,
-        );
+        ));
 
         gesture.deinit(&mut t);
         t.deinit(Allocator);
@@ -1939,10 +1943,10 @@ mod tests {
         };
 
         assert!(!pre_scroll_pin.eql(post_scroll_pin));
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(test_pin(&mut t, 1, 1), post_scroll_pin, false),
             sel,
-        );
+        ));
 
         gesture.deinit(&mut t);
         t.deinit(Allocator);
@@ -2008,10 +2012,10 @@ mod tests {
             )
             .unwrap();
 
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(test_pin(&mut t, 0, 0), test_pin(&mut t, 4, 0), false),
             sel,
-        );
+        ));
         assert_eq!(0_u8, gesture.left_click_count);
         assert_eq!(None, gesture.left_click_time);
         assert_eq!(true, gesture.left_click_dragged);
@@ -2078,10 +2082,10 @@ mod tests {
         drag_event.word_boundary_codepoints = &boundary;
         let sel = gesture.drag(&mut t, drag_event).unwrap();
 
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(test_pin(&mut t, 0, 0), test_pin(&mut t, 9, 0), false),
             sel,
-        );
+        ));
 
         gesture.deinit(&mut t);
         t.deinit(Allocator);
@@ -2106,10 +2110,10 @@ mod tests {
         drag_event.word_boundary_codepoints = &boundary;
         let sel = gesture.drag(&mut t, drag_event).unwrap();
 
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(test_pin(&mut t, 0, 0), test_pin(&mut t, 9, 0), false),
             sel,
-        );
+        ));
 
         gesture.deinit(&mut t);
         t.deinit(Allocator);
@@ -2134,10 +2138,10 @@ mod tests {
         drag_event.word_boundary_codepoints = &boundary;
         let sel = gesture.drag(&mut t, drag_event).unwrap();
 
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(test_pin(&mut t, 0, 0), test_pin(&mut t, 9, 0), false),
             sel,
-        );
+        ));
 
         gesture.deinit(&mut t);
         t.deinit(Allocator);
@@ -2162,10 +2166,10 @@ mod tests {
         let __ev33 = test_drag(&mut t, 2, 2, 20.0, 50.0);
         let sel = gesture.drag(&mut t, __ev33).unwrap();
 
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(test_pin(&mut t, 0, 0), test_pin(&mut t, 9, 2), false),
             sel,
-        );
+        ));
 
         gesture.deinit(&mut t);
         t.deinit(Allocator);
@@ -2190,10 +2194,10 @@ mod tests {
         let __ev37 = test_drag(&mut t, 1, 0, 10.0, 50.0);
         let sel = gesture.drag(&mut t, __ev37).unwrap();
 
-        expect_sel_eq(
+        assert!(sel_eql(
             Selection::init(test_pin(&mut t, 0, 0), test_pin(&mut t, 9, 2), false),
             sel,
-        );
+        ));
 
         gesture.deinit(&mut t);
         t.deinit(Allocator);

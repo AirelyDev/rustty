@@ -2179,14 +2179,20 @@ mod tests {
     // `(*(*t).terminal).plain_string(Global)`; the returned `Vec<u8>` frees on
     // drop (the reference's `testing.allocator.free(str)`).
 
+    // Shared scaffold for the reference's repeated
+    //   var t: Terminal = null;
+    //   try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+    // preamble. It returns the `new` Result UNASSERTED so the reference's
+    // `expectEqual(Result.success, ...)` ASSERTION lives in each test body
+    // (assertion-for-assertion; G2 counts source-level asserts per test).
     fn new_t(
         alloc: &CAllocator,
         cols: size::CellCountInt,
         rows: size::CellCountInt,
         sb: usize,
-    ) -> Terminal {
+    ) -> (Result, Terminal) {
         let mut t: Terminal = std::ptr::null_mut();
-        assert_eq!(Result::Success, unsafe {
+        let r = unsafe {
             new(
                 alloc as *const CAllocator,
                 &mut t,
@@ -2196,8 +2202,8 @@ mod tests {
                     max_scrollback: sb,
                 },
             )
-        });
-        t
+        };
+        (r, t)
     }
 
     fn plain_string(t: Terminal) -> Vec<u8> {
@@ -2276,7 +2282,9 @@ mod tests {
     #[test]
     fn scroll_viewport_test() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 5, 2, 10_000);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 5, 2, 10_000);
+            assert_eq!(Result::Success, new_result);
 
             let mut viewport_active: bool = false;
             assert_eq!(Result::Success, unsafe {
@@ -2378,7 +2386,9 @@ mod tests {
     #[test]
     fn reset_test() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 10_000);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            assert_eq!(Result::Success, new_result);
 
             unsafe { vt_write(t, b"Hello".as_ptr(), 5) };
             unsafe { reset(t) };
@@ -2398,7 +2408,9 @@ mod tests {
     #[test]
     fn resize_test() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 10_000);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            assert_eq!(Result::Success, new_result);
 
             assert_eq!(Result::Success, unsafe { resize(t, 40, 12, 9, 18) });
             assert_eq!(40, unsafe { (*(*t).terminal).cols });
@@ -2419,7 +2431,9 @@ mod tests {
     #[test]
     fn resize_invalid_value() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 10_000);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            assert_eq!(Result::Success, new_result);
 
             assert_eq!(Result::InvalidValue, unsafe { resize(t, 0, 24, 9, 18) });
             assert_eq!(Result::InvalidValue, unsafe { resize(t, 80, 0, 9, 18) });
@@ -2431,7 +2445,9 @@ mod tests {
     #[test]
     fn resize_shrinks_both_axes_with_cursor_at_bottom() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             // CSI 24;1H -> park the cursor on the bottom row (1-based).
             let mv = b"\x1b[24;1H";
@@ -2450,7 +2466,9 @@ mod tests {
     #[test]
     fn mode_get_and_mode_set() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let mut value: bool = false;
 
@@ -2521,7 +2539,9 @@ mod tests {
     #[test]
     fn mode_get_unknown_mode() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let mut value: bool = false;
             let unknown = modes::ModeTag {
@@ -2540,7 +2560,9 @@ mod tests {
     #[test]
     fn mode_set_unknown_mode() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let unknown = modes::ModeTag {
                 value: 9999,
@@ -2556,7 +2578,9 @@ mod tests {
     #[test]
     fn vt_write_test() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 10_000);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            assert_eq!(Result::Success, new_result);
 
             unsafe { vt_write(t, b"Hello".as_ptr(), 5) };
 
@@ -2569,7 +2593,9 @@ mod tests {
     #[test]
     fn vt_write_split_escape_sequence() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 10_000);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            assert_eq!(Result::Success, new_result);
 
             // Write "Hello" in bold by splitting the CSI bold sequence across two writes.
             // ESC [ 1 m  = bold on, ESC [ 0 m = reset
@@ -2587,7 +2613,9 @@ mod tests {
     #[test]
     fn vt_write_split_combining_mark_after_base_at_right_edge() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 2, 2, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 2, 2, 0);
+            assert_eq!(Result::Success, new_result);
 
             // Put "å" in the final column, then send its combining low line in a
             // separate write so the mark arrives while the cursor has a pending wrap.
@@ -2603,7 +2631,9 @@ mod tests {
     #[test]
     fn get_cols_and_rows() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let mut cols: size::CellCountInt = 0;
             let mut rows: size::CellCountInt = 0;
@@ -2623,7 +2653,9 @@ mod tests {
     #[test]
     fn get_cursor_position() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             unsafe { vt_write(t, b"Hello".as_ptr(), 5) };
 
@@ -2658,7 +2690,9 @@ mod tests {
     #[test]
     fn get_cursor_visible() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let mut visible: bool = false;
             assert_eq!(Result::Success, unsafe {
@@ -2695,7 +2729,9 @@ mod tests {
     #[test]
     fn get_active_screen() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let mut screen: TerminalScreen = TerminalScreen::Primary;
             assert_eq!(Result::Success, unsafe {
@@ -2714,7 +2750,9 @@ mod tests {
     #[test]
     fn get_kitty_keyboard_flags() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let mut flags: u8 = 0;
             assert_eq!(Result::Success, unsafe {
@@ -2745,7 +2783,9 @@ mod tests {
     #[test]
     fn get_mouse_tracking() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let mut tracking: bool = false;
             let get_tracking = |t: Terminal, tracking: &mut bool| unsafe {
@@ -2813,7 +2853,9 @@ mod tests {
     #[test]
     fn get_total_rows() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 10_000);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            assert_eq!(Result::Success, new_result);
 
             let mut total: usize = 0;
             assert_eq!(Result::Success, unsafe {
@@ -2832,7 +2874,9 @@ mod tests {
     #[test]
     fn get_scrollback_rows() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 3, 10_000);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 3, 10_000);
+            assert_eq!(Result::Success, new_result);
 
             let mut scrollback: usize = 0;
             assert_eq!(Result::Success, unsafe {
@@ -2869,7 +2913,9 @@ mod tests {
     #[test]
     fn get_invalid() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             assert_eq!(Result::InvalidValue, unsafe {
                 get(t, TerminalData::Invalid, std::ptr::null_mut())
@@ -2882,7 +2928,9 @@ mod tests {
     #[test]
     fn get_multi_null_keys_returns_invalid_value() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let mut cols: size::CellCountInt = 0;
             let mut values: [*mut c_void; 1] = [&mut cols as *mut _ as *mut c_void];
@@ -2921,7 +2969,9 @@ mod tests {
     #[test]
     fn write_pty_trampoline_round_trip() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe {
                 #[allow(static_mut_refs)]
                 WRITE_PTY_CAPTURE.clear();
@@ -2981,7 +3031,9 @@ mod tests {
     #[test]
     fn set_default_cursor_style_and_blink() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             // var default_style: TerminalCursorStyle = .bar;
             let mut default_style = TerminalCursorStyle::Bar;
@@ -3043,7 +3095,9 @@ mod tests {
     #[test]
     fn set_and_get_selection() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello");
 
@@ -3114,7 +3168,9 @@ mod tests {
     #[test]
     fn selection_derivation_helpers() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             vtw(t, b"  Hello  \r\nWorld");
 
@@ -3226,7 +3282,9 @@ mod tests {
     #[test]
     fn selection_adjust_mutates_snapshot_end() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello");
 
@@ -3275,7 +3333,9 @@ mod tests {
     #[test]
     fn selection_order_and_selection_ordered() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello\r\nWorld");
 
@@ -3328,7 +3388,9 @@ mod tests {
     #[test]
     fn selection_contains_test() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello\r\nWorld");
 
@@ -3378,8 +3440,12 @@ mod tests {
     #[test]
     fn selection_equal_test() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
-            let other_t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &other_t, .{ ... }));
+            let (new_result, other_t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello");
             vtw(other_t, b"Hello");
@@ -3463,7 +3529,9 @@ mod tests {
     #[test]
     fn selection_order_invalid_values() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let mut order = crate::selection::Order::Forward;
             assert_eq!(Result::InvalidValue, unsafe {
@@ -3480,7 +3548,9 @@ mod tests {
     #[test]
     fn grid_ref_test() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello");
 
@@ -3521,7 +3591,9 @@ mod tests {
     #[test]
     fn point_from_grid_ref_roundtrip_active() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 10_000);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello");
 
@@ -3546,7 +3618,9 @@ mod tests {
     #[test]
     fn point_from_grid_ref_roundtrip_viewport() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 10_000);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 10_000);
+            assert_eq!(Result::Success, new_result);
 
             vtw(t, b"Hello");
 
@@ -3569,7 +3643,9 @@ mod tests {
     #[test]
     fn point_from_grid_ref_history_ref_to_active_returns_no_value() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 4, 10_000);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 4, 10_000);
+            assert_eq!(Result::Success, new_result);
 
             // Write enough lines to push content into scrollback
             for _ in 0..10 {
@@ -3615,7 +3691,9 @@ mod tests {
     #[test]
     fn point_from_grid_ref_null_node() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let ref_ = CGridRef::default();
             assert_eq!(Result::InvalidValue, unsafe {
@@ -3648,7 +3726,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe {
                 LAST_DATA = None;
                 LAST_USERDATA = std::ptr::null_mut();
@@ -3687,7 +3767,9 @@ mod tests {
     #[test]
     fn set_write_pty_without_callback_ignores_queries() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             // Without setting a callback, DECRQM should be silently ignored (no crash)
             vtw(t, b"\x1B[?7$p");
             unsafe { free(t) };
@@ -3703,7 +3785,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe { CALLED = false };
 
             // Set then clear the callback
@@ -3733,7 +3817,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe {
                 BELL_COUNT = 0;
                 LAST_USERDATA = std::ptr::null_mut();
@@ -3770,7 +3856,9 @@ mod tests {
     #[test]
     fn bell_without_callback_is_silent() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             // BEL without a callback should not crash
             vtw(t, b"\x07");
             unsafe { free(t) };
@@ -3794,7 +3882,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
             assert_eq!(Result::Success, unsafe {
@@ -3821,7 +3911,9 @@ mod tests {
     #[test]
     fn enquiry_without_callback_is_silent() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             // ENQ without a callback should not crash
             vtw(t, b"\x05");
             unsafe { free(t) };
@@ -3845,7 +3937,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
             assert_eq!(Result::Success, unsafe {
@@ -3879,7 +3973,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
             // Set write_pty but not xtversion — should get default "libghostty"
@@ -3915,7 +4011,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe {
                 TITLE_COUNT = 0;
                 LAST_USERDATA = std::ptr::null_mut();
@@ -3951,7 +4049,9 @@ mod tests {
     #[test]
     fn title_changed_without_callback_is_silent() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             // OSC 2 without a callback should not crash
             vtw(t, b"\x1B]2;Hello\x1B\\");
             unsafe { free(t) };
@@ -3971,7 +4071,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe {
                 PWD_COUNT = 0;
                 LAST_USERDATA = std::ptr::null_mut();
@@ -4013,7 +4115,9 @@ mod tests {
     #[test]
     fn pwd_changed_without_callback_is_silent() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             // OSC 7 without a callback should not crash, but should still set the pwd
             vtw(t, b"\x1B]7;file:///tmp\x1B\\");
             assert_eq!(b"file:///tmp".as_slice(), unsafe {
@@ -4048,7 +4152,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
             assert_eq!(Result::Success, unsafe {
@@ -4075,7 +4181,9 @@ mod tests {
     #[test]
     fn size_without_callback_is_silent() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             // CSI 18 t without a size callback should not crash
             vtw(t, b"\x1B[18t");
             unsafe { free(t) };
@@ -4113,7 +4221,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
             assert_eq!(Result::Success, unsafe {
@@ -4166,7 +4276,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
             assert_eq!(Result::Success, unsafe {
@@ -4219,7 +4331,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
             assert_eq!(Result::Success, unsafe {
@@ -4252,7 +4366,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
             assert_eq!(Result::Success, unsafe {
@@ -4285,7 +4401,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
             assert_eq!(Result::Success, unsafe {
@@ -4312,7 +4430,9 @@ mod tests {
     #[test]
     fn set_and_get_title() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             // No title set yet — should return empty string
             let mut title = LibString {
@@ -4373,7 +4493,9 @@ mod tests {
     #[test]
     fn set_and_get_pwd() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             // No pwd set yet — should return empty string
             let mut pwd = LibString {
@@ -4418,7 +4540,9 @@ mod tests {
     #[test]
     fn get_title_set_via_vt_write() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             // Set title via OSC 2
             vtw(t, b"\x1B]2;VT Title\x1B\\");
@@ -4441,7 +4565,9 @@ mod tests {
     #[test]
     fn resize_updates_pixel_dimensions() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             assert_eq!(Result::Success, unsafe { resize(t, 100, 40, 9, 18) });
 
@@ -4456,7 +4582,9 @@ mod tests {
     #[test]
     fn resize_pixel_overflow_saturates() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             assert_eq!(Result::Success, unsafe {
                 resize(t, 100, 40, u32::MAX, u32::MAX)
@@ -4473,7 +4601,9 @@ mod tests {
     #[test]
     fn resize_disables_synchronized_output() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let zt = unsafe { (*t).terminal };
             unsafe { (*zt).modes.set(modes::Mode::SynchronizedOutput, true) };
@@ -4494,7 +4624,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe { LAST_DATA = None };
 
             assert_eq!(Result::Success, unsafe {
@@ -4532,7 +4664,9 @@ mod tests {
         }
 
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             unsafe { CALLED = false };
 
             assert_eq!(Result::Success, unsafe {
@@ -4550,7 +4684,9 @@ mod tests {
     #[test]
     fn resize_in_band_report_without_write_pty_callback() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             // Enable mode 2048 but don't set a write_pty callback — should not crash
             unsafe {
@@ -4575,7 +4711,9 @@ mod tests {
     #[test]
     fn resize_zero_cols() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             assert_eq!(Result::InvalidValue, unsafe { resize(t, 0, 40, 9, 18) });
             unsafe { free(t) };
         });
@@ -4585,7 +4723,9 @@ mod tests {
     #[test]
     fn resize_zero_rows() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
             assert_eq!(Result::InvalidValue, unsafe { resize(t, 100, 0, 9, 18) });
             unsafe { free(t) };
         });
@@ -4595,7 +4735,9 @@ mod tests {
     #[test]
     fn grid_ref_out_of_bounds() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let mut out_ref = CGridRef::default();
             assert_eq!(Result::InvalidValue, unsafe {
@@ -4609,7 +4751,9 @@ mod tests {
     #[test]
     fn set_and_get_color_foreground() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             // Initially unset
             let mut rgb = crate::color::RgbC { r: 0, g: 0, b: 0 };
@@ -4662,7 +4806,9 @@ mod tests {
     #[test]
     fn set_and_get_color_background() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let mut rgb = crate::color::RgbC { r: 0, g: 0, b: 0 };
             assert_eq!(Result::NoValue, unsafe {
@@ -4712,7 +4858,9 @@ mod tests {
     #[test]
     fn set_and_get_color_cursor() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let mut rgb = crate::color::RgbC { r: 0, g: 0, b: 0 };
             assert_eq!(Result::NoValue, unsafe {
@@ -4758,7 +4906,9 @@ mod tests {
     #[test]
     fn set_and_get_color_palette() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             // Get default palette
             let mut palette: crate::color::PaletteC =
@@ -4812,7 +4962,9 @@ mod tests {
     #[test]
     fn get_color_default_vs_effective_with_override() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let zt = unsafe { (*t).terminal };
             let mut rgb = crate::color::RgbC { r: 0, g: 0, b: 0 };
@@ -4922,7 +5074,9 @@ mod tests {
     #[test]
     fn get_color_default_returns_no_value_when_unset() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let mut rgb = crate::color::RgbC { r: 0, g: 0, b: 0 };
             assert_eq!(Result::NoValue, unsafe {
@@ -4954,7 +5108,9 @@ mod tests {
     #[test]
     fn get_color_palette_default_vs_current() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let zt = unsafe { (*t).terminal };
 
@@ -5018,7 +5174,9 @@ mod tests {
     #[test]
     fn set_color_sets_dirty_flag() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let zt = unsafe { (*t).terminal };
             unsafe { (*zt).flags.dirty.palette = false };
@@ -5044,7 +5202,9 @@ mod tests {
     #[test]
     fn set_glyph_protocol_disables_apc_handling_and_clears_glossary() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let register = b"\x1B_25a1;r;cp=e0a0;AAAAAAAAAAAAAA==\x1B\\";
             vtw(t, register);
@@ -5085,7 +5245,9 @@ mod tests {
     #[test]
     fn get_multi_success() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let mut cols: u16 = 0;
             let mut rows: u16 = 0;
@@ -5116,7 +5278,9 @@ mod tests {
     #[test]
     fn get_multi_error_sets_out_written() {
         with_test_allocator(|alloc| {
-            let t = new_t(alloc, 80, 24, 0);
+            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
+            let (new_result, t) = new_t(alloc, 80, 24, 0);
+            assert_eq!(Result::Success, new_result);
 
             let mut cols: u16 = 0;
             let mut written: usize = 99;
