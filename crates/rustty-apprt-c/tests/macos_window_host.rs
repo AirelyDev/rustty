@@ -18,21 +18,34 @@
 //! on libtest's parallel worker threads (unlike a real NSWindow, which would need
 //! the process main thread libtest does not provide).
 //!
-//! W4 DEVIATION (blocker discovered at KAT runtime, recorded here + in the report):
-//! the two tests that spawn a LIVE surface render thread
-//! (`hosts_view_layer_and_presents_live_frame`, `set_display_id_pushes_to_render_
-//! thread_panic_free`) are `#[ignore]` — NOT because of a main-thread constraint,
-//! but because on a host WITH a Metal device the render thread transitively hits
-//! `renderer::metal::metal_impl::Metal::loop_enter` (the M-4 IOSurfaceLayer
-//! display-callback install), which is STILL `unimplemented!("windowing-host")`.
-//! Per the governing plan that leaf is W1-3/W2 work (plan lines 534/564/600/1001),
-//! left deferred on this tree; its `unimplemented!()` fires on the render thread and
-//! ABORTS the process (a non-unwinding panic). The W4 design's "ready" disposition
-//! assumed W0–W3 fully live the on-screen present path; this leaf contradicts that.
-//! The two tests are therefore un-ignore-able only once that renderer seam lands
-//! (they otherwise abort the whole `cargo test` binary). The W4-2 blur sub-KAT does
-//! NOT spawn a surface/render thread, so it runs GREEN headless and proves the
-//! realized blur leaf (real `windowNumber` msg_send + the private CGS SPI) end-to-end.
+//! W4 DEVIATION — REVISED 2026-07-10 (VALIDATION_REPORT M4 re-run on a Metal host):
+//! the ORIGINAL deviation blamed `Metal::loop_enter` being `unimplemented!()`; that
+//! leaf LANDED in W5 (metal_impl.rs `loop_enter` is live), so the old reason is
+//! stale. The M4 re-run found the TRUE state:
+//! - `set_display_id_pushes_to_render_thread_panic_free` PASSES on a Metal host
+//!   (run 2026-07-10, this machine) — it is UN-IGNORED below.
+//! - `hosts_view_layer_and_presents_live_frame` FAILS at its FIRST assertion
+//!   ("host view is not layer-hosting", :329): `rustty_surface_new` never attaches
+//!   an IOSurfaceLayer to the host view because `generic::Renderer::init` builds
+//!   its `Metal` via the offscreen ctor (`Metal::init_offscreen`, generic.rs:1840,
+//!   the W1-7 apprt-free divergence) and the on-screen host-attach step —
+//!   `Metal::init(view)` wired at the renderer_seam (core renderer_seam.rs
+//!   `Renderer::init` currently DROPS `rt_surface`) — is the still-open
+//!   "live-windowing Renderer::init" seam. It stays `#[ignore]` with that HONEST
+//!   reason (an un-ignored always-failing KAT would poison the suite) and is a
+//!   TRIAGED FINDING, not a silent skip — full triage ledgered at
+//!   `.port/phase-2/DEFERRALS.md` "W-ATTACH"; the windowed host-attach chunk
+//!   (plan Task 23) must wire the attach and un-ignore it.
+//!   ALSO FOUND + HANDLED (2026-07-10, lldb): two
+//!   tests calling `rustty_app_new` on parallel libtest workers SIGABRT with zero
+//!   diagnostics inside HIToolbox (`Keymap::init` ->
+//!   `TISCopyCurrentKeyboardLayoutInputSource` -> abort; TIS is not thread-safe) —
+//!   app creation in this binary is serialized via `app_new_serialized` to restore
+//!   the mirrored one-main-thread host contract.
+//!
+//! The W4-2 blur sub-KAT does NOT spawn a surface/render thread, so it runs GREEN
+//! headless and proves the realized blur leaf (real `windowNumber` msg_send + the
+//! private CGS SPI) end-to-end.
 use std::ffi::{c_char, c_int, c_void};
 use std::time::{Duration, Instant};
 
@@ -68,6 +81,27 @@ fn ensure_init() {
         let rc = unsafe { rustty_init(0, core::ptr::null_mut()) };
         assert_eq!(rc, 0, "rustty_init");
     });
+}
+
+// M4 diagnosis (2026-07-10, lldb): two libtest worker threads calling
+// `rustty_app_new` CONCURRENTLY abort inside Apple's HIToolbox —
+// `App::init` -> `Keymap::init` -> `TISCopyCurrentKeyboardLayoutInputSource` ->
+// `islGetInputSourceListWithAdditions` -> `abort()` (TIS is not thread-safe).
+// The C host contract this KAT mirrors calls `ghostty_app_new` from the main
+// thread (one at a time); libtest's parallel workers violate that contract, so
+// app CREATION is serialized here — test-harness glue restoring the mirrored
+// calling convention, NOT a port change (the
+// `parallel-cargo-test-exposes-c-init-races` precedent).
+static APP_NEW_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// All `rustty_app_new` calls in this binary go through here.
+///
+/// # Safety
+/// Same contract as `rustty_app_new`: `opts`/`config` live for the call.
+unsafe fn app_new_serialized(opts: &Options, config: *mut rustty_config::Config) -> *mut App {
+    let _guard = APP_NEW_LOCK.lock().unwrap();
+    // SAFETY: forwarded caller contract (see doc above).
+    unsafe { rustty_app_new(opts, config) }
 }
 
 // --- MockHostView: the layer-host double handed across the C-ABI as `nsview` ---
@@ -202,7 +236,7 @@ impl HostedSurface {
         let view = make_host_view();
         let nsview_ptr: *mut c_void = Retained::as_ptr(&view) as *mut c_void;
         // SAFETY: `test_options`/config are live for the call; app_new clones the config.
-        let app = unsafe { rustty_app_new(&test_options(), make_config_transparent_blur()) };
+        let app = unsafe { app_new_serialized(&test_options(), make_config_transparent_blur()) };
         if app.is_null() {
             return None;
         }
@@ -310,14 +344,19 @@ impl Drop for HostedSurface {
 }
 
 #[test]
-#[ignore = "needs the W1/W2 renderer seam Metal::loop_enter (IOSurfaceLayer display \
-            callback) which is still unimplemented!() — the live render thread aborts"]
+#[ignore = "deferred: windowed host-attach unwired — core renderer_seam Renderer::init \
+            drops rt_surface and builds Metal via init_offscreen, so no IOSurfaceLayer \
+            is ever attached to the host view (FAILS at 'host view is not \
+            layer-hosting'); see DEFERRALS.md W-ATTACH — un-ignored by the \
+            windowed-attach chunk (plan Task 23)"]
 fn hosts_view_layer_and_presents_live_frame() {
     // NO MainThreadMarker guard — MockHostView is main-thread-agnostic. The ONLY
-    // reason this is #[ignore] is the deferred `Metal::loop_enter` (W1/W2 seam): the
-    // live render thread this spawns calls it and the `unimplemented!()` aborts the
-    // process. Un-ignore once that renderer leaf lands. The Metal probe is the skip
-    // guard for a no-Metal host.
+    // reason this is #[ignore] is the un-wired on-screen host-attach (see the
+    // REVISED W4 DEVIATION in the file header): `rustty_surface_new` builds the
+    // renderer offscreen and never sends `setLayer:` to the host view, so phase (1)
+    // below fails deterministically. Un-ignore once the live-windowing
+    // `Renderer::init` seam wires `Metal::init(view)` (DEFERRALS.md W-ATTACH, plan
+    // Task 23). The Metal probe is the skip guard for a no-Metal host.
     let host = match HostedSurface::spawn() {
         Some(h) => h,
         None => {
@@ -355,7 +394,7 @@ fn hosts_view_layer_and_presents_live_frame() {
 fn set_window_background_blur_is_panic_free_on_transparent_config() {
     ensure_init();
     // SAFETY: `test_options`/config live for the call; app_new clones the config.
-    let app = unsafe { rustty_app_new(&test_options(), make_config_transparent_blur()) };
+    let app = unsafe { app_new_serialized(&test_options(), make_config_transparent_blur()) };
     assert!(!app.is_null(), "app_new");
     let view = make_host_view();
     let wptr: *mut c_void = Retained::as_ptr(&view) as *mut c_void;
@@ -374,12 +413,11 @@ fn set_window_background_blur_is_panic_free_on_transparent_config() {
 
 // --- W4-3 focused sub-KAT ---
 #[test]
-#[ignore = "needs the W1/W2 renderer seam Metal::loop_enter (IOSurfaceLayer display \
-            callback) which is still unimplemented!() — the live render thread aborts"]
 fn set_display_id_pushes_to_render_thread_panic_free() {
-    // #[ignore] for the same reason as `hosts_view_layer_and_presents_live_frame`:
-    // `HostedSurface::spawn` starts a live render thread that hits the deferred
-    // `Metal::loop_enter` and aborts. Un-ignore once that renderer leaf lands.
+    // UN-IGNORED (M4, 2026-07-10): the old #[ignore] cited `Metal::loop_enter`
+    // being `unimplemented!()`; that leaf landed in W5 and this KAT passes on a
+    // Metal host (MIRI_EXCEPTIONS.md instructed the un-ignore). It spawns a LIVE
+    // surface render thread and proves the display-id mailbox push is panic-free.
     let Some(host) = HostedSurface::spawn() else {
         return; // no Metal => skip
     };
@@ -427,7 +465,7 @@ fn shows_visible_window_on_device() {
     let view = window.contentView().expect("contentView");
     let nsview_ptr: *mut c_void = Retained::as_ptr(&view) as *mut c_void;
     // SAFETY: `test_options`/config live for the call; app_new clones the config.
-    let app = unsafe { rustty_app_new(&test_options(), make_config_transparent_blur()) };
+    let app = unsafe { app_new_serialized(&test_options(), make_config_transparent_blur()) };
     assert!(!app.is_null(), "app_new");
     // SAFETY: default surface options built by the live C-ABI export.
     let mut opts: SurfaceOptions = unsafe { rustty_surface_config_new() };

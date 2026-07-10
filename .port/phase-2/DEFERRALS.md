@@ -3536,3 +3536,50 @@ and is tracked here PER-TEST so `check_test_counts`/G2 auditors can resolve it:
   artifact. **Target: the rustty wasm app-runtime** (the same milestone that
   un-defers the config/vt wasm exports); porting the Wasm block MUST port this
   test with all 4 asserts live.
+
+## W-ATTACH — windowed host-attach unwired in core `renderer_seam::Renderer::init` (M4 triage, 2026-07-10)
+
+**The suppressed-then-rerun M4 KAT** (`crates/rustty-apprt-c/tests/macos_window_host.rs`
+`hosts_view_layer_and_presents_live_frame`) FAILS deterministically on a Metal host.
+Failure verbatim (run 2026-07-10, this machine):
+
+```
+thread 'hosts_view_layer_and_presents_live_frame' panicked at
+crates/rustty-apprt-c/tests/macos_window_host.rs:365:5:
+host view is not layer-hosting
+```
+
+**Root cause (verified in-tree):** the on-screen host-attach step never runs —
+`rustty_surface_new` builds its renderer through core
+`crates/rustty-core/src/renderer_seam.rs` `Renderer::init`, which DROPS the
+host surface (`renderer_seam.rs:240`:
+`let _ = (surface_mailbox, rt_surface, thread); // held-in-core seam bits`) and
+forwards to `rustty_renderer::Renderer::init`, whose Metal is constructed by the
+offscreen-portable ctor (`crates/rustty-renderer/src/generic.rs:1840`
+`Metal::init_offscreen(...)`, the W1-7 apprt-free divergence). The on-screen
+attach ctor `Metal::init(view)` (`crates/rustty-renderer/src/metal/metal_impl.rs:379`,
+W1-2 — sends `setLayer:` / `setWantsLayer:` to the host view) exists but has NO
+caller on the surface-creation path: the renderer_seam wiring that was to supply
+it is the still-open "live-windowing `Renderer::init`" seam. NOT the old ignore
+reason (`Metal::loop_enter` `unimplemented!()` — that leaf landed in W5,
+`metal_impl.rs:493` is live; the stale reason is what VALIDATION_REPORT M4
+flagged).
+
+**Interim state (honest, R5):** the KAT stays `#[ignore]` with a TRUE reason
+string pointing here (an un-ignored always-failing KAT would poison the suite).
+Its sibling `set_display_id_pushes_to_render_thread_panic_free` PASSES on a
+Metal host (4/4 consecutive runs, 2026-07-10) and is UN-IGNORED — live. The TIS
+serialization fix (`app_new_serialized`: parallel `rustty_app_new` SIGABRTs in
+HIToolbox `TISCopyCurrentKeyboardLayoutInputSource`; test-harness glue restoring
+the one-main-thread host contract) stays regardless.
+
+**Resolution = the windowed host-attach porting chunk** (plan
+`docs/superpowers/plans/2026-07-10-port-realignment-and-validation-hardening.md`,
+Task 23 — "New findings (2026-07-10 execution)" addendum): wire the host view
+from `renderer_seam::Options<A>.rt_surface` into the Metal on-screen ctor
+(`Metal::init(view)`) at surface init, mirroring ghostty's reference attach:
+`src/renderer/Metal.zig:64` `init` reads
+`opts.rt_surface.platform.macos.nsview` and makes the view layer-hosting by
+setting `layer` then `wantsLayer` (Metal.zig:110-126).
+**Acceptance test IS un-ignoring this KAT**: both windowed-present KATs
+un-ignored and green on a Metal host.

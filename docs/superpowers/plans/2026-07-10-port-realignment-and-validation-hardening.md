@@ -406,3 +406,47 @@ Phase 5: T22 (any time after T15/T16)
 - Every VALIDATION_REPORT confirmed finding (B1,B2,H1–H7,M1–M8) maps to a task: B1→T5, B2→T1+T2, H1→T11, H2/H4→T2, H3→T1, H5→T4, H6→T3(+M7), H7→T6, M1–M3/M5→T14, M4→T13, M6→T10, M8→T4+T21. §3a→T4/T5/T7 + G8/G5 arming noted in T21's gate exercise (G8 candidate emitter = rustty-bench BASELINE-shaped JSON; G5 fuzz wiring — both are additions, park in T21 follow-ups if sweep #2 confirms priority). §3c→T12, §3d→T10/T13, §3e→T12.9/T13, §3f→(fontconfig-sys/gettext-sys/libpng duplicates are pre-Linux-milestone work; recorded in T22's tier checklist), §3g→T21.9.
 - Every BUN TL;DR adoption maps: #1→T16, #2→T18, #3→T17, #4→T20, #5→T19, #6→T5/T21 (.diag files: adopt inside T5's comparator loop — write per-case diag output on diff), #7/#8→T15 (R7/R8 tables), #9→wf-script template updates in T22, #10→T15 + the same-day-rule now lives in PORT_RULES.
 - LIFETIMES.tsv locked decision (memory adopt-lifetimes-tsv): T16 retroactive + T22 prospective. ✔
+
+---
+
+## New findings (2026-07-10 execution)
+
+### Task 23: Wire windowed host-attach in core renderer_seam (M4 root cause; DEFERRALS W-ATTACH)
+
+**Finding (T13/M4 re-run on a Metal host):** the M4 KAT
+`hosts_view_layer_and_presents_live_frame` fails deterministically at
+`"host view is not layer-hosting"` (macos_window_host.rs, first assertion) —
+NOT the old (false) `Metal::loop_enter` ignore reason (that leaf landed in W5).
+The TRUE gap: core `renderer_seam::Renderer::init`
+(`crates/rustty-core/src/renderer_seam.rs:240`) drops `rt_surface`
+(`let _ = (surface_mailbox, rt_surface, thread);`) and the generic renderer
+builds its Metal via the offscreen ctor
+(`crates/rustty-renderer/src/generic.rs:1840` `Metal::init_offscreen`, the W1-7
+apprt-free divergence), so the on-screen attach ctor `Metal::init(view)`
+(`crates/rustty-renderer/src/metal/metal_impl.rs:379`) has no caller on the
+surface-creation path and no IOSurfaceLayer is ever attached to the host view.
+Full triage: `.port/phase-2/DEFERRALS.md` "W-ATTACH". Interim (honest, R5): the
+KAT is `#[ignore]` with the TRUE reason pointing at W-ATTACH; its sibling
+`set_display_id_pushes_to_render_thread_panic_free` passes on a Metal host and
+is live (un-ignored); the TIS `app_new_serialized` fix (parallel
+`rustty_app_new` SIGABRT in HIToolbox TIS init) is kept.
+
+**Files:** Modify: `crates/rustty-core/src/renderer_seam.rs` (route the host
+view from `Options<A>.rt_surface` into renderer construction instead of
+dropping it), `crates/rustty-renderer/src/generic.rs` (accept the optional
+on-screen target and construct via `Metal::init(view)` when present —
+preserving the R4 no-apprt-type rule via the same seam discipline as the
+RendererConfig accessor trait), `crates/rustty-renderer/src/metal/metal_impl.rs`
+(as needed for the view handoff), `crates/rustty-apprt-c/tests/macos_window_host.rs`
+(un-ignore). Reference: ghostty `src/renderer/Metal.zig:64` `init` reads
+`opts.rt_surface.platform.macos.nsview` and makes the view layer-hosting
+(`layer` then `wantsLayer`, Metal.zig:110-126); generic.zig:662
+`GraphicsAPI.init(alloc, options)` is the on-screen construction site.
+
+- [ ] **Step 1:** Port the attach wiring (R1 line-level against Metal.zig
+  init); keep `init_offscreen` for the headless/golden lanes.
+- [ ] **Step 2 (acceptance):** remove the `#[ignore]` from
+  `hosts_view_layer_and_presents_live_frame` — acceptance IS both
+  windowed-present KATs un-ignored and green on a Metal host
+  (`cargo test -p rustty-apprt-c --test macos_window_host`), plus
+  `cargo test --workspace` green. Close DEFERRALS W-ATTACH in the same commit.
