@@ -90,15 +90,22 @@ PY="${PYTHON:-python3}"
 # G1b runner: check_test_counts.py greps the read-only ghostty oracle checkout
 # directly (R3: the oracle is an EXTERNAL reference, never shipped to CI). With
 # the checkout absent, every zig ref glob would expand to nothing -> zig=0 for
-# every module -> a VACUOUS green. So the gate is probe-gated here: oracle
-# absent -> exit 3 BLOCKED (surfaced as a WARNING by run_gate, never a silent
-# green); oracle present -> the per-module count gate runs BINDING (any module
-# with rust #[test] < zig test{} minus documented apc-deferred is RED and fails
-# CI — no done-status grace; it binds per-module today). RUSTTY_ORACLE exists
-# so the BLOCKED branch is testable; pointing it anywhere invalid only yields
-# BLOCKED/WARNING, never a green (R5-safe).
+# every module -> a VACUOUS green. Two defenses, NEITHER env-overridable (an
+# override that could redirect the probe away from the path the script actually
+# greps was a spoof hole — probe passes on a fake dir while the script counts
+# zig=0 everywhere -> vacuous green; killed, R5):
+#   1. this probe checks the SAME hard-coded root the script greps (one source
+#      of truth) — absent -> exit 3 BLOCKED (surfaced as a WARNING by
+#      run_gate, never a silent green);
+#   2. check_test_counts.py itself exits 3 BLOCKED if any explicitly listed
+#      zig reference file is missing (absent/partial oracle or zig-cache dep
+#      checkout), so even a bypassed probe can never yield a vacuous green.
+# Oracle present -> the per-module count gate runs BINDING (any module with
+# rust #[test] < zig test{} minus documented apc-deferred is RED and fails
+# CI — no done-status grace; it binds per-module today).
 run_test_counts() {
-  local oracle="${RUSTTY_ORACLE:-/Users/gael/projects/ghostty}"
+  # Must stay identical to the root check_test_counts.py hard-codes (defense 1).
+  local oracle="/Users/gael/projects/ghostty"
   if [ ! -d "$oracle/src" ]; then
     echo "BLOCKED: ghostty oracle checkout not found at $oracle (R3 — the"
     echo "         external oracle never ships to CI); the per-module"

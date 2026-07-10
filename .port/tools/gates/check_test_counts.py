@@ -13,6 +13,11 @@ benches, zeroed-buffer, etc.). rust < zig is RED.
 Usage: check_test_counts.py            # audit all mapped rustty-vt modules
        check_test_counts.py <module>   # one module
 Exit 1 if any mapped module has rust < zig (minus documented apc-deferred).
+Exit 3 (BLOCKED) if any explicitly listed zig reference file is missing — the
+zig side greps EXTERNAL read-only checkouts (the ghostty oracle + the pinned
+zig-cache dep packages, R3), and a missing ref would silently count zig=0 and
+turn the gate VACUOUSLY green. Never green on that: surface it (ci.sh renders
+exit 3 as a WARNING, never a pass).
 """
 import re, sys, glob, os
 
@@ -842,6 +847,26 @@ def rust_count(files):
 
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else None
+    # R3 guard against VACUOUS greens: every explicitly listed (non-wildcard)
+    # zig reference file must exist. The zig side lives in external read-only
+    # checkouts (the ghostty oracle + pinned zig-cache dep packages); if one is
+    # absent/partial, its refs would silently glob/count to zig=0 and every
+    # affected module would pass "rust >= 0" without checking anything. That
+    # must never read as green — it is BLOCKED (exit 3; ci.sh surfaces it as a
+    # WARNING, never a pass). This binds INSIDE the gate so no wrapper/probe
+    # mismatch (e.g. an env override the probe honors but this script ignores)
+    # can convert an absent oracle into a green.
+    missing = []
+    for mod, (zg, _rg, _apc) in MAP.items():
+        if only and mod != only:
+            continue
+        missing += [f"  {mod}: {g}" for g in zg if "*" not in g and not os.path.exists(g)]
+    if missing:
+        print("TEST-COUNT GATE: BLOCKED — missing zig reference file(s); the external")
+        print("oracle/dep checkouts are absent or incomplete (R3), so the per-module")
+        print("counts cannot bind (a missing ref would vacuously count zig=0):")
+        print("\n".join(missing))
+        sys.exit(3)
     bad = 0
     print("module            zig  rust  status")
     for mod, (zg, rg, apc) in MAP.items():
