@@ -178,7 +178,7 @@ Fully complete: **terminal-vt**, **config-input**, **os-platform**. Mostly done 
 ### 8. unused-subset (synthetic / bench / extra generators / subset seams)  ·  effort **M** · risk **low**
 
 - **Blocker-class:** unused-by-ghostty
-- **Goal:** Resolve the feasible-headless-but-open and unused-by-ghostty units, most currently UNTRACKED in DEFERRALS.md: the synthetic differential-fuzzing generators (1157 LOC scaffold), the benchmark harness (1441 LOC scaffold), the src/extra shell-completion + editor-syntax generators (941 LOC, no counterpart), the vt-c get/set FFI accessors (todo! stubs), and a decision on the unreachable z2d (AA-fill/dashed-stroke) + wuffs (swizzle) subset seams and stb_image_resize.
+- **Goal:** Resolve the feasible-headless-but-open and unused-by-ghostty units, most currently UNTRACKED in DEFERRALS.md: the synthetic differential-fuzzing generators (1157 LOC scaffold), the benchmark harness (1441 LOC scaffold), the src/extra shell-completion + editor-syntax generators (941 LOC, no counterpart), ~~the vt-c get/set FFI accessors (todo! stubs)~~ [CORRECTION 2026-07-10, VALIDATION_REPORT M3: STALE — all 34 vt-c modules landed, 308 tests, zero live todo!()], and a decision on the unreachable z2d (AA-fill/dashed-stroke) + wuffs (swizzle) subset seams and stb_image_resize [both now ledgered in DEFERRALS.md, 2026-07-10].
 - **Depends on:** nothing (can start now)
 - **Reuse strategy:** Mostly Zig-port; headless-feasible with no external blocker. src/extra generators depend on the CLI Action/Config reflection surface (already ported). The z2d/wuffs subset seams are input-variant guards the sole consumer never constructs — candidate to leave as documented unreachable unimplemented!() unless the GTK-OpenGL path later needs them. Benchmark harness feeds phase-0 BASELINE.json regression.
 - **First milestone:** Port the synthetic generators (Bytes/Utf8/Osc/Ascii + cli) to feed the differential fuzz harness and add its DEFERRALS entry — clearing the largest untracked gap.
@@ -186,7 +186,7 @@ Fully complete: **terminal-vt**, **config-input**, **os-platform**. Mostly done 
   - `crates/rustty-synthetic (9-file generators, 9 test blocks)`
   - `crates/rustty-bench (12-file harness, benchmark_cli C-ABI)`
   - `src/extra/{bash,fish,zsh,vim,sublime}.zig (+gen-* CLI actions)`
-  - `crates/rustty-vt-c/src/terminal.rs (todo! get/set accessors)`
+  - ~~`crates/rustty-vt-c/src/terminal.rs (todo! get/set accessors)`~~ [CORRECTION 2026-07-10: STALE — landed; zero live todo!() in rustty-vt-c (VALIDATION_REPORT M3)]
   - `z2d painter/stroke subset + wuffs swizzle.rs (unreached seams) + stb_image_resize verification`
 
 ### 9. misc-feasible-headless + ledger hygiene  ·  effort **S** · risk **low**

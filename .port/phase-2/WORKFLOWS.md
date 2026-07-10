@@ -52,6 +52,14 @@ artifacts* are the `*_BLUEPRINT.md` / `*_DESIGN.md` docs beside them).
 - **Renderer + GPU R-d (5):** `wf-renderer-ra`, `wf-gpu-rd-design`,
   `wf-gpu-rd-chunk2-metal`, `wf-gpu-rd-p1-image-overlay`,
   `wf-gpu-rd-chunk3a-renderer-skeleton`.
+- **Validation sweep #1 realignment (2):** `wf-realign-phase12` (plan Tasks
+  1–13: gate re-arming G1–G9, H1 mirihar fix, soundness + semantics mediums,
+  the ae40aa2 payoff) and `wf-realign-phase2b` (the finishing pass: Task 14
+  ledger/status sweep — DEFERRALS.md reconciled to zero phantom open seams,
+  every live `unimplemented!()`/`todo!()` in crates/ mapped to a live ledger
+  entry, GAP_ANALYSIS superseded-by stamp, vt12 worklist RESOLVED). Plan:
+  `docs/superpowers/plans/2026-07-10-port-realignment-and-validation-hardening.md`;
+  evidence: `.port/phase-2/VALIDATION_REPORT.md`.
 
 > Note: the collection spans several work sessions and predates this manifest, so
 > the early hand-curated `wf-vt*` names and the later `wf-<meta.name>` names
