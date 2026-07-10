@@ -711,3 +711,58 @@ under SB+TB; the tty's `unsafe` is exclusively `libc` FFI calls (ASan/native). A
 edit that routes a concurrent `Loop` field access through a whole `&mut Loop` re-opens the
 hazard — re-run `mirihar-chunk3b` (`loopthread_shipped` must stay green under both SB and
 TB, `loopthread_naive` UB, BEFORE the change ships).
+
+---
+
+## Live-syscall test binaries (G6 lane routing — Miri → ASan)
+
+`check_leaks.sh` (G6) runs claimed-done pure-Rust crates under Miri. A crate may
+carry an integration-test binary whose entire PURPOSE is to drive a **real**
+kernel object (kqueue, mach ports) — Miri does not merely time out on such a
+test, it **cannot execute it at all** (hard error: "unsupported operation:
+can't call foreign function `kqueue` on OS `macos`"). For these binaries the
+G6 Miri lane runs the crate's unit surface (`cargo +nightly miri test -p <crate>
+--lib`) and the listed binary is ROUTED to the ASan lane (`-Zsanitizer=address`
++ native host target). Nothing is skipped (R5): the binary still runs under
+plain `cargo test` AND under ASan on every G6 run — only the tool changes,
+per R6 (right tool per job). The routing table is `live_ffi_tests()` in
+`.port/tools/gates/check_leaks.sh`; every row there requires a 4-criterion
+entry here.
+
+### `rustty-os` — `--test cf_release_live` (`cf_release_thread_releases_on_real_xev_loop`)
+
+The W0 live-loop KAT: the CFReleaseThread runs its REAL rustty-xev kqueue loop;
+a `Release` message drains and CFReleases a CFString across a genuine
+mach-port wakeup (`crates/rustty-os/tests/cf_release_live.rs`).
+
+1. **Empirically intractable — stronger: structurally impossible.** Miri
+   hard-errors, it does not run slow: "error: unsupported operation: can't
+   call foreign function `kqueue` on OS `macos`" at
+   `crates/rustty-xev/src/kqueue.rs:325` via `rustty_os::cf_release_thread::
+   Thread::init` (live G6 RED evidence: ci-run-2026-07-10.log:2160). No Miri
+   budget can ever admit this test.
+2. **Passes natively** — `cargo test -p rustty-os --test cf_release_live`:
+   `test result: ok. 1 passed; 0 failed` (2026-07-10, this change).
+3. **No uncovered unsafe path.** The test's unsafe surface is the FFI boundary
+   itself — kqueue/mach-port syscalls (rustty-xev) and `CFRelease`
+   (CoreFoundation) — for which ASan IS the designated R6 tool (Miri cannot
+   execute foreign code, so ASan coverage here is not a downgrade but the only
+   sound verifier). The pure-Rust interior the test exercises is Miri-verified
+   elsewhere: the mailbox is `rustty_datastruct::blocking_queue::BlockingQueue`
+   (Miri lane of the done crate `rustty-datastruct`), and the rest of
+   `rustty-os`'s unit surface stays in the Miri lane via `--lib` (40 passed,
+   0 failed; the 18 ignores are the crate's pre-existing
+   `#[cfg_attr(miri, ignore)]` real-OS-state unit tests, each individually
+   annotated at source). The routed binary itself is ASan-clean:
+   `test result: ok. 1 passed; 0 failed` under `-Zsanitizer=address`
+   (2026-07-10).
+4. **The blocker is the foreign syscall, not logic.** The test exists precisely
+   to prove the REAL kqueue/mach-port loop drains the mailbox (its header says
+   so: "Real mach-port/kqueue syscalls -> Miri-excluded"). A Miri-compatible
+   variant would have to fake the loop and would therefore verify nothing this
+   test was written to verify — the logic-level equivalents already live in the
+   Miri-covered unit surface.
+
+**Standing rule:** adding a binary to `live_ffi_tests()` without a matching
+section here is a gate violation — `check_leaks.sh`'s comment points at this
+file, and review must reject unmatched additions.

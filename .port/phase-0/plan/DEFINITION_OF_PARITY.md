@@ -57,10 +57,15 @@ Each gate below applies to the whole workspace. `$RUSTTY` = `/Users/gael/project
 `$REF` = `/Users/gael/projects/ghostty` (oracle only; never built as a Cargo dep, R3).
 Gate scripts live under `.port/tools/gates/` (Phase-1 creates them from the specs here).
 
-### G1 — 100% test blocks ported (count == contract) [R1]
+### G1 — 100% test blocks ported (count >= contract, MISSING == ∅ — DG3(a)) [R1]
 
 Every reference `test{}` block has a corresponding Rust test; the count must
-**equal** (not merely meet) the contract, and named tests must match name-for-name.
+**meet** the contract and named tests must match name-for-name — no reference
+test may be MISSING. *(DG3(a), resolved 2026-07-10: the original "must equal
+exactly" wording is unsatisfiable because sanctioned rustty-only infra tests
+exist workspace-wide; the binding form is `ported >= contract` AND an empty
+MISSING name-set, with EXTRA names reported but never fatal. The contract
+floors themselves are frozen and never lowered — R5.)*
 
 - **Check:**
   `python3 .port/tools/gates/check_tests_ported.py --inventory .port/phase-0/inventory/inventory.json --rust-root $RUSTTY/crates`
@@ -68,9 +73,10 @@ Every reference `test{}` block has a corresponding Rust test; the count must
   locate the ported Rust test module(s) for that file via `PORT_PLAN.md`'s file→crate
   map; collect `#[test]` fns (and the anonymous-block equivalents, named by a fixed
   convention e.g. `test_anon_<n>`); diff the sets.
-- **Pass condition:** ported test count **== 3234** globally AND per-file
-  `ported == contract` for every file AND the per-file name-set delta is empty.
-  Exit 0 on equality; non-zero + a `MISSING:`/`EXTRA:` list otherwise.
+- **Pass condition (DG3(a)):** ported test count **>= 3234** globally AND
+  per-crate `ported >= contract` AND the MISSING name-set is empty for every
+  crate (EXTRA is listed for review, not fatal). Exit 0 when all three hold;
+  non-zero + a `MISSING:`/`EXTRA:` list otherwise.
 - **Cross-checks (independent of the script):** `cargo test --workspace -- --list | grep -c ': test$'` must be ≥ 3234 (Rust may add glue tests, never fewer ported);
   `cargo test --workspace` exit 0 (the PASS/FAIL oracle).
 - **Contract:** 3234 total (3113 string-named + 45 identifier-named + 76
@@ -137,22 +143,35 @@ identity rename (R2). This is what `build-config` needed to surface the dropped
 
 ### G4 — Differential VT clean (primary behavioral gate)
 
-Identical input fed to the reference oracle (built with the `identity-ghostty`
-feature OR replayed from frozen golden corpora) and to rustty produces
+Identical input fed to the reference oracle (a live `vt_driver_ref` built on
+libghostty-vt OR replayed from frozen golden corpora) and to rustty produces
 byte-identical canonical VT output (Screen/PageList dump, OSC/DCS responses,
 formatter output, key/mouse/focus encodings).
 
 - **Check:**
-  `python3 .port/phase-0/harness/diff_vt.py --corpus .port/phase-0/corpora/cvt --rust-bin $RUSTTY/target/release/rustty-c-vt-runner --ref-golden .port/phase-0/corpora/cvt/golden`
-  Drives each corpus input through both sides and diffs canonical output. Where a
-  live oracle is needed it builds the **rustty** side with `--features identity-ghostty`
-  so identity bytes (XTVERSION, DA1/DA2, TERM) match the reference with **no
-  canonicalization hacks** (R2). The reference side is the pre-built `c-vt-*`
-  binaries (`.port/phase-0/examples-out/*/zig-out/bin/*`) or frozen goldens.
-- **Pass condition:** zero diffs across the entire corpus; exit 0. Any single
-  byte diff (outside the documented identity-token positions, which the harness
-  neutralizes by building rustty in `identity-ghostty` mode) is a blocker. Each
-  diff is reported as `DIFF <case>: ref=<hex> rust=<hex> @offset`.
+  `bash .port/tools/gates/run_differential.sh`
+  Arms itself the moment the port driver exists —
+  `harness/bin/vt_driver_port` (or `$RUSTTY_VT_DRIVER`), built by
+  `.port/phase-0/harness/build_port_driver.sh`: the SAME `vt_driver.c` and
+  unchanged ghostty headers linked against `librustty_vt_c.a` through a
+  generated `rustty_*`→`ghostty_*` ld64 alias list (no C-source fork; built
+  `--features rustty-vt/simd` to mirror the reference build config). Two legs:
+  **leg A** drives every `harness/fixtures/*.vt` through
+  `comparator.py <input> --ref bin/vt_driver_ref --port bin/vt_driver_port`
+  and byte-diffs the canonical output; **leg B** runs all 21 port-built
+  `c-vt-*` example binaries (`harness/bin/cvt/<case>`) and byte-diffs combined
+  stdout+stderr against the frozen goldens (`corpora/cvt/*.golden`) plus
+  exit-code match — a missing port binary is RED `unbuilt`, never a skip.
+  Identity bytes (XTVERSION, DA1/DA2, TERM, version strings) must match with
+  **no canonicalization hacks** (R2): an identity-token divergence is a real
+  finding, not something the harness neutralizes.
+- **Pass condition:** zero diffs across both legs; exit 0. Any single byte
+  diff is a blocker: RED (exit 1) with a per-case line, and each failing case
+  writes `harness/results/diag/<case>.diag` (failure class
+  crash/hang/diverge/unbuilt, exit codes, first diverging byte offset + hex
+  context). While the port driver is absent the gate runs progress mode only
+  (`gate_empty_divergence.sh` against an empty stub ⇒ `HARNESS-WIRED`, never a
+  fabricated parity green).
 - **Corpus floor:** the 21 `c-vt-*` consumer programs enumerated in
   `build-summary.md` plus vttest/esctest conformance fixtures staged under
   `corpora/cvt/`.
@@ -415,11 +434,11 @@ the rename actually took effect), so R2 is itself gated.
 
 | Gate | Reads | Command (canonical) | GREEN when |
 |---|---|---|---|
-| G1 tests ported | inventory.json | `check_tests_ported.py` + `cargo test --workspace` | count==3234, per-file ==contract, names match, exit 0 |
+| G1 tests ported | inventory.json | `check_tests_ported.py` + `cargo test --workspace` | count>=3234, per-crate >=contract, MISSING==∅ (DG3(a)), exit 0 |
 | G2 assertions | inventory.json | `check_assertions.py` | per-test rust>=ref, none weakened |
 | G3 comments | inventory.json + identity map | `fidelity_critic.py` | per-file delta==0 |
 | G3b comment coverage | ref `.zig` comments + identity map | `check_comment_coverage.py` | 0 MISSING (every distinctive ref comment matched) |
-| G4 differential VT | corpora/cvt + harness | `diff_vt.py` (rustty `--features identity-ghostty`) | zero diffs |
+| G4 differential VT | corpora/cvt + harness | `run_differential.sh` (armed via `harness/bin/vt_driver_port`) | zero byte diffs, both legs |
 | G5 differential fuzz | fuzz corpus | `cargo fuzz run vt_diff` | zero new artifacts |
 | G6 memory-safe | — | `check_leaks.sh --all-done` (Miri pure-Rust / ASan FFI) | zero leaks/UB |
 | G7 acyclic | tools/cycle_check.py | `cycle_check.py` (SCC line) + `cargo build` | runtime SCCs==0; Cargo resolves |

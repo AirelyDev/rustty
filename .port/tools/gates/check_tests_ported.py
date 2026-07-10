@@ -23,8 +23,14 @@ MODES:
       (ported < contract) or has a non-empty MISSING name-set. A claimed-done
       crate is one whose lib.rs no longer says `PORT STATUS: stub`.
   --strict:
-    - The full G1 gate: RED unless global count == 3234 AND every crate's ported
-      count == its contract. Used for the final/locked workspace.
+    - The full G1 gate (DG3(a), 2026-07-10): RED unless global ported >= the
+      contract AND every crate's ported >= its contract AND every crate's
+      MISSING name-set is empty. EXTRA names are reported, never fatal:
+      sanctioned rustty-only infra tests make exact `ported == contract`
+      unsatisfiable, and the binding fidelity signal is "no reference test is
+      missing" (MISSING == empty), not "no extra tests exist". The contract
+      floors themselves are never lowered (R5). Used for the final/locked
+      workspace.
 
   --crate <name>:  scope the check to one crate (per-crate P-T gate).
   --self-test:     run the built-in self-test (synthetic crate, flip proof).
@@ -106,7 +112,10 @@ def run(args):
 
         missing = []
         extra = []
-        if claimed_done and ref_names.get(crate):
+        # The name-set diff binds for claimed-done crates (progress mode) and
+        # for EVERY crate under --strict (DG3(a): strict requires MISSING == ∅
+        # workspace-wide, done-claim or not).
+        if (claimed_done or args.strict) and ref_names.get(crate):
             ref_set = set()
             for fset in ref_names[crate].values():
                 ref_set |= fset
@@ -133,12 +142,11 @@ def run(args):
                 crate_red = True
             if missing:
                 crate_red = True
-        if args.strict and not args.crate:
-            # strict global: every crate must equal contract exactly.
-            if ported != contract:
-                crate_red = True
-        if args.strict and args.crate:
-            if ported != contract:
+        if args.strict:
+            # DG3(a) strict per-crate: ported >= contract AND MISSING == ∅.
+            # (Exact equality was unsatisfiable: sanctioned rustty-only infra
+            # tests exist workspace-wide. EXTRA is reported above, not fatal.)
+            if ported < contract or missing:
                 crate_red = True
 
         if crate_red:
@@ -180,14 +188,17 @@ def run(args):
                 G.emit(G.RED, f"contract drift: workspace {total_contract} + non-DAG "
                               f"{non_ws} != global floor {CONTRACT_TOTAL}")
                 return 1
-            if total_ported != total_contract:
-                G.emit(G.RED, f"global ported {total_ported} != workspace contract "
+            # DG3(a): >= the workspace contract (sanctioned extra tests allowed;
+            # a shortfall or any MISSING name below is still RED).
+            if total_ported < total_contract:
+                G.emit(G.RED, f"global ported {total_ported} < workspace contract "
                               f"{total_contract} (global floor {CONTRACT_TOTAL})")
                 return 1
         if red:
-            G.emit(G.RED, "per-crate count != contract (strict)")
+            G.emit(G.RED, "per-crate ported < contract or MISSING names (strict, DG3(a))")
             return 1
-        G.emit(G.GREEN, f"count == contract ({total_ported}); name-sets match")
+        G.emit(G.GREEN, f"ported >= contract ({total_ported}/{total_contract}); "
+                        f"no MISSING names (DG3(a))")
         return 0
 
     # progress mode
@@ -282,6 +293,21 @@ def self_test():
     print(f"[d] stub 1/2 progress -> exit {r.returncode} (expect 0)")
     ok &= (r.returncode == 0)
 
+    # (e) DG3(a): done crate, 3 tests vs contract 2 => --strict GREEN
+    # (ported >= contract with sanctioned extra tests; old `==` semantics
+    # would have falsely RED'd this).
+    write_lib("done", 3)
+    r = invoke("--crate", "demo", "--strict")
+    print(f"[e] done 3/2 --crate demo --strict -> exit {r.returncode} (expect 0)")
+    ok &= (r.returncode == 0)
+
+    # (f) DG3(a) flip proof: done crate, 1 of 2 tests => --strict RED
+    # (ported < contract is still fatal; >= did not weaken the shortfall arm).
+    write_lib("done", 1)
+    r = invoke("--crate", "demo", "--strict")
+    print(f"[f] done 1/2 --crate demo --strict -> exit {r.returncode} (expect non-zero)")
+    ok &= (r.returncode != 0)
+
     shutil.rmtree(tmp, ignore_errors=True)
     print("SELF-TEST:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
@@ -294,7 +320,8 @@ def main():
     ap.add_argument("--rust-root", help="(ignored; uses canonical crates/ path)")
     ap.add_argument("--crate", help="scope to a single crate (P-T)")
     ap.add_argument("--strict", action="store_true",
-                    help="full G1: count must EQUAL contract")
+                    help="full G1 (DG3(a)): ported >= contract AND empty "
+                         "MISSING name-set; EXTRA reported, not fatal")
     ap.add_argument("--no-names", action="store_true",
                     help="skip name-set diff (count only)")
     ap.add_argument("--self-test", action="store_true",

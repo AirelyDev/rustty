@@ -177,7 +177,33 @@ def crate_src_dir(crate):
 # ---------------------------------------------------------------------------
 # Done-status detection
 # ---------------------------------------------------------------------------
-PORT_STATUS_RE = re.compile(r"PORT\s*STATUS\s*:\s*([A-Za-z0-9_-]+)", re.IGNORECASE)
+# The status is the run of word-tokens after the colon, separated by SINGLE
+# spaces, stopping at any other punctuation ('done (chunk 1a' -> 'done';
+# 'in progress' -> 'in progress', not the truncated 'in').
+PORT_STATUS_RE = re.compile(
+    r"PORT\s*STATUS\s*:\s*([A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*)", re.IGNORECASE)
+
+
+def dir_status(crate_dir):
+    """Declared PORT STATUS for an explicit crate DIRECTORY (works for both
+    crates/ and crates-sys/ trees — check_leaks.sh's enumerator shims through
+    this so G6 shares one done-detection with G1/G2/G3b).
+
+    Reads the crate's src/lib.rs (or src/main.rs for a bin crate) in FULL —
+    a marker past a former 8KB read cap no longer yields 'unknown'; the FIRST
+    marker in file order (the header) wins. Returns 'unknown' if absent."""
+    for root_name in ("lib.rs", "main.rs"):
+        p = os.path.join(crate_dir, "src", root_name)
+        if os.path.exists(p):
+            try:
+                with open(p, encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except Exception:  # noqa: BLE001
+                continue
+            m = PORT_STATUS_RE.search(text)
+            if m:
+                return m.group(1).lower()
+    return "unknown"
 
 
 def crate_status(crate):
@@ -188,18 +214,7 @@ def crate_status(crate):
     src = crate_src_dir(crate)
     if src is None:
         return "absent"
-    for root_name in ("lib.rs", "main.rs"):
-        p = os.path.join(src, root_name)
-        if os.path.exists(p):
-            try:
-                with open(p, encoding="utf-8", errors="replace") as fh:
-                    head = fh.read(8192)
-            except Exception:  # noqa: BLE001
-                continue
-            m = PORT_STATUS_RE.search(head)
-            if m:
-                return m.group(1).lower()
-    return "unknown"
+    return dir_status(os.path.dirname(src))
 
 
 # A crate is "claimed-done" when it declares a status that is NOT 'stub'/'unknown'/

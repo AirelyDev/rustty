@@ -138,11 +138,12 @@ def run(args):
     overall_red = 0
     for crate in crates:
         rust_files = scope_port if scope_port is not None else crate_rust_files(crate)
-        # only meaningful for crates that have been ported (non-stub)
-        done = any("PORT STATUS:" in open(f, encoding="utf-8", errors="replace").read()
-                   and re.search(r"PORT STATUS:\s*done",
-                                 open(f, encoding="utf-8", errors="replace").read())
-                   for f in rust_files if f.endswith("lib.rs"))
+        # only meaningful for crates that have been ported (non-stub).
+        # H5 fix: unified done-detection via _gatelib.is_claimed_done — the same
+        # signal G1/G2 bind on (statuses done|complete|parity|ported|final all
+        # count), so 'ported'-status crates (args/termio) no longer escape this
+        # gate the way a literal `PORT STATUS: done` grep let them.
+        done = G.is_claimed_done(crate)
         if not (args.strict or done or args.crate or scope_port is not None):
             continue
         ref_norm = []
