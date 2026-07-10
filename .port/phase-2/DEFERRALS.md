@@ -3516,3 +3516,23 @@ preserved and the field/method surface is fixed so the later chunk FILLS them.
    (`vaxis.init`/`enterAltScreen`/`queryTerminal`/`deviceStatusReport` — item 2 leaves)
    and a live tty; un-ignored when the Vaxis chunk fills the placeholder. It still counts
    toward `check_test_counts` (a `#[test]`, just `#[ignore]`d). **Target: the Vaxis chunk.**
+
+## rustty-font Atlas wasm surface — per-test deferral ledger (VALIDATION_REPORT §3e)
+
+The reference `font/Atlas.zig` `pub const Wasm` block (the C-ABI/JS atlas surface
+for the wasm build) is feature-gated OFF in `crates/rustty-font/src/atlas.rs`
+(off-by-default `wasm` cargo feature; the whole block is preserved verbatim as a
+comment at atlas.rs — R1, no reference line dropped). Its ONE test defers with it
+and is tracked here PER-TEST so `check_test_counts`/G2 auditors can resolve it:
+
+- **`Atlas.Wasm` `test "happy path"`** (Atlas.zig:564; commented verbatim at
+  atlas.rs "test \"happy path\"") — **4 assertions deferred with the surface**:
+  1. `try testing.expect(wasm.isHostOwned(reg));`
+  2. `try testing.expect(reg.width > 0);`
+  3. `try testing.expect(!atlas.modified);`
+  4. `try testing.expect(atlas.modified);` (after `atlas_set`)
+  It exercises `atlas_new`/`atlas_reserve`/`atlas_set`/`atlas_free` + the
+  `os/wasm.zig` host-ownership helpers — none of which exist outside the wasm
+  artifact. **Target: the rustty wasm app-runtime** (the same milestone that
+  un-defers the config/vt wasm exports); porting the Wasm block MUST port this
+  test with all 4 asserts live.

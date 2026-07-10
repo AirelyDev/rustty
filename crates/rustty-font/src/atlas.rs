@@ -746,6 +746,9 @@ impl<A: Allocator + Copy> Atlas<A> {
 // the rustty wasm app-runtime lands — exactly as the config/vt wasm exports are
 // deferred. The faithful reference is recorded verbatim below so no reference
 // line or comment is dropped (R1); none of it pulls a C/JS edge into this crate.
+// The block's ONE test (`test "happy path"`, 4 assertions) defers with it and is
+// ledgered PER-TEST in `.port/phase-2/DEFERRALS.md` ("rustty-font Atlas wasm
+// surface") — porting the Wasm block must port that test with all 4 asserts live.
 //
 // /// The wasm-compatible API. This lacks documentation unless the API differs
 // /// from the standard Zig API. To learn what a function does, just look one
