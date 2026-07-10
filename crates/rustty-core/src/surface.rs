@@ -7477,7 +7477,7 @@ where
 
                 // Round towards zero.
                 // const delta: isize = @intFromFloat(@trunc(amount));
-                let delta: isize = amount.trunc() as isize;
+                let delta: isize = isize_from_float(amount.trunc());
                 // assert(@abs(delta) >= 1);
                 debug_assert!(delta.unsigned_abs() >= 1);
 
@@ -7495,7 +7495,7 @@ where
                 // if (!scroll_mods.precision) {
                 if !scroll_mods.precision {
                     // const x_delta_isize: isize = @intFromFloat(@round(xoff));
-                    let x_delta_isize: isize = xoff.round() as isize;
+                    let x_delta_isize: isize = isize_from_float(xoff.round());
                     // break :x .{ .delta = x_delta_isize };
                     break 'x ScrollAmount {
                         delta: x_delta_isize,
@@ -7521,7 +7521,7 @@ where
                 // self.mouse.pending_scroll_x = poff - (amount * cell_size);
                 self.mouse.pending_scroll_x = poff - (amount * cell_size);
                 // const delta: isize = @intFromFloat(@trunc(amount));
-                let delta: isize = amount.trunc() as isize;
+                let delta: isize = isize_from_float(amount.trunc());
                 // assert(@abs(delta) >= 1);
                 debug_assert!(delta.unsigned_abs() >= 1);
                 // break :x .{ .delta = delta };
@@ -11236,7 +11236,9 @@ where
                 // const rows: f32 = @floatFromInt(self.size.grid().rows);
                 let rows: f32 = f32::from(self.size.grid().rows);
                 // const delta: isize = @intFromFloat(@trunc(fraction * rows));
-                let delta: isize = (fraction * rows).trunc() as isize;
+                // (f32 site: `f64::from` is exact, so the f64 helper checks the
+                // identical value.)
+                let delta: isize = isize_from_float(f64::from((fraction * rows).trunc()));
                 // self.queueIo(.{
                 //     .scroll_viewport = .{ .delta = delta },
                 // }, .unlocked);
@@ -12876,6 +12878,33 @@ enum KeySequenceMemory {
     Free,
 }
 
+/// PORT helper — Zig `@intFromFloat` for the scroll/selection GESTURE pixel
+/// math (`scrollCallback`'s `@intFromFloat(@trunc(amount))` /
+/// `@intFromFloat(@round(xoff))` and `performBindingAction`'s
+/// `.scroll_page_fractional` `@intFromFloat(@trunc(fraction * rows))`).
+///
+/// RUST CONTRACT (differs from the Zig builtin it replaces): Zig
+/// `@intFromFloat` is safety-checked — Debug/ReleaseSafe TRAP when the value
+/// has no in-range integer representation (including NaN); ReleaseFast is UB.
+/// A bare Rust `as` cast instead SATURATES (NaN -> 0), silently bending the
+/// gesture math on out-of-range input. This helper restores the checked
+/// builds' trap via `debug_assert!` (active in dev + `release-safe`, the DG4
+/// parity lanes; PORT_RULES.md "DG2/DG4") while unchecked release builds keep
+/// the saturating `as` result — defined behavior, strictly safer than the
+/// reference's ReleaseFast UB (VALIDATION_REPORT §3d).
+#[inline]
+fn isize_from_float(v: f64) -> isize {
+    // `@intFromFloat` converts the INTEGER PART (truncation toward zero) and
+    // safety-checks that it fits the destination. `-(isize::MIN as f64)` is
+    // exactly 2^63; NaN/inf fail both comparisons and trap here too.
+    let t = v.trunc();
+    debug_assert!(
+        t >= isize::MIN as f64 && t < -(isize::MIN as f64),
+        "@intFromFloat: value {v} has no isize representation"
+    );
+    v as isize
+}
+
 // The amount to scroll. This structure is always normalized so that
 // negative is down, left and positive is up, right. Note that INTERNALLY,
 // vertical scroll on our terminal uses positive for down (right is not
@@ -13607,5 +13636,38 @@ mod renderer_config_tests {
         }
         // frees `impl.links` onig handles then drops both boxes.
         msg.deinit();
+    }
+}
+
+// rustty-only tests: lock the `isize_from_float` gesture-cast helper's contract
+// (VALIDATION_REPORT §3d — `@intFromFloat` trap vs `as` saturate). In-range
+// gesture deltas convert exactly; under debug-assertions (dev + `release-safe`,
+// the DG4 parity lanes) an out-of-range or NaN input panics exactly where the
+// Zig builtin traps.
+#[cfg(test)]
+mod isize_from_float_tests {
+    use super::isize_from_float;
+
+    #[test]
+    fn isize_from_float_in_range_is_exact() {
+        assert_eq!(isize_from_float(3.0), 3);
+        assert_eq!(isize_from_float(-2.0), -2);
+        // `@intFromFloat` converts the integer part (truncation toward zero).
+        assert_eq!(isize_from_float(0.9), 0);
+        assert_eq!(isize_from_float(-1.9), -1);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "@intFromFloat")]
+    fn isize_from_float_nan_traps_in_checked_builds() {
+        let _ = isize_from_float(f64::NAN);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "@intFromFloat")]
+    fn isize_from_float_out_of_range_traps_in_checked_builds() {
+        let _ = isize_from_float(1e300);
     }
 }
