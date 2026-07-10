@@ -35,18 +35,11 @@ MODES:
 Per-test matching resolves a reference test NAME (from tests.jsonl) to its
 ported Rust fn(s) via layered identifier matching (H6 fix — raw string equality
 compared only 43/3,065 named tests; a Rust fn cannot equal a string-named Zig
-test):
-  L1  name_candidates(ref) ∩ ported fn names   (DoP §G1 slug convention)
-  L2  canonical form equality (lowercase, non-alphanumerics stripped) — covers
-      camel-preserved slugs like pagelist_pointFromPin_active_no_history
-  L3  canonical form + 'test' prefix/suffix — the fn-name-collision convention
-      (ctrlOrSuper -> ctrl_or_super_test)
-  L4  disambiguating-prefix ADDED by the port (Zig duplicates one name across
-      types; Rust prefixes the type): fn canon ENDS WITH ref canon (>= 5 chars)
-      ('parseCLI base' -> palette_parse_cli_base)
-  L5  redundant type-prefix DROPPED by the port (the Rust test lives in the
-      type's own module): ref canon ENDS WITH fn canon (fn canon >= 10 chars)
-      ('SelectionGesture drag selection logic' -> drag_selection_logic)
+test). The resolver lives in _gatelib (build_fn_index/resolve_ref_test) and is
+SHARED with G1's name-set diff so both gates bind names one way; layers L1-L5
+are documented on _gatelib.resolve_ref_test (L1 additionally accepts the
+symbol-worded F7 slug variants, and canonicalization applies Unicode NFC —
+both only ADD bindings).
 When several ported fns resolve, the comparison bar is max(rust counts) vs the
 strongest reference test of that name (same max-dedup as the ref side) — the
 `>=` semantics are unchanged. Ported tests with no name match still contribute
@@ -57,64 +50,13 @@ still compared, and ~2,900 previously-uncompared pairs now bind (R5 tightens).
 import argparse
 import json
 import os
-import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _gatelib as G  # noqa: E402
+from _gatelib import build_fn_index, resolve_ref_test  # noqa: E402,F401 (shared L1-L5 resolver)
 
 CONTRACT_TOTAL_ASSERTIONS = 11975
-
-
-def _canon(s):
-    """Canonical identifier form: lowercase with every non-alphanumeric
-    stripped. 'PageList pointFromPin active' and
-    pagelist_pointFromPin_active canonicalize identically."""
-    return re.sub(r"[^a-z0-9]", "", s.lower())
-
-
-def build_fn_index(rust_per_test):
-    """Precompute the per-crate resolution index over ported test fns
-    (rust_per_test maps fn name -> [assertion_count, ...], one entry per
-    occurrence of the fn name): (fn_set, canon->fns map, [(fn, canon)] list)."""
-    fn_set = set(rust_per_test)
-    canon_map = {}
-    canon_list = []
-    for fn in fn_set:
-        cf = _canon(fn)
-        canon_map.setdefault(cf, []).append(fn)
-        canon_list.append((fn, cf))
-    return fn_set, canon_map, canon_list
-
-
-def resolve_ref_test(name, fn_index):
-    """Resolve a reference test name to the set of ported fn names it may
-    legitimately have been ported as (layers L1-L5, see module docstring).
-    Returns a (possibly empty) set. First matching layer wins so the most
-    precise binding is used."""
-    fn_set, canon_map, canon_list = fn_index
-    # L1: exact slug-candidate intersection (DoP §G1 convention)
-    hits = G.name_candidates(name) & fn_set
-    if hits:
-        return hits
-    c = _canon(name)
-    if not c:
-        return set()
-    # L2: canonical equality
-    if c in canon_map:
-        return set(canon_map[c])
-    # L3: 'test' suffix/prefix (fn-name-collision convention)
-    hits = set(canon_map.get(c + "test", [])) | set(canon_map.get("test" + c, []))
-    if hits:
-        return hits
-    # L4: port added a disambiguating type/module prefix
-    if len(c) >= 5:
-        hits = {fn for fn, cf in canon_list if cf.endswith(c) and cf != c}
-        if hits:
-            return hits
-    # L5: port dropped a redundant leading type name
-    return {fn for fn, cf in canon_list
-            if len(cf) >= 10 and c.endswith(cf) and cf != c}
 
 
 def load_ref_assertions(summary):

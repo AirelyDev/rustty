@@ -35,6 +35,13 @@ MODES:
   --crate <name>:  scope the check to one crate (per-crate P-T gate).
   --self-test:     run the built-in self-test (synthetic crate, flip proof).
 
+NAME MATCHING: a reference test name counts as ported when the SHARED layered
+resolver (_gatelib.resolve_ref_test — the exact binding G2 uses for
+assertion-for-assertion) resolves it to a ported #[test] fn. Layers L1-L5 and
+the verified symbol-worded (F7) forms are documented in _gatelib. Every
+many-to-one binding is printed as MULTI-BOUND (a candidate form may never
+silently fold two reference names onto one fn).
+
 This gate NEVER edits a contract or threshold (R5). The contract is
 tests-summary.json's per-crate test_blocks; the global floor is 3234.
 """
@@ -112,6 +119,7 @@ def run(args):
 
         missing = []
         extra = []
+        multi = []
         # The name-set diff binds for claimed-done crates (progress mode) and
         # for EVERY crate under --strict (DG3(a): strict requires MISSING == ∅
         # workspace-wide, done-claim or not).
@@ -120,20 +128,28 @@ def run(args):
             for fset in ref_names[crate].values():
                 ref_set |= fset
             ported_set = set(ported_names)
-            # A reference test name is considered ported if ANY of its accepted
-            # identifier slug forms (DoP §G1 naming convention) appears as a
-            # ported fn name. Rust fn names cannot contain spaces/punctuation, so
-            # a string-named reference test is matched against its slug forms.
-            remaining = set(ported_set)
+            # A reference test name is considered ported if the SHARED layered
+            # resolver (_gatelib.resolve_ref_test, L1-L5 — the same binding G2
+            # uses for assertion parity) resolves it to at least one ported fn.
+            # Rust fn names cannot contain spaces/punctuation, so a string-named
+            # reference test is matched against its slug/canon forms.
+            fn_index = G.build_fn_index(ported_set)
+            bound = {}  # ported fn -> [ref names that resolved to it]
             for nm in sorted(ref_set):
-                cands = G.name_candidates(nm)
-                hit = cands & ported_set
-                if hit:
-                    remaining -= hit
+                hits = G.resolve_ref_test(nm, fn_index)
+                if hits:
+                    for h in hits:
+                        bound.setdefault(h, []).append(nm)
                 else:
                     missing.append(nm)
             missing = sorted(missing)
-            extra = sorted(remaining)
+            extra = sorted(ported_set - set(bound))
+            # Multiplicity accounting: a candidate form must not silently fold
+            # two reference names onto one ported fn — every many-to-one
+            # binding is REPORTED (never hidden) so the EXTRA+MISSING numbers
+            # stay reconcilable by eye.
+            multi = sorted((fn, sorted(nms)) for fn, nms in bound.items()
+                           if len(nms) > 1)
 
         crate_red = False
         if claimed_done:
@@ -151,11 +167,11 @@ def run(args):
 
         if crate_red:
             red = True
-        rows.append((crate, status, ported, contract, claimed_done, missing, extra, crate_red))
+        rows.append((crate, status, ported, contract, claimed_done, missing, extra, multi, crate_red))
 
     # ---- report ----
     print(f"{'crate':<16}{'status':<10}{'ported':>7}{'contract':>10}  state")
-    for (crate, status, ported, contract, done, missing, extra, crate_red) in rows:
+    for (crate, status, ported, contract, done, missing, extra, multi, crate_red) in rows:
         state = "RED" if crate_red else ("done" if done else "progress")
         print(f"{crate:<16}{status:<10}{ported:>7}{contract:>10}  {state}")
         for nm in missing[:20]:
@@ -164,6 +180,14 @@ def run(args):
             print(f"    MISSING: ... (+{len(missing) - 20} more)")
         for nm in extra[:10]:
             print(f"    EXTRA:   {crate}::{nm}")
+        if len(extra) > 10:
+            print(f"    EXTRA:   ... (+{len(extra) - 10} more)")
+        for fn, nms in multi[:10]:
+            print(f"    MULTI-BOUND: {crate}::{fn} <- {len(nms)} ref names: "
+                  + "; ".join(repr(n) for n in nms[:4])
+                  + (" ..." if len(nms) > 4 else ""))
+        if len(multi) > 10:
+            print(f"    MULTI-BOUND: ... (+{len(multi) - 10} more)")
 
     scope = args.crate if args.crate else "workspace"
     print(f"\nPROGRESS [{scope}]: {total_ported}/{total_contract} ported "
@@ -307,6 +331,35 @@ def self_test():
     r = invoke("--crate", "demo", "--strict")
     print(f"[f] done 1/2 --crate demo --strict -> exit {r.returncode} (expect non-zero)")
     ok &= (r.returncode != 0)
+
+    # (g) NAME-BINDING flip proof (layered resolver): two string-named
+    # reference tests; the port carries conforming slugs => GREEN. Renaming
+    # one ported fn to an unrelated name (count unchanged!) must flip RED with
+    # a MISSING line — proving the resolver did not degrade into count-only.
+    with open(os.path.join(inv, "tests.jsonl"), "w") as fh:
+        fh.write(json.dumps({"file": "demo.zig", "name": "Demo: case one",
+                             "anonymous": False, "assertion_count": 1}) + "\n")
+        fh.write(json.dumps({"file": "demo.zig", "name": "Demo: case two",
+                             "anonymous": False, "assertion_count": 1}) + "\n")
+
+    def write_lib_named(fn_one, fn_two):
+        body = "//! demo\n//! PORT STATUS: done\n"
+        for fn_name in (fn_one, fn_two):
+            body += f"#[test]\nfn {fn_name}() {{ assert!(true); }}\n"
+        with open(os.path.join(crate_src, "lib.rs"), "w") as fh:
+            fh.write(body)
+
+    write_lib_named("demo_case_one", "demo_case_two")
+    r = invoke()
+    print(f"[g] done, both names bound -> exit {r.returncode} (expect 0)")
+    ok &= (r.returncode == 0)
+
+    write_lib_named("demo_case_one", "totally_unrelated_name")
+    r = invoke()
+    caught = "MISSING: demo::Demo: case two" in r.stdout
+    print(f"[g'] done, one fn renamed to unrelated (count constant) -> exit "
+          f"{r.returncode} (expect non-zero), MISSING caught: {caught}")
+    ok &= (r.returncode != 0 and caught)
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("SELF-TEST:", "PASS" if ok else "FAIL")

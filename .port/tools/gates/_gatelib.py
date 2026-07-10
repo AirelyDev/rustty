@@ -25,6 +25,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -342,6 +343,101 @@ SHOULD_PANIC_RE = re.compile(r"#\s*\[\s*should_panic\b")
 FN_NAME_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
 
 
+def port_slug(name):
+    """Composed port-slug form (the port's actual uniform convention):
+    split on every non-alphanumeric run, camel-split each token, lowercase,
+    join with '_'.  'DynamicPalette: changeDefault preserves changes'
+      -> dynamic_palette_change_default_preserves_changes
+    'bash: ENV' -> bash_env ; 'parseIntoField: bool' -> parse_into_field_bool"""
+    words = []
+    for tok in re.split(r"[^A-Za-z0-9]+", name):
+        if not tok:
+            continue
+        words.extend(
+            w for w in re.split(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[A-Za-z])(?=[0-9])", tok) if w
+        )
+    return "_".join(w.lower() for w in words)
+
+
+# Symbol -> spelled-out word observed in the port's fn names (family F7,
+# "symbol-worded slug"). A Rust identifier cannot carry `?`/`+`/`;`/... so the
+# port spells the symbol out as a word WHEN it is semantically load-bearing
+# (and simply drops it when it is a mere separator, e.g. the `+` in
+# `shift+alt+.`). Every entry below is VERIFIED against a real ported test:
+#   '->' -> 'to'         'OSC 9;4: progress -> desktop notification 1'
+#                        -> osc_9_4_progress_to_desktop_notification_1
+#                           (rustty-vt/src/osc/parsers/osc9.rs:954)
+#   '='  -> 'eq'         "OSC 133: fresh_line_new_prompt with '=' in aid"
+#                        -> osc_133_fresh_line_new_prompt_with_eq_in_aid
+#                           (rustty-vt/src/osc/parsers/semantic_prompt.rs:1004)
+#   ';'  -> 'semicolon'  'OSC 133: fresh_line_new_prompt with trailing ;'
+#                        -> osc_133_fresh_line_new_prompt_with_trailing_semicolon
+#                           (semantic_prompt.rs:1067); also
+#                        "kitty: report alternates colon (shift+';')"
+#                        -> kitty_report_alternates_colon_shift_semicolon
+#                           (rustty-vt/src/input/key_encode.rs:2195)
+#   '>'  -> 'gt'         'Terminal: OSC133C at x>0 on prompt row ...'
+#                        -> terminal_osc133c_at_xgt0_on_prompt_row_...
+#                           (rustty-vt/src/terminal.rs:15710)
+#   '['  -> 'bracket'    'csi: ESC [ H' -> csi_esc_bracket_h
+#                           (rustty-vt/src/parser.rs:753, also :776)
+#   '('  -> 'paren'      'esc: ESC ( B' -> esc_esc_paren_b (parser.rs:729)
+#   '.'  -> 'period'     'legacy: shift+alt+. macos'
+#                        -> legacy_shift_alt_period_macos (key_encode.rs:2960)
+#   '?'  -> 'question'   'stream CSI ? W reset tab stops'
+#                        -> stream_csi_question_w_reset_tab_stops
+#                           (rustty-vt/src/stream.rs:3956)
+#   '+'  -> 'plus'       'stream: SGR with 17+ parameters for underline color'
+#                        -> stream_sgr_with_17_plus_parameters_for_underline_color
+#                           (stream.rs:3999)
+#   'ф'  -> 'f cyrillic' 'legacy: alt+ф' -> legacy_alt_f_cyrillic
+#                           (key_encode.rs:2990)
+#   'ő'  -> 'o double acute'
+#                        'legacy: hu layout ctrl+ő sends proper codepoint'
+#                        -> legacy_hu_layout_ctrl_o_double_acute_sends_proper_codepoint
+#                           (key_encode.rs:3644)
+# This only ADDS candidate forms (R5-safe): a form still has to match a ported
+# fn exactly (or canon-exactly in the resolver); genuine misses stay MISSING.
+SYMBOL_WORDS = (
+    ("->", "to"),
+    ("=", "eq"),
+    (";", "semicolon"),
+    (">", "gt"),
+    ("[", "bracket"),
+    ("(", "paren"),
+    (".", "period"),
+    ("?", "question"),
+    ("+", "plus"),
+    ("ф", "f cyrillic"),          # ф
+    ("ő", "o double acute"),      # ő
+)
+
+# Cap the variant fan-out (a name with many mapped symbols would otherwise
+# explode 2^k; real reference names carry only a handful).
+_VARIANT_CAP = 64
+
+
+def symbol_worded_variants(name):
+    """Variants of `name` with each SYMBOL_WORDS symbol either left in place
+    (it slugs away as a separator) or spelled out as its word. Both choices are
+    generated because the same symbol can be load-bearing in one name ('17+'
+    -> '17_plus') and a separator in another ('shift+alt' -> 'shift_alt').
+    Returns only the variants that differ from `name` itself."""
+    variants = {name}
+    for sym, word in SYMBOL_WORDS:
+        if sym not in name:
+            continue
+        new = set()
+        for v in variants:
+            new.add(v)                                  # symbol as separator
+            new.add(v.replace(sym, " %s " % word))      # symbol spelled out
+        variants = new
+        if len(variants) >= _VARIANT_CAP:
+            break
+    variants.discard(name)
+    return variants
+
+
 def name_candidates(name):
     """Canonical set of valid-Rust-identifier forms a reference test name may
     legitimately take when ported (DoP §G1: named tests "match name-for-name"
@@ -354,8 +450,10 @@ def name_candidates(name):
     misses/extras are still flagged.
 
     Accepted forms include the raw name (for already-identifier names like
-    `errorAfter`), camelCase, PascalCase, snake_case, SCREAMING_SNAKE, and the
-    raw token with hyphen/space -> underscore."""
+    `errorAfter`), camelCase, PascalCase, snake_case, SCREAMING_SNAKE, the
+    raw token with hyphen/space -> underscore, the composed port slug, and the
+    composed port slug of every symbol-worded variant (family F7; each mapping
+    in SYMBOL_WORDS is verified against a real ported test — see the table)."""
     out = set()
     out.add(name)
     # split on word boundaries (space, hyphen, underscore) and drop empties
@@ -372,21 +470,89 @@ def name_candidates(name):
     out.add(re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower())
     # hyphen/space (and any non-identifier run) -> underscore on the raw token
     out.add(re.sub(r"[^\w]+", "_", name).strip("_"))
-    # Composed port-slug form (the port's actual uniform convention):
-    # split on every non-alphanumeric run, camel-split each token, lowercase,
-    # join with '_'.  'DynamicPalette: changeDefault preserves changes'
-    #   -> dynamic_palette_change_default_preserves_changes
-    # 'bash: ENV' -> bash_env ; 'parseIntoField: bool' -> parse_into_field_bool
-    words = []
-    for tok in re.split(r"[^A-Za-z0-9]+", name):
-        if not tok:
-            continue
-        words.extend(
-            w for w in re.split(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[A-Za-z])(?=[0-9])", tok) if w
-        )
-    if words:
-        out.add("_".join(w.lower() for w in words))
+    # Composed port-slug form (the port's actual uniform convention).
+    out.add(port_slug(name))
+    # Symbol-worded slugs (family F7): the port spells load-bearing symbols out
+    # as words; each candidate is still an EXACT fn-name form.
+    for v in symbol_worded_variants(name):
+        out.add(port_slug(v))
     return {v for v in out if v}
+
+
+# ---------------------------------------------------------------------------
+# Layered reference-name -> ported-fn resolver (shared by G1 and G2)
+# ---------------------------------------------------------------------------
+# Formerly private to check_assertions.py (H6 fix); hoisted here so G1's
+# name-set diff and G2's per-test comparison bind reference tests to ported
+# fns THE SAME way (one convention, one matcher — no gate can drift from the
+# other). The layers are unchanged from check_assertions' documented L1-L5;
+# canonicalization gains Unicode NFC (canonically-equivalent strings — e.g. a
+# decomposed `ò` in tests.jsonl vs the composed form — canonicalize
+# identically; pure-ASCII names are unaffected).
+def canon_id(s):
+    """Canonical identifier form: Unicode NFC, then lowercase with every
+    non-[a-z0-9] stripped. 'PageList pointFromPin active' and
+    pagelist_pointFromPin_active canonicalize identically."""
+    return re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFC", s).lower())
+
+
+def build_fn_index(fn_names):
+    """Precompute the per-crate resolution index over ported test fn names
+    (any iterable of names): (fn_set, canon->fns map, [(fn, canon)] list)."""
+    fn_set = set(fn_names)
+    canon_map = {}
+    canon_list = []
+    for fn in fn_set:
+        cf = canon_id(fn)
+        canon_map.setdefault(cf, []).append(fn)
+        canon_list.append((fn, cf))
+    return fn_set, canon_map, canon_list
+
+
+def resolve_ref_test(name, fn_index):
+    """Resolve a reference test name to the set of ported fn names it may
+    legitimately have been ported as (layers L1-L5, see check_assertions.py's
+    module docstring). Returns a (possibly empty) set. First matching layer
+    wins so the most precise binding is used.
+
+      L1  name_candidates(ref) ∩ ported fn names (exact slug forms, incl. the
+          symbol-worded F7 variants)
+      L2  canonical form equality — for the raw name AND each symbol-worded
+          variant (covers camel-preserved slugs like
+          pagelist_pointFromPin_active_no_history, F2/F3 canon families)
+      L3  canonical form + 'test' prefix/suffix (fn-name-collision convention,
+          e.g. vt_write -> vt_write_test)
+      L4  disambiguating type/module prefix ADDED by the port: fn canon ENDS
+          WITH ref canon (>= 5 chars) ('parseCLI base' -> palette_parse_cli_base)
+      L5  redundant type prefix DROPPED by the port: ref canon ENDS WITH fn
+          canon (fn canon >= 10 chars) ('SelectionGesture drag selection logic'
+          -> drag_selection_logic)"""
+    fn_set, canon_map, canon_list = fn_index
+    # L1: exact slug-candidate intersection (DoP §G1 convention)
+    hits = name_candidates(name) & fn_set
+    if hits:
+        return hits
+    # L2: canonical equality (raw name first, then symbol-worded variants)
+    canons = [canon_id(name)]
+    canons += [canon_id(v) for v in symbol_worded_variants(name)]
+    for c in canons:
+        if c and c in canon_map:
+            return set(canon_map[c])
+    c = canons[0]
+    if not c:
+        return set()
+    # L3: 'test' suffix/prefix (fn-name-collision convention)
+    hits = set(canon_map.get(c + "test", [])) | set(canon_map.get("test" + c, []))
+    if hits:
+        return hits
+    # L4: port added a disambiguating type/module prefix
+    if len(c) >= 5:
+        hits = {fn for fn, cf in canon_list if cf.endswith(c) and cf != c}
+        if hits:
+            return hits
+    # L5: port dropped a redundant leading type name
+    return {fn for fn, cf in canon_list
+            if len(cf) >= 10 and c.endswith(cf) and cf != c}
 
 # In-test assertion macros / forms (count, not parse).
 #
