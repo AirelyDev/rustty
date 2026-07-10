@@ -201,3 +201,51 @@ for c in displaycb_naive displaycb_shipped; do
   MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri run -q -- "$c" # Tree Borrows
 done
 ```
+
+## LOOPTHREAD candidates (VAXIS_C3B_DESIGN §8: the vaxis `Loop` read thread)
+
+Added for `VAXIS_C3B_DESIGN.md` §8 — the vaxis Chunk-3b `Loop.zig` read thread
+(`crates/rustty-vaxis/src/loop_.rs`). The general construct-then-spawn + userdata-
+callback-reentry family is already certified by RENDERTHREAD; the `Loop` has DISTINCT
+field mechanics worth a dedicated pin: the produced-to channel is the internally-synced
+**Mutex-backed `Queue`** (not renderthread's plain-field mailbox), `should_quit` is an
+**`AtomicBool`** (main stores / child loads), the `thread` handle is a **`Cell` mutated
+through `&self` by MAIN** while the child holds `*mut Loop` (§4.4), the re-entrant
+callback is the **type-erased SIGWINCH winsize callback** (`*mut c_void` context, the
+userdata round-trip an `Arc` cannot model), and the queued element is **OWNED** (a
+`Vec<u8>` copied at post time, modelling `Key::into_owned` — the child keeps mutating its
+per-iteration stack ring AFTER posting; main never observes it, §4.5/§6). A deterministic
+mpsc handshake sequences the two threads' borrow ops (happens-before, no data race to mask
+the tag verdict); the winsize callback fires on the child while its borrow context is live.
+Selected by argv `loopthread_naive` / `loopthread_shipped`.
+
+| candidate | models | SB | TB |
+|---|---|---|---|
+| `loopthread_naive` | child `ttyRun` binds `let l = &mut *self_ptr` (WHOLE) held across the read loop; the winsize cb reborrows a SIBLING `&mut *self_ptr` (pops `l`) → `l.field` re-used after = use-after-pop; main's stop/nextEvent also reborrow a whole `&mut Loop`. The whole-`&mut` retag spans the ENTIRE struct (incl. the `thread` field at +0x8), so it RACES main's legitimate narrow `thread.set` — Miri flags it at the child's `&mut *self_ptr`. | **UB** | **UB** |
+| `loopthread_shipped` | **shipped**: child + winsize-cb use raw `self_ptr` with NARROW field access only (`(*sp).should_quit` atomic load, `&(*sp).queue` external push, `(*sp).tty`/`(*sp).vaxis`/`(*sp).field` narrow); main = narrow `(*sp).queue` pop + `AtomicBool` store + a narrow `Cell` `thread` set/take, never a whole `&mut Loop`; and the posted item **OWNS** its bytes | **CLEAN** | **CLEAN** |
+
+**Load-bearing finding:** the `Loop` read thread MUST NOT bind a long-lived whole
+`&mut *self_ptr`. The whole-`&mut` retag is a *write to the entire allocation* — it not
+only pops any sibling `&mut *self_ptr` the winsize callback later takes (use-after-pop),
+it also collides with the MAIN thread's perfectly-legal narrow `thread` `Cell` write
+(`start`/`stop` mutate `thread` through `&self` while the child runs), producing a data
+race under BOTH SB and TB. The shipped shape keeps `self_ptr` raw throughout and projects
+only narrow per-field accesses that retag disjoint byte ranges: the `thread` field is
+touched by MAIN only, `should_quit` is atomic, `queue` is internally `Mutex`-synced, and
+the queued `T` owns every byte (no read-thread ring crosses the boundary) — so nothing
+races and no tag is popped (CLEAN under both). If `loopthread_shipped` is not green under
+both models, the raw-self narrow-projection discipline in §4 is wrong and must not ship.
+(The §4.5 borrowed-ring data race is the *documented* second hazard the owned-copy
+removes; Miri halts at the first UB — the whole-`&mut` retag race above — so the owned
+promotion is modelled by the shipped candidate's owned push rather than a second detected
+race.)
+
+Run:
+
+```sh
+for c in loopthread_naive loopthread_shipped; do
+  echo "== $c =="
+  cargo +nightly miri run --quiet -- "$c"                          # Stacked Borrows
+  MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri run -q -- "$c" # Tree Borrows
+done
+```

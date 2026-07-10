@@ -30,10 +30,24 @@
 //!   c1b-uucode grapheme path; `parse<'a>(&'a mut self, &'a [u8])` — PURE, no
 //!   tty/Loop coupling, 34 assertion-for-assertion tests)
 //!
+//! CHUNK 3b adds the IMPURE half of the backend (the tty backend + concurrency):
+//! - [`queue`] — `queue.zig` (the thread-safe fixed-size BLOCKING two-mirror ring;
+//!   `Mutex` + `not_full`/`not_empty` `Condvar`; the 7-test Miri pin)
+//! - [`tty`] — `tty.zig` (`PosixTty` termios/ioctl/sigaction FFI; the SIGWINCH global
+//!   handler; `TestTty` pipe mock; `WindowsTty` = `#[cfg(windows)]` R5 seam)
+//! - [`loop_`] — `Loop.zig` (the construct-then-spawn read thread: raw-self `*mut Loop`,
+//!   `should_quit: AtomicBool`, `thread: Cell`, the type-erased winsize callback; the
+//!   queued `T` OWNS its grapheme text via `Key::into_owned`; `handle_event_generic`
+//!   ported LIVE against the [`vaxis::Vaxis`] placeholder; the `LoopEvent` trait for
+//!   Zig's `@hasField`)
+//! - [`vaxis`] — the INHABITED `Vaxis` placeholder (placeholder-leaf-doctrine; the
+//!   capability-flag writes are live, the Vaxis-method leaves defer to a later chunk)
+//!
 //! PORT STATUS: done (chunk 1a — value types; chunk 1b — gwidth/unicode + the uucode
 //! width/grapheme tables; chunk 2 — the Screen/InternalScreen/Window rendering layer;
-//! chunk 3a — the event/ctlseqs/parser input-parsing layer; tty/loop/vaxis are later
-//! chunks).
+//! chunk 3a — the event/ctlseqs/parser input-parsing layer; chunk 3b — the tty backend
+//! and concurrency layer (queue/tty/loop_) plus the Vaxis placeholder; the full Vaxis is
+//! a later chunk).
 
 pub mod cell;
 pub mod ctlseqs;
@@ -43,12 +57,21 @@ pub mod gwidth;
 pub mod image;
 pub mod internal_screen;
 pub mod key;
+pub mod loop_;
 pub mod mouse;
 pub mod parser;
+pub mod queue;
 pub mod screen;
+pub mod tty;
 pub mod unicode;
 pub mod uucode;
+pub mod vaxis;
 pub mod window;
+
+// so `vaxis::Loop` matches Zig's `vaxis.Loop`, and `vaxis::Tty` matches `vaxis.Tty`
+pub use loop_::Loop;
+pub use tty::Tty;
+pub use vaxis::Vaxis;
 
 /// The size of the terminal screen
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

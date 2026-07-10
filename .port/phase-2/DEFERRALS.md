@@ -3423,3 +3423,36 @@ the 11 `gwidth` tests + `unicode.zig` grapheme results byte-exact. Chunk 1b then
 `unicode.rs` (`Grapheme`/`GraphemeIterator`/`graphemeIterator`) and the
 `rustty-vaxis → rustty-unicode` dep edge (clean DAG; leaf). Test-count contract for 1b:
 **+11** (`check_test_counts.py`). Full analysis: `VAXIS_C1_DESIGN.md`.
+
+## rustty-vaxis Chunk 3b (tty backend + concurrency) — R5 seams / placeholder leaves
+
+From **vaxis Chunk 3b** (`crates/rustty-vaxis/src/{tty,loop_,vaxis}.rs`) — these are
+`#[cfg(windows)]` seams / placeholder-leaf `unimplemented!()` bodies, scheduled for the
+named later chunk. Nothing is dropped (R1); the reference control-flow/comments are
+preserved and the field/method surface is fixed so the later chunk FILLS them.
+
+1. **`tty.rs` — `WindowsTty` (`#[cfg(windows)] mod windows_tty`).** The console-mode +
+   `ReadConsoleInputW` + `INPUT_RECORD` key/mouse/resize/focus decode (~450 LOC) lands
+   when a Windows target is in scope. Ported as the struct SHAPE (`stdin`/`stdout`/
+   `initial_*`/`buf`/`last_mouse_button_press`) + `unimplemented!()` method bodies; the
+   non-windows (macOS/Linux) build never names it (which also sidesteps its latent Zig
+   `self.fd` bug — its `read` references a field it lacks). **Target: a Windows-target
+   chunk.**
+
+2. **`vaxis.rs` — the `Vaxis` INHABITED placeholder leaves.** `handle_event_generic`
+   ports LIVE against this placeholder (the capability-flag writes + the F3 width/
+   scaled-text detection are live); only three genuine Vaxis leaves defer as
+   `unimplemented!()`: `Vaxis::translate_mouse`, `Vaxis::device_status_report`, and
+   `Vaxis::wake_query_futex` (`std.Thread.Futex.wake(&vx.query_futex, 10)`). The later
+   **Vaxis chunk** FILLS the placeholder (must preserve the `caps`/`state`/`screen`/
+   `query_futex`/`queries_done`/`opts` field surface + these three methods;
+   `cargo build --workspace` is the backstop). **Target: the Vaxis chunk.**
+
+3. **`tty.rs` — `TestTty::next_event`.** A Windows-API-compat stub (`unimplemented!()`) —
+   Zig returns `error.SkipZigTest`; never reached on non-windows targets. Filled with the
+   `WindowsTty` decode (item 1). **Target: a Windows-target chunk.**
+
+4. **`loop_.rs` — the `test Loop` lifecycle test (`#[ignore]`).** Needs the real `Vaxis`
+   (`vaxis.init`/`enterAltScreen`/`queryTerminal`/`deviceStatusReport` — item 2 leaves)
+   and a live tty; un-ignored when the Vaxis chunk fills the placeholder. It still counts
+   toward `check_test_counts` (a `#[test]`, just `#[ignore]`d). **Target: the Vaxis chunk.**

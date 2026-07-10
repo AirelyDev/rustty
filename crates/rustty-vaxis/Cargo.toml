@@ -32,6 +32,14 @@ build = "build.rs"
 [lints]
 workspace = true
 
+# CHUNK 3b adds the IMPURE half of the backend (queue/tty/Loop). The tty layer needs
+# the termios/ioctl/sigaction FFI, so this crate takes ONE new dependency: `libc`.
+# `libc` is a LEAF (no rustty edges) pinned per-crate (matching rustty-os/rustty-vt/
+# rustty-xev/… — a plain `libc = "0.2"` literal, NOT `workspace = true`), so
+# rustty-vaxis stays acyclic (R4). No other new crate deps: queue is pure std; Loop
+# consumes intra-crate parser/event/grapheme_cache/key/mouse/Winsize + the Vaxis
+# placeholder. (It is otherwise a value-type/rendering/input crate, formerly dep-free.)
 [dependencies]
+libc = "0.2"
 
 [dev-dependencies]

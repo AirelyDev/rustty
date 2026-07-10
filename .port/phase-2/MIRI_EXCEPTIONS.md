@@ -668,3 +668,46 @@ The W4-2 blur sub-KAT does NOT spawn a surface, so it runs GREEN headless and pr
 the realized blur leaf (real `windowNumber` msg_send + the private CGS SPI, incl. the
 `#[link] CoreGraphics` symbol resolution) end-to-end. Un-ignore the two tests once the
 `Metal::loop_enter` renderer seam lands.
+
+## rustty-vaxis Chunk 3b — the `tty.rs` termios/ioctl/sigaction FFI
+
+Chunk 3b (`crates/rustty-vaxis/src/{queue,tty,loop_}.rs`) adds the IMPURE half of the
+vaxis backend. Its memory-safety coverage splits cleanly by module, and only the tty
+FFI is excepted from Miri:
+
+- **`queue.rs` — Miri PRIMARY (no exception).** The thread-safe fixed-size blocking
+  two-mirror ring is pure `std::sync::{Mutex,Condvar}` with a `[Option<T>; N]` buf
+  (zero `unsafe`, §2.2). All **7 ported tests** (incl. the two spurious-wake `while`-loop
+  pins and the multi-reader/writer `thread::scope` cases) run GREEN under
+  `cargo +nightly miri test -p rustty-vaxis` (default Stacked Borrows) — the ring
+  wraparound + the Condvar blocking handoff are the fidelity contract and are Miri-clean.
+
+- **`tty.rs` — Miri EXCEPTED (ASan/native).** `PosixTty`/`TestTty` are the crate's ONLY
+  FFI surface: `libc::{open,read,write,tcgetattr,tcsetattr,ioctl(TIOCGWINSZ),sigaction,
+  sigemptyset,close,pipe}`. Miri cannot execute these foreign functions (the same
+  "can't call foreign function" class as the PageList/GPU exceptions above), and
+  `/dev/tty` is absent in the sandbox. There are **0 Zig `test{}`** in `tty.zig` to port;
+  any device smoke test (`make_raw` round-trip, `get_winsize`) needs a real tty and is
+  therefore `#[ignore]`-on-device. The R6 gate here is ASan/native. `TestTty` (pipe-
+  backed via `libc::pipe`, which the sandbox *does* allow) covers the device-free path.
+  PORT-NOTE: the SIGWINCH handler locks a `Mutex` + would `ioctl`/push a queue — NOT
+  async-signal-safe, but Zig's exact design; faithful port keeps it (ASan/native, never
+  Miri).
+
+- **`loop_.rs` — the read-thread ALIASING → mirihar (`loopthread_*`).** The construct-
+  then-spawn read thread (raw-self `*mut Loop<T>`, `should_quit: AtomicBool`,
+  `thread: Cell`, the type-erased SIGWINCH winsize callback, the OWNED queued grapheme
+  text via `Key::into_owned`) cannot be Miri-checked directly (it needs a live tty +
+  the SIGWINCH handler). Its soundness is proven by the `loopthread_naive`(UB)/
+  `loopthread_shipped`(CLEAN, SB **and** TB) pair in `mirihar-chunk3b` (see that crate's
+  README "LOOPTHREAD candidates"): the shipped narrow-projection split is CLEAN under
+  both borrow models; the naive whole-`&mut *self_ptr` is UB under both (its whole-struct
+  retag races main's legitimate narrow `thread.set`). The one ported `test Loop` needs
+  the real `Vaxis` (a §5 placeholder with `unimplemented!()` leaves) so it is `#[ignore]`.
+
+**Why the split leaves zero unsafe path unverified:** queue's ring/Condvar (the only
+non-FFI concurrency) is Miri-primary; the loop's raw-self aliasing is mirihar-proven
+under SB+TB; the tty's `unsafe` is exclusively `libc` FFI calls (ASan/native). Any future
+edit that routes a concurrent `Loop` field access through a whole `&mut Loop` re-opens the
+hazard — re-run `mirihar-chunk3b` (`loopthread_shipped` must stay green under both SB and
+TB, `loopthread_naive` UB, BEFORE the change ships).

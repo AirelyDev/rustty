@@ -601,7 +601,7 @@ unsafe fn trampoline2(ctx: *mut ()) {
 // -Zmiri-tree-borrows. Only then do the core arm + the retyped callback land.
 // ============================================================================
 
-use std::sync::atomic::{AtomicU32, Ordering as AOrd};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering as AOrd};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex as SMutex};
 
@@ -1297,6 +1297,235 @@ fn run_displaycb(naive: bool) {
     drop(layer);
 }
 
+// ============================================================================
+// VAXIS_C3B_DESIGN §8: the Loop read-thread aliasing model (loopthread_*).
+//
+// Models Loop.zig's construct-then-spawn read thread with its DISTINCT field mechanics
+// vs renderthread: the produced-to channel is the internally-synced Mutex-backed Queue
+// (not a plain-field mailbox), should_quit is an AtomicBool (not a plain field), the
+// `thread` handle is a Cell mutated through &self by MAIN while the child holds *mut Loop,
+// and the re-entrant callback is the type-erased SIGWINCH winsize callback (*mut c_void
+// context). PLUS the queued-element ownership handoff (§4.5/§6): loopthread_shipped posts
+// an OWNED Vec<u8> — the child keeps mutating its per-iteration STACK ring AFTER posting,
+// and main never observes that mutation because it popped an owned copy — whereas
+// loopthread_naive additionally binds a whole &mut *self_ptr and would post a slice
+// borrowing that ring (the §4.5 cross-thread hazard the owned promotion removes).
+//
+//   loopthread_shipped — raw self_ptr, NARROW field access only (should_quit atomic,
+//     &(*sp).queue external push, (*sp).tty/(*sp).vaxis narrow, (*sp).field narrow),
+//     main = &self queue ops + AtomicBool store + a narrow Cell `thread` take/set, owned
+//     queue bytes: expected CLEAN under BOTH SB and TB.
+//   loopthread_naive — the child binds `let l = &mut *self_ptr` (whole) held across the
+//     read loop; the winsize callback reborrows a SIBLING `&mut *self_ptr` (pops `l`);
+//     `l` is re-used after (use-after-pop); main's stop/nextEvent also reborrow a whole
+//     `&mut Loop`: expected UB under BOTH SB and TB. (A channel handshake parks the child
+//     in `recv` while main reborrows, so the ONLY reported UB is the tag violation — no
+//     data race masks the verdict; the borrowed-ring race is the documented §4.5 hazard
+//     the shipped owned-copy avoids.)
+//
+// Pass criterion (recorded in README.md): loopthread_shipped CLEAN under BOTH
+// -Zmiri-stacked-borrows and -Zmiri-tree-borrows; loopthread_naive UB under both.
+// ============================================================================
+
+// MiniQueue models vaxis::Queue (internally-synced Mutex). Reached via *const (external,
+// outside the LThread SB/TB coverage — the decoupled-producer lineage, search_shipped).
+struct MiniQueue {
+    items: SMutex<Vec<Vec<u8>>>,
+}
+impl MiniQueue {
+    fn push(&self, v: Vec<u8>) {
+        self.items.lock().unwrap().push(v);
+    }
+    fn pop(&self) -> Option<Vec<u8>> {
+        self.items.lock().unwrap().pop()
+    }
+}
+
+struct LThread {
+    // the internally-synced channel, reached via *const (narrow raw field read → push)
+    queue: *const MiniQueue,
+    // Zig `should_quit: bool` → AtomicBool (main writes via store, child reads via load)
+    should_quit: AtomicBool,
+    // Zig `thread: ?std.Thread` → a Cell mutated by MAIN through &self while the child
+    // holds *mut Loop; MAIN-THREAD-ONLY (the child never touches it).
+    thread: ICell<Option<u32>>,
+    tty: *mut u32,   // narrow raw field (getWinsize/read stand-in)
+    vaxis: *mut u32, // narrow raw field (handle_event/winsize stand-in)
+    field: u32,      // misc narrow field write
+}
+
+struct SendLT(*mut LThread);
+unsafe impl Send for SendLT {}
+
+// ---- winsize callback: type-erased ctx, raw self, NARROW field access (SHIPPED) ----
+unsafe fn loop_winsize_cb_shipped(ctx: *mut c_void) {
+    unsafe {
+        let sp = ctx as *mut LThread; // @ptrCast(@alignCast(ptr)) back to *Self
+        let _vx = (*sp).vaxis; // narrow raw read (in_band_resize stand-in)
+        let _fd = (*sp).tty; // narrow raw read (tty.fd stand-in)
+        let q: *const MiniQueue = (*sp).queue; // narrow raw read of the queue ptr
+        (*q).push(vec![0xAA, 0xBB]); // postEvent(.{ .winsize = ws }) — OWNED
+    }
+}
+// ---- winsize callback: whole &mut *sp reborrow (NAIVE) ----
+unsafe fn loop_winsize_cb_naive(ctx: *mut c_void) {
+    unsafe {
+        let sp = ctx as *mut LThread;
+        let l: &mut LThread = &mut *sp; // SIBLING whole reborrow → pops the child's `l`
+        let q: *const MiniQueue = l.queue;
+        (*q).push(vec![0xAA, 0xBB]);
+        l.field = l.field.wrapping_add(1);
+    }
+}
+
+fn run_loopthread(shipped: bool) {
+    let mq = Box::new(MiniQueue {
+        items: SMutex::new(Vec::new()),
+    });
+    let mq_ptr: *const MiniQueue = &*mq;
+    let mut tty_val = Box::new(7u32);
+    let mut vaxis_val = Box::new(9u32);
+    let tty_ptr: *mut u32 = &raw mut *tty_val;
+    let vaxis_ptr: *mut u32 = &raw mut *vaxis_val;
+
+    let mut boxed: Box<LThread> = Box::new(LThread {
+        queue: mq_ptr,
+        should_quit: AtomicBool::new(false),
+        thread: ICell::new(None),
+        tty: tty_ptr,
+        vaxis: vaxis_ptr,
+        field: 0,
+    });
+    // ONE transient &mut at birth, lowered to raw (§2.4 / search_shipped).
+    let sp: *mut LThread = &raw mut *boxed;
+
+    let (go_tx, go_rx): (Sender<u8>, Receiver<u8>) = channel(); // main → child ticks
+    let (ack_tx, ack_rx): (Sender<u8>, Receiver<u8>) = channel();
+
+    let send = SendLT(sp);
+    let handle = std::thread::Builder::new()
+        .name("ttyRun".into())
+        .spawn(move || {
+            let s = send;
+            let go = go_rx;
+            let ack = ack_tx;
+            unsafe {
+                if shipped {
+                    // ttyRun(self_ptr): NARROW projections only; a per-iteration STACK ring
+                    // whose bytes are copied OWNED into the queue (the child keeps mutating
+                    // the ring AFTER the push; main never observes it).
+                    let mut ring = [0u8; 8]; // the ttyRun stack-local grapheme ring
+                    loop {
+                        let msg = match go.recv() {
+                            Ok(m) => m,
+                            Err(_) => break,
+                        };
+                        if msg == 2 {
+                            break;
+                        }
+                        if msg == 1 {
+                            loop_winsize_cb_shipped(s.0 as *mut c_void); // re-entrant winsize cb, raw ctx
+                        }
+                        // Zig ttyRun checks should_quit at the loop top.
+                        if (*s.0).should_quit.load(AOrd::Relaxed) {
+                            break;
+                        }
+                        // "read" bytes into the ring
+                        ring[0] = ring[0].wrapping_add(1);
+                        // OWNED copy across the queue (models Key::into_owned)
+                        let q: *const MiniQueue = (*s.0).queue;
+                        (*q).push(ring[0..2].to_vec());
+                        // keep mutating the ring AFTER posting (the wrap that would race a
+                        // BORROWED slice — harmless here because we posted an owned copy)
+                        ring[1] = ring[1].wrapping_add(1);
+                        (*s.0).field = (*s.0).field.wrapping_add(1); // narrow write
+                        ack.send(1).unwrap();
+                    }
+                } else {
+                    // NAIVE: whole &mut held across the loop; winsize cb reborrows &mut *s.0
+                    // (sibling) → pops `l`; `l` re-used after → use-after-pop.
+                    let l: &mut LThread = &mut *s.0;
+                    let mut ring = [0u8; 8];
+                    loop {
+                        let msg = match go.recv() {
+                            Ok(m) => m,
+                            Err(_) => break,
+                        };
+                        if msg == 2 {
+                            break;
+                        }
+                        if msg == 1 {
+                            loop_winsize_cb_naive(s.0 as *mut c_void); // pops `l`
+                            l.field = l.field.wrapping_add(1); // UAP
+                        }
+                        if l.should_quit.load(AOrd::Relaxed) {
+                            break;
+                        }
+                        ring[0] = ring[0].wrapping_add(1);
+                        let q: *const MiniQueue = l.queue;
+                        // NAIVE would push a slice BORROWING `ring` (the §4.5 hazard); an
+                        // owned copy stands in so MiniQueue stays `Vec<Vec<u8>>`.
+                        (*q).push(ring[0..2].to_vec());
+                        l.field = l.field.wrapping_add(1);
+                        ack.send(1).unwrap();
+                    }
+                }
+            }
+        })
+        .unwrap();
+
+    // start(): set the `thread` Cell THROUGH a NARROW &(*sp).thread (main-thread-only; the
+    // child never touches `thread`), AFTER the spawn — interior mutability, never a
+    // *mut-through-&self plain-field write.
+    unsafe {
+        (*sp).thread.set(Some(1));
+    }
+
+    // let the child arm (establish its tag) — first read tick.
+    go_tx.send(0).unwrap();
+    let _ = ack_rx.recv();
+
+    // winsize tick: the re-entrant callback fires on the child while its borrow context
+    // (the naive `l`) is LIVE.
+    go_tx.send(1).unwrap();
+    let _ = ack_rx.recv();
+
+    // MAIN steady state (between child ticks, child parked in recv → happens-before via
+    // the channel): stop() pops the queue + stores should_quit.
+    if shipped {
+        let q: *const MiniQueue = unsafe { (*sp).queue }; // narrow raw read
+        let _ = unsafe { (*q).pop() };
+        unsafe {
+            (*sp).should_quit.store(true, AOrd::Relaxed); // narrow atomic store
+        }
+    } else {
+        let m: &mut LThread = unsafe { &mut *sp }; // whole reborrow → pops the child tag
+        let q: *const MiniQueue = m.queue;
+        let _ = unsafe { (*q).pop() };
+        m.should_quit.store(true, AOrd::Relaxed);
+    }
+
+    // stop(): trigger a read tick so the child re-checks should_quit and breaks, then join
+    // (no ack expected — the child breaks without acking).
+    go_tx.send(0).unwrap();
+    let _ = go_tx.send(2); // belt-and-suspenders break (receiver may already be gone)
+    handle.join().unwrap();
+
+    // take the `thread` Cell (narrow, main-only) after join.
+    let _ = unsafe { (*sp).thread.take() };
+
+    let field = unsafe { (*sp).field };
+    let qlen = mq.items.lock().unwrap().len();
+    println!(
+        "loopthread_{}: field={field} qlen={qlen}",
+        if shipped { "shipped" } else { "naive" }
+    );
+    drop(boxed);
+    drop(mq);
+    drop(tty_val);
+    drop(vaxis_val);
+}
+
 fn main() {
     let which = std::env::args().nth(1).unwrap_or_default();
     match which.as_str() {
@@ -1356,6 +1585,14 @@ fn main() {
         }
         "displaycb_naive" => {
             run_displaycb(true);
+            return;
+        }
+        "loopthread_shipped" => {
+            run_loopthread(true);
+            return;
+        }
+        "loopthread_naive" => {
+            run_loopthread(false);
             return;
         }
         _ => {}

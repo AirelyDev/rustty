@@ -270,6 +270,46 @@ impl Key<'_> {
             || self.codepoint == right_control
             || self.codepoint == right_meta
     }
+
+    /// Promote this borrowed `Key<'a>` to an OWNED [`KeyOwned`] (`text` copied into a
+    /// fresh `Vec<u8>`). Used by the Loop read thread (`handle_event_generic`) to sever
+    /// `text`'s borrow into the read/parser buffer BEFORE the key crosses the queue — so
+    /// the queued event owns every byte it carries (the resolved cross-thread grapheme-
+    /// text blocker, Chunk 3b §4.5/§6). Replaces Zig's `cache.put(text)` (a shared
+    /// read-thread-local ring that wraps).
+    pub fn into_owned(&self) -> KeyOwned {
+        KeyOwned {
+            codepoint: self.codepoint,
+            text: self.text.map(|t| t.to_vec()),
+            shifted_codepoint: self.shifted_codepoint,
+            base_layout_codepoint: self.base_layout_codepoint,
+            mods: self.mods,
+        }
+    }
+}
+
+/// The OWNED image of [`Key`] — `text: Option<Vec<u8>>` instead of the borrowed
+/// `Option<&[u8]>` (all other fields are `Copy`). A queued Loop event carries a
+/// `KeyOwned` so it may be `Send + 'static` (Chunk 3b §6): a borrowed `Key<'a>` in an
+/// event variant would fail the `LoopEvent: 'static` bound. Built by [`Key::into_owned`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeyOwned {
+    /// the unicode codepoint of the key event.
+    pub codepoint: u32,
+
+    /// the text generated from the key event, owned (the Loop copies it out of the
+    /// transient ring/parser buffer).
+    pub text: Option<Vec<u8>>,
+
+    /// the shifted codepoint of this key event. This will only be present if the
+    /// Shift modifier was used to generate the event
+    pub shifted_codepoint: Option<u32>,
+
+    /// the key that would have been pressed on a standard keyboard layout. This is
+    /// useful for shortcut matching
+    pub base_layout_codepoint: Option<u32>,
+
+    pub mods: Modifiers,
 }
 
 // a few special keys that we encode as their actual ascii value
