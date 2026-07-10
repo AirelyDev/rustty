@@ -2622,6 +2622,25 @@ detection lives in the bin, ADV-FIX 2). New cli Cargo deps: `rustty-build-config
   `vaxis`/`zf` deps (same class as libxev D6 / z2d). Their plain/enumeration
   paths land in C5; the interactive render paths are deferred placeholder leaves
   (GPU/GTK/xev precedent). All 0-test → no contract impact.
+  - **`list_colors`/`list_keybinds` `prettyPrint`. ✅ RESOLVED (WIRE1).** Now
+    that `rustty-vaxis` (the full vaxis core: Vaxis/Window/Tty/ctlseqs/Style/
+    Color/prettyPrint) is landed, both interactive render paths are filled from
+    their preserved verbatim Zig bodies (`crates/rustty-cli/src/{list_colors,
+    list_keybinds}.rs`) — including `list_keybinds`' `TriggerNode`/`ChordBinding`/
+    `iterateBindings` helpers (the intrusive `std.SinglyLinkedList` ported as an
+    owned `Vec<Trigger>`; `lessThan` → `ChordBinding::cmp` for the stable
+    `sort_by`). One new cli dep: `rustty-vaxis` (leaf, acyclic G7). One cli-local
+    `Error::Tty(TtyError)` variant + `From`. The render is factored into a
+    `render_{colors,keybinds}<W: Write>` seam (pure over a `Vec<u8>` sink →
+    smoke-tested + Miri-clean) behind the `pretty_print` device wrapper (opens a
+    real `/dev/tty` → `#[ignore]`-on-device). The reference `alloc` arena is
+    ported as the `pretty_arena::Arena` (a typed-arena-style byte arena; the
+    vaxis `Window` stores each `Segment`'s `text: &'a [u8]` BY REFERENCE, so the
+    `allocPrint`'d hex/key/action bytes must outlive the screen). cli now
+    2 (`list_colors`) + 4 (`list_keybinds`) new `#[test]`s (device smokes
+    `#[ignore]`d); test-count/scoped-G3b/acyclic/clippy-D/fmt/Miri all GREEN.
+    `boo` + `list_themes`' picker remain deferred (`zf` still unported for the
+    latter).
 
 ## rustty-cli C2 (Phase-2 CLI milestone) — pure config/introspection actions + Pager
 

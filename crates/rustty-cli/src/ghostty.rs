@@ -60,6 +60,10 @@ pub enum Error {
     /// discoverer (non-macOS) is DEFERRED.
     #[cfg(target_os = "macos")]
     FontDiscover(rustty_font_shaper::discovery::Error),
+    /// A vaxis tty failure propagated from the interactive `prettyPrint` render
+    /// paths (`list_colors`/`list_keybinds`). Reference: `vaxis.Tty.init` /
+    /// `vaxis.Tty.getWinsize` `try`d into the inferred `!u8` error set.
+    Tty(rustty_vaxis::tty::TtyError),
 }
 
 impl From<std::io::Error> for Error {
@@ -110,6 +114,12 @@ impl From<rustty_config::file_load::FileLoadError> for Error {
 impl From<rustty_font_shaper::discovery::Error> for Error {
     fn from(e: rustty_font_shaper::discovery::Error) -> Self {
         Error::FontDiscover(e)
+    }
+}
+
+impl From<rustty_vaxis::tty::TtyError> for Error {
+    fn from(e: rustty_vaxis::tty::TtyError) -> Self {
+        Error::Tty(e)
     }
 }
 

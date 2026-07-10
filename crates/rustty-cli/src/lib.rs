@@ -62,6 +62,9 @@ pub mod list_keybinds;
 pub mod list_themes;
 pub mod new_window;
 pub mod pager;
+// WIRE1: the arena analogue threaded into the `list_colors`/`list_keybinds`
+// interactive `prettyPrint` render seams (the reference `arena.allocator()`).
+mod pretty_arena;
 pub mod show_config;
 pub mod show_face;
 pub mod ssh;

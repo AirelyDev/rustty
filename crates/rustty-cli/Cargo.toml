@@ -63,6 +63,11 @@ allocator-api2 = { workspace = true }
 # C4: new_window's `checkArg` uses `lib.cutPrefix` (`--class=` / `--working-directory=`
 # prefix cuts). rustty-lib is a low, strictly-earlier member — acyclic (G7).
 rustty-lib = { workspace = true }
+# C5 (WIRE1): the interactive `list_colors`/`list_keybinds` `prettyPrint` render
+# paths drive the vaxis TUI core (Tty/Vaxis/Window/ctlseqs/Style/Color/pretty_print).
+# rustty-vaxis is a low/mid vendored crate with NO edge back to cli/config/apprt,
+# so `cli -> vaxis` is a downward edge — acyclic (G7/R4).
+rustty-vaxis = { workspace = true }
 
 # Build-time codegen of the `help_strings.Action` table (R1 port of
 # helpgen.genActions): build.rs scans each cli action module's `pub fn run` doc.
