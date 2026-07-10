@@ -1042,12 +1042,22 @@ fn errno() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
 
-/// PORT (Zig-std shim): `posix.exit(code)` — terminates the process via the
-/// libc `exit` (the reference links libc), which is exactly what
-/// `std::process::exit` calls.
+/// PORT (Zig-std shim): `posix.exit(code)` — the reference links libc, so this
+/// is `std.c.exit(status)`: the libc `exit(3)` (atexit handlers + C-stdio
+/// flush) and NOTHING more. Deliberately NOT Rust's `std::process::exit`,
+/// which first runs `rt::cleanup()` — that takes the Rust stdout lock and
+/// drops/reallocates the stdout `LineWriter` (malloc/free) — work that is not
+/// async-signal-safe and therefore illegal in the forked child (between
+/// `fork` and `exec`) where this shim runs (see `start`'s allocation
+/// contract), and that would also flush the child's inherited copy of the
+/// parent's buffered stdout (duplicated output). The Zig child performs
+/// neither; matching it is the T8 fidelity fix.
+//
+// (pub(crate): Exec's `Subprocess::start` in_child arm is the reference's
+// `posix.exit(1)` — it must use this same shim.)
 #[cfg_attr(windows, allow(dead_code))]
-fn posix_exit(status: u8) -> ! {
-    std::process::exit(i32::from(status))
+pub(crate) fn posix_exit(status: u8) -> ! {
+    unsafe { libc::exit(i32::from(status)) }
 }
 
 /// PORT (Zig-std shim): `std.c.environ` — the libc-provided environment block
@@ -1391,6 +1401,20 @@ mod tests {
     use rustty_os::tempdir::TempDir;
     use std::io::{Read as _, Seek as _, SeekFrom};
 
+    // [T8] Every test below forks. Take the crate-wide fork-serialization lock
+    // (lib.rs `FORK_KAT_SERIAL`) for the test's duration: an unserialized
+    // `fork()` snapshots every open fd, leaking a concurrently-running exec
+    // KAT's pty master/slave into this test's child — on macOS a process
+    // holding a leaked slave copy can wedge SIGKILL-immune in kernel exit
+    // (pending-output drain), which is the ci-run-2026-07-10 hang. Pure
+    // serialization: every test still runs unchanged.
+    #[cfg(not(windows))]
+    fn fork_serial() -> std::sync::MutexGuard<'static, ()> {
+        crate::FORK_KAT_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     // test "createNullDelimitedEnvMap" {
     #[test]
     fn create_null_delimited_env_map() {
@@ -1449,6 +1473,9 @@ mod tests {
         // F3 DirectWrite precedent.)
         #[cfg(not(windows))]
         {
+            // [T8] serialize with every other fork KAT in this binary.
+            let _serial = fork_serial();
+
             let mut cmd: Command = Command {
                 path: c"/bin/sh",
                 args: &[c"/bin/sh", c"-v"],
@@ -1497,6 +1524,9 @@ mod tests {
         // if (builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
         {
+            // [T8] serialize with every other fork KAT in this binary.
+            let _serial = fork_serial();
+
             let mut cmd: Command = Command {
                 path: c"/bin/sh",
                 args: &[c"/bin/sh", c"-v"],
@@ -1544,6 +1574,9 @@ mod tests {
         // if (builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
         {
+            // [T8] serialize with every other fork KAT in this binary.
+            let _serial = fork_serial();
+
             let mut cmd: Command = Command {
                 path: c"/bin/sh",
                 args: &[c"/bin/sh", c"-v"],
@@ -1591,6 +1624,9 @@ mod tests {
         // if (builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
         {
+            // [T8] serialize with every other fork KAT in this binary.
+            let _serial = fork_serial();
+
             let mut cmd: Command = Command {
                 path: c"/bin/sh",
                 args: &[c"/bin/sh", c"-v"],
@@ -1638,6 +1674,9 @@ mod tests {
         // if (builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
         {
+            // [T8] serialize with every other fork KAT in this binary.
+            let _serial = fork_serial();
+
             let mut cmd: Command = Command {
                 path: c"/bin/sh",
                 args: &[c"/bin/sh", c"-c", c"sleep 1"],
@@ -1706,6 +1745,10 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // real fork/exec/waitpid syscalls (termio's G6 tool is ASan, not Miri)
     fn command_redirect_stdout_to_file() {
+        // [T8] serialize with every other fork KAT in this binary.
+        #[cfg(not(windows))]
+        let _serial = fork_serial();
+
         // var td = try TempDir.init();
         // defer td.deinit();
         let mut td = TempDir::init().unwrap();
@@ -1788,6 +1831,10 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // real fork/exec/waitpid syscalls (termio's G6 tool is ASan, not Miri)
     fn command_custom_env_vars() {
+        // [T8] serialize with every other fork KAT in this binary.
+        #[cfg(not(windows))]
+        let _serial = fork_serial();
+
         // var td = try TempDir.init();
         // defer td.deinit();
         let mut td = TempDir::init().unwrap();
@@ -1884,6 +1931,10 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // real fork/exec/waitpid syscalls (termio's G6 tool is ASan, not Miri)
     fn command_custom_working_directory() {
+        // [T8] serialize with every other fork KAT in this binary.
+        #[cfg(not(windows))]
+        let _serial = fork_serial();
+
         // var td = try TempDir.init();
         // defer td.deinit();
         let mut td = TempDir::init().unwrap();
@@ -1987,6 +2038,9 @@ mod tests {
         // if (builtin.os.tag == .windows) { return error.SkipZigTest; }
         #[cfg(not(windows))]
         {
+            // [T8] serialize with every other fork KAT in this binary.
+            let _serial = fork_serial();
+
             // var td = try TempDir.init();
             // defer td.deinit();
             let mut td = TempDir::init().unwrap();

@@ -129,6 +129,23 @@ impl core::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+// (test-support, Rust-only glue) Serialize this binary's fork-spawning KATs so
+// two never `fork()` concurrently: a `fork` snapshots EVERY open fd, so a
+// concurrent fork can leak another test's pty master/slave fds into an
+// unrelated child (the parallel-cargo-test isolation lesson). On macOS this is
+// not just an fd-hygiene issue: a SIGHUP'd `login(1)` can wedge
+// UNINTERRUPTIBLY (SIGKILL-immune, state `E`) in kernel exit draining pending
+// pty slave output, and any process holding a leaked slave fd copy can wedge
+// the same way when it exits — which is exactly the T8 CI hang
+// (ci-run-2026-07-10.log: `command_rt_pre_exec_1` + the two exec KATs stuck
+// >29min). The Zig reference never faces this because its test runner is
+// single-threaded per binary; Rust's libtest forks from a threaded process.
+// This is a serialization (every test still runs, nothing is skipped or
+// weakened) — the in-crate convention formerly private to `exec::tests` as
+// FORK_KAT_SERIAL, hoisted so `command::tests`' fork KATs share it.
+#[cfg(all(test, not(windows)))]
+pub(crate) static FORK_KAT_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // test {
 //     @import("std").testing.refAllDecls(@This());
 //

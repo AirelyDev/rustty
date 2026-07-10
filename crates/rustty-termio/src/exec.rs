@@ -2654,11 +2654,13 @@ impl Subprocess {
             // duplicate process), the `posix.exit(1)` is performed HERE — the one
             // place `in_child` is known — BEFORE the parent-only errdefer/defer
             // cleanup (which `in_child` already guards). `posix.exit ->
-            // std::process::exit` per command.rs's mapping. Behaviorally
-            // identical to the reference: the child exits 1; the parent bubbles
-            // every other error.
+            // crate::command::posix_exit` (the libc `exit(3)` shim — NOT
+            // `std::process::exit`, whose `rt::cleanup()` locks/allocates and
+            // is illegal in the forked child; T8). Behaviorally identical to
+            // the reference: the child exits 1; the parent bubbles every other
+            // error.
             if in_child {
-                std::process::exit(1);
+                crate::command::posix_exit(1);
             }
 
             // The reference errdefer/defer, now that the scoped spawn resolved:
@@ -3796,9 +3798,10 @@ mod tests {
     // the same test binary (a `fork` snapshots every open fd; concurrent
     // pty-spawning tests can leak each other's master fd into a child — the
     // parallel-cargo-test isolation lesson). Every KAT that spawns a real process
-    // takes this lock for its duration.
+    // takes this lock for its duration. (T8: hoisted to the crate root so
+    // `command::tests`' fork KATs share it — see the doc there.)
     #[cfg(target_os = "macos")]
-    static FORK_KAT_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use crate::FORK_KAT_SERIAL;
 
     // test "execCommand darwin: shell command" {
     #[test]
@@ -4238,6 +4241,31 @@ mod tests {
         assert!(fds.read >= 0, "PtyFds carries a valid master fd");
         assert_eq!(fds.read, fds.write, "read/write are both the pty master");
 
+        // [T8] Drain the pty master concurrently — the role the REAL termio
+        // read thread plays during `threadExit` (which calls `stop()` while the
+        // read thread is still draining; ghostty Exec.zig does the same).
+        // Without a reader, a SIGHUP'd `login(1)` (raced mid-startup by
+        // `stop()`) wedges UNINTERRUPTIBLY in kernel exit (state `E`,
+        // SIGKILL-immune) draining its pending slave output to the master, and
+        // `killPid`'s faithful `waitpid(WNOHANG)` loop then spins forever (an
+        // E-state proc is not reapable) — the T8 CI hang. Proven on macOS
+        // 26.5.1: reading ~37 pending bytes un-wedges the child instantly.
+        // The drainer reads until EOF (all slave refs closed at reap), exactly
+        // the upstream runtime condition; nothing this KAT asserts changed.
+        let master_fd = fds.read;
+        let drainer = std::thread::spawn(move || loop {
+            let mut buf = [0u8; 4096];
+            let n = unsafe { libc::read(master_fd, buf.as_mut_ptr().cast(), buf.len()) };
+            if n < 0
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
+            {
+                continue;
+            }
+            if n <= 0 {
+                break;
+            }
+        });
+
         // process is a pid-bearing ForkExec handle whose reference fields are
         // TRUE 'static empties (the pid-only handle, blueprint §2).
         match &subprocess.process {
@@ -4254,6 +4282,10 @@ mod tests {
         // NOT hang — the child setsid'd in childPreExec so getpgid resolves).
         subprocess.stop();
         assert!(subprocess.process.is_none(), "stop() clears the process");
+
+        // The child is reaped, so every slave fd is closed and the drainer has
+        // hit EOF; join it BEFORE closing the master (its fd copy).
+        drainer.join().expect("drainer join");
 
         // Close the master (read/write) fd so the test leaks nothing.
         unsafe {
