@@ -60,8 +60,40 @@ pub fn disableDefaultFontFeatures<F: Face + ?Sized>(face: &F) -> bool {
 // .ReleaseSmall, .ReleaseSafe, .ReleaseFast => inline fn assert(ok: bool) void {
 //     if (!ok) unreachable;
 // }
+//
+// RUST CONTRACT (DG4 policy, PORT_RULES.md "DG2/DG4"; VALIDATION_REPORT §3d):
+// the reference's `builtin.mode` switch makes this check ACTIVE in Debug and
+// ReleaseSafe (`unreachable` traps there) and ELIDED in ReleaseFast/Small
+// (`unreachable` is UB the optimizer removes — the quirk's whole purpose: the
+// check must vanish from hotpaths in the shipped ReleaseFast artifact).
+// `debug_assert!` reproduces that mode switch exactly: active under
+// debug-assertions (dev profile + the `release-safe` parity profile the
+// differential harness/CI use), compiled out in `release`/`release-fast`.
+// Where the Zig elision is UB, the Rust elision is a defined no-op — strictly
+// safer. Callers evaluate `ok` AT THE CALL SITE (a by-value fn argument), so
+// argument side effects are preserved in every profile, exactly like the Zig
+// `inline fn` whose argument is always evaluated. A previous draft used
+// always-on `assert!`, inverting the quirk's ReleaseFast-elision purpose.
 #[inline(always)]
 #[allow(non_snake_case)]
 pub fn inlineAssert(ok: bool) {
-    assert!(ok);
+    debug_assert!(ok);
+}
+
+// rustty-only tests: lock the DG4 activation contract of `inlineAssert` in the
+// lane where it is observable (`cargo test` runs with debug-assertions ON, the
+// reference's Debug/ReleaseSafe behavior: a false assert traps).
+#[cfg(test)]
+mod inline_assert_tests {
+    #[test]
+    fn inline_assert_true_is_a_noop() {
+        super::inlineAssert(true);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic]
+    fn inline_assert_false_traps_in_checked_builds() {
+        super::inlineAssert(false);
+    }
 }
