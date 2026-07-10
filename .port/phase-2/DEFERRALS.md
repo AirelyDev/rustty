@@ -2998,6 +2998,11 @@ DEFERRED (documented; not needed to unit-prove the loop):
   ported DEAD branch (never taken while `thread_pool` is None). The
   `kqueue: file IO on thread pool` test is a **SkipZigTest-style skip-stub `#[test]`**
   (count holds, reference comments preserved) — it activates with the pool body.
+  HONEST-SKIP wiring (VALIDATION_REPORT §3e): the stub is gated on a
+  `THREAD_POOL_BODY_PORTED = false` marker const (the `TMUX_DCS_WIRED`
+  precedent) and its body `include_str!`s THIS file, asserting this entry still
+  exists — deleting this entry without porting the pool body fails the test.
+  The pool-body chunk must port the live reference body AND flip the const.
 - **`Loop.init(options: Options)` → `Loop::init()` (no-arg).** ghostty's macOS
   build only ever calls `Loop.init(.{})` (default Options, no thread_pool) and
   termio's D6 seam fixes the signature to no-arg; the Options-carrying form + the

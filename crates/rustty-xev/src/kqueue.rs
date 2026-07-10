@@ -3545,11 +3545,42 @@ mod tests {
     //   // Make sure the data is on disk
     //   // Read
     //   // Wait for the send/receive
+    //
+    // HONEST-SKIP CONTRACT (VALIDATION_REPORT §3e; R5 forbids an #[ignore] and the
+    // Zap pool + `xev.File` watcher are their own chunk, not portable here): the
+    // marker const below is flipped to `true` by the ThreadPool-body chunk (the
+    // `TMUX_DCS_WIRED` precedent), and while it is `false` the test body FAILS
+    // LOUDLY unless the deferral is still tracked in the DEFERRALS ledger — the
+    // skip can never silently outlive its ledger entry.
+    /// Flipped to `true` by the ThreadPool work-stealing body chunk (§1/§6),
+    /// which must then replace the ledger-tracking arm with the live reference
+    /// body above.
+    const THREAD_POOL_BODY_PORTED: bool = false;
+
     #[test]
     fn kqueue_file_io_on_thread_pool() {
-        // Deferred: the Zap work-stealing ThreadPool body (§1/§6). The type surface
-        // (`ThreadPool.init/deinit/shutdown/schedule`, `Loop.init(.{.thread_pool})`)
-        // is ported; the live thread-pool IO path lands with the pool body.
+        if !THREAD_POOL_BODY_PORTED {
+            // Deferred: the Zap work-stealing ThreadPool body (§1/§6). The type
+            // surface (`ThreadPool.init/deinit/shutdown/schedule`,
+            // `Loop.init(.{.thread_pool})`) is ported; the live thread-pool IO
+            // path lands with the pool body. Assert the deferral is still
+            // ledgered so this skip stays visible (compile-time embed: a removed
+            // ledger entry fails this test on the next build).
+            let ledger = include_str!("../../../.port/phase-2/DEFERRALS.md");
+            assert!(
+                ledger.contains("`ThreadPool.zig` work-stealing BODY")
+                    && ledger.contains("file IO on thread pool"),
+                "the ThreadPool-body deferral vanished from DEFERRALS.md but \
+                 `kqueue_file_io_on_thread_pool` is still a skip-stub: port the \
+                 reference body (and flip THREAD_POOL_BODY_PORTED) or restore \
+                 the ledger entry"
+            );
+            return;
+        }
+        unreachable!(
+            "THREAD_POOL_BODY_PORTED flipped without porting the reference \
+             `kqueue: file IO on thread pool` body into this test"
+        );
     }
 
     // `libc::mach_task_self()` is `#[deprecated]` in libc (see async.rs PORT NOTE).
