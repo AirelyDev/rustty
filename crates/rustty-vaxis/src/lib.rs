@@ -56,7 +56,15 @@
 //! chunk 3a — the event/ctlseqs/parser input-parsing layer; chunk 3b — the tty backend
 //! and concurrency layer (queue/tty/loop_) plus the Vaxis placeholder; chunk 4a — the real
 //! `Vaxis<'a>` object + the render diff-and-emit engine, with `transmit_image`/`load_image`
-//! the only remaining zigimg R5 seams).
+//! the only remaining zigimg R5 seams; chunk 4b — the `widgets` tier + the `TextInput`
+//! gap-buffer widget).
+//!
+//! CHUNK 4b adds the first WIDGET (the new `widgets` tier, ABOVE `window`):
+//! - [`widgets`] — `widgets.zig` aggregator + [`widgets::text_input`] (`widgets/TextInput.zig`):
+//!   the single-line text-input widget over a raw-UTF-8 **gap `Buffer`** (`&[u8]`/`Vec<u8>`,
+//!   never a lossy `String`); `update(Event)` key-dispatch, cursor/word motion, delete, and a
+//!   gwidth-aware `draw` (record-then-replay — the `Cell<'a>` borrows into `self.buf`, §6).
+//!   Self-contained over `Window` → no R5 seam; a pure leaf → Miri-primary.
 
 pub mod cell;
 pub mod ctlseqs;
@@ -75,6 +83,7 @@ pub mod tty;
 pub mod unicode;
 pub mod uucode;
 pub mod vaxis;
+pub mod widgets;
 pub mod window;
 
 // so `vaxis::Loop` matches Zig's `vaxis.Loop`, and `vaxis::Tty` matches `vaxis.Tty`
