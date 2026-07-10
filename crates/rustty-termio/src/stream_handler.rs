@@ -2529,11 +2529,8 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     }
 
     // .print_repeat => try self.terminal.printRepeat(value),
-    fn print_repeat(&mut self, count: u16) {
-        let r = self
-            .term()
-            .print_repeat(count as usize)
-            .map_err(|_| crate::Error);
+    fn print_repeat(&mut self, count: usize) {
+        let r = self.term().print_repeat(count).map_err(|_| crate::Error);
         self.vt(r);
     }
 

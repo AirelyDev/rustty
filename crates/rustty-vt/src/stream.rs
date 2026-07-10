@@ -260,7 +260,13 @@ pub trait Handler {
     fn print(&mut self, _cp: u32) {}
 
     /// `print_repeat` (REP) — repeat the previous char N times.
-    fn print_repeat(&mut self, _count: u16) {}
+    //
+    // PORT NOTE (VALIDATION_REPORT §3d): the reference Action union carries
+    // `print_repeat: usize` (stream.zig:36) — the u16 CSI param WIDENS into it.
+    // An earlier draft narrowed this to `u16`; `usize` restores the reference
+    // payload type (unreachable via the VT stream, whose params are u16, but
+    // part of the handler API surface).
+    fn print_repeat(&mut self, _count: usize) {}
 
     /// `bell` (BEL)
     fn bell(&mut self) {}
@@ -1627,7 +1633,8 @@ impl<'a, H: Handler> Stream<'a, H> {
             b'b' => match input.intermediates.len() {
                 0 => self.handler.print_repeat(match input.params.len() {
                     0 => 1,
-                    1 => input.params[0],
+                    // (u16 param widens into the reference's `usize` payload.)
+                    1 => usize::from(input.params[0]),
                     _ => {
                         // log.warn("invalid print repeat command: {f}", .{input});
                         return;
@@ -2983,6 +2990,28 @@ mod tests {
         let mut s: Stream<H> = Stream::init(H { c: Some(0) });
         s.next(b'x');
         assert_eq!(120u32, s.handler.c.unwrap());
+    }
+
+    // rustty-only test (VALIDATION_REPORT §3d): the REP dispatch delivers the
+    // reference's `print_repeat: usize` payload (stream.zig:36) — the u16 CSI
+    // param widens into it; the handler signature must be usize, not u16.
+    #[test]
+    fn stream_print_repeat_payload_is_usize() {
+        struct H {
+            count: Option<usize>,
+        }
+        impl Handler for H {
+            fn print_repeat(&mut self, count: usize) {
+                self.count = Some(count);
+            }
+        }
+
+        let mut s: Stream<H> = Stream::init(H { count: None });
+        // CSI 500 b => REP with the max-clamped u16 param widened to usize 500.
+        for b in b"\x1b[500b" {
+            s.next(*b);
+        }
+        assert_eq!(Some(500usize), s.handler.count);
     }
 
     // test "simd: print invalid utf-8" { ... }

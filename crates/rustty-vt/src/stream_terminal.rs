@@ -1247,8 +1247,8 @@ impl<'a> stream::Handler for Handler<'a> {
     }
 
     // .print_repeat => try self.terminal.printRepeat(value),
-    fn print_repeat(&mut self, count: u16) {
-        self.vt(|t| t.print_repeat(count as usize));
+    fn print_repeat(&mut self, count: usize) {
+        self.vt(|t| t.print_repeat(count));
     }
 
     // .bell => self.bell(),
