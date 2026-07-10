@@ -1,5 +1,18 @@
 # rustty — Full Gap Analysis & Completion Roadmap
 
+> **SUPERSEDED-BY (stamped 2026-07-10, T14):** the live planning document is
+> `docs/superpowers/plans/2026-07-10-port-realignment-and-validation-hardening.md`
+> (+ its "New findings (2026-07-10 execution)" addendum, e.g. Task 23 W-ATTACH),
+> and the live seam ledger is `.port/phase-2/DEFERRALS.md` (reconciled to zero
+> phantom open seams, 2026-07-10). This document is a POINT-IN-TIME snapshot
+> (2026-07-08) that was contradicted by the tree within days on ~6 major claims
+> (VALIDATION_REPORT §3b): the runtime-thread workstream was already RESOLVED at
+> generation time (D6 closed 2026-07-03), macos-windowing W0–W5 landed 07-09/10,
+> the tui-cli paths were wired live, synthetic/bench/extra were ported, the §6
+> ledger backlog was reconciled, and the live seam count is now enumerated in
+> DEFERRALS.md (69 at reconciliation, not 92). See the corrected workstream
+> table at the top of §3. Do NOT drive work from this file.
+
 _Generated 2026-07-08 from the `full-gap-analysis` workflow (14 subsystem inventories + 3 completeness critics + synthesis, 18 agents). Raw per-unit data: `gap-analysis-raw.json`._
 
 > **Goal:** a FULL and COMPLETE port of ghostty (Zig 1.3.2-dev) to Rust, **reusing non-Zig code** (the Swift macOS/iOS app, dcimgui C++, GLSL/Metal shaders, GTK Blueprint XML, vendored C/C++ libs) rather than reimplementing it.
@@ -48,6 +61,21 @@ Global open-seam blocker tally (units not done/reused):
 Fully complete: **terminal-vt**, **config-input**, **os-platform**. Mostly done (headless logic ported, seams gated on windowing/threads): app-core, apprt-embedded, termio, font, cli, deps-runtime, misc-support. Not started: **apprt-gtk** (zero counterpart). Partial: renderer (offscreen done, present pending), inspector (FFI done, widgets pending), macos-swift-app (reuse pending C-ABI glue).
 
 ## 3. The completion plan — workstreams (recommended order)
+
+> **CORRECTED WORKSTREAM TABLE (2026-07-10, T14 — supersedes the per-workstream
+> prose below; evidence = git log + DEFERRALS.md reconciliation):**
+>
+> | # | workstream | status as of 2026-07-10 | residual |
+> |---|---|---|---|
+> | 1 | runtime-thread (D6) | **DONE — was already resolved when this doc was generated** (xev Milestone B, 2026-07-03; live-shell KAT) | none (windows/flatpak arms are workstream 6) |
+> | 2 | macos-windowing | **DONE through W5** (W0 540c924, W1 74c5720, W2 accbd4a, W3 8e604eb, W4 73acefa, W5 9f16b9d) | **W-ATTACH** only: core `renderer_seam::Renderer::init` host-attach (plan Task 23) |
+> | 3 | macos-swift-app | open (unchanged) | alias/xcframework decisions (§7.1) |
+> | 4 | gui-inspector | open (unchanged) | 13 apprt leaves + core activate/deactivate + widgets |
+> | 5 | tui-cli | **DONE except `boo`** (vaxis chunks 1a–4b + zf ported; list_colors/list_keybinds prettyPrint e55e39d; list_themes picker 1f88eec) | `boo.rs:22` (needs unported vxfw tier) |
+> | 6 | platform-linux-windows | open (unchanged) | fontconfig arms, windows spawn/tty, flatpak |
+> | 7 | gtk | open, not started (unchanged) | whole subsystem |
+> | 8 | unused-subset | **substantially DONE**: synthetic PORTED (fb12303, 4 binary-entry seams), benchmark PORTED (rustty-bench done, 8/8), src/extra PORTED (rustty-extra done, byte-exact goldens) | wasm target + mdgen/webgen + stb_image_resize decisions |
+> | 9 | misc-headless + ledger hygiene | **DONE** (DEFERRALS.md reconciled 2026-07-10 to zero phantom open seams; the §6 backlog below is closed) | — |
 
 ### 1. runtime-thread (D6 live xev event loop)  ·  effort **L** · risk **high**
 

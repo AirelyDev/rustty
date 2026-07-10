@@ -1,8 +1,15 @@
 //! rustty-input
 //!
-//! PORTS: ghostty src/input/ minus the 5-file VT slice owned by rustty-vt (input.zig, Binding,
-//! KeymapDarwin, KeymapNoop, Link, command, config, function_keys, helpgen_actions,
-//! key_mods, keyboard, keycodes, kitty).
+//! PORTS: ghostty src/input/ minus the VT slice owned by rustty-vt. (Ownership
+//! doc corrected 2026-07-10, VALIDATION_REPORT §3b — the old "5-file VT slice"
+//! claim under-counted it by half.) The rustty-vt slice
+//! (`crates/rustty-vt/src/input/`, 10 Rust modules incl. the aggregator `mod.rs`)
+//! owns 9 reference files: key.zig, key_encode.zig, mouse.zig, mouse_encode.zig,
+//! paste.zig, function_keys.zig, kitty.zig, plus the VT halves of config.zig
+//! (`OptionAsAlt`) and key_mods.zig (the VT-Mods half). THIS crate owns the
+//! rest: input.zig (partially carved — see below), Binding, KeymapDarwin,
+//! KeymapNoop, Link, command, keyboard, keycodes, helpgen_actions, and the
+//! config-dependent halves of config.zig / key_mods.zig.
 //!
 //! PORT STATUS: stub
 //!

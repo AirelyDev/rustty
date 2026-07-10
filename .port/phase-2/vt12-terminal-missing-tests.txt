@@ -1,3 +1,17 @@
+# RESOLVED (2026-07-10, T14 — VALIDATION_REPORT §3b): this vt-12 worklist is
+# COMPLETE. All 179 entries below are ported into crates/rustty-vt/src/ as
+# #[test] fns (re-verified 2026-07-10 by exact-name + slug-normalized match
+# against the tree: 88 exact, 89 underscore-variant slugs, 2 renames):
+#   - terminal_osc133c_at_x_0_on_prompt_row_does_not_clear_prompt_mark was a
+#     GARBLED slug conflating two reference tests ("OSC133C at x=0 ... clears"
+#     Terminal.zig:12283 + "OSC133C at x>0 ... does not clear" :12322); BOTH are
+#     ported: terminal.rs:15662 terminal_osc133c_at_x0_on_prompt_row_clears_prompt_mark
+#     + terminal.rs:15710 terminal_osc133c_at_xgt0_on_prompt_row_does_not_clear_prompt_mark.
+#   - terminal_print_grapheme_o_o_with_nonspacing_mark_should_be_narrow ->
+#     terminal_print_grapheme_o_with_nonspacing_mark_should_be_narrow
+#     (terminal.rs:5252; the reference title's "ò (o ..." collapses to one o in
+#     the Rust slug — Terminal.zig:4465).
+# The list is kept verbatim below for provenance. Do NOT use as a worklist.
 terminal_cursordown_above_bottom_scroll_margin
 terminal_cursordown_below_bottom_scroll_margin
 terminal_cursorleft_extended_reverse_wrap

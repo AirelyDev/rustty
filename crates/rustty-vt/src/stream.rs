@@ -6,9 +6,17 @@
 //! `next`/`next_slice`, the action router, and the full
 //! `csi`/`osc`/`esc`/`dcs`/`apc` dispatch, with `TestHandler`s + all 38 tests.
 //!
-//! DEFERRED SEAM: the SIMD `next_slice` fast path (`nextSliceCapped`, gated on
-//! `options::SIMD`) — see `.port/phase-2/DEFERRALS.md`. The scalar fallback (the
-//! reference's own non-SIMD arm) runs unconditionally and is fully exercised.
+//! SIMD STATUS (realigned 2026-07-10, VALIDATION_REPORT §3b — the former
+//! "DEFERRED SEAM" wording here was stale): the SIMD `next_slice` fast path
+//! (`nextSliceCapped` + `consumeUntilGround` over
+//! `rustty_simd::vt::utf8DecodeUntilControlSeq`) is PORTED and LIVE — RESOLVED
+//! Stage A.1, see `.port/phase-2/DEFERRALS.md` "Deferred to Dispatch/SIMD
+//! phase". It stays gated on `options::SIMD` (the reference's own
+//! `comptime debug or !build_options.simd` switch): `SIMD` defaults to `false`
+//! (`cfg!(feature = "simd")`), so the scalar fallback — the reference's own
+//! non-SIMD arm — runs unconditionally by default, and the SIMD arm is
+//! exercised under `--features simd` (all 38 stream tests pass in both modes;
+//! Miri covers the scalar arm, ASan the C-FFI SIMD arm per MIRI_EXCEPTIONS.md).
 
 // PORT NOTE: the dispatch routines are a verbatim retargeting of the reference's
 // `switch` statements (notably `switch (input.intermediates.len)` /
