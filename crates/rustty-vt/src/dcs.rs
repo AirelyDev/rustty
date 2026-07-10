@@ -740,9 +740,15 @@ mod tests {
         // enter/exit wiring sub-batch lands (the `()` `TmuxState`/`TmuxCommand`
         // stubs + `unreachable!()` hook are still in place), so we keep deferring
         // under `--features oniguruma` too rather than asserting against a stub.
-        // This preserves the assertion inventory (the body is a verbatim faithful
-        // port) and is tracked in `.port/phase-2/DEFERRALS.md`. Neither the
-        // default (2019) nor the oniguruma test count changes: the test still
+        //
+        // ASSERTION INVENTORY (honest count): the dormant body below carries 2 of
+        // the reference's 4 expects (`cmd == .tmux`, twice). The 2 VARIANT asserts
+        // (`cmd.tmux == .enter`, `cmd.tmux == .exit`) CANNOT be expressed against
+        // the `()` `TmuxCommand` stub and are held as `DEFERRED ASSERT` comment
+        // lines at their sites below — the tmux wiring sub-batch MUST restore them
+        // when `TmuxCommand` becomes the real `ControlNotification` (tracked in
+        // `.port/phase-2/DEFERRALS.md`, "DCS <-> tmux enter/exit wiring"). Neither
+        // the default (2019) nor the oniguruma test count changes: the test still
         // counts as a passed no-op in both builds.
         if !build_options::TMUX_CONTROL_MODE || !TMUX_DCS_WIRED {
             return;
@@ -764,6 +770,9 @@ mod tests {
                 )
                 .unwrap();
             assert!(matches!(cmd, Command::Tmux(_)));
+            // DEFERRED ASSERT (DEFERRALS.md "DCS <-> tmux enter/exit wiring"):
+            // inexpressible against the `()` `TmuxCommand` stub; the wiring
+            // sub-batch MUST restore it as a live assert:
             // try testing.expect(cmd.tmux == .enter);
             cmd.deinit();
         }
@@ -771,6 +780,9 @@ mod tests {
         {
             let mut cmd = h.unhook().unwrap();
             assert!(matches!(cmd, Command::Tmux(_)));
+            // DEFERRED ASSERT (DEFERRALS.md "DCS <-> tmux enter/exit wiring"):
+            // inexpressible against the `()` `TmuxCommand` stub; the wiring
+            // sub-batch MUST restore it as a live assert:
             // try testing.expect(cmd.tmux == .exit);
             cmd.deinit();
         }

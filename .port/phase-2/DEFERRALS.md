@@ -351,8 +351,12 @@ which would otherwise make the faithful `tmux_enter_and_implicit_exit` test asse
 against that stub (it panicked at the `unreachable!()`). The test now ALSO defers
 while `!TMUX_DCS_WIRED` — a `false` marker const in `dcs.rs` `mod tests`, flipped
 to `true` by the wiring sub-batch — so it stays a passing no-op in BOTH the default
-(2019) and `--features oniguruma` (2030) builds; the faithful body is preserved
-verbatim (R1, not weakened). This is NOT one of the StringMap gaps above — it is a
+(2019) and `--features oniguruma` (2030) builds. ASSERTION INVENTORY (honest count,
+VALIDATION_REPORT §3e): the dormant body carries 2 of the reference's 4 expects
+(`cmd == .tmux`, twice); the 2 VARIANT asserts (`cmd.tmux == .enter`,
+`cmd.tmux == .exit`) are inexpressible against the `()` `TmuxCommand` stub and are
+held as `DEFERRED ASSERT` comment lines at their sites — the wiring sub-batch MUST
+restore them as live asserts. This is NOT one of the StringMap gaps above — it is a
 pre-existing stub exposed by turning the flag on. **Target: the vt tmux
 control-mode DCS wiring sub-batch (replaces the `()` stubs + `unreachable!()` and
 flips `TMUX_DCS_WIRED` to `true`, enabling the test body).**
