@@ -40,14 +40,23 @@
 //!   queued `T` OWNS its grapheme text via `Key::into_owned`; `handle_event_generic`
 //!   ported LIVE against the [`vaxis::Vaxis`] placeholder; the `LoopEvent` trait for
 //!   Zig's `@hasField`)
-//! - [`vaxis`] — the INHABITED `Vaxis` placeholder (placeholder-leaf-doctrine; the
-//!   capability-flag writes are live, the Vaxis-method leaves defer to a later chunk)
+//! - [`vaxis`] — the Vaxis placeholder (Chunk 3b), later REPLACED by the real `Vaxis<'a>`
+//!
+//! CHUNK 4a REPLACES the placeholder with the real `Vaxis<'a>` — the main object + the
+//! render diff-and-emit engine:
+//! - [`vaxis`] — `Vaxis.zig` (the `Vaxis<'a>` struct: caps/screen/screen_last/state/opts +
+//!   the query-futex; init/deinit/reset_state/resize/alt-screen/window; queryTerminal/
+//!   deviceStatusReport capability queries; the RENDER diff-and-emit engine and its simpler
+//!   `pretty_print` mirror; the setters/queries; the portable kitty-graphics transmit paths.
+//!   The two `zigimg`-decode paths (`transmit_image`/`load_image`) are R5 seams. Filling the
+//!   placeholder threaded `'a` through `Loop<'a, T>`.)
 //!
 //! PORT STATUS: done (chunk 1a — value types; chunk 1b — gwidth/unicode + the uucode
 //! width/grapheme tables; chunk 2 — the Screen/InternalScreen/Window rendering layer;
 //! chunk 3a — the event/ctlseqs/parser input-parsing layer; chunk 3b — the tty backend
-//! and concurrency layer (queue/tty/loop_) plus the Vaxis placeholder; the full Vaxis is
-//! a later chunk).
+//! and concurrency layer (queue/tty/loop_) plus the Vaxis placeholder; chunk 4a — the real
+//! `Vaxis<'a>` object + the render diff-and-emit engine, with `transmit_image`/`load_image`
+//! the only remaining zigimg R5 seams).
 
 pub mod cell;
 pub mod ctlseqs;

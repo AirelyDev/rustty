@@ -102,11 +102,13 @@ pub trait LoopEvent: Sized + Send + 'static {
     // (no cap_* constructors: caps set vx.caps, never postEvent'd)
 }
 
-pub struct Loop<T> {
+pub struct Loop<'a, T> {
     /// Zig `tty: *Tty`. Raw so the read thread can project it narrowly.
     pub tty: *mut Tty,
-    /// Zig `vaxis: *Vaxis` (the §5 placeholder).
-    pub vaxis: *mut Vaxis,
+    /// Zig `vaxis: *Vaxis`. `Vaxis<'a>` gained a lifetime (it owns `Screen<'a>`), so the
+    /// raw pointer threads `'a`; the Loop router never names the borrowed graphemes, so the
+    /// threading is a pure annotation exercise (VAXIS_C4A_DESIGN §3).
+    pub vaxis: *mut Vaxis<'a>,
     /// internally-synced (§2) — both threads hold only `&Queue`.
     queue: Queue<T, 512>,
     /// Zig `thread: ?std.Thread`. A `Cell` (interior-mutable through `&self`): `start`/
@@ -123,17 +125,24 @@ pub struct Loop<T> {
 /// A `Send` newtype carrying the raw `*mut Loop<T>` into the read thread (§4.2). Sound:
 /// the pointee is pinned for the thread's life and only ever touched via narrow field
 /// projections on both sides.
-struct SendLoop<T>(*mut Loop<T>);
+// PORT-NOTE (`'a` erasure across the thread boundary): `std::thread::spawn` requires a
+// `'static` closure, so `SendLoop` carries a LIFETIME-ERASED `*mut Loop<'static, T>` (cast
+// in `start`). This is sound: the read thread only projects lifetime-agnostic fields
+// (`tty`/`vaxis` caps/state/`screen.width_method`/`queries_done`/`query_futex`) and NEVER
+// dereferences the `'a`-borrowed cell graphemes; the pointee (a `Loop<'a, T>`) outlives the
+// thread (pinned by the owner), so reading those `'a`-free fields through the erased pointer
+// is valid.
+struct SendLoop<T>(*mut Loop<'static, T>);
 // SAFETY: the raw self-pointer is only projected narrowly (see the module aliasing
 // discipline); the pointee outlives the thread (pinned by the owner).
 unsafe impl<T> Send for SendLoop<T> {}
 
-impl<T: LoopEvent> Loop<T> {
+impl<'a, T: LoopEvent> Loop<'a, T> {
     /// Construct the Loop over a tty + Vaxis (Zig `.{ .tty = &tty, .vaxis = &vx }`). The
     /// caller passes raw pointers to a PINNED `tty`/`vaxis` that outlive the Loop. The
     /// Loop itself must then be pinned (Box/stack held for the read thread's life)
     /// before `init`/`start` — the intrusive-init requirement below.
-    pub fn new(tty: *mut Tty, vaxis: *mut Vaxis) -> Self {
+    pub fn new(tty: *mut Tty, vaxis: *mut Vaxis<'a>) -> Self {
         Loop {
             tty,
             vaxis,
@@ -168,8 +177,12 @@ impl<T: LoopEvent> Loop<T> {
         if already {
             return Ok(());
         }
-        let self_ptr: *mut Loop<T> = self as *const Self as *mut Self;
-        let send = SendLoop(self_ptr);
+        let self_ptr: *mut Loop<'a, T> = self as *const Self as *mut Self;
+        // Erase `'a` for the thread boundary (see the SendLoop PORT-NOTE). clippy sees the
+        // cast as a no-op because it ignores lifetimes, but it is load-bearing: raw pointers
+        // are invariant, so `*mut Loop<'a, T>` does NOT coerce to `*mut Loop<'static, T>`.
+        #[allow(clippy::unnecessary_cast)]
+        let send = SendLoop(self_ptr as *mut Loop<'static, T>);
         // PORT-NOTE: Zig passes `self.vaxis.opts.system_clipboard_allocator` as the paste
         // allocator; dropped here (paste owns its `Vec`, §5/3a precedent).
         let handle = std::thread::Builder::new().spawn(move || {
@@ -190,7 +203,7 @@ impl<T: LoopEvent> Loop<T> {
         self.should_quit.store(true, Ordering::Relaxed);
         // trigger a read (narrow projections; `tty`/`vaxis` are SEPARATE allocations, so
         // no whole-`&mut Loop` is formed). Errors ignored (Zig `catch {}`).
-        let self_ptr: *mut Loop<T> = self as *const Self as *mut Self;
+        let self_ptr: *mut Loop<'a, T> = self as *const Self as *mut Self;
         unsafe {
             let vx = (*self_ptr).vaxis;
             let tty = (*self_ptr).tty;
@@ -231,7 +244,7 @@ impl<T: LoopEvent> Loop<T> {
     /// casts back and projects narrow fields only (§4.2 rule 2). `extern "C"` so it can
     /// adapt the signal-handler ABI.
     pub extern "C" fn winsize_callback(ptr: *mut c_void) {
-        let self_ptr = ptr as *mut Loop<T>;
+        let self_ptr = ptr as *mut Loop<'a, T>;
         unsafe {
             // We will be receiving winsize updates in-band
             if (*(*self_ptr).vaxis).state.in_band_resize {
@@ -301,7 +314,7 @@ impl<T: LoopEvent> Loop<T> {
 
                     match result.event {
                         None => continue,
-                        Some(event) => handle_event_generic::<T>(sp, (*sp).vaxis, event),
+                        Some(event) => handle_event_generic(sp, (*sp).vaxis, event),
                     }
                 }
             }
@@ -332,9 +345,9 @@ impl<T: LoopEvent> Loop<T> {
 /// `self_ptr`/`vx` must be valid, and the caller must hold no conflicting whole-`&mut`.
 ///
 // Use return on the self.post_event's so it can either return error union or void
-pub unsafe fn handle_event_generic<T: LoopEvent>(
-    self_ptr: *mut Loop<T>,
-    vx: *mut Vaxis,
+pub unsafe fn handle_event_generic<'a, T: LoopEvent>(
+    self_ptr: *mut Loop<'a, T>,
+    vx: *mut Vaxis<'a>,
     event: Event<'_>,
 ) {
     unsafe {
@@ -470,18 +483,17 @@ pub unsafe fn handle_event_generic<T: LoopEvent>(
     }
 }
 
-// The one Zig `test Loop` — needs the real `Vaxis` (`vaxis.init`, `enterAltScreen`,
-// `queryTerminal`, `deviceStatusReport`) which are §5 placeholder `unimplemented!()`
-// leaves, so it is `#[ignore]` (unblocks when the Vaxis chunk fills the placeholder).
-// `tty_run` returns early in test mode, so it only asserts the init/start/stop lifecycle
-// compiles + runs against `TestTty`. It still counts toward `check_test_counts`.
+// The one Zig `test Loop`. Now that the Vaxis chunk (C4a) FILLED the placeholder leaves
+// (`device_status_report` is real), the init/start/stop lifecycle runs to completion, so it
+// is UN-IGNORED. `tty_run` returns early in test mode, so it asserts the init/start/stop
+// lifecycle compiles + runs against `TestTty`. It counts toward `check_test_counts`.
 #[cfg(test)]
 mod tests {
     use super::*;
 
     // The test's event type: `{ key_press, winsize, focus_in, foo }` — impls only those
     // three `LoopEvent` constructors (the rest default to `None` ≡ `@hasField` false).
-    // (Payloads are never read: the `#[ignore]`d test only drives the lifecycle.)
+    // (Payloads are never read: the test only drives the init/start/stop lifecycle.)
     #[derive(Debug)]
     #[allow(dead_code)]
     enum TestEvent {
@@ -504,12 +516,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs the real Vaxis (init/enterAltScreen/queryTerminal) — placeholder leaf; on-device"]
     fn loop_lifecycle() {
         let mut tty = Tty::init(Vec::new()).unwrap();
         let mut vx = Vaxis::default();
 
-        let l: Loop<TestEvent> = Loop::new(&mut tty, &mut vx);
+        let l: Loop<'_, TestEvent> = Loop::new(&mut tty, &mut vx);
         l.init().unwrap();
 
         l.start().unwrap();
