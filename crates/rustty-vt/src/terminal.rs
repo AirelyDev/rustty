@@ -481,7 +481,7 @@ impl Drop for SemanticIndexGuard {
         } else {
             // This should never be set in the output mode.
             // assert(!screen.cursor.semantic_content_clear_eol);
-            assert!(!unsafe { (*screen).cursor.semantic_content_clear_eol });
+            debug_assert!(!unsafe { (*screen).cursor.semantic_content_clear_eol });
         }
     }
 }
@@ -775,7 +775,16 @@ impl Terminal {
                         let cps = unsafe { (*page).lookup_grapheme(prev_cell) }.unwrap();
                         for &cp2 in cps {
                             // log.debug("cp1={x} cp2={x}", .{ previous_codepoint, cp2 });
-                            assert!(!unicode::graphemeBreak(previous_codepoint, cp2, &mut state));
+                            // assert(!unicode.graphemeBreak(previous_codepoint, cp2, &state));
+                            //
+                            // DG4 (PORT_RULES.md "DG2/DG4"): `assert` here is
+                            // `quirks.inlineAssert` -> `debug_assert!`. The call
+                            // MUTATES `state` (the reference's `inline fn` argument
+                            // is evaluated in every build mode), so it must run
+                            // UNCONDITIONALLY outside the macro — `debug_assert!`
+                            // would drop the side effect in unchecked builds.
+                            let brk = unicode::graphemeBreak(previous_codepoint, cp2, &mut state);
+                            debug_assert!(!brk);
                             previous_codepoint = cp2;
                         }
                     }
@@ -1027,7 +1036,7 @@ impl Terminal {
         // Note: it is possible to have a width of "3" and a width of "-1" from
         // uucode.x's wcwidth. We should look into those cases and handle them
         // appropriately.
-        assert!(width <= 2);
+        debug_assert!(width <= 2);
         // log.debug("c={x} width={}", .{ c, width });
 
         // Attach zero-width characters to our cell as grapheme data.
@@ -1257,7 +1266,7 @@ impl Terminal {
                 }
 
                 pagepkg::Wide::SpacerTail => {
-                    assert!(unsafe { (*active).cursor.x } > 0);
+                    debug_assert!(unsafe { (*active).cursor.x } > 0);
 
                     // So integrity checks pass. We fix this up later so we don't
                     // need to do this without safety checks.
@@ -1315,7 +1324,7 @@ impl Terminal {
 
             // Release the old style.
             if unsafe { (*cell).style_id() } != style::DEFAULT_ID {
-                assert!(unsafe { (*(*active).cursor.page_row).styled() });
+                debug_assert!(unsafe { (*(*active).cursor.page_row).styled() });
                 unsafe {
                     let base = (*page).memory_ptr();
                     (*page).styles.release(base, (*cell).style_id());
@@ -1362,7 +1371,7 @@ impl Terminal {
         if unsafe { (*active).cursor.hyperlink_id } > 0 {
             if let Err(_err) = self.active_mut().cursor_set_hyperlink() {
                 // log.warn("error reallocating for more hyperlink space, ignoring hyperlink err={}", .{err});
-                assert!(!unsafe { (*cell).hyperlink() });
+                debug_assert!(!unsafe { (*cell).hyperlink() });
             }
         } else if had_hyperlink {
             // If the previous cell had a hyperlink then we need to clear it.
@@ -1441,7 +1450,7 @@ impl Terminal {
         single: bool,
     ) {
         if single {
-            assert!(active == charsets::ActiveSlot::GL);
+            debug_assert!(active == charsets::ActiveSlot::GL);
             self.active_mut().charset.single_shift = Some(slot);
             return;
         }
@@ -1722,7 +1731,7 @@ impl Terminal {
             //     break;
             // }
             if unsafe { (*self.screens.active).cursor.y } == 0 {
-                assert!(unsafe { (*self.screens.active).cursor.x } == left_margin);
+                debug_assert!(unsafe { (*self.screens.active).cursor.x } == left_margin);
                 break;
             }
 
@@ -2350,9 +2359,9 @@ impl Terminal {
             // would be better option but this is more efficient and this is
             // a super hot path so we do this instead.
             // assert(screen.cursor.x == old_cursor.x);
-            assert!(unsafe { (*screen).cursor.x } == old_cursor_x);
+            debug_assert!(unsafe { (*screen).cursor.x } == old_cursor_x);
             // assert(screen.cursor.y == old_cursor.y);
-            assert!(unsafe { (*screen).cursor.y } == old_cursor_y);
+            debug_assert!(unsafe { (*screen).cursor.y } == old_cursor_y);
             // screen.cursor.y -= 1;
             unsafe { (*screen).cursor.y -= 1 };
             // screen.cursorDown(1);
@@ -3435,7 +3444,7 @@ impl Terminal {
         if unsafe { (*(*self.screens.active).cursor.page_cell).wide() } == pagepkg::Wide::SpacerTail
         {
             // assert(self.screens.active.cursor.x > 0);
-            assert!(unsafe { (*self.screens.active).cursor.x } > 0);
+            debug_assert!(unsafe { (*self.screens.active).cursor.x } > 0);
             // self.screens.active.clearCells(page, self.screens.active.cursor.page_row, (left - 1)[0..2]);
             let row: *mut Row = unsafe { (*self.screens.active).cursor.page_row };
             let cells = core::ptr::slice_from_raw_parts_mut(unsafe { left.sub(1) }, 2);
@@ -3489,7 +3498,7 @@ impl Terminal {
                 // const end_multi: [*]Cell = @ptrCast(end);
                 let end_multi: *mut pagepkg::Cell = end;
                 // assert(end_multi[1].wide == .spacer_tail);
-                assert!(unsafe { (*end_multi.add(1)).wide() } == pagepkg::Wide::SpacerTail);
+                debug_assert!(unsafe { (*end_multi.add(1)).wide() } == pagepkg::Wide::SpacerTail);
                 // self.screens.active.clearCells(page, self.screens.active.cursor.page_row, end_multi[0..2]);
                 let row: *mut Row = unsafe { (*self.screens.active).cursor.page_row };
                 let cells = core::ptr::slice_from_raw_parts_mut(end_multi, 2);
@@ -3899,7 +3908,7 @@ impl Terminal {
                 }
 
                 // Unsets pending wrap state. Should be done by eraseLine.
-                assert!(!unsafe { (*self.screens.active).cursor.pending_wrap });
+                debug_assert!(!unsafe { (*self.screens.active).cursor.pending_wrap });
             }
 
             csi::EraseDisplay::Above => {
@@ -3920,7 +3929,7 @@ impl Terminal {
                 }
 
                 // Unsets pending wrap state
-                assert!(!unsafe { (*self.screens.active).cursor.pending_wrap });
+                debug_assert!(!unsafe { (*self.screens.active).cursor.pending_wrap });
             }
 
             csi::EraseDisplay::Scrollback => self.active_mut().erase_history(None),
