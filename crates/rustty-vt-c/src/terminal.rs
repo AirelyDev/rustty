@@ -675,10 +675,17 @@ fn new_(alloc_: Option<&CAllocator>, opts: Options) -> std::result::Result<Termi
     // Setup our stream with trampolines always installed so that
     // setting C callbacks at any time takes effect immediately.
     // var handler: Stream.Handler = t.vtHandler();
-    // SAFETY: `terminal_ptr` is a freshly-boxed, uniquely-owned `ZigTerminal`;
-    // `vt_handler` only reads `&mut *terminal_ptr` to capture its address into
-    // the returned `Handler` (no aliasing handler exists yet).
-    let mut handler: Handler<'static> = unsafe { (*terminal_ptr).vt_handler() };
+    // SB (SOUNDNESS): build the Handler DIRECTLY from the heap box's base raw
+    // pointer. Going through `(*terminal_ptr).vt_handler()` would autoref a
+    // temporary `&mut ZigTerminal` and the handler would store a child of that
+    // temporary's tag — the FIRST later `&mut`-method call on the terminal
+    // from any export (e.g. `resize`'s `(*t).gpa()`) would pop it and make
+    // every subsequent `vt_write` Stacked-Borrows UB (Miri-caught via the
+    // kitty `image_get_multi_success` KAT). With the base tag, transient
+    // `&mut` children created by exports die at the next handler use instead
+    // of killing it — the rust-mut-args-strongly-protected rule; the
+    // reference's `t.vtHandler()` is a plain unprotected Zig pointer copy.
+    let mut handler: Handler<'static> = Handler::init(terminal_ptr);
 
     // handler.effects = .{ .write_pty = &Effects.writePtyTrampoline, ... };
     handler.effects = rustty_vt::stream_terminal::Effects {

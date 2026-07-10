@@ -402,6 +402,14 @@ fn display(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Response
         rows: p.rows,
         z: p.z,
     };
+    // SB: the `storage` reference taken at the top of `display` dies the
+    // moment the cursor-pin block above takes its own
+    // `&mut *terminal.screens.active` (Stacked Borrows pops the older tag;
+    // Miri-caught through the vt-c kitty transmit KAT). Re-derive it from the
+    // raw base pointer here so each alias stays scoped, exactly as the PORT
+    // NOTE above prescribes; the reference's `storage` is a plain Zig pointer
+    // with no such invalidation.
+    let storage = unsafe { &mut (*terminal.screens.active).kitty_images };
     if let Err(err) = storage.add_placement(alloc, img.id, result.placement_id, p) {
         // p.deinit(terminal.screens.active);
         p_copy.deinit(unsafe { &mut *terminal.screens.active });

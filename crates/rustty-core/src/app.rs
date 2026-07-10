@@ -1389,7 +1389,13 @@ mod test_runtime {
         assert_eq!(app.findSurfaceByID(1), Some(core));
         assert!(app.findSurfaceByID(2).is_none());
 
-        rt_app.actions.lock().unwrap().clear();
+        // SB: clear through the SAME raw alias `deleteSurface` will write
+        // through (`rt_surface.app`) — a fresh `&mut`-derived access via the
+        // owner `rt_app` here would pop the alias tag stored at construction
+        // and make the `perform_action` recording below Stacked-Borrows UB
+        // (Miri-caught; the shaper-hook interleave rule: route mid-test
+        // mutations via the alias's own pointer, never the owner).
+        unsafe { (*rt_surface.app).actions.lock().unwrap().clear() };
         app.deleteSurface(&mut rt_surface);
         assert!(app.surfaces.is_empty());
         assert_eq!(

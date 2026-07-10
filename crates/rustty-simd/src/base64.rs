@@ -9,8 +9,16 @@ use rustty_util::quirks::inlineAssert as assert;
 /// reference's `build_options.simd`, which defaults to `true`.
 const SIMD: bool = true;
 
+// PORT NOTE (Miri): Miri cannot execute the C/C++ side of the FFI ("can't
+// call foreign function"), so under Miri the two entry points below take the
+// scalar lane instead — the exact code the reference builds when
+// `build_options.simd` is off, with identical output by construction (see
+// `scalar_input`). `cfg!(miri)` is const-false in every real build, so the
+// SIMD lane is untouched everywhere else (in-repo precedent: the `cfg(miri)`
+// std-heap allocator fallback in rustty-vt pagelist/mod.rs). The SIMD lane
+// itself stays covered by this crate's ASan G6 route and `cargo test`.
 pub fn max_len(input: &[u8]) -> usize {
-    if SIMD {
+    if SIMD && !cfg!(miri) {
         return unsafe { ghostty_simd_base64_max_length(input.as_ptr(), input.len()) };
     }
 
@@ -35,7 +43,8 @@ fn max_len_scalar(input: &[u8]) -> usize {
 pub struct Base64Invalid;
 
 pub fn decode<'a>(input: &[u8], output: &'a mut [u8]) -> Result<&'a [u8], Base64Invalid> {
-    if SIMD {
+    // See the Miri PORT NOTE on `max_len`.
+    if SIMD && !cfg!(miri) {
         let res =
             unsafe { ghostty_simd_base64_decode(input.as_ptr(), input.len(), output.as_mut_ptr()) };
         if res < 0 {

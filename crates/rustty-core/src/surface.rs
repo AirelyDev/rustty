@@ -13603,6 +13603,16 @@ mod renderer_config_tests {
 
     // T1 — a real `DerivedConfig` derived from a real `Config`.
     #[test]
+    // Miri cannot execute the oniguruma C FFI this test deliberately reaches
+    // (`extern static OnigEncodingUTF8`, via `link::Set::from_config` regex
+    // compilation): "unsupported operation", not a soundness verdict. Covered
+    // natively by `cargo test --workspace` (CI HARD step 4) and by the
+    // rustty-config/rustty-oniguruma ASan G6 lanes. See MIRI_EXCEPTIONS.md
+    // ("rustty-core renderer_config_tests").
+    #[cfg_attr(
+        miri,
+        ignore = "real Config compiles link regexes through oniguruma C FFI (extern static OnigEncodingUTF8) — un-executable under Miri; ASan + native lanes cover it"
+    )]
     fn renderer_derived_config_from_real_config() {
         // OnceLock C-init guard (memory `parallel-cargo-test-exposes-c-init-races`):
         // `init<C>` reaches `link::Set::from_config`, which compiles the default
@@ -13623,6 +13633,12 @@ mod renderer_config_tests {
 
     // T2 — a real `Message::ChangeConfig` end-to-end (no `Surface` needed).
     #[test]
+    // Same Miri FFI limit as T1 above (oniguruma extern static via the real
+    // `Config`); same native + ASan coverage. See MIRI_EXCEPTIONS.md.
+    #[cfg_attr(
+        miri,
+        ignore = "real Config compiles link regexes through oniguruma C FFI (extern static OnigEncodingUTF8) — un-executable under Miri; ASan + native lanes cover it"
+    )]
     fn init_change_config_from_real_config() {
         // OnceLock C-init guard (see T1).
         oni::testing::ensure_init().unwrap();

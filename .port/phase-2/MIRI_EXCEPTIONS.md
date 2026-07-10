@@ -800,3 +800,34 @@ mach-port wakeup (`crates/rustty-os/tests/cf_release_live.rs`).
 **Standing rule:** adding a binary to `live_ffi_tests()` without a matching
 section here is a gate violation — `check_leaks.sh`'s comment points at this
 file, and review must reject unmatched additions.
+
+## rustty-core `renderer_config_tests` (T1/T2 real-Config seam tests) — in-lib `cfg_attr(miri, ignore)`
+
+`surface.rs` `renderer_config_tests::{renderer_derived_config_from_real_config,
+init_change_config_from_real_config}` — the renderer-config accessor-trait seam
+tests that deliberately build a REAL `Config` (they even carry the
+`oni::testing::ensure_init()` OnceLock C-init guard).
+
+1. **Structurally impossible under Miri.** Building the default `Config`
+   compiles the default link regex through the vendored oniguruma C FFI; Miri
+   hard-errors: "unsupported operation: extern static `OnigEncodingUTF8` is not
+   supported by Miri" (phase-1/2 close run, 2026-07-10; surfaced the moment the
+   earlier `app.rs` seam-test SB fix let the rustty-core Miri lane run past
+   `add_and_delete_surface_drive_the_quit_timer`). No Miri budget admits an
+   extern static of a non-Rust library.
+2. **Passes natively** — both tests run green in `cargo test --workspace`
+   (CI HARD step 4) on every run.
+3. **No uncovered unsafe path.** The C surface they reach is oniguruma, whose
+   designated R6 verifier is the ASan lane (`rustty-oniguruma` and
+   `rustty-config` are both `FFI_CRATES` rows in `check_leaks.sh`). The
+   pure-Rust logic they exercise (accessor trait plumbing, `DerivedConfig`
+   clamps/casts, `Message::ChangeConfig` box building) has no unsafe of its
+   own; rustty-core's remaining unit surface (20 tests incl. every app-seam
+   raw-pointer test) stays in the Miri lane.
+4. **The blocker is the foreign static, not logic.** A Miri-compatible variant
+   would need a fake `Config` without compiled links and would no longer be
+   the "real `Config` end-to-end" contract these tests exist to lock.
+
+Both tests are individually annotated at source with this reason
+(`crates/rustty-core/src/surface.rs`, `#[cfg_attr(miri, ignore = ...)]`), the
+same convention as the 58 pre-existing real-OS-state in-lib ignores.

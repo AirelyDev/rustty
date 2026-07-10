@@ -94,9 +94,13 @@ pub struct RowIteratorWrapper {
     pub y: Option<size::CellCountInt>,
 
     /// These are the raw pointers into the render state data.
-    // PORT NOTE: `raws`/`cells`/`selection`/`dirty` collapse to a raw `*const
+    // PORT NOTE: `raws`/`cells`/`selection`/`dirty` collapse to a raw `*mut
     // [Row]` (ptr+len) since rustty-vt's `RenderState` owns rows as `Vec<Row>`.
-    pub rows: *const [RenderRow],
+    // MUT provenance is required: the reference MultiArrayList slices are
+    // writable and `row_set(.dirty)` writes through this pointer — a
+    // `*const`-derived (SharedReadOnly) tag cast to `*mut` still forbids the
+    // write under Stacked Borrows (Miri-caught in `render_row_get_set_dirty`).
+    pub rows: *mut [RenderRow],
 
     /// The color palette from the render state, needed to resolve
     /// palette-indexed background colors on cells.
@@ -552,7 +556,9 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
             // const row_data = state.state.row_data.slice();
             // it.* = .{ .alloc = it.alloc, .y = null, .raws = row_data.items(.raw), ... .palette = &state.state.colors.palette };
             it.y = None;
-            it.rows = state.state.row_data.as_slice() as *const [RenderRow];
+            // MUT slice: `row_set(.dirty)` later writes through this pointer,
+            // so it must carry write provenance (see the field's PORT NOTE).
+            it.rows = state.state.row_data.as_mut_slice() as *mut [RenderRow];
             it.palette = &state.state.colors.palette as *const Palette;
         }
         // .color_background => out.* = state.state.colors.background.cval(),
@@ -801,7 +807,12 @@ pub unsafe fn row_iterator_new(alloc_: Option<&CAllocator>, result: *mut RowIter
     let ptr = Box::into_raw(Box::new(RowIteratorWrapper {
         alloc,
         y: None,
-        rows: &[] as *const [RenderRow],
+        // Empty placeholder slice (never dereferenced: `len == 0` makes
+        // `row_iterator_next` return false; `get` installs the real slice).
+        rows: std::ptr::slice_from_raw_parts_mut(
+            std::ptr::NonNull::<RenderRow>::dangling().as_ptr(),
+            0,
+        ),
         palette: std::ptr::null(),
     }));
     // result.* = ptr;
@@ -1545,19 +1556,18 @@ unsafe fn row_set_typed(iterator_: RowIterator, option: RowOption, value: *const
         // .dirty => it.dirty[y] = value.*,
         RowOption::Dirty => {
             // PORT NOTE: the reference writes through the `dirty` per-field slice
-            // (`it.dirty[y] = value.*`). The Rust iterator stores a `*const
-            // [Row]`; the write needs `&mut Row`. We form a `*mut [Row]` from the
-            // same provenance and write `row_data[y].dirty`. This mutates the
+            // (`it.dirty[y] = value.*`). The Rust iterator stores a `*mut [Row]`
+            // with write provenance (installed from `row_data.as_mut_slice()` in
+            // `get`); we write `row_data[y].dirty` through it. This mutates the
             // `RenderState.row_data` the iterator points into, exactly as the
             // reference slice write does.
             // SAFETY: `value` points to a readable `bool`.
             let v = unsafe { *(value as *const bool) };
-            // SAFETY: `it.rows` came from `RenderState.row_data.as_slice()`; the
-            // backing storage is uniquely owned by the live `RenderStateWrapper`
-            // and no other reference into it is live during this call. `y` is
-            // bounds-checked by `row_iterator_next`.
-            let rows = it.rows as *mut [RenderRow];
-            unsafe { (*rows)[y as usize].dirty = v };
+            // SAFETY: `it.rows` came from `RenderState.row_data.as_mut_slice()`
+            // (write provenance); the backing storage is uniquely owned by the
+            // live `RenderStateWrapper` and no other reference into it is live
+            // during this call. `y` is bounds-checked by `row_iterator_next`.
+            unsafe { (*it.rows)[y as usize].dirty = v };
         }
     }
 
