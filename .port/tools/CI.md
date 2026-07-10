@@ -35,6 +35,7 @@ local iteration.
 | **G7** | `check_acyclic.sh` | `cargo_cycle_check.py` | **HARD-FAIL** |
 | **G4** | `run_differential.sh` | harness `gate_empty_divergence.sh`, `comparator.py` | **HARD-FAIL** |
 | **G1** | `check_tests_ported.py` | `_gatelib.py` | PROGRESS* |
+| **G1b** | `check_test_counts.py` (oracle-probed by ci.sh) | ghostty oracle checkout (R3, local only) | PROGRESS* |
 | **G2** | `check_assertions.py` | `_gatelib.py` | PROGRESS* |
 | **G3** | `check_comments_fidelity.py` | `_gatelib.py` | PROGRESS* |
 | **G9** | `check_parity_surface.py` | `_gatelib.py` | PROGRESS* |
@@ -78,18 +79,28 @@ crate being ported.
 | `cargo build --workspace` | the workspace compiles | also the **live R4/G7 proof** — Cargo refuses a normal-dependency cycle, so a clean build *is* hard acyclicity |
 | `cargo test --workspace` | every present test passes | PASS/FAIL oracle for all ported tests (R1/G1). Zero ported tests now ⇒ trivially passes; each ported test must pass as it lands |
 | **G7** `check_acyclic.sh` | crate graph acyclic (R4) | parses the **real rustty Cargo graph** (`crates/*/Cargo.toml`): 29 crates, 93 inter-crate edges, **0 cross-crate SCCs** today (the workspace is wired in leaves-first topological order). `--self-test` proves it flips RED on an injected cycle. `--with-reference` additionally prints the reference structural pre-check (informational; `.port/tools/cycle_check.py` models the *un-broken* ghostty mapping and prints non-zero SCCs by design — the binding G7 result is the rustty Cargo graph) |
-| **G4** `run_differential.sh` | differential VT clean + harness soundness | auto-detects a real rustty c-vt runner. **No runner yet (today):** runs the harness self-test `gate_empty_divergence.sh`, which asserts the **CONTROL** (reference vs reference ⇒ `0.0000%` divergence — the metric is sound) **and** the **empty-divergence** proof (the empty port emits nothing ⇒ 100% divergence on every fixture — the harness detects total divergence). This is the *"empty-divergence control must behave as expected"* requirement. **Runner appears:** runs the real byte-exact differential over the cvt corpus (rustty built `--features identity-ghostty`) and fails on any diff |
+| **G4** `run_differential.sh` | differential VT clean + harness soundness | **ARMED** — keys on the port driver `harness/bin/vt_driver_port` (override `$RUSTTY_VT_DRIVER`; build with `.port/phase-0/harness/build_port_driver.sh`). **Driver present:** runs the real byte-exact differential — leg A: every `harness/fixtures/*.vt` through `vt_driver_ref` vs `vt_driver_port` via `comparator.py` (identical input + options, canonical output byte-diffed); leg B: every `corpora/cvt/*.golden` c-vt case against its port-built example binary (combined stdout+stderr + exit code must match the stored golden). Any diff ⇒ **RED (exit 1)**, never a warning; each failing case writes `harness/results/diag/<case>.diag` (crash/hang/diverge/unbuilt + first-diverging-byte hex context). `--self-test` proves the RED flip by corrupting one byte of a byte-exact stand-in port. **Driver absent:** progress mode — the harness self-test `gate_empty_divergence.sh` asserts the **CONTROL** (ref vs ref ⇒ `0.0000%` divergence) and the **empty-divergence** proof (empty port ⇒ 100% divergence on every fixture); exit 0 = "HARNESS-WIRED (port empty)", explicitly not a parity green |
 
-### G4 auto-flip (no edit required)
+### G4 arming (no edit required)
 
-`run_differential.sh` watches for `$RUSTTY_CVT_RUNNER` (or
-`target/release/rustty-c-vt-runner`):
+`run_differential.sh` watches for the port driver
+`.port/phase-0/harness/bin/vt_driver_port` (override: `$RUSTTY_VT_DRIVER`);
+`build_port_driver.sh` produces it by compiling the SAME `vt_driver.c` the
+reference uses against `librustty_vt_c.a`, mapping the canonical `rustty_*`
+ABI to the `ghostty_*` names the shared C sources expect via a generated ld64
+alias list (the locked `ghostty_*`-aliases fork, derived from `nm` of the
+staticlib on every build). It also builds the 21 port-side c-vt example
+binaries into `harness/bin/cvt/` for leg B.
 
-- **No runner (port empty):** harness self-test mode — control 0% **and** empty
-  port 100% divergence on every fixture. Exit 0 = "HARNESS-WIRED (port empty)",
-  which is explicitly *not* a parity green; it proves the harness is correct.
-- **Runner present (port emits output):** the byte-exact differential becomes
-  the binding check — zero diffs across the corpus or RED.
+- **No port driver (port empty):** harness self-test mode — control 0% **and**
+  empty port 100% divergence on every fixture. Exit 0 = "HARNESS-WIRED (port
+  empty)", which is explicitly *not* a parity green; it proves the harness is
+  correct.
+- **Port driver present:** the byte-exact differential is the binding check —
+  zero diffs across both legs (fixtures + cvt goldens) or **RED (exit 1)**. A
+  missing/unlinkable port example binary is RED (`unbuilt`), never a skip.
+  Failing cases write `harness/results/diag/<case>.diag`
+  (crash/hang/diverge/unbuilt taxonomy + byte context).
 
 **Oracle-arch note (R3):** the reference driver
 `.port/phase-0/harness/bin/vt_driver_ref` is a Mach-O **arm64** binary linked
@@ -125,6 +136,7 @@ done` with 0 ported tests turns G1/G2/G3 RED and ci.sh exits 1; reverting to
 | Gate | DoP id | Contract (frozen) | Progress today | Goes binding when |
 |---|---|---|---|---|
 | `check_tests_ported.py` | G1 | **3234** test blocks, count == contract, names match | per-crate `0/contract`, workspace `0/3225` ported | a crate is `done` (then per-crate ported == contract, names match) |
+| `check_test_counts.py` | G1b | per mapped module: rust `#[test]` `>=` zig `test{}` minus documented apc-deferred — the only fidelity net for the non-`src/` crates outside the 3234 contract (vaxis/zf/xev/wuffs/z2d/…) | binding NOW for every mapped module (no done-status grace) | **already binding** wherever the ghostty oracle checkout exists. It greps the oracle directly (R3: external, never on CI), so ci.sh probe-gates it: oracle absent ⇒ **BLOCKED (exit 3) ⇒ WARNING** — never a vacuous green (absent oracle would make every zig count 0); oracle present ⇒ any dropped test is RED and fails CI |
 | `check_assertions.py` | G2 | assertion-for-assertion, per-test `rust >= ref` (floor **11975**) | per-crate `rust=0 / ref`, workspace `rust=0` | a `done` crate (then no weakened assertion) |
 | `check_comments_fidelity.py` | G3 | per-file comment delta `>= 0` after identity-rename (census **42069**) | per-crate `rust / ref` comment lines | a `done` crate (then delta `>= 0`, no DROPPED) |
 | `check_parity_surface.py` | G9 | every config/keybind/action/terminfo id covered + test-referenced; zero residual `ghostty_*` (R2) | `0/677` surface ids covered | an owner crate is `done` (then no UNCOVERED) |

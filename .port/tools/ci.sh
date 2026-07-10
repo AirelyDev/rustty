@@ -29,6 +29,19 @@
 #                                    uucode" tests whose live oracle R3 forbids
 #                                    in-crate. 0 diffs required.)
 #   G1  check_tests_ported.py        100% test{} ported (==3234)     -> PROGRESS*
+#   G1b check_test_counts.py         per-module rust #[test] >= zig  -> PROGRESS*
+#                                    test{} (minus documented apc-deferred) —
+#                                    the ONLY fidelity net for the non-src/
+#                                    crates outside the 3234 contract (vaxis/
+#                                    zf/xev/wuffs/z2d/...). It greps the
+#                                    read-only ghostty oracle checkout
+#                                    directly (R3: external oracle, never
+#                                    shipped to CI), so ci.sh probe-gates it:
+#                                    oracle absent (CI) -> exit 3 BLOCKED
+#                                    (WARNING, never a vacuous green); oracle
+#                                    present (local) -> BINDING, any module
+#                                    with rust < zig-deferred is RED and
+#                                    fails CI.
 #   G2  check_assertions.py          assertion-for-assertion         -> PROGRESS*
 #   G3  check_comments_fidelity.py   zero comment-inventory delta    -> PROGRESS*
 #   G3b check_comment_coverage.py    content-aware comment coverage  -> PROGRESS*
@@ -41,9 +54,14 @@
 #   G6  check_leaks.sh               leak-free (tracking-alloc/Miri) -> PROGRESS*
 #
 #   HARD-FAIL gates must be green from day one (G7 holds via the topo-ordered
-#   acyclic rustty Cargo graph; G4's harness CONTROL + empty-divergence proof
-#   must pass now and auto-flips to the real byte-exact gate once the port emits
-#   output). A red here fails CI.
+#   acyclic rustty Cargo graph; G4 is ARMED: it keys on the port driver
+#   harness/bin/vt_driver_port (override: $RUSTTY_VT_DRIVER; build it with
+#   .port/phase-0/harness/build_port_driver.sh) and runs the real byte-exact
+#   differential — every harness fixture through vt_driver_ref vs
+#   vt_driver_port via comparator.py, plus every c-vt golden case against its
+#   port-built example binary. Any diff is RED (exit 1), never a warning; the
+#   empty-divergence self-proof runs only while the port driver is absent).
+#   A red here fails CI.
 #
 #   PROGRESS* gates: these are the parity gates that "PRINT progress without
 #   failing CI while crates are unported." They are NOT weakened (R5): each keeps
@@ -69,6 +87,27 @@ cd "$ROOT"
 GATES="$ROOT/.port/tools/gates"
 PY="${PYTHON:-python3}"
 
+# G1b runner: check_test_counts.py greps the read-only ghostty oracle checkout
+# directly (R3: the oracle is an EXTERNAL reference, never shipped to CI). With
+# the checkout absent, every zig ref glob would expand to nothing -> zig=0 for
+# every module -> a VACUOUS green. So the gate is probe-gated here: oracle
+# absent -> exit 3 BLOCKED (surfaced as a WARNING by run_gate, never a silent
+# green); oracle present -> the per-module count gate runs BINDING (any module
+# with rust #[test] < zig test{} minus documented apc-deferred is RED and fails
+# CI — no done-status grace; it binds per-module today). RUSTTY_ORACLE exists
+# so the BLOCKED branch is testable; pointing it anywhere invalid only yields
+# BLOCKED/WARNING, never a green (R5-safe).
+run_test_counts() {
+  local oracle="${RUSTTY_ORACLE:-/Users/gael/projects/ghostty}"
+  if [ ! -d "$oracle/src" ]; then
+    echo "BLOCKED: ghostty oracle checkout not found at $oracle (R3 — the"
+    echo "         external oracle never ships to CI); the per-module"
+    echo "         test-count gate cannot bind here."
+    return 3
+  fi
+  "$PY" "$GATES/check_test_counts.py"
+}
+
 # Gate registry: "DoP_id|classification|runner...". classification is HARD or
 # PROGRESS. HARD-fail gates run first (fail-fast visibility), then PROGRESS.
 # Each runner is invoked verbatim; its exit code is interpreted below:
@@ -81,6 +120,7 @@ GATE_REGISTRY=(
   "G4|HARD|bash $GATES/run_differential.sh"
   "G4-uni|HARD|bash $ROOT/.port/phase-0/harness/unicode/run_unicode_diff.sh"
   "G1|PROGRESS|$PY $GATES/check_tests_ported.py"
+  "G1b|PROGRESS|run_test_counts"
   "G2|PROGRESS|$PY $GATES/check_assertions.py"
   "G3|PROGRESS|$PY $GATES/check_comments_fidelity.py"
   "G3b|PROGRESS|$PY $GATES/check_comment_coverage.py"
