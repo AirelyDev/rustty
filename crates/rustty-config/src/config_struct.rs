@@ -8761,10 +8761,17 @@ impl Config {
             b"auto-update-channel" => f_opt_enum!(auto_update_channel, release_channel_to_name),
 
             // No non-underscore field matched. Unreachable from `FileFormatter`.
-            _ => {
-                debug_assert!(false, "format_entry_field: unknown key");
-                Ok(())
-            }
+            //
+            // RUST CONTRACT (VALIDATION_REPORT §3d): the reference dispatch is a
+            // comptime `inline for` over `@typeInfo(Config)` fields — an unknown
+            // key CANNOT EXIST at runtime (it is a compile error). This arm is
+            // Rust glue for that comptime-impossible case, so it panics
+            // unconditionally in EVERY profile; a previous draft's
+            // `debug_assert!(false)` + `Ok(())` silently succeeded in release,
+            // inventing a formatted-nothing behavior the reference cannot exhibit.
+            _ => unreachable!(
+                "format_entry_field: unknown key (comptime-impossible in the reference)"
+            ),
         }
     }
 }
@@ -11028,6 +11035,18 @@ mod clone_changed_tests {
             None,
             "clone_config left a Key field uncopied (changeIterator yielded a change)"
         );
+    }
+
+    // rustty-only test (VALIDATION_REPORT §3d): the `format_entry_field` `_` arm
+    // is Rust glue for a comptime-impossible case (the reference's `inline for`
+    // makes an unknown key a COMPILE error). It must panic in every profile —
+    // never silently format nothing.
+    #[test]
+    #[should_panic(expected = "format_entry_field: unknown key")]
+    fn format_entry_field_unknown_key_is_unreachable() {
+        let default = Config::default();
+        let mut buf = rustty_cfg_fmt::AllocatingWriter::init();
+        let _ = default.format_entry_field(b"no-such-config-key", &mut buf);
     }
 
     // test "clone default" {

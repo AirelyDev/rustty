@@ -133,12 +133,42 @@ pub fn format_entry_display<W: Writer, V: core::fmt::Display>(
     writer.write_all(b"\n")
 }
 
+/// The float primitives the `.float` arm accepts (`f32`/`f64` config fields).
+/// `Display` supplies the shortest round-trip decimal; the two query methods
+/// let `format_entry_float` reproduce Zig `{d}`'s special-case spellings
+/// (see the RUST CONTRACT note there).
+pub trait FloatEntry: core::fmt::Display + Copy {
+    fn is_nan(self) -> bool;
+    fn is_sign_negative(self) -> bool;
+}
+impl FloatEntry for f32 {
+    fn is_nan(self) -> bool {
+        f32::is_nan(self)
+    }
+    fn is_sign_negative(self) -> bool {
+        f32::is_sign_negative(self)
+    }
+}
+impl FloatEntry for f64 {
+    fn is_nan(self) -> bool {
+        f64::is_nan(self)
+    }
+    fn is_sign_negative(self) -> bool {
+        f64::is_sign_negative(self)
+    }
+}
+
 /// `.float => try writer.print("{s} = {d}\n", .{ name, value });`
 //
 // PORT NOTE: the reference uses the `{d}` formatter for floats, which prints the
 // shortest round-trippable decimal (e.g. `0.7`). Rust's default float `Display`
-// produces the same shortest decimal, so `{value}` reproduces `{d}`.
-pub fn format_entry_float<W: Writer, V: core::fmt::Display>(
+// produces the same shortest decimal, so `{value}` reproduces `{d}` — EXCEPT for
+// NaN (RUST CONTRACT, VALIDATION_REPORT §3d): Zig `{d}` spells it `nan` with the
+// sign bit preserved (`-nan`), while Rust `Display` prints `NaN` and always drops
+// the sign. The NaN branch below restores the Zig spelling byte-for-byte
+// (verified against zig 0.15.2: `nan`/`-nan`/`inf`/`-inf`; `inf` spellings
+// already agree).
+pub fn format_entry_float<W: Writer, V: FloatEntry>(
     name: &[u8],
     value: &V,
     writer: &mut W,
@@ -147,7 +177,15 @@ pub fn format_entry_float<W: Writer, V: core::fmt::Display>(
     // return;
     writer.write_all(name)?;
     writer.write_all(b" = ")?;
-    writer.write_all(format!("{value}").as_bytes())?;
+    if value.is_nan() {
+        writer.write_all(if value.is_sign_negative() {
+            b"-nan"
+        } else {
+            b"nan"
+        })?;
+    } else {
+        writer.write_all(format!("{value}").as_bytes())?;
+    }
     writer.write_all(b"\n")
 }
 
@@ -375,6 +413,34 @@ mod tests {
             super::format_entry_float(b"a", &0.7f64, &mut buf).unwrap();
             // try testing.expectEqualStrings("a = 0.7\n", buf.written());
             assert_eq!(buf.written(), b"a = 0.7\n");
+        }
+    }
+
+    // rustty-only test (VALIDATION_REPORT §3d): Zig `{d}` spells NaN `nan`
+    // (sign-preserving: `-nan`); Rust `Display` prints `NaN` and drops the
+    // sign. Lock the restored Zig spellings, for f64 and f32.
+    #[test]
+    fn format_entry_float_nan_matches_zig_spelling() {
+        {
+            let mut buf = AllocatingWriter::init();
+            super::format_entry_float(b"a", &f64::NAN, &mut buf).unwrap();
+            assert_eq!(buf.written(), b"a = nan\n");
+        }
+        {
+            let mut buf = AllocatingWriter::init();
+            super::format_entry_float(b"a", &(-f64::NAN), &mut buf).unwrap();
+            assert_eq!(buf.written(), b"a = -nan\n");
+        }
+        {
+            let mut buf = AllocatingWriter::init();
+            super::format_entry_float(b"a", &f32::NAN, &mut buf).unwrap();
+            assert_eq!(buf.written(), b"a = nan\n");
+        }
+        // inf spellings already agree between Zig `{d}` and Rust `Display`.
+        {
+            let mut buf = AllocatingWriter::init();
+            super::format_entry_float(b"a", &f64::NEG_INFINITY, &mut buf).unwrap();
+            assert_eq!(buf.written(), b"a = -inf\n");
         }
     }
 
