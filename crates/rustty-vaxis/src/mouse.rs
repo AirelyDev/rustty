@@ -10,7 +10,10 @@
 ///
 /// PORT-NOTE: Zig `Mouse` has no default (`col`/`row`/`button`/`mods`/`type` have no
 /// default values), so this struct intentionally does NOT derive `Default`.
-#[derive(Clone, Copy, Debug)]
+///
+/// PORT-NOTE (Chunk 3a): `PartialEq` added so the Parser tests can `assert_eq!` a whole
+/// `Mouse` (Zig `testing.expectEqual`); all fields already compare by value.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Mouse {
     pub col: u16,
     pub row: u16,
@@ -51,6 +54,31 @@ pub enum Button {
     Button9 = 129,
     Button10 = 130,
     Button11 = 131,
+}
+
+impl Button {
+    /// `@enumFromInt(v)` — the SGR/xterm mouse `button_mask & buttons` decode
+    /// (Parser). PORT-NOTE (Chunk 3a): faithful to Zig's checked `@enumFromInt`
+    /// illegal-behavior — a masked value with both wheel bits (6+7) set is an
+    /// invalid button (192..195); Zig safe-mode panics there, so we `unreachable!()`.
+    /// Provably not hit by the SGR corpus (button masks never set both wheel bits).
+    pub fn from_u8(v: u8) -> Button {
+        match v {
+            0 => Button::Left,
+            1 => Button::Middle,
+            2 => Button::Right,
+            3 => Button::None,
+            64 => Button::WheelUp,
+            65 => Button::WheelDown,
+            66 => Button::WheelRight,
+            67 => Button::WheelLeft,
+            128 => Button::Button8,
+            129 => Button::Button9,
+            130 => Button::Button10,
+            131 => Button::Button11,
+            _ => unreachable!(),
+        }
+    }
 }
 
 // pub const Modifiers = packed struct(u3) { shift, alt, ctrl : bool = false };

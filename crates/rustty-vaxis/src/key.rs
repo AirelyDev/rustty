@@ -24,7 +24,10 @@
 ///
 /// PORT-NOTE: Zig `super` field → `super_` (`super` is a Rust keyword that cannot be a
 /// raw identifier). LSB bit order (§7): shift0 alt1 ctrl2 super3 hyper4 meta5 caps6 num7.
-#[derive(Clone, Copy, Debug, Default)]
+///
+/// PORT-NOTE (Chunk 3a): `PartialEq`/`Eq` added — the field-by-field bool compare is
+/// identical to the existing bitcast `eql`, and is needed to derive `PartialEq` on `Key`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Modifiers {
     pub shift: bool,
     pub alt: bool,
@@ -53,6 +56,22 @@ impl Modifiers {
         let a: u8 = self.to_u8();
         let b: u8 = other.to_u8();
         a == b
+    }
+
+    /// `@bitCast(u8) -> Modifiers` — the inverse of [`to_u8`]; unpacks the LSB-first
+    /// packed bit layout (§7). PORT-NOTE (Chunk 3a): used at the CSI decode sites
+    /// (`key.mods = @bitCast(modifier_mask -| 1)`).
+    pub fn from_u8(bits: u8) -> Modifiers {
+        Modifiers {
+            shift: bits & 0b0000_0001 != 0,
+            alt: bits & 0b0000_0010 != 0,
+            ctrl: bits & 0b0000_0100 != 0,
+            super_: bits & 0b0000_1000 != 0,
+            hyper: bits & 0b0001_0000 != 0,
+            meta: bits & 0b0010_0000 != 0,
+            caps_lock: bits & 0b0100_0000 != 0,
+            num_lock: bits & 0b1000_0000 != 0,
+        }
     }
 }
 
@@ -86,7 +105,13 @@ impl Default for KittyFlags {
 ///
 /// PORT-NOTE: Zig `Key` has no default (`codepoint` has no default value), so this
 /// struct intentionally does NOT derive `Default`.
-#[derive(Clone, Copy, Debug)]
+///
+/// PORT-NOTE (Chunk 3a): `PartialEq` added so the Parser tests can `assert_eq!` a whole
+/// `Key` (Zig `expectEqual`/`expectEqualDeep`). `text: Option<&[u8]>` compares by
+/// byte-slice equality — the robust faithful semantic (Zig's `expectEqual` on a slice is
+/// pointer-identity that happens to pass via literal interning; `expectEqualDeep` is
+/// exactly byte-equality).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Key<'a> {
     /// the unicode codepoint of the key event.
     pub codepoint: u32,

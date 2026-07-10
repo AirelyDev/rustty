@@ -185,7 +185,8 @@ RSZF = "/Users/gael/projects/rustty/crates/rustty-zf/src"
 # Key.zig carries 5 (matches 'a'/'shift+a'/'shift+tab'/'shift+;' + name_map);
 # Mouse.zig/GraphemeCache.zig/Image.zig carry 0. Chunk 1b landed gwidth.zig (11 test) +
 # unicode.zig (0); Chunk 2 landed Screen.zig (1) + InternalScreen.zig (0) + Window.zig (8) —
-# all now referenced. zig = Cell 1 + Key 5 + gwidth 11 + Screen 1 + Window 8 = 26; the rust
+# all now referenced. Chunk 3a landed Parser.zig (34 test) + event.zig/ctlseqs.zig (0).
+# zig = Cell 1 + Key 5 + gwidth 11 + Screen 1 + Window 8 + Parser 34 = 60; the rust
 # glob {RSVAXIS}/*.rs picks up every ported #[test], keeping rust >= zig.
 GHVAXIS = "/Users/gael/.cache/zig/p/vaxis-0.5.1-BWNV_LosCQAGmCCNOLljCIw6j6-yt53tji6n6rwJ2BhS/src"
 RSVAXIS = "/Users/gael/projects/rustty/crates/rustty-vaxis/src"
@@ -194,7 +195,7 @@ RSVAXIS = "/Users/gael/projects/rustty/crates/rustty-vaxis/src"
 MAP = {
     "wuffs":           ([f"{GHWUFFS}/png.zig", f"{GHWUFFS}/jpeg.zig", f"{GHWUFFS}/main.zig", f"{GHWUFFS}/error.zig", f"{GHWUFFS}/swizzle.zig"], [f"{RSWUFFS}/*.rs"], 0),
     "zf":              ([f"{GHZF}/zf.zig", f"{GHZF}/filter.zig", f"{GHZF}/clib.zig"], [f"{RSZF}/*.rs"], 0),
-    "vaxis":           ([f"{GHVAXIS}/Cell.zig", f"{GHVAXIS}/Key.zig", f"{GHVAXIS}/Mouse.zig", f"{GHVAXIS}/GraphemeCache.zig", f"{GHVAXIS}/Image.zig", f"{GHVAXIS}/gwidth.zig", f"{GHVAXIS}/unicode.zig", f"{GHVAXIS}/Screen.zig", f"{GHVAXIS}/InternalScreen.zig", f"{GHVAXIS}/Window.zig"], [f"{RSVAXIS}/*.rs"], 0),
+    "vaxis":           ([f"{GHVAXIS}/Cell.zig", f"{GHVAXIS}/Key.zig", f"{GHVAXIS}/Mouse.zig", f"{GHVAXIS}/GraphemeCache.zig", f"{GHVAXIS}/Image.zig", f"{GHVAXIS}/gwidth.zig", f"{GHVAXIS}/unicode.zig", f"{GHVAXIS}/Screen.zig", f"{GHVAXIS}/InternalScreen.zig", f"{GHVAXIS}/Window.zig", f"{GHVAXIS}/Parser.zig", f"{GHVAXIS}/event.zig", f"{GHVAXIS}/ctlseqs.zig"], [f"{RSVAXIS}/*.rs"], 0),
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
     "page":            ([f"{GH}/page.zig"], [f"{RS}/page_impl.rs", f"{RS}/page_tests.rs", f"{RS}/page.rs"], 0),
     "screen":          ([f"{GH}/Screen.zig"], [f"{RS}/screen.rs"], 0),

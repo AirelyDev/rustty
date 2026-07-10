@@ -288,7 +288,9 @@ impl Color {
 }
 
 // pub const Kind = union(enum) { fg, bg, cursor, index: u8 };
-#[derive(Clone, Copy, Debug)]
+// PORT-NOTE (Chunk 3a): `PartialEq`/`Eq` added so the Parser color-report tests can
+// `assert_eq!` a whole `Report`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Fg,
     Bg,
@@ -297,7 +299,7 @@ pub enum Kind {
 }
 
 /// Returned when querying a color from the terminal
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Report {
     pub kind: Kind,
     pub value: [u8; 3],

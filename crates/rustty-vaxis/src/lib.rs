@@ -22,17 +22,29 @@
 //!   `fill`/`clear`, cursor, `print`/`print_segment` gwidth-aware layout, `scroll`,
 //!   `has_mouse`; `Window<'a>` holds `screen: *mut Screen<'a>` and is `Copy`, §5)
 //!
+//! CHUNK 3a adds the INPUT-PARSING layer (the pure half of the backend):
+//! - [`event`] — `event.zig` (the `Event<'a>` union; `Paste` owns a `Vec<u8>`)
+//! - [`ctlseqs`] — `ctlseqs.zig` (~60 `&[u8]` control-sequence byte constants)
+//! - [`parser`] — `Parser.zig` (the ground/escape/csi/osc/dcs/sos/pm/apc/ss3 state
+//!   machine; Kitty keyboard, SGR/xterm mouse, bracketed paste, OSC-52 base64, the
+//!   c1b-uucode grapheme path; `parse<'a>(&'a mut self, &'a [u8])` — PURE, no
+//!   tty/Loop coupling, 34 assertion-for-assertion tests)
+//!
 //! PORT STATUS: done (chunk 1a — value types; chunk 1b — gwidth/unicode + the uucode
 //! width/grapheme tables; chunk 2 — the Screen/InternalScreen/Window rendering layer;
-//! tty/loop/vaxis are later chunks).
+//! chunk 3a — the event/ctlseqs/parser input-parsing layer; tty/loop/vaxis are later
+//! chunks).
 
 pub mod cell;
+pub mod ctlseqs;
+pub mod event;
 pub mod grapheme_cache;
 pub mod gwidth;
 pub mod image;
 pub mod internal_screen;
 pub mod key;
 pub mod mouse;
+pub mod parser;
 pub mod screen;
 pub mod unicode;
 pub mod uucode;
