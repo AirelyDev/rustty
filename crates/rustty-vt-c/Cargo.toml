@@ -21,6 +21,15 @@ workspace = true
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
 
+[features]
+# Parity-harness identity profile (R2). Forwards to `rustty-vt`'s feature of
+# the same name (which forwards to `rustty-identity`), flipping the vt LIBRARY
+# version reported by `build_info.rs` to the reference's separate libghostty
+# version (`build.zig:10` `lib_version = "0.1.0-dev"`), so the G4
+# c-vt-build-info golden matches byte-for-byte. Harness only — never enable
+# for a published rustty artifact.
+identity-ghostty = ["rustty-vt/identity-ghostty"]
+
 [dependencies]
 rustty-vt = { workspace = true }
 rustty-lib = { workspace = true }

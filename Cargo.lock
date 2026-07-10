@@ -927,6 +927,7 @@ dependencies = [
  "libc",
  "rustty-datastruct",
  "rustty-font",
+ "rustty-identity",
  "rustty-lib",
  "rustty-oniguruma",
  "rustty-os",

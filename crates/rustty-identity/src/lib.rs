@@ -21,6 +21,9 @@
 //!     `src/config/file_load.zig`, `src/termio/Exec.zig`).
 //!   * `TERM` default — `xterm-ghostty` (`src/config/Config.zig:3724`).
 //!   * version — `1.3.2-dev` (`build.zig.zon`).
+//!   * VT library version — `0.1.0-dev` (`build.zig:10`, `lib_version`; the
+//!     reference deliberately versions libghostty separately from the app:
+//!     "We use a separate version from the app").
 //!   * bundle id — `com.mitchellh.ghostty` (`src/build_config.zig:58`).
 //!   * XTVERSION wire format — `ESC P > | {name} {version} ESC \` from
 //!     `src/termio/stream_handler.zig:reportXtversion`; the libghostty-vt
@@ -71,6 +74,13 @@ mod values {
     /// reference reads this from `build.zig.zon`).
     pub const VERSION: &str = "0.1.0";
 
+    /// The version of the standalone VT library (librustty-vt), SEPARATE from
+    /// the app `VERSION`. This mirrors the reference's deliberate app/lib
+    /// version split — `build.zig:10`: `const lib_version = "0.1.0-dev";`
+    /// ("Libghostty version. We use a separate version from the app.") —
+    /// rustty's own vt library version is `0.1.0` (no pre-release tag).
+    pub const VT_LIB_VERSION: &str = "0.1.0";
+
     /// Reverse-DNS bundle identifier (macOS `.app`, single-instance keys, etc.).
     /// Reference: `com.mitchellh.ghostty` (`src/build_config.zig:58`).
     pub const BUNDLE_ID: &str = "io.airely.rustty";
@@ -119,6 +129,13 @@ mod values {
     /// `/Users/gael/projects/ghostty/build.zig.zon` (`.version = "1.3.2-dev"`).
     pub const VERSION: &str = "1.3.2-dev";
 
+    /// The version of the standalone VT library (libghostty-vt), SEPARATE from
+    /// the app `VERSION`. Reference: `build.zig:10` — `const lib_version =
+    /// "0.1.0-dev";` ("Libghostty version. We use a separate version from the
+    /// app."), parsed via `std.SemanticVersion.parse` in
+    /// `src/build/Config.zig:307` (major 0, minor 1, patch 0, pre `dev`).
+    pub const VT_LIB_VERSION: &str = "0.1.0-dev";
+
     /// Reverse-DNS bundle identifier. Reference: `src/build_config.zig:58`.
     pub const BUNDLE_ID: &str = "com.mitchellh.ghostty";
 
@@ -160,6 +177,10 @@ mod values {
 pub const APP_NAME: &str = values::APP_NAME;
 /// Semantic version string of this build.
 pub const VERSION: &str = values::VERSION;
+/// Semantic version string of the standalone VT library. Deliberately SEPARATE
+/// from the app `VERSION`, mirroring the reference's `lib_version` split
+/// (`build.zig:7-10`: "We use a separate version from the app").
+pub const VT_LIB_VERSION: &str = values::VT_LIB_VERSION;
 /// Reverse-DNS bundle identifier.
 pub const BUNDLE_ID: &str = values::BUNDLE_ID;
 /// `TERM` environment variable value.
@@ -220,6 +241,10 @@ mod tests {
         assert_eq!(XTVERSION_NAME, "rustty");
         assert_eq!(LIBVT_XTVERSION_FALLBACK, "librustty");
         assert_eq!(BUNDLE_ID, "io.airely.rustty");
+        // The vt library carries its OWN version (the reference's deliberate
+        // app/lib split, build.zig:7-10); rustty's vt lib version has no
+        // pre-release tag.
+        assert_eq!(VT_LIB_VERSION, "0.1.0");
         // The primary terminfo name MUST equal TERM (tcell invariant).
         assert_eq!(TERMINFO_PRIMARY_NAME, TERM);
         // VT query wire strings.
@@ -247,6 +272,12 @@ mod tests {
         assert_eq!(XTVERSION_NAME, "ghostty");
         assert_eq!(LIBVT_XTVERSION_FALLBACK, "libghostty");
         assert_eq!(BUNDLE_ID, "com.mitchellh.ghostty");
+        // The reference's SEPARATE libghostty version (build.zig:10). This is
+        // exactly what the c-vt-build-info golden records ("Version:
+        // 0.1.0-dev" / "Version pre  : dev"), and it must NOT equal the app
+        // version — that inequality IS the split this constant ports.
+        assert_eq!(VT_LIB_VERSION, "0.1.0-dev");
+        assert_ne!(VT_LIB_VERSION, VERSION);
         // The primary terminfo name MUST equal TERM (tcell invariant).
         assert_eq!(TERMINFO_PRIMARY_NAME, TERM);
         // VT query wire strings must match the reference byte-for-byte. These

@@ -37,6 +37,141 @@ pub struct SemanticVersion {
     pub build: Option<&'static str>,
 }
 
+impl SemanticVersion {
+    /// Parse a `MAJOR.MINOR.PATCH[-PRE][+BUILD]` version string at compile
+    /// time, mirroring `std.SemanticVersion.parse` — the call the reference
+    /// build makes on the vt lib version string (`try
+    /// std.SemanticVersion.parse(libVersion)`, src/build/Config.zig:307-309).
+    /// Every call site is a `const` initializer of a compile-time identity
+    /// constant, so a malformed version is a COMPILE error (const-eval panic) —
+    /// the Rust analog of the reference's `try` failing the build. The
+    /// reference's additional pre-release/build identifier charset validation
+    /// (semver spec items 9/10) is not replicated for those fixed constants;
+    /// the parsed values are pinned by tests.
+    pub const fn parse(text: &'static str) -> SemanticVersion {
+        let bytes = text.as_bytes();
+
+        // const extra_index = std.mem.indexOfAny(u8, text, "-+");
+        // const required = text[0..(extra_index orelse text.len)];
+        let mut extra_index: Option<usize> = None;
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'-' || bytes[i] == b'+' {
+                extra_index = Some(i);
+                break;
+            }
+            i += 1;
+        }
+        let required_end = match extra_index {
+            Some(idx) => idx,
+            None => bytes.len(),
+        };
+
+        // var it = std.mem.splitScalar(u8, required, '.');
+        // major/minor/patch = parseNum(...); a 4th component is InvalidVersion.
+        let mut dot1: Option<usize> = None;
+        let mut dot2: Option<usize> = None;
+        let mut i = 0;
+        while i < required_end {
+            if bytes[i] == b'.' {
+                match (dot1, dot2) {
+                    (None, _) => dot1 = Some(i),
+                    (_, None) => dot2 = Some(i),
+                    // if (it.next() != null) return error.InvalidVersion;
+                    _ => panic!("invalid semantic version: more than three numeric components"),
+                }
+            }
+            i += 1;
+        }
+        let (d1, d2) = match (dot1, dot2) {
+            (Some(a), Some(b)) => (a, b),
+            // it.next() orelse return error.InvalidVersion
+            _ => panic!("invalid semantic version: expected MAJOR.MINOR.PATCH"),
+        };
+        let major = parse_num(bytes, 0, d1);
+        let minor = parse_num(bytes, d1 + 1, d2);
+        let patch = parse_num(bytes, d2 + 1, required_end);
+
+        // Slice optional pre-release or build metadata components.
+        // const extra: []const u8 = text[extra_index.?..text.len];
+        // if (extra[0] == '-') { pre = extra[1..build_index]; build = ... }
+        // else { build = extra[1..]; }
+        let mut pre: Option<&'static str> = None;
+        let mut build: Option<&'static str> = None;
+        if let Some(ei) = extra_index {
+            if bytes[ei] == b'-' {
+                // const build_index = std.mem.indexOfScalar(u8, extra, '+');
+                let mut build_index: Option<usize> = None;
+                let mut j = ei;
+                while j < bytes.len() {
+                    if bytes[j] == b'+' {
+                        build_index = Some(j);
+                        break;
+                    }
+                    j += 1;
+                }
+                match build_index {
+                    Some(bi) => {
+                        pre = Some(subslice(text, ei + 1, bi));
+                        build = Some(subslice(text, bi + 1, bytes.len()));
+                    }
+                    None => pre = Some(subslice(text, ei + 1, bytes.len())),
+                }
+            } else {
+                build = Some(subslice(text, ei + 1, bytes.len()));
+            }
+        }
+
+        SemanticVersion {
+            major,
+            minor,
+            patch,
+            pre,
+            build,
+        }
+    }
+}
+
+/// Parse one non-negative decimal component at compile time, mirroring the
+/// reference's `parseNum` (`std.SemanticVersion.zig`): leading zeroes and
+/// non-digit characters are `error.InvalidVersion`, which here is a const-eval
+/// panic (a compile error, since every call site is a `const` initializer).
+const fn parse_num(bytes: &[u8], start: usize, end: usize) -> usize {
+    // if (text.len > 1 and text[0] == '0') return error.InvalidVersion;
+    if end - start > 1 && bytes[start] == b'0' {
+        panic!("invalid semantic version: leading zero in numeric component");
+    }
+    if end == start {
+        panic!("invalid semantic version: empty numeric component");
+    }
+    let mut value: usize = 0;
+    let mut i = start;
+    while i < end {
+        let c = bytes[i];
+        if c < b'0' || c > b'9' {
+            // error.InvalidCharacter => error.InvalidVersion
+            panic!("invalid semantic version: non-digit in numeric component");
+        }
+        value = value * 10 + (c - b'0') as usize;
+        i += 1;
+    }
+    value
+}
+
+/// Compile-time `text[start..end]` for the pre/build components (the Zig
+/// slices `extra[1..build_index]` / `extra[(idx + 1)..]`). The bounds always
+/// sit on the ASCII `-`/`+` delimiters found in `parse`, so the byte slice is
+/// valid UTF-8 whenever the input string is; a failed re-validation is
+/// unreachable and would be a compile error, never a runtime one.
+const fn subslice(text: &'static str, start: usize, end: usize) -> &'static str {
+    let (head, _) = text.as_bytes().split_at(end);
+    let (_, mid) = head.split_at(start);
+    match core::str::from_utf8(mid) {
+        Ok(s) => s,
+        Err(_) => panic!("invalid semantic version: non-UTF-8 component slice"),
+    }
+}
+
 /// Options set by Zig build.zig and exposed via `terminal_options`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Options {
@@ -341,5 +476,31 @@ mod tests {
         assert_eq!("0.9.1-alpha.1+g1234abc", resolved.version_string);
         assert_eq!(Some("alpha.1"), resolved.version_pre);
         assert_eq!(Some("g1234abc"), resolved.version_build);
+    }
+
+    #[test]
+    fn semantic_version_parse_mirrors_zig() {
+        // The same shapes `std.SemanticVersion.parse` produces for these
+        // inputs (see the reference tests in std/SemanticVersion.zig). The
+        // first is the reference's vt lib version (`build.zig:10`).
+        let v = SemanticVersion::parse("0.1.0-dev");
+        assert_eq!((0, 1, 0), (v.major, v.minor, v.patch));
+        assert_eq!(Some("dev"), v.pre);
+        assert_eq!(None, v.build);
+
+        let v = SemanticVersion::parse("1.3.2");
+        assert_eq!((1, 3, 2), (v.major, v.minor, v.patch));
+        assert_eq!(None, v.pre);
+        assert_eq!(None, v.build);
+
+        let v = SemanticVersion::parse("1.1.2-prerelease+meta");
+        assert_eq!((1, 1, 2), (v.major, v.minor, v.patch));
+        assert_eq!(Some("prerelease"), v.pre);
+        assert_eq!(Some("meta"), v.build);
+
+        let v = SemanticVersion::parse("10.20.30+build.4");
+        assert_eq!((10, 20, 30), (v.major, v.minor, v.patch));
+        assert_eq!(None, v.pre);
+        assert_eq!(Some("build.4"), v.build);
     }
 }

@@ -23,7 +23,7 @@
 // resolved against the current build target (`cfg!(target_arch/target_os)`) and
 // the rustty feature flags below.
 
-use crate::build_options::Artifact;
+use crate::build_options::{Artifact, SemanticVersion};
 
 /// The target artifact to build. This will gate some functionality.
 // PORT NOTE: `opts.addOption(Artifact, "artifact", self.artifact)`. rustty builds
@@ -68,58 +68,49 @@ pub const KITTY_GRAPHICS: bool = !(cfg!(target_arch = "wasm32") && cfg!(target_o
 // "tmux_control_mode", self.oniguruma)` — it tracks `oniguruma` exactly.
 pub const TMUX_CONTROL_MODE: bool = ONIGURUMA;
 
+// PORT NOTE (version source of truth): for the terminal module the reference
+// version is ARTIFACT-selected — `Config.terminalOptions` (src/build/Config.zig)
+// plumbs `.version = switch (artifact) { .ghostty => self.version, .lib =>
+// self.lib_version }`, and `lib_version` is the DELIBERATELY SEPARATE
+// libghostty version (`build.zig:7-10`: `const lib_version = "0.1.0-dev";` —
+// "We use a separate version from the app"), parsed via
+// `std.SemanticVersion.parse` (src/build/Config.zig:307). This crate IS the vt
+// library, so its version is the vt LIB version from `rustty-identity` (the R2
+// identity source of truth) — NOT `CARGO_PKG_VERSION` (the workspace/app
+// version, which only coincidentally matched): `0.1.0` under the rustty
+// profile, the reference's exact `0.1.0-dev` under `identity-ghostty`.
+const VERSION: SemanticVersion = SemanticVersion::parse(rustty_identity::VT_LIB_VERSION);
+
 /// The version string, `MAJOR.MINOR.PATCH[-PRE][+BUILD]`.
 // PORT NOTE: `opts.addOption([]const u8, "version_string", b.fmt("{f}", .{self.version}))`.
-// Sourced from the rustty crate version (the build-time source of truth).
-pub const VERSION_STRING: &str = env!("CARGO_PKG_VERSION");
+// The reference formats the parsed semver back to a string
+// (`SemanticVersion.format`: `major.minor.patch[-pre][+build]`); for a
+// well-formed input that round-trips to the source string, so this is the
+// identity constant verbatim (asserted by the `version_string_is_semver_format`
+// test below).
+pub const VERSION_STRING: &str = rustty_identity::VT_LIB_VERSION;
 
 /// The major component of the version.
 // PORT NOTE: `opts.addOption(usize, "version_major", self.version.major)`.
-pub const VERSION_MAJOR: usize = parse_env_usize(env!("CARGO_PKG_VERSION_MAJOR"));
+pub const VERSION_MAJOR: usize = VERSION.major;
 
 /// The minor component of the version.
 // PORT NOTE: `opts.addOption(usize, "version_minor", self.version.minor)`.
-pub const VERSION_MINOR: usize = parse_env_usize(env!("CARGO_PKG_VERSION_MINOR"));
+pub const VERSION_MINOR: usize = VERSION.minor;
 
 /// The patch component of the version.
 // PORT NOTE: `opts.addOption(usize, "version_patch", self.version.patch)`.
-pub const VERSION_PATCH: usize = parse_env_usize(env!("CARGO_PKG_VERSION_PATCH"));
+pub const VERSION_PATCH: usize = VERSION.patch;
 
 /// The pre-release component of the version, if any.
 // PORT NOTE: `opts.addOption(?[]const u8, "version_pre", self.version.pre)`.
-// `CARGO_PKG_VERSION_PRE` is the empty string when there is no pre-release; the
-// reference uses `null` for that case, so map empty to `None`.
-pub const VERSION_PRE: Option<&str> = none_if_empty(env!("CARGO_PKG_VERSION_PRE"));
+// The reference models "no pre-release" as `null`; `None` here.
+pub const VERSION_PRE: Option<&str> = VERSION.pre;
 
 /// The build-metadata component of the version, if any.
 // PORT NOTE: `opts.addOption(?[]const u8, "version_build", self.version.build)`.
-// Cargo has no build-metadata env var, so this is always `None` (matching the
-// `null` the reference writes when `self.version.build` is unset).
-pub const VERSION_BUILD: Option<&str> = None;
-
-/// Parse a non-negative decimal integer at compile time, mirroring how the
-/// reference reads `self.version.major/minor/patch` as `usize` values.
-const fn parse_env_usize(s: &str) -> usize {
-    let bytes = s.as_bytes();
-    let mut value: usize = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        value = value * 10 + (bytes[i] - b'0') as usize;
-        i += 1;
-    }
-    value
-}
-
-/// Map an empty string to `None`, otherwise `Some`. Used for the optional
-/// `version_pre`/`version_build` fields, whose absence the reference models as
-/// `null`.
-const fn none_if_empty(s: &str) -> Option<&str> {
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
-}
+// `null` in the reference when the version string has no `+BUILD` suffix.
+pub const VERSION_BUILD: Option<&str> = VERSION.build;
 
 #[cfg(test)]
 mod tests {
@@ -145,25 +136,47 @@ mod tests {
     }
 
     #[test]
-    fn version_components_match_string() {
-        // The major.minor.patch components reconstruct the package version prefix.
-        let prefix = format!("{VERSION_MAJOR}.{VERSION_MINOR}.{VERSION_PATCH}");
-        assert!(
-            VERSION_STRING.starts_with(&prefix),
-            "version string {VERSION_STRING:?} should start with {prefix:?}",
-        );
+    fn version_string_is_semver_format() {
+        // `version_string` in the reference is `b.fmt("{f}", .{self.version})` —
+        // the PARSED semver re-formatted (`SemanticVersion.format`:
+        // `major.minor.patch[-pre][+build]`). Assert the same round-trip here:
+        // re-formatting the parsed components reproduces VERSION_STRING exactly.
+        let mut formatted = format!("{VERSION_MAJOR}.{VERSION_MINOR}.{VERSION_PATCH}");
+        if let Some(pre) = VERSION_PRE {
+            formatted.push('-');
+            formatted.push_str(pre);
+        }
+        if let Some(build) = VERSION_BUILD {
+            formatted.push('+');
+            formatted.push_str(build);
+        }
+        assert_eq!(VERSION_STRING, formatted);
     }
 
+    /// Under the default (rustty) profile the vt lib version is `0.1.0`.
+    #[cfg(not(feature = "identity-ghostty"))]
     #[test]
-    fn parse_env_usize_reads_decimal() {
-        assert_eq!(0, parse_env_usize("0"));
-        assert_eq!(7, parse_env_usize("7"));
-        assert_eq!(123, parse_env_usize("123"));
+    fn version_is_rustty_vt_lib_version() {
+        assert_eq!("0.1.0", VERSION_STRING);
+        assert_eq!(0, VERSION_MAJOR);
+        assert_eq!(1, VERSION_MINOR);
+        assert_eq!(0, VERSION_PATCH);
+        assert_eq!(None, VERSION_PRE);
+        assert_eq!(None, VERSION_BUILD);
     }
 
+    /// Under `identity-ghostty` the vt lib version is the reference's SEPARATE
+    /// libghostty version (`build.zig:10`), exactly as the c-vt-build-info
+    /// golden records it: "Version: 0.1.0-dev", "Version pre  : dev".
+    #[cfg(feature = "identity-ghostty")]
     #[test]
-    fn none_if_empty_maps_empty_to_none() {
-        assert_eq!(None, none_if_empty(""));
-        assert_eq!(Some("rc.1"), none_if_empty("rc.1"));
+    fn version_is_reference_lib_version() {
+        assert_eq!("0.1.0-dev", VERSION_STRING);
+        assert_eq!(0, VERSION_MAJOR);
+        assert_eq!(1, VERSION_MINOR);
+        assert_eq!(0, VERSION_PATCH);
+        assert_eq!(Some("dev"), VERSION_PRE);
+        assert_eq!(None, VERSION_BUILD);
     }
+
 }

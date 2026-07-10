@@ -28,6 +28,12 @@ workspace = true
 oniguruma = ["dep:rustty-oniguruma"]
 # Whether to build SIMD-accelerated code paths (reference `simd`). Off by default.
 simd = []
+# Parity-harness identity profile (R2). Flips the vt LIBRARY version (the
+# reference's deliberate app/lib version split, `build.zig:10` `lib_version`)
+# to the reference ghostty value by forwarding to `rustty-identity`'s feature
+# of the same name, so the G4 differential output (c-vt-build-info) matches
+# the oracle byte-for-byte. Harness only — never for published artifacts.
+identity-ghostty = ["rustty-identity/identity-ghostty"]
 # Whether the apprt-layer `dcimgui` (cimgui) binding is available. Gates
 # `input::key::Key::imgui_key` (the Key->cimgui-constant mapping), an apprt-layer
 # GUI-glue dependency (R3) DEFERRED to apprt — see DEFERRALS.md. Off by default so
@@ -35,6 +41,12 @@ simd = []
 imgui = []
 
 [dependencies]
+# R2 identity source of truth: provides the vt LIBRARY version consumed by
+# `options.rs` (`VT_LIB_VERSION`), porting the reference's separate
+# `lib_version` (`build.zig:7-10`, "We use a separate version from the app")
+# instead of coincidentally reusing the workspace/app version. Leaf constants
+# crate — no dependency edges.
+rustty-identity = { workspace = true }
 rustty-datastruct = { workspace = true }
 rustty-unicode = { workspace = true }
 # D1 (Option C): rustty-font is PURE and BELOW vt. apc/glyph deps the glyf
