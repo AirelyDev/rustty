@@ -313,15 +313,39 @@ mod tests {
         // Each assert_eq! ports one `try testing.expectEqualStrings(expected, actual)`
         // (asserted directly, as the reference does — G2 counts assertion-for-assertion).
         let mut buf = [0u8; 256];
-        assert_eq!("en_US".as_bytes(), canonicalizeLocale(&mut buf, "en_US").unwrap());
-        assert_eq!("zh_CN".as_bytes(), canonicalizeLocale(&mut buf, "zh-Hans").unwrap());
-        assert_eq!("zh_TW".as_bytes(), canonicalizeLocale(&mut buf, "zh-Hant").unwrap());
+        assert_eq!(
+            "en_US".as_bytes(),
+            canonicalizeLocale(&mut buf, "en_US").unwrap()
+        );
+        assert_eq!(
+            "zh_CN".as_bytes(),
+            canonicalizeLocale(&mut buf, "zh-Hans").unwrap()
+        );
+        assert_eq!(
+            "zh_TW".as_bytes(),
+            canonicalizeLocale(&mut buf, "zh-Hant").unwrap()
+        );
 
-        assert_eq!("zh_CN".as_bytes(), canonicalizeLocale(&mut buf, "zh-Hans-CN").unwrap());
-        assert_eq!("zh_SG".as_bytes(), canonicalizeLocale(&mut buf, "zh-Hans-SG").unwrap());
-        assert_eq!("zh_TW".as_bytes(), canonicalizeLocale(&mut buf, "zh-Hant-TW").unwrap());
-        assert_eq!("zh_HK".as_bytes(), canonicalizeLocale(&mut buf, "zh-Hant-HK").unwrap());
-        assert_eq!("zh_MO".as_bytes(), canonicalizeLocale(&mut buf, "zh-Hant-MO").unwrap());
+        assert_eq!(
+            "zh_CN".as_bytes(),
+            canonicalizeLocale(&mut buf, "zh-Hans-CN").unwrap()
+        );
+        assert_eq!(
+            "zh_SG".as_bytes(),
+            canonicalizeLocale(&mut buf, "zh-Hans-SG").unwrap()
+        );
+        assert_eq!(
+            "zh_TW".as_bytes(),
+            canonicalizeLocale(&mut buf, "zh-Hant-TW").unwrap()
+        );
+        assert_eq!(
+            "zh_HK".as_bytes(),
+            canonicalizeLocale(&mut buf, "zh-Hant-HK").unwrap()
+        );
+        assert_eq!(
+            "zh_MO".as_bytes(),
+            canonicalizeLocale(&mut buf, "zh-Hant-MO").unwrap()
+        );
 
         // This is just an edge case I want to make sure we're aware of:
         // canonicalizeLocale does not handle encodings and will turn them into

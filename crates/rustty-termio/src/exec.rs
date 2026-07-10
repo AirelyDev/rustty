@@ -4256,9 +4256,7 @@ mod tests {
         let drainer = std::thread::spawn(move || loop {
             let mut buf = [0u8; 4096];
             let n = unsafe { libc::read(master_fd, buf.as_mut_ptr().cast(), buf.len()) };
-            if n < 0
-                && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
-            {
+            if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
                 continue;
             }
             if n <= 0 {

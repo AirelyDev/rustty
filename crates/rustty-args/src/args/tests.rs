@@ -1388,7 +1388,7 @@ fn parse_into_field_tagged_union_missing_tag() {
 // test "ArgsIterator"
 // ===========================================================================
 #[test]
-fn args_iterator_test() {
+fn args_iterator() {
     // PORT NOTE: `ArgsIterator(@TypeOf(child))` wraps the
     // `ArgIteratorGeneral`-tokenized child. The child is adapted to `GenIter`
     // (yields `Option<Vec<u8>>`).
@@ -1450,7 +1450,7 @@ fn line_iterator_end_in_newline() {
 
 // test "LineIterator spaces around '='"
 #[test]
-fn line_iterator_spaces_around_eq() {
+fn line_iterator_spaces_around() {
     let src: &[u8] = b"A = B\n\n";
     let mut iter = LineIterator::init(src);
     assert_eq!(b"--A=B".as_slice(), LineIterator::next(&mut iter).unwrap());

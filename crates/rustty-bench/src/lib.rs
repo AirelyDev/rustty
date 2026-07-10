@@ -44,45 +44,6 @@ pub mod is_symbol;
 pub mod options;
 pub mod osc_parser;
 
-// test {
-//     @import("std").testing.refAllDecls(@This());
-// }
-#[cfg(test)]
-mod tests {
-    /// Ports `main.zig`'s anonymous `refAllDecls(@This())` block (workspace
-    /// `ref_all_decls` convention): compile-touch every pub decl of this hub
-    /// module so the crate surface is exercised by the test build. Nothing is
-    /// run — exactly what the Zig reify test achieves.
-    #[test]
-    fn ref_all_decls() {
-        // pub const cli = @import("cli.zig");
-        let _ = core::any::type_name::<crate::cli::Action>();
-        // pub const Benchmark = @import("Benchmark.zig");
-        let _ = core::any::type_name::<crate::benchmark::Benchmark>();
-        // pub const CApi = @import("CApi.zig"); (its sole decl is the export fn)
-        let _: unsafe extern "C" fn(
-            *const core::ffi::c_char,
-            *const core::ffi::c_char,
-        ) -> bool = crate::capi::rustty_benchmark_cli;
-        // pub const TerminalStream = @import("TerminalStream.zig");
-        let _ = core::any::type_name::<crate::terminal_stream::TerminalStream>();
-        // pub const CodepointWidth = @import("CodepointWidth.zig");
-        let _ = core::any::type_name::<crate::codepoint_width::CodepointWidth>();
-        // pub const GraphemeBreak = @import("GraphemeBreak.zig");
-        let _ = core::any::type_name::<crate::grapheme_break::GraphemeBreak>();
-        // pub const ScreenClone = @import("ScreenClone.zig");
-        let _ = core::any::type_name::<crate::screen_clone::ScreenClone>();
-        // pub const TerminalParser = @import("TerminalParser.zig");
-        let _ = core::any::type_name::<crate::terminal_parser::TerminalParser>();
-        // pub const IsSymbol = @import("IsSymbol.zig");
-        let _ = core::any::type_name::<crate::is_symbol::IsSymbol>();
-        // `options` / `osc_parser` are not re-exported by `main.zig` (see the
-        // PORT NOTE above) but are pub mods of this hub, so touch them too.
-        let _ = core::any::type_name::<crate::options::DataFile>();
-        let _ = core::any::type_name::<crate::osc_parser::OscParser>();
-    }
-}
-
 /// Build a `terminal::Options` reproducing the Zig `Terminal.Options` field
 /// defaults (§7.5/§7.7): the ScreenClone/TerminalStream benchmarks init with
 /// `.{ .rows, .cols }`, relying on the reference struct's field defaults for the
@@ -106,5 +67,42 @@ pub(crate) fn terminal_options(rows: u16, cols: u16) -> rustty_vt::terminal::Opt
         kitty_image_storage_limit: 320 * 1000 * 1000,
         // kitty_image_loading_limits: ... = .direct,
         kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
+    }
+}
+
+// test {
+//     @import("std").testing.refAllDecls(@This());
+// }
+#[cfg(test)]
+mod tests {
+    /// Ports `main.zig`'s anonymous `refAllDecls(@This())` block (workspace
+    /// `ref_all_decls` convention): compile-touch every pub decl of this hub
+    /// module so the crate surface is exercised by the test build. Nothing is
+    /// run — exactly what the Zig reify test achieves.
+    #[test]
+    fn ref_all_decls() {
+        // pub const cli = @import("cli.zig");
+        let _ = core::any::type_name::<crate::cli::Action>();
+        // pub const Benchmark = @import("Benchmark.zig");
+        let _ = core::any::type_name::<crate::benchmark::Benchmark>();
+        // pub const CApi = @import("CApi.zig"); (its sole decl is the export fn)
+        let _: unsafe extern "C" fn(*const core::ffi::c_char, *const core::ffi::c_char) -> bool =
+            crate::capi::rustty_benchmark_cli;
+        // pub const TerminalStream = @import("TerminalStream.zig");
+        let _ = core::any::type_name::<crate::terminal_stream::TerminalStream>();
+        // pub const CodepointWidth = @import("CodepointWidth.zig");
+        let _ = core::any::type_name::<crate::codepoint_width::CodepointWidth>();
+        // pub const GraphemeBreak = @import("GraphemeBreak.zig");
+        let _ = core::any::type_name::<crate::grapheme_break::GraphemeBreak>();
+        // pub const ScreenClone = @import("ScreenClone.zig");
+        let _ = core::any::type_name::<crate::screen_clone::ScreenClone>();
+        // pub const TerminalParser = @import("TerminalParser.zig");
+        let _ = core::any::type_name::<crate::terminal_parser::TerminalParser>();
+        // pub const IsSymbol = @import("IsSymbol.zig");
+        let _ = core::any::type_name::<crate::is_symbol::IsSymbol>();
+        // `options` / `osc_parser` are not re-exported by `main.zig` (see the
+        // PORT NOTE above) but are pub mods of this hub, so touch them too.
+        let _ = core::any::type_name::<crate::options::DataFile>();
+        let _ = core::any::type_name::<crate::osc_parser::OscParser>();
     }
 }
