@@ -7,8 +7,11 @@ Reads:   .port/phase-0/inventory/tests-summary.json  (global 11975 assertion flo
                                                         per-file assertion counts)
          .port/phase-0/inventory/tests.jsonl          (per-test assertion counts +
                                                         names, for per-test parity)
-Scans:   crates/<crate>/src/**/*.rs   (assertion-family macros, .expect/.unwrap,
-                                        ?-propagation, #[should_panic])
+Scans:   crates/<crate>/src/**/*.rs   (assertion-family macros,
+                                        .unwrap_err/.expect_err, #[should_panic];
+                                        .unwrap()/.expect(..)/? are NOT counted —
+                                        they are Zig-`try` plumbing, not
+                                        assertions; M7 undiluted count)
 
 PASS CONDITION (DoP G2):
   - per-test  rust_assertions >= ref_assertions  (>= because idiomatic Rust may
@@ -29,20 +32,89 @@ MODES:
   --crate <name>: scope to one crate (per-crate P-A gate).
   --self-test:    built-in flip proof.
 
-Per-test matching is by test NAME. When a ported test name matches a reference
-test name (from tests.jsonl), assertions are compared directly. Ported tests with
-no name match still contribute to the crate total (so they can only help, never
-trigger a false WEAKENED).
+Per-test matching resolves a reference test NAME (from tests.jsonl) to its
+ported Rust fn(s) via layered identifier matching (H6 fix — raw string equality
+compared only 43/3,065 named tests; a Rust fn cannot equal a string-named Zig
+test):
+  L1  name_candidates(ref) ∩ ported fn names   (DoP §G1 slug convention)
+  L2  canonical form equality (lowercase, non-alphanumerics stripped) — covers
+      camel-preserved slugs like pagelist_pointFromPin_active_no_history
+  L3  canonical form + 'test' prefix/suffix — the fn-name-collision convention
+      (ctrlOrSuper -> ctrl_or_super_test)
+  L4  disambiguating-prefix ADDED by the port (Zig duplicates one name across
+      types; Rust prefixes the type): fn canon ENDS WITH ref canon (>= 5 chars)
+      ('parseCLI base' -> palette_parse_cli_base)
+  L5  redundant type-prefix DROPPED by the port (the Rust test lives in the
+      type's own module): ref canon ENDS WITH fn canon (fn canon >= 10 chars)
+      ('SelectionGesture drag selection logic' -> drag_selection_logic)
+When several ported fns resolve, the comparison bar is max(rust counts) vs the
+strongest reference test of that name (same max-dedup as the ref side) — the
+`>=` semantics are unchanged. Ported tests with no name match still contribute
+to the crate total (so they can only help, never trigger a false WEAKENED).
+This is a matcher correction, not a loosening: every pair compared before is
+still compared, and ~2,900 previously-uncompared pairs now bind (R5 tightens).
 """
 import argparse
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _gatelib as G  # noqa: E402
 
 CONTRACT_TOTAL_ASSERTIONS = 11975
+
+
+def _canon(s):
+    """Canonical identifier form: lowercase with every non-alphanumeric
+    stripped. 'PageList pointFromPin active' and
+    pagelist_pointFromPin_active canonicalize identically."""
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def build_fn_index(rust_per_test):
+    """Precompute the per-crate resolution index over ported test fns
+    (rust_per_test maps fn name -> [assertion_count, ...], one entry per
+    occurrence of the fn name): (fn_set, canon->fns map, [(fn, canon)] list)."""
+    fn_set = set(rust_per_test)
+    canon_map = {}
+    canon_list = []
+    for fn in fn_set:
+        cf = _canon(fn)
+        canon_map.setdefault(cf, []).append(fn)
+        canon_list.append((fn, cf))
+    return fn_set, canon_map, canon_list
+
+
+def resolve_ref_test(name, fn_index):
+    """Resolve a reference test name to the set of ported fn names it may
+    legitimately have been ported as (layers L1-L5, see module docstring).
+    Returns a (possibly empty) set. First matching layer wins so the most
+    precise binding is used."""
+    fn_set, canon_map, canon_list = fn_index
+    # L1: exact slug-candidate intersection (DoP §G1 convention)
+    hits = G.name_candidates(name) & fn_set
+    if hits:
+        return hits
+    c = _canon(name)
+    if not c:
+        return set()
+    # L2: canonical equality
+    if c in canon_map:
+        return set(canon_map[c])
+    # L3: 'test' suffix/prefix (fn-name-collision convention)
+    hits = set(canon_map.get(c + "test", [])) | set(canon_map.get("test" + c, []))
+    if hits:
+        return hits
+    # L4: port added a disambiguating type/module prefix
+    if len(c) >= 5:
+        hits = {fn for fn, cf in canon_list if cf.endswith(c) and cf != c}
+        if hits:
+            return hits
+    # L5: port dropped a redundant leading type name
+    return {fn for fn, cf in canon_list
+            if len(cf) >= 10 and c.endswith(cf) and cf != c}
 
 
 def load_ref_assertions(summary):
@@ -106,23 +178,35 @@ def run(args):
 
     grand_rust = 0
     grand_ref = 0
+    compared_pairs = 0
+    named_ref_tests = 0
     red = False
     rows = []
     weakened_all = []
     for crate in crates:
         rust_per_test = G.scan_rust_test_assertions(crate)
-        rust_total = sum(rust_per_test.values())
+        rust_total = sum(sum(counts) for counts in rust_per_test.values())
         ref_crate_total = ref_total.get(crate, 0)
         claimed_done = G.is_claimed_done(crate)
         grand_rust += rust_total
         grand_ref += ref_crate_total
 
+        # Resolve every named reference test to its ported fn(s) (L1-L5).
+        # The compared-pair count is reported for ALL crates; the WEAKENED
+        # verdict binds (RED) only for claimed-done crates, as before.
+        fn_index = build_fn_index(rust_per_test)
+        rt = ref_test.get(crate, {})
+        named_ref_tests += len(rt)
         weakened = []
+        for name, refc in rt.items():
+            matched = resolve_ref_test(name, fn_index)
+            if not matched:
+                continue
+            compared_pairs += 1
+            rust_c = max(max(rust_per_test[fn]) for fn in matched)
+            if claimed_done and rust_c < refc:
+                weakened.append((name, refc, rust_c))
         if claimed_done:
-            rt = ref_test.get(crate, {})
-            for name, refc in rt.items():
-                if name in rust_per_test and rust_per_test[name] < refc:
-                    weakened.append((name, refc, rust_per_test[name]))
             # also a claimed-done crate must not have a lower crate total
             if rust_total < ref_crate_total:
                 weakened.append(("<crate-total>", ref_crate_total, rust_total))
@@ -148,7 +232,9 @@ def run(args):
         print(f"    WEAKENED: {crate}::{name} ref={refc} rust={rustc}")
 
     scope = args.crate if args.crate else "workspace"
-    print(f"\nPROGRESS [{scope}]: assertions rust={grand_rust} ref={grand_ref} "
+    print(f"\nPER-TEST [{scope}]: {compared_pairs}/{named_ref_tests} named reference "
+          f"tests bound to a ported fn and compared (L1-L5)")
+    print(f"PROGRESS [{scope}]: assertions rust={grand_rust} ref={grand_ref} "
           f"(global contract floor = {CONTRACT_TOTAL_ASSERTIONS})")
 
     if args.strict:
@@ -237,6 +323,64 @@ def self_test():
     r = invoke()
     print(f"[d] done 4 vs ref 3 -> exit {r.returncode} (expect 0)")
     ok &= (r.returncode == 0)
+
+    # ---- per-test injection scenario (H6's escape) ----
+    # Two STRING-named reference tests (the 94.6% case the raw-name comparison
+    # could never bind): deleting an assertion from one test while padding the
+    # other keeps the crate total constant — the per-test comparison alone must
+    # catch it.
+    summary2 = {
+        "total_assertions": 3,
+        "crate_map": {
+            "demo": {"files": [{"file": "demo.zig", "test_blocks": 2}],
+                     "test_blocks": 2, "file_count": 1},
+        },
+    }
+    with open(os.path.join(inv, "tests-summary.json"), "w") as fh:
+        json.dump(summary2, fh)
+    with open(os.path.join(inv, "tests.jsonl"), "w") as fh:
+        fh.write(json.dumps({"file": "demo.zig", "name": "Demo: case one",
+                             "anonymous": False, "assertion_count": 2}) + "\n")
+        fh.write(json.dumps({"file": "demo.zig", "name": "Demo: case two",
+                             "anonymous": False, "assertion_count": 1}) + "\n")
+
+    def write_lib2(status, n_one, n_two, pad_unwraps=0):
+        body = f"//! demo\n//! PORT STATUS: {status}\n"
+        for fn_name, n in (("demo_case_one", n_one), ("demo_case_two", n_two)):
+            body += f"#[test]\nfn {fn_name}() {{\n"
+            for _ in range(n):
+                body += "    assert!(true);\n"
+            for _ in range(pad_unwraps):
+                body += "    let _ = Some(1).unwrap();\n"
+            body += "}\n"
+        with open(os.path.join(crate_src, "lib.rs"), "w") as fh:
+            fh.write(body)
+
+    # (e) faithful port: 2 + 1 == ref 2 + 1 => GREEN, both pairs bound
+    write_lib2("done", 2, 1)
+    r = invoke()
+    bound = "PER-TEST [workspace]: 2/2" in r.stdout
+    print(f"[e] done string-named 2+1 vs ref 2+1 -> exit {r.returncode} "
+          f"(expect 0), both pairs bound: {bound}")
+    ok &= (r.returncode == 0 and bound)
+
+    # (f) INJECTION: delete one assertion from test one, pad test two — the
+    # crate total is unchanged (3 == 3) so only the per-test check can flip RED.
+    write_lib2("done", 1, 2)
+    r = invoke()
+    caught = "WEAKENED: demo::Demo: case one ref=2 rust=1" in r.stdout
+    print(f"[f] done injected 1+2 vs ref 2+1 (total constant) -> exit "
+          f"{r.returncode} (expect non-zero), per-test WEAKENED caught: {caught}")
+    ok &= (r.returncode != 0 and caught)
+
+    # (g) DILUTION INJECTION (M7): same deletion, but the gutted test is padded
+    # with .unwrap() plumbing — must still be RED (unwrap is not an assertion).
+    write_lib2("done", 1, 2, pad_unwraps=5)
+    r = invoke()
+    caught = "WEAKENED: demo::Demo: case one ref=2 rust=1" in r.stdout
+    print(f"[g] done injected 1+2 with 5 .unwrap() pads -> exit {r.returncode} "
+          f"(expect non-zero), undiluted WEAKENED caught: {caught}")
+    ok &= (r.returncode != 0 and caught)
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("SELF-TEST:", "PASS" if ok else "FAIL")

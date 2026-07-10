@@ -732,9 +732,12 @@ fn parse_into_field_sentinel_string() {
     assert_eq!(b"42".as_slice(), data.a.as_slice());
     // try testing.expectEqual(@as(u8, 0), data.a[data.a.len]);
     //
-    // PORT NOTE: the reference asserts the sentinel byte past the slice end is 0.
-    // The owned `Vec<u8>` carries no trailing sentinel (the bytes are identical);
-    // this sentinel assertion is the Zig `[:0]` representation detail.
+    // PORT NOTE: the reference asserts the sentinel byte past the slice end is 0
+    // (the Zig `[:0]` representation detail). The owned `Vec<u8>` carries no
+    // trailing sentinel, so the equivalent Rust-side statement of the same
+    // guarantee is that the parsed VALUE contains no NUL byte at all — the
+    // sentinel never leaks into the owned bytes:
+    assert!(!data.a.contains(&0));
 }
 
 // test "parseIntoField: bool"

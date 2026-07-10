@@ -384,6 +384,15 @@ def name_candidates(name):
     return {v for v in out if v}
 
 # In-test assertion macros / forms (count, not parse).
+#
+# UNDILUTED COUNT (M7 fix): the reference side (tests.jsonl assertion_count)
+# counts only `testing.expect*` calls — the Zig `try` on an ordinary fallible
+# call is NOT an assertion there. The Rust equivalents of that plumbing
+# (`.unwrap()`, `.expect(..)`, `?`-propagation) therefore must NOT count
+# toward assertion parity: with them included, a test could lose ALL of its
+# real assertions and still satisfy rust >= ref. Error-ASSERTING forms stay:
+# `.unwrap_err()` / `.expect_err(..)` assert that a Result IS an error
+# (Zig `testing.expectError`), and `#[should_panic]` is a whole-test assert.
 ASSERTION_PATTERNS = [
     re.compile(r"\bassert!\s*\("),
     re.compile(r"\bassert_eq!\s*\("),
@@ -392,14 +401,11 @@ ASSERTION_PATTERNS = [
     re.compile(r"\bdebug_assert_eq!\s*\("),
     re.compile(r"\bdebug_assert_ne!\s*\("),
     re.compile(r"\bassert_matches!\s*\("),
-    re.compile(r"\.expect\s*\("),
-    re.compile(r"\.unwrap\s*\(\s*\)"),
     re.compile(r"\.unwrap_err\s*\(\s*\)"),
+    re.compile(r"\.expect_err\s*\("),
     re.compile(r"\bpanic!\s*\("),
     re.compile(r"\bunreachable!\s*\("),
 ]
-# `?`-propagation used as an assertion inside a `-> Result` test body.
-QMARK_RE = re.compile(r"\?[\s;,)\]]")
 
 
 def scan_rust_tests(crate):
@@ -441,11 +447,16 @@ def _find_balanced_block(text, open_idx):
 
 
 def scan_rust_test_assertions(crate):
-    """Return {test_name: assertion_count} for each ported test fn.
+    """Return {test_name: [assertion_count, ...]} for each ported test fn —
+    a LIST because the same fn name may legitimately appear in several test
+    modules (e.g. utf8.rs and cli/utf8.rs both define `fn utf8()`); a plain
+    dict overwrite would silently drop all but the last occurrence, corrupting
+    both the crate total and the per-test comparison.
 
-    Counts assertion-family macros + `.expect/.unwrap` + `?`-propagation + a
-    +1 for a `#[should_panic]` test body inside the *cleaned* (comment/string
-    free) test body."""
+    Counts assertion-family macros + `.unwrap_err/.expect_err` + a +1 for a
+    `#[should_panic]` test body inside the *cleaned* (comment/string free)
+    test body. `.unwrap()`/`.expect(..)`/`?` are deliberately NOT counted
+    (M7): they are Zig-`try` plumbing, not assertions — see ASSERTION_PATTERNS."""
     result = {}
     for path in iter_rust_files(crate):
         try:
@@ -468,17 +479,16 @@ def scan_rust_test_assertions(crate):
             should_panic = bool(SHOULD_PANIC_RE.search(attr_block))
             brace = clean.find("{", fm.end())
             if brace == -1:
-                result[name] = 1 if should_panic else 0
+                result.setdefault(name, []).append(1 if should_panic else 0)
                 continue
             end = _find_balanced_block(clean, brace)
             body = clean[brace:end]
             count = 0
             for pat in ASSERTION_PATTERNS:
                 count += len(pat.findall(body))
-            count += len(QMARK_RE.findall(body))
             if should_panic:
                 count += 1
-            result[name] = count
+            result.setdefault(name, []).append(count)
     return result
 
 

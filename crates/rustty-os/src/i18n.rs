@@ -302,10 +302,6 @@ extern "C" {
 mod tests {
     use super::*;
 
-    fn expectEqualStrings(expected: &str, actual: &[u8]) {
-        assert_eq!(expected.as_bytes(), actual);
-    }
-
     #[test]
     #[cfg_attr(miri, ignore)] // ffi: vendored gnulib canonicalizer (gettext-sys) crosses the C boundary (ASan, not Miri)
     fn canonicalizeLocale_darwin() {
@@ -314,22 +310,24 @@ mod tests {
             return; // error.SkipZigTest
         }
 
+        // Each assert_eq! ports one `try testing.expectEqualStrings(expected, actual)`
+        // (asserted directly, as the reference does — G2 counts assertion-for-assertion).
         let mut buf = [0u8; 256];
-        expectEqualStrings("en_US", canonicalizeLocale(&mut buf, "en_US").unwrap());
-        expectEqualStrings("zh_CN", canonicalizeLocale(&mut buf, "zh-Hans").unwrap());
-        expectEqualStrings("zh_TW", canonicalizeLocale(&mut buf, "zh-Hant").unwrap());
+        assert_eq!("en_US".as_bytes(), canonicalizeLocale(&mut buf, "en_US").unwrap());
+        assert_eq!("zh_CN".as_bytes(), canonicalizeLocale(&mut buf, "zh-Hans").unwrap());
+        assert_eq!("zh_TW".as_bytes(), canonicalizeLocale(&mut buf, "zh-Hant").unwrap());
 
-        expectEqualStrings("zh_CN", canonicalizeLocale(&mut buf, "zh-Hans-CN").unwrap());
-        expectEqualStrings("zh_SG", canonicalizeLocale(&mut buf, "zh-Hans-SG").unwrap());
-        expectEqualStrings("zh_TW", canonicalizeLocale(&mut buf, "zh-Hant-TW").unwrap());
-        expectEqualStrings("zh_HK", canonicalizeLocale(&mut buf, "zh-Hant-HK").unwrap());
-        expectEqualStrings("zh_MO", canonicalizeLocale(&mut buf, "zh-Hant-MO").unwrap());
+        assert_eq!("zh_CN".as_bytes(), canonicalizeLocale(&mut buf, "zh-Hans-CN").unwrap());
+        assert_eq!("zh_SG".as_bytes(), canonicalizeLocale(&mut buf, "zh-Hans-SG").unwrap());
+        assert_eq!("zh_TW".as_bytes(), canonicalizeLocale(&mut buf, "zh-Hant-TW").unwrap());
+        assert_eq!("zh_HK".as_bytes(), canonicalizeLocale(&mut buf, "zh-Hant-HK").unwrap());
+        assert_eq!("zh_MO".as_bytes(), canonicalizeLocale(&mut buf, "zh-Hant-MO").unwrap());
 
         // This is just an edge case I want to make sure we're aware of:
         // canonicalizeLocale does not handle encodings and will turn them into
         // underscores. We should parse them out before calling this function.
-        expectEqualStrings(
-            "en_US.UTF_8",
+        assert_eq!(
+            "en_US.UTF_8".as_bytes(),
             canonicalizeLocale(&mut buf, "en_US.UTF-8").unwrap(),
         );
     }
