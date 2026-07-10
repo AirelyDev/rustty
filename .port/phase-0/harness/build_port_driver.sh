@@ -47,17 +47,27 @@ CVT_OUT_DIR="$HARNESS_DIR/bin/cvt"
 LIBA="${RUSTTY_VT_LIB:-}"
 if [ -z "$LIBA" ]; then
   if command -v cargo >/dev/null 2>&1 && [ -f "$RUSTTY_ROOT/Cargo.toml" ]; then
-    echo "build_port_driver: cargo build --release -p rustty-vt-c --features rustty-vt/simd ..." >&2
+    echo "build_port_driver: cargo build --profile release-safe -p rustty-vt-c --features rustty-vt/simd ..." >&2
     # simd mirrors the reference build config (see header note). identity-ghostty
     # is intentionally NOT passed: the feature is not plumbed to rustty-vt-c yet.
-    ( cd "$RUSTTY_ROOT" && cargo build --release -p rustty-vt-c --features rustty-vt/simd ) >&2 || \
+    # DG2/DG4 (PORT_RULES §DG2/DG4): the harness links the `release-safe`
+    # profile — release optimization with debug-assertions (and the inherited
+    # overflow-checks) ON — matching the oracle's ReleaseSafe build mode
+    # (std.debug.assert active), so ported debug_assert! sites are LIVE under G4.
+    ( cd "$RUSTTY_ROOT" && cargo build --profile release-safe -p rustty-vt-c --features rustty-vt/simd ) >&2 || \
       echo "build_port_driver: cargo build failed; probing for an existing staticlib anyway." >&2
   fi
   for cand in \
+    "$RUSTTY_ROOT/target/release-safe/librustty_vt_c.a" \
     "$RUSTTY_ROOT/target/release/librustty_vt_c.a" \
     "$RUSTTY_ROOT/target/debug/librustty_vt_c.a"; do
     if [ -f "$cand" ]; then LIBA="$cand"; break; fi
   done
+  case "$LIBA" in
+    "$RUSTTY_ROOT/target/release-safe/"*) : ;;
+    "") : ;; # handled by the honest blocker below
+    *) echo "WARN: linking a non-release-safe staticlib ($LIBA); DG4 ReleaseSafe assert semantics (debug_assert! live) are NOT guaranteed in this driver." >&2 ;;
+  esac
 fi
 
 # --- Locate the C ABI header dir (`ghostty/vt.h` layout). ---------------------
@@ -80,10 +90,10 @@ fi
 if [ -z "$LIBA" ] || [ ! -f "$LIBA" ]; then
   cat >&2 <<EOF
 build_port_driver: BLOCKED — no rustty librustty_vt_c.a available.
-  cargo build --release -p rustty-vt-c did not produce a staticlib (and no
-  RUSTTY_VT_LIB override was given). Probed:
+  cargo build --profile release-safe -p rustty-vt-c did not produce a staticlib
+  (and no RUSTTY_VT_LIB override was given). Probed:
     RUSTTY_VT_LIB=${RUSTTY_VT_LIB:-<unset>}
-    target/{release,debug}/librustty_vt_c.a
+    target/{release-safe,release,debug}/librustty_vt_c.a
 EOF
   exit 11
 fi

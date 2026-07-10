@@ -903,6 +903,37 @@ mod tests {
         assert_eq!(Err(Error::DimensionsTooLarge), loading.complete());
     }
 
+    // rustty-only capacity regression (no Zig test{} counterpart) for the DG2/
+    // DG4 release-profile fork (PORT_RULES §DG2/DG4; VALIDATION_REPORT §3d
+    // "Kitty graphics expected-size multiply"). Oracle behavior, mirrored
+    // exactly: graphics_image.zig computes `expected_len = img.width *
+    // img.height * bpp` (:394) in u32, where attacker-controlled dimensions
+    // would overflow — a ReleaseSafe TRAP, ReleaseFast UB — but that multiply
+    // is UNREACHABLE for out-of-range dimensions because the guard at
+    // graphics_image.zig:390 returns error.DimensionsTooLarge first
+    // (max_dimension = 10000). So for w=0xFFFF_FFFF, h=2, bpp=4 (rgba) the
+    // oracle ERRORS — it does not trap — in every build mode, and so must we.
+    // The ported multiply at complete() widens to usize (Rust contract: the
+    // u32 operands cannot overflow usize after the MAX_DIMENSION guard, max
+    // 10000*10000*4); [profile.release] overflow-checks = true restores
+    // ReleaseSafe trap-parity should this guard ordering ever regress.
+    #[test]
+    fn image_load_expected_size_capacity_width_u32_max() {
+        let cmd: command::Command = command::Command {
+            control: command::Control::Transmit(command::Transmission {
+                format: command::Format::Rgba, // bpp = 4
+                width: 0xFFFF_FFFF,
+                height: 2,
+                image_id: 31,
+                ..Default::default()
+            }),
+            quiet: command::Quiet::No,
+            data: b"AAAA".to_vec(),
+        };
+        let mut loading = LoadingImage::init(&cmd, Limits::DIRECT).unwrap();
+        assert_eq!(Err(Error::DimensionsTooLarge), loading.complete());
+    }
+
     #[test]
     fn image_load_rgb_zlib_compressed_direct() {
         let cmd: command::Command = command::Command {

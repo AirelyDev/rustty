@@ -102,3 +102,36 @@ custom reimplementation:
 General principle (per user guidance): pick the right, considered tool for each
 job, weigh tradeoffs (OS/arch matters), and escalate only when a tradeoff is a
 genuine judgment call for the user. See memory `right-tool-for-the-job`.
+
+## DG2/DG4 — Release-profile semantics (locked fork, 2026-07-10)
+
+Ghostty's two build modes differ in failure semantics: its dev builds are Zig
+**ReleaseSafe** (integer overflow / bounds / `std.debug.assert` all TRAP);
+its tagged/shipped artifacts are **ReleaseFast** (the same overflow is UB,
+asserts elided). rustty resolves the fork in the root `Cargo.toml`
+(`[profile.*]`, three profiles):
+
+- **DG2 → option (a).** `[profile.release] overflow-checks = true`: rustty
+  release keeps trap-parity with ReleaseSafe on plain arithmetic — strictly
+  safer than the mirrored ReleaseFast artifact (where the same overflow is
+  UB) — restoring trap semantics for e.g. the Kitty expected-size multiply
+  (VALIDATION_REPORT M6/§3d). The `release-fast` profile
+  (`overflow-checks = false`; Rust's defined wrap, never UB) mirrors the
+  tagged ReleaseFast artifact for Goal-2 bench/perf work ONLY — never for
+  parity gates (R5).
+- **DG4 → option (a).** Zig `std.debug.assert` is active in ReleaseSafe, but
+  its faithful port `debug_assert!` (109 rustty-vt sites) compiles out of a
+  plain Rust release. The `release-safe` profile (`inherits = "release"`,
+  `debug-assertions = true`, overflow-checks inherited ON) restores the
+  oracle's ReleaseSafe assert semantics with zero code churn; the
+  differential harness (`.port/phase-0/harness/build_port_driver.sh` →
+  G4's `vt_driver_port`) builds with `--profile release-safe`. The CI test
+  lane (`ci.sh` step 4, `cargo test --workspace`) runs the dev profile,
+  where `debug-assertions` are already ON — so both assert-bearing lanes
+  execute the oracle's ReleaseSafe assert semantics.
+
+Regression anchor: `crates/rustty-vt/src/kitty/graphics_image.rs`
+`image_load_expected_size_capacity_width_u32_max` — the §3d Kitty
+`w*h*bpp` capacity path, mirrored against `graphics_image.zig:389-394`
+(the oracle's `max_dimension` guard fires BEFORE the u32 multiply, so
+out-of-range dimensions ERROR with `DimensionsTooLarge`, never trap).

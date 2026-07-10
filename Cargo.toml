@@ -271,3 +271,20 @@ unused_must_use = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# DG2: ghostty dev builds are ReleaseSafe (overflow/bounds TRAP); its tagged
+# artifacts are ReleaseFast (overflow UB). rustty release keeps trap-parity
+# with ReleaseSafe — strictly safer than the mirrored artifact (PORT_RULES §DG2).
+[profile.release]
+overflow-checks = true
+
+# Parity/bench profile mirroring the tagged ReleaseFast artifact (Goal-2 only).
+[profile.release-fast]
+inherits = "release"
+overflow-checks = false
+
+# DG4: differential harness + CI test lane run the oracle's ReleaseSafe
+# assert semantics (std.debug.assert active) against ported debug_assert!.
+[profile.release-safe]
+inherits = "release"
+debug-assertions = true
