@@ -41,17 +41,20 @@ local iteration.
 | **G9** | `check_parity_surface.py` | `_gatelib.py` | PROGRESS* |
 | **G8** | `check_baseline_regression.py` | `_gatelib.py` | PROGRESS* |
 | **G5** | `run_fuzz_smoke.sh` | harness `FUZZ-INVENTORY.md`, `comparator.py` | PROGRESS* |
-| **G6** | `check_leaks.sh` | `cargo test --features leak-track`, Miri/ASan | PROGRESS* |
+| **G6** | `check_leaks.sh` | Miri (pure) / ASan (FFI + live-syscall tests), `_gatelib` done-detection; missing miri ⇒ exit 3 BLOCKED | PROGRESS* |
 
 > **G5 (differential fuzz)** and **G6 (leak-free)** are wired progress-mode
 > runners now. G5: if `cargo fuzz` + the `vt_diff` target in
 > `crates/rustty-vt/fuzz/` exist it runs a short smoke budget and fails on any
 > new artifact; otherwise it verifies the fuzz inventory/corpus wiring and
-> reports FUZZ-WIRED (exit 0). G6: by default a DRY wiring report (no cargo) that
-> surfaces the documented blockers loudly (e.g. `cargo miri` not installed ⇒
-> BLOCKED-not-waived per DoP §G6) and reports WIRED; its real check is
-> `cargo test --workspace --features leak-track` (run with `--run`, or it folds
-> into step 4 once the `leak-track` feature lands). The per-crate gate template
+> reports FUZZ-WIRED (exit 0). G6 (`check_leaks.sh --all-done`): for every
+> *claimed-done* crate it runs the right tool per R6 — Miri
+> (`cargo +nightly miri test`) for pure-Rust crates, ASan
+> (`-Zsanitizer=address`) for FFI crates, with live-syscall test binaries
+> routed Miri→ASan per `MIRI_EXCEPTIONS.md`; any UB/leak/unrouted binary is
+> RED. `cargo miri` not installed ⇒ **exit 3 BLOCKED-not-waived** per DoP §G6
+> (the script and this doc agree; CI installs nightly+miri unconditionally so
+> the gate actually runs there). The per-crate gate template
 > (DoP §2: P-T/P-A/P-C/P-PASS/P-DIFF/P-FUZZ/P-DAG/P-SURF/P-SIZE) applies to each
 > crate as it is carved.
 
@@ -102,13 +105,18 @@ binaries into `harness/bin/cvt/` for leg B.
   Failing cases write `harness/results/diag/<case>.diag`
   (crash/hang/diverge/unbuilt taxonomy + byte context).
 
-**Oracle-arch note (R3):** the reference driver
+**Oracle-arch note (R3) — G4 is LOCAL-ONLY:** the reference driver
 `.port/phase-0/harness/bin/vt_driver_ref` is a Mach-O **arm64** binary linked
-against `libghostty-vt.a` — the *external oracle*, never a Cargo dep. On the
-`macos-latest` (arm64) CI leg it runs and G4 is enforced HARD. On a leg where it
-can't execute (Linux, x86 macOS), the harness self-test can't run and G4 reports
-**BLOCKED (exit 3) ⇒ WARNING**, never a fabricated green. The macOS leg is the
-binding differential check.
+against `libghostty-vt.a` — the *external oracle*, never a Cargo dep, and never
+shipped to CI (`.port/phase-0/harness/bin/` is gitignored, so no CI leg has
+it). On GitHub CI `run_differential.sh` therefore reports **BLOCKED (exit 3) ⇒
+WARNING** on every leg — an honest "did not run", never a fabricated green and
+never a fake HARD claim; `ci.yml` prints an explicit
+`G4: local-only (R3 — oracle not on CI)` note before invoking ci.sh. The
+binding byte-exact differential is the LOCAL run, where `build_ref_driver.sh` /
+`build_port_driver.sh` produce both drivers and any diff is RED (exit 1) and
+fails ci.sh. (G1b `check_test_counts.py` is local-only for the same R3 reason:
+the ghostty oracle checkout is absent on CI ⇒ probe exits 3 BLOCKED.)
 
 ---
 

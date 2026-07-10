@@ -8,8 +8,12 @@
 #
 # R3: NO dependency on the ghostty tree. The reference oracle (the differential
 # harness's vt_driver_ref, which links libghostty-vt.a) is used ONLY by the G4
-# control gate; when it is unavailable in CI, G4 reports PROGRESS (exit 78) and
-# does not fail the build. The rustty crates themselves never link the reference.
+# gate and is a locally built, gitignored binary (.port/phase-0/harness/bin/ is
+# in .gitignore) — so G4 is LOCAL-ONLY: on CI run_differential.sh reports
+# BLOCKED (exit 3) and ci.sh surfaces it as a WARNING, never a fabricated
+# green and never a fake HARD claim. The binding byte-exact differential runs
+# locally, where build_ref_driver.sh / build_port_driver.sh produce both
+# drivers. The rustty crates themselves never link the reference.
 
 name: ci
 
@@ -48,6 +52,25 @@ jobs:
           # this action respects it. Components listed for belt-and-suspenders.
           components: rustfmt, clippy
 
+      # G6 (check_leaks.sh) runs `cargo +nightly miri test` for pure-Rust
+      # claimed-done crates and `-Zsanitizer=address` (nightly) for FFI crates.
+      # Without nightly+miri the gate exits 3 BLOCKED (warning); installing
+      # them here is what makes G6 actually RUN on CI (H7 fix).
+      - name: Install nightly + miri (G6 Miri/ASan lanes)
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup component add miri rust-src --toolchain nightly
+          cargo +nightly miri setup
+
+      # G4-uni (run_unicode_diff.sh) builds the uucode oracle with zig; the
+      # version is pinned to match the harness requirement (0.15.2 — the same
+      # pin the script's BLOCKED message names). Harness tooling only, R3:
+      # no rustty crate depends on zig or uucode.
+      - name: Install zig 0.15.2 (pinned — G4-uni uucode oracle)
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
       - name: Cache cargo registry + target
         uses: actions/cache@v4
         with:
@@ -72,23 +95,32 @@ jobs:
           cargo clippy --version
           python3 --version
 
+      # G4 (run_differential.sh) needs .port/phase-0/harness/bin/vt_driver_ref —
+      # a locally built arm64 binary linked against libghostty-vt.a (the
+      # external oracle, R3 — never a Cargo dep, never shipped to CI: the whole
+      # harness/bin/ dir is gitignored). So G4 is LOCAL-ONLY on every leg:
+      # run_differential.sh exits 3 BLOCKED here and ci.sh surfaces that as a
+      # WARNING — an honest "did not run", never a fake green and never a fake
+      # HARD claim. Same for G1b (check_test_counts.py): the ghostty oracle
+      # checkout is absent on CI, so ci.sh's probe reports BLOCKED (exit 3).
+      # Both gates bind locally, where the oracle exists.
+      - name: "G4 policy note (local-only, R3)"
+        run: |
+          echo "G4: local-only (R3 — oracle not on CI); expect 'G4 BLOCKED (exit 3)' as a WARNING in the ci.sh summary below."
+          echo "G1b: local-only for the same reason (ghostty oracle checkout absent on CI)."
+
       # The single entry. ci.sh runs (collecting all failures):
       #   cargo fmt --check  -> clippy -D warnings -> build --workspace ->
       #   test --workspace   -> every gate in .port/tools/gates/.
       # It exits non-zero iff a HARD-FAIL check is red. Progress gates
-      # (G1 check_tests_ported, G2 check_assertions, G3 check_comments_fidelity,
-      # G8 check_baseline_regression, G9 check_parity_surface) print progress and
-      # never fail CI while crates are unported (they self-flip to RED only when
-      # a *claimed-done* crate regresses). G7 (check_acyclic) and G4
-      # (run_differential — the harness control + empty-divergence proof) are
-      # hard-fail. See .port/tools/CI.md for the full classification.
-      #
-      # Oracle-arch note: the differential harness reference driver
-      # (.port/phase-0/harness/bin/vt_driver_ref) is a Mach-O arm64 binary built
-      # against libghostty-vt.a (the external oracle, R3 — never a Cargo dep).
-      # On the macos-latest (arm64) leg it runs and G4's control/empty-divergence
-      # proof is enforced HARD. On a leg where it cannot execute (e.g. Linux, or
-      # x86 macOS), G4 reports BLOCKED -> surfaced as a WARNING, never a fake
-      # green. The macOS leg is the binding differential check.
+      # (G1 check_tests_ported, G2 check_assertions, G3/G3b comments, G8
+      # check_baseline_regression, G9 check_parity_surface, G5 fuzz smoke,
+      # G6 check_leaks) print progress and never fail CI while crates are
+      # unported (they self-flip to RED only when a *claimed-done* crate
+      # regresses). G7 (check_acyclic) and G4-uni (run_unicode_diff — live
+      # uucode oracle, zig-built above) are hard-fail on CI; G4
+      # (run_differential) is hard-fail LOCALLY and BLOCKED->WARNING here (see
+      # the policy note step above). Gate exit contract: 0 = pass, 3 = BLOCKED
+      # (warning), any other non-zero = red. See .port/tools/CI.md.
       - name: Run rustty CI (.port/tools/ci.sh)
         run: bash .port/tools/ci.sh

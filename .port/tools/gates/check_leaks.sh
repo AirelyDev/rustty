@@ -30,7 +30,10 @@
 #   check_leaks.sh --crate <name>     run the right tool for that crate
 #   check_leaks.sh --list             enumerate crates + status + lane (no run)
 #   check_leaks.sh --self-test        prove Miri catches a leak and a UB
-# Exit 0 = GREEN (clean) ; non-zero = RED (UB/leak) or tool genuinely missing.
+# Exit 0 = GREEN (clean) ; 3 = BLOCKED (miri toolchain missing — a tooling
+# input, surfaced by ci.sh as a WARNING per the CI.md exit contract, never a
+# silent green and never misclassified as a claimed-done regression) ; any
+# other non-zero = RED (UB/leak/unrouted binary) or bad usage (2).
 set -uo pipefail
 
 GATES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -82,8 +85,15 @@ sys.exit(0 if G.dir_status(sys.argv[1]) in G.DONE_STATUSES else 1)
 }
 
 require_miri() {
+  # Missing miri is a MISSING TOOLING INPUT, not a claimed-done regression:
+  # exit 3 = BLOCKED per the documented gate exit contract (.port/tools/CI.md
+  # "Gate exit-code contract" + DoP §G6 BLOCKED-not-waived). ci.sh surfaces it
+  # as a WARNING — loud, never a silent green (H7 fix: the script used to exit
+  # 2 here, which ci.sh misread as a RED regression). CI installs
+  # nightly+miri unconditionally (.github/workflows/ci.yml), so this path is
+  # for genuinely miri-less local hosts only.
   if ! cargo +nightly miri --version >/dev/null 2>&1; then
-    echo "G6 RED: cargo miri not available (rustup component add miri --toolchain nightly)"; exit 2
+    echo "G6 BLOCKED: cargo miri not available (rustup component add miri --toolchain nightly)"; exit 3
   fi
 }
 
