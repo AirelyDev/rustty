@@ -506,7 +506,7 @@ The `TERMINAL_TEST_LOCK` + `terminal_test_guard()` + the 8 `let _terminal_guard`
 call sites have been deleted. The unrelated `SHADER_FFI_LOCK` (glslang/spirv-cross
 ARE genuinely non-reentrant) is intentionally retained.
 
-### rustty-renderer R-d — offscreen Metal draw path (Chunks 0-4) DONE; on-screen + config + Kitty + overlay DEFERRED
+### rustty-renderer R-d — offscreen Metal draw path (Chunks 0-4) DONE; residual = inspector overlayFeatures + GL/WebGL/GTK [RECONCILED 2026-07-10, T14]
 
 **DONE.** The monomorphic `Renderer<Metal>` RENDERS a terminal state offscreen
 (macOS/Metal). The whole `metal/*` backend (device/queue/buffer/texture/pipeline/
@@ -518,32 +518,45 @@ asserts). The `size_of::<CellText>()==32` un-defer landed. The `draw_frame` raw-
 aliasing discipline is proven clean under **both** Stacked and Tree Borrows by
 `.port/phase-2/mirihar-chunk3b`.
 
-**DEFERRED (five named Goal-2 tiers — 18 live `unimplemented!()` call sites, each
-with its verbatim Zig body preserved, R5; the full seam audit is
-`.port/phase-2/GPU_RD_CHUNK5_DESIGN.md` §1).** Zero of the 18 is reachable from the
-tested offscreen path (proven by walking `draw_frame` against the golden's static
-pins: `overlay/inspector/images/bg_image = None`, empty images, `sync = true`,
-`size_changed = false`, direct struct construction with no `Drop`):
-- **windowing-host / apprt-surface:** `Renderer::{init,deinit}` (live NSView),
-  `Metal::{init,loop_enter}`, the async `Frame::complete` present half, the real
-  CAMetalLayer/IOSurfaceLayer + display-link windowed present, and the
-  resize/config-swap (`changeConfig`/`setScreenSize`/`setFontGrid`).
-- **renderer↔config (G7 cycle):** `Renderer.DerivedConfig::init`,
+**RECONCILIATION (2026-07-10, VALIDATION_REPORT §3b — this block previously
+deferred "five named Goal-2 tiers, 18 live `unimplemented!()` call sites"; four
+of the five tiers have since LANDED and the stale list was never resolved here):**
+- ~~**windowing-host / apprt-surface**~~ **RESOLVED by W0–W5** (macOS-windowing
+  sub-project #1, commits 540c924/74c5720/accbd4a/8e604eb/73acefa/9f16b9d):
+  `Metal::{init,loop_enter}` live, async `Frame::complete` present half live,
+  CAMetalLayer/IOSurfaceLayer + display-link windowed present live,
+  resize/config-swap live. The ONE residual windowing gap is core-side, NOT in
+  this crate: `renderer_seam::Renderer::init` never routes the host view into
+  `Metal::init(view)` — tracked at **W-ATTACH** (below in this file, Task 23).
+- ~~**renderer↔config (G7 cycle)**~~ **RESOLVED** via the `RendererConfig`
+  accessor trait defined in this crate and impl'd IN `rustty-config` (no
+  renderer→config edge, G7 stays acyclic; memory
+  `renderer-config-accessor-trait-acyclic`): `Renderer.DerivedConfig::init`,
   `Message::initChangeConfig`, `Thread.DerivedConfig::init`,
-  `shadertoy::load_from_files`/`load_from_file` (commented verbatim, no live fn), and
-  `prep_background_image` file I/O (subsumed by the `Renderer::init` seam).
-- **Kitty-pixel / image-upload:** `image` `kitty_update`/`prep_kitty_*`/`convert`
-  (wuffs swizzle).
-- **overlay-render:** the z2d `Overlay` `highlight_*` rect draws.
-- **rustty-inspector:** `overlayFeatures` (uninhabited inspector placeholder).
-- the **OpenGL/WebGL** backends (Linux/wasm) and **GTK** — out of the monomorphic
-  Metal scope.
+  `shadertoy::{load_from_files,load_from_file}` (live fns, shadertoy.rs:141/188),
+  and `prep_background_image` (generic.rs:2586) are ALL live.
+- ~~**Kitty-pixel / image-upload**~~ **RESOLVED** (R-d P1 fill,
+  `RENDERER_KITTY_IMAGE_PATH_DESIGN.md`): `Image::convert` re-homed as a pure-Rust
+  RGBA_PREMUL swizzle loop + the four `kitty_*` terminal-walk methods live
+  (image.rs). NOTE: the `rustty-wuffs` crate's own `swizzle.rs` seams are a
+  SEPARATE, still-open entry (see "rustty-wuffs swizzle" below).
+- ~~**overlay-render**~~ **RESOLVED**: the four z2d `Overlay` `highlight_*` draws
+  are live (overlay.rs; z2d `Context` gained `anti_aliasing_mode`/`hairline`).
 
-**G3b.** The crate remains `PORT STATUS: in progress` ⇒ G3b comment-coverage keeps
-SKIPPING it (honest — the crate is not wholly ported). R1 for the ported slice is
-backstopped by the adversary + verify panel + the golden gate (heavy-tier doctrine);
-a scoped `check_comment_coverage.py --port-glob` run is available on the done slice
-as an optional on-demand check.
+**STILL DEFERRED (the honest residual — 1 live `unimplemented!()` in this crate):**
+- **rustty-inspector:** `overlayFeatures` (generic.rs:4566) — statically the
+  unreachable `Some(_insp)` arm over the uninhabited inspector placeholder;
+  verbatim reference body preserved. Un-defers with the Phase-3 dcimgui
+  inspector fill.
+- the **OpenGL/WebGL** backends (Linux/wasm) and **GTK** — out of the monomorphic
+  Metal scope (whole-backend follow-up ports, no in-crate `unimplemented!()`).
+
+**G3b.** The crate remains `PORT STATUS: in progress` (honest — GL/WebGL/GTK
+backends are unported and the inspector arm is a placeholder) ⇒ G3b
+comment-coverage keeps SKIPPING it. R1 for the ported slices is backstopped by
+the adversary + verify panel + the golden gate (heavy-tier doctrine); a scoped
+`check_comment_coverage.py --port-glob` run is available on the done slice as an
+optional on-demand check.
 
 ## rustty-crash (integration-tier stage 1) — `ThreadStateSurface` seam; concrete `ThreadState` impl deferred
 
@@ -2799,7 +2812,7 @@ deferrals; two convention notes (NOT deferrals — no follow-up scheduled):
   seam (`record_replay_arg` → `_ssh_args`, `apply_e_command` → halt) — the
   aliasing-safe analogue of the `-e` path (memory `rust-mut-args-strongly-protected`).
 
-## rustty-cli C5 (Phase-2 CLI milestone) — vaxis/zf-touching actions
+## rustty-cli C5 (Phase-2 CLI milestone) — vaxis/zf-touching actions [RECONCILED 2026-07-10, T14: TUI wiring landed; `boo.rs:22` is the crate's ONLY live seam]
 
 C5 (CLI_BLUEPRINT.md §1/§7 + Risk 1/2) lands the four vaxis/zf-touching actions
 into `rustty-cli`: `list_colors.zig` (0t → `list_colors.rs`), `list_keybinds.zig`
@@ -2812,15 +2825,28 @@ picker is preserved VERBATIM as a commented block), clippy `-D warnings` / fmt /
 acyclic G7 GREEN, rustty-vt 2019 (no regression). The plain/enumeration paths are
 LIVE; the vaxis/zf render paths are documented deferred placeholder leaves.
 
-- **`vaxis` + `zf` are unported Zig-source dependencies** (TTY UI + fuzzy match) —
-  the same class as libxev (D6) and z2d, NOT ghostty src and NOT C libs. Every
-  code path that needs them is 0-test and sits behind the `tui.can_pretty_print &&
-  !plain && isatty` gate, so the plain/enumeration paths — the ONLY paths the KAT
-  and any redirected pipe hit — land LIVE now and the render paths defer:
+**RECONCILIATION (2026-07-10, VALIDATION_REPORT §3b): the blocker below is
+GONE.** `vaxis` and `zf` are no longer "unported Zig-source dependencies" —
+`rustty-vaxis` is `PORT STATUS: done` (chunks 1a–4b) and `rustty-zf` is ported,
+and the TUI-CLI wiring commits (e55e39d — `list_colors`/`list_keybinds`
+`prettyPrint`; 1f88eec — the `list_themes` interactive vaxis+zf fuzzy picker,
+Miri-proven) FILLED three of the four deferred render leaves. Of the items
+below, only **`boo`** remains deferred: `boo.rs:22` `unimplemented!()` is the
+crate's ONLY live seam (it needs the vaxis `vxfw` widget framework tier — NOT
+ported by chunks 1a–4b, which stop at the `widgets`/TextInput tier — plus the
+`framedata` compressed asset). Un-defer trigger: a vaxis vxfw follow-up chunk.
+The per-leaf notes below are kept for history with their outcomes marked:
+
+- ~~**`vaxis` + `zf` are unported Zig-source dependencies**~~ **STALE — both
+  ported** (TTY UI + fuzzy match; the same class as libxev (D6) and z2d, NOT
+  ghostty src and NOT C libs). Historical rationale: every code path that needs
+  them is 0-test and sits behind the `tui.can_pretty_print && !plain && isatty`
+  gate, so the plain/enumeration paths — the ONLY paths the KAT and any
+  redirected pipe hit — landed LIVE first and the render paths deferred:
   - **`list_colors` `--plain`/non-tty path — LIVE.** Iterates `x11_color.map.keys()`
-    (sorted `orderIgnoreCase`) and prints `name = #RRGGBB`. The `prettyPrint`
-    (vaxis) branch is a deferred leaf (`unimplemented!()` + verbatim body/comments
-    preserved). **Enabling change in `rustty-vt` (x11_color.rs):** the ported
+    (sorted `orderIgnoreCase`) and prints `name = #RRGGBB`. ~~The `prettyPrint`
+    (vaxis) branch is a deferred leaf~~ **RESOLVED (e55e39d): `prettyPrint` is
+    LIVE over rustty-vaxis.** **Enabling change in `rustty-vt` (x11_color.rs):** the ported
     `x11_color` map stored keys *lowercased* (for case-insensitive `get`), which
     would corrupt `+list-colors`' displayed names (e.g. `GhostWhite`→`ghostwhite`).
     Added an additive `Map::keys()` returning the ORIGINAL-case names in rgb.txt
@@ -2830,22 +2856,24 @@ LIVE; the vaxis/zf render paths are documented deferred placeholder leaves.
     `config.keybind.formatEntryDocs(entryFormatter("keybind", writer), opts.docs)`
     over the ported `rustty_cfg_fmt::EntryFormatter` (`--docs` rides the same
     `help_strings`/`NoHelpStrings` deferred seam already tracked for C1/C2 — no new
-    deferral). The `prettyPrint` (vaxis) + its `ChordBinding`/`TriggerNode`/
-    `iterateBindings` helpers are a deferred leaf (verbatim body/comments preserved).
+    deferral). ~~The `prettyPrint` (vaxis) + its `ChordBinding`/`TriggerNode`/
+    `iterateBindings` helpers are a deferred leaf~~ **RESOLVED (e55e39d): all
+    LIVE over rustty-vaxis.**
   - **`list_themes` theme ENUMERATION — LIVE.** Built on the ported
     `config/theme.zig` `LocationIterator` + `Config.loadFile` + `shouldIncludeTheme`
-    (luminance filter). The interactive vaxis+zf fuzzy-finder picker (`Preview` and
-    all its methods, `preview`, `resolveAutoThemePath`/`writeAutoThemeFile`,
-    `color`, `ThemeListElement.toUri`) is a deferred leaf — the reference body +
-    comments (1552 lines) are preserved VERBATIM as a commented block; `preview` is
-    an `unimplemented!()` marker. `lorem_ipsum.txt` (`@embedFile`, used only by the
-    deferred `drawPreview`) is copied into the rustty tree (R3) only when the picker
-    lands — NOT needed for the live enumeration.
-  - **`boo` — full vaxis-deferred leaf.** A 100% vaxis/vxfw ghost animation (needs
-    the `framedata` compressed asset too); `run` is an `unimplemented!()` marker and
-    the whole reference (`Boo` widget, span-parser, flate decompression) is preserved
-    verbatim as comments (comment-fidelity, scoped-G3b missing=0). Un-deferred with
-    the `vaxis` port.
+    (luminance filter). ~~The interactive vaxis+zf fuzzy-finder picker (`Preview`
+    and all its methods, `preview`, `resolveAutoThemePath`/`writeAutoThemeFile`,
+    `color`, `ThemeListElement.toUri`) is a deferred leaf~~ **RESOLVED (1f88eec):
+    the interactive fuzzy picker is LIVE over rustty-vaxis + rustty-zf
+    (Miri-proven), `lorem_ipsum.txt` included.**
+  - **`boo` — STILL DEFERRED (the crate's ONLY live seam, `boo.rs:22`).** A 100%
+    vaxis/**vxfw** ghost animation (needs the `framedata` compressed asset too);
+    `run` is an `unimplemented!()` marker and the whole reference (`Boo` widget,
+    span-parser, flate decompression) is preserved verbatim as comments
+    (comment-fidelity, scoped-G3b missing=0). NOT unblocked by the vaxis port:
+    chunks 1a–4b stop at the `widgets`/TextInput tier and do NOT port the `vxfw`
+    widget framework `Boo` is built on. Un-defer trigger: a vaxis vxfw follow-up
+    chunk + the `framedata` asset (R3 copy).
 
 - **`list_themes` resources-dir two-seam note (NOT a new deferral).** The reference
   reads `global_state.resources_dir.app()` (the process-global) for BOTH the
@@ -3154,30 +3182,28 @@ The rustty-side smoke `#[test]`s are NOT ghostty parity tests: `image_empty_life
 Metal device is present), `id_z_less_than_ordering`, `pixel_format_bpp`,
 `overlay_surface_roundtrip` (pure z2d), `overlay_invalid_dimensions`, `color_alpha_pixels`.
 
-DEFERRED (R5 `unimplemented!()` seams — verbatim Zig body preserved as a leading
-block comment at each; golden never runs any of them):
+~~DEFERRED~~ **ALL THREE P1 SEAM GROUPS RESOLVED (reconciled 2026-07-10, T14 —
+they landed after this entry was written and it was never marked):**
 
-- **`Image::convert`** (image.rs) — the `wuffs.swizzle.{g,ga,rgb,bgr,bgra}ToRgba`
-  pixel path. `wuffs` has **no Rust home** (grep: only a `rustty-font` comment
-  references it) — the one HARD dep gap. NOTE (adversary fix): the `.rgba => return`
-  early-out lives INSIDE `convert`'s body, so this whole-method seam swallows it —
-  `Image::upload`/`prep_for_upload` are FULL wiring but ALWAYS reach this panic if
-  ever run, even for already-RGBA data (e.g. the overlay). Golden-SAFE (empty map +
-  `None` overlay + no `background-image` never reach `upload`). Un-seaming needs a
-  pure-Rust g/ga/rgb/bgr/bgra→rgba swizzle (also unblocks the pre-Kitty `bg_image`
-  path — `prepBackgroundImage` builds `Pending{.rgba}` and `uploadBackgroundImage`
-  → `prep_for_upload` → `convert`; §7 OPEN RISK #1). Offscreen golden config MUST
-  NOT set `background-image` (solid bg → `bg_color`, not a texture).
-- **`State::{kitty_update, prep_kitty_placement, prep_kitty_virtual_placement,
-  prep_kitty_image}`** (image.rs) — the Kitty terminal-walk (viewport pins, per-
-  placement `rect`/`pixelSize`/`pointFromPin`, `unicode.placementIterator`/
-  `renderPlacement`, z-sort, bg/text split). Never run by the no-image golden;
-  feeds only each other + `kitty_placements`.
-- **`Overlay::{highlight_hyperlinks, highlight_semantic_prompts, highlight_grid_rect,
-  highlight_pixel_rect}`** (overlay.rs) — the four z2d CPU render leaves. Doubly
-  forced: (1) the ported z2d `Context` subset lacks `set_anti_aliasing_mode`/
-  `set_hairline`; (2) the `RenderState` row/cell `.hyperlink`/`.semantic_*` metadata
-  is not yet exposed; (3) no overlay feature is enabled by the golden.
+- ~~**`Image::convert`** (image.rs)~~ **RESOLVED** — filled as a pure-Rust
+  per-pixel g/ga/rgb/bgr/bgra→RGBA_PREMUL swizzle loop (the "wuffs has no Rust
+  home" blocker was resolved by re-homing the conversion, NOT by filling
+  `rustty-wuffs` — whose own `swizzle.rs` seams remain open, see the
+  "rustty-wuffs swizzle" entry below). `Image::upload`/`prep_for_upload` now run
+  for real; the `bg_image` path (`prep_background_image` →
+  `prep_for_upload` → `convert`) is live. See image.rs header
+  ("FILLED (R-d)") + `RENDERER_KITTY_IMAGE_PATH_DESIGN.md`.
+- ~~**`State::{kitty_update, prep_kitty_placement, prep_kitty_virtual_placement,
+  prep_kitty_image}`** (image.rs)~~ **RESOLVED** — the Kitty terminal-walk is
+  live (image.rs:466/713/…), exercised by the offscreen APC-driven Kitty
+  pixel-path test.
+- ~~**`Overlay::{highlight_hyperlinks, highlight_semantic_prompts,
+  highlight_grid_rect, highlight_pixel_rect}`** (overlay.rs)~~ **RESOLVED** —
+  all three former forcings were lifted: the z2d `Context` exposes
+  `anti_aliasing_mode`/`hairline` (public fields) + the hairline stroking
+  fast-path is ported, and the `RenderState` row/cell metadata is public. The
+  four draws render for real (overlay.rs header "now FILLED"), covered by
+  host-only pixel tests.
 
 FULL (ported, compiles against the landed metal leaves + z2d, no `GenericRenderer`):
 `State::{empty, deinit, upload, draw, overlay_update, kitty_requires_update,
@@ -3194,6 +3220,32 @@ PORT-NOTE divergences from the design (both R1-driven, documented in-source):
   Chunk-3 `rebuildOverlay` passes `self.overlay.as_ref()`.
 - `State::draw` is `&self` (no mutation; the Zig `*State` is non-mutating).
 - `Overlay::init`/`deinit` drop the Zig `alloc` (the z2d subset owns its buffer).
+
+## macOS windowing W0 (objc2-quartz-core + cf_release_thread xev rewire + IOSurfaceLayer) — no open deferral [added 2026-07-10, T14 reconciliation]
+
+Chunk W0 (commit 540c924, `W0_DESIGN.md`): the `objc2-quartz-core` dep
+(`CALayer`+`objc2-core-foundation`+`CAMetalLayer` features), the
+`os/cf_release_thread` rewire onto the REAL `rustty-xev` (retiring its
+`xev_seam` placeholder markers), and the `IOSurfaceLayer` CALayer-subclass port
+(`crates/rustty-renderer/src/metal/iosurface_layer.rs` — `set_surface`
+main-thread hop, `display` override, `kCAGravityTopLeft` contents wiring).
+**No `unimplemented!()` seam was introduced or left by W0.** Divergence ledger
+lives in `W0_DESIGN.md` §0 (objc2 feature-gate corrections, `Send`-wrapper
+`SetSurfaceBlock` analogue). The `IOSurfaceLayer` unsynchronized-`Cell` ivar
+note is tracked by VALIDATION_REPORT §3c (AtomicPtr fix landed in 9f87df1).
+
+## macOS windowing W1 (Metal on-screen present + windowed init — FIRST PIXELS) — residual folded into W-ATTACH [added 2026-07-10, T14 reconciliation]
+
+Chunk W1 (commit 74c5720, `W1_DESIGN.md`): `Metal::init(view)` (the on-screen
+attach ctor — sends `setLayer:`/`setWantsLayer:` to the type-erased host view,
+R4: `&AnyObject`, no apprt edge), the sync + async (`Frame::complete`) present
+halves, `surfaceSize`, and the windowed `Renderer` init plumbing — proven by
+the on-device first-pixels KAT. **No `unimplemented!()` seam remains in
+`rustty-renderer` from W1.** The W1-7 divergence (generic `Renderer::init`
+constructs Metal via the offscreen-portable `init_offscreen`, generic.rs:1840)
+became the CORE-side host-attach gap once core's `renderer_seam::Renderer::init`
+landed against it — that residual is the **W-ATTACH** entry below (Task 23),
+NOT a W1 in-crate seam.
 
 ## macOS windowing W2 (CVDisplayLink) — divergence ledger + one deferred leaf
 
@@ -3229,14 +3281,16 @@ on-device KAT passes (real vsync tick, TICKS>=1). Divergences (all documented in
   `WaitError` alias of the already-exported `MachPortError` was un-exported; the KAT's
   typed `Async.wait` callback names it. Not a behavioral divergence.
 
-**Deferred leaf (INHABITED-placeholder doctrine, → W3):** `Renderer::loop_enter`
-is filled and faithful, but its transitive `self.api.loop_enter()` (metal_impl.rs) stays
-`unimplemented!("windowing-host: Metal::loop_enter installs the IOSurfaceLayer display
-callback")` — it needs a live NSView layer (W3). The method compiles and is faithful;
-it PANICS if called until W3 fills the Metal hook. The KAT does NOT call
-`Renderer::loop_enter` — it drives the `DisplayLink` primitive + the callback→`Async`
-seam directly, so the deferred Metal leaf never gates the vsync proof. `loop_exit` has
-no Metal hook (`@hasDecl(Metal,"loopExit")` false) and is fully runnable.
+**Deferred leaf — RESOLVED (by W5, not W3; reconciled 2026-07-10, T14):**
+`Renderer::loop_enter` was filled and faithful at W2, with its transitive
+`self.api.loop_enter()` (metal_impl.rs) left `unimplemented!("windowing-host: …")`.
+That Metal hook was FILLED by chunk **W5** (commit 9f16b9d — the display-callback
+trampoline; `metal_impl.rs:493` is live, concurrency Miri-proven), so the old
+"PANICS until W3" wording here was stale twice over (wrong chunk, then wrong
+state). Nothing in this entry's scope remains deferred. The KAT never needed the
+Metal leaf — it drives the `DisplayLink` primitive + the callback→`Async` seam
+directly. `loop_exit` has no Metal hook (`@hasDecl(Metal,"loopExit")` false) and
+was always fully runnable.
 
 ## macOS windowing W3 (E2 renderer-Thread event loop) — one deferred leaf
 
@@ -3263,6 +3317,34 @@ DEFERRALS entry); the `MUST_DRAW_FROM_APP_THREAD` app-mailbox `drawFrame` arm is
 dead-but-live (`false` this milestone, flips when GTK lands) — both arms compile,
 no `unimplemented!`.
 
+## macOS windowing W4 (apprt-c host handshake: blur + display_id) — no open deferral [added 2026-07-10, T14 reconciliation]
+
+Chunk W4 (commit 73acefa, `W4_DESIGN.md`): filled the two remaining macOS
+`#[cfg(target_os="macos")]` C-ABI leaves in `crates/rustty-apprt-c/src/lib.rs` —
+`rustty_surface_set_window_background_blur` (private-CGS, explicit
+`#[link(name = "CoreGraphics", kind = "framework")]`) and
+`rustty_surface_set_display_id` (renderer mailbox → `set_macos_display_id`) —
+plus the config blur-radius `pub` accessor and the NSWindow layer-host
+integration harness. **Both former E10 leaves are LIVE; W4 left no new seam.**
+The `quicklook`/`secure-input`/`inspector` apprt-c leaves were explicitly OUT of
+W4 scope and stay tracked by the E9/E10 sections above (Phase-3).
+`set_display_id_pushes_to_render_thread_panic_free` is un-ignored and green on a
+Metal host (see W-ATTACH below).
+
+## macOS windowing W5 (Metal::loop_enter display-callback trampoline) — no open deferral [added 2026-07-10, T14 reconciliation]
+
+Chunk W5 (commit 9f16b9d, `W5_DESIGN.md`): filled the LAST live-windowing seam
+inside `rustty-renderer` — `Metal::loop_enter` (`metal_impl.rs:493`, live)
+installs the `IOSurfaceLayer` display callback via the raw-self draw chain
+(container_of / `@fieldParentPtr` idiom, aliasing proven on
+`.port/phase-2/mirihar-chunk3b`). **Zero `unimplemented!()` windowing seams
+remain in `rustty-renderer`** (the crate's single live seam is the inspector
+`overlayFeatures` arm — see the R-d reconciliation above). The remaining
+windowed-present gap is CORE-side host-attach wiring, tracked at **W-ATTACH**
+(below, Task 23). Stale references to "Metal::loop_enter unimplemented" in
+older entries were reconciled 2026-07-10 (the W2 entry above; VALIDATION_REPORT
+M4).
+
 ---
 
 # Ledger-hygiene reconciliation (2026-07 — GAP_ANALYSIS drift backlog §6)
@@ -3272,18 +3354,34 @@ entry, plus one app-core over-claim. These entries reconcile that drift. Each
 maps to a GAP_ANALYSIS §3 workstream ("sub-project"); the numbering below is the
 sub-project id the critics used (macos-swift-app = #2, unused-subset = #3, gtk = #4).
 
-## Sub-project #3 (unused-subset): `src/synthetic/**` — differential-fuzzing generators
+## Sub-project #3 (unused-subset): `src/synthetic/**` — RESOLVED (ported 2026-07-09); 4 binary-entry seams tracked [reconciled 2026-07-10, T14]
 
-**Ghostty source:** `src/synthetic/**` — 9 `.zig` files, ~1157 LOC
-(`Generator.zig`, `Bytes.zig`, `Osc.zig`, `Utf8.zig`, `cli.zig`, `main.zig`,
-`cli/**`). **Rustty counterpart:** only a 9-line scaffold in
-`crates/rustty-synthetic/src/lib.rs` (crate exists, body unported).
-**Why deferred:** these are the differential-fuzzing input generators — a
-developer/CI tool, NOT reachable from the terminal product; ghostty itself does
-not link them into the app. Headless-feasible (no GPU/GTK/windowing dependency).
-**What unblocks it:** slated for sub-project #3 (unused-subset, GAP_ANALYSIS §3.8).
-Port the generators into `rustty-synthetic` when the unused-by-ghostty subset
-milestone runs. 0-test impact on the product crates.
+~~**Rustty counterpart:** only a 9-line scaffold (crate exists, body unported).~~
+**RESOLVED — the body was PORTED the day this entry was written (commit
+fb12303, `SYNTHETIC_DESIGN.md`)**: all of ghostty `src/synthetic/**` (9 `.zig`
+files, ~1157 LOC) is ported module-per-file into `crates/rustty-synthetic`
+(`generator`/`bytes`/`osc`/`utf8`/`cli` + `cli/{ascii,osc,utf8}` + the package
+root, plus 3 net-new support modules `rand`/`enums`/`io`), PRNG bit-exact
+(Xoshiro256++ / SplitMix64 / the std.Random 0.15.2 helper chain, verbatim), 12
+Zig `test{}` ported assertion-for-assertion (15 Rust tests), Miri-clean, G3b
+missing=0, `PORT STATUS: done`.
+
+**Residual (4 live `unimplemented!()` — the BINARY-ENTRY seams,
+`crates/rustty-synthetic/src/cli.rs`, previously tracked only in
+`SYNTHETIC_DESIGN.md`; each keeps its verbatim Zig body as comments):**
+
+1. **`cli.rs:56` `main()`** — needs `cli.action.detectArgs` (generic `+action`
+   detection), which lives ABOVE `synthetic` in the acyclic Rust split (a
+   synthetic→cli edge would cycle). No ported `test{}` exercises it.
+2. **`cli.rs:85/88/91` `main_action_impl_{ascii,osc,utf8}`** — the
+   option-parsing (`cli.args.parse` over argv/string iterators) + stdout wiring
+   of `mainActionImpl`. The substantive dispatch (`main_action`) and every
+   generator body are LIVE; only the binary-entry glue defers.
+
+**Un-defer trigger:** the `rustty +synthetic`-style binary entry (the same
+milestone that wires generator binaries into the differential-fuzz harness, G5).
+Placeholder-leaf doctrine: shapes fixed, bodies panic if called, no test reaches
+them.
 
 ## Sub-project #3 (unused-subset): `src/benchmark/**` + `main_bench.zig` + `ghostty_benchmark_cli`
 
@@ -3499,23 +3597,51 @@ preserved and the field/method surface is fixed so the later chunk FILLS them.
    `self.fd` bug — its `read` references a field it lacks). **Target: a Windows-target
    chunk.**
 
-2. **`vaxis.rs` — the `Vaxis` INHABITED placeholder leaves.** `handle_event_generic`
-   ports LIVE against this placeholder (the capability-flag writes + the F3 width/
-   scaled-text detection are live); only three genuine Vaxis leaves defer as
-   `unimplemented!()`: `Vaxis::translate_mouse`, `Vaxis::device_status_report`, and
-   `Vaxis::wake_query_futex` (`std.Thread.Futex.wake(&vx.query_futex, 10)`). The later
-   **Vaxis chunk** FILLS the placeholder (must preserve the `caps`/`state`/`screen`/
-   `query_futex`/`queries_done`/`opts` field surface + these three methods;
-   `cargo build --workspace` is the backstop). **Target: the Vaxis chunk.**
+2. ~~**`vaxis.rs` — the `Vaxis` INHABITED placeholder leaves.**~~ **RESOLVED by
+   Chunk 4a** (commit 9500493): the real `Vaxis<'a>` replaced the placeholder;
+   `translate_mouse` (vaxis.rs:890), `device_status_report` (vaxis.rs:1143), and
+   `wake_query_futex` (vaxis.rs:1153) are all LIVE. The 4a residuals (the two
+   `zigimg` seams) are the **Chunk 4a/4b section below**.
 
 3. **`tty.rs` — `TestTty::next_event`.** A Windows-API-compat stub (`unimplemented!()`) —
    Zig returns `error.SkipZigTest`; never reached on non-windows targets. Filled with the
    `WindowsTty` decode (item 1). **Target: a Windows-target chunk.**
 
-4. **`loop_.rs` — the `test Loop` lifecycle test (`#[ignore]`).** Needs the real `Vaxis`
-   (`vaxis.init`/`enterAltScreen`/`queryTerminal`/`deviceStatusReport` — item 2 leaves)
-   and a live tty; un-ignored when the Vaxis chunk fills the placeholder. It still counts
-   toward `check_test_counts` (a `#[test]`, just `#[ignore]`d). **Target: the Vaxis chunk.**
+4. ~~**`loop_.rs` — the `test Loop` lifecycle test (`#[ignore]`).**~~ **RESOLVED by
+   Chunk 4a**: `loop_lifecycle` (loop_.rs:558) is UN-IGNORED — the filled
+   `device_status_report` lets the init/start/stop lifecycle run to completion
+   against `TestTty` (see the comment at loop_.rs:525).
+
+NOTE (T14 reconciliation, 2026-07-10): item 1's Windows seam family also covers
+`loop_.rs:341` (`#[cfg(windows)]` `tty_run` arm) — same `#[cfg(windows)]` class,
+same Windows-target-chunk target.
+
+## rustty-vaxis Chunks 4a/4b (the real `Vaxis<'a>` + widgets) — residual R5 seams [added 2026-07-10, T14 reconciliation — VALIDATION_REPORT M5]
+
+Chunk 4a (commit 9500493) replaced the 3b placeholder with the real `Vaxis<'a>`
+(render diff-and-emit engine, capability queries, kitty-graphics transmit
+paths); Chunk 4b (commit 17bcf2d) added the `widgets`/TextInput tier. The chunk
+sequence for the libvaxis port is FINISHED — these are the crate's remaining
+live seams (verbatim reference bodies preserved at each; this section replaces
+the formerly-dangling "(DEFERRALS.md)" citations in vaxis.rs, which pointed at
+no entry):
+
+1. **`vaxis.rs:997` `Vaxis::transmit_image` + `vaxis.rs:1018` `Vaxis::load_image`
+   — the `zigimg` seams.** Both decode/convert image payloads via the unported
+   Zig-source dep `zigimg` (`img.convertToPixelFormat`, PNG decode) before the
+   (LIVE) kitty transmit paths. Same dep class as libxev/z2d/vaxis itself: a
+   vendored-dep port. **Un-defer trigger: a `rustty-zigimg` port (or an R3
+   pure-Rust re-home of the two conversions), needed only when a TUI consumer
+   transmits images.**
+2. **`image.rs:223` `Image::draw` + `image.rs:248` `Image::cell_size`.** The
+   "(later chunk)" wording in-source is STALE (the chunk sequence is finished);
+   the honest state: both consume a live `Window`/`Screen` but are unreachable
+   until item 1 lands (a vaxis `Image` can only be constructed through
+   `transmit_image`/`load_image`), so they defer WITH the zigimg tier.
+   **Un-defer trigger: item 1.**
+
+No other live seams exist in the crate outside the `#[cfg(windows)]` family +
+`TestTty::next_event` (Chunk 3b items 1/3 above).
 
 ## rustty-font Atlas wasm surface — per-test deferral ledger (VALIDATION_REPORT §3e)
 
@@ -3583,3 +3709,67 @@ from `renderer_seam::Options<A>.rt_surface` into the Metal on-screen ctor
 setting `layer` then `wantsLayer` (Metal.zig:110-126).
 **Acceptance test IS un-ignoring this KAT**: both windowed-present KATs
 un-ignored and green on a Metal host.
+
+## rustty-wuffs swizzle — 5 unreached pixel-format seams [added 2026-07-10, T14 reconciliation — VALIDATION_REPORT §3b]
+
+`crates/rustty-wuffs/src/swizzle.rs` ports `pkg/wuffs/src/swizzle.zig` as five
+R5 `unimplemented!()` seams with the verbatim reference bodies preserved (the
+crate previously had NO entry under its own name — only stale pre-crate
+renderer lines):
+
+- **`swizzle.rs:26` `gToRgba`**, **`:39` `gaToRgba`**, **`:51` `rgbToRgba`**,
+  **`:63` `bgrToRgba`**, **`:75` `bgraToRgba`** — each is one call into the
+  vendored wuffs `swizzle(alloc, src, SRC_FMT, RGBA_PREMUL)` core.
+
+**Why deferred (scope-trim, not an external blocker):** NO rustty caller
+reaches them — the background-image decode path converts internally
+(`decode_frame` + `set_from_slice` with `RGBA_NONPREMUL`,
+RENDERER_BG_IMAGE_DESIGN §2.2), and the renderer Kitty path uses the LIVE
+re-homed `image::convert` pure-Rust loop (see the R-d P1 reconciliation above).
+Fidelity-preserving dead code within the vendored wuffs subset.
+**Un-defer trigger:** a future non-RGBA image ingest that consumes the wuffs
+swizzle surface directly (e.g. the GTK/OpenGL renderer tier), or a completeness
+pass on the wuffs vendored subset (GAP_ANALYSIS §7 open decision 4).
+
+## rustty-z2d subset guards — 6 by-design `unimplemented!()` arms [added 2026-07-10, T14 reconciliation — VALIDATION_REPORT §3b]
+
+`rustty-z2d` is `PORT STATUS: done` for the ghostty-exercised z2d 0.10.0
+subset; the arms OUTSIDE the subset are guarded `unimplemented!()` by design
+(lib.rs header documents this). Enumerated here so every live seam has a ledger
+entry:
+
+- **`painter.rs:128`** — anti-aliased fill via **supersample** (the sole
+  consumer uses `.default`/`.multisample_4x`, both ported).
+- **`painter.rs:322`** — supersample stroke (same class).
+- **`internal/tess/stroke_plotter.rs:46`** + **`internal/tess/polyline_plotter.rs:47`**
+  — **dashed** stroke/polyline tessellation (the sprite/glyf canvas draws no
+  dashes).
+- **`surface.rs:355` + `surface.rs:392`** — sub-8-bit **packed-alpha**
+  surfaces (`Alpha4`/`Alpha2`/`Alpha1` → `PackedImageSurface`; the consumers
+  use `Alpha8`/RGB(A) surfaces).
+
+Each arm is reachable only through an `AntiAliasMode`/dash-array/`Pixel`
+variant the sole consumers (rustty-font sprite/glyf canvas, the renderer
+overlay) never construct — latent, not parity-blocking (GAP_ANALYSIS §6).
+**Un-defer trigger:** a consumer constructing those variants (candidate: the
+future GTK/OpenGL renderer tier), or GAP_ANALYSIS §7 open decision 4 choosing
+fill-for-completeness.
+
+## rustty-font-shaper — Linux fontconfig backend + web_canvas [added 2026-07-10, T14 reconciliation — VALIDATION_REPORT §3b]
+
+The D1 shaper tier is fully landed (backend selector, CoreText + FreeType
+faces, HarfBuzz shaping, discovery, Collection/CodepointResolver,
+SharedGrid/SharedGridSet — 110 tests). Residual, per the macOS-first locked
+fork:
+
+- **`deferred_face.rs:479/482/489` — the 3 Fontconfig `DeferredFace` arms**
+  (`unimplemented!("Fontconfig DeferredFace is DEFERRED (Linux backend)")`).
+  The fontconfig discovery half is the same deferral class as the empty
+  `fontconfig-sys` stub (VALIDATION_REPORT §3f). **Un-defer trigger: the Linux
+  font-discovery milestone** (platform-linux workstream, GAP_ANALYSIS §3.6).
+- **`face/web_canvas.zig`** — the wasm browser face: NOT ported (no Rust file,
+  no seam marker). **Un-defer trigger: the rustty wasm app-runtime milestone**
+  (same target as the config/vt wasm exports + the font Atlas wasm test above).
+
+The cli C2 entry's "Non-macOS Fontconfig discovery is still DEFERRED in the
+shaper" note points here.
