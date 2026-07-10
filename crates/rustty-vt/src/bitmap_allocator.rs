@@ -193,12 +193,12 @@ impl<const CHUNK_SIZE: usize> BitmapAllocator<CHUNK_SIZE> {
         let bytes_len = core::mem::size_of_val(slice);
         let aligned_len = align_forward(bytes_len, CHUNK_SIZE);
         // const chunk_count = @divExact(aligned_len, chunk_size);
-        let chunk_count = aligned_len / CHUNK_SIZE;
+        let chunk_count = div_exact(aligned_len, CHUNK_SIZE);
 
         // From the pointer, we can calculate the exact index.
         let chunks = unsafe { self.chunks.ptr(base) };
         // const chunk_idx = @divExact(@intFromPtr(slice.ptr) - @intFromPtr(chunks), chunk_size);
-        let chunk_idx = ((slice.as_ptr() as usize) - (chunks as usize)) / CHUNK_SIZE;
+        let chunk_idx = div_exact((slice.as_ptr() as usize) - (chunks as usize), CHUNK_SIZE);
 
         let bitmaps =
             unsafe { core::slice::from_raw_parts_mut(self.bitmap.ptr(base), self.bitmap_count) };
@@ -268,10 +268,12 @@ impl<const CHUNK_SIZE: usize> BitmapAllocator<CHUNK_SIZE> {
 
         let bytes_len = core::mem::size_of_val(slice);
         let aligned_len = align_forward(bytes_len, CHUNK_SIZE);
-        let chunk_count = aligned_len / CHUNK_SIZE;
+        // const chunk_count = @divExact(aligned_len, chunk_size);
+        let chunk_count = div_exact(aligned_len, CHUNK_SIZE);
 
         let chunks = unsafe { self.chunks.ptr(base) };
-        let chunk_idx = ((slice.as_ptr() as usize) - (chunks as usize)) / CHUNK_SIZE;
+        // const chunk_idx = @divExact(@intFromPtr(slice.ptr) - @intFromPtr(chunks), chunk_size);
+        let chunk_idx = div_exact((slice.as_ptr() as usize) - (chunks as usize), CHUNK_SIZE);
 
         let bitmaps =
             unsafe { core::slice::from_raw_parts(self.bitmap.ptr(base), self.bitmap_count) };
@@ -315,10 +317,10 @@ impl<const CHUNK_SIZE: usize> BitmapAllocator<CHUNK_SIZE> {
         // We align the chunk count forward so our bitmaps are full so we
         // don't have to handle the case where we have a partial bitmap.
         // const chunk_count = @divExact(aligned_cap, chunk_size);
-        let chunk_count = aligned_cap / CHUNK_SIZE;
+        let chunk_count = div_exact(aligned_cap, CHUNK_SIZE);
         let aligned_chunk_count = align_forward(chunk_count, 64);
         // const bitmap_count = @divExact(aligned_chunk_count, 64);
-        let bitmap_count = aligned_chunk_count / 64;
+        let bitmap_count = div_exact(aligned_chunk_count, 64);
 
         let bitmap_start = 0;
         let bitmap_end = core::mem::size_of::<u64>() * bitmap_count;
@@ -349,6 +351,25 @@ pub struct Layout {
 #[inline]
 fn align_forward(value: usize, alignment: usize) -> usize {
     value.next_multiple_of(alignment)
+}
+
+// PORT NOTE (VALIDATION_REPORT §3c.7): `@divExact(numerator, denominator)` —
+// Zig's exact division is SAFETY-CHECKED: a non-zero remainder TRAPS in
+// Debug/ReleaseSafe (it is UB only in ReleaseFast). A plain Rust `/` silently
+// floors, which would turn `free()`'s heap-corruption tripwire (a misaligned
+// slice pointer under the grapheme/hyperlink storage) into silent bitmap
+// corruption. `debug_assert!` restores the oracle's ReleaseSafe trap semantics
+// under BOTH assert-bearing lanes of the DG2/DG4 profile decision (dev `cargo
+// test` and the `release-safe` profile, where debug-assertions are ON); the
+// mirrored ReleaseFast artifact (`release-fast`, assertions off) floors instead
+// of UB — Rust's defined result, strictly safer than the reference's UB.
+#[inline]
+fn div_exact(numerator: usize, denominator: usize) -> usize {
+    debug_assert!(
+        numerator % denominator == 0,
+        "@divExact: {numerator} is not an exact multiple of {denominator}"
+    );
+    numerator / denominator
 }
 
 /// Find `n` sequential free chunks in the given bitmaps and return the index
@@ -1143,5 +1164,31 @@ mod tests {
             assert_eq!(32, Alloc::bytes_required::<u8>(32));
             assert_eq!(64, Alloc::bytes_required::<u8>(33));
         }
+    }
+
+    // PORT NOTE (rustty-only, VALIDATION_REPORT §3c.7): pins the `div_exact`
+    // helper's @divExact parity. Exact inputs divide exactly (identical to the
+    // reference in every build mode); an INEXACT input must TRAP wherever Zig's
+    // safety-checked builds trap (Debug/ReleaseSafe == the DG4 assert-bearing
+    // lanes: dev `cargo test` + the `release-safe` profile, both with
+    // debug-assertions ON). The trap test is compiled only under
+    // `debug_assertions` because in the mirrored ReleaseFast artifact the
+    // reference does NOT trap either (there the Zig behavior is UB; the Rust
+    // helper floors — defined, strictly safer).
+    #[test]
+    fn div_exact_exact_inputs() {
+        assert_eq!(1, div_exact(4, 4));
+        assert_eq!(7, div_exact(7 * 32, 32));
+        assert_eq!(0, div_exact(0, 64));
+        assert_eq!(64, div_exact(64 * 64, 64));
+    }
+
+    #[test]
+    #[should_panic(expected = "@divExact")]
+    #[cfg(debug_assertions)]
+    fn div_exact_traps_on_inexact() {
+        // A misaligned free()-style pointer delta (the §3c.7 heap-corruption
+        // tripwire): 5 bytes into a 4-byte-chunk space is not exact.
+        let _ = div_exact(5, 4);
     }
 }

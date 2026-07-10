@@ -350,7 +350,13 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
 // behavior R1 preserves). Rust's Drop is the natural end-of-life hook Zig lacks:
 // remove this Loop's registration (keyed on the context pointer — the SAME
 // address `init` registered, valid because the Loop is PINNED per the `new`
-// contract) before the pointee dies. Proven on the isolated Miri harness
+// contract) before the pointee dies. HAZARD if that contract is violated: a
+// Loop moved between `init` and drop deregisters its DROP-time address and
+// leaves the stale INIT-time entry in `HANDLERS` — no worse than upstream
+// (which never removes it, and the moved Loop's registered ctx is already
+// dangling for the live handler anyway), but not fixed by this Drop either;
+// only the pinning contract makes the handler sound while the Loop is alive.
+// Proven on the isolated Miri harness
 // (.port/phase-2/mirihar-chunk3b): `winch_naive` (no dereg) = UAF UB under both
 // SB and TB; `winch_shipped` (dereg-on-drop) = CLEAN. The cfg mirrors `init`'s:
 // on windows/test nothing was registered, so nothing is removed.

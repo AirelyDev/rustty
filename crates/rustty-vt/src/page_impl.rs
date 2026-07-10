@@ -1272,12 +1272,16 @@ impl Page {
     // PORT NOTE: the reference is `getRow(self: *const Page) *Row` — a `*const`
     // receiver returning a mutable pointer into the page's offset-addressed
     // backing memory (interior mutability via offsets). We mirror that exact
-    // signature; the `&mut` from `&self` is sound because the data lives behind
-    // raw offsets, not in `self`.
-    #[allow(clippy::mut_from_ref)]
+    // signature with PURE pointer arithmetic (no `&mut` is ever materialized),
+    // matching the sibling `get_row_and_cell`/`get_cells`: a Zig `*Row` carries
+    // no aliasing protector, and materializing `&mut Row` here would mint a
+    // Unique-derived tag that a later sibling `get_row` (or any other reborrow
+    // of the same row bytes) invalidates — a Stacked-Borrows hazard proven in
+    // the isolated Miri harness (.port/phase-2/mirihar-chunk3b, `getrow_naive`
+    // UB vs `getrow_shipped` CLEAN; VALIDATION_REPORT §3c.1).
     pub fn get_row(&self, y: usize) -> *mut Row {
         assert!(y < self.size.rows as usize);
-        unsafe { &mut *self.rows.ptr(self.memory_ptr()).add(y) }
+        unsafe { self.rows.ptr(self.memory_ptr()).add(y) }
     }
 
     /// Get the cells for a row.

@@ -3614,10 +3614,15 @@ impl Terminal {
     pub fn erase_chars(&mut self, count_req: usize) {
         let count = {
             let remaining = self.cols - unsafe { (*self.screens.active).cursor.x };
-            let mut end = core::cmp::min(
-                remaining,
-                core::cmp::max(count_req, 1) as size::CellCountInt,
-            );
+            // var end = @min(remaining, @max(count_req, 1));
+            // PORT NOTE (VALIDATION_REPORT §3c.8): Zig's peer-type resolution
+            // runs the `@min`/`@max` in usize and only then uses the (≤
+            // remaining, so ≤ u16::MAX) result in u16 contexts. Clamp in usize
+            // FIRST, then narrow — truncating `count_req` to u16 before the min
+            // would mangle counts > u16::MAX (e.g. 65537 → 1), reachable via
+            // this pub API / FFI.
+            let mut end = core::cmp::min(remaining as usize, core::cmp::max(count_req, 1))
+                as size::CellCountInt;
 
             // If our last cell is a wide char then we need to also clear the
             // cell beyond it since we can't just split a wide char.
@@ -8404,6 +8409,32 @@ mod tests {
         }
         t.set_cursor_pos(1, 4);
         t.erase_chars(10);
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "  A".as_bytes());
+        }
+
+        t.deinit(Global);
+    }
+
+    // PORT NOTE (rustty-only regression, NOT a reference test — VALIDATION_REPORT
+    // §3c.8): `count_req: usize` past u16::MAX. Zig's `@min(remaining,
+    // @max(count_req, 1))` clamps in usize BEFORE the value narrows into u16
+    // context; the pre-fix Rust body truncated `count_req as CellCountInt`
+    // FIRST, so 65537 became 1 and erased a single cell instead of clamping to
+    // `remaining` (unreachable via the VT stream, reachable via this pub API /
+    // FFI). Mirrors `eraseChars beyond screen edge` with an over-u16 count.
+    #[test]
+    fn terminal_erase_chars_count_beyond_u16() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for c in "  ABC".chars() {
+            t.print(c as u32).unwrap();
+        }
+        t.set_cursor_pos(1, 4);
+        // u16::MAX + 2: must clamp to `remaining` (2), not truncate to 1.
+        t.erase_chars(65537);
 
         {
             let str = t.plain_string(Global).unwrap();

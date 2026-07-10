@@ -2759,6 +2759,18 @@ impl Screen {
     /// So if OutOfSpace is returned, it means that even after splitting the page
     /// there was still no room for the new style.
     pub fn manual_style_update(&mut self) -> Result<(), pagelist::grow::IncreaseCapacityError> {
+        // PORT NOTE: `defer self.assertIntegrity()` — Zig's defer runs on ERROR
+        // returns too, so the body lives in an inner fn and the integrity gate
+        // runs unconditionally after it, on every exit path including the `?`
+        // splitForCapacity early-return (VALIDATION_REPORT §3e / §3c.9).
+        let result = self.manual_style_update_inner();
+        self.assert_integrity();
+        result
+    }
+
+    /// The body of `manual_style_update` (the reference fn minus its `defer`);
+    /// see the PORT NOTE above.
+    fn manual_style_update_inner(&mut self) -> Result<(), pagelist::grow::IncreaseCapacityError> {
         use crate::pagelist::grow::{IncreaseCapacity, IncreaseCapacityError};
         use crate::ref_counted_set::AddError;
 
@@ -2778,7 +2790,6 @@ impl Screen {
         // If our new style is the default, just reset to that
         if self.cursor.style.default_style() {
             self.cursor.style_id = style::DEFAULT_ID;
-            self.assert_integrity();
             return Ok(());
         }
 
@@ -2813,7 +2824,6 @@ impl Screen {
                 ) {
                     Ok(node) => node,
                     Err(IncreaseCapacityError::OutOfMemory) => {
-                        self.assert_integrity();
                         return Err(IncreaseCapacityError::OutOfMemory);
                     }
                     Err(IncreaseCapacityError::OutOfSpace) => {
@@ -2849,7 +2859,6 @@ impl Screen {
                         // we only need one space, but again, I don't want to crash
                         // here so let's log loudly and reset.
                         // log.err("style addition failed after capacity increase", .{});
-                        self.assert_integrity();
                         return Err(IncreaseCapacityError::OutOfMemory);
                     }
                     Err(AddError::NeedsRehash) => {
@@ -2858,7 +2867,6 @@ impl Screen {
                         // we don't want to simply hard crash so log it and
                         // clear our style.
                         // log.err("style rehash resulted in needs rehash", .{});
-                        self.assert_integrity();
                         return Ok(());
                     }
                 }
@@ -2866,7 +2874,6 @@ impl Screen {
         };
 
         self.cursor.style_id = id;
-        self.assert_integrity();
         Ok(())
     }
 
@@ -2933,6 +2940,23 @@ impl Screen {
         cell: *mut Cell,
         cp: u21,
     ) -> Result<(), pagelist::grow::IncreaseCapacityError> {
+        // PORT NOTE: `defer self.cursor.page_pin.node.data.assertIntegrity()` —
+        // Zig's defer runs on ERROR returns too (and reads the pin at DEFER
+        // time, i.e. the possibly-reloaded pin), so the body lives in an inner
+        // fn and the page integrity gate runs unconditionally after it against
+        // the then-current pin (VALIDATION_REPORT §3e / §3c.9).
+        let result = self.append_grapheme_inner(cell, cp);
+        unsafe { (*(*self.cursor.page_pin).node).data.assert_integrity() };
+        result
+    }
+
+    /// The body of `append_grapheme` (the reference fn minus its `defer`); see
+    /// the PORT NOTE above.
+    fn append_grapheme_inner(
+        &mut self,
+        cell: *mut Cell,
+        cp: u21,
+    ) -> Result<(), pagelist::grow::IncreaseCapacityError> {
         use crate::pagelist::grow::IncreaseCapacity;
 
         let result = unsafe {
@@ -2987,7 +3011,6 @@ impl Screen {
                 })?;
             }
         }
-        unsafe { (*(*self.cursor.page_pin).node).data.assert_integrity() };
         Ok(())
     }
 

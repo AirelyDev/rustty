@@ -22,8 +22,19 @@ impl PageList {
     /// that behavior is required.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn erase_row(&mut self, pt: point::Point) -> Result<(), super::OutOfMemory> {
-        // PORT NOTE: `defer self.assertIntegrity()` — reproduced by calling
-        // `assert_integrity` before every exit point below.
+        // PORT NOTE: `defer self.assertIntegrity()` — Zig's defer runs on ERROR
+        // returns too, so the body lives in an inner fn and the integrity gate
+        // runs unconditionally after it (a `?` early-return must not skip the
+        // corruption tripwire at exactly the OOM point the oracle checks it —
+        // VALIDATION_REPORT §3e / §3c.9).
+        let result = self.erase_row_inner(pt);
+        self.assert_integrity();
+        result
+    }
+
+    /// The body of `erase_row` (the reference fn minus its `defer`); see the
+    /// PORT NOTE above.
+    fn erase_row_inner(&mut self, pt: point::Point) -> Result<(), super::OutOfMemory> {
         let pn = self.pin(pt).unwrap();
 
         let mut node = pn.node;
@@ -127,7 +138,6 @@ impl PageList {
             (*node).data.clear_cells(row, 0, cols);
         }
 
-        self.assert_integrity();
         Ok(())
     }
 
@@ -142,9 +152,22 @@ impl PageList {
         pt: point::Point,
         limit: usize,
     ) -> Result<(), super::OutOfMemory> {
-        // PORT NOTE: `defer self.assertIntegrity()` — reproduced by calling
-        // `assert_integrity` before every exit point below.
+        // PORT NOTE: `defer self.assertIntegrity()` — Zig's defer runs on ERROR
+        // returns too, so the body lives in an inner fn and the integrity gate
+        // runs unconditionally after it, on every exit path including the `?`
+        // OOM early-return (VALIDATION_REPORT §3e / §3c.9).
+        let result = self.erase_row_bounded_inner(pt, limit);
+        self.assert_integrity();
+        result
+    }
 
+    /// The body of `erase_row_bounded` (the reference fn minus its `defer`);
+    /// see the PORT NOTE above.
+    fn erase_row_bounded_inner(
+        &mut self,
+        pt: point::Point,
+        limit: usize,
+    ) -> Result<(), super::OutOfMemory> {
         // This function has a lot of repeated code in it because it is a hot path.
         //
         // To get a better idea of what's happening, read eraseRow first for more
@@ -210,7 +233,6 @@ impl PageList {
                 }
             }
 
-            self.assert_integrity();
             return Ok(());
         }
 
@@ -336,7 +358,6 @@ impl PageList {
                     unsafe { (*p).y -= 1 };
                 }
 
-                self.assert_integrity();
                 return Ok(());
             }
 
@@ -388,7 +409,6 @@ impl PageList {
             (*node).data.clear_cells(row, 0, cols);
         }
 
-        self.assert_integrity();
         Ok(())
     }
 
@@ -422,9 +442,17 @@ impl PageList {
     /// represent, leaving dangling references in consumers such as search.
     /// Use the public eraseHistory/eraseActive wrappers which enforce this.
     fn erase_rows(&mut self, tl_pt: point::Point, bl_pt: Option<point::Point>) {
-        // PORT NOTE: `defer self.assertIntegrity()` — reproduced by calling
-        // `assert_integrity` before the (single) return point below.
+        // PORT NOTE: `defer self.assertIntegrity()` — Zig's defer runs on the
+        // grow-failure EARLY `return` too, so the body lives in an inner fn and
+        // the integrity gate runs unconditionally after it (VALIDATION_REPORT
+        // §3e / §3c.9).
+        self.erase_rows_inner(tl_pt, bl_pt);
+        self.assert_integrity();
+    }
 
+    /// The body of `erase_rows` (the reference fn minus its `defer`); see the
+    /// PORT NOTE above.
+    fn erase_rows_inner(&mut self, tl_pt: point::Point, bl_pt: Option<point::Point>) {
         // The count of rows that was erased.
         let mut erased: usize = 0;
 
@@ -539,8 +567,6 @@ impl PageList {
 
         // If we have a pinned viewport, we need to adjust for active area.
         self.fixup_viewport(erased);
-
-        self.assert_integrity();
     }
 
     /// Erase a single page, freeing all its resources. The page must be

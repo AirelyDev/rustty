@@ -169,11 +169,24 @@ fn decode_png_wrapper(
 
     // return .{ .width = out.width, .height = out.height, .data = result_data[0..out.data_len] };
     // PORT NOTE (ownership model): the reference's `terminal_sys.Image.data` is a
-    // `[]u8` it takes ownership of directly. rustty's `Image.data` is a `Vec<u8>`
-    // (owned, frees on drop via the Rust allocator), so we copy the
-    // callback-allocated bytes into a Vec; this preserves the same observable
-    // image (width/height/bytes) without aliasing two allocators' ownership.
+    // `[]u8` it takes ownership of directly (the kitty image later frees it via
+    // `alloc.free(data)` — a byte-aligned []u8 free through the same allocator the
+    // callback allocated from). rustty's `Image.data` is a `Vec<u8>` (owned, frees
+    // on drop via the Rust allocator), so we copy the callback-allocated bytes
+    // into a Vec AND free the callback's buffer here through the same allocator we
+    // handed it — the rustty analogue of the reference's downstream
+    // `alloc.free(data)` (VALIDATION_REPORT §3c.4: without this free, every kitty
+    // PNG decode leaked the C-callback buffer; regression-pinned Miri-fail-first by
+    // `decode_png_wrapper_frees_callback_buffer` below).
     let bytes = unsafe { std::slice::from_raw_parts(out.data, out.data_len) }.to_vec();
+    // Free the callback-allocated buffer: byte (1) alignment, exactly the layout
+    // `alloc_bytes`/the reference's `[]u8` contract allocated with.
+    use rustty_lib::allocator::ZigAllocator as _;
+    zig_alloc.free(
+        rustty_lib::allocator::ZigSlice::new(out.data, out.data_len),
+        rustty_lib::allocator::Alignment(0),
+        0,
+    );
     Ok(terminal_sys::Image {
         width: out.width,
         height: out.height,
@@ -718,5 +731,69 @@ mod tests {
         });
         // try std.testing.expect(global.userdata == null);
         assert!(GLOBAL.lock().unwrap().userdata.is_null());
+    }
+
+    // PORT NOTE (rustty-only leak regression, NOT a reference test — VALIDATION_REPORT
+    // §3c.4): the reference `decodePngWrapper` hands the callback-allocated buffer to
+    // `terminal_sys.Image.data` ([]u8, ownership transfers; the kitty image later frees
+    // it as `alloc.free(data)`). rustty's `terminal_sys::Image.data` is an OWNED
+    // `Vec<u8>`, so the wrapper copies the bytes and must then free the C-callback
+    // buffer itself — before this fix, every kitty PNG decode leaked it. This test
+    // drives the installed wrapper through the `terminal_sys::decode_png` slot with a
+    // callback that allocates through the PROVIDED allocator (the reference contract);
+    // the leak detector is the crate's G6 lane: this crate is pure Rust, so
+    // `cargo +nightly miri test -p rustty-vt-c decode_png_wrapper_frees` reports
+    // "memory leaked" pre-fix and runs clean post-fix (fail-first proven; LSan is
+    // unavailable on arm64 macOS per R6, Miri IS this crate's leak gate).
+    #[test]
+    fn decode_png_wrapper_frees_callback_buffer() {
+        let _guard = reset_global();
+
+        // A decode callback that allocates the pixel buffer through the provided
+        // C allocator (byte-aligned, exactly like the reference contract where the
+        // callback allocates through the passed `*const CAllocator`).
+        extern "C" fn decode_alloc(
+            _u: *mut std::ffi::c_void,
+            a: *const CAllocator,
+            d: *const u8,
+            l: usize,
+            out: *mut Image,
+        ) -> bool {
+            let n = 4usize;
+            // SAFETY: `a` is the allocator the wrapper passed us (live for the call).
+            let buf = unsafe { (*a).zig().alloc_bytes(n) };
+            if buf.is_null() {
+                return false;
+            }
+            // SAFETY: `buf` is n bytes; `d`/`l` is the wrapper's input slice.
+            unsafe {
+                let seed = if l > 0 { *d } else { 0 };
+                for i in 0..n {
+                    *buf.add(i) = (i as u8) ^ seed;
+                }
+                *out = Image {
+                    width: 2,
+                    height: 2,
+                    data: buf,
+                    data_len: n,
+                };
+            }
+            true
+        }
+
+        assert_eq!(Result::Success, unsafe {
+            set(Option_::DecodePng, decode_alloc as *const std::ffi::c_void)
+        });
+        let f = terminal_sys::decode_png.read().unwrap().unwrap();
+        let img = f(&[0x42]).expect("decode must succeed");
+        assert_eq!(2, img.width);
+        assert_eq!(2, img.height);
+        // bytes copied out of the callback buffer before it is freed
+        assert_eq!(vec![0x42u8, 0x43, 0x40, 0x41], img.data);
+
+        // Clear the slot again (leave the global state clean for siblings).
+        assert_eq!(Result::Success, unsafe {
+            set(Option_::DecodePng, std::ptr::null())
+        });
     }
 }

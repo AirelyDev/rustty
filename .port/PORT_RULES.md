@@ -135,3 +135,36 @@ Regression anchor: `crates/rustty-vt/src/kitty/graphics_image.rs`
 `w*h*bpp` capacity path, mirrored against `graphics_image.zig:389-394`
 (the oracle's `max_dimension` guard fires BEFORE the u32 multiply, so
 out-of-range dimensions ERROR with `DimensionsTooLarge`, never trap).
+
+## DG5 — C-ABI panic policy: ABORT, never unwind, never error-code (locked fork, 2026-07-10)
+
+The decision recorded for VALIDATION_REPORT §3c (the 271 exported C-ABI fns of
+`rustty-vt-c` + `rustty-apprt-c`, and every Rust callback handed to foreign
+code — ObjC/Core Animation, C fn-pointer slots):
+
+- **Policy: a Rust panic reaching a C-ABI boundary ABORTS the process.** This
+  is the R1-faithful mirror of the reference: a Zig panic in a
+  `callconv(.c)` export (or any Zig fn a C host calls) prints and aborts — it
+  never unwinds into the caller and never turns into an error code. Documented
+  placeholder leaves (`unimplemented!()` seams per the placeholder-leaf
+  doctrine) therefore PANIC→ABORT when driven; that IS the policy, not a gap.
+  No `catch_unwind`→error-code translation layer is added anywhere: the
+  reference has no such behavior, and inventing one would diverge (R1).
+- **Mechanical application:** every exported fn and every callback passed to
+  foreign code uses plain `extern "C"` — NEVER `extern "C-unwind"`. Rust
+  defines that a panic escaping an `extern "C"` boundary aborts, so the
+  policy is enforced by the ABI string itself, uniformly, with zero per-fn
+  wrappers. (Gated continuously by `no_c_unwind_in_c_api_sources`, which
+  scans `crates/rustty-vt-c/src`, `crates/rustty-apprt-c/src`, AND
+  `crates/rustty-renderer/src` for `extern "C-unwind"` — 0 tokens as of
+  2026-07-10.) Callbacks that run inside foreign frames
+  where an abort message matters (the Metal display path) additionally wrap
+  their body in `abort_on_unwind` (catch_unwind + `std::process::abort`) —
+  defense in depth, same observable policy.
+- **Regression anchors:** `rustty-apprt-c` `exported_c_abi_panic_aborts_host`
+  (a panicking `extern "C"` export driven in a subprocess must die by
+  SIGABRT) and `rustty-renderer` `abort_on_unwind_aborts_process` (the
+  display-path guard). New exported fns MUST be `extern "C"`; a reviewer
+  seeing `"C-unwind"` on an exported/installed fn treats it as a policy
+  violation unless a documented unwind contract with the host exists (none
+  does today).

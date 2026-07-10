@@ -9,8 +9,8 @@
 //! PORT: `const log = std.log.scoped(.IOSurfaceLayer);` — routed to the log
 //! facade where used; the wrong-size-discard message is preserved as a comment.
 
-use std::cell::Cell;
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -36,16 +36,30 @@ pub enum Error {
 
 /// PORT: `pub const DisplayCallback = ?*align(8) const fn (?*anyopaque) void;`
 /// (line 121). An optional C function pointer taking an opaque context.
-pub type DisplayCallback = Option<unsafe extern "C-unwind" fn(*mut c_void)>;
+// PORT NOTE (§3c.3): plain `extern "C"`, never the unwinding C ABI variant — a
+// Zig fn never unwinds (a Zig panic aborts), and this callback is invoked from
+// the ObjC `display` override inside Core Animation frames, so an unwind across
+// it would be UB in the caller. `extern "C"` makes any escaping panic abort at
+// the boundary (the Zig-faithful failure mode, PORT_RULES DG5); the installed
+// `display_callback` additionally catch_unwind+aborts explicitly (metal_impl.rs).
+pub type DisplayCallback = Option<unsafe extern "C" fn(*mut c_void)>;
 
 // PORT: `subclass.addIvar("display_cb"); subclass.addIvar("display_ctx")` (lines
 // 148-149). objc2 ivars can't hold an `Option<fn>`, so `DisplayCallback` is
 // stored as raw bits (transmute round-trip) exactly as the reference stores it via
-// `setInstanceVariable` of an objc id built from `@intFromPtr(display_cb)`. `Cell`
-// gives interior mutability so `set_display_callback` can take `&self`.
+// `setInstanceVariable` of an objc id built from `@intFromPtr(display_cb)`.
+// `AtomicPtr` gives interior mutability so `set_display_callback` can take `&self`
+// AND makes the cross-thread pairing formally defined: the reference's plain ObjC
+// ivars are unsynchronized (both `setDisplayCallback` and the CA `display` fire on
+// the main thread in practice), but nothing pins that at the type level, and a
+// non-atomic `Cell` written on one thread while `display` reads on another is a
+// data race — UB (VALIDATION_REPORT §3c.10; race reproduced + fix proven on the
+// isolated Miri harness, .port/phase-2/mirihar-chunk3b `ivars_naive` UB /
+// `ivars_shipped` CLEAN). SeqCst store/load is the free fix — no observable
+// behavior change on the (main-thread-only) reference schedule.
 pub struct Ivars {
-    display_cb: Cell<*const c_void>,
-    display_ctx: Cell<*mut c_void>,
+    display_cb: AtomicPtr<c_void>,
+    display_ctx: AtomicPtr<c_void>,
 }
 
 define_class!(
@@ -61,10 +75,10 @@ define_class!(
         // PORT: `subclass.replaceMethod("display", ...)` (lines 151-162).
         #[unsafe(method(display))]
         fn display(&self) {
-            let bits = self.ivars().display_cb.get();
+            let bits: *mut c_void = self.ivars().display_cb.load(Ordering::SeqCst);
             // PORT: `const display_cb: DisplayCallback = @ptrFromInt(@intFromPtr(
             //   self.getInstanceVariable("display_cb").value));`
-            // DisplayCallback = Option<unsafe extern "C-unwind" fn(*mut c_void)>; a
+            // DisplayCallback = Option<unsafe extern "C" fn(*mut c_void)>; a
             // null `*const c_void` transmutes to `None` (fn-pointer niche), a
             // non-null to `Some(fn)` — the Rust analogue of the reference's
             // `@ptrFromInt(@intFromPtr(...))`.
@@ -76,7 +90,7 @@ define_class!(
             let cb: DisplayCallback = unsafe { core::mem::transmute(bits) };
             // if (display_cb) |cb| cb(@ptrCast(self.getInstanceVariable("display_ctx").value));
             if let Some(cb) = cb {
-                unsafe { cb(self.ivars().display_ctx.get()) };
+                unsafe { cb(self.ivars().display_ctx.load(Ordering::SeqCst)) };
             }
         }
 
@@ -122,8 +136,8 @@ impl IOSurfaceLayer {
             // The ivars default to null, matching the reference's explicit
             // post-init `setInstanceVariable("display_cb"/"display_ctx", null)`
             // (lines 36-37).
-            display_cb: Cell::new(core::ptr::null()),
-            display_ctx: Cell::new(core::ptr::null_mut()),
+            display_cb: AtomicPtr::new(core::ptr::null_mut()),
+            display_ctx: AtomicPtr::new(core::ptr::null_mut()),
         });
         let layer: Retained<IOSurfaceLayerClass> = unsafe { msg_send![super(this), init] };
 
@@ -230,12 +244,16 @@ impl IOSurfaceLayer {
 
     pub fn set_display_callback(&self, display_cb: DisplayCallback, display_ctx: *mut c_void) {
         // PORT: `self.layer.setInstanceVariable("display_cb"/"display_ctx", ...)`
-        // (lines 128-135). The fn pointer is stored as raw bits (null == None).
+        // (lines 128-135). The fn pointer is stored as raw bits (null == None);
+        // atomic stores per the Ivars PORT NOTE (§3c.10).
+        self.layer.ivars().display_cb.store(
+            display_cb.map_or(core::ptr::null_mut(), |f| f as *const c_void as *mut c_void),
+            Ordering::SeqCst,
+        );
         self.layer
             .ivars()
-            .display_cb
-            .set(display_cb.map_or(core::ptr::null(), |f| f as *const c_void));
-        self.layer.ivars().display_ctx.set(display_ctx);
+            .display_ctx
+            .store(display_ctx, Ordering::SeqCst);
     }
 }
 
@@ -286,7 +304,7 @@ mod tests {
     }
 
     static FIRED: AtomicBool = AtomicBool::new(false);
-    unsafe extern "C-unwind" fn on_display(ctx: *mut c_void) {
+    unsafe extern "C" fn on_display(ctx: *mut c_void) {
         assert_eq!(ctx, 0xABCD_usize as *mut c_void);
         FIRED.store(true, Ordering::SeqCst);
     }

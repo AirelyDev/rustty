@@ -560,11 +560,23 @@ mod tests {
         let a = 0x1000_usize as *mut c_void;
         let b = 0x2000_usize as *mut c_void;
 
-        PosixTty::notify_winsize(SignalHandler { context: a, callback: cb }).unwrap();
-        PosixTty::notify_winsize(SignalHandler { context: b, callback: cb }).unwrap();
+        PosixTty::notify_winsize(SignalHandler {
+            context: a,
+            callback: cb,
+        })
+        .unwrap();
+        PosixTty::notify_winsize(SignalHandler {
+            context: b,
+            callback: cb,
+        })
+        .unwrap();
         // the same context may be registered more than once (init called twice);
         // deregistration must remove ALL of its entries.
-        PosixTty::notify_winsize(SignalHandler { context: a, callback: cb }).unwrap();
+        PosixTty::notify_winsize(SignalHandler {
+            context: a,
+            callback: cb,
+        })
+        .unwrap();
         {
             let st = HANDLERS.lock().unwrap();
             assert_eq!(3, st.idx);

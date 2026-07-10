@@ -820,17 +820,42 @@ impl Metal {
 // (`draw_frame_raw`) — NEVER `(*renderer).draw_frame(true)`, which would form a
 // protected whole-`Renderer` `&mut` and race the render thread's own draw
 // (`W5_DESIGN §2.2`/§2.3). The `align(8)` in Zig is satisfied by the Rust fn-item
-// ABI; the signature matches `DisplayCallback = Option<unsafe extern "C-unwind"
+// ABI; the signature matches `DisplayCallback = Option<unsafe extern "C"
 // fn(*mut c_void)>`.
+//
+// PORT NOTE (VALIDATION_REPORT §3c.3, panic policy): this fires INSIDE a Core
+// Animation commit (ObjC frames on the stack). A Rust panic must never unwind
+// into them — that is UB — and the Zig reference's failure mode here is an
+// abort (Zig panics do not unwind). So the body is wrapped in `abort_on_unwind`
+// (catch_unwind + abort) and the ABI is plain `extern "C"` (whose boundary also
+// converts any escaping panic to an abort — two independent layers enforcing
+// the same Zig contract).
 //
 /// # Safety
 /// `ctx` must be the whole-`Renderer`-provenance pointer installed by `loop_enter`
 /// (round-tripped through `Cell<*mut c_void>`, so provenance is preserved).
-unsafe extern "C-unwind" fn display_callback(ctx: *mut c_void) {
-    let renderer = ctx.cast::<Renderer>();
-    if let Err(_err) = unsafe { Renderer::draw_frame_raw(renderer, true) } {
-        // log.warn("Error drawing frame in display callback, err={}", .{err});
-        // (no logging facade wired in the port yet — tree-wide `log.*`-as-comment.)
+unsafe extern "C" fn display_callback(ctx: *mut c_void) {
+    abort_on_unwind(|| {
+        let renderer = ctx.cast::<Renderer>();
+        if let Err(_err) = unsafe { Renderer::draw_frame_raw(renderer, true) } {
+            // log.warn("Error drawing frame in display callback, err={}", .{err});
+            // (no logging facade wired in the port yet — tree-wide `log.*`-as-comment.)
+        }
+    })
+}
+
+/// Run `f`, aborting the process if it panics (never unwinding past this frame).
+///
+/// PORT NOTE (VALIDATION_REPORT §3c.3): the Rust spelling of the Zig panic
+/// contract for callbacks invoked from foreign (ObjC/Core Animation) frames — a
+/// Zig panic aborts, it never unwinds into its C caller. `AssertUnwindSafe` is
+/// sound because the process aborts on the Err arm (no state is ever observed
+/// after a caught panic). Proven by `abort_on_unwind_aborts_process` (subprocess
+/// SIGABRT KAT).
+fn abort_on_unwind<R>(f: impl FnOnce() -> R) -> R {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(_) => std::process::abort(),
     }
 }
 
@@ -971,5 +996,38 @@ mod tests {
         // Golden-support readback: `w*h*4` BGRA bytes out of the offscreen surface.
         let px = target.read_bgra();
         assert_eq!(px.len(), 4 * 4 * 4);
+    }
+
+    // PORT NOTE (rustty-only KAT, VALIDATION_REPORT §3c.3): pins the display-path
+    // panic policy — a panic inside `abort_on_unwind` (the guard wrapped around
+    // `display_callback`'s body) must ABORT the process (SIGABRT), never unwind
+    // back toward the ObjC caller. Subprocess pattern: the test re-execs itself
+    // with an env marker; the child runs the panicking guard and must die by
+    // SIGABRT (`std::process::abort`), which the parent asserts on.
+    #[test]
+    fn abort_on_unwind_aborts_process() {
+        const MARKER: &str = "RUSTTY_ABORT_ON_UNWIND_CHILD";
+        if std::env::var_os(MARKER).is_some() {
+            // Child: the panic must be converted to an abort, never an unwind.
+            let _: u32 = super::abort_on_unwind(|| panic!("display-path panic"));
+            unreachable!("abort_on_unwind must never return after a panic");
+        }
+        let exe = std::env::current_exe().expect("current_exe");
+        let out = std::process::Command::new(exe)
+            .args([
+                "--exact",
+                "metal::metal_impl::tests::abort_on_unwind_aborts_process",
+            ])
+            .env(MARKER, "1")
+            .output()
+            .expect("spawn child test process");
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(
+            Some(6), // SIGABRT — std::process::abort()
+            out.status.signal(),
+            "child must die by SIGABRT, not exit/unwind; status={:?} stderr={}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr),
+        );
     }
 }

@@ -897,6 +897,78 @@ fn pagelist_grow_prune_required_with_a_single_page() {
     s.deinit();
 }
 
+// PORT NOTE (rustty-only, NOT a reference test — VALIDATION_REPORT §3c.6 /
+// MIRI_EXCEPTIONS rows 8-13): a Miri-TRACTABLE grow-PRUNE test. The six
+// excepted `grow_*` tests reach the prune branch only after filling whole pages
+// one `grow()` call at a time (each call runs the O(cells) integrity walk —
+// quadratic under Miri, hours), so before this test the prune branch had no
+// distinct Miri-passing coverage (the exception table self-cited an excepted
+// test). This variant reaches the SAME branch — `pop_first` → total_rows
+// rebook → viewport/tracked-pin remap → buffer `write_bytes` reset →
+// `init_buf` reuse → `insert_after` → serial rebump — with a CONSTANT number
+// of `grow()` calls by filling pages surgically (the
+// `grow_prune_scrollback_with_viewport_pin…` precedent; `init_buf` formats
+// rows to full capacity, so bumping `size.rows` is valid), keeping it well
+// inside the 20-min Miri budget (criterion 3 coverage for rows 8-13).
+#[test]
+fn pagelist_grow_prune_miri_tractable() {
+    let mut s = PageList::init(80, 24, Some(0)).unwrap();
+
+    // Fill page 1 to capacity surgically (constant-time).
+    unsafe {
+        let first = &mut (*s.pages.first).data;
+        first.size.rows = first.capacity.rows;
+    }
+    s.total_rows = s.total_rows();
+
+    // Allocate page 2 (grow_alloc path; the prune condition is skipped while
+    // first == last).
+    let new = s.grow().unwrap().expect("page 2 allocated");
+    assert!(core::ptr::eq(new, s.pages.last));
+    assert_eq!(2, s.total_pages());
+
+    // Fill page 2 to capacity surgically.
+    unsafe {
+        let last = &mut (*s.pages.last).data;
+        last.size.rows = last.capacity.rows;
+    }
+    s.total_rows = s.total_rows();
+
+    // Track a pin inside the to-be-pruned first page so the prune's
+    // tracked-pin remap executes under Miri too.
+    let first_before = s.pages.first;
+    let p = s
+        .track_pin(Pin {
+            node: first_before,
+            x: 1,
+            y: 1,
+            garbage: false,
+        })
+        .unwrap();
+
+    // The next grow must PRUNE: with max_size(=min_max_size, two std pages)
+    // already consumed, `page_size + std_size > max_size` and total_rows is far
+    // above the active area, so the first page is popped, zeroed, re-inited and
+    // reused as the new last page — the page count stays 2.
+    let reused = s.grow().unwrap().expect("prune reuses the popped page");
+    assert!(core::ptr::eq(first_before, reused));
+    assert!(core::ptr::eq(s.pages.last, reused));
+    assert_eq!(2, s.total_pages());
+    assert_eq!(1, unsafe { (*reused).data.size.rows });
+
+    // The tracked pin in the pruned page was remapped to the new first page's
+    // top-left and marked garbage.
+    unsafe {
+        assert!(core::ptr::eq((*p).node, s.pages.first));
+        assert_eq!(0, (*p).x);
+        assert_eq!(0, (*p).y);
+        assert!((*p).garbage);
+    }
+    s.untrack_pin(p);
+
+    s.deinit();
+}
+
 // ref: test "PageList scrollbar with max_size 0 after grow"
 #[test]
 fn pagelist_scrollbar_with_max_size_0_after_grow() {
@@ -2440,6 +2512,91 @@ fn pagelist_split_preserves_styled_cells() {
         assert!(unsafe { (*rac.row).styled() });
     }
 
+    s.deinit();
+}
+
+// PORT NOTE (rustty-only, NOT a reference test — VALIDATION_REPORT §3e/§3c.9):
+// pins the ERROR-PATH integrity gate of `erase_row`. Zig's
+// `defer self.assertIntegrity()` runs on the `try cloneRowFrom` ERROR return;
+// the pre-fix Rust body skipped the gate via `?`, so an OOM at exactly the
+// point the oracle checks for corruption went ungated. The test drives the
+// real error path (cross-page clone into a page whose style set is FULL →
+// `CloneFromError::StyleSet*` → `Err(OutOfMemory)`) with a deliberately
+// corrupted `total_rows`, and requires the integrity gate to PANIC on that
+// error exit (pre-fix: the call returned `Err` silently — fail-first).
+#[test]
+fn pagelist_erase_row_error_path_runs_integrity_gate() {
+    let mut s = PageList::init(10, 10, Some(0)).unwrap();
+
+    // Give the (future) second page's top row a styled cell, then split so
+    // pages.first (rows 0-4) has a next page whose row 0 carries the style.
+    {
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let base = unsafe { (*page).memory_ptr() };
+        let style = Style {
+            flags: stylepkg::Flags {
+                bold: true,
+                ..stylepkg::Flags::default()
+            },
+            ..Style::default()
+        };
+        let style_id = unsafe { (*page).styles.add(base, style) }.unwrap();
+        let rac = unsafe { (*page).get_row_and_cell(0, 5) };
+        unsafe {
+            let mut c = cell_codepoint(b'S' as u32);
+            c.set_style_id(style_id);
+            *rac.cell = c;
+            (*rac.row).set_styled(true);
+        }
+    }
+    let split_pin = Pin {
+        node: s.pages.first,
+        y: 5,
+        x: 0,
+        garbage: false,
+    };
+    s.split(split_pin).unwrap();
+    assert_eq!(2, s.total_pages());
+
+    // Fill the FIRST page's style set to capacity with unique (orphan) styles
+    // so the erase's cross-page clone cannot add the styled row's style there.
+    {
+        let page = unsafe { core::ptr::addr_of_mut!((*s.pages.first).data) };
+        let base = unsafe { (*page).memory_ptr() };
+        let mut n: u32 = 1;
+        loop {
+            let style = Style {
+                fg_color: stylepkg::Color::Rgb(crate::color::RGB {
+                    r: (n & 0xFF) as u8,
+                    g: ((n >> 8) & 0xFF) as u8,
+                    b: ((n >> 16) & 0xFF) as u8,
+                }),
+                ..Style::default()
+            };
+            if unsafe { (*page).styles.add(base, style) }.is_err() {
+                break;
+            }
+            n += 1;
+        }
+    }
+
+    // Corrupt a PageList invariant the integrity gate checks (cached row count),
+    // then drive the erase ERROR path: the gate must fire ON THE ERROR EXIT.
+    s.total_rows += 1;
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        s.erase_row(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+    }));
+    match panicked {
+        // post-fix: the defer-image integrity gate panicked on the error exit
+        Err(_) => {}
+        Ok(result) => panic!(
+            "erase_row must run the integrity gate on its error exit \
+             (Zig `defer assertIntegrity()`); got silent {result:?}"
+        ),
+    }
+
+    // Undo the corruption so deinit-time state is consistent again.
+    s.total_rows -= 1;
     s.deinit();
 }
 
