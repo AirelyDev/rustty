@@ -4,12 +4,20 @@
 //! runtime, ...) minus the apprt-api iface seam; links gtk-rs/gobject, objc, wayland
 //! (bindings, not reimplementations, per R3). Consumes breaks #8, #10, #13, #14.
 //!
-//! PORT STATUS: in-progress (chunk E0 — scaffold). The concrete apprt backends
-//! are being carved leaves-first (EMBEDDED_BLUEPRINT §7): `none` + `browser` are
-//! FULLY ported (§4); `embedded` (the FIRST concrete `apprt_api` trait backend,
-//! §2) is a shell filled by chunks E1..E10. The libghostty C ABI wrappers live in
-//! the separate `rustty-apprt-c` top-sink crate (vt-c precedent, §3). This crate
-//! also hosts the global-state precursor [`init`] the C ABI's `rustty_init` calls.
+//! PORT STATUS: in-progress (chunks E0–E11 ALL LANDED; header realigned per
+//! VALIDATION_REPORT.md §3b — the old "chunk E0 — scaffold" line was stale by
+//! eleven chunks). `none` + `browser` are FULLY ported (EMBEDDED_BLUEPRINT §4);
+//! `embedded` (the FIRST concrete `apprt_api` trait backend, §2) is FILLED
+//! (E1 App backend, E2 Surface backend, E3 event-sink callbacks, E4 Inspector
+//! inhabited placeholder, E6–E10 CAPI wiring, E11 C-ABI smoke KAT + finale).
+//! The honest residual = the 13 tracked Phase-3 leaves in `embedded.rs` (ALL
+//! dcimgui/Metal Inspector surface: `Surface::queueInspectorRender` +
+//! `Inspector::{init,deinit,initMetal,renderMetal}` + `Backend::deinit` + the
+//! 6 IO callbacks + `newFrame` — DEFERRALS.md "rustty-apprt embedded E4"), and
+//! GTK (a whole unported subsystem, GAP_ANALYSIS §3.7 — why the crate is not
+//! `done`). The libghostty C ABI wrappers live in the separate `rustty-apprt-c`
+//! top-sink crate (vt-c precedent, §3). This crate also hosts the global-state
+//! precursor [`init`] the C ABI's `rustty_init` calls.
 //!
 //! Carved incrementally (R1: every line/comment/test{} ported as the crate is
 //! carved, leaves-first, under the acyclicity gate per R4).

@@ -28,24 +28,35 @@
 //!   pixel asserts). The `draw_frame` raw-ptr aliasing is proven clean under Stacked
 //!   AND Tree Borrows by `.port/phase-2/mirihar-chunk3b`.
 //!
-//! DEFERRED (named Goal-2 tiers — R5 `unimplemented!()` seams, verbatim bodies kept):
-//!   - windowing-host / apprt-surface: `Renderer::{init,deinit}` (live NSView),
-//!     `Metal::{init,loop_enter}`, the async `Frame::complete` present half, the real
-//!     CAMetalLayer/IOSurfaceLayer + display-link windowed present, and the
-//!     resize/config-swap (`changeConfig`/`setScreenSize`/`setFontGrid`).
-//!   - renderer<->config (G7 cycle): `Renderer.DerivedConfig::init`,
-//!     `Message::initChangeConfig`, `Thread.DerivedConfig::init`,
-//!     `shadertoy::load_from_files`/`load_from_file`, `prep_background_image` file I/O.
-//!   - Kitty-pixel: `image` `kitty_update`/`prep_kitty_*`/`convert` (wuffs swizzle).
-//!   - overlay-render: the z2d `Overlay` `highlight_*` rect draws.
-//!   - rustty-inspector: `overlayFeatures` (uninhabited inspector placeholder).
-//!   - OpenGL/WebGL backends (Linux/wasm) and GTK — out of the monomorphic Metal scope.
+//! DONE — the macOS-windowing W0–W5 slice (sub-project #1): `IOSurfaceLayer`
+//!   (W0), `Metal::init(view)` + the sync/async on-screen present halves (W1),
+//!   `CVDisplayLink` (W2), `Metal::loop_enter` (the display-callback trampoline,
+//!   W5) — the formerly deferred windowing-host tier is LIVE in this crate. The
+//!   one residual windowed gap is CORE-side (renderer_seam::Renderer::init never
+//!   routes the host view into `Metal::init(view)` — DEFERRALS.md "W-ATTACH").
+//!
+//! DONE — the renderer<->config tier via the `RendererConfig` accessor trait
+//!   (defined here, impl'd IN rustty-config; no config edge, G7 acyclic):
+//!   `Renderer.DerivedConfig::init`, `Message::initChangeConfig`,
+//!   `Thread.DerivedConfig::init`, `shadertoy::{load_from_files,load_from_file}`,
+//!   `prep_background_image` — all live. The Kitty-pixel path (`image`
+//!   `kitty_update`/`prep_kitty_*`/`convert`, re-homed pure-Rust swizzle) and the
+//!   z2d `Overlay` `highlight_*` draws are live too (R-d P1 fill).
+//!
+//! DEFERRED (the honest residual — see DEFERRALS.md "rustty-renderer R-d
+//! [RECONCILED]"):
+//!   - rustty-inspector: `overlayFeatures` (generic.rs — the statically
+//!     unreachable arm over the uninhabited inspector placeholder; the crate's
+//!     ONLY live `unimplemented!()`).
+//!   - OpenGL/WebGL backends (Linux/wasm) and GTK — out of the monomorphic Metal
+//!     scope (whole-backend follow-up ports).
 //!
 //! G3b comment-coverage SKIPS this crate while it is marked `in progress` (only a
-//! `done` status activates the whole-crate fuzzy match); it stays `in progress` while
-//! the above is deferred (honest). R1 fidelity for the ported slices is backstopped by
-//! the adversary + verify panel + the golden gate (heavy-tier doctrine), and MAY be
-//! spot-checked with a scoped `check_comment_coverage.py --port-glob` run.
+//! `done` status activates the whole-crate fuzzy match); it stays `in progress`
+//! while the GL/WebGL/GTK backends are unported (honest). R1 fidelity for the
+//! ported slices is backstopped by the adversary + verify panel + the golden gate
+//! (heavy-tier doctrine), and MAY be spot-checked with a scoped
+//! `check_comment_coverage.py --port-glob` run.
 //! See .port/phase-2/DEFERRALS.md and .port/phase-2/GPU_RD_CHUNK5_DESIGN.md.
 
 pub mod cell;

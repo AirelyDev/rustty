@@ -25,10 +25,18 @@
 //! src/Command.zig (break #13b: Command-in-core would cycle — termio/Exec
 //! constructs+starts Command while core already deps termio).
 //!
-//! PORT STATUS: ported (integration-tier stages 2-4), R1 contract 44 tests
-//! (Exec 10 + shell_integration 21 + message 2 + root 1 + Command 10); the
-//! xev-loop/live-thread paths are D6-deferred with verbatim bodies
-//! (DEFERRALS.md):
+//! PORT STATUS: ported (integration-tier stages 2-4 + the D6 live-thread fill),
+//! R1 contract 44 tests (Exec 10 + shell_integration 21 + message 2 + root 1 +
+//! Command 10). The xev-loop/live-thread paths are LIVE — D6 was RESOLVED
+//! 2026-07-03 (xev Milestone B: `Thread.run` + `Termio.init`/`threadEnter`/
+//! `processOutput` + `Subprocess.start`/`ReadThread`/`queueWrite`, proven by the
+//! live-shell KAT; the old "D6-deferred" sentence here was stale doc drift,
+//! realigned per VALIDATION_REPORT.md §3b). The honest residual seams are the
+//! platform arms OUTSIDE the macOS-first fork: the Windows spawn/read arms
+//! (`exec.rs` `threadMainWindows` + windows `Subprocess.start`) and the
+//! flatpak comptime-false branches — see DEFERRALS.md "rustty-termio stage 2/4".
+//! Module notes below record each module's ORIGINAL stage state; the deferred
+//! bodies named there are now live except the windows/flatpak arms:
 //!
 //! - `message` — termio/message.zig (2 tests): the IO-thread `Message` union.
 //! - `options` — termio/Options.zig (0 tests): the `Options` struct shape.
@@ -58,7 +66,8 @@
 //!
 //! SEAMS: `apprt.surface.Mailbox` -> `rustty_apprt_api::surface::AppMailbox`
 //! (termio is a generic consumer, `M: AppMailbox`); `renderer.Size`/`State`/
-//! `Thread.Mailbox` -> rustty-renderer; `xev` -> `xev_seam` (D6 deferred).
+//! `Thread.Mailbox` -> rustty-renderer; `xev` -> `xev_seam` (LIVE over the
+//! shared `rustty-xev` crate since D6/Milestone B resolved).
 
 // const stream_handler = @import("termio/stream_handler.zig");
 pub mod stream_handler;

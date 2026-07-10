@@ -8,14 +8,20 @@
 //! shaping, so it may depend on both `rustty-vt` and `rustty-font` plus the
 //! `-sys`/objc2 backends.
 //!
-//! PORT STATUS: F3 — `face.zig` (the backend selector) + the `face/freetype.zig`
-//! and `face/coretext.zig` (macOS) backend faces ported; `face/web_canvas.zig`
-//! and `shape.zig` land in later F3 subtasks.
+//! PORT STATUS: ported (the FULL D1 shaper tier — 110 tests; the old
+//! "F3 — shape.zig lands later" sentence was stale doc drift, realigned per
+//! VALIDATION_REPORT.md §3b): `face.zig` (the backend selector) + the
+//! `face/freetype.zig` and `face/coretext.zig` (macOS) backend faces,
+//! `shape.zig` + the `shaper/` HarfBuzz framework (`run`/`feature`/`Cache`/
+//! `noop`), `discovery.zig` (CoreText discoverer + `Descriptor`),
+//! `Collection.zig`/`CodepointResolver.zig`, and `SharedGrid.zig`/
+//! `SharedGridSet.zig`. Honest residual (macOS-first locked fork — DEFERRALS.md
+//! "rustty-font-shaper"): the 3 Fontconfig `DeferredFace` arms
+//! (`deferred_face.rs`, Linux backend) + the non-macOS Fontconfig discovery
+//! half, and `face/web_canvas.zig` (wasm browser face, unported).
 //!
 //! Carved leaves-first (R1: every line/comment/test{} ported as the crate is
-//! carved, under the acyclicity gate per R4). Ported so far: `face` (the
-//! backend selector — `Face` = the active backend `Face` type; `Options` /
-//! `DesiredSize` / `Variation`, `default_dpi`, the `FreetypeLoadFlags` seam).
+//! carved, under the acyclicity gate per R4).
 
 pub mod backend;
 pub mod codepoint_resolver;

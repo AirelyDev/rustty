@@ -2,12 +2,19 @@
 //! shapes. CHUNK 1a ports the STRUCT SHAPES faithfully (all plain value fields — no
 //! `zigimg` needed for the shape). The two methods that touch `Window`/geometry
 //! (`draw`, `cell_size`) are R5 `unimplemented!()` seams (placeholder-leaf-doctrine)
-//! with the verbatim Zig body preserved as a leading block comment — `Window`/`Screen`
-//! are absent until a later chunk, and neither is reachable by the Chunk-1a value layer.
+//! with the verbatim Zig body preserved as a leading block comment.
+//!
+//! SEAM STATUS (realigned 2026-07-10, VALIDATION_REPORT M5 — the original
+//! "later chunk" rationale went stale when the chunk sequence finished at 4b):
+//! `Window`/`Screen` are LIVE (Chunk 2), but `draw`/`cell_size` remain deferred
+//! because they are UNREACHABLE until the zigimg tier lands — a vaxis `Image` is
+//! only constructed through `Vaxis::transmit_image`/`load_image`, themselves the
+//! zigimg R5 seams. See DEFERRALS.md "rustty-vaxis Chunks 4a/4b".
 //!
 //! PORT-NOTE: `Image::Source` byte-slices → `&'a [u8]` (never lossy `String`).
 //! `transmit`/`transmitImage` (the consumers of `TRANSMIT_OPENER`/`TransmitFormat`/
-//! `TransmitMedium`) live in `Vaxis.zig`, a later chunk — shape-only here.
+//! `TransmitMedium`) live in `Vaxis.zig` (`vaxis.rs`, Chunk 4a — live above the
+//! zigimg seams).
 
 // const transmit_opener = "\x1b_Gf=32,i={d},s={d},v={d},m={d};";
 pub const TRANSMIT_OPENER: &[u8] = b"\x1b_Gf=32,i={d},s={d},v={d},m={d};";
@@ -133,8 +140,9 @@ pub struct Image {
 }
 
 impl Image {
-    // R5 SEAM (placeholder-leaf-doctrine): needs `Window`/`Screen`, absent until a
-    // later chunk; NOT reachable by the Chunk-1a value layer. Verbatim Zig body:
+    // R5 SEAM (placeholder-leaf-doctrine): unreachable until the zigimg tier lands
+    // (an `Image` is only constructed via the `transmit_image`/`load_image` zigimg
+    // seams — DEFERRALS.md "rustty-vaxis Chunks 4a/4b"). Verbatim Zig body:
     //
     // pub fn draw(self: Image, win: Window, opts: DrawOptions) !void {
     //     var p_opts = opts;
@@ -220,10 +228,11 @@ impl Image {
     //     win.writeCell(0, 0, .{ .image = p });
     // }
     pub fn draw(&self, _opts: DrawOptions) {
-        unimplemented!("Image::draw needs Window/Screen (later chunk)")
+        unimplemented!("Image::draw — unreachable until the zigimg tier (DEFERRALS.md vaxis 4a/4b)")
     }
 
-    // R5 SEAM (placeholder-leaf-doctrine): needs `Window`/`Screen`. Verbatim Zig body:
+    // R5 SEAM (placeholder-leaf-doctrine): unreachable until the zigimg tier lands
+    // (see `draw` above — DEFERRALS.md "rustty-vaxis Chunks 4a/4b"). Verbatim Zig body:
     //
     // /// the size of the image, in cells
     // pub fn cellSize(self: Image, win: Window) !CellSize {
@@ -245,6 +254,8 @@ impl Image {
     // }
     /// the size of the image, in cells
     pub fn cell_size(&self) -> CellSize {
-        unimplemented!("Image::cellSize needs Window/Screen (later chunk)")
+        unimplemented!(
+            "Image::cellSize — unreachable until the zigimg tier (DEFERRALS.md vaxis 4a/4b)"
+        )
     }
 }

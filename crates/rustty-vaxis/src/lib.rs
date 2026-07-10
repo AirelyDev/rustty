@@ -55,9 +55,13 @@
 //! width/grapheme tables; chunk 2 — the Screen/InternalScreen/Window rendering layer;
 //! chunk 3a — the event/ctlseqs/parser input-parsing layer; chunk 3b — the tty backend
 //! and concurrency layer (queue/tty/loop_) plus the Vaxis placeholder; chunk 4a — the real
-//! `Vaxis<'a>` object + the render diff-and-emit engine, with `transmit_image`/`load_image`
-//! the only remaining zigimg R5 seams; chunk 4b — the `widgets` tier + the `TextInput`
-//! gap-buffer widget).
+//! `Vaxis<'a>` object + the render diff-and-emit engine; chunk 4b — the `widgets` tier +
+//! the `TextInput` gap-buffer widget). The chunk sequence is FINISHED; the crate's
+//! remaining live seams (DEFERRALS.md "rustty-vaxis Chunks 4a/4b"): the two zigimg
+//! seams (`Vaxis::transmit_image`/`load_image`) plus `Image::draw`/`Image::cell_size`
+//! (unreachable until the zigimg tier lands — an `Image` is only constructed through
+//! those two), and the `#[cfg(windows)]` family (`WindowsTty` + the windows `tty_run`
+//! arm + `TestTty::next_event`, DEFERRALS.md Chunk 3b).
 //!
 //! CHUNK 4b adds the first WIDGET (the new `widgets` tier, ABOVE `window`):
 //! - [`widgets`] — `widgets.zig` aggregator + [`widgets::text_input`] (`widgets/TextInput.zig`):
