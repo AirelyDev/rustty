@@ -913,7 +913,8 @@ mod tests {
                 false,
                 make_screen(false, true, true, false, false, false),
             );
-            let (t_new_result, t, f_new_result, f) = setup_plain(calloc, b"Test", extra, Format::Vt, std::ptr::null());
+            let (t_new_result, t, f_new_result, f) =
+                setup_plain(calloc, b"Test", extra, Format::Vt, std::ptr::null());
             // try testing.expectEqual(Result.success, terminal_c.new(&test_allocator, &t, .{ ... }));
             assert_eq!(Result::Success, t_new_result);
             // try testing.expectEqual(Result.success, terminal_new(&test_allocator, &f, t, opts));

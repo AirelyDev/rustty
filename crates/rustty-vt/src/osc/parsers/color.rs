@@ -866,7 +866,8 @@ mod tests {
     // OSC 110-119: Reset Dynamic Colors
     // test "OSC 110: ... reset dynamic" {
     #[test]
-    fn osc_110_osc_111_osc_112_osc_113_osc_114_osc_115_osc_116_osc_117_osc_118_osc_119_reset_dynamic() {
+    fn osc_110_osc_111_osc_112_osc_113_osc_114_osc_115_osc_116_osc_117_osc_118_osc_119_reset_dynamic(
+    ) {
         // inline for (@typeInfo(DynamicColor).@"enum".fields) |field|
         for (color, value) in DYNAMIC_FIELDS {
             // const op = @field(Operation, std.fmt.comptimePrint("osc_1{d}", .{field.value}));

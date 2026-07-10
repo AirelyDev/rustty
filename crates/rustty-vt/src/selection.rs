@@ -1167,7 +1167,10 @@ mod tests {
             let sel_forward = Selection::init(pin_screen(&s, 1, 1), pin_screen(&s, 3, 1), false);
             assert!(sel_eql(sel.ordered(&s, Order::Forward), sel_forward));
             assert!(sel_eql(sel.ordered(&s, Order::Reverse), sel));
-            assert!(sel_eql(sel.ordered(&s, Order::MirroredForward), sel_forward));
+            assert!(sel_eql(
+                sel.ordered(&s, Order::MirroredForward),
+                sel_forward
+            ));
         }
         {
             // mirrored_forward
@@ -1176,7 +1179,10 @@ mod tests {
             let sel_reverse = Selection::init(pin_screen(&s, 3, 3), pin_screen(&s, 1, 1), true);
             assert!(sel_eql(sel.ordered(&s, Order::Forward), sel_forward));
             assert!(sel_eql(sel.ordered(&s, Order::Reverse), sel_reverse));
-            assert!(sel_eql(sel.ordered(&s, Order::MirroredReverse), sel_forward));
+            assert!(sel_eql(
+                sel.ordered(&s, Order::MirroredReverse),
+                sel_forward
+            ));
         }
         {
             // mirrored_reverse
@@ -1185,7 +1191,10 @@ mod tests {
             let sel_reverse = Selection::init(pin_screen(&s, 3, 3), pin_screen(&s, 1, 1), true);
             assert!(sel_eql(sel.ordered(&s, Order::Forward), sel_forward));
             assert!(sel_eql(sel.ordered(&s, Order::Reverse), sel_reverse));
-            assert!(sel_eql(sel.ordered(&s, Order::MirroredForward), sel_forward));
+            assert!(sel_eql(
+                sel.ordered(&s, Order::MirroredForward),
+                sel_forward
+            ));
         }
 
         s.deinit();
@@ -1347,7 +1356,10 @@ mod tests {
             assert!(sel.contained_row(&s, pin_screen(&s, 1, 2)).is_none());
 
             // Contained
-            assert!(sel_eql(sel, sel.contained_row(&s, pin_screen(&s, 1, 1)).unwrap()));
+            assert!(sel_eql(
+                sel,
+                sel.contained_row(&s, pin_screen(&s, 1, 1)).unwrap()
+            ));
         }
 
         s.deinit();

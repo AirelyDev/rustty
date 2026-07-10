@@ -276,58 +276,68 @@ fn render_row_iterator_get_invalid_value() {
 }
 
 // test "render: row iterator new/free"
+// The four length asserts below intentionally go through `.map(|r| &r.<field>)`
+// so each one names the reference SoA slice (`raws`/`cells`/`selection`/`dirty`)
+// it stands in for (see the PORT NOTE inside); the map is the mapping record,
+// not a logic step, so the suspicious_map lint is a false positive here.
+#[allow(clippy::suspicious_map)]
 #[test]
 fn render_row_iterator_new_free() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            // try testing.expectEqual(Result.success, update(state, terminal));
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                // try testing.expectEqual(Result.success, update(state, terminal));
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut iterator: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut iterator)
-            });
-            // defer row_iterator_free(iterator);
+                let mut iterator: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut iterator)
+                });
+                // defer row_iterator_free(iterator);
 
-            // try testing.expect(iterator != null);
-            assert!(!iterator.is_null());
+                // try testing.expect(iterator != null);
+                assert!(!iterator.is_null());
 
-            assert_eq!(Result::Success, unsafe {
-                get(
-                    state,
-                    Data::RowIterator,
-                    &mut iterator as *mut _ as *mut c_void,
-                )
-            });
+                assert_eq!(Result::Success, unsafe {
+                    get(
+                        state,
+                        Data::RowIterator,
+                        &mut iterator as *mut _ as *mut c_void,
+                    )
+                });
 
-            // const iterator_ptr = iterator.?;
-            let iterator_ptr = unsafe { &*iterator };
-            // const row_data = state.?.state.row_data.slice();
-            let row_data = unsafe { &(*state).state.row_data };
+                // const iterator_ptr = iterator.?;
+                let iterator_ptr = unsafe { &*iterator };
+                // const row_data = state.?.state.row_data.slice();
+                let row_data = unsafe { &(*state).state.row_data };
 
-            // try testing.expectEqual(@as(?size.CellCountInt, null), iterator_ptr.y);
-            assert_eq!(None, iterator_ptr.y);
-            // PORT NOTE: the reference iterator carries four parallel
-            // struct-of-arrays slices (`raws`/`cells`/`selection`/`dirty`);
-            // rustty's RowIterator carries ONE `rows` slice of per-row structs,
-            // so each reference length assert maps to the length of the
-            // corresponding per-row field VIEW below (assertion-for-assertion).
-            let rows = unsafe { &*iterator_ptr.rows };
-            // try testing.expectEqual(row_data.items(.raw).len, iterator_ptr.raws.len);
-            assert_eq!(row_data.len(), rows.iter().map(|r| &r.raw).count());
-            // try testing.expectEqual(row_data.items(.cells).len, iterator_ptr.cells.len);
-            assert_eq!(row_data.len(), rows.iter().map(|r| &r.cells).count());
-            // try testing.expectEqual(row_data.items(.selection).len, iterator_ptr.selection.len);
-            assert_eq!(row_data.len(), rows.iter().map(|r| &r.selection).count());
-            // try testing.expectEqual(row_data.items(.dirty).len, iterator_ptr.dirty.len);
-            assert_eq!(row_data.len(), rows.iter().map(|r| &r.dirty).count());
+                // try testing.expectEqual(@as(?size.CellCountInt, null), iterator_ptr.y);
+                assert_eq!(None, iterator_ptr.y);
+                // PORT NOTE: the reference iterator carries four parallel
+                // struct-of-arrays slices (`raws`/`cells`/`selection`/`dirty`);
+                // rustty's RowIterator carries ONE `rows` slice of per-row structs,
+                // so each reference length assert maps to the length of the
+                // corresponding per-row field VIEW below (assertion-for-assertion).
+                let rows = unsafe { &*iterator_ptr.rows };
+                // try testing.expectEqual(row_data.items(.raw).len, iterator_ptr.raws.len);
+                assert_eq!(row_data.len(), rows.iter().map(|r| &r.raw).count());
+                // try testing.expectEqual(row_data.items(.cells).len, iterator_ptr.cells.len);
+                assert_eq!(row_data.len(), rows.iter().map(|r| &r.cells).count());
+                // try testing.expectEqual(row_data.items(.selection).len, iterator_ptr.selection.len);
+                assert_eq!(row_data.len(), rows.iter().map(|r| &r.selection).count());
+                // try testing.expectEqual(row_data.items(.dirty).len, iterator_ptr.dirty.len);
+                assert_eq!(row_data.len(), rows.iter().map(|r| &r.dirty).count());
 
-            unsafe { row_iterator_free(iterator) };
-        });
+                unsafe { row_iterator_free(iterator) };
+            },
+        );
     });
 }
 
@@ -364,35 +374,40 @@ fn render_row_get_null() {
 #[test]
 fn render_row_get_invalid_data() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut iterator: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut iterator)
-            });
-            // defer row_iterator_free(iterator);
+                let mut iterator: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut iterator)
+                });
+                // defer row_iterator_free(iterator);
 
-            assert_eq!(Result::Success, unsafe {
-                get(
-                    state,
-                    Data::RowIterator,
-                    &mut iterator as *mut _ as *mut c_void,
-                )
-            });
-            // try testing.expect(row_iterator_next(iterator));
-            assert!(unsafe { row_iterator_next(iterator) });
-            // try testing.expectEqual(Result.invalid_value, row_get(iterator, .invalid, null));
-            assert_eq!(Result::InvalidValue, unsafe {
-                row_get(iterator, RowData::Invalid, std::ptr::null_mut())
-            });
+                assert_eq!(Result::Success, unsafe {
+                    get(
+                        state,
+                        Data::RowIterator,
+                        &mut iterator as *mut _ as *mut c_void,
+                    )
+                });
+                // try testing.expect(row_iterator_next(iterator));
+                assert!(unsafe { row_iterator_next(iterator) });
+                // try testing.expectEqual(Result.invalid_value, row_get(iterator, .invalid, null));
+                assert_eq!(Result::InvalidValue, unsafe {
+                    row_get(iterator, RowData::Invalid, std::ptr::null_mut())
+                });
 
-            unsafe { row_iterator_free(iterator) };
-        });
+                unsafe { row_iterator_free(iterator) };
+            },
+        );
     });
 }
 
@@ -415,39 +430,44 @@ fn render_row_set_null() {
 #[test]
 fn render_row_set_before_iteration() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut iterator: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut iterator)
-            });
-            // defer row_iterator_free(iterator);
+                let mut iterator: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut iterator)
+                });
+                // defer row_iterator_free(iterator);
 
-            assert_eq!(Result::Success, unsafe {
-                get(
-                    state,
-                    Data::RowIterator,
-                    &mut iterator as *mut _ as *mut c_void,
-                )
-            });
-            // const dirty = false;
-            let dirty = false;
-            // try testing.expectEqual(Result.invalid_value, row_set(iterator, .dirty, @ptrCast(&dirty)));
-            assert_eq!(Result::InvalidValue, unsafe {
-                row_set(
-                    iterator,
-                    RowOption::Dirty,
-                    &dirty as *const _ as *const c_void,
-                )
-            });
+                assert_eq!(Result::Success, unsafe {
+                    get(
+                        state,
+                        Data::RowIterator,
+                        &mut iterator as *mut _ as *mut c_void,
+                    )
+                });
+                // const dirty = false;
+                let dirty = false;
+                // try testing.expectEqual(Result.invalid_value, row_set(iterator, .dirty, @ptrCast(&dirty)));
+                assert_eq!(Result::InvalidValue, unsafe {
+                    row_set(
+                        iterator,
+                        RowOption::Dirty,
+                        &dirty as *const _ as *const c_void,
+                    )
+                });
 
-            unsafe { row_iterator_free(iterator) };
-        });
+                unsafe { row_iterator_free(iterator) };
+            },
+        );
     });
 }
 
@@ -455,39 +475,44 @@ fn render_row_set_before_iteration() {
 #[test]
 fn render_row_get_before_iteration() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut iterator: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut iterator)
-            });
-            // defer row_iterator_free(iterator);
+                let mut iterator: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut iterator)
+                });
+                // defer row_iterator_free(iterator);
 
-            assert_eq!(Result::Success, unsafe {
-                get(
-                    state,
-                    Data::RowIterator,
-                    &mut iterator as *mut _ as *mut c_void,
-                )
-            });
-            // var dirty: bool = undefined;
-            let mut dirty: bool = false;
-            // try testing.expectEqual(Result.invalid_value, row_get(iterator, .dirty, @ptrCast(&dirty)));
-            assert_eq!(Result::InvalidValue, unsafe {
-                row_get(
-                    iterator,
-                    RowData::Dirty,
-                    &mut dirty as *mut _ as *mut c_void,
-                )
-            });
+                assert_eq!(Result::Success, unsafe {
+                    get(
+                        state,
+                        Data::RowIterator,
+                        &mut iterator as *mut _ as *mut c_void,
+                    )
+                });
+                // var dirty: bool = undefined;
+                let mut dirty: bool = false;
+                // try testing.expectEqual(Result.invalid_value, row_get(iterator, .dirty, @ptrCast(&dirty)));
+                assert_eq!(Result::InvalidValue, unsafe {
+                    row_get(
+                        iterator,
+                        RowData::Dirty,
+                        &mut dirty as *mut _ as *mut c_void,
+                    )
+                });
 
-            unsafe { row_iterator_free(iterator) };
-        });
+                unsafe { row_iterator_free(iterator) };
+            },
+        );
     });
 }
 
@@ -495,68 +520,73 @@ fn render_row_get_before_iteration() {
 #[test]
 fn render_row_get_set_dirty() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            // Dirty the first row so the iterator has at least one dirty row to observe.
-            // terminal_c.vt_write(terminal, "hello", 5);
-            let input = b"hello";
-            unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 5) };
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+                // Dirty the first row so the iterator has at least one dirty row to observe.
+                // terminal_c.vt_write(terminal, "hello", 5);
+                let input = b"hello";
+                unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 5) };
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            // Create an iterator and verify it is dirty.
-            let mut it: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut it)
-            });
-            // defer row_iterator_free(it);
+                // Create an iterator and verify it is dirty.
+                let mut it: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut it)
+                });
+                // defer row_iterator_free(it);
 
-            assert_eq!(Result::Success, unsafe {
-                get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_iterator_next(it) });
-            let mut dirty: bool = false;
-            assert_eq!(Result::Success, unsafe {
-                row_get(it, RowData::Dirty, &mut dirty as *mut _ as *mut c_void)
-            });
-            // try testing.expect(dirty);
-            assert!(dirty);
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_iterator_next(it) });
+                let mut dirty: bool = false;
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it, RowData::Dirty, &mut dirty as *mut _ as *mut c_void)
+                });
+                // try testing.expect(dirty);
+                assert!(dirty);
 
-            // Clear dirty on this row.
-            // const dirty_false = false;
-            let dirty_false = false;
-            assert_eq!(Result::Success, unsafe {
-                row_set(
-                    it,
-                    RowOption::Dirty,
-                    &dirty_false as *const _ as *const c_void,
-                )
-            });
+                // Clear dirty on this row.
+                // const dirty_false = false;
+                let dirty_false = false;
+                assert_eq!(Result::Success, unsafe {
+                    row_set(
+                        it,
+                        RowOption::Dirty,
+                        &dirty_false as *const _ as *const c_void,
+                    )
+                });
 
-            // It should not be dirty anymore.
-            let mut it2: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut it2)
-            });
-            // defer row_iterator_free(it2);
+                // It should not be dirty anymore.
+                let mut it2: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut it2)
+                });
+                // defer row_iterator_free(it2);
 
-            assert_eq!(Result::Success, unsafe {
-                get(state, Data::RowIterator, &mut it2 as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_iterator_next(it2) });
-            assert_eq!(Result::Success, unsafe {
-                row_get(it2, RowData::Dirty, &mut dirty as *mut _ as *mut c_void)
-            });
-            // try testing.expect(!dirty);
-            assert!(!dirty);
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::RowIterator, &mut it2 as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_iterator_next(it2) });
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it2, RowData::Dirty, &mut dirty as *mut _ as *mut c_void)
+                });
+                // try testing.expect(!dirty);
+                assert!(!dirty);
 
-            unsafe { row_iterator_free(it2) };
-            unsafe { row_iterator_free(it) };
-        });
+                unsafe { row_iterator_free(it2) };
+                unsafe { row_iterator_free(it) };
+            },
+        );
     });
 }
 
@@ -564,73 +594,78 @@ fn render_row_get_set_dirty() {
 #[test]
 fn render_row_get_selection() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 10, 3, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            // const t = terminal.?.terminal; const screen = t.screens.active;
-            let screen = unsafe { active_screen(terminal) };
-            // try screen.select(.init(screen.pages.pin(.{ .active = .{ .x = 2, .y = 1 } }).?, screen.pages.pin(.{ .active = .{ .x = 4, .y = 1 } }).?, false));
-            let start = unsafe {
-                (*screen).pages.pin(rustty_vt::point::Point::Active(
-                    rustty_vt::point::Coordinate { x: 2, y: 1 },
-                ))
-            }
-            .unwrap();
-            let end = unsafe {
-                (*screen).pages.pin(rustty_vt::point::Point::Active(
-                    rustty_vt::point::Coordinate { x: 4, y: 1 },
-                ))
-            }
-            .unwrap();
-            unsafe {
-                (*screen).select(Some(rustty_vt::selection::Selection::init(
-                    start, end, false,
-                )))
-            }
-            .unwrap();
+        with_terminal_state(
+            alloc,
+            10,
+            3,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                // const t = terminal.?.terminal; const screen = t.screens.active;
+                let screen = unsafe { active_screen(terminal) };
+                // try screen.select(.init(screen.pages.pin(.{ .active = .{ .x = 2, .y = 1 } }).?, screen.pages.pin(.{ .active = .{ .x = 4, .y = 1 } }).?, false));
+                let start = unsafe {
+                    (*screen).pages.pin(rustty_vt::point::Point::Active(
+                        rustty_vt::point::Coordinate { x: 2, y: 1 },
+                    ))
+                }
+                .unwrap();
+                let end = unsafe {
+                    (*screen).pages.pin(rustty_vt::point::Point::Active(
+                        rustty_vt::point::Coordinate { x: 4, y: 1 },
+                    ))
+                }
+                .unwrap();
+                unsafe {
+                    (*screen).select(Some(rustty_vt::selection::Selection::init(
+                        start, end, false,
+                    )))
+                }
+                .unwrap();
 
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut it: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut it)
-            });
-            // defer row_iterator_free(it);
+                let mut it: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut it)
+                });
+                // defer row_iterator_free(it);
 
-            assert_eq!(Result::Success, unsafe {
-                get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
-            });
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                });
 
-            // var sel: RowSelection = .{};
-            let mut sel: RowSelection = RowSelection::default();
-            // try testing.expect(row_iterator_next(it));
-            assert!(unsafe { row_iterator_next(it) });
-            // try testing.expectEqual(Result.no_value, row_get(it, .selection, @ptrCast(&sel)));
-            assert_eq!(Result::NoValue, unsafe {
-                row_get(it, RowData::Selection, &mut sel as *mut _ as *mut c_void)
-            });
+                // var sel: RowSelection = .{};
+                let mut sel: RowSelection = RowSelection::default();
+                // try testing.expect(row_iterator_next(it));
+                assert!(unsafe { row_iterator_next(it) });
+                // try testing.expectEqual(Result.no_value, row_get(it, .selection, @ptrCast(&sel)));
+                assert_eq!(Result::NoValue, unsafe {
+                    row_get(it, RowData::Selection, &mut sel as *mut _ as *mut c_void)
+                });
 
-            assert!(unsafe { row_iterator_next(it) });
-            // sel = .{};
-            sel = RowSelection::default();
-            assert_eq!(Result::Success, unsafe {
-                row_get(it, RowData::Selection, &mut sel as *mut _ as *mut c_void)
-            });
-            // try testing.expectEqual(@as(u16, 2), sel.start_x);
-            assert_eq!(2u16, sel.start_x);
-            // try testing.expectEqual(@as(u16, 4), sel.end_x);
-            assert_eq!(4u16, sel.end_x);
+                assert!(unsafe { row_iterator_next(it) });
+                // sel = .{};
+                sel = RowSelection::default();
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it, RowData::Selection, &mut sel as *mut _ as *mut c_void)
+                });
+                // try testing.expectEqual(@as(u16, 2), sel.start_x);
+                assert_eq!(2u16, sel.start_x);
+                // try testing.expectEqual(@as(u16, 4), sel.end_x);
+                assert_eq!(4u16, sel.end_x);
 
-            assert!(unsafe { row_iterator_next(it) });
-            sel = RowSelection::default();
-            assert_eq!(Result::NoValue, unsafe {
-                row_get(it, RowData::Selection, &mut sel as *mut _ as *mut c_void)
-            });
+                assert!(unsafe { row_iterator_next(it) });
+                sel = RowSelection::default();
+                assert_eq!(Result::NoValue, unsafe {
+                    row_get(it, RowData::Selection, &mut sel as *mut _ as *mut c_void)
+                });
 
-            unsafe { row_iterator_free(it) };
-        });
+                unsafe { row_iterator_free(it) };
+            },
+        );
     });
 }
 
@@ -638,135 +673,140 @@ fn render_row_get_selection() {
 #[test]
 fn render_row_cells_get_selected() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 10, 3, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            let screen = unsafe { active_screen(terminal) };
-            let start = unsafe {
-                (*screen).pages.pin(rustty_vt::point::Point::Active(
-                    rustty_vt::point::Coordinate { x: 2, y: 1 },
-                ))
-            }
-            .unwrap();
-            let end = unsafe {
-                (*screen).pages.pin(rustty_vt::point::Point::Active(
-                    rustty_vt::point::Coordinate { x: 4, y: 1 },
-                ))
-            }
-            .unwrap();
-            unsafe {
-                (*screen).select(Some(rustty_vt::selection::Selection::init(
-                    start, end, false,
-                )))
-            }
-            .unwrap();
+        with_terminal_state(
+            alloc,
+            10,
+            3,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                let screen = unsafe { active_screen(terminal) };
+                let start = unsafe {
+                    (*screen).pages.pin(rustty_vt::point::Point::Active(
+                        rustty_vt::point::Coordinate { x: 2, y: 1 },
+                    ))
+                }
+                .unwrap();
+                let end = unsafe {
+                    (*screen).pages.pin(rustty_vt::point::Point::Active(
+                        rustty_vt::point::Coordinate { x: 4, y: 1 },
+                    ))
+                }
+                .unwrap();
+                unsafe {
+                    (*screen).select(Some(rustty_vt::selection::Selection::init(
+                        start, end, false,
+                    )))
+                }
+                .unwrap();
 
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut it: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut it)
-            });
-            // defer row_iterator_free(it);
+                let mut it: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut it)
+                });
+                // defer row_iterator_free(it);
 
-            let mut cells: RowCells = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_cells_new(Some(alloc), &mut cells)
-            });
-            // defer row_cells_free(cells);
+                let mut cells: RowCells = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_new(Some(alloc), &mut cells)
+                });
+                // defer row_cells_free(cells);
 
-            assert_eq!(Result::Success, unsafe {
-                get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
-            });
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                });
 
-            assert!(unsafe { row_iterator_next(it) });
-            assert_eq!(Result::Success, unsafe {
-                row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
-            });
+                assert!(unsafe { row_iterator_next(it) });
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                });
 
-            // var selected: bool = true;
-            let mut selected: bool = true;
-            assert_eq!(Result::Success, unsafe { row_cells_select(cells, 0) });
-            assert_eq!(Result::Success, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::Selected,
-                    &mut selected as *mut _ as *mut c_void,
-                )
-            });
-            assert!(!selected);
+                // var selected: bool = true;
+                let mut selected: bool = true;
+                assert_eq!(Result::Success, unsafe { row_cells_select(cells, 0) });
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::Selected,
+                        &mut selected as *mut _ as *mut c_void,
+                    )
+                });
+                assert!(!selected);
 
-            assert!(unsafe { row_iterator_next(it) });
-            assert_eq!(Result::Success, unsafe {
-                row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
-            });
+                assert!(unsafe { row_iterator_next(it) });
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                });
 
-            assert_eq!(Result::Success, unsafe { row_cells_select(cells, 1) });
-            assert_eq!(Result::Success, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::Selected,
-                    &mut selected as *mut _ as *mut c_void,
-                )
-            });
-            assert!(!selected);
+                assert_eq!(Result::Success, unsafe { row_cells_select(cells, 1) });
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::Selected,
+                        &mut selected as *mut _ as *mut c_void,
+                    )
+                });
+                assert!(!selected);
 
-            assert_eq!(Result::Success, unsafe { row_cells_select(cells, 2) });
-            assert_eq!(Result::Success, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::Selected,
-                    &mut selected as *mut _ as *mut c_void,
-                )
-            });
-            assert!(selected);
+                assert_eq!(Result::Success, unsafe { row_cells_select(cells, 2) });
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::Selected,
+                        &mut selected as *mut _ as *mut c_void,
+                    )
+                });
+                assert!(selected);
 
-            assert_eq!(Result::Success, unsafe { row_cells_select(cells, 4) });
-            assert_eq!(Result::Success, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::Selected,
-                    &mut selected as *mut _ as *mut c_void,
-                )
-            });
-            assert!(selected);
+                assert_eq!(Result::Success, unsafe { row_cells_select(cells, 4) });
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::Selected,
+                        &mut selected as *mut _ as *mut c_void,
+                    )
+                });
+                assert!(selected);
 
-            assert_eq!(Result::Success, unsafe { row_cells_select(cells, 5) });
-            assert_eq!(Result::Success, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::Selected,
-                    &mut selected as *mut _ as *mut c_void,
-                )
-            });
-            assert!(!selected);
+                assert_eq!(Result::Success, unsafe { row_cells_select(cells, 5) });
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::Selected,
+                        &mut selected as *mut _ as *mut c_void,
+                    )
+                });
+                assert!(!selected);
 
-            assert_eq!(Result::Success, unsafe { row_cells_select(cells, 3) });
-            // selected = false;
-            selected = false;
-            // var written: usize = 0;
-            let mut written: usize = 0;
-            // const keys = [_]RowCellsData{.selected};
-            let keys = [RowCellsData::Selected];
-            // var values = [_]?*anyopaque{@ptrCast(&selected)};
-            let mut values = [&mut selected as *mut _ as *mut c_void];
-            assert_eq!(Result::Success, unsafe {
-                row_cells_get_multi(
-                    cells,
-                    keys.len(),
-                    keys.as_ptr(),
-                    values.as_mut_ptr(),
-                    &mut written,
-                )
-            });
-            assert_eq!(keys.len(), written);
-            assert!(selected);
+                assert_eq!(Result::Success, unsafe { row_cells_select(cells, 3) });
+                // selected = false;
+                selected = false;
+                // var written: usize = 0;
+                let mut written: usize = 0;
+                // const keys = [_]RowCellsData{.selected};
+                let keys = [RowCellsData::Selected];
+                // var values = [_]?*anyopaque{@ptrCast(&selected)};
+                let mut values = [&mut selected as *mut _ as *mut c_void];
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_get_multi(
+                        cells,
+                        keys.len(),
+                        keys.as_ptr(),
+                        values.as_mut_ptr(),
+                        &mut written,
+                    )
+                });
+                assert_eq!(keys.len(), written);
+                assert!(selected);
 
-            unsafe { row_cells_free(cells) };
-            unsafe { row_iterator_free(it) };
-        });
+                unsafe { row_cells_free(cells) };
+                unsafe { row_iterator_free(it) };
+            },
+        );
     });
 }
 
@@ -774,76 +814,81 @@ fn render_row_cells_get_selected() {
 #[test]
 fn render_row_cells_get_has_styling() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 10, 3, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            // const input = "A\x1b[31mB";
-            let input = b"A\x1b[31mB";
-            unsafe { terminal_c::vt_write(terminal, input.as_ptr(), input.len()) };
+        with_terminal_state(
+            alloc,
+            10,
+            3,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                // const input = "A\x1b[31mB";
+                let input = b"A\x1b[31mB";
+                unsafe { terminal_c::vt_write(terminal, input.as_ptr(), input.len()) };
 
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut it: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut it)
-            });
-            let mut cells: RowCells = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_cells_new(Some(alloc), &mut cells)
-            });
+                let mut it: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut it)
+                });
+                let mut cells: RowCells = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_new(Some(alloc), &mut cells)
+                });
 
-            assert_eq!(Result::Success, unsafe {
-                get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_iterator_next(it) });
-            assert_eq!(Result::Success, unsafe {
-                row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
-            });
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_iterator_next(it) });
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                });
 
-            // var has_styling = true;
-            let mut has_styling = true;
-            assert_eq!(Result::Success, unsafe { row_cells_select(cells, 0) });
-            assert_eq!(Result::Success, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::HasStyling,
-                    &mut has_styling as *mut _ as *mut c_void,
-                )
-            });
-            assert!(!has_styling);
+                // var has_styling = true;
+                let mut has_styling = true;
+                assert_eq!(Result::Success, unsafe { row_cells_select(cells, 0) });
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::HasStyling,
+                        &mut has_styling as *mut _ as *mut c_void,
+                    )
+                });
+                assert!(!has_styling);
 
-            assert_eq!(Result::Success, unsafe { row_cells_select(cells, 1) });
-            assert_eq!(Result::Success, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::HasStyling,
-                    &mut has_styling as *mut _ as *mut c_void,
-                )
-            });
-            assert!(has_styling);
+                assert_eq!(Result::Success, unsafe { row_cells_select(cells, 1) });
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::HasStyling,
+                        &mut has_styling as *mut _ as *mut c_void,
+                    )
+                });
+                assert!(has_styling);
 
-            // has_styling = false;
-            has_styling = false;
-            let mut written: usize = 0;
-            let keys = [RowCellsData::HasStyling];
-            let mut values = [&mut has_styling as *mut _ as *mut c_void];
-            assert_eq!(Result::Success, unsafe {
-                row_cells_get_multi(
-                    cells,
-                    keys.len(),
-                    keys.as_ptr(),
-                    values.as_mut_ptr(),
-                    &mut written,
-                )
-            });
-            assert_eq!(keys.len(), written);
-            assert!(has_styling);
+                // has_styling = false;
+                has_styling = false;
+                let mut written: usize = 0;
+                let keys = [RowCellsData::HasStyling];
+                let mut values = [&mut has_styling as *mut _ as *mut c_void];
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_get_multi(
+                        cells,
+                        keys.len(),
+                        keys.as_ptr(),
+                        values.as_mut_ptr(),
+                        &mut written,
+                    )
+                });
+                assert_eq!(keys.len(), written);
+                assert!(has_styling);
 
-            unsafe { row_cells_free(cells) };
-            unsafe { row_iterator_free(it) };
-        });
+                unsafe { row_cells_free(cells) };
+                unsafe { row_iterator_free(it) };
+            },
+        );
     });
 }
 
@@ -851,106 +896,111 @@ fn render_row_cells_get_has_styling() {
 #[test]
 fn render_row_cells_get_graphemes_utf8() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 10, 3, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            // const input = "e\u{301}";
-            let input = "e\u{301}".as_bytes();
-            unsafe { terminal_c::vt_write(terminal, input.as_ptr(), input.len()) };
+        with_terminal_state(
+            alloc,
+            10,
+            3,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                // const input = "e\u{301}";
+                let input = "e\u{301}".as_bytes();
+                unsafe { terminal_c::vt_write(terminal, input.as_ptr(), input.len()) };
 
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut it: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut it)
-            });
-            let mut cells: RowCells = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_cells_new(Some(alloc), &mut cells)
-            });
+                let mut it: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut it)
+                });
+                let mut cells: RowCells = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_new(Some(alloc), &mut cells)
+                });
 
-            assert_eq!(Result::Success, unsafe {
-                get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_iterator_next(it) });
-            assert_eq!(Result::Success, unsafe {
-                row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
-            });
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_iterator_next(it) });
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                });
 
-            assert_eq!(Result::Success, unsafe { row_cells_select(cells, 0) });
+                assert_eq!(Result::Success, unsafe { row_cells_select(cells, 0) });
 
-            // var text: lib.Buffer = .{};
-            let mut text: Buffer = Buffer::default();
-            // try testing.expectEqual(Result.out_of_space, row_cells_get(cells, .graphemes_utf8, @ptrCast(&text)));
-            assert_eq!(Result::OutOfSpace, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::GraphemesUtf8,
-                    &mut text as *mut _ as *mut c_void,
-                )
-            });
-            // try testing.expectEqual(@as(usize, input.len), text.len);
-            assert_eq!(input.len(), text.len);
+                // var text: lib.Buffer = .{};
+                let mut text: Buffer = Buffer::default();
+                // try testing.expectEqual(Result.out_of_space, row_cells_get(cells, .graphemes_utf8, @ptrCast(&text)));
+                assert_eq!(Result::OutOfSpace, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::GraphemesUtf8,
+                        &mut text as *mut _ as *mut c_void,
+                    )
+                });
+                // try testing.expectEqual(@as(usize, input.len), text.len);
+                assert_eq!(input.len(), text.len);
 
-            // var small = [_]u8{ 'x', 'x' };
-            let mut small = [b'x', b'x'];
-            // text = .{ .ptr = &small, .cap = small.len };
-            text = Buffer {
-                ptr: small.as_mut_ptr(),
-                cap: small.len(),
-                len: 0,
-            };
-            assert_eq!(Result::OutOfSpace, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::GraphemesUtf8,
-                    &mut text as *mut _ as *mut c_void,
-                )
-            });
-            assert_eq!(input.len(), text.len);
-            // try testing.expectEqualSlices(u8, &.{ 'x', 'x' }, &small);
-            assert_eq!([b'x', b'x'], small);
+                // var small = [_]u8{ 'x', 'x' };
+                let mut small = [b'x', b'x'];
+                // text = .{ .ptr = &small, .cap = small.len };
+                text = Buffer {
+                    ptr: small.as_mut_ptr(),
+                    cap: small.len(),
+                    len: 0,
+                };
+                assert_eq!(Result::OutOfSpace, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::GraphemesUtf8,
+                        &mut text as *mut _ as *mut c_void,
+                    )
+                });
+                assert_eq!(input.len(), text.len);
+                // try testing.expectEqualSlices(u8, &.{ 'x', 'x' }, &small);
+                assert_eq!([b'x', b'x'], small);
 
-            // var buf: [8]u8 = undefined;
-            let mut buf = [0u8; 8];
-            // text = .{ .ptr = &buf, .cap = buf.len };
-            text = Buffer {
-                ptr: buf.as_mut_ptr(),
-                cap: buf.len(),
-                len: 0,
-            };
-            assert_eq!(Result::Success, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::GraphemesUtf8,
-                    &mut text as *mut _ as *mut c_void,
-                )
-            });
-            assert_eq!(input.len(), text.len);
-            // try testing.expectEqualStrings(input, buf[0..text.len]);
-            assert_eq!(input, &buf[0..text.len]);
+                // var buf: [8]u8 = undefined;
+                let mut buf = [0u8; 8];
+                // text = .{ .ptr = &buf, .cap = buf.len };
+                text = Buffer {
+                    ptr: buf.as_mut_ptr(),
+                    cap: buf.len(),
+                    len: 0,
+                };
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::GraphemesUtf8,
+                        &mut text as *mut _ as *mut c_void,
+                    )
+                });
+                assert_eq!(input.len(), text.len);
+                // try testing.expectEqualStrings(input, buf[0..text.len]);
+                assert_eq!(input, &buf[0..text.len]);
 
-            assert_eq!(Result::Success, unsafe { row_cells_select(cells, 1) });
-            text = Buffer {
-                ptr: buf.as_mut_ptr(),
-                cap: buf.len(),
-                len: 0,
-            };
-            assert_eq!(Result::Success, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::GraphemesUtf8,
-                    &mut text as *mut _ as *mut c_void,
-                )
-            });
-            // try testing.expectEqual(@as(usize, 0), text.len);
-            assert_eq!(0usize, text.len);
+                assert_eq!(Result::Success, unsafe { row_cells_select(cells, 1) });
+                text = Buffer {
+                    ptr: buf.as_mut_ptr(),
+                    cap: buf.len(),
+                    len: 0,
+                };
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::GraphemesUtf8,
+                        &mut text as *mut _ as *mut c_void,
+                    )
+                });
+                // try testing.expectEqual(@as(usize, 0), text.len);
+                assert_eq!(0usize, text.len);
 
-            unsafe { row_cells_free(cells) };
-            unsafe { row_iterator_free(it) };
-        });
+                unsafe { row_cells_free(cells) };
+                unsafe { row_iterator_free(it) };
+            },
+        );
     });
 }
 
@@ -958,57 +1008,62 @@ fn render_row_cells_get_graphemes_utf8() {
 #[test]
 fn render_row_iterator_next() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut iterator: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut iterator)
-            });
-            // defer row_iterator_free(iterator);
+                let mut iterator: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut iterator)
+                });
+                // defer row_iterator_free(iterator);
 
-            assert_eq!(Result::Success, unsafe {
-                get(
-                    state,
-                    Data::RowIterator,
-                    &mut iterator as *mut _ as *mut c_void,
-                )
-            });
+                assert_eq!(Result::Success, unsafe {
+                    get(
+                        state,
+                        Data::RowIterator,
+                        &mut iterator as *mut _ as *mut c_void,
+                    )
+                });
 
-            // const rows = state.?.state.rows;
-            let rows = unsafe { (*state).state.rows };
-            // if (rows == 0) { try testing.expect(!row_iterator_next(iterator)); return; }
-            if rows == 0 {
-                assert!(!unsafe { row_iterator_next(iterator) });
-                unsafe { row_iterator_free(iterator) };
-                return;
-            }
+                // const rows = state.?.state.rows;
+                let rows = unsafe { (*state).state.rows };
+                // if (rows == 0) { try testing.expect(!row_iterator_next(iterator)); return; }
+                if rows == 0 {
+                    assert!(!unsafe { row_iterator_next(iterator) });
+                    unsafe { row_iterator_free(iterator) };
+                    return;
+                }
 
-            assert!(unsafe { row_iterator_next(iterator) });
-            // try testing.expectEqual(@as(?size.CellCountInt, 0), iterator.?.y);
-            assert_eq!(Some(0u16), unsafe { (*iterator).y });
-
-            // var i: size.CellCountInt = 1;
-            let mut i: size::CellCountInt = 1;
-            // while (i < rows) : (i += 1) { ... }
-            while i < rows {
                 assert!(unsafe { row_iterator_next(iterator) });
-                // try testing.expectEqual(@as(?size.CellCountInt, i), iterator.?.y);
-                assert_eq!(Some(i), unsafe { (*iterator).y });
-                i += 1;
-            }
+                // try testing.expectEqual(@as(?size.CellCountInt, 0), iterator.?.y);
+                assert_eq!(Some(0u16), unsafe { (*iterator).y });
 
-            // try testing.expect(!row_iterator_next(iterator));
-            assert!(!unsafe { row_iterator_next(iterator) });
-            // try testing.expectEqual(@as(?size.CellCountInt, rows - 1), iterator.?.y);
-            assert_eq!(Some(rows - 1), unsafe { (*iterator).y });
+                // var i: size.CellCountInt = 1;
+                let mut i: size::CellCountInt = 1;
+                // while (i < rows) : (i += 1) { ... }
+                while i < rows {
+                    assert!(unsafe { row_iterator_next(iterator) });
+                    // try testing.expectEqual(@as(?size.CellCountInt, i), iterator.?.y);
+                    assert_eq!(Some(i), unsafe { (*iterator).y });
+                    i += 1;
+                }
 
-            unsafe { row_iterator_free(iterator) };
-        });
+                // try testing.expect(!row_iterator_next(iterator));
+                assert!(!unsafe { row_iterator_next(iterator) });
+                // try testing.expectEqual(@as(?size.CellCountInt, rows - 1), iterator.?.y);
+                assert_eq!(Some(rows - 1), unsafe { (*iterator).y });
+
+                unsafe { row_iterator_free(iterator) };
+            },
+        );
     });
 }
 
@@ -1016,31 +1071,36 @@ fn render_row_iterator_next() {
 #[test]
 fn render_update() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let input = b"hello";
-            unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 5) };
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+                let input = b"hello";
+                unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 5) };
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            // var cols: size.CellCountInt = 0; var rows_val: size.CellCountInt = 0;
-            let mut cols: size::CellCountInt = 0;
-            let mut rows_val: size::CellCountInt = 0;
-            assert_eq!(Result::Success, unsafe {
-                get(state, Data::Cols, &mut cols as *mut _ as *mut c_void)
-            });
-            assert_eq!(Result::Success, unsafe {
-                get(state, Data::Rows, &mut rows_val as *mut _ as *mut c_void)
-            });
-            // try testing.expectEqual(@as(size.CellCountInt, 80), cols);
-            assert_eq!(80u16, cols);
-            // try testing.expectEqual(@as(size.CellCountInt, 24), rows_val);
-            assert_eq!(24u16, rows_val);
-        });
+                // var cols: size.CellCountInt = 0; var rows_val: size.CellCountInt = 0;
+                let mut cols: size::CellCountInt = 0;
+                let mut rows_val: size::CellCountInt = 0;
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::Cols, &mut cols as *mut _ as *mut c_void)
+                });
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::Rows, &mut rows_val as *mut _ as *mut c_void)
+                });
+                // try testing.expectEqual(@as(size.CellCountInt, 80), cols);
+                assert_eq!(80u16, cols);
+                // try testing.expectEqual(@as(size.CellCountInt, 24), rows_val);
+                assert_eq!(24u16, rows_val);
+            },
+        );
     });
 }
 
@@ -1048,37 +1108,42 @@ fn render_update() {
 #[test]
 fn render_colors_get() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            // var colors: Colors = std.mem.zeroes(Colors);
-            let mut colors: Colors = unsafe { std::mem::zeroed() };
-            colors.size = std::mem::size_of::<Colors>();
-            assert_eq!(Result::Success, unsafe { colors_get(state, &mut colors) });
+                // var colors: Colors = std.mem.zeroes(Colors);
+                let mut colors: Colors = unsafe { std::mem::zeroed() };
+                colors.size = std::mem::size_of::<Colors>();
+                assert_eq!(Result::Success, unsafe { colors_get(state, &mut colors) });
 
-            // const state_colors = &state.?.state.colors;
-            let state_colors = unsafe { &(*state).state.colors };
-            // try testing.expectEqual(state_colors.background.cval(), colors.background);
-            assert_eq!(state_colors.background, colors.background);
-            assert_eq!(state_colors.foreground, colors.foreground);
+                // const state_colors = &state.?.state.colors;
+                let state_colors = unsafe { &(*state).state.colors };
+                // try testing.expectEqual(state_colors.background.cval(), colors.background);
+                assert_eq!(state_colors.background, colors.background);
+                assert_eq!(state_colors.foreground, colors.foreground);
 
-            // if (state_colors.cursor) |cursor| { ... } else { ... }
-            if let Some(cursor) = state_colors.cursor {
-                assert!(colors.cursor_has_value);
-                assert_eq!(cursor, colors.cursor);
-            } else {
-                assert!(!colors.cursor_has_value);
-            }
+                // if (state_colors.cursor) |cursor| { ... } else { ... }
+                if let Some(cursor) = state_colors.cursor {
+                    assert!(colors.cursor_has_value);
+                    assert_eq!(cursor, colors.cursor);
+                } else {
+                    assert!(!colors.cursor_has_value);
+                }
 
-            // for (state_colors.palette, colors.palette) |expected, actual| { try testing.expectEqual(expected.cval(), actual); }
-            for (expected, actual) in state_colors.palette.iter().zip(colors.palette.iter()) {
-                assert_eq!(*expected, *actual);
-            }
-        });
+                // for (state_colors.palette, colors.palette) |expected, actual| { try testing.expectEqual(expected.cval(), actual); }
+                for (expected, actual) in state_colors.palette.iter().zip(colors.palette.iter()) {
+                    assert_eq!(*expected, *actual);
+                }
+            },
+        );
     });
 }
 
@@ -1086,50 +1151,55 @@ fn render_colors_get() {
 #[test]
 fn render_row_cells_bg_color_no_background() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            // Write plain text (no background color set).
-            let input = b"hello";
-            unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 5) };
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                // Write plain text (no background color set).
+                let input = b"hello";
+                unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 5) };
 
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut it: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut it)
-            });
-            assert_eq!(Result::Success, unsafe {
-                get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_iterator_next(it) });
+                let mut it: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut it)
+                });
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_iterator_next(it) });
 
-            let mut cells: RowCells = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_cells_new(Some(alloc), &mut cells)
-            });
+                let mut cells: RowCells = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_new(Some(alloc), &mut cells)
+                });
 
-            assert_eq!(Result::Success, unsafe {
-                row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_cells_next(cells) });
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_cells_next(cells) });
 
-            // No background set, should return invalid_value.
-            // var bg: colorpkg.RGB.C = undefined;
-            let mut bg: RGB = RGB { r: 0, g: 0, b: 0 };
-            assert_eq!(Result::InvalidValue, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::BgColor,
-                    &mut bg as *mut _ as *mut c_void,
-                )
-            });
+                // No background set, should return invalid_value.
+                // var bg: colorpkg.RGB.C = undefined;
+                let mut bg: RGB = RGB { r: 0, g: 0, b: 0 };
+                assert_eq!(Result::InvalidValue, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::BgColor,
+                        &mut bg as *mut _ as *mut c_void,
+                    )
+                });
 
-            unsafe { row_cells_free(cells) };
-            unsafe { row_iterator_free(it) };
-        });
+                unsafe { row_cells_free(cells) };
+                unsafe { row_iterator_free(it) };
+            },
+        );
     });
 }
 
@@ -1137,59 +1207,64 @@ fn render_row_cells_bg_color_no_background() {
 #[test]
 fn render_row_cells_bg_color_from_style() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            // Set an RGB background via SGR 48;2;R;G;B and write text.
-            // terminal_c.vt_write(terminal, "\x1b[48;2;10;20;30mA", 18);
-            //
-            // The reference's Zig string literal is sentinel-terminated
-            // (`[17:0]u8`), so passing count 18 reads an in-bounds 0x00 as the
-            // 18th byte. Rust byte-string literals carry no sentinel, so we add
-            // the trailing 0x00 explicitly to make the allocation byte-identical
-            // to what the reference passes (and avoid a real over-read).
-            let input = b"\x1b[48;2;10;20;30mA\x00";
-            unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 18) };
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                // Set an RGB background via SGR 48;2;R;G;B and write text.
+                // terminal_c.vt_write(terminal, "\x1b[48;2;10;20;30mA", 18);
+                //
+                // The reference's Zig string literal is sentinel-terminated
+                // (`[17:0]u8`), so passing count 18 reads an in-bounds 0x00 as the
+                // 18th byte. Rust byte-string literals carry no sentinel, so we add
+                // the trailing 0x00 explicitly to make the allocation byte-identical
+                // to what the reference passes (and avoid a real over-read).
+                let input = b"\x1b[48;2;10;20;30mA\x00";
+                unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 18) };
 
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut it: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut it)
-            });
-            assert_eq!(Result::Success, unsafe {
-                get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_iterator_next(it) });
+                let mut it: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut it)
+                });
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_iterator_next(it) });
 
-            let mut cells: RowCells = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_cells_new(Some(alloc), &mut cells)
-            });
+                let mut cells: RowCells = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_new(Some(alloc), &mut cells)
+                });
 
-            assert_eq!(Result::Success, unsafe {
-                row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_cells_next(cells) });
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_cells_next(cells) });
 
-            let mut bg: RGB = RGB { r: 0, g: 0, b: 0 };
-            assert_eq!(Result::Success, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::BgColor,
-                    &mut bg as *mut _ as *mut c_void,
-                )
-            });
-            // try testing.expectEqual(@as(u8, 10), bg.r);
-            assert_eq!(10u8, bg.r);
-            assert_eq!(20u8, bg.g);
-            assert_eq!(30u8, bg.b);
+                let mut bg: RGB = RGB { r: 0, g: 0, b: 0 };
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::BgColor,
+                        &mut bg as *mut _ as *mut c_void,
+                    )
+                });
+                // try testing.expectEqual(@as(u8, 10), bg.r);
+                assert_eq!(10u8, bg.r);
+                assert_eq!(20u8, bg.g);
+                assert_eq!(30u8, bg.b);
 
-            unsafe { row_cells_free(cells) };
-            unsafe { row_iterator_free(it) };
-        });
+                unsafe { row_cells_free(cells) };
+                unsafe { row_iterator_free(it) };
+            },
+        );
     });
 }
 
@@ -1197,58 +1272,63 @@ fn render_row_cells_bg_color_from_style() {
 #[test]
 fn render_row_cells_bg_color_from_content_tag() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            // Set an RGB background and then erase the line. The erased cells
-            // should carry the background color via the content tag (bg_color_rgb)
-            // rather than through the style.
-            // terminal_c.vt_write(terminal, "\x1b[48;2;10;20;30m\x1b[2K", 21);
-            //
-            // Sentinel-terminated to match the reference's `[20:0]u8` literal:
-            // count 21 reads an in-bounds 0x00 as the 21st byte. See
-            // render_row_cells_bg_color_from_style for the rationale.
-            let input = b"\x1b[48;2;10;20;30m\x1b[2K\x00";
-            unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 21) };
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                // Set an RGB background and then erase the line. The erased cells
+                // should carry the background color via the content tag (bg_color_rgb)
+                // rather than through the style.
+                // terminal_c.vt_write(terminal, "\x1b[48;2;10;20;30m\x1b[2K", 21);
+                //
+                // Sentinel-terminated to match the reference's `[20:0]u8` literal:
+                // count 21 reads an in-bounds 0x00 as the 21st byte. See
+                // render_row_cells_bg_color_from_style for the rationale.
+                let input = b"\x1b[48;2;10;20;30m\x1b[2K\x00";
+                unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 21) };
 
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut it: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut it)
-            });
-            assert_eq!(Result::Success, unsafe {
-                get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_iterator_next(it) });
+                let mut it: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut it)
+                });
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_iterator_next(it) });
 
-            let mut cells: RowCells = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_cells_new(Some(alloc), &mut cells)
-            });
+                let mut cells: RowCells = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_new(Some(alloc), &mut cells)
+                });
 
-            assert_eq!(Result::Success, unsafe {
-                row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_cells_next(cells) });
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_cells_next(cells) });
 
-            let mut bg: RGB = RGB { r: 0, g: 0, b: 0 };
-            assert_eq!(Result::Success, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::BgColor,
-                    &mut bg as *mut _ as *mut c_void,
-                )
-            });
-            assert_eq!(10u8, bg.r);
-            assert_eq!(20u8, bg.g);
-            assert_eq!(30u8, bg.b);
+                let mut bg: RGB = RGB { r: 0, g: 0, b: 0 };
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::BgColor,
+                        &mut bg as *mut _ as *mut c_void,
+                    )
+                });
+                assert_eq!(10u8, bg.r);
+                assert_eq!(20u8, bg.g);
+                assert_eq!(30u8, bg.b);
 
-            unsafe { row_cells_free(cells) };
-            unsafe { row_iterator_free(it) };
-        });
+                unsafe { row_cells_free(cells) };
+                unsafe { row_iterator_free(it) };
+            },
+        );
     });
 }
 
@@ -1256,49 +1336,54 @@ fn render_row_cells_bg_color_from_content_tag() {
 #[test]
 fn render_row_cells_fg_color_no_foreground() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            // Write plain text (no foreground color set).
-            let input = b"hello";
-            unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 5) };
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                // Write plain text (no foreground color set).
+                let input = b"hello";
+                unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 5) };
 
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut it: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut it)
-            });
-            assert_eq!(Result::Success, unsafe {
-                get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_iterator_next(it) });
+                let mut it: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut it)
+                });
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_iterator_next(it) });
 
-            let mut cells: RowCells = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_cells_new(Some(alloc), &mut cells)
-            });
+                let mut cells: RowCells = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_new(Some(alloc), &mut cells)
+                });
 
-            assert_eq!(Result::Success, unsafe {
-                row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_cells_next(cells) });
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_cells_next(cells) });
 
-            // No foreground set, should return invalid_value.
-            let mut fg: RGB = RGB { r: 0, g: 0, b: 0 };
-            assert_eq!(Result::InvalidValue, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::FgColor,
-                    &mut fg as *mut _ as *mut c_void,
-                )
-            });
+                // No foreground set, should return invalid_value.
+                let mut fg: RGB = RGB { r: 0, g: 0, b: 0 };
+                assert_eq!(Result::InvalidValue, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::FgColor,
+                        &mut fg as *mut _ as *mut c_void,
+                    )
+                });
 
-            unsafe { row_cells_free(cells) };
-            unsafe { row_iterator_free(it) };
-        });
+                unsafe { row_cells_free(cells) };
+                unsafe { row_iterator_free(it) };
+            },
+        );
     });
 }
 
@@ -1306,56 +1391,61 @@ fn render_row_cells_fg_color_no_foreground() {
 #[test]
 fn render_row_cells_fg_color_from_style() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            // Set an RGB foreground via SGR 38;2;R;G;B and write text.
-            // terminal_c.vt_write(terminal, "\x1b[38;2;10;20;30mA", 18);
-            //
-            // Sentinel-terminated to match the reference's `[17:0]u8` literal:
-            // count 18 reads an in-bounds 0x00 as the 18th byte. See
-            // render_row_cells_bg_color_from_style for the rationale.
-            let input = b"\x1b[38;2;10;20;30mA\x00";
-            unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 18) };
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                // Set an RGB foreground via SGR 38;2;R;G;B and write text.
+                // terminal_c.vt_write(terminal, "\x1b[38;2;10;20;30mA", 18);
+                //
+                // Sentinel-terminated to match the reference's `[17:0]u8` literal:
+                // count 18 reads an in-bounds 0x00 as the 18th byte. See
+                // render_row_cells_bg_color_from_style for the rationale.
+                let input = b"\x1b[38;2;10;20;30mA\x00";
+                unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 18) };
 
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut it: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut it)
-            });
-            assert_eq!(Result::Success, unsafe {
-                get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_iterator_next(it) });
+                let mut it: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut it)
+                });
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_iterator_next(it) });
 
-            let mut cells: RowCells = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_cells_new(Some(alloc), &mut cells)
-            });
+                let mut cells: RowCells = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_new(Some(alloc), &mut cells)
+                });
 
-            assert_eq!(Result::Success, unsafe {
-                row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_cells_next(cells) });
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_cells_next(cells) });
 
-            let mut fg: RGB = RGB { r: 0, g: 0, b: 0 };
-            assert_eq!(Result::Success, unsafe {
-                row_cells_get(
-                    cells,
-                    RowCellsData::FgColor,
-                    &mut fg as *mut _ as *mut c_void,
-                )
-            });
-            assert_eq!(10u8, fg.r);
-            assert_eq!(20u8, fg.g);
-            assert_eq!(30u8, fg.b);
+                let mut fg: RGB = RGB { r: 0, g: 0, b: 0 };
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_get(
+                        cells,
+                        RowCellsData::FgColor,
+                        &mut fg as *mut _ as *mut c_void,
+                    )
+                });
+                assert_eq!(10u8, fg.r);
+                assert_eq!(20u8, fg.g);
+                assert_eq!(30u8, fg.b);
 
-            unsafe { row_cells_free(cells) };
-            unsafe { row_iterator_free(it) };
-        });
+                unsafe { row_cells_free(cells) };
+                unsafe { row_iterator_free(it) };
+            },
+        );
     });
 }
 
@@ -1363,38 +1453,43 @@ fn render_row_cells_fg_color_from_style() {
 #[test]
 fn render_colors_get_supports_truncated_sized_struct() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            // var colors: Colors = std.mem.zeroes(Colors);
-            let mut colors: Colors = unsafe { std::mem::zeroed() };
-            // const sentinel: colorpkg.RGB.C = .{ .r = 0xAA, .g = 0xBB, .b = 0xCC };
-            let sentinel: RGB = RGB {
-                r: 0xAA,
-                g: 0xBB,
-                b: 0xCC,
-            };
-            // for (&colors.palette) |*entry| entry.* = sentinel;
-            for entry in colors.palette.iter_mut() {
-                *entry = sentinel;
-            }
+                // var colors: Colors = std.mem.zeroes(Colors);
+                let mut colors: Colors = unsafe { std::mem::zeroed() };
+                // const sentinel: colorpkg.RGB.C = .{ .r = 0xAA, .g = 0xBB, .b = 0xCC };
+                let sentinel: RGB = RGB {
+                    r: 0xAA,
+                    g: 0xBB,
+                    b: 0xCC,
+                };
+                // for (&colors.palette) |*entry| entry.* = sentinel;
+                for entry in colors.palette.iter_mut() {
+                    *entry = sentinel;
+                }
 
-            // colors.size = @offsetOf(Colors, "palette") + @sizeOf(colorpkg.RGB.C) * 2;
-            let palette_offset = colors_struct_type().offset_of("palette");
-            colors.size = palette_offset + std::mem::size_of::<RGB>() * 2;
-            assert_eq!(Result::Success, unsafe { colors_get(state, &mut colors) });
+                // colors.size = @offsetOf(Colors, "palette") + @sizeOf(colorpkg.RGB.C) * 2;
+                let palette_offset = colors_struct_type().offset_of("palette");
+                colors.size = palette_offset + std::mem::size_of::<RGB>() * 2;
+                assert_eq!(Result::Success, unsafe { colors_get(state, &mut colors) });
 
-            let state_colors = unsafe { &(*state).state.colors };
-            // try testing.expectEqual(state_colors.palette[0].cval(), colors.palette[0]);
-            assert_eq!(state_colors.palette[0], colors.palette[0]);
-            assert_eq!(state_colors.palette[1], colors.palette[1]);
-            // try testing.expectEqual(sentinel, colors.palette[2]);
-            assert_eq!(sentinel, colors.palette[2]);
-        });
+                let state_colors = unsafe { &(*state).state.colors };
+                // try testing.expectEqual(state_colors.palette[0].cval(), colors.palette[0]);
+                assert_eq!(state_colors.palette[0], colors.palette[0]);
+                assert_eq!(state_colors.palette[1], colors.palette[1]);
+                // try testing.expectEqual(sentinel, colors.palette[2]);
+                assert_eq!(sentinel, colors.palette[2]);
+            },
+        );
     });
 }
 
@@ -1402,37 +1497,42 @@ fn render_colors_get_supports_truncated_sized_struct() {
 #[test]
 fn render_get_multi_success() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            // var cols: u16 = 0; var rows: u16 = 0; var written: usize = 0;
-            let mut cols: u16 = 0;
-            let mut rows: u16 = 0;
-            let mut written: usize = 0;
+                // var cols: u16 = 0; var rows: u16 = 0; var written: usize = 0;
+                let mut cols: u16 = 0;
+                let mut rows: u16 = 0;
+                let mut written: usize = 0;
 
-            // const keys = [_]Data{ .cols, .rows };
-            let keys = [Data::Cols, Data::Rows];
-            let mut values = [
-                &mut cols as *mut _ as *mut c_void,
-                &mut rows as *mut _ as *mut c_void,
-            ];
-            assert_eq!(Result::Success, unsafe {
-                get_multi(
-                    state,
-                    keys.len(),
-                    keys.as_ptr(),
-                    values.as_mut_ptr(),
-                    &mut written,
-                )
-            });
-            assert_eq!(keys.len(), written);
-            assert_eq!(80, cols);
-            assert_eq!(24, rows);
-        });
+                // const keys = [_]Data{ .cols, .rows };
+                let keys = [Data::Cols, Data::Rows];
+                let mut values = [
+                    &mut cols as *mut _ as *mut c_void,
+                    &mut rows as *mut _ as *mut c_void,
+                ];
+                assert_eq!(Result::Success, unsafe {
+                    get_multi(
+                        state,
+                        keys.len(),
+                        keys.as_ptr(),
+                        values.as_mut_ptr(),
+                        &mut written,
+                    )
+                });
+                assert_eq!(keys.len(), written);
+                assert_eq!(80, cols);
+                assert_eq!(24, rows);
+            },
+        );
     });
 }
 
@@ -1459,43 +1559,48 @@ fn render_get_multi_null_returns_invalid_value() {
 #[test]
 fn render_row_get_multi_success() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut it: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut it)
-            });
+                let mut it: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut it)
+                });
 
-            assert_eq!(Result::Success, unsafe {
-                get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_iterator_next(it) });
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_iterator_next(it) });
 
-            // var dirty: bool = true; var written: usize = 0;
-            let mut dirty: bool = true;
-            let mut written: usize = 0;
+                // var dirty: bool = true; var written: usize = 0;
+                let mut dirty: bool = true;
+                let mut written: usize = 0;
 
-            // const keys = [_]RowData{.dirty};
-            let keys = [RowData::Dirty];
-            let mut values = [&mut dirty as *mut _ as *mut c_void];
-            assert_eq!(Result::Success, unsafe {
-                row_get_multi(
-                    it,
-                    keys.len(),
-                    keys.as_ptr(),
-                    values.as_mut_ptr(),
-                    &mut written,
-                )
-            });
-            assert_eq!(keys.len(), written);
+                // const keys = [_]RowData{.dirty};
+                let keys = [RowData::Dirty];
+                let mut values = [&mut dirty as *mut _ as *mut c_void];
+                assert_eq!(Result::Success, unsafe {
+                    row_get_multi(
+                        it,
+                        keys.len(),
+                        keys.as_ptr(),
+                        values.as_mut_ptr(),
+                        &mut written,
+                    )
+                });
+                assert_eq!(keys.len(), written);
 
-            unsafe { row_iterator_free(it) };
-        });
+                unsafe { row_iterator_free(it) };
+            },
+        );
     });
 }
 
@@ -1520,57 +1625,62 @@ fn render_row_get_multi_null_returns_invalid_value() {
 #[test]
 fn render_row_cells_get_multi_success() {
     with_test_allocator(|alloc| {
-        with_terminal_state(alloc, 80, 24, |terminal_new_result, terminal, state_new_result, state| {
-            // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
-            assert_eq!(Result::Success, terminal_new_result);
-            // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
-            assert_eq!(Result::Success, state_new_result);
-            let input = b"A";
-            unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 1) };
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                // try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &terminal, .{ ... }));
+                assert_eq!(Result::Success, terminal_new_result);
+                // try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+                assert_eq!(Result::Success, state_new_result);
+                let input = b"A";
+                unsafe { terminal_c::vt_write(terminal, input.as_ptr(), 1) };
 
-            assert_eq!(Result::Success, unsafe { update(state, terminal) });
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
-            let mut it: RowIterator = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_iterator_new(Some(alloc), &mut it)
-            });
+                let mut it: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut it)
+                });
 
-            assert_eq!(Result::Success, unsafe {
-                get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_iterator_next(it) });
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_iterator_next(it) });
 
-            let mut cells: RowCells = std::ptr::null_mut();
-            assert_eq!(Result::Success, unsafe {
-                row_cells_new(Some(alloc), &mut cells)
-            });
+                let mut cells: RowCells = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_new(Some(alloc), &mut cells)
+                });
 
-            assert_eq!(Result::Success, unsafe {
-                row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
-            });
-            assert!(unsafe { row_cells_next(cells) });
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_cells_next(cells) });
 
-            // var raw: row.CRow = undefined; var written: usize = 0;
-            let mut raw: row::CRow = 0;
-            let mut written: usize = 0;
+                // var raw: row.CRow = undefined; var written: usize = 0;
+                let mut raw: row::CRow = 0;
+                let mut written: usize = 0;
 
-            // const keys = [_]RowCellsData{.raw};
-            let keys = [RowCellsData::Raw];
-            let mut values = [&mut raw as *mut _ as *mut c_void];
-            assert_eq!(Result::Success, unsafe {
-                row_cells_get_multi(
-                    cells,
-                    keys.len(),
-                    keys.as_ptr(),
-                    values.as_mut_ptr(),
-                    &mut written,
-                )
-            });
-            assert_eq!(keys.len(), written);
+                // const keys = [_]RowCellsData{.raw};
+                let keys = [RowCellsData::Raw];
+                let mut values = [&mut raw as *mut _ as *mut c_void];
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_get_multi(
+                        cells,
+                        keys.len(),
+                        keys.as_ptr(),
+                        values.as_mut_ptr(),
+                        &mut written,
+                    )
+                });
+                assert_eq!(keys.len(), written);
 
-            unsafe { row_cells_free(cells) };
-            unsafe { row_iterator_free(it) };
-        });
+                unsafe { row_cells_free(cells) };
+                unsafe { row_iterator_free(it) };
+            },
+        );
     });
 }
 

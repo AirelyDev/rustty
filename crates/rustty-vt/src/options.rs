@@ -178,5 +178,4 @@ mod tests {
         assert_eq!(Some("dev"), VERSION_PRE);
         assert_eq!(None, VERSION_BUILD);
     }
-
 }
