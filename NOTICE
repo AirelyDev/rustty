@@ -1,0 +1,69 @@
+rustty — Third-Party Notices
+============================
+
+rustty is a full-fidelity Rust port of Ghostty, a terminal emulator by
+Mitchell Hashimoto and the Ghostty contributors.
+
+  Ghostty — https://github.com/ghostty-org/ghostty
+  Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors
+  MIT License
+
+rustty's source is translated line-by-line from Ghostty's Zig; see LICENSE. This
+NOTICE credits the upstream projects that Ghostty (and therefore rustty) builds on.
+The authoritative license text for every vendored C/C++ dependency is its
+LICENSE/COPYING file checked in under `crates-sys/*/vendor/`.
+
+
+Ported Zig dependencies
+-----------------------
+Ghostty vendors these Zig libraries; rustty ports the subset it uses into pure-Rust
+crates. Each is credited under its upstream license:
+
+  libvaxis  — TUI library — Tim Culverhouse (rockorager) — MIT
+              → rustty-vaxis
+  zf        — fuzzy finder — Nathan Craddock — MIT
+              → rustty-zf
+  uucode    — Unicode data (0.1.0) — Jacob Sandlund — MIT
+              → rustty-vaxis/src/uucode (+ vendored UCD 16.0.0, see below)
+  z2d       — 2D vector graphics — upstream https://github.com/vancluever/z2d
+              (no license file was present in the pinned tarball; confirm the
+              upstream license before any public release)
+              → rustty-z2d
+  libxev    — event loop — Mitchell Hashimoto — MIT
+              → rustty-xev
+
+
+Vendored C/C++ dependencies
+---------------------------
+Source is checked in under `crates-sys/*/vendor/`, each retaining its own license
+file (path shown; that file is authoritative):
+
+  FreeType        crates-sys/freetype-sys/vendor/LICENSE.TXT   (FTL / GPLv2)
+  HarfBuzz        crates-sys/harfbuzz-sys/vendor/COPYING       (Old MIT)
+  Fontconfig      crates-sys/fontconfig-sys/                   (MIT-style; currently a stub)
+  Oniguruma       crates-sys/oniguruma-sys/vendor/LICENSE      (BSD-2-Clause)
+  simdutf         crates-sys/simdutf-sys/                      (Apache-2.0 / MIT / BSD-3)
+  Highway         crates-sys/highway-sys/vendor/LICENSE(-BSD3) (Apache-2.0 / BSD-3)
+  Wuffs           crates-sys/wuffs-sys/vendor/LICENSE-{APACHE,MIT} (Apache-2.0 / MIT)
+  libpng          crates-sys/libpng-sys/vendor/LICENSE         (PNG Reference Library License)
+  zlib            crates-sys/zlib-sys/                          (zlib License)
+  glslang         crates-sys/glslang-sys/vendor/LICENSE        (BSD-3-Clause + others)
+  SPIRV-Cross     crates-sys/spirv-cross-sys/vendor/LICENSE    (Apache-2.0)
+  Dear ImGui      crates-sys/dcimgui-sys/vendor/imgui/LICENSE.txt (MIT)
+  Sentry/Breakpad crates-sys/sentry-sys/vendor/LICENSE         (MIT / BSD-3)
+  gettext         crates-sys/gettext-sys/                      (LGPL/GPL — build-time only)
+
+
+Unicode data
+------------
+Unicode Character Database (UCD 16.0.0) files under `crates/rustty-vaxis/ucd/` are
+Copyright (c) Unicode, Inc., distributed under the Unicode License Agreement.
+See `crates/rustty-vaxis/ucd/PROVENANCE.md`.
+
+
+Bundled font assets
+-------------------
+Font binaries under `crates/rustty-font/res/` (JetBrains Mono, Julia Mono, Noto Color
+Emoji, Symbols Nerd Font, and others) are distributed under their own licenses (SIL
+Open Font License and similar); accompanying license/attribution files ship alongside
+them in that directory.
