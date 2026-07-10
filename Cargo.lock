@@ -632,7 +632,9 @@ dependencies = [
  "rustty-lib",
  "rustty-os",
  "rustty-terminfo",
+ "rustty-vaxis",
  "rustty-vt",
+ "rustty-zf",
 ]
 
 [[package]]

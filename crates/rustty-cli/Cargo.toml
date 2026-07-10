@@ -68,6 +68,11 @@ rustty-lib = { workspace = true }
 # rustty-vaxis is a low/mid vendored crate with NO edge back to cli/config/apprt,
 # so `cli -> vaxis` is a downward edge — acyclic (G7/R4).
 rustty-vaxis = { workspace = true }
+# WIRE2 (cli C5 finale): the interactive `list_themes` fuzzy-finder preview picker
+# ranks theme names via `zf::rank`. rustty-zf is a low pure-leaf vendored-dep-port
+# crate with NO edge back to cli/config/apprt, so `cli -> zf` is a downward edge —
+# acyclic (G7/R4).
+rustty-zf = { workspace = true }
 
 # Build-time codegen of the `help_strings.Action` table (R1 port of
 # helpgen.genActions): build.rs scans each cli action module's `pub fn run` doc.

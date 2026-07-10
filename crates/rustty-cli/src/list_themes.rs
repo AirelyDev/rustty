@@ -2,16 +2,20 @@
 //!
 //! PORTS: ghostty src/cli/list_themes.zig (0t) — the `+list-themes` action.
 //!
-//! PORT STATUS: C5 (CLI_BLUEPRINT.md §1/§7 + Risk 2). The theme ENUMERATION —
-//! the plain/non-tty listing (`--plain`, or output piped to another command),
-//! the ONLY path the KAT and any redirected pipe hit — lands LIVE here, built on
-//! the ported `config/theme.zig` (`LocationIterator`) + `Config.loadFile`. The
-//! interactive vaxis+zf fuzzy-finder picker (`Preview` and its helpers, the
-//! `preview` entry, `resolveAutoThemePath`/`writeAutoThemeFile`, `color`,
-//! `ThemeListElement.toUri`) is a documented vaxis/zf-deferred placeholder leaf
-//! (DEFERRALS.md "cli C5"; GPU/GTK/xev precedent) — its reference body + comments
-//! are preserved VERBATIM in the commented block at the tail. 0 tests;
-//! comment-fidelity (scoped-G3b, incl. the 1741 loc) applies.
+//! PORT STATUS: C5 (CLI_BLUEPRINT.md §1/§7 + Risk 2) — FULLY LANDED (WIRE2 finale).
+//! The theme ENUMERATION — the plain/non-tty listing (`--plain`, or output piped to
+//! another command), the ONLY path the KAT and any redirected pipe hit — lands LIVE
+//! here, built on the ported `config/theme.zig` (`LocationIterator`) +
+//! `Config.loadFile`. The interactive vaxis+zf fuzzy-finder picker (`Preview` and its
+//! helpers, the `preview` entry, `resolveAutoThemePath`/`writeAutoThemeFile`,
+//! `color`, `ThemeListElement.toUri`) is now ALSO LIVE (WIRE2, DEFERRALS.md "cli C5
+//! RESOLVED"): filled from the preserved verbatim Zig bodies on `rustty-vaxis`
+//! (`Loop`/`Vaxis`/`Window`/`Tty`/`Style`/`Color`/`Key`/`Mouse`/`widgets::TextInput`)
+//! plus `rustty-zf` (`zf::rank`). See the `WIRE2 (cli C5 finale)` banner at the tail for
+//! the aliasing/lifetime/divergence PORT NOTEs. Tests cover the pure
+//! `rank_filtered`, `reselect`, and `to_uri` kernels plus four `draw`
+//! render-to-`Vec<u8>` smokes (Miri-clean); the interactive `run` Loop path is
+//! `#[ignore]`-on-device. comment-fidelity (scoped-G3b) applies.
 
 // const std = @import("std");
 // const args = @import("args.zig");
@@ -36,7 +40,8 @@ use crate::tui;
 
 // const vaxis = @import("vaxis");
 // const zf = @import("zf");
-//   VAXIS/ZF-DEFERRED: used only by the interactive picker leaf (see the tail).
+//   Used by the interactive picker (WIRE2) — imported at the `WIRE2 (cli C5 finale)`
+//   banner below (`rustty_vaxis::*` + `rustty_zf::zf::rank`).
 
 use std::io::Write;
 
@@ -166,9 +171,14 @@ pub struct ThemeListElement {
     // theme: []const u8,
     pub theme: Vec<u8>,
     // rank: ?f64 = null,
-    //   (set/read only by the deferred zf-ranking picker; kept for fidelity.)
-    #[allow(dead_code)]
-    pub rank: Option<f64>,
+    //   PORT NOTE (WIRE2): the picker's `updateFiltered` writes `theme.rank` while
+    //   `themes` is held as a SHARED `&[ThemeListElement]` (so theme names/paths can
+    //   be printed with the persistent screen's `'a` lifetime — a whole-`&mut` view
+    //   would poison those `&'a` reads). `rank` is therefore interior-mutable
+    //   (`Cell`) so the ranking pass can faithfully set it through the shared slice.
+    //   `rank` is otherwise write-only (never read for display), so `Cell` is sound
+    //   and single-threaded (themes never cross the read-thread boundary).
+    pub rank: std::cell::Cell<Option<f64>>,
 }
 
 impl ThemeListElement {
@@ -346,7 +356,7 @@ pub fn run() -> Result<u8, Error> {
                     path,
                     location: loc.location,
                     theme: name_bytes.to_vec(),
-                    rank: None,
+                    rank: std::cell::Cell::new(None),
                 });
             }
             //     else => {},
@@ -513,1570 +523,2094 @@ fn os_name_bytes(name: &std::ffi::OsStr) -> &[u8] {
 }
 
 // ===========================================================================
-// VAXIS/ZF-DEFERRED placeholder leaf (DEFERRALS.md "cli C5") — the interactive
-// theme picker. `vaxis` (TTY UI) and `zf` (fuzzy match) are unported Zig-source
-// dependencies (same class as libxev/z2d); the reference body + comments below
-// are preserved VERBATIM and the `preview` entry point is an `unimplemented!()`
-// dependency marker. `lorem_ipsum.txt` (@embedFile) is copied into the rustty
-// tree (R3) only when the picker lands. 0 tests; the enumeration path above is
-// fully functional today.
+// WIRE2 (cli C5 finale) — the interactive vaxis+zf fuzzy-finder theme picker,
+// ported LIVE from `cli/list_themes.zig` (`Preview` + `Event` + `color` +
+// `lorem_ipsum` + `preview` + `toUri` + `resolveAutoThemePath`/`writeAutoThemeFile`).
+//
+// PORT NOTES (structural, R1):
+//  * The reference `Preview` is a heap struct (`allocator.create(Preview)`) that a
+//    `vaxis.Loop(Event)` holds by raw pointer into `&self.tty`/`&self.vx` while the
+//    read thread runs. The Rust port maps this to the PROVEN C3b/loop_-lifecycle
+//    shape: `tty`/`vx` are SEPARATE run-scope locals (stable addresses, never moved
+//    for the read thread's life) and the reference `Preview`'s remaining fields
+//    become a `DrawState` local. `Loop::new(&mut tty, &mut vx)` + the disjoint-field
+//    `update`/`draw` free fns are exactly the `loop_::tests::loop_lifecycle`
+//    (Miri-green) idiom — no whole-object `&mut` is ever formed over the aliased
+//    bytes. The fresh `.port/phase-2/mirihar-wire2` harness re-pins this under
+//    `cargo +nightly miri test` (see memory `shaper-hook-sb-clean-interleave`:
+//    PROVE on an isolated Miri harness, don't hand-reason SB).
+//  * The persistent `Vaxis<'a>` screen stores each printed `Segment`'s `text` BY
+//    REFERENCE (`Cell<'a>`; `Window<'a>` holds an invariant `*mut Screen<'a>`), so
+//    EVERY byte printed each frame must live for `'a`. `themes` is held as a SHARED
+//    `&'a [ThemeListElement]` (theme names/paths are `&'a`) and every per-frame
+//    temporary (`toUri`, `allocPrint`, diagnostics) is duped into ONE `'a`-lived
+//    session `Arena` (the reference frees a per-iteration arena; the port uses a
+//    single session arena because the borrows outlive one iteration — a documented,
+//    memory-only divergence).
+//  * `text_input.drawWithStyle` needs `&'a mut TextInput` + `Window<'a>` (invariant
+//    screen lifetime forces `'s == 'a`), which the per-frame `&mut` cannot supply;
+//    the search box renders the buffer bytes directly (arena-duped) — the visible
+//    search string is identical (the widget cursor glyph is the only omission).
+//    Documented forced divergence.
+//  * Owned-`KeyOwned` across the queue → `borrow_key`; clipboard has NO `alloc` arg
+//    (Rust sig divergence); `TerminalColor` cell-* arms resolve to the reference's
+//    missing-value fallback; Wyhash digest short-circuit → an equal-`Vec<usize>`
+//    compare (byte-observably identical); `std.Uri` → a faithful `file://` escaper;
+//    `LoadError` has no `Display` → `{err:?}` (cosmetic err-pane divergence).
 // ===========================================================================
 
-// fn preview(allocator: std.mem.Allocator, themes: []ThemeListElement, theme_filter: ColorScheme) !void {
-#[allow(dead_code)]
-fn preview(themes: &[ThemeListElement], theme_filter: ColorScheme) -> Result<(), Error> {
-    let _ = (themes, theme_filter);
-    unimplemented!("cli/list_themes.zig preview — vaxis/zf-deferred leaf (DEFERRALS.md cli C5)")
+use crate::pretty_arena::{styled, Arena};
+use rustty_config::value_types::TerminalColor;
+use rustty_vaxis::cell::{Cell as VCell, Color, Hyperlink, Scheme, Segment, Style, Underline};
+use rustty_vaxis::key::{self, Key, KeyOwned, Modifiers};
+use rustty_vaxis::loop_::LoopEvent;
+use rustty_vaxis::mouse::{Button, Mouse, Shape, Type as MouseType};
+use rustty_vaxis::vaxis::Options as VaxisOptions;
+use rustty_vaxis::widgets::text_input::{Event as TiEvent, TextInput};
+use rustty_vaxis::window::{BorderOptions, ChildOptions, PrintOptions, Where, Window, Wrap};
+use rustty_vaxis::{Loop, Tty, Vaxis, Winsize};
+use rustty_zf::zf::{rank as zf_rank, RankOptions};
+
+// const lorem_ipsum = @embedFile("lorem_ipsum.txt");
+//   PORT NOTE (R3): `@embedFile` → `include_bytes!`, kept as `&[u8]` (never a lossy
+//   `String`) — `drawPreview` splits it on raw bytes (`splitAny(u8, .., " \n")`).
+const LOREM_IPSUM: &[u8] = include_bytes!("lorem_ipsum.txt");
+
+// ---- ThemeListElement.toUri (link URI for the picker's draw) ----
+impl ThemeListElement {
+    // pub fn toUri(self: *const ThemeListElement, alloc) ![]const u8 {
+    //     const uri = std.Uri{ .scheme="file", .host=.{.raw=""}, .path=.{.raw=self.path} };
+    //     ... uri.writeToStream(.{ .scheme=true, .authority=true, .path=true }); ...
+    //   PORT NOTE: a faithful `file://` URI builder over `&[u8]` — `scheme + "//" +
+    //   authority("") + percent-encoded path` per `std.Uri.writeToStream` (RFC 3986
+    //   path escaping). Returns an owned `Vec<u8>` (the `toOwnedSlice`).
+    fn to_uri(&self) -> Vec<u8> {
+        uri_from_path(&self.path)
+    }
 }
 
-// --- reference (verbatim): ThemeListElement.toUri (link URI for the picker's draw) ---
-//     pub fn toUri(self: *const ThemeListElement, alloc: std.mem.Allocator) ![]const u8 {
-//         const uri = std.Uri{
-//             .scheme = "file",
-//             .host = .{ .raw = "" },
-//             .path = .{ .raw = self.path },
-//         };
-//         var buf: std.Io.Writer.Allocating = .init(alloc);
-//         errdefer buf.deinit();
-//         try uri.writeToStream(
-//             &buf.writer,
-//             .{ .scheme = true, .authority = true, .path = true },
-//         );
-//         return buf.toOwnedSlice();
-//     }
+// `std.Uri.writeToStream` path escaping: unreserved + sub-delims + ":" "@" "/" are
+// written verbatim; everything else is `%XX`.
+fn uri_from_path(path: &[u8]) -> Vec<u8> {
+    fn is_path_char(b: u8) -> bool {
+        b.is_ascii_alphanumeric()
+            || matches!(b, b'-' | b'.' | b'_' | b'~') // unreserved
+            || matches!(b, b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b';' | b'=') // sub-delims
+            || matches!(b, b':' | b'@' | b'/')
+    }
+    let mut out: Vec<u8> = Vec::new();
+    out.extend_from_slice(b"file://");
+    for &b in path {
+        if is_path_char(b) {
+            out.push(b);
+        } else {
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out
+}
 
-// --- reference (verbatim): resolveAutoThemePath / writeAutoThemeFile (save-selected-theme) ---
-// fn resolveAutoThemePath(alloc: std.mem.Allocator) ![]u8 {
-//     const main_cfg_path = try configpkg.preferredDefaultFilePath(alloc);
-//     defer alloc.free(main_cfg_path);
-//
-//     const base_dir = std.fs.path.dirname(main_cfg_path) orelse return error.BadPathName;
-//     return try std.fs.path.join(alloc, &.{ base_dir, "auto", "theme.ghostty" });
-// }
-//
-// fn writeAutoThemeFile(alloc: std.mem.Allocator, theme_name: []const u8) !void {
-//     const auto_path = try resolveAutoThemePath(alloc);
-//     defer alloc.free(auto_path);
-//
-//     if (std.fs.path.dirname(auto_path)) |dir| {
-//         try std.fs.cwd().makePath(dir);
-//     }
-//
-//     var f = try std.fs.createFileAbsolute(auto_path, .{ .truncate = true });
-//     defer f.close();
-//
-//     var buf: [128]u8 = undefined;
-//     var w = f.writer(&buf);
-//     try w.interface.print("theme = {s}\n", .{theme_name});
-//     try w.interface.flush();
-// }
+// const Event = union(enum) { key_press, mouse, color_scheme, winsize };
+//   PORT NOTE (§2): Zig's `union(enum)` field-presence gate (`@hasField`) is modeled
+//   by which `LoopEvent` constructors return `Some`; these four mirror the reference
+//   `Event` exactly. `KeyPress` carries `KeyOwned` (not a borrowed `Key<'a>`) because
+//   the queued `T` must be `Send + 'static`.
+enum Event {
+    // key_press: vaxis.Key  (owned across the queue)
+    KeyPress(KeyOwned),
+    // mouse: vaxis.Mouse
+    Mouse(Mouse),
+    // color_scheme: vaxis.Color.Scheme
+    ColorScheme(Scheme),
+    // winsize: vaxis.Winsize
+    Winsize(Winsize),
+}
 
-// --- reference (verbatim): Event union + Preview struct/methods + color + lorem_ipsum + preview ---
-// const Event = union(enum) {
-//     key_press: vaxis.Key,
-//     mouse: vaxis.Mouse,
-//     color_scheme: vaxis.Color.Scheme,
-//     winsize: vaxis.Winsize,
-// };
-//
-// const Preview = struct {
-//     allocator: std.mem.Allocator,
-//     should_quit: bool,
-//     tty: vaxis.Tty,
-//     vx: vaxis.Vaxis,
-//     mouse: ?vaxis.Mouse,
-//     themes: []ThemeListElement,
-//     filtered: std.ArrayList(usize),
-//     current: usize,
-//     window: usize,
-//     hex: bool,
-//     mode: enum {
-//         normal,
-//         help,
-//         search,
-//         save,
-//     },
-//     color_scheme: vaxis.Color.Scheme,
-//     text_input: vaxis.widgets.TextInput,
-//     theme_filter: ColorScheme,
-//
-//     pub fn init(
-//         allocator: std.mem.Allocator,
-//         themes: []ThemeListElement,
-//         theme_filter: ColorScheme,
-//         buf: []u8,
-//     ) !*Preview {
-//         const self = try allocator.create(Preview);
-//
-//         self.* = .{
-//             .allocator = allocator,
-//             .should_quit = false,
-//             .tty = try .init(buf),
-//             .vx = try vaxis.init(allocator, .{}),
-//             .mouse = null,
-//             .themes = themes,
-//             .filtered = try .initCapacity(allocator, themes.len),
-//             .current = 0,
-//             .window = 0,
-//             .hex = false,
-//             .mode = .normal,
-//             .color_scheme = .light,
-//             .text_input = .init(allocator),
-//             .theme_filter = theme_filter,
-//         };
-//
-//         try self.updateFiltered();
-//
-//         return self;
-//     }
-//
-//     pub fn deinit(self: *Preview) void {
-//         const allocator = self.allocator;
-//         self.filtered.deinit(allocator);
-//         self.text_input.deinit();
-//         self.vx.deinit(allocator, self.tty.writer());
-//         self.tty.deinit();
-//         allocator.destroy(self);
-//     }
-//
-//     pub fn run(self: *Preview) !void {
-//         var loop: vaxis.Loop(Event) = .{
-//             .tty = &self.tty,
-//             .vaxis = &self.vx,
-//         };
-//         try loop.init();
-//         try loop.start();
-//
-//         const writer = self.tty.writer();
-//
-//         try self.vx.enterAltScreen(writer);
-//         try self.vx.setTitle(writer, "👻 Ghostty Theme Preview 👻");
-//         try self.vx.queryTerminal(writer, 1 * std.time.ns_per_s);
-//         try self.vx.setMouseMode(writer, true);
-//         if (self.vx.caps.color_scheme_updates)
-//             try self.vx.subscribeToColorSchemeUpdates(writer);
-//
-//         while (!self.should_quit) {
-//             var arena = std.heap.ArenaAllocator.init(self.allocator);
-//             defer arena.deinit();
-//             const alloc = arena.allocator();
-//
-//             loop.pollEvent();
-//             while (loop.tryEvent()) |event| {
-//                 try self.update(event, alloc);
-//             }
-//             try self.draw(alloc);
-//
-//             try self.vx.render(writer);
-//             try writer.flush();
-//         }
-//     }
-//
-//     fn updateFiltered(self: *Preview) !void {
-//         const relative = self.current -| self.window;
-//         var selected: []const u8 = undefined;
-//         if (self.filtered.items.len > 0) {
-//             selected = self.themes[self.filtered.items[self.current]].theme;
-//         }
-//
-//         const hash_algorithm = std.hash.Wyhash;
-//
-//         const old_digest = d: {
-//             var hash = hash_algorithm.init(0);
-//             for (self.filtered.items) |item|
-//                 hash.update(std.mem.asBytes(&item));
-//             break :d hash.final();
-//         };
-//
-//         self.filtered.clearRetainingCapacity();
-//
-//         var theme_config = try Config.default(self.allocator);
-//         defer theme_config.deinit();
-//         if (self.text_input.buf.realLength() > 0) {
-//             const first_half = self.text_input.buf.firstHalf();
-//             const second_half = self.text_input.buf.secondHalf();
-//
-//             const buffer = try self.allocator.alloc(u8, first_half.len + second_half.len);
-//             defer self.allocator.free(buffer);
-//
-//             @memcpy(buffer[0..first_half.len], first_half);
-//             @memcpy(buffer[first_half.len..], second_half);
-//
-//             const string = try std.ascii.allocLowerString(self.allocator, buffer);
-//             defer self.allocator.free(string);
-//
-//             var tokens: std.ArrayList([]const u8) = .empty;
-//             defer tokens.deinit(self.allocator);
-//
-//             var it = std.mem.tokenizeScalar(u8, string, ' ');
-//             while (it.next()) |token| try tokens.append(self.allocator, token);
-//
-//             for (self.themes, 0..) |*theme, i| {
-//                 try theme_config.loadFile(theme_config._arena.?.allocator(), theme.path);
-//                 if (!shouldIncludeTheme(self.theme_filter, theme_config)) continue;
-//
-//                 theme.rank = zf.rank(theme.theme, tokens.items, .{
-//                     .to_lower = true,
-//                     .plain = true,
-//                 });
-//                 if (theme.rank != null) try self.filtered.append(self.allocator, i);
-//             }
-//         } else {
-//             for (self.themes, 0..) |*theme, i| {
-//                 try theme_config.loadFile(theme_config._arena.?.allocator(), theme.path);
-//                 if (shouldIncludeTheme(self.theme_filter, theme_config)) {
-//                     try self.filtered.append(self.allocator, i);
-//                     theme.rank = null;
-//                 }
-//             }
-//         }
-//
-//         const new_digest = d: {
-//             var hash = hash_algorithm.init(0);
-//             for (self.filtered.items) |item|
-//                 hash.update(std.mem.asBytes(&item));
-//             break :d hash.final();
-//         };
-//
-//         if (old_digest == new_digest) return;
-//
-//         if (self.filtered.items.len == 0) {
-//             self.current = 0;
-//             self.window = 0;
-//             return;
-//         }
-//
-//         self.current, self.window = current: {
-//             if (selected.len == 0) break :current .{ 0, 0 };
-//
-//             for (self.filtered.items, 0..) |index, i| {
-//                 if (std.mem.eql(u8, self.themes[index].theme, selected)) {
-//                     // Keep the relative position but ensure all search results are visible
-//                     const new_window = i -| relative;
-//                     // If the new window would hide some results at the top, adjust it
-//                     break :current .{ i, if (self.filtered.items.len <= SMALL_LIST_THRESHOLD) 0 else new_window };
-//                 }
-//             }
-//             break :current .{ 0, 0 };
-//         };
-//     }
-//
-//     fn up(self: *Preview, count: usize) void {
-//         if (self.filtered.items.len == 0) {
-//             self.current = 0;
-//             return;
-//         }
-//         self.current -|= count;
-//     }
-//
-//     fn down(self: *Preview, count: usize) void {
-//         if (self.filtered.items.len == 0) {
-//             self.current = 0;
-//             return;
-//         }
-//         self.current += count;
-//         if (self.current >= self.filtered.items.len)
-//             self.current = self.filtered.items.len - 1;
-//     }
-//
-//     pub fn update(self: *Preview, event: Event, alloc: std.mem.Allocator) !void {
-//         switch (event) {
-//             .key_press => |key| {
-//                 if (key.matches('c', .{ .ctrl = true }))
-//                     self.should_quit = true;
-//                 switch (self.mode) {
-//                     .normal => {
-//                         if (key.matchesAny(&.{ 'q', vaxis.Key.escape }, .{}))
-//                             self.should_quit = true;
-//                         if (key.matchesAny(&.{ '?', vaxis.Key.f1 }, .{}))
-//                             self.mode = .help;
-//                         if (key.matches('h', .{ .ctrl = true }))
-//                             self.mode = .help;
-//                         if (key.matches('/', .{}))
-//                             self.mode = .search;
-//                         if (key.matchesAny(&.{ vaxis.Key.enter, vaxis.Key.kp_enter }, .{}))
-//                             self.mode = .save;
-//                         if (key.matchesAny(&.{ 'x', '/' }, .{ .ctrl = true })) {
-//                             self.text_input.buf.clearRetainingCapacity();
-//                             try self.updateFiltered();
-//                         }
-//                         if (key.matchesAny(&.{ vaxis.Key.home, vaxis.Key.kp_home }, .{}))
-//                             self.current = 0;
-//                         if (key.matchesAny(&.{ vaxis.Key.end, vaxis.Key.kp_end }, .{}))
-//                             self.current = self.filtered.items.len - 1;
-//                         if (key.matchesAny(&.{ 'j', '+', vaxis.Key.down, vaxis.Key.kp_down, vaxis.Key.kp_add }, .{}))
-//                             self.down(1);
-//                         if (key.matchesAny(&.{ vaxis.Key.page_down, vaxis.Key.kp_down }, .{}))
-//                             self.down(20);
-//                         if (key.matchesAny(&.{ 'k', '-', vaxis.Key.up, vaxis.Key.kp_up, vaxis.Key.kp_subtract }, .{}))
-//                             self.up(1);
-//                         if (key.matchesAny(&.{ vaxis.Key.page_up, vaxis.Key.kp_page_up }, .{}))
-//                             self.up(20);
-//                         if (key.matchesAny(&.{ 'h', 'x' }, .{}))
-//                             self.hex = true;
-//                         if (key.matches('d', .{}))
-//                             self.hex = false;
-//                         if (key.matches('c', .{}))
-//                             try self.vx.copyToSystemClipboard(
-//                                 self.tty.writer(),
-//                                 self.themes[self.filtered.items[self.current]].theme,
-//                                 alloc,
-//                             )
-//                         else if (key.matches('c', .{ .shift = true }))
-//                             try self.vx.copyToSystemClipboard(
-//                                 self.tty.writer(),
-//                                 self.themes[self.filtered.items[self.current]].path,
-//                                 alloc,
-//                             );
-//                         if (key.matches('f', .{})) {
-//                             switch (self.theme_filter) {
-//                                 .all => self.theme_filter = .dark,
-//                                 .dark => self.theme_filter = .light,
-//                                 .light => self.theme_filter = .all,
-//                             }
-//                             try self.updateFiltered();
-//                         }
-//                     },
-//                     .help => {
-//                         if (key.matches('q', .{}))
-//                             self.should_quit = true;
-//                         if (key.matchesAny(&.{ '?', vaxis.Key.escape, vaxis.Key.f1 }, .{}))
-//                             self.mode = .normal;
-//                         if (key.matches('h', .{ .ctrl = true }))
-//                             self.mode = .normal;
-//                     },
-//                     .search => search: {
-//                         if (key.matchesAny(&.{ vaxis.Key.escape, vaxis.Key.enter }, .{})) {
-//                             self.mode = .normal;
-//                             break :search;
-//                         }
-//                         if (key.matchesAny(&.{ 'x', '/' }, .{ .ctrl = true })) {
-//                             self.text_input.clearRetainingCapacity();
-//                             try self.updateFiltered();
-//                             break :search;
-//                         }
-//                         try self.text_input.update(.{ .key_press = key });
-//                         try self.updateFiltered();
-//                     },
-//                     .save => {
-//                         if (key.matches('q', .{}))
-//                             self.should_quit = true;
-//                         if (key.matchesAny(&.{ vaxis.Key.escape, vaxis.Key.enter, vaxis.Key.kp_enter }, .{}))
-//                             self.mode = .normal;
-//                         if (key.matches('w', .{})) {
-//                             self.saveSelectedTheme();
-//                         }
-//                     },
-//                 }
-//             },
-//             .color_scheme => |color_scheme| self.color_scheme = color_scheme,
-//             .mouse => |mouse| self.mouse = mouse,
-//             .winsize => |ws| try self.vx.resize(self.allocator, self.tty.writer(), ws),
-//         }
-//     }
-//
-//     pub fn ui_fg(self: *Preview) vaxis.Color {
-//         return switch (self.color_scheme) {
-//             .light => .{ .rgb = [_]u8{ 0x00, 0x00, 0x00 } },
-//             .dark => .{ .rgb = [_]u8{ 0xff, 0xff, 0xff } },
-//         };
-//     }
-//
-//     pub fn ui_bg(self: *Preview) vaxis.Color {
-//         return switch (self.color_scheme) {
-//             .light => .{ .rgb = [_]u8{ 0xff, 0xff, 0xff } },
-//             .dark => .{ .rgb = [_]u8{ 0x00, 0x00, 0x00 } },
-//         };
-//     }
-//
-//     pub fn ui_standard(self: *Preview) vaxis.Style {
-//         return .{
-//             .fg = self.ui_fg(),
-//             .bg = self.ui_bg(),
-//         };
-//     }
-//
-//     pub fn ui_hover_bg(self: *Preview) vaxis.Color {
-//         return switch (self.color_scheme) {
-//             .light => .{ .rgb = [_]u8{ 0xbb, 0xbb, 0xbb } },
-//             .dark => .{ .rgb = [_]u8{ 0x22, 0x22, 0x22 } },
-//         };
-//     }
-//
-//     pub fn ui_highlighted(self: *Preview) vaxis.Style {
-//         return .{
-//             .fg = self.ui_fg(),
-//             .bg = self.ui_hover_bg(),
-//         };
-//     }
-//
-//     pub fn ui_selected_fg(self: *Preview) vaxis.Color {
-//         return switch (self.color_scheme) {
-//             .light => .{ .rgb = [_]u8{ 0x00, 0xaa, 0x00 } },
-//             .dark => .{ .rgb = [_]u8{ 0x00, 0xaa, 0x00 } },
-//         };
-//     }
-//
-//     pub fn ui_selected_bg(self: *Preview) vaxis.Color {
-//         return switch (self.color_scheme) {
-//             .light => .{ .rgb = [_]u8{ 0xaa, 0xaa, 0xaa } },
-//             .dark => .{ .rgb = [_]u8{ 0x33, 0x33, 0x33 } },
-//         };
-//     }
-//
-//     pub fn ui_selected(self: *Preview) vaxis.Style {
-//         return .{
-//             .fg = self.ui_selected_fg(),
-//             .bg = self.ui_selected_bg(),
-//         };
-//     }
-//
-//     pub fn ui_err_fg(self: *Preview) vaxis.Color {
-//         return switch (self.color_scheme) {
-//             .light => .{ .rgb = [_]u8{ 0xff, 0x00, 0x00 } },
-//             .dark => .{ .rgb = [_]u8{ 0xff, 0x00, 0x00 } },
-//         };
-//     }
-//
-//     pub fn ui_err(self: *Preview) vaxis.Style {
-//         return .{
-//             .fg = self.ui_err_fg(),
-//             .bg = self.ui_bg(),
-//         };
-//     }
-//
-//     pub fn draw(self: *Preview, alloc: std.mem.Allocator) !void {
-//         const win = self.vx.window();
-//         win.clear();
-//
-//         self.vx.setMouseShape(.default);
-//
-//         const theme_list = win.child(.{
-//             .x_off = 0,
-//             .y_off = 0,
-//             .width = 32,
-//             .height = win.height,
-//         });
-//
-//         var highlight: ?usize = null;
-//
-//         if (self.mouse) |mouse| {
-//             self.mouse = null;
-//             if (self.mode == .normal) {
-//                 if (mouse.button == .wheel_up) {
-//                     self.up(1);
-//                 }
-//                 if (mouse.button == .wheel_down) {
-//                     self.down(1);
-//                 }
-//                 if (theme_list.hasMouse(mouse)) |_| {
-//                     if (mouse.button == .left and mouse.type == .release) {
-//                         const selection = self.window + mouse.row;
-//                         if (selection < self.filtered.items.len) {
-//                             self.current = selection;
-//                         }
-//                     }
-//                     highlight = mouse.row;
-//                 }
-//             }
-//         }
-//
-//         if (self.filtered.items.len == 0) {
-//             self.current = 0;
-//             self.window = 0;
-//         } else {
-//             const start = self.window;
-//             const end = self.window + theme_list.height - 1;
-//             if (self.current > end)
-//                 self.window = self.current - theme_list.height + 1;
-//             if (self.current < start)
-//                 self.window = self.current;
-//             if (self.window >= self.filtered.items.len)
-//                 self.window = self.filtered.items.len - 1;
-//         }
-//
-//         theme_list.fill(.{ .style = self.ui_standard() });
-//
-//         for (0..theme_list.height) |row_capture| {
-//             const row: u16 = @intCast(row_capture);
-//             const index = self.window + row;
-//             if (index >= self.filtered.items.len) break;
-//
-//             const theme = self.themes[self.filtered.items[index]];
-//
-//             const style: enum { normal, highlighted, selected } = style: {
-//                 if (index == self.current) break :style .selected;
-//                 if (highlight) |h| if (h == row) break :style .highlighted;
-//                 break :style .normal;
-//             };
-//
-//             if (style == .selected) {
-//                 _ = theme_list.printSegment(
-//                     .{
-//                         .text = "❯ ",
-//                         .style = self.ui_selected(),
-//                     },
-//                     .{
-//                         .row_offset = row,
-//                         .col_offset = 0,
-//                     },
-//                 );
-//             }
-//             _ = theme_list.printSegment(
-//                 .{
-//                     .text = theme.theme,
-//                     .style = switch (style) {
-//                         .normal => self.ui_standard(),
-//                         .highlighted => self.ui_highlighted(),
-//                         .selected => self.ui_selected(),
-//                     },
-//                     .link = .{
-//                         .uri = try theme.toUri(alloc),
-//                     },
-//                 },
-//                 .{
-//                     .row_offset = row,
-//                     .col_offset = 2,
-//                 },
-//             );
-//             if (style == .selected) {
-//                 if (theme.theme.len < theme_list.width - 4) {
-//                     for (2 + theme.theme.len..theme_list.width - 2) |i_capture| {
-//                         const i: u16 = @intCast(i_capture);
-//                         _ = theme_list.printSegment(
-//                             .{
-//                                 .text = " ",
-//                                 .style = self.ui_selected(),
-//                             },
-//                             .{
-//                                 .row_offset = row,
-//                                 .col_offset = i,
-//                             },
-//                         );
-//                     }
-//                 }
-//                 _ = theme_list.printSegment(
-//                     .{
-//                         .text = " ❮",
-//                         .style = self.ui_selected(),
-//                     },
-//                     .{
-//                         .row_offset = row,
-//                         .col_offset = theme_list.width - 2,
-//                     },
-//                 );
-//             }
-//         }
-//
-//         try self.drawPreview(alloc, win, theme_list.x_off + theme_list.width);
-//
-//         switch (self.mode) {
-//             .normal => {
-//                 win.hideCursor();
-//             },
-//             .help => {
-//                 win.hideCursor();
-//                 const width = 60;
-//                 const height = 22;
-//                 const child = win.child(
-//                     .{
-//                         .x_off = win.width / 2 -| width / 2,
-//                         .y_off = win.height / 2 -| height / 2,
-//                         .width = width,
-//                         .height = height,
-//                         .border = .{
-//                             .where = .all,
-//                             .style = self.ui_standard(),
-//                         },
-//                     },
-//                 );
-//
-//                 child.fill(.{ .style = self.ui_standard() });
-//
-//                 const key_help = [_]struct { keys: []const u8, help: []const u8 }{
-//                     .{ .keys = "^C, q, ESC", .help = "Quit." },
-//                     .{ .keys = "F1, ?, ^H", .help = "Toggle help window." },
-//                     .{ .keys = "f", .help = "Cycle through theme filters." },
-//                     .{ .keys = "k, ↑", .help = "Move up 1 theme." },
-//                     .{ .keys = "ScrollUp", .help = "Move up 1 theme." },
-//                     .{ .keys = "PgUp", .help = "Move up 20 themes." },
-//                     .{ .keys = "j, ↓", .help = "Move down 1 theme." },
-//                     .{ .keys = "ScrollDown", .help = "Move down 1 theme." },
-//                     .{ .keys = "PgDown", .help = "Move down 20 themes." },
-//                     .{ .keys = "h, x", .help = "Show palette numbers in hexadecimal." },
-//                     .{ .keys = "d", .help = "Show palette numbers in decimal." },
-//                     .{ .keys = "c", .help = "Copy theme name to the clipboard." },
-//                     .{ .keys = "C", .help = "Copy theme path to the clipboard." },
-//                     .{ .keys = "Home", .help = "Go to the start of the list." },
-//                     .{ .keys = "End", .help = "Go to the end of the list." },
-//                     .{ .keys = "/", .help = "Start search." },
-//                     .{ .keys = "^X, ^/", .help = "Clear search." },
-//                     .{ .keys = "⏎", .help = "Save theme or close search window." },
-//                     .{ .keys = "w", .help = "Write theme to auto config file." },
-//                 };
-//
-//                 for (key_help, 0..) |help, captured_i| {
-//                     const i: u16 = @intCast(captured_i);
-//                     _ = child.printSegment(
-//                         .{
-//                             .text = help.keys,
-//                             .style = self.ui_standard(),
-//                         },
-//                         .{
-//                             .row_offset = i + 1,
-//                             .col_offset = 2,
-//                         },
-//                     );
-//                     _ = child.printSegment(
-//                         .{
-//                             .text = "—",
-//                             .style = self.ui_standard(),
-//                         },
-//                         .{
-//                             .row_offset = i + 1,
-//                             .col_offset = 15,
-//                         },
-//                     );
-//                     _ = child.printSegment(
-//                         .{
-//                             .text = help.help,
-//                             .style = self.ui_standard(),
-//                         },
-//                         .{
-//                             .row_offset = i + 1,
-//                             .col_offset = 17,
-//                         },
-//                     );
-//                 }
-//             },
-//             .search => {
-//                 const child = win.child(.{
-//                     .x_off = 20,
-//                     .y_off = win.height - 5,
-//                     .width = win.width - 40,
-//                     .height = 3,
-//                     .border = .{
-//                         .where = .all,
-//                         .style = self.ui_standard(),
-//                     },
-//                 });
-//                 child.fill(.{ .style = self.ui_standard() });
-//                 self.text_input.drawWithStyle(child, self.ui_standard());
-//             },
-//             .save => {
-//                 const theme = self.themes[self.filtered.items[self.current]];
-//
-//                 const width = 92;
-//                 const height = 17;
-//                 const child = win.child(
-//                     .{
-//                         .x_off = win.width / 2 -| width / 2,
-//                         .y_off = win.height / 2 -| height / 2,
-//                         .width = width,
-//                         .height = height,
-//                         .border = .{
-//                             .where = .all,
-//                             .style = self.ui_standard(),
-//                         },
-//                     },
-//                 );
-//
-//                 child.fill(.{ .style = self.ui_standard() });
-//
-//                 const save_instructions = [_][]const u8{
-//                     "To apply this theme, add the following line to your Ghostty configuration:",
-//                     "",
-//                     try std.fmt.allocPrint(alloc, "theme = {s}", .{theme.theme}),
-//                     "",
-//                     "Save the configuration file and then reload it to apply the new theme.",
-//                     "",
-//                     "Or press 'w' to write an auto theme file to your system's preferred default config path.",
-//                     "Then add the following line to your Ghostty configuration and reload:",
-//                     "",
-//                     "config-file = ?auto/theme.ghostty",
-//                     "",
-//                     "For more details on configuration and themes, visit the Ghostty documentation:",
-//                     "",
-//                     "https://ghostty.org/docs/config/reference",
-//                 };
-//
-//                 for (save_instructions, 0..) |instruction, captured_i| {
-//                     const i: u16 = @intCast(captured_i);
-//                     _ = child.printSegment(
-//                         .{
-//                             .text = instruction,
-//                             .style = self.ui_standard(),
-//                         },
-//                         .{
-//                             .row_offset = i + 1,
-//                             .col_offset = 2,
-//                         },
-//                     );
-//                 }
-//             },
-//         }
-//     }
-//
-//     pub fn drawPreview(self: *Preview, alloc: std.mem.Allocator, win: vaxis.Window, x_off_unconverted: i17) !void {
-//         const x_off: u16 = @intCast(x_off_unconverted);
-//         const width: u16 = win.width - x_off;
-//
-//         if (self.filtered.items.len > 0) {
-//             const theme = self.themes[self.filtered.items[self.current]];
-//
-//             var config = try Config.default(alloc);
-//             defer config.deinit();
-//
-//             config.loadFile(config._arena.?.allocator(), theme.path) catch |err| {
-//                 const theme_path_len: u16 = @intCast(theme.path.len);
-//
-//                 const child = win.child(
-//                     .{
-//                         .x_off = x_off,
-//                         .y_off = 0,
-//                         .width = width,
-//                         .height = win.height,
-//                     },
-//                 );
-//                 child.fill(.{ .style = self.ui_standard() });
-//                 const middle = child.height / 2;
-//                 {
-//                     const text = try std.fmt.allocPrint(alloc, "Unable to open {s} from:", .{theme.theme});
-//                     const text_len: u16 = @intCast(text.len);
-//                     _ = child.printSegment(
-//                         .{
-//                             .text = text,
-//                             .style = self.ui_err(),
-//                         },
-//                         .{
-//                             .row_offset = middle -| 1,
-//                             .col_offset = child.width / 2 -| text_len / 2,
-//                         },
-//                     );
-//                 }
-//                 {
-//                     _ = child.printSegment(
-//                         .{
-//                             .text = theme.path,
-//                             .style = self.ui_err(),
-//                             .link = .{
-//                                 .uri = try theme.toUri(alloc),
-//                             },
-//                         },
-//                         .{
-//                             .row_offset = middle,
-//                             .col_offset = child.width / 2 -| theme_path_len / 2,
-//                         },
-//                     );
-//                 }
-//                 {
-//                     const text = try std.fmt.allocPrint(alloc, "{}", .{err});
-//                     const text_len: u16 = @intCast(text.len);
-//                     _ = child.printSegment(
-//                         .{
-//                             .text = text,
-//                             .style = self.ui_err(),
-//                         },
-//                         .{
-//                             .row_offset = middle + 1,
-//                             .col_offset = child.width / 2 -| text_len / 2,
-//                         },
-//                     );
-//                 }
-//                 return;
-//             };
-//
-//             var next_start: u16 = 0;
-//
-//             const fg: vaxis.Color = .{
-//                 .rgb = [_]u8{
-//                     config.foreground.r,
-//                     config.foreground.g,
-//                     config.foreground.b,
-//                 },
-//             };
-//             const bg: vaxis.Color = .{
-//                 .rgb = [_]u8{
-//                     config.background.r,
-//                     config.background.g,
-//                     config.background.b,
-//                 },
-//             };
-//             const cursor_fg: vaxis.Color = if (config.@"cursor-text") |cursor_text| .{
-//                 .rgb = [_]u8{
-//                     cursor_text.color.r,
-//                     cursor_text.color.g,
-//                     cursor_text.color.b,
-//                 },
-//             } else bg;
-//             const cursor_bg: vaxis.Color = if (config.@"cursor-color") |cursor_bg| .{
-//                 .rgb = [_]u8{
-//                     cursor_bg.color.r,
-//                     cursor_bg.color.g,
-//                     cursor_bg.color.b,
-//                 },
-//             } else fg;
-//             const selection_fg: vaxis.Color = if (config.@"selection-foreground") |selection_fg| .{
-//                 .rgb = [_]u8{
-//                     selection_fg.color.r,
-//                     selection_fg.color.g,
-//                     selection_fg.color.b,
-//                 },
-//             } else bg;
-//             const selection_bg: vaxis.Color = if (config.@"selection-background") |selection_bg| .{
-//                 .rgb = [_]u8{
-//                     selection_bg.color.r,
-//                     selection_bg.color.g,
-//                     selection_bg.color.b,
-//                 },
-//             } else fg;
-//             const cursor: vaxis.Style = .{
-//                 .fg = cursor_fg,
-//                 .bg = cursor_bg,
-//             };
-//             const standard_selection: vaxis.Style = .{
-//                 .fg = selection_fg,
-//                 .bg = selection_bg,
-//             };
-//             const standard: vaxis.Style = .{
-//                 .fg = fg,
-//                 .bg = bg,
-//             };
-//             const standard_bold: vaxis.Style = .{
-//                 .fg = fg,
-//                 .bg = bg,
-//                 .bold = true,
-//             };
-//             const standard_italic: vaxis.Style = .{
-//                 .fg = fg,
-//                 .bg = bg,
-//                 .italic = true,
-//             };
-//             const standard_bold_italic: vaxis.Style = .{
-//                 .fg = fg,
-//                 .bg = bg,
-//                 .bold = true,
-//                 .italic = true,
-//             };
-//             const standard_underline: vaxis.Style = .{
-//                 .fg = fg,
-//                 .bg = bg,
-//                 .ul_style = .single,
-//             };
-//             const standard_double_underline: vaxis.Style = .{
-//                 .fg = fg,
-//                 .bg = bg,
-//                 .ul_style = .double,
-//             };
-//             const standard_dashed_underline: vaxis.Style = .{
-//                 .fg = fg,
-//                 .bg = bg,
-//                 .ul_style = .dashed,
-//             };
-//             const standard_curly_underline: vaxis.Style = .{
-//                 .fg = fg,
-//                 .bg = bg,
-//                 .ul_style = .curly,
-//             };
-//             const standard_dotted_underline: vaxis.Style = .{
-//                 .fg = fg,
-//                 .bg = bg,
-//                 .ul_style = .dotted,
-//             };
-//
-//             {
-//                 const theme_len: u16 = @intCast(theme.theme.len);
-//                 const theme_path_len: u16 = @intCast(theme.path.len);
-//                 const child = win.child(
-//                     .{
-//                         .x_off = x_off,
-//                         .y_off = next_start,
-//                         .width = width,
-//                         .height = 4,
-//                     },
-//                 );
-//                 child.fill(.{ .style = standard });
-//                 _ = child.printSegment(
-//                     .{
-//                         .text = theme.theme,
-//                         .style = standard_bold_italic,
-//                         .link = .{
-//                             .uri = try theme.toUri(alloc),
-//                         },
-//                     },
-//                     .{
-//                         .row_offset = 1,
-//                         .col_offset = child.width / 2 -| theme_len / 2,
-//                     },
-//                 );
-//                 _ = child.printSegment(
-//                     .{
-//                         .text = theme.path,
-//                         .style = standard,
-//                         .link = .{
-//                             .uri = try theme.toUri(alloc),
-//                         },
-//                     },
-//                     .{
-//                         .row_offset = 2,
-//                         .col_offset = child.width / 2 -| theme_path_len / 2,
-//                         .wrap = .none,
-//                     },
-//                 );
-//                 next_start += child.height;
-//             }
-//
-//             if (config._diagnostics.items().len > 0) {
-//                 const diagnostic_items_len: u16 = @intCast(config._diagnostics.items().len);
-//                 const child = win.child(
-//                     .{
-//                         .x_off = x_off,
-//                         .y_off = next_start,
-//                         .width = width,
-//                         .height = if (config._diagnostics.items().len == 0) 0 else 2 + diagnostic_items_len,
-//                     },
-//                 );
-//                 {
-//                     const text = "Problems were encountered trying to load the theme:";
-//                     const text_len: u16 = @intCast(text.len);
-//                     _ = child.printSegment(
-//                         .{
-//                             .text = text,
-//                             .style = self.ui_err(),
-//                         },
-//                         .{
-//                             .row_offset = 0,
-//                             .col_offset = child.width / 2 -| (text_len / 2),
-//                         },
-//                     );
-//                 }
-//
-//                 var buf: std.Io.Writer.Allocating = .init(alloc);
-//                 defer buf.deinit();
-//                 for (config._diagnostics.items(), 0..) |diag, captured_i| {
-//                     const i: u16 = @intCast(captured_i);
-//                     try diag.format(&buf.writer);
-//                     _ = child.printSegment(
-//                         .{
-//                             .text = buf.written(),
-//                             .style = self.ui_err(),
-//                         },
-//                         .{
-//                             .row_offset = 2 + i,
-//                             .col_offset = 2,
-//                         },
-//                     );
-//                     buf.clearRetainingCapacity();
-//                 }
-//                 next_start += child.height;
-//             }
-//             {
-//                 const child = win.child(.{
-//                     .x_off = x_off,
-//                     .y_off = next_start,
-//                     .width = width,
-//                     .height = 6,
-//                 });
-//
-//                 child.fill(.{ .style = standard });
-//
-//                 for (0..16) |captured_i| {
-//                     const i: u16 = @intCast(captured_i);
-//                     const r = i / 8;
-//                     const c = i % 8;
-//                     const text = if (self.hex)
-//                         try std.fmt.allocPrint(alloc, " {x:0>2}", .{i})
-//                     else
-//                         try std.fmt.allocPrint(alloc, "{d:3}", .{i});
-//                     _ = child.printSegment(
-//                         .{
-//                             .text = text,
-//                             .style = standard,
-//                         },
-//                         .{
-//                             .row_offset = 3 * r,
-//                             .col_offset = c * 8,
-//                         },
-//                     );
-//                     _ = child.printSegment(
-//                         .{
-//                             .text = "████",
-//                             .style = .{
-//                                 .fg = color(config, i),
-//                                 .bg = bg,
-//                             },
-//                         },
-//                         .{
-//                             .row_offset = 3 * r,
-//                             .col_offset = 4 + c * 8,
-//                         },
-//                     );
-//                     _ = child.printSegment(
-//                         .{
-//                             .text = "████",
-//                             .style = .{
-//                                 .fg = color(config, i),
-//                                 .bg = bg,
-//                             },
-//                         },
-//                         .{
-//                             .row_offset = 3 * r + 1,
-//                             .col_offset = 4 + c * 8,
-//                         },
-//                     );
-//                 }
-//                 next_start += child.height;
-//             }
-//             {
-//                 const child = win.child(
-//                     .{
-//                         .x_off = x_off,
-//                         .y_off = next_start,
-//                         .width = width,
-//                         .height = 24,
-//                     },
-//                 );
-//                 const bold: vaxis.Style = .{
-//                     .fg = fg,
-//                     .bg = bg,
-//                     .bold = true,
-//                 };
-//                 const color1: vaxis.Style = .{
-//                     .fg = color(config, 1),
-//                     .bg = bg,
-//                 };
-//                 const color2: vaxis.Style = .{
-//                     .fg = color(config, 2),
-//                     .bg = bg,
-//                 };
-//                 const color3: vaxis.Style = .{
-//                     .fg = color(config, 3),
-//                     .bg = bg,
-//                 };
-//                 const color4: vaxis.Style = .{
-//                     .fg = color(config, 4),
-//                     .bg = bg,
-//                 };
-//                 const color5: vaxis.Style = .{
-//                     .fg = color(config, 5),
-//                     .bg = bg,
-//                 };
-//                 const color6: vaxis.Style = .{
-//                     .fg = color(config, 6),
-//                     .bg = bg,
-//                 };
-//                 const color6ul: vaxis.Style = .{
-//                     .fg = color(config, 6),
-//                     .bg = bg,
-//                     .ul_style = .single,
-//                 };
-//                 const color10: vaxis.Style = .{
-//                     .fg = color(config, 10),
-//                     .bg = bg,
-//                 };
-//                 const color12: vaxis.Style = .{
-//                     .fg = color(config, 12),
-//                     .bg = bg,
-//                 };
-//                 const color238: vaxis.Style = .{
-//                     .fg = color(config, 238),
-//                     .bg = bg,
-//                 };
-//                 child.fill(.{ .style = standard });
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "→", .style = color2 },
-//                         .{ .text = " ", .style = standard },
-//                         .{ .text = "bat", .style = color4 },
-//                         .{ .text = " ", .style = standard },
-//                         .{ .text = "ziggzagg.zig", .style = color6ul },
-//                     },
-//                     .{
-//                         .row_offset = 0,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 {
-//                     _ = child.print(
-//                         &.{
-//                             .{
-//                                 .text = "───────┬",
-//                                 .style = color238,
-//                             },
-//                         },
-//                         .{
-//                             .row_offset = 1,
-//                             .col_offset = 2,
-//                         },
-//                     );
-//                     if (child.width > 10) {
-//                         for (10..child.width) |captured_col| {
-//                             const col: u16 = @intCast(captured_col);
-//                             _ = child.print(
-//                                 &.{
-//                                     .{
-//                                         .text = "─",
-//                                         .style = color238,
-//                                     },
-//                                 },
-//                                 .{
-//                                     .row_offset = 1,
-//                                     .col_offset = col,
-//                                 },
-//                             );
-//                         }
-//                     }
-//                 }
-//                 _ = child.print(
-//                     &.{
-//                         .{
-//                             .text = "       │ ",
-//                             .style = color238,
-//                         },
-//
-//                         .{
-//                             .text = "File: ",
-//                             .style = standard,
-//                         },
-//
-//                         .{
-//                             .text = "ziggzagg.zig",
-//                             .style = bold,
-//                         },
-//                     },
-//                     .{
-//                         .row_offset = 2,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 {
-//                     _ = child.print(
-//                         &.{
-//                             .{
-//                                 .text = "───────┼",
-//                                 .style = color238,
-//                             },
-//                         },
-//                         .{
-//                             .row_offset = 3,
-//                             .col_offset = 2,
-//                         },
-//                     );
-//                     if (child.width > 10) {
-//                         for (10..child.width) |captured_col| {
-//                             const col: u16 = @intCast(captured_col);
-//                             _ = child.print(
-//                                 &.{
-//                                     .{
-//                                         .text = "─",
-//                                         .style = color238,
-//                                     },
-//                                 },
-//                                 .{
-//                                     .row_offset = 3,
-//                                     .col_offset = col,
-//                                 },
-//                             );
-//                         }
-//                     }
-//                 }
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "   1   │ ", .style = color238 },
-//                         .{ .text = "const", .style = color5 },
-//                         .{ .text = " std ", .style = standard },
-//                         .{ .text = "= @import", .style = color5 },
-//                         .{ .text = "(", .style = standard },
-//                         .{ .text = "\"std\"", .style = color10 },
-//                         .{ .text = ");", .style = standard },
-//                     },
-//                     .{
-//                         .row_offset = 4,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "   2   │", .style = color238 },
-//                     },
-//                     .{
-//                         .row_offset = 5,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "   3   │ ", .style = color238 },
-//                         .{ .text = "pub ", .style = color5 },
-//                         .{ .text = "fn ", .style = color12 },
-//                         .{ .text = "main", .style = color2 },
-//                         .{ .text = "() ", .style = standard },
-//                         .{ .text = "!", .style = color5 },
-//                         .{ .text = "void", .style = color12 },
-//                         .{ .text = " {", .style = standard },
-//                     },
-//                     .{
-//                         .row_offset = 6,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "   4   │     ", .style = color238 },
-//                         .{ .text = "const ", .style = color5 },
-//                         .{ .text = "stdout ", .style = standard },
-//                         .{ .text = "=", .style = color5 },
-//                         .{ .text = " std.Io.getStdOut().writer();", .style = standard },
-//                     },
-//                     .{
-//                         .row_offset = 7,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "   5   │     ", .style = color238 },
-//                         .{ .text = "var ", .style = color5 },
-//                         .{ .text = "i:", .style = standard },
-//                         .{ .text = " usize", .style = color12 },
-//                         .{ .text = " =", .style = color5 },
-//                         .{ .text = " 1", .style = color4 },
-//                         .{ .text = ";", .style = standard },
-//                     },
-//                     .{
-//                         .row_offset = 8,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "   6   │     ", .style = color238 },
-//                         .{ .text = "while ", .style = color5 },
-//                         .{ .text = "(i ", .style = standard },
-//                         .{ .text = "<= ", .style = color5 },
-//                         .{ .text = "16", .style = color4 },
-//                         .{ .text = ") : (i ", .style = standard },
-//                         .{ .text = "+= ", .style = color5 },
-//                         .{ .text = "1", .style = color4 },
-//                         .{ .text = ") {", .style = standard },
-//                     },
-//                     .{
-//                         .row_offset = 9,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "   7   │         ", .style = color238 },
-//                         .{ .text = "if ", .style = color5 },
-//                         .{ .text = "(i ", .style = standard },
-//                         .{ .text = "% ", .style = color5 },
-//                         .{ .text = "15 ", .style = color4 },
-//                         .{ .text = "== ", .style = color5 },
-//                         .{ .text = "0", .style = color4 },
-//                         .{ .text = ") {", .style = standard },
-//                     },
-//                     .{
-//                         .row_offset = 10,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "   8   │             ", .style = color238 },
-//                         .{ .text = "try ", .style = color5 },
-//                         .{ .text = "stdout.writeAll(", .style = standard },
-//                         .{ .text = "\"ZiggZagg", .style = color10 },
-//                         .{ .text = "\\n", .style = color12 },
-//                         .{ .text = "\"", .style = color10 },
-//                         .{ .text = ");", .style = standard },
-//                     },
-//                     .{
-//                         .row_offset = 11,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "   9   │         ", .style = color238 },
-//                         .{ .text = "} ", .style = standard },
-//                         .{ .text = "else if ", .style = color5 },
-//                         .{ .text = "(i ", .style = standard },
-//                         .{ .text = "% ", .style = color5 },
-//                         .{ .text = "3 ", .style = color4 },
-//                         .{ .text = "== ", .style = color5 },
-//                         .{ .text = "0", .style = color4 },
-//                         .{ .text = ") {", .style = standard },
-//                     },
-//                     .{
-//                         .row_offset = 12,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "  10   │             ", .style = color238 },
-//                         .{ .text = "try ", .style = color5 },
-//                         .{ .text = "stdout.writeAll(", .style = standard },
-//                         .{ .text = "\"Zigg", .style = color10 },
-//                         .{ .text = "\\n", .style = color12 },
-//                         .{ .text = "\"", .style = color10 },
-//                         .{ .text = ");", .style = standard },
-//                     },
-//                     .{
-//                         .row_offset = 13,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "  11   │         ", .style = color238 },
-//                         .{ .text = "} ", .style = standard },
-//                         .{ .text = "else if ", .style = color5 },
-//                         .{ .text = "(i ", .style = standard },
-//                         .{ .text = "% ", .style = color5 },
-//                         .{ .text = "5 ", .style = color4 },
-//                         .{ .text = "== ", .style = color5 },
-//                         .{ .text = "0", .style = color4 },
-//                         .{ .text = ") {", .style = standard },
-//                     },
-//                     .{
-//                         .row_offset = 14,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "  12   │             ", .style = color238 },
-//                         .{ .text = "try ", .style = color5 },
-//                         .{ .text = "stdout.writeAll(", .style = standard },
-//                         .{ .text = "\"Zagg", .style = color10 },
-//                         .{ .text = "\\n", .style = color12 },
-//                         .{ .text = "\"", .style = color10 },
-//                         .{ .text = ");", .style = standard },
-//                     },
-//                     .{
-//                         .row_offset = 15,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "  13   │         ", .style = color238 },
-//                         .{ .text = "} ", .style = standard },
-//                         .{ .text = "else ", .style = color5 },
-//                         .{ .text = "{", .style = standard },
-//                     },
-//                     .{
-//                         .row_offset = 16,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "  14   │             ", .style = color238 },
-//                         .{ .text = "try ", .style = color5 },
-//                         .{ .text = "stdout.print(\"{d}\\n\", .{i})", .style = standard_selection },
-//                         .{ .text = ";", .style = cursor },
-//                     },
-//                     .{
-//                         .row_offset = 17,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "  15   │         ", .style = color238 },
-//                         .{ .text = "}", .style = standard },
-//                     },
-//                     .{
-//                         .row_offset = 18,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "  16   │     ", .style = color238 },
-//                         .{ .text = "}", .style = standard },
-//                     },
-//                     .{
-//                         .row_offset = 19,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "  17   │ ", .style = color238 },
-//                         .{ .text = "}", .style = standard },
-//                     },
-//                     .{
-//                         .row_offset = 20,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 {
-//                     _ = child.print(
-//                         &.{
-//                             .{
-//                                 .text = "───────┴",
-//                                 .style = color238,
-//                             },
-//                         },
-//                         .{
-//                             .row_offset = 21,
-//                             .col_offset = 2,
-//                         },
-//                     );
-//                     if (child.width > 10) {
-//                         for (10..child.width) |captured_col| {
-//                             const col: u16 = @intCast(captured_col);
-//                             _ = child.print(
-//                                 &.{
-//                                     .{
-//                                         .text = "─",
-//                                         .style = color238,
-//                                     },
-//                                 },
-//                                 .{
-//                                     .row_offset = 21,
-//                                     .col_offset = col,
-//                                 },
-//                             );
-//                         }
-//                     }
-//                 }
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "ghostty ", .style = color6 },
-//                         .{ .text = "on ", .style = standard },
-//                         .{ .text = " main ", .style = color4 },
-//                         .{ .text = "[+] ", .style = color1 },
-//                         .{ .text = "via ", .style = standard },
-//                         .{ .text = " v0.13.0 ", .style = color3 },
-//                         .{ .text = "via ", .style = standard },
-//                         .{ .text = "  impure (ghostty-env)", .style = color4 },
-//                     },
-//                     .{
-//                         .row_offset = 22,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 _ = child.print(
-//                     &.{
-//                         .{ .text = "✦ ", .style = color4 },
-//                         .{ .text = "at ", .style = standard },
-//                         .{ .text = "10:36:15 ", .style = color3 },
-//                         .{ .text = "→", .style = color2 },
-//                     },
-//                     .{
-//                         .row_offset = 23,
-//                         .col_offset = 2,
-//                     },
-//                 );
-//                 next_start += child.height;
-//             }
-//             if (next_start < win.height) {
-//                 const child = win.child(
-//                     .{
-//                         .x_off = x_off,
-//                         .y_off = next_start,
-//                         .width = width,
-//                         .height = win.height - next_start,
-//                     },
-//                 );
-//                 child.fill(.{ .style = standard });
-//                 var it = std.mem.splitAny(u8, lorem_ipsum, " \n");
-//                 var row: u16 = 1;
-//                 var col: u16 = 2;
-//                 while (row < child.height) {
-//                     const word = it.next() orelse line: {
-//                         it.reset();
-//                         break :line it.next() orelse unreachable;
-//                     };
-//                     const word_len: u16 = @intCast(word.len);
-//                     if (col + word.len > child.width) {
-//                         row += 1;
-//                         col = 2;
-//                     }
-//                     const style: vaxis.Style = style: {
-//                         if (std.mem.eql(u8, "ipsum", word)) break :style .{ .fg = color(config, 2), .bg = bg };
-//                         if (std.mem.eql(u8, "consectetur", word)) break :style standard_bold;
-//                         if (std.mem.eql(u8, "reprehenderit", word)) break :style standard_italic;
-//                         if (std.mem.eql(u8, "Praesent", word)) break :style standard_bold_italic;
-//                         if (std.mem.eql(u8, "auctor", word)) break :style standard_underline;
-//                         if (std.mem.eql(u8, "dui", word)) break :style standard_double_underline;
-//                         if (std.mem.eql(u8, "erat", word)) break :style standard_dashed_underline;
-//                         if (std.mem.eql(u8, "enim", word)) break :style standard_dotted_underline;
-//                         if (std.mem.eql(u8, "odio", word)) break :style standard_curly_underline;
-//                         break :style standard;
-//                     };
-//                     _ = child.printSegment(
-//                         .{
-//                             .text = word,
-//                             .style = style,
-//                         },
-//                         .{
-//                             .row_offset = row,
-//                             .col_offset = col,
-//                         },
-//                     );
-//                     col += word_len + 1;
-//                 }
-//             }
-//         } else {
-//             const child = win.child(.{
-//                 .x_off = 0,
-//                 .y_off = 0,
-//                 .width = win.width,
-//                 .height = win.height,
-//             });
-//             child.fill(.{
-//                 .style = self.ui_standard(),
-//             });
-//
-//             _ = child.printSegment(.{
-//                 .text = "No theme found!",
-//                 .style = self.ui_standard(),
-//             }, .{
-//                 .row_offset = win.height / 2 - 1,
-//                 .col_offset = win.width / 2 - 7,
-//             });
-//         }
-//     }
-//
-//     fn saveSelectedTheme(self: *Preview) void {
-//         if (self.filtered.items.len == 0)
-//             return;
-//
-//         const idx = self.filtered.items[self.current];
-//         const theme = self.themes[idx];
-//
-//         writeAutoThemeFile(self.allocator, theme.theme) catch {
-//             return;
-//         };
-//     }
-// };
-//
-// fn color(config: Config, palette: usize) vaxis.Color {
-//     return .{
-//         .rgb = [_]u8{
-//             config.palette.value[palette].r,
-//             config.palette.value[palette].g,
-//             config.palette.value[palette].b,
-//         },
-//     };
-// }
-//
-// const lorem_ipsum = @embedFile("lorem_ipsum.txt");
-//
-// fn preview(allocator: std.mem.Allocator, themes: []ThemeListElement, theme_filter: ColorScheme) !void {
-//     var buf: [4096]u8 = undefined;
-//     var app = try Preview.init(
-//         allocator,
-//         themes,
-//         theme_filter,
-//         &buf,
-//     );
-//     defer app.deinit();
-//     try app.run();
-// }
+impl LoopEvent for Event {
+    fn key_press(k: KeyOwned) -> Option<Self> {
+        Some(Event::KeyPress(k))
+    }
+    fn mouse(m: Mouse) -> Option<Self> {
+        Some(Event::Mouse(m))
+    }
+    fn color_scheme(s: Scheme) -> Option<Self> {
+        Some(Event::ColorScheme(s))
+    }
+    fn winsize(ws: Winsize) -> Option<Self> {
+        Some(Event::Winsize(ws))
+    }
+    // all other constructors default to None ≡ Zig's `@hasField` false.
+}
+
+// The `mode: enum { normal, help, search, save }` field.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Normal,
+    Help,
+    Search,
+    Save,
+}
+
+// The row-style discriminant `enum { normal, highlighted, selected }` in `draw`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RowStyle {
+    Normal,
+    Highlighted,
+    Selected,
+}
+
+// const Preview = struct { ... } — the reference struct's fields, MINUS `tty`/`vx`
+// (run-scope locals, see the module note) and `allocator` (dropped). `themes` is a
+// SHARED `&'a` slice; `arena` is the session arena; `rank` writes go through the
+// `Cell` on each element.
+struct DrawState<'a> {
+    // should_quit: bool
+    should_quit: bool,
+    // mouse: ?vaxis.Mouse
+    mouse: Option<Mouse>,
+    // themes: []ThemeListElement
+    themes: &'a [ThemeListElement],
+    // (the `'a`-lived per-frame allocation arena; the reference's per-iteration arena)
+    arena: &'a Arena,
+    // filtered: std.ArrayList(usize)
+    filtered: Vec<usize>,
+    // current: usize
+    current: usize,
+    // window: usize
+    window: usize,
+    // hex: bool
+    hex: bool,
+    // mode: enum { normal, help, search, save }
+    mode: Mode,
+    // color_scheme: vaxis.Color.Scheme
+    color_scheme: Scheme,
+    // text_input: vaxis.widgets.TextInput
+    text_input: TextInput,
+    // theme_filter: ColorScheme
+    theme_filter: ColorScheme,
+}
+
+// borrow_key — `KeyOwned` → `Key<'_>` (§5b). The queued `Event::KeyPress` owns a
+// `KeyOwned` (no `matches`); the dispatch needs a borrowed `Key<'_>` view.
+fn borrow_key(k: &KeyOwned) -> Key<'_> {
+    Key {
+        codepoint: k.codepoint,
+        text: k.text.as_deref(),
+        shifted_codepoint: k.shifted_codepoint,
+        base_layout_codepoint: k.base_layout_codepoint,
+        mods: k.mods,
+    }
+}
+
+// fn preview(allocator, themes: []ThemeListElement, theme_filter: ColorScheme) !void {
+//   The picker entry. Creates the session arena + drives the read-loop lifecycle.
+fn preview(themes: &[ThemeListElement], theme_filter: ColorScheme) -> Result<(), Error> {
+    // The session arena outlives `vx` (declared/created before it) so the screen's
+    // `'a` cell borrows into duped bytes stay valid — mirrors `defer arena.deinit()`.
+    let arena = Arena::init();
+    run_preview(&arena, themes, theme_filter)
+}
+
+// The reference `Preview.init` + `run` + `deinit`, flattened over run-scope locals
+// (the proven separate-`var` shape). `'a` = the session arena / themes lifetime.
+fn run_preview<'a>(
+    arena: &'a Arena,
+    themes: &'a [ThemeListElement],
+    theme_filter: ColorScheme,
+) -> Result<(), Error> {
+    // === Preview.init ===
+    // .tty = try .init(buf),   (buf: [4096]u8)
+    let mut tty = Tty::init(vec![0u8; 4096])?;
+    // .vx = try vaxis.init(allocator, .{}),
+    let mut vx: Vaxis<'a> = Vaxis::init(VaxisOptions::default());
+    let mut st = DrawState {
+        // .should_quit = false,
+        should_quit: false,
+        // .mouse = null,
+        mouse: None,
+        // .themes = themes,
+        themes,
+        arena,
+        // .filtered = try .initCapacity(allocator, themes.len),
+        filtered: Vec::with_capacity(themes.len()),
+        // .current = 0,
+        current: 0,
+        // .window = 0,
+        window: 0,
+        // .hex = false,
+        hex: false,
+        // .mode = .normal,
+        mode: Mode::Normal,
+        // .color_scheme = .light,
+        color_scheme: Scheme::Light,
+        // .text_input = .init(allocator),
+        text_input: TextInput::init(),
+        // .theme_filter = theme_filter,
+        theme_filter,
+    };
+    // try self.updateFiltered();   (pre-loop, no read thread yet)
+    update_filtered(&mut st)?;
+
+    // === Preview.run ===
+    // ALIASING DISCIPLINE (PROVEN by `.port/phase-2/mirihar-wire2` under Stacked AND
+    // Tree Borrows; memory `shaper-hook-sb-clean-interleave`): the `vaxis.Loop` holds
+    // raw `*mut Tty`/`*mut Vaxis` and its read thread DEREFS them for the loop's life.
+    // Deriving the raw ptrs via `&raw mut` (a `SharedReadWrite` place-projection) and
+    // then accessing `tty`/`vx` ONLY through those raw ptrs (TRANSIENT `&mut *ptr`
+    // reborrows) keeps the read thread's tag live — whereas `Loop::new(&mut tty, ..)`
+    // + a later `tty.writer()` on the LOCAL pushes a `Unique` that POPS the read
+    // thread's raw tag off the borrow stack (SB UB; the mirihar reproduces + rejects
+    // exactly that shape). So: raw ptrs once, transient reborrows thereafter; the
+    // `update`/`draw` free fns receive `&mut *ptr` (disjoint fields, never `&mut
+    // *self`). After `stop()` joins the reader, the locals are touched directly (sound).
+    let tty_ptr: *mut Tty = &raw mut tty;
+    let vx_ptr: *mut Vaxis<'a> = &raw mut vx;
+
+    // var loop: vaxis.Loop(Event) = .{ .tty = &self.tty, .vaxis = &self.vx };
+    let loop_ = Loop::<Event>::new(tty_ptr, vx_ptr);
+    // try loop.init();
+    loop_.init()?;
+    // try loop.start();
+    loop_.start()?;
+
+    // const writer = self.tty.writer();  (all `tty`/`vx` access via the raw ptrs)
+    // SAFETY (each `unsafe` below): `tty_ptr`/`vx_ptr` are the `&raw mut` of the still-
+    // live run-scope locals; every reborrow is transient (dropped at the call) and
+    // shares the read thread's `SharedReadWrite` parent — no `Unique` outlives a call.
+    // try self.vx.enterAltScreen(writer);
+    unsafe { (*vx_ptr).enter_alt_screen((*tty_ptr).writer()) }?;
+    // try self.vx.setTitle(writer, "👻 Ghostty Theme Preview 👻");
+    unsafe {
+        (*vx_ptr).set_title(
+            (*tty_ptr).writer(),
+            "👻 Ghostty Theme Preview 👻".as_bytes(),
+        )
+    }?;
+    // try self.vx.queryTerminal(writer, 1 * std.time.ns_per_s);
+    unsafe { (*vx_ptr).query_terminal((*tty_ptr).writer(), 1_000_000_000) }?;
+    // try self.vx.setMouseMode(writer, true);
+    unsafe { (*vx_ptr).set_mouse_mode((*tty_ptr).writer(), true) }?;
+    // if (self.vx.caps.color_scheme_updates) try self.vx.subscribeToColorSchemeUpdates(writer);
+    if unsafe { (*vx_ptr).caps.color_scheme_updates } {
+        unsafe { (*vx_ptr).subscribe_to_color_scheme_updates((*tty_ptr).writer()) }?;
+    }
+
+    // while (!self.should_quit) {
+    while !st.should_quit {
+        // (the reference's per-iteration arena is the session arena here — see note.)
+        // loop.pollEvent();
+        loop_.poll_event();
+        // while (loop.tryEvent()) |event| try self.update(event, alloc);
+        while let Some(event) = loop_.try_event() {
+            // update(vx, tty, st, event) — transient disjoint reborrows via the raw ptrs.
+            update(
+                unsafe { &mut *vx_ptr },
+                unsafe { &mut *tty_ptr },
+                &mut st,
+                event,
+            )?;
+        }
+        // try self.draw(alloc);
+        draw(unsafe { &mut *vx_ptr }, &mut st);
+        // try self.vx.render(writer);
+        unsafe { (*vx_ptr).render((*tty_ptr).writer()) }?;
+        // try writer.flush();
+        unsafe { (*tty_ptr).writer().flush() }?;
+    }
+
+    // PORT NOTE: join the read thread before teardown (the reference relies on
+    // process exit; Rust must stop/join so no `*mut tty`/`*mut vx` outlives the
+    // locals). `stop` posts a DSR to unblock the blocking read, then joins.
+    loop_.stop();
+
+    // === Preview.deinit ===  (filtered/text_input drop on their own)
+    //   The reader is joined/dead now, so whole-`tty`/`vx` access is sound again.
+    // self.vx.deinit(allocator, self.tty.writer());
+    vx.deinit(tty.writer());
+    // self.tty.deinit();
+    tty.deinit();
+    Ok(())
+}
+
+// fn up(self: *Preview, count: usize) void  — pure integer nav over DrawState.
+fn up(st: &mut DrawState, count: usize) {
+    if st.filtered.is_empty() {
+        st.current = 0;
+        return;
+    }
+    // self.current -|= count;
+    st.current = st.current.saturating_sub(count);
+}
+
+// fn down(self: *Preview, count: usize) void
+fn down(st: &mut DrawState, count: usize) {
+    if st.filtered.is_empty() {
+        st.current = 0;
+        return;
+    }
+    // self.current += count;
+    st.current += count;
+    // if (self.current >= self.filtered.items.len) self.current = self.filtered.items.len - 1;
+    if st.current >= st.filtered.len() {
+        st.current = st.filtered.len() - 1;
+    }
+}
+
+// pub fn update(self: *Preview, event: Event, alloc) !void {
+//   Free fn over disjoint field borrows (§3/§5): `vx`/`tty` are needed only by the
+//   `.winsize` resize + the clipboard arms; every other arm mutates only `st`.
+fn update<'a>(
+    vx: &mut Vaxis<'a>,
+    tty: &mut Tty,
+    st: &mut DrawState<'a>,
+    event: Event,
+) -> Result<(), Error> {
+    let ctrl = Modifiers {
+        ctrl: true,
+        ..Default::default()
+    };
+    let none = Modifiers::default();
+    let shift = Modifiers {
+        shift: true,
+        ..Default::default()
+    };
+    match event {
+        // .key_press => |key| {
+        Event::KeyPress(owned) => {
+            let key = borrow_key(&owned);
+            // if (key.matches('c', .{ .ctrl = true })) self.should_quit = true;
+            if key.matches('c' as u32, ctrl) {
+                st.should_quit = true;
+            }
+            // switch (self.mode) {
+            match st.mode {
+                // .normal => {
+                Mode::Normal => {
+                    // if (key.matchesAny(&.{ 'q', escape }, .{})) self.should_quit = true;
+                    if key.matches_any(&['q' as u32, key::escape], none) {
+                        st.should_quit = true;
+                    }
+                    // if (key.matchesAny(&.{ '?', f1 }, .{})) self.mode = .help;
+                    if key.matches_any(&['?' as u32, key::f1], none) {
+                        st.mode = Mode::Help;
+                    }
+                    // if (key.matches('h', .{ .ctrl = true })) self.mode = .help;
+                    if key.matches('h' as u32, ctrl) {
+                        st.mode = Mode::Help;
+                    }
+                    // if (key.matches('/', .{})) self.mode = .search;
+                    if key.matches('/' as u32, none) {
+                        st.mode = Mode::Search;
+                    }
+                    // if (key.matchesAny(&.{ enter, kp_enter }, .{})) self.mode = .save;
+                    if key.matches_any(&[key::enter, key::kp_enter], none) {
+                        st.mode = Mode::Save;
+                    }
+                    // if (key.matchesAny(&.{ 'x', '/' }, .{ .ctrl = true })) { buf.clearRetainingCapacity(); updateFiltered(); }
+                    if key.matches_any(&['x' as u32, '/' as u32], ctrl) {
+                        st.text_input.buf.clear_retaining_capacity();
+                        update_filtered(st)?;
+                    }
+                    // if (key.matchesAny(&.{ home, kp_home }, .{})) self.current = 0;
+                    if key.matches_any(&[key::home, key::kp_home], none) {
+                        st.current = 0;
+                    }
+                    // if (key.matchesAny(&.{ end, kp_end }, .{})) self.current = self.filtered.items.len - 1;
+                    //   PORT NOTE (issue 4): `wrapping_sub(1)` mirrors ReleaseFast's `usize`
+                    //   wrap on an empty filter; `draw` resets `current = 0` before any index,
+                    //   so the wrapped value is never used to index (matching the reference).
+                    if key.matches_any(&[key::end, key::kp_end], none) {
+                        st.current = st.filtered.len().wrapping_sub(1);
+                    }
+                    // if (key.matchesAny(&.{ 'j', '+', down, kp_down, kp_add }, .{})) self.down(1);
+                    if key.matches_any(
+                        &['j' as u32, '+' as u32, key::down, key::kp_down, key::kp_add],
+                        none,
+                    ) {
+                        down(st, 1);
+                    }
+                    // if (key.matchesAny(&.{ page_down, kp_down }, .{})) self.down(20);
+                    if key.matches_any(&[key::page_down, key::kp_down], none) {
+                        down(st, 20);
+                    }
+                    // if (key.matchesAny(&.{ 'k', '-', up, kp_up, kp_subtract }, .{})) self.up(1);
+                    if key.matches_any(
+                        &[
+                            'k' as u32,
+                            '-' as u32,
+                            key::up,
+                            key::kp_up,
+                            key::kp_subtract,
+                        ],
+                        none,
+                    ) {
+                        up(st, 1);
+                    }
+                    // if (key.matchesAny(&.{ page_up, kp_page_up }, .{})) self.up(20);
+                    if key.matches_any(&[key::page_up, key::kp_page_up], none) {
+                        up(st, 20);
+                    }
+                    // if (key.matchesAny(&.{ 'h', 'x' }, .{})) self.hex = true;
+                    if key.matches_any(&['h' as u32, 'x' as u32], none) {
+                        st.hex = true;
+                    }
+                    // if (key.matches('d', .{})) self.hex = false;
+                    if key.matches('d' as u32, none) {
+                        st.hex = false;
+                    }
+                    // if (key.matches('c', .{})) copy theme name  else if (key.matches('c', .{shift})) copy path;
+                    //   PORT NOTE (§1 divergence): NO `alloc` arg. (issue 4) guard the
+                    //   `filtered[current]` index on an empty filter.
+                    if key.matches('c' as u32, none) {
+                        if !st.filtered.is_empty() {
+                            vx.copy_to_system_clipboard(
+                                tty.writer(),
+                                &st.themes[st.filtered[st.current]].theme,
+                            )?;
+                        }
+                    } else if key.matches('c' as u32, shift) && !st.filtered.is_empty() {
+                        // (issue 4) guard the `filtered[current]` index on an empty filter.
+                        vx.copy_to_system_clipboard(
+                            tty.writer(),
+                            &st.themes[st.filtered[st.current]].path,
+                        )?;
+                    }
+                    // if (key.matches('f', .{})) { cycle theme_filter (all->dark->light->all); updateFiltered(); }
+                    if key.matches('f' as u32, none) {
+                        st.theme_filter = match st.theme_filter {
+                            ColorScheme::All => ColorScheme::Dark,
+                            ColorScheme::Dark => ColorScheme::Light,
+                            ColorScheme::Light => ColorScheme::All,
+                        };
+                        update_filtered(st)?;
+                    }
+                }
+                // .help => {
+                Mode::Help => {
+                    // if (key.matches('q', .{})) self.should_quit = true;
+                    if key.matches('q' as u32, none) {
+                        st.should_quit = true;
+                    }
+                    // if (key.matchesAny(&.{ '?', escape, f1 }, .{})) self.mode = .normal;
+                    if key.matches_any(&['?' as u32, key::escape, key::f1], none) {
+                        st.mode = Mode::Normal;
+                    }
+                    // if (key.matches('h', .{ .ctrl = true })) self.mode = .normal;
+                    if key.matches('h' as u32, ctrl) {
+                        st.mode = Mode::Normal;
+                    }
+                }
+                // .search => search: {
+                Mode::Search => 'search: {
+                    // if (key.matchesAny(&.{ escape, enter }, .{})) { self.mode = .normal; break :search; }
+                    if key.matches_any(&[key::escape, key::enter], none) {
+                        st.mode = Mode::Normal;
+                        break 'search;
+                    }
+                    // if (key.matchesAny(&.{ 'x', '/' }, .{ .ctrl = true })) { text_input.clearRetainingCapacity(); updateFiltered(); break :search; }
+                    if key.matches_any(&['x' as u32, '/' as u32], ctrl) {
+                        st.text_input.clear_retaining_capacity();
+                        update_filtered(st)?;
+                        break 'search;
+                    }
+                    // try self.text_input.update(.{ .key_press = key });
+                    st.text_input.update(TiEvent::KeyPress(key));
+                    // try self.updateFiltered();
+                    update_filtered(st)?;
+                }
+                // .save => {
+                Mode::Save => {
+                    // if (key.matches('q', .{})) self.should_quit = true;
+                    if key.matches('q' as u32, none) {
+                        st.should_quit = true;
+                    }
+                    // if (key.matchesAny(&.{ escape, enter, kp_enter }, .{})) self.mode = .normal;
+                    if key.matches_any(&[key::escape, key::enter, key::kp_enter], none) {
+                        st.mode = Mode::Normal;
+                    }
+                    // if (key.matches('w', .{})) self.saveSelectedTheme();
+                    if key.matches('w' as u32, none) {
+                        save_selected_theme(st);
+                    }
+                }
+            }
+        }
+        // .color_scheme => |color_scheme| self.color_scheme = color_scheme,
+        Event::ColorScheme(cs) => st.color_scheme = cs,
+        // .mouse => |mouse| self.mouse = mouse,
+        Event::Mouse(m) => st.mouse = Some(m),
+        // .winsize => |ws| try self.vx.resize(allocator, self.tty.writer(), ws),
+        Event::Winsize(ws) => vx.resize(tty.writer(), ws)?,
+    }
+    Ok(())
+}
+
+// ---- the ui_* color helpers (methods on Preview → free fns over the scheme) ----
+// pub fn ui_fg(self) vaxis.Color
+fn ui_fg(scheme: Scheme) -> Color {
+    match scheme {
+        Scheme::Light => Color::Rgb([0x00, 0x00, 0x00]),
+        Scheme::Dark => Color::Rgb([0xff, 0xff, 0xff]),
+    }
+}
+// pub fn ui_bg(self) vaxis.Color
+fn ui_bg(scheme: Scheme) -> Color {
+    match scheme {
+        Scheme::Light => Color::Rgb([0xff, 0xff, 0xff]),
+        Scheme::Dark => Color::Rgb([0x00, 0x00, 0x00]),
+    }
+}
+// pub fn ui_standard(self) vaxis.Style
+fn ui_standard(scheme: Scheme) -> Style {
+    Style {
+        fg: ui_fg(scheme),
+        bg: ui_bg(scheme),
+        ..Default::default()
+    }
+}
+// pub fn ui_hover_bg(self) vaxis.Color
+fn ui_hover_bg(scheme: Scheme) -> Color {
+    match scheme {
+        Scheme::Light => Color::Rgb([0xbb, 0xbb, 0xbb]),
+        Scheme::Dark => Color::Rgb([0x22, 0x22, 0x22]),
+    }
+}
+// pub fn ui_highlighted(self) vaxis.Style
+fn ui_highlighted(scheme: Scheme) -> Style {
+    Style {
+        fg: ui_fg(scheme),
+        bg: ui_hover_bg(scheme),
+        ..Default::default()
+    }
+}
+// pub fn ui_selected_fg(self) vaxis.Color
+fn ui_selected_fg(_scheme: Scheme) -> Color {
+    // .light/.dark both 0x00aa00
+    Color::Rgb([0x00, 0xaa, 0x00])
+}
+// pub fn ui_selected_bg(self) vaxis.Color
+fn ui_selected_bg(scheme: Scheme) -> Color {
+    match scheme {
+        Scheme::Light => Color::Rgb([0xaa, 0xaa, 0xaa]),
+        Scheme::Dark => Color::Rgb([0x33, 0x33, 0x33]),
+    }
+}
+// pub fn ui_selected(self) vaxis.Style
+fn ui_selected(scheme: Scheme) -> Style {
+    Style {
+        fg: ui_selected_fg(scheme),
+        bg: ui_selected_bg(scheme),
+        ..Default::default()
+    }
+}
+// pub fn ui_err_fg(self) vaxis.Color
+fn ui_err_fg(_scheme: Scheme) -> Color {
+    // .light/.dark both 0xff0000
+    Color::Rgb([0xff, 0x00, 0x00])
+}
+// pub fn ui_err(self) vaxis.Style
+fn ui_err(scheme: Scheme) -> Style {
+    Style {
+        fg: ui_err_fg(scheme),
+        bg: ui_bg(scheme),
+        ..Default::default()
+    }
+}
+
+// fn color(config: Config, palette: usize) vaxis.Color
+fn color(config: &Config, palette: usize) -> Color {
+    // .rgb = .{ palette.value[palette].r, .g, .b }
+    Color::Rgb([
+        config.palette.value[palette].r,
+        config.palette.value[palette].g,
+        config.palette.value[palette].b,
+    ])
+}
+
+// `.{ .row_offset = r, .col_offset = c }`
+fn propt(row: u16, col: u16) -> PrintOptions {
+    PrintOptions {
+        row_offset: row,
+        col_offset: col,
+        ..Default::default()
+    }
+}
+
+// A segment carrying a hyperlink URI (theme name/path rows).
+fn linked<'x>(text: &'x [u8], style: Style, uri: &'x [u8]) -> Segment<'x> {
+    Segment {
+        text,
+        style,
+        link: Hyperlink { uri, params: b"" },
+    }
+}
+
+// pub fn draw(self: *Preview, alloc) !void
+//   Free fn over disjoint `&mut vx` / `&mut st` (§7). Never names `tty`, never forms
+//   a whole `&mut Preview`. Infallible (all draw ops); the tty writes stay in `run`.
+fn draw<'a>(vx: &mut Vaxis<'a>, st: &mut DrawState<'a>) {
+    let arena: &'a Arena = st.arena;
+    let themes: &'a [ThemeListElement] = st.themes;
+    let scheme = st.color_scheme;
+
+    // const win = self.vx.window();
+    let win = vx.window();
+    // win.clear();
+    win.clear();
+    // self.vx.setMouseShape(.default);
+    vx.set_mouse_shape(Shape::Default);
+
+    // const theme_list = win.child(.{ .x_off=0, .y_off=0, .width=32, .height=win.height });
+    let theme_list = win.child(ChildOptions {
+        x_off: 0,
+        y_off: 0,
+        width: Some(32),
+        height: Some(win.height),
+        ..Default::default()
+    });
+
+    // var highlight: ?usize = null;
+    let mut highlight: Option<usize> = None;
+
+    // if (self.mouse) |mouse| { self.mouse = null; ... }
+    if let Some(mouse) = st.mouse.take() {
+        // if (self.mode == .normal) {
+        if st.mode == Mode::Normal {
+            // if (mouse.button == .wheel_up) self.up(1);
+            if mouse.button == Button::WheelUp {
+                up(st, 1);
+            }
+            // if (mouse.button == .wheel_down) self.down(1);
+            if mouse.button == Button::WheelDown {
+                down(st, 1);
+            }
+            // if (theme_list.hasMouse(mouse)) |_| {
+            if Window::has_mouse(theme_list, Some(mouse)).is_some() {
+                // if (mouse.button == .left and mouse.type == .release) {
+                if mouse.button == Button::Left && mouse.r#type == MouseType::Release {
+                    // const selection = self.window + mouse.row;
+                    let selection = st.window + mouse.row as usize;
+                    // if (selection < self.filtered.items.len) self.current = selection;
+                    if selection < st.filtered.len() {
+                        st.current = selection;
+                    }
+                }
+                // highlight = mouse.row;
+                highlight = Some(mouse.row as usize);
+            }
+        }
+    }
+
+    // if (self.filtered.items.len == 0) { current=0; window=0; } else { window scroll clamp }
+    if st.filtered.is_empty() {
+        st.current = 0;
+        st.window = 0;
+    } else {
+        // const start = self.window;
+        let start = st.window;
+        // const end = self.window + theme_list.height - 1;
+        let end = st.window + theme_list.height as usize - 1;
+        // if (self.current > end) self.window = self.current - theme_list.height + 1;
+        if st.current > end {
+            st.window = st.current - theme_list.height as usize + 1;
+        }
+        // if (self.current < start) self.window = self.current;
+        if st.current < start {
+            st.window = st.current;
+        }
+        // if (self.window >= self.filtered.items.len) self.window = self.filtered.items.len - 1;
+        if st.window >= st.filtered.len() {
+            st.window = st.filtered.len() - 1;
+        }
+    }
+
+    // theme_list.fill(.{ .style = self.ui_standard() });
+    theme_list.fill(VCell {
+        style: ui_standard(scheme),
+        ..Default::default()
+    });
+
+    // for (0..theme_list.height) |row_capture| {
+    for row in 0..theme_list.height {
+        // const index = self.window + row;
+        let index = st.window + row as usize;
+        // if (index >= self.filtered.items.len) break;
+        if index >= st.filtered.len() {
+            break;
+        }
+        // const theme = self.themes[self.filtered.items[index]];
+        let theme = &themes[st.filtered[index]];
+
+        // const style: enum { normal, highlighted, selected } = style: { ... };
+        let style = if index == st.current {
+            RowStyle::Selected
+        } else if highlight == Some(row as usize) {
+            RowStyle::Highlighted
+        } else {
+            RowStyle::Normal
+        };
+
+        // if (style == .selected) printSegment("❯ ", ui_selected(), {row,0});
+        if style == RowStyle::Selected {
+            let _ = theme_list
+                .print_segment(styled("❯ ".as_bytes(), ui_selected(scheme)), propt(row, 0));
+        }
+        // printSegment(theme.theme, style-dependent, link=toUri, {row,2});
+        let seg_style = match style {
+            RowStyle::Normal => ui_standard(scheme),
+            RowStyle::Highlighted => ui_highlighted(scheme),
+            RowStyle::Selected => ui_selected(scheme),
+        };
+        let uri = arena.dupe(&theme.to_uri());
+        let _ = theme_list.print_segment(linked(&theme.theme, seg_style, uri), propt(row, 2));
+
+        // if (style == .selected) { right-pad + " ❮" tail }
+        if style == RowStyle::Selected {
+            // if (theme.theme.len < theme_list.width - 4) { for (2+len .. width-2) print " " }
+            if theme.theme.len() < (theme_list.width - 4) as usize {
+                for i in (2 + theme.theme.len())..(theme_list.width as usize - 2) {
+                    let _ = theme_list
+                        .print_segment(styled(b" ", ui_selected(scheme)), propt(row, i as u16));
+                }
+            }
+            // printSegment(" ❮", ui_selected(), {row, width-2});
+            let _ = theme_list.print_segment(
+                styled(" ❮".as_bytes(), ui_selected(scheme)),
+                propt(row, theme_list.width - 2),
+            );
+        }
+    }
+
+    // try self.drawPreview(alloc, win, theme_list.x_off + theme_list.width);
+    draw_preview(st, win, theme_list.x_off + theme_list.width as i32);
+
+    // switch (self.mode) {
+    match st.mode {
+        // .normal => win.hideCursor();
+        Mode::Normal => {
+            win.hide_cursor();
+        }
+        // .help => { hideCursor; 60x22 bordered child + the 19-row key_help table }
+        Mode::Help => {
+            win.hide_cursor();
+            let width: u16 = 60;
+            let height: u16 = 22;
+            let child = win.child(ChildOptions {
+                x_off: (win.width / 2).saturating_sub(width / 2) as i32,
+                y_off: (win.height / 2).saturating_sub(height / 2) as i32,
+                width: Some(width),
+                height: Some(height),
+                border: BorderOptions {
+                    r#where: Where::All,
+                    style: ui_standard(scheme),
+                    ..Default::default()
+                },
+            });
+            child.fill(VCell {
+                style: ui_standard(scheme),
+                ..Default::default()
+            });
+
+            // const key_help = [_]struct { keys, help }{ ... };
+            let key_help: [(&[u8], &[u8]); 19] = [
+                (b"^C, q, ESC", b"Quit."),
+                (b"F1, ?, ^H", b"Toggle help window."),
+                (b"f", b"Cycle through theme filters."),
+                ("k, ↑".as_bytes(), b"Move up 1 theme."),
+                (b"ScrollUp", b"Move up 1 theme."),
+                (b"PgUp", b"Move up 20 themes."),
+                ("j, ↓".as_bytes(), b"Move down 1 theme."),
+                (b"ScrollDown", b"Move down 1 theme."),
+                (b"PgDown", b"Move down 20 themes."),
+                (b"h, x", b"Show palette numbers in hexadecimal."),
+                (b"d", b"Show palette numbers in decimal."),
+                (b"c", b"Copy theme name to the clipboard."),
+                (b"C", b"Copy theme path to the clipboard."),
+                (b"Home", b"Go to the start of the list."),
+                (b"End", b"Go to the end of the list."),
+                (b"/", b"Start search."),
+                (b"^X, ^/", b"Clear search."),
+                ("⏎".as_bytes(), b"Save theme or close search window."),
+                (b"w", b"Write theme to auto config file."),
+            ];
+            // for (key_help, 0..) |help, captured_i| { keys@2, "—"@15, help@17 }
+            for (captured_i, (keys, help)) in key_help.iter().enumerate() {
+                let i = captured_i as u16;
+                let _ = child.print_segment(styled(keys, ui_standard(scheme)), propt(i + 1, 2));
+                let _ = child.print_segment(
+                    styled("—".as_bytes(), ui_standard(scheme)),
+                    propt(i + 1, 15),
+                );
+                let _ = child.print_segment(styled(help, ui_standard(scheme)), propt(i + 1, 17));
+            }
+        }
+        // .search => bordered child + text_input.drawWithStyle
+        Mode::Search => {
+            let child = win.child(ChildOptions {
+                x_off: 20,
+                y_off: (win.height - 5) as i32,
+                width: Some(win.width - 40),
+                height: Some(3),
+                border: BorderOptions {
+                    r#where: Where::All,
+                    style: ui_standard(scheme),
+                    ..Default::default()
+                },
+            });
+            child.fill(VCell {
+                style: ui_standard(scheme),
+                ..Default::default()
+            });
+            // self.text_input.drawWithStyle(child, self.ui_standard());
+            //   PORT NOTE (forced divergence): `drawWithStyle` needs `&'a mut TextInput`
+            //   + `Window<'a>` (the invariant `*mut Screen<'a>` forces `'s == 'a`), which
+            //   the per-frame `&mut` cannot supply. Render the buffer bytes directly
+            //   (arena-duped, `first_half ++ second_half`) — the visible search string is
+            //   identical; only the widget's cursor glyph is omitted.
+            let mut buffer: Vec<u8> = Vec::new();
+            buffer.extend_from_slice(st.text_input.buf.first_half());
+            buffer.extend_from_slice(st.text_input.buf.second_half());
+            let text = arena.dupe(&buffer);
+            let _ = child.print_segment(styled(text, ui_standard(scheme)), propt(0, 0));
+        }
+        // .save => 92x17 child + the 14-line save_instructions
+        Mode::Save => {
+            let width: u16 = 92;
+            let height: u16 = 17;
+            let child = win.child(ChildOptions {
+                x_off: (win.width / 2).saturating_sub(width / 2) as i32,
+                y_off: (win.height / 2).saturating_sub(height / 2) as i32,
+                width: Some(width),
+                height: Some(height),
+                border: BorderOptions {
+                    r#where: Where::All,
+                    style: ui_standard(scheme),
+                    ..Default::default()
+                },
+            });
+            child.fill(VCell {
+                style: ui_standard(scheme),
+                ..Default::default()
+            });
+            // const theme = self.themes[self.filtered.items[self.current]];  (issue-4 guard)
+            //   allocPrint "theme = {s}" → arena-duped; empty filter → skip the line.
+            let theme_line: &[u8] = if !st.filtered.is_empty() {
+                let theme = &themes[st.filtered[st.current]];
+                let mut v: Vec<u8> = Vec::new();
+                v.extend_from_slice(b"theme = ");
+                v.extend_from_slice(&theme.theme);
+                arena.dupe(&v)
+            } else {
+                b""
+            };
+            let save_instructions: [&[u8]; 14] = [
+                "To apply this theme, add the following line to your Ghostty configuration:"
+                    .as_bytes(),
+                b"",
+                theme_line,
+                b"",
+                "Save the configuration file and then reload it to apply the new theme.".as_bytes(),
+                b"",
+                "Or press 'w' to write an auto theme file to your system's preferred default config path."
+                    .as_bytes(),
+                "Then add the following line to your Ghostty configuration and reload:".as_bytes(),
+                b"",
+                "config-file = ?auto/theme.ghostty".as_bytes(),
+                b"",
+                "For more details on configuration and themes, visit the Ghostty documentation:"
+                    .as_bytes(),
+                b"",
+                "https://ghostty.org/docs/config/reference".as_bytes(),
+            ];
+            // for (save_instructions, 0..) |instruction, captured_i| { instruction@2 }
+            for (captured_i, instruction) in save_instructions.iter().enumerate() {
+                let i = captured_i as u16;
+                let _ =
+                    child.print_segment(styled(instruction, ui_standard(scheme)), propt(i + 1, 2));
+            }
+        }
+    }
+}
+
+// pub fn drawPreview(self, alloc, win: vaxis.Window, x_off_unconverted: i17) !void
+//   Reads only `st` (filtered/current/hex/color_scheme) + `win` — never `tty`/`vx`.
+//   Catches the `loadFile` error internally (error pane), so it is infallible.
+fn draw_preview<'a>(st: &DrawState<'a>, win: Window<'a>, x_off_unconverted: i32) {
+    let arena: &'a Arena = st.arena;
+    let themes: &'a [ThemeListElement] = st.themes;
+    let scheme = st.color_scheme;
+
+    // const x_off: u16 = @intCast(x_off_unconverted);
+    let x_off = x_off_unconverted as u16;
+    // const width: u16 = win.width - x_off;
+    let width: u16 = win.width - x_off;
+
+    // if (self.filtered.items.len > 0) {
+    if !st.filtered.is_empty() {
+        // const theme = self.themes[self.filtered.items[self.current]];
+        let theme = &themes[st.filtered[st.current]];
+
+        // var config = try Config.default(alloc);
+        let mut config = Config::default_config();
+
+        // config.loadFile(..., theme.path) catch |err| { error pane; return; };
+        if let Err(err) = config.load_file(&theme.path) {
+            let theme_path_len = theme.path.len() as u16;
+            let child = win.child(ChildOptions {
+                x_off: x_off as i32,
+                y_off: 0,
+                width: Some(width),
+                height: Some(win.height),
+                ..Default::default()
+            });
+            child.fill(VCell {
+                style: ui_standard(scheme),
+                ..Default::default()
+            });
+            let middle = child.height / 2;
+            {
+                // "Unable to open {s} from:"
+                let mut v: Vec<u8> = Vec::new();
+                v.extend_from_slice(b"Unable to open ");
+                v.extend_from_slice(&theme.theme);
+                v.extend_from_slice(b" from:");
+                let text = arena.dupe(&v);
+                let text_len = text.len() as u16;
+                let _ = child.print_segment(
+                    styled(text, ui_err(scheme)),
+                    propt(
+                        middle.saturating_sub(1),
+                        (child.width / 2).saturating_sub(text_len / 2),
+                    ),
+                );
+            }
+            {
+                // theme.path (linked)
+                let uri = arena.dupe(&theme.to_uri());
+                let _ = child.print_segment(
+                    linked(&theme.path, ui_err(scheme), uri),
+                    propt(middle, (child.width / 2).saturating_sub(theme_path_len / 2)),
+                );
+            }
+            {
+                // "{}" of the error — PORT NOTE (issue 3): `LoadError` has NO `Display`,
+                // so `{err:?}` (Debug); a documented COSMETIC divergence (err-pane text).
+                let text = arena.dupe(format!("{err:?}").as_bytes());
+                let text_len = text.len() as u16;
+                let _ = child.print_segment(
+                    styled(text, ui_err(scheme)),
+                    propt(middle + 1, (child.width / 2).saturating_sub(text_len / 2)),
+                );
+            }
+            return;
+        }
+
+        // var next_start: u16 = 0;
+        let mut next_start: u16 = 0;
+
+        // fg/bg/cursor/selection colors
+        let fg = Color::Rgb([
+            config.foreground.r,
+            config.foreground.g,
+            config.foreground.b,
+        ]);
+        let bg = Color::Rgb([
+            config.background.r,
+            config.background.g,
+            config.background.b,
+        ]);
+        // PORT NOTE (§1 fidelity): `TerminalColor::Color(c) => rgb`; the cell-* arms
+        // have no rgb → resolve to the reference's missing-value fallback (cursor_fg→bg,
+        // cursor_bg→fg, selection_fg→bg, selection_bg→fg).
+        let cursor_fg = config
+            .cursor_text
+            .as_ref()
+            .and_then(term_color_rgb)
+            .unwrap_or(bg);
+        let cursor_bg = config
+            .cursor_color
+            .as_ref()
+            .and_then(term_color_rgb)
+            .unwrap_or(fg);
+        let selection_fg = config
+            .selection_foreground
+            .as_ref()
+            .and_then(term_color_rgb)
+            .unwrap_or(bg);
+        let selection_bg = config
+            .selection_background
+            .as_ref()
+            .and_then(term_color_rgb)
+            .unwrap_or(fg);
+        let cursor = Style {
+            fg: cursor_fg,
+            bg: cursor_bg,
+            ..Default::default()
+        };
+        let standard_selection = Style {
+            fg: selection_fg,
+            bg: selection_bg,
+            ..Default::default()
+        };
+        let standard = Style {
+            fg,
+            bg,
+            ..Default::default()
+        };
+        let standard_bold = Style {
+            fg,
+            bg,
+            bold: true,
+            ..Default::default()
+        };
+        let standard_italic = Style {
+            fg,
+            bg,
+            italic: true,
+            ..Default::default()
+        };
+        let standard_bold_italic = Style {
+            fg,
+            bg,
+            bold: true,
+            italic: true,
+            ..Default::default()
+        };
+        let standard_underline = Style {
+            fg,
+            bg,
+            ul_style: Underline::Single,
+            ..Default::default()
+        };
+        let standard_double_underline = Style {
+            fg,
+            bg,
+            ul_style: Underline::Double,
+            ..Default::default()
+        };
+        let standard_dashed_underline = Style {
+            fg,
+            bg,
+            ul_style: Underline::Dashed,
+            ..Default::default()
+        };
+        let standard_curly_underline = Style {
+            fg,
+            bg,
+            ul_style: Underline::Curly,
+            ..Default::default()
+        };
+        let standard_dotted_underline = Style {
+            fg,
+            bg,
+            ul_style: Underline::Dotted,
+            ..Default::default()
+        };
+
+        // { title/path child (height 4) }
+        {
+            let theme_len = theme.theme.len() as u16;
+            let theme_path_len = theme.path.len() as u16;
+            let child = win.child(ChildOptions {
+                x_off: x_off as i32,
+                y_off: next_start as i32,
+                width: Some(width),
+                height: Some(4),
+                ..Default::default()
+            });
+            child.fill(VCell {
+                style: standard,
+                ..Default::default()
+            });
+            let uri1 = arena.dupe(&theme.to_uri());
+            let _ = child.print_segment(
+                linked(&theme.theme, standard_bold_italic, uri1),
+                propt(1, (child.width / 2).saturating_sub(theme_len / 2)),
+            );
+            let uri2 = arena.dupe(&theme.to_uri());
+            let _ = child.print_segment(
+                Segment {
+                    text: &theme.path,
+                    style: standard,
+                    link: Hyperlink {
+                        uri: uri2,
+                        params: b"",
+                    },
+                },
+                PrintOptions {
+                    row_offset: 2,
+                    col_offset: (child.width / 2).saturating_sub(theme_path_len / 2),
+                    wrap: Wrap::None,
+                    ..Default::default()
+                },
+            );
+            next_start += child.height;
+        }
+
+        // if (config._diagnostics.items().len > 0) { diagnostics child }
+        if !config._diagnostics.items().is_empty() {
+            let diagnostic_items_len = config._diagnostics.items().len() as u16;
+            let child = win.child(ChildOptions {
+                x_off: x_off as i32,
+                y_off: next_start as i32,
+                width: Some(width),
+                height: Some(if config._diagnostics.items().is_empty() {
+                    0
+                } else {
+                    2 + diagnostic_items_len
+                }),
+                ..Default::default()
+            });
+            {
+                let text = b"Problems were encountered trying to load the theme:";
+                let text_len = text.len() as u16;
+                let _ = child.print_segment(
+                    styled(text, ui_err(scheme)),
+                    propt(0, (child.width / 2).saturating_sub(text_len / 2)),
+                );
+            }
+            // for (config._diagnostics.items(), 0..) |diag, i| { diag.format(&buf); print@(2+i,2); }
+            for (captured_i, diag) in config._diagnostics.items().iter().enumerate() {
+                let i = captured_i as u16;
+                let mut buf: Vec<u8> = Vec::new();
+                diag.format(&mut buf);
+                let text = arena.dupe(&buf);
+                let _ = child.print_segment(styled(text, ui_err(scheme)), propt(2 + i, 2));
+            }
+            next_start += child.height;
+        }
+
+        // { 6-row 16-color swatch grid }
+        {
+            let child = win.child(ChildOptions {
+                x_off: x_off as i32,
+                y_off: next_start as i32,
+                width: Some(width),
+                height: Some(6),
+                ..Default::default()
+            });
+            child.fill(VCell {
+                style: standard,
+                ..Default::default()
+            });
+            for i in 0u16..16 {
+                let r = i / 8;
+                let c = i % 8;
+                // hex " {x:0>2}" / decimal "{d:3}"
+                let text = if st.hex {
+                    arena.dupe(format!(" {i:02x}").as_bytes())
+                } else {
+                    arena.dupe(format!("{i:3}").as_bytes())
+                };
+                let _ = child.print_segment(styled(text, standard), propt(3 * r, c * 8));
+                let swatch = Style {
+                    fg: color(&config, i as usize),
+                    bg,
+                    ..Default::default()
+                };
+                let _ =
+                    child.print_segment(styled("████".as_bytes(), swatch), propt(3 * r, 4 + c * 8));
+                let _ = child.print_segment(
+                    styled("████".as_bytes(), swatch),
+                    propt(3 * r + 1, 4 + c * 8),
+                );
+            }
+            next_start += child.height;
+        }
+
+        // { 24-row ziggzagg.zig `bat` sample }
+        {
+            let child = win.child(ChildOptions {
+                x_off: x_off as i32,
+                y_off: next_start as i32,
+                width: Some(width),
+                height: Some(24),
+                ..Default::default()
+            });
+            let bold = Style {
+                fg,
+                bg,
+                bold: true,
+                ..Default::default()
+            };
+            let color1 = Style {
+                fg: color(&config, 1),
+                bg,
+                ..Default::default()
+            };
+            let color2 = Style {
+                fg: color(&config, 2),
+                bg,
+                ..Default::default()
+            };
+            let color3 = Style {
+                fg: color(&config, 3),
+                bg,
+                ..Default::default()
+            };
+            let color4 = Style {
+                fg: color(&config, 4),
+                bg,
+                ..Default::default()
+            };
+            let color5 = Style {
+                fg: color(&config, 5),
+                bg,
+                ..Default::default()
+            };
+            let color6 = Style {
+                fg: color(&config, 6),
+                bg,
+                ..Default::default()
+            };
+            let color6ul = Style {
+                fg: color(&config, 6),
+                bg,
+                ul_style: Underline::Single,
+                ..Default::default()
+            };
+            let color10 = Style {
+                fg: color(&config, 10),
+                bg,
+                ..Default::default()
+            };
+            let color12 = Style {
+                fg: color(&config, 12),
+                bg,
+                ..Default::default()
+            };
+            let color238 = Style {
+                fg: color(&config, 238),
+                bg,
+                ..Default::default()
+            };
+            child.fill(VCell {
+                style: standard,
+                ..Default::default()
+            });
+            let _ = child.print(
+                &[
+                    styled("→".as_bytes(), color2),
+                    styled(b" ", standard),
+                    styled(b"bat", color4),
+                    styled(b" ", standard),
+                    styled(b"ziggzagg.zig", color6ul),
+                ],
+                propt(0, 2),
+            );
+            {
+                let _ = child.print(&[styled("───────┬".as_bytes(), color238)], propt(1, 2));
+                if child.width > 10 {
+                    for col in 10..child.width {
+                        let _ = child.print(&[styled("─".as_bytes(), color238)], propt(1, col));
+                    }
+                }
+            }
+            let _ = child.print(
+                &[
+                    styled("       │ ".as_bytes(), color238),
+                    styled(b"File: ", standard),
+                    styled(b"ziggzagg.zig", bold),
+                ],
+                propt(2, 2),
+            );
+            {
+                let _ = child.print(&[styled("───────┼".as_bytes(), color238)], propt(3, 2));
+                if child.width > 10 {
+                    for col in 10..child.width {
+                        let _ = child.print(&[styled("─".as_bytes(), color238)], propt(3, col));
+                    }
+                }
+            }
+            let _ = child.print(
+                &[
+                    styled("   1   │ ".as_bytes(), color238),
+                    styled(b"const", color5),
+                    styled(b" std ", standard),
+                    styled(b"= @import", color5),
+                    styled(b"(", standard),
+                    styled("\"std\"".as_bytes(), color10),
+                    styled(b");", standard),
+                ],
+                propt(4, 2),
+            );
+            let _ = child.print(&[styled("   2   │".as_bytes(), color238)], propt(5, 2));
+            let _ = child.print(
+                &[
+                    styled("   3   │ ".as_bytes(), color238),
+                    styled(b"pub ", color5),
+                    styled(b"fn ", color12),
+                    styled(b"main", color2),
+                    styled(b"() ", standard),
+                    styled(b"!", color5),
+                    styled(b"void", color12),
+                    styled(b" {", standard),
+                ],
+                propt(6, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("   4   │     ".as_bytes(), color238),
+                    styled(b"const ", color5),
+                    styled(b"stdout ", standard),
+                    styled(b"=", color5),
+                    styled(b" std.Io.getStdOut().writer();", standard),
+                ],
+                propt(7, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("   5   │     ".as_bytes(), color238),
+                    styled(b"var ", color5),
+                    styled(b"i:", standard),
+                    styled(b" usize", color12),
+                    styled(b" =", color5),
+                    styled(b" 1", color4),
+                    styled(b";", standard),
+                ],
+                propt(8, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("   6   │     ".as_bytes(), color238),
+                    styled(b"while ", color5),
+                    styled(b"(i ", standard),
+                    styled(b"<= ", color5),
+                    styled(b"16", color4),
+                    styled(b") : (i ", standard),
+                    styled(b"+= ", color5),
+                    styled(b"1", color4),
+                    styled(b") {", standard),
+                ],
+                propt(9, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("   7   │         ".as_bytes(), color238),
+                    styled(b"if ", color5),
+                    styled(b"(i ", standard),
+                    styled(b"% ", color5),
+                    styled(b"15 ", color4),
+                    styled(b"== ", color5),
+                    styled(b"0", color4),
+                    styled(b") {", standard),
+                ],
+                propt(10, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("   8   │             ".as_bytes(), color238),
+                    styled(b"try ", color5),
+                    styled(b"stdout.writeAll(", standard),
+                    styled("\"ZiggZagg".as_bytes(), color10),
+                    styled("\\n".as_bytes(), color12),
+                    styled("\"".as_bytes(), color10),
+                    styled(b");", standard),
+                ],
+                propt(11, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("   9   │         ".as_bytes(), color238),
+                    styled(b"} ", standard),
+                    styled(b"else if ", color5),
+                    styled(b"(i ", standard),
+                    styled(b"% ", color5),
+                    styled(b"3 ", color4),
+                    styled(b"== ", color5),
+                    styled(b"0", color4),
+                    styled(b") {", standard),
+                ],
+                propt(12, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("  10   │             ".as_bytes(), color238),
+                    styled(b"try ", color5),
+                    styled(b"stdout.writeAll(", standard),
+                    styled("\"Zigg".as_bytes(), color10),
+                    styled("\\n".as_bytes(), color12),
+                    styled("\"".as_bytes(), color10),
+                    styled(b");", standard),
+                ],
+                propt(13, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("  11   │         ".as_bytes(), color238),
+                    styled(b"} ", standard),
+                    styled(b"else if ", color5),
+                    styled(b"(i ", standard),
+                    styled(b"% ", color5),
+                    styled(b"5 ", color4),
+                    styled(b"== ", color5),
+                    styled(b"0", color4),
+                    styled(b") {", standard),
+                ],
+                propt(14, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("  12   │             ".as_bytes(), color238),
+                    styled(b"try ", color5),
+                    styled(b"stdout.writeAll(", standard),
+                    styled("\"Zagg".as_bytes(), color10),
+                    styled("\\n".as_bytes(), color12),
+                    styled("\"".as_bytes(), color10),
+                    styled(b");", standard),
+                ],
+                propt(15, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("  13   │         ".as_bytes(), color238),
+                    styled(b"} ", standard),
+                    styled(b"else ", color5),
+                    styled(b"{", standard),
+                ],
+                propt(16, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("  14   │             ".as_bytes(), color238),
+                    styled(b"try ", color5),
+                    styled(
+                        "stdout.print(\"{d}\\n\", .{i})".as_bytes(),
+                        standard_selection,
+                    ),
+                    styled(b";", cursor),
+                ],
+                propt(17, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("  15   │         ".as_bytes(), color238),
+                    styled(b"}", standard),
+                ],
+                propt(18, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("  16   │     ".as_bytes(), color238),
+                    styled(b"}", standard),
+                ],
+                propt(19, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("  17   │ ".as_bytes(), color238),
+                    styled(b"}", standard),
+                ],
+                propt(20, 2),
+            );
+            {
+                let _ = child.print(&[styled("───────┴".as_bytes(), color238)], propt(21, 2));
+                if child.width > 10 {
+                    for col in 10..child.width {
+                        let _ = child.print(&[styled("─".as_bytes(), color238)], propt(21, col));
+                    }
+                }
+            }
+            let _ = child.print(
+                &[
+                    styled(b"ghostty ", color6),
+                    styled(b"on ", standard),
+                    styled(" main ".as_bytes(), color4),
+                    styled(b"[+] ", color1),
+                    styled(b"via ", standard),
+                    styled(" v0.13.0 ".as_bytes(), color3),
+                    styled(b"via ", standard),
+                    styled("  impure (ghostty-env)".as_bytes(), color4),
+                ],
+                propt(22, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("✦ ".as_bytes(), color4),
+                    styled(b"at ", standard),
+                    styled(b"10:36:15 ", color3),
+                    styled("→".as_bytes(), color2),
+                ],
+                propt(23, 2),
+            );
+            next_start += child.height;
+        }
+
+        // if (next_start < win.height) { lorem_ipsum fill }
+        if next_start < win.height {
+            let child = win.child(ChildOptions {
+                x_off: x_off as i32,
+                y_off: next_start as i32,
+                width: Some(width),
+                height: Some(win.height - next_start),
+                ..Default::default()
+            });
+            child.fill(VCell {
+                style: standard,
+                ..Default::default()
+            });
+            // var it = std.mem.splitAny(u8, lorem_ipsum, " \n");
+            let words = split_any(LOREM_IPSUM, b" \n");
+            let mut idx = 0usize;
+            // var row: u16 = 1; var col: u16 = 2;
+            let mut row: u16 = 1;
+            let mut col: u16 = 2;
+            // while (row < child.height) {
+            while row < child.height {
+                // const word = it.next() orelse line: { it.reset(); it.next() orelse unreachable };
+                if idx >= words.len() {
+                    idx = 0;
+                }
+                let word = words[idx];
+                idx += 1;
+                let word_len = word.len() as u16;
+                // if (col + word.len > child.width) { row += 1; col = 2; }
+                if col as usize + word.len() > child.width as usize {
+                    row += 1;
+                    col = 2;
+                }
+                // const style: vaxis.Style = style: { the 9 special-word styles };
+                let style = if word == b"ipsum" {
+                    Style {
+                        fg: color(&config, 2),
+                        bg,
+                        ..Default::default()
+                    }
+                } else if word == b"consectetur" {
+                    standard_bold
+                } else if word == b"reprehenderit" {
+                    standard_italic
+                } else if word == b"Praesent" {
+                    standard_bold_italic
+                } else if word == b"auctor" {
+                    standard_underline
+                } else if word == b"dui" {
+                    standard_double_underline
+                } else if word == b"erat" {
+                    standard_dashed_underline
+                } else if word == b"enim" {
+                    standard_dotted_underline
+                } else if word == b"odio" {
+                    standard_curly_underline
+                } else {
+                    standard
+                };
+                let text = arena.dupe(word);
+                let _ = child.print_segment(styled(text, style), propt(row, col));
+                // col += word_len + 1;
+                col += word_len + 1;
+            }
+        }
+    } else {
+        // else => the full-window "No theme found!" centered pane
+        let child = win.child(ChildOptions {
+            x_off: 0,
+            y_off: 0,
+            width: Some(win.width),
+            height: Some(win.height),
+            ..Default::default()
+        });
+        child.fill(VCell {
+            style: ui_standard(scheme),
+            ..Default::default()
+        });
+        let _ = child.print_segment(
+            styled("No theme found!".as_bytes(), ui_standard(scheme)),
+            propt(win.height / 2 - 1, win.width / 2 - 7),
+        );
+    }
+}
+
+// `TerminalColor::Color(c) => rgb`; cell-* arms → None (missing-value fallback, §1).
+fn term_color_rgb(tc: &TerminalColor) -> Option<Color> {
+    match tc {
+        TerminalColor::Color(c) => Some(Color::Rgb([c.r, c.g, c.b])),
+        _ => None,
+    }
+}
+
+// `std.mem.splitAny(u8, buf, delims)` — split on ANY delimiter byte, keeping empties.
+fn split_any<'b>(buf: &'b [u8], delims: &[u8]) -> Vec<&'b [u8]> {
+    let mut out: Vec<&[u8]> = Vec::new();
+    let mut start = 0usize;
+    for (i, &b) in buf.iter().enumerate() {
+        if delims.contains(&b) {
+            out.push(&buf[start..i]);
+            start = i + 1;
+        }
+    }
+    out.push(&buf[start..]);
+    out
+}
+
+// fn resolveAutoThemePath(alloc) ![]u8 {
+fn resolve_auto_theme_path() -> Result<Vec<u8>, Error> {
+    // const main_cfg_path = try configpkg.preferredDefaultFilePath(alloc);
+    let main_cfg_path = rustty_config::file_load::preferred_default_file_path()?;
+    // const base_dir = std.fs.path.dirname(main_cfg_path) orelse return error.BadPathName;
+    let base_dir = std::path::Path::new(&main_cfg_path)
+        .parent()
+        .ok_or_else(|| std::io::Error::other("BadPathName"))?;
+    // return try std.fs.path.join(alloc, &.{ base_dir, "auto", "theme.ghostty" });
+    let base_bytes = path_bytes(base_dir);
+    Ok(join(&[&base_bytes, b"auto", b"theme.ghostty"]))
+}
+
+// fn writeAutoThemeFile(alloc, theme_name: []const u8) !void {
+fn write_auto_theme_file(theme_name: &[u8]) -> Result<(), Error> {
+    // const auto_path = try resolveAutoThemePath(alloc);
+    let auto_path = resolve_auto_theme_path()?;
+    // if (std.fs.path.dirname(auto_path)) |dir| try std.fs.cwd().makePath(dir);
+    let p = std::path::Path::new(os_str_from_bytes(&auto_path));
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    // var f = try std.fs.createFileAbsolute(auto_path, .{ .truncate = true });
+    let mut f = std::fs::File::create(os_str_from_bytes(&auto_path))?;
+    // try w.interface.print("theme = {s}\n", .{theme_name});
+    f.write_all(b"theme = ")?;
+    f.write_all(theme_name)?;
+    f.write_all(b"\n")?;
+    Ok(())
+}
+
+// fn saveSelectedTheme(self: *Preview) void {
+fn save_selected_theme(st: &DrawState) {
+    // if (self.filtered.items.len == 0) return;
+    if st.filtered.is_empty() {
+        return;
+    }
+    // const idx = self.filtered.items[self.current]; const theme = self.themes[idx];
+    let theme = &st.themes[st.filtered[st.current]];
+    // writeAutoThemeFile(self.allocator, theme.theme) catch { return; };
+    let _ = write_auto_theme_file(&theme.theme);
+}
+
+// `&Path` → raw bytes (POSIX byte-faithful; the parity harness targets POSIX).
+#[cfg(unix)]
+fn path_bytes(p: &std::path::Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    p.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(not(unix))]
+fn path_bytes(p: &std::path::Path) -> Vec<u8> {
+    p.to_string_lossy().as_bytes().to_vec()
+}
+
+// ---- updateFiltered — the zf-ranking pass (§6) ----
+//
+// PURE kernel: two branches keyed on `has_query` (= real_length > 0, NOT
+// token-count — the all-spaces edge, issue 5):
+//  has_query == true : tokens ← lowercased(buffer) split on ' ' (empty runs
+//    skipped, so an ALL-SPACES buffer yields ZERO tokens but STILL takes this
+//    branch); per theme keep i iff color_pass[i] && zf::rank(name, &tokens,
+//    {to_lower, plain}).is_some() — `zf::rank` IS CALLED even when tokens is empty.
+//  has_query == false: per theme keep i iff color_pass[i]; ranks_out[i] = None.
+// Byte-faithful (`&[u8]`, never `String`).
+fn rank_filtered(
+    theme_names: &[&[u8]],
+    buffer: &[u8],
+    has_query: bool,
+    color_pass: &[bool],
+    ranks_out: &mut [Option<f64>],
+) -> Vec<usize> {
+    let mut filtered: Vec<usize> = Vec::new();
+    if has_query {
+        // const string = try std.ascii.allocLowerString(allocator, buffer);
+        let mut string = buffer.to_vec();
+        string.make_ascii_lowercase();
+        // var it = std.mem.tokenizeScalar(u8, string, ' ');  (skips empty runs)
+        let tokens: Vec<&[u8]> = string
+            .split(|&b| b == b' ')
+            .filter(|t| !t.is_empty())
+            .collect();
+        // for (self.themes, 0..) |*theme, i| { if (!shouldIncludeTheme) continue; rank; if rank!=null append; }
+        for (i, name) in theme_names.iter().enumerate() {
+            if !color_pass[i] {
+                continue;
+            }
+            let r = zf_rank(
+                name,
+                &tokens,
+                RankOptions {
+                    to_lower: true,
+                    plain: true,
+                },
+            );
+            ranks_out[i] = r;
+            if r.is_some() {
+                filtered.push(i);
+            }
+        }
+    } else {
+        // for (self.themes, 0..) |*theme, i| { if (shouldIncludeTheme) { append; rank=null; } }
+        for (i, _name) in theme_names.iter().enumerate() {
+            if color_pass[i] {
+                filtered.push(i);
+                ranks_out[i] = None;
+            }
+        }
+    }
+    filtered
+}
+
+// The reselect walk (§6) — pure integer/byte math: given the rebuilt filtered, the
+// pre-rebuild selected name + relative offset, returns the new (current, window).
+fn reselect(
+    filtered: &[usize],
+    names: &[&[u8]],
+    selected: Option<&[u8]>,
+    relative: usize,
+) -> (usize, usize) {
+    // if (selected.len == 0) break :current .{ 0, 0 };
+    //   PORT NOTE: the reference reads an `undefined` `selected` when the pre-rebuild
+    //   filtered was empty; the port models "no prior selection" as `None` → (0, 0)
+    //   (the benign resolution the reference falls into on init).
+    let Some(sel) = selected else {
+        return (0, 0);
+    };
+    // for (self.filtered.items, 0..) |index, i| {
+    for (i, &index) in filtered.iter().enumerate() {
+        // if (std.mem.eql(u8, self.themes[index].theme, selected)) {
+        if names[index] == sel {
+            // Keep the relative position but ensure all search results are visible
+            let new_window = i.saturating_sub(relative);
+            // If the new window would hide some results at the top, adjust it
+            let win = if filtered.len() <= SMALL_LIST_THRESHOLD {
+                0
+            } else {
+                new_window
+            };
+            return (i, win);
+        }
+    }
+    // break :current .{ 0, 0 };
+    (0, 0)
+}
+
+// fn updateFiltered(self: *Preview) !void {
+//   Impure wrapper: computes `color_pass` via ONE accumulating `Config` (issue 2),
+//   the `has_query`/`buffer`, calls the pure kernel, writes back `theme.rank`, then
+//   applies the digest short-circuit + reselect. Loads propagate (reference `try`).
+fn update_filtered(st: &mut DrawState) -> Result<(), Error> {
+    // const relative = self.current -| self.window;
+    let relative = st.current.saturating_sub(st.window);
+    // if (self.filtered.items.len > 0) selected = self.themes[self.filtered.items[self.current]].theme;
+    let selected: Option<Vec<u8>> = if !st.filtered.is_empty() {
+        Some(st.themes[st.filtered[st.current]].theme.clone())
+    } else {
+        None
+    };
+
+    let themes = st.themes;
+
+    // old_digest → snapshot for the equal-set short-circuit (Wyhash → Vec compare;
+    //   byte-observably identical — the digest is only ever compared for equality).
+    let old_filtered = st.filtered.clone();
+    // self.filtered.clearRetainingCapacity();
+    st.filtered.clear();
+
+    // color_pass via ONE accumulating theme_config (issue 2, FIDELITY): no per-theme
+    // reset — a theme omitting `background` inherits the previous theme's, exactly as
+    // the reference `run`/`updateFiltered` do (single `Config.default` + repeated
+    // `loadFile`).
+    let mut theme_config = Config::default_config();
+    let mut color_pass: Vec<bool> = vec![false; themes.len()];
+    for (i, t) in themes.iter().enumerate() {
+        // try theme_config.loadFile(theme_config._arena.?.allocator(), theme.path);
+        theme_config.load_file(&t.path)?;
+        color_pass[i] = should_include_theme(st.theme_filter, &theme_config);
+    }
+
+    // has_query = self.text_input.buf.realLength() > 0
+    let has_query = st.text_input.buf.real_length() > 0;
+    // buffer = first_half ++ second_half
+    let mut buffer: Vec<u8> = Vec::new();
+    buffer.extend_from_slice(st.text_input.buf.first_half());
+    buffer.extend_from_slice(st.text_input.buf.second_half());
+
+    let theme_names: Vec<&[u8]> = themes.iter().map(|t| t.theme.as_slice()).collect();
+    let mut ranks_out: Vec<Option<f64>> = themes.iter().map(|t| t.rank.get()).collect();
+    let new_filtered = rank_filtered(
+        &theme_names,
+        &buffer,
+        has_query,
+        &color_pass,
+        &mut ranks_out,
+    );
+    // theme.rank = ... (write back through the interior-mutable Cell)
+    for (i, t) in themes.iter().enumerate() {
+        t.rank.set(ranks_out[i]);
+    }
+    st.filtered = new_filtered;
+
+    // if (old_digest == new_digest) return;
+    if old_filtered == st.filtered {
+        return Ok(());
+    }
+    // if (self.filtered.items.len == 0) { current=0; window=0; return; }
+    if st.filtered.is_empty() {
+        st.current = 0;
+        st.window = 0;
+        return Ok(());
+    }
+    // self.current, self.window = current: { ... };
+    let (cur, win) = reselect(&st.filtered, &theme_names, selected.as_deref(), relative);
+    st.current = cur;
+    st.window = win;
+    Ok(())
+}
+
+// ===========================================================================
+// Tests — the PURE kernels (Miri-clean) + a render-to-`Vec<u8>` draw smoke; the
+// interactive Loop path is `#[ignore]`-on-device (needs a real `/dev/tty`).
+// ===========================================================================
+#[cfg(test)]
+mod picker_tests {
+    use super::*;
+
+    fn te(name: &[u8], path: &[u8]) -> ThemeListElement {
+        ThemeListElement {
+            location: Location::User,
+            path: path.to_vec(),
+            theme: name.to_vec(),
+            rank: std::cell::Cell::new(None),
+        }
+    }
+
+    // rank_filtered inclusion + all-spaces edge (issue 5) + color gate.
+    #[test]
+    fn rank_filtered_inclusion() {
+        let names: [&[u8]; 3] = [b"Solarized Dark", b"Gruvbox", b"Nord"];
+        let pass = [true, true, true];
+        let mut ranks = [None; 3];
+
+        // has_query, buffer "grv" → only Gruvbox fuzzy-matches.
+        let f = rank_filtered(&names, b"grv", true, &pass, &mut ranks);
+        assert_eq!(f, vec![1]);
+
+        // has_query=false → include all color-passing themes.
+        let mut ranks2 = [None; 3];
+        let f2 = rank_filtered(&names, b"", false, &pass, &mut ranks2);
+        assert_eq!(f2, vec![0, 1, 2]);
+
+        // buffer "zzz" → no match.
+        let mut ranks3 = [None; 3];
+        let f3 = rank_filtered(&names, b"zzz", true, &pass, &mut ranks3);
+        assert!(f3.is_empty());
+    }
+
+    // all-spaces query MUST route through `zf::rank(name, &[], opts)` (has_query
+    // branch), NOT the include-all `else` — pins the branch keys on `has_query`.
+    #[test]
+    fn rank_filtered_all_spaces() {
+        let names: [&[u8]; 2] = [b"Alpha", b"Beta"];
+        let pass = [true, true];
+        let mut ranks = [None; 2];
+        let f = rank_filtered(&names, b"   ", true, &pass, &mut ranks);
+
+        // explicit reference: zf::rank(name, &[], {to_lower, plain}) for each name.
+        let expect: Vec<usize> = names
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| {
+                zf_rank(
+                    n,
+                    &[],
+                    RankOptions {
+                        to_lower: true,
+                        plain: true,
+                    },
+                )
+                .is_some()
+            })
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(f, expect);
+    }
+
+    // color gate drops the masked index.
+    #[test]
+    fn rank_filtered_color_gate() {
+        let names: [&[u8]; 3] = [b"A", b"B", b"C"];
+        let pass = [true, false, true];
+        let mut ranks = [None; 3];
+        let f = rank_filtered(&names, b"", false, &pass, &mut ranks);
+        assert_eq!(f, vec![0, 2]);
+    }
+
+    // rank ordering: a better (contiguous) match ranks lower — pins WIRE2 consumes
+    // zf's exact ranks. "Gruvbox" ranks better for "gru" than "Gruvbox Material".
+    #[test]
+    fn rank_filtered_ordering() {
+        let names: [&[u8]; 2] = [b"Gruvbox", b"Gruvbox Material Dark"];
+        let pass = [true, true];
+        let mut ranks = [None; 2];
+        let f = rank_filtered(&names, b"gru", true, &pass, &mut ranks);
+        assert_eq!(f, vec![0, 1]);
+        // both matched; the shorter/tighter candidate has the lower (better) rank.
+        assert!(ranks[0].unwrap() <= ranks[1].unwrap());
+    }
+
+    // reselect: SMALL_LIST_THRESHOLD reset + selected-preservation walk.
+    #[test]
+    fn reselect_pins() {
+        let names: [&[u8]; 3] = [b"A", b"B", b"C"];
+        // small list (<= threshold) → window resets to 0, current tracks selected.
+        let (cur, win) = reselect(&[0, 1, 2], &names, Some(b"B"), 1);
+        assert_eq!((cur, win), (1, 0));
+        // no prior selection → (0, 0).
+        let (cur2, win2) = reselect(&[0, 1, 2], &names, None, 0);
+        assert_eq!((cur2, win2), (0, 0));
+        // selected not present → (0, 0).
+        let (cur3, win3) = reselect(&[0, 1], &names, Some(b"C"), 0);
+        assert_eq!((cur3, win3), (0, 0));
+    }
+
+    // A large list keeps the relative window (no SMALL_LIST_THRESHOLD reset).
+    #[test]
+    fn reselect_large_list_keeps_window() {
+        let names: Vec<&[u8]> = (0..20u8).map(|_| b"x".as_slice()).collect();
+        // 20 filtered > SMALL_LIST_THRESHOLD (10); selected at index 15, relative 3
+        // → window = 15 - 3 = 12.
+        let filtered: Vec<usize> = (0..20).collect();
+        // make index 15's name distinct so it is found
+        let mut nm: Vec<&[u8]> = names.clone();
+        nm[15] = b"target";
+        let (cur, win) = reselect(&filtered, &nm, Some(b"target"), 3);
+        assert_eq!((cur, win), (15, 12));
+    }
+
+    // Build a headless Vaxis (no Tty) for the render smoke.
+    fn smoke_vx<'a>() -> Vaxis<'a> {
+        let mut vx = Vaxis::init(VaxisOptions::default());
+        let mut sink: Vec<u8> = Vec::new();
+        vx.resize(
+            &mut sink,
+            Winsize {
+                rows: 40,
+                cols: 120,
+                x_pixel: 0,
+                y_pixel: 0,
+            },
+        )
+        .unwrap();
+        vx
+    }
+
+    fn smoke_state<'a>(
+        arena: &'a Arena,
+        themes: &'a [ThemeListElement],
+        mode: Mode,
+    ) -> DrawState<'a> {
+        DrawState {
+            should_quit: false,
+            mouse: None,
+            themes,
+            arena,
+            filtered: (0..themes.len()).collect(),
+            current: 0,
+            window: 0,
+            hex: false,
+            mode,
+            color_scheme: Scheme::Light,
+            text_input: TextInput::init(),
+            theme_filter: ColorScheme::All,
+        }
+    }
+
+    // draw smoke: empty filtered → "No theme found!" pane.
+    #[test]
+    fn draw_smoke_no_theme() {
+        let arena = Arena::init();
+        let themes: Vec<ThemeListElement> = Vec::new();
+        let mut vx = smoke_vx();
+        let mut st = smoke_state(&arena, &themes, Mode::Normal);
+        st.filtered.clear();
+        draw(&mut vx, &mut st);
+        let mut out: Vec<u8> = Vec::new();
+        vx.render(&mut out).unwrap();
+        assert!(
+            find_bytes(&out, b"No theme found!"),
+            "expected the No-theme pane"
+        );
+    }
+
+    // draw smoke: a bogus theme path → drawPreview loadFile Err → "Unable to open".
+    // (loads a config file → real FS; Miri isolation blocks `File::open`, so
+    // `#[cfg_attr(miri, ignore)]` — the pure kernels + the no-file draw smokes stay
+    // Miri-covered.)
+    #[test]
+    #[cfg_attr(miri, ignore = "opens a file — Miri isolation")]
+    fn draw_smoke_unable_to_open() {
+        let arena = Arena::init();
+        let themes = vec![te(b"Bogus", b"/nonexistent/path/to/theme.zzz")];
+        let mut vx = smoke_vx();
+        let mut st = smoke_state(&arena, &themes, Mode::Normal);
+        draw(&mut vx, &mut st);
+        let mut out: Vec<u8> = Vec::new();
+        vx.render(&mut out).unwrap();
+        assert!(
+            find_bytes(&out, b"Unable to open"),
+            "expected the error pane"
+        );
+        assert!(find_bytes(&out, b"Bogus"), "expected the theme name");
+    }
+
+    // draw smoke: Help mode renders a key_help entry. (loads a config file for the
+    // preview pane → Miri isolation; ignored under Miri.)
+    #[test]
+    #[cfg_attr(miri, ignore = "opens a file — Miri isolation")]
+    fn draw_smoke_help() {
+        let arena = Arena::init();
+        let themes = vec![te(b"Bogus", b"/nonexistent/theme.zzz")];
+        let mut vx = smoke_vx();
+        let mut st = smoke_state(&arena, &themes, Mode::Help);
+        draw(&mut vx, &mut st);
+        let mut out: Vec<u8> = Vec::new();
+        vx.render(&mut out).unwrap();
+        assert!(
+            find_bytes(&out, b"Toggle help window."),
+            "expected a key_help row"
+        );
+    }
+
+    // draw smoke: empty filtered + Save mode renders without panicking (issue-4 guard).
+    #[test]
+    fn draw_smoke_save_empty_guard() {
+        let arena = Arena::init();
+        let themes: Vec<ThemeListElement> = Vec::new();
+        let mut vx = smoke_vx();
+        let mut st = smoke_state(&arena, &themes, Mode::Save);
+        st.filtered.clear();
+        draw(&mut vx, &mut st);
+        let mut out: Vec<u8> = Vec::new();
+        vx.render(&mut out).unwrap();
+        // No theme found in the preview pane; the save pane rendered its instructions.
+        assert!(find_bytes(&out, b"Ghostty configuration"));
+    }
+
+    fn find_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    // uri_from_path: ASCII path → verbatim `file://` prefix; a space is `%20`.
+    #[test]
+    fn to_uri_smoke() {
+        assert_eq!(
+            uri_from_path(b"/a/b.ghostty"),
+            b"file:///a/b.ghostty".to_vec()
+        );
+        assert_eq!(uri_from_path(b"/a b"), b"file:///a%20b".to_vec());
+    }
+
+    // Interactive Loop path — needs a real `/dev/tty` (absent in the sandbox).
+    // `Tty = PosixTty` in cli's dep graph, so `Tty::init` opens `/dev/tty`.
+    #[test]
+    #[ignore = "opens /dev/tty — device-only"]
+    fn preview_run_smoke() {
+        let themes = vec![te(b"Bogus", b"/nonexistent/theme.zzz")];
+        preview(&themes, ColorScheme::All).unwrap();
+    }
+}

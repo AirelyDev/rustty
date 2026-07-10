@@ -2641,6 +2641,36 @@ detection lives in the bin, ADV-FIX 2). New cli Cargo deps: `rustty-build-config
     `#[ignore]`d); test-count/scoped-G3b/acyclic/clippy-D/fmt/Miri all GREEN.
     `boo` + `list_themes`' picker remain deferred (`zf` still unported for the
     latter).
+  - **`list_themes`' interactive fuzzy-finder preview picker. ✅ RESOLVED
+    (WIRE2, cli C5 finale).** Now that `rustty-vaxis` (full core incl. `Loop` +
+    `widgets::TextInput`) AND `rustty-zf` (`zf::rank`) are landed, the picker is
+    filled LIVE in `crates/rustty-cli/src/list_themes.rs` from the preserved
+    verbatim Zig bodies: the `Event` + `LoopEvent` impl, `Preview` (→ run-scope
+    `tty`/`vx` locals + a `DrawState`), `init`/`run`/`deinit`, `update` (every
+    key/mouse arm), `up`/`down`, `updateFiltered` (factored into the PURE
+    `rank_filtered` zf-ranking kernel + `reselect`), `draw`/`drawPreview` (the
+    theme list, the swatch/ziggzagg/lorem-ipsum preview panes), the `ui_*` color
+    helpers, `color`, `toUri`, `resolveAutoThemePath`/`writeAutoThemeFile`/
+    `saveSelectedTheme`. One new cli dep: **`rustty-zf`** (leaf, acyclic G7).
+    `lorem_ipsum.txt` (`@embedFile` → `include_bytes!`) copied into the tree (R3).
+    Key correctness pins: ONE accumulating `Config` for the color gate (issue 2);
+    all-spaces query routes through `zf::rank(&[])` via `has_query`/real_length
+    (issue 5); empty-filter `wrapping_sub`/`!filtered.is_empty()` guards (issue 4);
+    `{err:?}` err-pane text (no `Display` on `LoadError`, issue 3, cosmetic).
+    **Aliasing (the substantive finding):** the `vaxis.Loop` holds raw `*mut
+    Tty`/`*mut Vaxis`; the naive `Loop::new(&mut tty, &mut vx)` + body
+    `tty.writer()` shape is **Stacked-Borrows UB** (the local `&mut` reborrow pops
+    the read thread's live raw tag) — caught + fixed via the `&raw mut` + transient-
+    reborrow discipline, PROVEN by the fresh `.port/phase-2/mirihar-wire2` harness
+    (GREEN under Stacked AND Tree Borrows; the pre-fix shape is RED). `text_input.
+    drawWithStyle` (needs `&'a mut TextInput`/invariant `Window<'a>`) is rendered
+    as a direct arena-duped buffer segment (visible search string identical; cursor
+    glyph omitted — documented forced divergence). New `#[test]`s: `rank_filtered`
+    (inclusion/all-spaces/color-gate/ordering), `reselect`, `to_uri`, four
+    render-to-`Vec<u8>` `draw` smokes; the interactive `run` path + the two file-
+    loading draw smokes are `#[ignore]`/`#[cfg_attr(miri, ignore)]`-on-device.
+    test-count/scoped-G3b (missing=0)/acyclic/clippy-D/fmt/Miri all GREEN. **`boo`
+    remains the last cli vaxis-deferred leaf.**
 
 ## rustty-cli C2 (Phase-2 CLI milestone) — pure config/introspection actions + Pager
 
