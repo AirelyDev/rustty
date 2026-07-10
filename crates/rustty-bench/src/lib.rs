@@ -13,14 +13,11 @@
 //!
 //! Module map (`main.zig`'s re-export hub becomes this `lib.rs`):
 //!   - `main.zig`         -> this `lib.rs` (`pub mod` each). Its `test {
-//!     refAllDecls(@This()) }` is DROPPED — a Zig reflection idiom with no Rust
-//!     analogue; `cargo build --all-targets` + the workspace test run is the
-//!     "all decls compile" equivalent. This makes `rust_test_count =
-//!     zig_test_count - 1` for the `lib.rs`/`main.zig` module (recorded for
-//!     `check_test_counts.py`; DEFERRALS.md).
+//!     refAllDecls(@This()) }` ports as `tests::ref_all_decls` (workspace
+//!     convention — same pattern as rustty-crash / rustty-zf and 30 siblings).
 //!
-//! Test contract: the 8 Zig `test{}` blocks -> 7 `#[test]` fns (Benchmark + the 6
-//! benchmark decltests; ScreenClone has none) + the dropped `refAllDecls`.
+//! Test contract: 8 Zig `test{}` blocks -> 8 `#[test]` fns (Benchmark + the 6
+//! benchmark decltests + `ref_all_decls`; ScreenClone has none).
 
 // pub const cli = @import("cli.zig");
 pub mod cli;
@@ -47,8 +44,44 @@ pub mod is_symbol;
 pub mod options;
 pub mod osc_parser;
 
-// test { @import("std").testing.refAllDecls(@This()); }
-//   -> DROPPED (see the module doc above / DEFERRALS.md).
+// test {
+//     @import("std").testing.refAllDecls(@This());
+// }
+#[cfg(test)]
+mod tests {
+    /// Ports `main.zig`'s anonymous `refAllDecls(@This())` block (workspace
+    /// `ref_all_decls` convention): compile-touch every pub decl of this hub
+    /// module so the crate surface is exercised by the test build. Nothing is
+    /// run — exactly what the Zig reify test achieves.
+    #[test]
+    fn ref_all_decls() {
+        // pub const cli = @import("cli.zig");
+        let _ = core::any::type_name::<crate::cli::Action>();
+        // pub const Benchmark = @import("Benchmark.zig");
+        let _ = core::any::type_name::<crate::benchmark::Benchmark>();
+        // pub const CApi = @import("CApi.zig"); (its sole decl is the export fn)
+        let _: unsafe extern "C" fn(
+            *const core::ffi::c_char,
+            *const core::ffi::c_char,
+        ) -> bool = crate::capi::rustty_benchmark_cli;
+        // pub const TerminalStream = @import("TerminalStream.zig");
+        let _ = core::any::type_name::<crate::terminal_stream::TerminalStream>();
+        // pub const CodepointWidth = @import("CodepointWidth.zig");
+        let _ = core::any::type_name::<crate::codepoint_width::CodepointWidth>();
+        // pub const GraphemeBreak = @import("GraphemeBreak.zig");
+        let _ = core::any::type_name::<crate::grapheme_break::GraphemeBreak>();
+        // pub const ScreenClone = @import("ScreenClone.zig");
+        let _ = core::any::type_name::<crate::screen_clone::ScreenClone>();
+        // pub const TerminalParser = @import("TerminalParser.zig");
+        let _ = core::any::type_name::<crate::terminal_parser::TerminalParser>();
+        // pub const IsSymbol = @import("IsSymbol.zig");
+        let _ = core::any::type_name::<crate::is_symbol::IsSymbol>();
+        // `options` / `osc_parser` are not re-exported by `main.zig` (see the
+        // PORT NOTE above) but are pub mods of this hub, so touch them too.
+        let _ = core::any::type_name::<crate::options::DataFile>();
+        let _ = core::any::type_name::<crate::osc_parser::OscParser>();
+    }
+}
 
 /// Build a `terminal::Options` reproducing the Zig `Terminal.Options` field
 /// defaults (§7.5/§7.7): the ScreenClone/TerminalStream benchmarks init with

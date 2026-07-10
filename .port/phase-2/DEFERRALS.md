@@ -3284,8 +3284,10 @@ milestone runs. 0-test impact on the product crates.
 `main.zig`, `options.zig`) + `src/main_bench.zig`, together ~1441 LOC; plus the
 `export fn ghostty_benchmark_cli` C-ABI entrypoint (`src/benchmark/CApi.zig:8`).
 **Rustty counterpart:** `crates/rustty-bench` — **PORTED (PORT STATUS: done)**: all
-12 `src/benchmark/*.zig` files ported module-per-file, 7 `test{}` assertion-for-assertion
-(ScreenClone has none; `main.zig` `refAllDecls` dropped as a Zig reflection idiom),
+12 `src/benchmark/*.zig` files ported module-per-file, 8 `test{}` assertion-for-assertion
+(ScreenClone has none; `main.zig`'s anonymous `refAllDecls` was initially dropped as
+"a Zig reflection idiom" — RESOLVED 2026-07-10: ported as `tests::ref_all_decls` in
+`crates/rustty-bench/src/lib.rs` per the workspace convention, bench 8/8 vs contract),
 Miri-clean, `rustty_benchmark_cli` extern "C" export landed. **Residual sub-seams
 (narrow, tracked):** (1) the macOS `os_signpost` Instruments interval (`Benchmark.zig`
 44-65) — `#[cfg(target_os="macos")]` no-op with the verbatim Zig body preserved,
