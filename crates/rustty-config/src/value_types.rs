@@ -7607,6 +7607,7 @@ mod tests {
         // try testing.expectEqual([2]u21{ 0x2500, 0x2500 }, entry.range);
         assert_eq!([0x2500u32, 0x2500u32], entry.range);
         // try testing.expect(entry.replacement == .codepoint);
+        assert!(matches!(entry.replacement, Replacement::Codepoint(_)));
         // try testing.expectEqual(@as(u21, 0x002D), entry.replacement.codepoint);
         assert!(matches!(entry.replacement, Replacement::Codepoint(0x002D)));
     }
@@ -7873,7 +7874,7 @@ mod tests {
 
     // test "format entry MouseScrollMultiplier"
     #[test]
-    fn mouse_scroll_multiplier_format_entry() {
+    fn format_entry_mouse_scroll_multiplier() {
         let mut buf = AllocatingWriter::init();
         // var args: Self = .{ .precision = 1.5, .discrete = 2.5 };
         let args = MouseScrollMultiplier {
@@ -8538,6 +8539,7 @@ mod tests {
         assert_eq!(b"Foo".as_slice(), list.value[0].title.as_slice());
 
         // try testing.expect(list.value.items[1].action == .text);
+        assert!(matches!(list.value[1].action, Action::Text(_)));
         // try testing.expectEqualStrings("ale bydle", list.value.items[1].action.text);
         assert_eq!(Action::Text(b"ale bydle".to_vec()), list.value[1].action);
         // try testing.expectEqualStrings("Bar", list.value.items[1].title);
@@ -8639,6 +8641,7 @@ mod tests {
             // try testing.expectEqualStrings("", item.description);
             assert_eq!(b"".as_slice(), item.description.as_slice());
             // try testing.expect(item.action == .text);
+            assert!(matches!(item.action, Action::Text(_)));
             // try testing.expectEqualStrings("kur,wa", item.action.text);
             assert_eq!(Action::Text(b"kur,wa".to_vec()), item.action);
         }
@@ -8659,6 +8662,7 @@ mod tests {
             // try testing.expectEqualStrings("abc,def", item.description);
             assert_eq!(b"abc,def".as_slice(), item.description.as_slice());
             // try testing.expect(item.action == .text);
+            assert!(matches!(item.action, Action::Text(_)));
             // try testing.expectEqualStrings("kurwa", item.action.text);
             assert_eq!(Action::Text(b"kurwa".to_vec()), item.action);
         }

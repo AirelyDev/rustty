@@ -2682,14 +2682,13 @@ mod tests {
 
     // test "bell effect callback"
     //
-    // PORT NOTE (vt-12b-7a): only the null-callback half (which asserts pure
-    // Terminal state after a bell) is ported here. The callback-driven half (and
-    // the `t.fullReset()` between) exercises the `bell` effect, which is ported,
-    // but the callback-count assertions belong with the effect-driven tests; the
-    // first block alone is a faithful state-only check that the bell arm does not
-    // disturb the terminal.
+    // PORT NOTE (vt-12b-7a): the reference's callback-count half captures the
+    // count in a local-struct `var` static (`S.bell_count`); Rust's `bell`
+    // effect is a bare `fn` pointer (no closures/captures), so the count is
+    // routed through the tests-module `COUNTER` thread_local cell — the same
+    // analog the vt-12b-7b effect tests below use for `title_changed`.
     #[test]
-    fn bell_effect_callback_readonly() {
+    fn bell_effect_callback() {
         let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
 
         // Test bell with null callback (default readonly effects) doesn't crash
@@ -2701,7 +2700,34 @@ mod tests {
             s.next_slice(b"AfterBell");
         }
         let str = t.plain_string(Global).unwrap();
+        // try testing.expectEqualStrings("AfterBell", str);
         assert_eq!(str.as_slice(), b"AfterBell");
+
+        // t.fullReset();
+        t.full_reset();
+
+        // Test bell with a callback
+        {
+            // const S = struct { var bell_count: usize = 0;
+            //     fn bell(_: *Handler) void { bell_count += 1; } };
+            fn bell(_: &mut Handler) {
+                COUNTER.with(|c| c.set(c.get() + 1));
+            }
+            // S.bell_count = 0;
+            cap_reset();
+
+            // var handler: Handler = .init(&t); handler.effects.bell = &S.bell;
+            let mut s = t.vt_stream();
+            s.handler.effects.bell = Some(bell);
+
+            s.next_slice(b"\x07");
+            // try testing.expectEqual(@as(usize, 1), S.bell_count);
+            assert_eq!(1_usize, COUNTER.with(|c| c.get()));
+
+            s.next_slice(b"\x07\x07");
+            // try testing.expectEqual(@as(usize, 3), S.bell_count);
+            assert_eq!(3_usize, COUNTER.with(|c| c.get()));
+        }
 
         t.deinit(Global);
     }

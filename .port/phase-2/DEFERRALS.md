@@ -339,7 +339,18 @@ so no test is un-deferred (`check_test_counts.py` `input_link` stays a
 normally-counted 0 — never a deferral/exclusion); the vt `string_map.rs` tests
 already exercise the `oni::Regex::init` surface.
 
-## Deferred: DCS <-> tmux enter/exit wiring — test `dcs::tests::tmux_enter_and_implicit_exit`
+## RESOLVED (2026-07-10, G1/G2 honest-green pass): DCS <-> tmux enter/exit wiring — test `dcs::tests::tmux_enter_and_implicit_exit`
+
+The wiring sub-batch targeted below LANDED: `dcs.rs`'s `TmuxState`/`TmuxCommand`
+are now the real `tmux::ControlParser`/`ControlNotification`; the `b'p'` `'tmux`
+hook builds the parser (`ControlParser::init_options(self.max_bytes, 128)`) and
+returns `.{ .tmux = .enter }`; `try_put`'s tmux prong forwards to
+`ControlParser::put`; `unhook`'s tmux prong deinits the parser and returns
+`.{ .tmux = .exit }`. The `TMUX_DCS_WIRED` marker const is deleted and both
+`DEFERRED ASSERT`s are restored as live asserts — the test carries all 4 of the
+reference's expects; it runs live under `--features oniguruma` and skips
+(mirroring `error.SkipZigTest`) in the default build. Original entry kept below
+for history:
 
 `dcs.rs`'s `TmuxState`/`TmuxCommand` are still `()` stubs (the reference's
 `tmux.ControlParser`/`ControlNotification`, `= void` while `tmux_control_mode` is

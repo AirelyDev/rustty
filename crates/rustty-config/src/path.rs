@@ -629,8 +629,14 @@ mod tests {
     }
 
     // test "parse" {
+    //
+    // PORT NOTE: the reference test name `parse` is duplicated across
+    // containers in this crate (`Path` here; `MouseScrollMultiplier` in
+    // Config.zig). The port convention disambiguates duplicated test names
+    // with the container prefix (`path_parse`, like
+    // `mouse_scroll_multiplier_parse`).
     #[test]
-    fn parse() {
+    fn path_parse() {
         // const Tag = std.meta.Tag(Path);
         {
             // const item = (try Path.parse(alloc, "config.1")).?;

@@ -816,7 +816,7 @@ mod tests {
     // OSC 10-19: Get/Set Dynamic Colors
     // test "OSC 10: OSC 11: OSC 12: OSC: 13: OSC 14: OSC 15: OSC: 16: OSC 17: OSC 18: OSC 19: dynamic" {
     #[test]
-    fn osc_10_through_19_dynamic() {
+    fn osc_10_osc_11_osc_12_osc_13_osc_14_osc_15_osc_16_osc_17_osc_18_osc_19_dynamic() {
         // inline for (@typeInfo(DynamicColor).@"enum".fields) |field|
         for (color, value) in DYNAMIC_FIELDS {
             // const op = @field(Operation, std.fmt.comptimePrint("osc_{d}", .{field.value}));
@@ -840,7 +840,7 @@ mod tests {
 
     // test "OSC 10: ... dynamic multiple" {
     #[test]
-    fn osc_10_through_19_dynamic_multiple() {
+    fn osc_10_osc_11_osc_12_osc_13_osc_14_osc_15_osc_16_osc_17_osc_18_osc_19_dynamic_multiple() {
         // Example script:
         // printf '\e]11;red;blue\e\\'
         {
@@ -866,7 +866,7 @@ mod tests {
     // OSC 110-119: Reset Dynamic Colors
     // test "OSC 110: ... reset dynamic" {
     #[test]
-    fn osc_110_through_119_reset_dynamic() {
+    fn osc_110_osc_111_osc_112_osc_113_osc_114_osc_115_osc_116_osc_117_osc_118_osc_119_reset_dynamic() {
         // inline for (@typeInfo(DynamicColor).@"enum".fields) |field|
         for (color, value) in DYNAMIC_FIELDS {
             // const op = @field(Operation, std.fmt.comptimePrint("osc_1{d}", .{field.value}));

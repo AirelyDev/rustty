@@ -1050,7 +1050,7 @@ mod tests {
     // This is from a Kakoune actual SGR sequence also.
     // test "csi: SGR mixed colon and semicolon setting underline, bg, fg" {
     #[test]
-    fn csi_sgr_mixed_colon_and_semicolon_underline_bg_fg() {
+    fn csi_sgr_mixed_colon_and_semicolon_setting_underline_bg_fg() {
         let mut p = Parser::init();
         let _ = p.next(0x1B);
         for c in *b"[4:3;38;2;51;51;51;48;2;170;170;170;58;2;255;97;136" {

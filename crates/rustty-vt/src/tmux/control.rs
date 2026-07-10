@@ -97,6 +97,22 @@ impl Parser {
         }
     }
 
+    // PORT NOTE: `dcs.zig`'s tmux hook constructs the parser as a struct
+    // literal overriding the field defaults:
+    //   .{ .max_bytes = self.max_bytes,
+    //      .buffer = try .initCapacity(alloc, 128) }
+    // `Parser`'s fields are private to this module, so the DCS handler uses
+    // this constructor mirror. The reference `initCapacity` threads the DCS
+    // allocator; this Parser's buffer is an owning global-allocator `Vec` (see
+    // the `buffer` field PORT NOTE above), so only the capacity carries over.
+    pub fn init_options(max_bytes: usize, capacity: usize) -> Parser {
+        Parser {
+            state: State::Idle,
+            buffer: Vec::with_capacity(capacity),
+            max_bytes,
+        }
+    }
+
     pub fn deinit(&mut self) {
         // If we're in a broken state, we already deinited
         // the buffer, so we don't need to do anything.

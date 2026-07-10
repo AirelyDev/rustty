@@ -128,31 +128,27 @@ impl<A: Allocator> Handler<A> {
                         break 'tmux None;
                     }
 
-                    // PORT NOTE: when `tmux_control_mode` is disabled (the default
-                    // rustty build, since it tracks `oniguruma`), this branch is
-                    // statically dead — the reference `comptime`-evaluates the
-                    // `break :tmux null` above and never reaches the
-                    // tmux-state construction. `tmux::ControlParser`/
-                    // `ControlNotification` (vt later sub-batch) are therefore not
-                    // referenced here. When tmux control mode is wired in, this
-                    // `unreachable!()` is replaced by the faithful construction:
-                    //
-                    //   // Tmux control mode must start with ESC P 1000 p
-                    //   if (dcs.params.len != 1 or dcs.params[0] != 1000) break :tmux null;
-                    //
-                    //   break :tmux .{
-                    //       .state = .{
-                    //           .tmux = .{
-                    //               .max_bytes = self.max_bytes,
-                    //               .buffer = try .initCapacity(
-                    //                   alloc,
-                    //                   128, // Arbitrary choice to limit initial reallocs
-                    //               ),
-                    //           },
-                    //       },
-                    //       .command = .{ .tmux = .enter },
-                    //   };
-                    unreachable!()
+                    // Tmux control mode must start with ESC P 1000 p
+                    // if (dcs.params.len != 1 or dcs.params[0] != 1000) break :tmux null;
+                    if dcs.params.len() != 1 || dcs.params[0] != 1000 {
+                        break 'tmux None;
+                    }
+
+                    // PORT NOTE: the reference builds the parser as a struct
+                    // literal (`.max_bytes = self.max_bytes, .buffer = try
+                    // .initCapacity(alloc, 128)`); `ControlParser`'s fields are
+                    // private, so `init_options` is its constructor mirror (the
+                    // parser's buffer is an owning global `Vec` per its own PORT
+                    // NOTE, so the `alloc`/`try` of `initCapacity` does not
+                    // thread through here).
+                    break 'tmux Some(Hook {
+                        state: State::Tmux(TmuxState::init_options(
+                            self.max_bytes,
+                            128, // Arbitrary choice to limit initial reallocs
+                        )),
+                        // .command = .{ .tmux = .enter },
+                        command: Some(Command::Tmux(TmuxCommand::Enter)),
+                    });
                 }
 
                 _ => None,
@@ -208,14 +204,20 @@ impl<A: Allocator> Handler<A> {
         match &mut self.state {
             State::Inactive | State::Ignore => {}
 
-            State::Tmux(_tmux) => {
+            State::Tmux(tmux) => {
                 if build_options::TMUX_CONTROL_MODE {
-                    // PORT NOTE: dead under the default build (tmux disabled). The
-                    // reference returns
-                    //   .{ .tmux = (try tmux.put(byte)) orelse return null }
-                    // here when tmux control mode is enabled.
-                    unreachable!()
+                    // return .{ .tmux = (try tmux.put(byte)) orelse return null };
+                    // PORT NOTE: the parser's `put` reports allocation failure
+                    // with the pagelist `OutOfMemory` marker; map it onto this
+                    // module's `OutOfMemory` (the same single-variant error set
+                    // the reference's `!?Command` carries).
+                    return match tmux.put(byte) {
+                        Ok(Some(n)) => Ok(Some(Command::Tmux(n))),
+                        Ok(None) => Ok(None),
+                        Err(_) => Err(OutOfMemory),
+                    };
                 } else {
+                    // else unreachable (the reference comptime-guards this prong)
                     unreachable!()
                 }
             }
@@ -255,10 +257,10 @@ impl<A: Allocator> Handler<A> {
                 if build_options::TMUX_CONTROL_MODE {
                     // self.state.deinit();
                     state.deinit();
-                    // PORT NOTE: dead under the default build (tmux disabled).
                     // break :tmux .{ .tmux = .exit };
-                    unreachable!()
+                    Some(Command::Tmux(TmuxCommand::Exit))
                 } else {
+                    // else unreachable (the reference comptime-guards this prong)
                     let _ = &mut state;
                     unreachable!()
                 }
@@ -322,11 +324,14 @@ pub struct OutOfMemory;
 // PORT NOTE: the reference `Command.tmux` / `State.tmux` field types are
 //   if (build_options.tmux_control_mode) terminal.tmux.ControlNotification else void
 //   if (build_options.tmux_control_mode) terminal.tmux.ControlParser     else void
-// Under the default rustty build `tmux_control_mode` is false, so both resolve to
-// `void`, modeled here as the unit type `()`. When tmux control mode is wired in
-// (vt later sub-batch) these become the real tmux types.
-type TmuxCommand = ();
-type TmuxState = ();
+// Rust has no comptime type selection; the real tmux types are used
+// unconditionally (they are plain owned types), and every tmux prong below
+// keeps the reference's `build_options.tmux_control_mode` guard as a
+// const-bool `if`, so behavior under the default (tmux-disabled) build is
+// unchanged: the `b'p'` hook ignores, and the put/unhook tmux prongs stay
+// unreachable exactly as the reference's `else unreachable`.
+type TmuxCommand = crate::tmux::ControlNotification;
+type TmuxState = crate::tmux::ControlParser;
 
 pub enum Command<A: Allocator = Global> {
     /// XTGETTCAP
@@ -336,7 +341,6 @@ pub enum Command<A: Allocator = Global> {
     Decrqss(Decrqss),
 
     /// Tmux control mode
-    #[allow(dead_code)]
     Tmux(TmuxCommand),
 }
 
@@ -423,7 +427,6 @@ enum State<A: Allocator = Global> {
     Decrqss(DecrqssState),
 
     /// Tmux control mode: https://github.com/tmux/tmux/wiki/Control-Mode
-    #[allow(dead_code)]
     Tmux(TmuxState),
 }
 
@@ -445,19 +448,6 @@ impl<A: Allocator> State<A> {
             }
         }
     }
-}
-
-// PORT NOTE: when `tmux_control_mode` is false, `TmuxState`/`TmuxCommand` are
-// `()`, which has no `deinit`. The `deinit` calls in the tmux prongs above are in
-// statically-dead branches under the default build; this trait-free extension
-// keeps the `()` `.deinit()` call compiling. When the real tmux types land they
-// supply their own `deinit`.
-#[allow(dead_code)]
-trait UnitDeinit {
-    fn deinit(&mut self);
-}
-impl UnitDeinit for () {
-    fn deinit(&mut self) {}
 }
 
 /// PORT NOTE: faithful stand-in for `std.Io.Writer.Allocating` as used by this
@@ -524,18 +514,6 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // PORT NOTE: `true` only once the DCS<->tmux enter/exit wiring sub-batch
-    // lands — the one that replaces the `TmuxState`/`TmuxCommand` `()` stubs with
-    // the real `tmux::ControlParser`/`ControlNotification` and fills in the
-    // `unreachable!()` hook construction (see `try_hook`'s `b'p'` `'tmux` prong).
-    // Our port PHASES the tmux work: the `oniguruma` feature flips
-    // `build_options::TMUX_CONTROL_MODE` on BEFORE that wiring exists, so the
-    // `tmux_enter_and_implicit_exit` test below must keep deferring even under
-    // `--features oniguruma` (it would otherwise assert against the `()`/
-    // `unreachable!()` stub). Flip this to `true` with that sub-batch; the test
-    // then runs its faithful body. Tracked in `.port/phase-2/DEFERRALS.md`.
-    const TMUX_DCS_WIRED: bool = false;
 
     // PORT NOTE: the reference tests do `var h: Handler = .{}` then pass
     // `testing.allocator` to `hook`. We use `Handler::<Global>::default()` and pass
@@ -728,34 +706,18 @@ mod tests {
         h.deinit();
     }
 
+    // test "tmux enter and implicit exit"
     #[test]
     fn tmux_enter_and_implicit_exit() {
-        // PORT NOTE: the reference begins with
-        //   if (comptime !build_options.tmux_control_mode) return error.SkipZigTest;
-        // Under the default rustty build `tmux_control_mode` is false, so this test
-        // is skipped (returns early), faithfully mirroring `error.SkipZigTest`.
+        // if (comptime !build_options.tmux_control_mode) return error.SkipZigTest;
         //
-        // The `|| !TMUX_DCS_WIRED` clause is the port-phasing addition: the
-        // `oniguruma` feature turns `TMUX_CONTROL_MODE` on before the DCS<->tmux
-        // enter/exit wiring sub-batch lands (the `()` `TmuxState`/`TmuxCommand`
-        // stubs + `unreachable!()` hook are still in place), so we keep deferring
-        // under `--features oniguruma` too rather than asserting against a stub.
-        //
-        // ASSERTION INVENTORY (honest count): the dormant body below carries 2 of
-        // the reference's 4 expects (`cmd == .tmux`, twice). The 2 VARIANT asserts
-        // (`cmd.tmux == .enter`, `cmd.tmux == .exit`) CANNOT be expressed against
-        // the `()` `TmuxCommand` stub and are held as `DEFERRED ASSERT` comment
-        // lines at their sites below — the tmux wiring sub-batch MUST restore them
-        // when `TmuxCommand` becomes the real `ControlNotification` (tracked in
-        // `.port/phase-2/DEFERRALS.md`, "DCS <-> tmux enter/exit wiring"). Neither
-        // the default (2019) nor the oniguruma test count changes: the test still
-        // counts as a passed no-op in both builds.
-        if !build_options::TMUX_CONTROL_MODE || !TMUX_DCS_WIRED {
+        // PORT NOTE: under the default rustty build `tmux_control_mode` is
+        // false, so this test is skipped (returns early), faithfully mirroring
+        // `error.SkipZigTest`; `--features oniguruma` enables it.
+        if !build_options::TMUX_CONTROL_MODE {
             return;
         }
 
-        // The body below is the faithful port of the reference, exercised only when
-        // tmux control mode is enabled (and the real tmux types are wired in).
         let mut h: Handler<Global> = Handler::default();
 
         {
@@ -769,21 +731,19 @@ mod tests {
                     },
                 )
                 .unwrap();
+            // try testing.expect(cmd == .tmux);
             assert!(matches!(cmd, Command::Tmux(_)));
-            // DEFERRED ASSERT (DEFERRALS.md "DCS <-> tmux enter/exit wiring"):
-            // inexpressible against the `()` `TmuxCommand` stub; the wiring
-            // sub-batch MUST restore it as a live assert:
             // try testing.expect(cmd.tmux == .enter);
+            assert!(matches!(cmd, Command::Tmux(TmuxCommand::Enter)));
             cmd.deinit();
         }
 
         {
             let mut cmd = h.unhook().unwrap();
+            // try testing.expect(cmd == .tmux);
             assert!(matches!(cmd, Command::Tmux(_)));
-            // DEFERRED ASSERT (DEFERRALS.md "DCS <-> tmux enter/exit wiring"):
-            // inexpressible against the `()` `TmuxCommand` stub; the wiring
-            // sub-batch MUST restore it as a live assert:
             // try testing.expect(cmd.tmux == .exit);
+            assert!(matches!(cmd, Command::Tmux(TmuxCommand::Exit)));
             cmd.deinit();
         }
 

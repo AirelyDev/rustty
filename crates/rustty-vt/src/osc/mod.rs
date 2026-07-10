@@ -342,7 +342,7 @@ impl ProgressReportState {
     //     if (comptime build_options.artifact == .lib) return error.SkipZigTest;
     //     try lib.checkGhosttyHEnum(State, "GHOSTTY_PROGRESS_STATE_");
     // }
-    // PORT NOTE (vt-6): ported below in `tests::ghostty_h_progress_report_state`,
+    // PORT NOTE (vt-6): ported below in `tests::ghostty_h_command_progress_report_state`,
     // mirroring the established `checkGhosttyHEnum` pattern (see mouse.rs Shape).
 }
 
@@ -376,7 +376,7 @@ mod tests {
     //     try lib.checkGhosttyHEnum(State, "GHOSTTY_PROGRESS_STATE_");
     // }
     #[test]
-    fn ghostty_h_progress_report_state() {
+    fn ghostty_h_command_progress_report_state() {
         // PORT NOTE: `if (comptime build_options.artifact == .lib) return
         // error.SkipZigTest;`. rustty-vt resolves `artifact` to the application
         // artifact (the reference `.ghostty`), so this skip path is not taken
