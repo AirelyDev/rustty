@@ -420,6 +420,10 @@ mod tests {
 
     // test "async"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn async_() {
         let mut loop_ = Loop::init().unwrap();
 
@@ -463,6 +467,10 @@ mod tests {
 
     // test "async: notify first"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn async_notify_first() {
         let mut loop_ = Loop::init().unwrap();
 
@@ -501,6 +509,10 @@ mod tests {
 
     // test "async batches multiple notifications"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn async_batches_multiple_notifications() {
         let mut loop_ = Loop::init().unwrap();
 
@@ -552,6 +564,10 @@ mod tests {
     // the [ADV-FIX F2] Send discipline (the `Async` port:u32 handle crosses the
     // thread boundary) end-to-end on a live kqueue + the drain coalescing contract.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C4, .port/phase-2/MIRI_EXCEPTIONS.md): live mach-port syscalls via the kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kat1_async_wakeup_roundtrip() {
         let mut loop_ = Loop::init().unwrap();
 

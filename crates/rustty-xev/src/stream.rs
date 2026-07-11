@@ -1048,6 +1048,10 @@ mod tests {
 
     // test "pty: child to parent"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C6, .port/phase-2/MIRI_EXCEPTIONS.md): real openpty + EVFILT_READ/WRITE via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn pty_child_to_parent() {
         // switch (builtin.os.tag) { .linux, .macos => {}, else => return
         // error.SkipZigTest }  — this module is macOS-gated, so the arm holds.
@@ -1122,6 +1126,10 @@ mod tests {
 
     // test "pty: parent to child"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C6, .port/phase-2/MIRI_EXCEPTIONS.md): real openpty + EVFILT_READ/WRITE via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn pty_parent_to_child() {
         // Create the pty parent/child side.
         let mut pty = Pty::init().unwrap();
@@ -1192,6 +1200,10 @@ mod tests {
 
     // test "pty: queued writes"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C6, .port/phase-2/MIRI_EXCEPTIONS.md): real openpty + EVFILT_READ/WRITE via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn pty_queued_writes() {
         // this test fails on x86_64 with a strange error but passes
         // on aarch64. for now, just let it go until we investigate.
@@ -1302,6 +1314,10 @@ mod tests {
     // the loop run on a live kqueue (Miri can't — real openpty/kevent/read/write
     // syscalls).
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C6, .port/phase-2/MIRI_EXCEPTIONS.md): real openpty + EVFILT_READ/WRITE via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kat4_pty_write_roundtrip() {
         let mut pty = Pty::init().unwrap();
         let mut loop_ = Loop::init().unwrap();

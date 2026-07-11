@@ -318,6 +318,10 @@ mod tests {
 
     // test "timer"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn timer() {
         let mut loop_ = Loop::init().unwrap();
         let timer = Timer::init().unwrap();
@@ -353,6 +357,10 @@ mod tests {
 
     // test "timer reset"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn timer_reset() {
         let mut loop_ = Loop::init().unwrap();
         let timer = Timer::init().unwrap();
@@ -407,6 +415,10 @@ mod tests {
 
     // test "timer reset before tick"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn timer_reset_before_tick() {
         let mut loop_ = Loop::init().unwrap();
         let timer = Timer::init().unwrap();
@@ -457,6 +469,10 @@ mod tests {
 
     // test "timer reset after trigger"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn timer_reset_after_trigger() {
         let mut loop_ = Loop::init().unwrap();
         let timer = Timer::init().unwrap();
@@ -510,6 +526,10 @@ mod tests {
 
     // test "timer cancel"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn timer_cancel() {
         let mut loop_ = Loop::init().unwrap();
         let timer = Timer::init().unwrap();
@@ -585,6 +605,10 @@ mod kat {
     // KAT 2 — Timer fires: `Timer.run(1ms)` -> `run(.until_done)` -> assert the
     // callback fired AND `now()` advanced.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3/C7, .port/phase-2/MIRI_EXCEPTIONS.md): drives the real kqueue loop (kqueue/kevent64/clock_gettime) -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kat2_timer_fires() {
         let mut loop_ = Loop::init().unwrap();
 

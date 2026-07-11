@@ -244,6 +244,10 @@ mod tests {
     // point of the watcher). clippy's `zombie_processes` lint can't see the FFI
     // reap, so it is allowed with this note (the process is reaped, not leaked).
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C5, .port/phase-2/MIRI_EXCEPTIONS.md): real posix_spawn/waitpid + EVFILT_PROC via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     #[allow(clippy::zombie_processes)]
     fn process_wait() {
         // var child = std.process.Child.init(argv_0, alloc); try child.spawn();
@@ -287,6 +291,10 @@ mod tests {
     // PORT NOTE: as in `process_wait`, the xev trampoline reaps the child via
     // `waitpid`; clippy's `zombie_processes` lint is allowed for the same reason.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C5, .port/phase-2/MIRI_EXCEPTIONS.md): real posix_spawn/waitpid + EVFILT_PROC via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     #[allow(clippy::zombie_processes)]
     fn process_wait_with_non_zero_exit_code() {
         // if (builtin.os.tag == .freebsd) return error.SkipZigTest;
@@ -331,6 +339,10 @@ mod tests {
 
     // test "process wait on a process that already exited"
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C5, .port/phase-2/MIRI_EXCEPTIONS.md): real posix_spawn/waitpid + EVFILT_PROC via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn process_wait_on_a_process_that_already_exited() {
         let mut child = Command::new(ARGV_0[0]).args(&ARGV_0[1..]).spawn().unwrap();
 
@@ -375,6 +387,10 @@ mod tests {
     // reaps + decodes NOTE_EXIT/NOTE_EXITSTATUS on a live kqueue (Miri can't — real
     // EVFILT_PROC / waitpid syscalls).
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C5, .port/phase-2/MIRI_EXCEPTIONS.md): real posix_spawn/waitpid + EVFILT_PROC via the live kqueue loop -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kat3_process_spawn_exit() {
         // posix_spawn /bin/true (canonicalized to /usr/bin/true — the `true`
         // coreutil's real path on modern macOS, where /bin/true no longer ships;

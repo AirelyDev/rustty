@@ -2735,6 +2735,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kqueue_loop_time() {
         let mut loop_ = Loop::init().unwrap();
         // defer loop.deinit();
@@ -2752,6 +2756,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kqueue_stop() {
         let mut loop_ = Loop::init().unwrap();
 
@@ -2794,6 +2802,10 @@ mod tests {
     // see — the reference is `while (!called) try loop.run(.no_wait)`.
     #[allow(clippy::while_immutable_condition)]
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kqueue_timer() {
         let mut loop_ = Loop::init().unwrap();
 
@@ -2866,6 +2878,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kqueue_timer_reset() {
         let mut loop_ = Loop::init().unwrap();
 
@@ -2909,6 +2925,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kqueue_timer_reset_before_tick() {
         let mut loop_ = Loop::init().unwrap();
 
@@ -2948,6 +2968,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kqueue_timer_reset_after_trigger() {
         let mut loop_ = Loop::init().unwrap();
 
@@ -2993,6 +3017,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kqueue_timer_cancellation() {
         let mut loop_ = Loop::init().unwrap();
 
@@ -3060,6 +3088,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kqueue_canceling_a_completed_operation() {
         let mut loop_ = Loop::init().unwrap();
 
@@ -3127,6 +3159,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kqueue_socket_accept_connect_send_recv_close() {
         let _guard = SOCKET_TEST_LOCK.lock().unwrap();
         let mut loop_ = Loop::init().unwrap();
@@ -3393,6 +3429,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kqueue_socket_accept_cancel_decrements_active() {
         let _guard = SOCKET_TEST_LOCK.lock().unwrap();
 
@@ -3558,6 +3598,10 @@ mod tests {
     const THREAD_POOL_BODY_PORTED: bool = false;
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kqueue_file_io_on_thread_pool() {
         if !THREAD_POOL_BODY_PORTED {
             // Deferred: the Zap work-stealing ThreadPool body (§1/§6). The type
@@ -3586,6 +3630,10 @@ mod tests {
     // `libc::mach_task_self()` is `#[deprecated]` in libc (see async.rs PORT NOTE).
     #[allow(deprecated)]
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively + ASan (sanitizers.sh)"
+    )]
     fn kqueue_mach_port() {
         // if (builtin.os.tag != .macos) return error.SkipZigTest;
         // (this test module is `#[cfg(target_os = "macos")]`-gated in lib.rs.)
