@@ -50,3 +50,6 @@ __pycache__/
 # .port/phase-0/baseline/METHODOLOGY.md (deterministic `ghostty-gen`/rustty-synthetic
 # seeds). Not needed for the parity gates; kept out of history to stay lean.
 /.port/phase-0/baseline/corpora/*.bin
+
+# rustc/Miri ICE crash dumps (transient; appear under heavy parallel Miri load)
+rustc-ice-*.txt
