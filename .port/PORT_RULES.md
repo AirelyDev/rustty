@@ -168,3 +168,173 @@ code — ObjC/Core Animation, C fn-pointer slots):
   seeing `"C-unwind"` on an exported/installed fn treats it as a policy
   violation unless a documented unwind contract with the host exists (none
   does today).
+
+---
+
+# R7–R12 — Bun-port adoptions (BINDING, ratified 2026-07-10)
+
+Provenance: drafted as PROPOSED rules in `.port/phase-2/BUN_PORT_LEARNINGS.md`
+§5 (detector references D1–D9 anchor in its §4); ratified in full — all six —
+on **2026-07-10** (plan `docs/superpowers/plans/2026-07-10-port-realignment-
+and-validation-hardening.md`, Task 15, decision gate DG1). Each rule only
+tightens (R5-compatible). Where a rule cites a gate/artifact that a Phase-3
+plan task is still landing, that is noted inline; the rule is binding now and
+the artifact's absence is tracked work, never a license to skip.
+
+## R7 — Replacement-primitive semantic fidelity
+
+When a Zig builtin/idiom is replaced by a Rust primitive with different edge semantics,
+the divergence is decided explicitly per site, never inherited silently:
+
+- **Narrowing:** `@intCast` → `T::try_from(x).unwrap()`. Bare `as` is reserved for
+  `@truncate` (intentional wrap). A proven-hot loop may use `as` only with
+  `// PERF(port): @intCast` and a benchmark citation.
+- **Wrapping/saturating:** `+%`/`-%`/`*%` → `wrapping_*`; `+|`/`-|` → `saturating_*`.
+  Never bare operators for these (under the landed DG2/DG4 profiles — root
+  `Cargo.toml` `[profile.release] overflow-checks = true`, `release-safe`,
+  `release-fast` — bare operators TRAP in dev and release; that is still not
+  the Zig `+%` wrap semantic, and under `release-fast` they wrap, which is
+  neither semantic decided per site).
+- **Float→int:** `@intFromFloat` → `as` (Rust saturates where Zig is UB). Keep the Zig
+  code's prior range checks; do not add new ones.
+- **Slice reinterprets:** every site records truncate-vs-error and carries an
+  odd/misaligned-length test (detector D1; gate `check_slice_reinterpret.sh`
+  lands via plan Task 18).
+- **Multi-object loops:** `for (a, b) |x, y|` ports with
+  `debug_assert_eq!(a.len(), b.len())` — the length assert is part of the source
+  semantics under R1, because `.zip()` silently truncates.
+- **Asserts:** `std.debug.assert` → `debug_assert!`; `unreachable` → `unreachable!()`
+  (checked); `catch unreachable` → `.expect(...)`. `unreachable_unchecked`/
+  `unwrap_unchecked` are forbidden until the invariant is proven (an isolated
+  non-FFI Miri proof harness per the in-repo mirihar doctrine —
+  `.port/phase-2/mirihar-chunk3b`, `.port/phase-2/mirihar-wire2`; memory
+  `shaper-hook-sb-clean-interleave` — or a closed-form argument), then marked
+  `// PERF(port)`. Assertions are side-effect-free;
+  a `debug_assert!` never discharges a safety obligation and never validates untrusted
+  input — VT-stream and config validation is release-checked.
+- **Comments:** a ported comment describing the OLD primitive's behavior is rewritten to
+  the Rust primitive's contract (fidelity to intent over stale text); flagged in review
+  (detector D9).
+
+## R8 — Comptime-phase and build-switch preservation
+
+- A Zig `comptime` parameter maps to a Rust const/generic/macro (ladder: plain generic >
+  const generic > macro). Porting one to a runtime function is a flagged deviation
+  requiring a written argument that no runtime bytes can alias the compile-time grammar
+  (detector D4), plus golden byte tests on any emitted escape/format output.
+- Zig build-mode/option switches (`builtin.mode`, build options, sanitizer/allocator
+  toggles) port as `cfg`, NEVER constant-folded to one profile's value. The
+  profile side of this fork is already landed in-repo: root `Cargo.toml`
+  `[profile.release]` (overflow-checks on), `[profile.release-fast]`,
+  `[profile.release-safe]` per §DG2/DG4 above — code must stay switchable
+  across those profiles, not folded to any one of them. Allocator and
+  instrumentation plumbing is the named highest-risk case (Bun Class 5).
+- Derived constants port as the same const EXPRESSION as the Zig source, never a folded
+  literal; zero placeholder constants survive a sub-batch gate (detector D3).
+- Sanitizer lanes carry self-test canaries (intentional leak + overflow must fail)
+  whenever the global allocator or instrumentation configuration changes (detector D6).
+
+## R9 — Unsafe accounting and the unsound-safe ledger
+
+- Ground truth: `.port/audits/count-unsafe.sh` (committed rg command; lands via
+  plan Task 17); snapshots pinned to commits, categories reconcile exactly to
+  the total.
+- Every unsafe block carries `// SAFETY(<origin>/<dest>): <owner/aliasing contract>`
+  using the fixed origin set {zig-port-idiom, ffi-boundary, raw-page-aliasing,
+  callback-ctx, lifetime-erasure, uninit-buffer, marker-trait, perf} and Bun's five
+  destinations. Missing tags fail the audit script.
+- "Fixed" bar: safe code cannot cause UB in a release build; debug assertions do not
+  qualify; wrappers that hide the invariant do not qualify.
+- A parallel unsound-safe ledger (`.port/audits/UNSOUND_SAFE.md`, lands via plan
+  Task 17) tracks every safe wrapper of a raw-ptr deref,
+  &self→&mut accessor, and lifetime-less pointer-holding struct, triaged
+  reachable-from-VT-stream / internal / theoretical; soundness fixes outrank
+  count-reduction, always.
+- Per-crate unsafe density is monotone non-increasing between snapshots; an increase
+  requires a written justification in the introducing change. Reviews count
+  `new_unsafe`; acceptance outside -sys/FFI crates requires `new_unsafe == 0`; each
+  extern fn gets exactly one safe wrapper (pure externs may be `safe fn`
+  redeclarations after an individual pure-vs-stateful review).
+- Census cadence: snapshot + unsound-safe pass at every sub-project finale; RAII
+  migrations convert one type at a time under the owning crate's Miri/ASan
+  harness (R6 tooling, runner `.port/tools/gates/check_leaks.sh`). Where a
+  covering test is Miri-intractable, exception routing follows the strict
+  4-criteria protocol of `.port/phase-2/MIRI_EXCEPTIONS.md` — right-tool
+  compensating coverage (native + ASan + tracking allocator +
+  Miri-on-lighter-tests), never a skip.
+
+## R10 — Marker and perf-intent discipline
+
+- Machine-greppable markers only: `TODO(port): <reason>` (unresolvable now — "flagging
+  is better than wrong code"), `PERF(port): <zig idiom>` (idiom downgraded to the plain
+  form; the perf intent is debt), `PORT NOTE: <reshape reason>` (sanctioned structural
+  divergence). Large ported files carry a PORT STATUS trailer (source path, confidence
+  high/medium/low, marker count).
+- `PERF(port)` is mandatory wherever a Zig perf idiom (appendAssumeCapacity, arena
+  bulk-free, stack-fallback alloc, comptime monomorphization, packed tagged pointer) is
+  ported as the plain idiomatic form. Before R2 perf parity is declared for a tier, a
+  bench-driven pass greps `PERF(port)` and resolves each against the ghostty benchmarks.
+- Endgame: a marker census by category feeds a leverage-ranked backlog
+  (`unsafe_removed × affected_count / effort`); rejected-alternative decisions are
+  recorded so they are not re-proposed. Sub-batch gates admit zero placeholder
+  CONSTANTS (R8); `unimplemented!()` placeholder leaves remain governed by the
+  placeholder-leaf doctrine and its dated C-F endgame audit (memory
+  `placeholder-leaf-doctrine`).
+
+## R11 — Adversarial verification protocol for bulk classification & review
+
+- Split contexts: implementer, verifier, and fixer are separate agents; the verifier
+  works a concrete violation checklist keyed to PORT_RULES and defaults to
+  not-ok-if-uncertain; the fixer makes surgical edits only and may skip a hallucinated
+  finding with a note; the orchestrator owns all path/naming decisions and all pushes.
+- Bulk classifications (pointer fields, comment coverage, SAFETY tags, upstream-parity
+  verdicts) require per-claim evidence in the form "file:line — what you saw"; every
+  low-confidence claim plus a fixed random sample (~10-15%) of high-confidence claims
+  receives 2-3 independent adversarial votes with default-refute polarity; majority
+  overturns. Inter-classifier agreement is published with the artifact.
+- Standing artifact: `.port/audits/GHOSTTY_LIFETIMES.tsv` (lands via plan Task
+  16) — every pointer-typed struct field in the
+  remaining pointer-heavy tiers classified once (Bun's 11-class taxonomy + GHOSTTY_C),
+  consumed verbatim by port agents ("trust it over local guessing"); UNKNOWN ⇒
+  `Option<NonNull<T>>` + TODO(port).
+- **LIFETIMES prospective prong:** no pointer-heavy tier ports without its
+  GHOSTTY_LIFETIMES.tsv rows landing first (2-reviewer consensus). This is item
+  1 of the pre-port tier checklist below (plan Task 16 Step 4 + Task 22 Step 1;
+  memory `adopt-lifetimes-tsv`).
+- Swarm hygiene: one expensive pass (build/Miri) per round with read-only fix agents;
+  contiguous-slice sharding; capped fixes per round; push per round; agents never run
+  destructive git and commit explicit pathspecs with hooks disabled.
+
+## R12 — Upstream parity tracking
+
+- A standing main-parity workflow (`.port/phase-2/wf-main-parity.js`, lands via
+  plan Task 19; ledger `.port/phase-2/MAIN_PARITY.md`) enumerates every
+  upstream ghostty commit (since the pinned reference SHA, `4749c4e9`)
+  touching ported files; each gets a verdict
+  ported/missing/partial/not-applicable with file:line evidence and 2-vote adversarial
+  verification; missing ones are ported WITH the same commit's test hunks. It
+  runs as a standing per-sub-project ritual. The reference checkout at
+  `/Users/gael/projects/ghostty` stays read-only: `git fetch` is the one
+  sanctioned write (remote refs only), never checkout/pull/reset.
+- Doctrine: updating the reference checkout does not port anything — "a merge does NOT
+  port the fix; only an explicit .rs change does."
+- Every escaped defect gets `tests/regression/issue_NNN.rs` with a documented fail-first
+  proof, and (for oracle-differential tests) proof the test fails against the
+  pre-fix/oracle side.
+
+## Pre-port tier checklist (binding, 2026-07-10)
+
+Per-tier PRE-PORT GATE for the remaining tiers (gtk ~23k LOC, swift-app glue,
+inspector widgets, platform-linux/windows). No porting workflow may start for a
+tier without ALL of (plan Task 22 Step 1):
+
+1. LIFETIMES.tsv rows for every pointer-typed field in the tier's Zig sources
+   (Task 16 process, prospective prong — 2-reviewer consensus).
+2. Paired-invariant catalog entries for cross-crate predicates the tier
+   introduces (D5).
+3. Comptime-parameter inventory for the tier (D4a) with per-instance rendering
+   decisions logged.
+4. Constants-parity extraction for the tier's Zig files (D3).
+5. Design doc + adversary pass (existing doctrine), now REQUIRED to cite
+   LIFETIMES rows for any raw-pointer seam.
+6. Slice-reinterpret allowlist extension for any new reinterpret sites (D1).
