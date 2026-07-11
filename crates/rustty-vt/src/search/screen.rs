@@ -135,7 +135,12 @@ pub struct SelectedMatch {
 
 impl SelectedMatch {
     // pub fn deinit(self: *SelectedMatch, screen: *Screen) void {
-    pub fn deinit(self, screen: &mut Screen) {
+    // SB: `screen` is `*mut Screen` (reference `*Screen`), NOT `&mut Screen` — a
+    // whole-`Screen` `&mut` reborrow would invalidate the searcher's live raw
+    // aliases (rust-mut-args-strongly-protected). Passes the raw ptr straight
+    // through to `TrackedHighlight::deinit`, which reborrows `.pages` narrowly.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // reference takes `screen: *Screen` (raw)
+    pub fn deinit(self, screen: *mut Screen) {
         // self.highlight.deinit(screen);
         self.highlight.deinit(screen);
     }
@@ -155,11 +160,15 @@ pub struct HistorySearch {
 
 impl HistorySearch {
     // pub fn deinit(self: *HistorySearch, screen: *Screen) void {
-    pub fn deinit(&mut self, screen: &mut Screen) {
+    // SB: `screen` is `*mut Screen` (reference `*Screen`), NOT `&mut Screen`;
+    // `.pages` is reborrowed narrowly for the single `untrack_pin` call so no
+    // whole-`Screen` retag invalidates the searcher's live raw aliases.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // reference takes `screen: *Screen` (raw)
+    pub fn deinit(&mut self, screen: *mut Screen) {
         // self.searcher.deinit();
         self.searcher.deinit();
         // screen.pages.untrackPin(self.start_pin);
-        screen.pages.untrack_pin(self.start_pin);
+        unsafe { (*screen).pages.untrack_pin(self.start_pin) };
     }
 }
 
@@ -300,11 +309,11 @@ impl ScreenSearch {
         self.active.deinit();
         // if (self.history) |*h| h.deinit(self.screen);
         if let Some(h) = self.history.as_mut() {
-            h.deinit(unsafe { &mut *self.screen });
+            h.deinit(self.screen);
         }
         // if (self.selected) |*m| m.deinit(self.screen);
         if let Some(m) = self.selected.take() {
-            m.deinit(unsafe { &mut *self.screen });
+            m.deinit(self.screen);
         }
         // for (self.active_results.items) |*hl| hl.deinit(alloc);
         // self.active_results.deinit(alloc);
@@ -673,7 +682,7 @@ impl ScreenSearch {
             self.selected
                 .take()
                 .unwrap()
-                .deinit(unsafe { &mut *self.screen });
+                .deinit(self.screen);
             true
         };
         // defer if (select_prev) { ... };
@@ -713,7 +722,10 @@ impl ScreenSearch {
         let alloc = self.allocator();
         let _ = alloc;
         // const list: *PageList = &self.screen.pages;
-        let list: *mut PageList = unsafe { &mut (*self.screen).pages };
+        // SB: raw `addr_of_mut!` (reference `*PageList`), NOT `&mut (*self.screen).pages`
+        // — a `&mut` reborrow here would be invalidated by the later `&mut`-free
+        // deinit/track calls that reborrow `.pages` narrowly; the raw alias survives.
+        let list: *mut PageList = unsafe { core::ptr::addr_of_mut!((*self.screen).pages) };
 
         // if (try self.active.update(list)) |history_node| history: {
         let update_result = self.active.update(unsafe { &*list })?;
@@ -746,7 +758,7 @@ impl ScreenSearch {
                         self.history
                             .as_mut()
                             .unwrap()
-                            .deinit(unsafe { &mut *self.screen });
+                            .deinit(self.screen);
                         self.history = None;
                         for hl in self.history_results.iter_mut() {
                             hl.deinit();
@@ -974,7 +986,7 @@ impl ScreenSearch {
                 self.history
                     .as_mut()
                     .unwrap()
-                    .deinit(unsafe { &mut *self.screen });
+                    .deinit(self.screen);
                 self.history = None;
                 for hl in self.history_results.iter_mut() {
                     hl.deinit();
@@ -998,7 +1010,7 @@ impl ScreenSearch {
                     self.selected
                         .take()
                         .unwrap()
-                        .deinit(unsafe { &mut *self.screen });
+                        .deinit(self.screen);
                     // _ = self.select(.prev) catch |err| { ... };
                     if let Err(err) = self.select(Select::Prev) {
                         eprintln!(
@@ -1031,7 +1043,7 @@ impl ScreenSearch {
                     this.selected
                         .take()
                         .unwrap()
-                        .deinit(unsafe { &mut *this.screen });
+                        .deinit(this.screen);
                     if let Err(err) = this.select(Select::Next) {
                         eprintln!(
                             "info(search_screen): reload failed to reset search selection err={:?}",
@@ -1188,7 +1200,7 @@ impl ScreenSearch {
             self.selected
                 .take()
                 .unwrap()
-                .deinit(unsafe { &mut *self.screen });
+                .deinit(self.screen);
             // _ = self.select(.next) catch |err| { ... };
             if let Err(err) = self.select(Select::Next) {
                 eprintln!(
@@ -1284,7 +1296,7 @@ impl ScreenSearch {
             // Pin it so we can track any movement
             // const tracked = try hl.untracked().track(self.screen);
             // errdefer tracked.deinit(self.screen);
-            let tracked = hl.untracked().track(unsafe { &mut *self.screen })?;
+            let tracked = hl.untracked().track(self.screen)?;
 
             // Our selection is index zero since we just started and
             // we store our selection.
@@ -1321,7 +1333,7 @@ impl ScreenSearch {
         // Pin it so we can track any movement
         // const tracked = try hl.untracked().track(self.screen);
         // errdefer tracked.deinit(self.screen);
-        let tracked = hl.untracked().track(unsafe { &mut *self.screen })?;
+        let tracked = hl.untracked().track(self.screen)?;
 
         // Free our previous match and setup our new selection
         // prev.deinit(self.screen);
@@ -1329,7 +1341,7 @@ impl ScreenSearch {
         self.selected
             .take()
             .unwrap()
-            .deinit(unsafe { &mut *self.screen });
+            .deinit(self.screen);
         self.selected = Some(SelectedMatch {
             idx: next_idx,
             highlight: tracked,
@@ -1364,7 +1376,7 @@ impl ScreenSearch {
             // Pin it so we can track any movement
             // const tracked = try hl.untracked().track(self.screen);
             // errdefer tracked.deinit(self.screen);
-            let tracked = hl.untracked().track(unsafe { &mut *self.screen })?;
+            let tracked = hl.untracked().track(self.screen)?;
 
             // Our selection is the last index since we just started
             // and we store our selection.
@@ -1406,7 +1418,7 @@ impl ScreenSearch {
         // Pin it so we can track any movement
         // const tracked = try hl.untracked().track(self.screen);
         // errdefer tracked.deinit(self.screen);
-        let tracked = hl.untracked().track(unsafe { &mut *self.screen })?;
+        let tracked = hl.untracked().track(self.screen)?;
 
         // Free our previous match and setup our new selection
         // prev.deinit(self.screen);
@@ -1414,7 +1426,7 @@ impl ScreenSearch {
         self.selected
             .take()
             .unwrap()
-            .deinit(unsafe { &mut *self.screen });
+            .deinit(self.screen);
         self.selected = Some(SelectedMatch {
             idx: next_idx,
             highlight: tracked,
@@ -1493,27 +1505,29 @@ mod tests {
         // try testing.expectEqual(2, matches.len);
         assert_eq!(2, matches.len());
 
-        let active = unsafe { &mut *active_ptr };
+        // SB: the active screen is shared with the searcher (raw `self.screen`); read it
+        // via the raw `active_ptr` per-use, never a `&mut Screen` held across `search.*`
+        // calls that mutate it (rust-mut-args-strongly-protected).
         {
             let sel = matches[0].untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 2 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 2 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
         {
             let sel = matches[1].untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -1555,16 +1569,18 @@ mod tests {
         let matches = search.matches(alloc).unwrap();
         assert_eq!(1, matches.len());
 
-        let active = unsafe { &mut *active_ptr };
+        // SB: the active screen is shared with the searcher (raw `self.screen`); read it
+        // via the raw `active_ptr` per-use, never a `&mut Screen` held across `search.*`
+        // calls that mutate it (rust-mut-args-strongly-protected).
         {
             let sel = matches[0].untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -1608,7 +1624,9 @@ mod tests {
         search.reload_active().unwrap();
         search.search_all().unwrap();
 
-        let active = unsafe { &mut *active_ptr };
+        // SB: the active screen is shared with the searcher (raw `self.screen`); read it
+        // via the raw `active_ptr` per-use, never a `&mut Screen` held across `search.*`
+        // calls that mutate it (rust-mut-args-strongly-protected).
         // Get all matches
         {
             let matches = search.matches(alloc).unwrap();
@@ -1617,22 +1635,22 @@ mod tests {
                 let sel = matches[1].untracked();
                 assert_eq!(
                     Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                    active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                    unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
                 );
                 assert_eq!(
                     Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                    active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                    unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
                 );
             }
             {
                 let sel = matches[0].untracked();
                 assert_eq!(
                     Some(Point::Active(point::Coordinate { x: 1, y: 1 })),
-                    active.pages.point_from_pin(point::Tag::Active, sel.start)
+                    unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.start) }
                 );
                 assert_eq!(
                     Some(Point::Active(point::Coordinate { x: 4, y: 1 })),
-                    active.pages.point_from_pin(point::Tag::Active, sel.end)
+                    unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.end) }
                 );
             }
         }
@@ -1653,7 +1671,9 @@ mod tests {
         search.reload_active().unwrap();
         search.search_all().unwrap();
 
-        let active = unsafe { &mut *active_ptr };
+        // SB: the active screen is shared with the searcher (raw `self.screen`); read it
+        // via the raw `active_ptr` per-use, never a `&mut Screen` held across `search.*`
+        // calls that mutate it (rust-mut-args-strongly-protected).
         {
             let matches = search.matches(alloc).unwrap();
             assert_eq!(1, matches.len());
@@ -1661,11 +1681,11 @@ mod tests {
                 let sel = matches[0].untracked();
                 assert_eq!(
                     Some(Point::Active(point::Coordinate { x: 2, y: 0 })),
-                    active.pages.point_from_pin(point::Tag::Active, sel.start)
+                    unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.start) }
                 );
                 assert_eq!(
                     Some(Point::Active(point::Coordinate { x: 5, y: 0 })),
-                    active.pages.point_from_pin(point::Tag::Active, sel.end)
+                    unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.end) }
                 );
             }
         }
@@ -1701,16 +1721,18 @@ mod tests {
         let matches = search.matches(alloc).unwrap();
         assert_eq!(1, matches.len());
 
-        let active = unsafe { &mut *active_ptr };
+        // SB: the active screen is shared with the searcher (raw `self.screen`); read it
+        // via the raw `active_ptr` per-use, never a `&mut Screen` held across `search.*`
+        // calls that mutate it (rust-mut-args-strongly-protected).
         {
             let sel = matches[0].untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 1 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 1 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -1738,16 +1760,18 @@ mod tests {
         // Select our next match (first)
         search.search_all().unwrap();
         let _ = search.select(Select::Next).unwrap();
-        let active = unsafe { &mut *active_ptr };
+        // SB: the active screen is shared with the searcher (raw `self.screen`); read it
+        // via the raw `active_ptr` per-use, never a `&mut Screen` held across `search.*`
+        // calls that mutate it (rust-mut-args-strongly-protected).
         {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 2 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 2 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -1757,11 +1781,11 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -1771,11 +1795,11 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 2 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 2 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -1798,17 +1822,19 @@ mod tests {
         search.search_all().unwrap();
         let _ = search.select(Select::Next).unwrap();
         let _ = search.select(Select::Next).unwrap();
-        let active = unsafe { &mut *active_ptr };
+        // SB: the active screen is shared with the searcher (raw `self.screen`); read it
+        // via the raw `active_ptr` per-use, never a `&mut Screen` held across `search.*`
+        // calls that mutate it (rust-mut-args-strongly-protected).
         {
             // Initial selection is the first fizz
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -1822,11 +1848,11 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 1 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 1 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -1840,11 +1866,11 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 1 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 1 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -1875,18 +1901,20 @@ mod tests {
         let mut search: ScreenSearch = ScreenSearch::init(alloc, active_ptr, b"Fizz").unwrap();
         search.search_all().unwrap();
 
-        let active = unsafe { &mut *active_ptr };
+        // SB: the active screen is shared with the searcher (raw `self.screen`); read it
+        // via the raw `active_ptr` per-use, never a `&mut Screen` held across `search.*`
+        // calls that mutate it (rust-mut-args-strongly-protected).
         // Get all matches
         let _ = search.select(Select::Next).unwrap();
         {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -1900,11 +1928,11 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -1917,11 +1945,11 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -1948,16 +1976,18 @@ mod tests {
         // Select prev (oldest first)
         search.search_all().unwrap();
         let _ = search.select(Select::Prev).unwrap();
-        let active = unsafe { &mut *active_ptr };
+        // SB: the active screen is shared with the searcher (raw `self.screen`); read it
+        // via the raw `active_ptr` per-use, never a `&mut Screen` held across `search.*`
+        // calls that mutate it (rust-mut-args-strongly-protected).
         {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -1967,11 +1997,11 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 2 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 2 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -1981,11 +2011,11 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -2007,14 +2037,16 @@ mod tests {
         let mut search: ScreenSearch = ScreenSearch::init(alloc, active_ptr, b"Fizz").unwrap();
         search.search_all().unwrap();
 
-        let active = unsafe { &mut *active_ptr };
+        // SB: the active screen is shared with the searcher (raw `self.screen`); read it
+        // via the raw `active_ptr` per-use, never a `&mut Screen` held across `search.*`
+        // calls that mutate it (rust-mut-args-strongly-protected).
         // Select next (newest first)
         let _ = search.select(Select::Next).unwrap();
         {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 2 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
         }
 
@@ -2024,7 +2056,7 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
         }
 
@@ -2034,7 +2066,7 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 2 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
         }
 
@@ -2065,18 +2097,20 @@ mod tests {
         let mut search: ScreenSearch = ScreenSearch::init(alloc, active_ptr, b"Fizz").unwrap();
         search.search_all().unwrap();
 
-        let active = unsafe { &mut *active_ptr };
+        // SB: the active screen is shared with the searcher (raw `self.screen`); read it
+        // via the raw `active_ptr` per-use, never a `&mut Screen` held across `search.*`
+        // calls that mutate it (rust-mut-args-strongly-protected).
         // Select prev (oldest first, should be in history)
         let _ = search.select(Select::Prev).unwrap();
         {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
 
@@ -2086,11 +2120,11 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 0, y: 1 })),
-                active.pages.point_from_pin(point::Tag::Active, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.start) }
             );
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 3, y: 1 })),
-                active.pages.point_from_pin(point::Tag::Active, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.end) }
             );
         }
 

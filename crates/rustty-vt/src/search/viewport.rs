@@ -433,23 +433,24 @@ mod tests {
         // var search: ViewportSearch = try .init(alloc, "Fizz");
         let mut search: ViewportSearch = ViewportSearch::init(alloc, b"Fizz").unwrap();
         // try testing.expect(try search.update(&t.screens.active.pages));
-        let active = unsafe { &mut *active_ptr };
-        assert!(search.update(&active.pages).unwrap());
+        // SB: read the searcher-shared active screen via raw `active_ptr` per-use, never
+        // a `&mut Screen` held across `search.update`/`next_slice` mutations (see screen.rs).
+        assert!(search.update(unsafe { &(*active_ptr).pages }).unwrap());
 
         // Viewport contains active so update should always re-search.
         // try testing.expect(try search.update(&t.screens.active.pages));
-        assert!(search.update(&active.pages).unwrap());
+        assert!(search.update(unsafe { &(*active_ptr).pages }).unwrap());
 
         {
             let h = search.next().unwrap();
             let sel = h.untracked();
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 0, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Active, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.start) }
             );
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 3, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Active, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.end) }
             );
         }
         {
@@ -457,11 +458,11 @@ mod tests {
             let sel = h.untracked();
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 0, y: 2 })),
-                active.pages.point_from_pin(point::Tag::Active, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.start) }
             );
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 3, y: 2 })),
-                active.pages.point_from_pin(point::Tag::Active, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.end) }
             );
         }
         assert!(search.next().is_none());
@@ -483,8 +484,9 @@ mod tests {
 
         let mut search: ViewportSearch = ViewportSearch::init(alloc, b"Fizz").unwrap();
         {
-            let active = unsafe { &mut *active_ptr };
-            assert!(search.update(&active.pages).unwrap());
+            // SB: read the searcher-shared active screen via raw `active_ptr` per-use, never
+            // a `&mut Screen` held across `search.update`/`next_slice` mutations (see screen.rs).
+            assert!(search.update(unsafe { &(*active_ptr).pages }).unwrap());
         }
 
         // s.nextSlice("\x1b[2J"); // Clear screen
@@ -493,19 +495,20 @@ mod tests {
         s.next_slice(b"\x1b[H"); // Move cursor home
                                  // s.nextSlice("Buzz\r\nFizz\r\nBuzz");
         s.next_slice(b"Buzz\r\nFizz\r\nBuzz");
-        let active = unsafe { &mut *active_ptr };
-        assert!(search.update(&active.pages).unwrap());
+        // SB: read the searcher-shared active screen via raw `active_ptr` per-use, never
+        // a `&mut Screen` held across `search.update`/`next_slice` mutations (see screen.rs).
+        assert!(search.update(unsafe { &(*active_ptr).pages }).unwrap());
 
         {
             let h = search.next().unwrap();
             let sel = h.untracked();
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 0, y: 1 })),
-                active.pages.point_from_pin(point::Tag::Active, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.start) }
             );
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 3, y: 1 })),
-                active.pages.point_from_pin(point::Tag::Active, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.end) }
             );
         }
         assert!(search.next().is_none());
@@ -531,38 +534,39 @@ mod tests {
         // search.active_dirty = false;
         search.active_dirty = Some(false);
 
-        let active = unsafe { &mut *active_ptr };
+        // SB: read the searcher-shared active screen via raw `active_ptr` per-use, never
+        // a `&mut Screen` held across `search.update`/`next_slice` mutations (see screen.rs).
 
         // Should update since we've never searched before
-        assert!(search.update(&active.pages).unwrap());
+        assert!(search.update(unsafe { &(*active_ptr).pages }).unwrap());
 
         // Should not update since nothing changed
         // try testing.expect(!try search.update(&t.screens.active.pages));
-        assert!(!search.update(&active.pages).unwrap());
+        assert!(!search.update(unsafe { &(*active_ptr).pages }).unwrap());
 
         s.next_slice(b"\x1b[2J"); // Clear screen
         s.next_slice(b"\x1b[H"); // Move cursor home
         s.next_slice(b"Buzz\r\nFizz\r\nBuzz");
 
         // Should still not update since active area isn't dirty
-        assert!(!search.update(&active.pages).unwrap());
+        assert!(!search.update(unsafe { &(*active_ptr).pages }).unwrap());
 
         // Mark
         // search.active_dirty = true;
         search.active_dirty = Some(true);
         // try testing.expect(try search.update(&t.screens.active.pages));
-        assert!(search.update(&active.pages).unwrap());
+        assert!(search.update(unsafe { &(*active_ptr).pages }).unwrap());
 
         {
             let h = search.next().unwrap();
             let sel = h.untracked();
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 0, y: 1 })),
-                active.pages.point_from_pin(point::Tag::Active, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.start) }
             );
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 3, y: 1 })),
-                active.pages.point_from_pin(point::Tag::Active, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.end) }
             );
         }
         assert!(search.next().is_none());
@@ -608,27 +612,28 @@ mod tests {
         s.deinit();
         t.scroll_viewport(ScrollViewport::Top);
 
-        let active = unsafe { &mut *active_ptr };
+        // SB: read the searcher-shared active screen via raw `active_ptr` per-use, never
+        // a `&mut Screen` held across `search.update`/`next_slice` mutations (see screen.rs).
         let mut search: ViewportSearch = ViewportSearch::init(alloc, b"Fizz").unwrap();
-        assert!(search.update(&active.pages).unwrap());
+        assert!(search.update(unsafe { &(*active_ptr).pages }).unwrap());
 
         {
             let h = search.next().unwrap();
             let sel = h.untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.start)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                active.pages.point_from_pin(point::Tag::Screen, sel.end)
+                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
             );
         }
         assert!(search.next().is_none());
 
         // Viewport doesn't contain active
         // try testing.expect(!try search.update(&t.screens.active.pages));
-        assert!(!search.update(&active.pages).unwrap());
+        assert!(!search.update(unsafe { &(*active_ptr).pages }).unwrap());
         assert!(search.next().is_none());
 
         search.deinit();

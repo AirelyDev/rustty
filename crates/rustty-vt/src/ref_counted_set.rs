@@ -682,11 +682,17 @@ where
         assert(id.to_usize() < self.layout.cap);
 
         let items = unsafe { self.items.ptr(base) };
-        let item = unsafe { &mut *items.add(id.to_usize()) };
+        // SB: raw `*mut Item`, NOT `&mut *items.add(..)`. `get` returns a `*T`
+        // (reference `*T`) and callers hold MULTIPLE results into the SAME set at
+        // once — the render hyperlink comparison (render.rs) compares two entries
+        // of one page's `hyperlink_set`. A `&mut` Unique retag here pops the
+        // sibling result off the borrow stack and makes its later use UB
+        // (rust-mut-args-strongly-protected). Field access goes through the raw.
+        let item = unsafe { items.add(id.to_usize()) };
 
-        assert(item.meta.ref_count > RefCount::ZERO);
+        assert(unsafe { (*item).meta.ref_count } > RefCount::ZERO);
 
-        &mut item.value as *mut T
+        unsafe { core::ptr::addr_of_mut!((*item).value) }
     }
 
     /// Releases a reference to an item by its ID.

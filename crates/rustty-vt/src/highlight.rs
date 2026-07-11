@@ -44,7 +44,14 @@ pub struct Untracked {
 }
 
 impl Untracked {
-    pub fn track(&self, screen: &mut Screen) -> Result<Tracked, OutOfMemory> {
+    // SB: `screen` is a raw `*mut Screen` (the reference's `*Screen`), NOT `&mut
+    // Screen`. The searcher holds long-lived raw aliases into the same `Screen`
+    // (PageListSearch.list, tracked pins); a `&mut *screen` reborrow here would
+    // retag the whole `Screen` allocation and invalidate them under Stacked
+    // Borrows (rust-mut-args-strongly-protected). `.pages` is reached via narrow
+    // scoped reborrows off the raw pointer inside `Tracked::init`.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // reference takes `screen: *Screen` (raw)
+    pub fn track(&self, screen: *mut Screen) -> Result<Tracked, OutOfMemory> {
         Tracked::init(screen, self.start, self.end)
     }
 
@@ -73,13 +80,17 @@ pub struct Tracked {
 }
 
 impl Tracked {
-    pub fn init(screen: &mut Screen, start: Pin, end: Pin) -> Result<Tracked, OutOfMemory> {
-        let start_tracked = screen.pages.track_pin(start)?;
+    // SB: `screen` is `*mut Screen` (reference `*Screen`); `.pages` is reached via
+    // narrow scoped `(*screen).pages` reborrows so no whole-`Screen` `&mut` retag
+    // invalidates the searcher's sibling raw aliases (see `Untracked::track`).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // reference takes `screen: *Screen` (raw)
+    pub fn init(screen: *mut Screen, start: Pin, end: Pin) -> Result<Tracked, OutOfMemory> {
+        let start_tracked = unsafe { (*screen).pages.track_pin(start) }?;
         // errdefer screen.pages.untrackPin(start_tracked);
-        let end_tracked = match screen.pages.track_pin(end) {
+        let end_tracked = match unsafe { (*screen).pages.track_pin(end) } {
             Ok(p) => p,
             Err(e) => {
-                screen.pages.untrack_pin(start_tracked);
+                unsafe { (*screen).pages.untrack_pin(start_tracked) };
                 return Err(e);
             }
         };
@@ -101,9 +112,12 @@ impl Tracked {
         Tracked { start, end }
     }
 
-    pub fn deinit(self, screen: &mut Screen) {
-        screen.pages.untrack_pin(self.start);
-        screen.pages.untrack_pin(self.end);
+    // SB: `screen` is `*mut Screen` (reference `*Screen`) — narrow `(*screen).pages`
+    // reborrows only, never a whole-`Screen` `&mut` (see `Untracked::track`).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // reference takes `screen: *Screen` (raw)
+    pub fn deinit(self, screen: *mut Screen) {
+        unsafe { (*screen).pages.untrack_pin(self.start) };
+        unsafe { (*screen).pages.untrack_pin(self.end) };
     }
 }
 
