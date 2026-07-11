@@ -208,8 +208,12 @@ pub struct ESC {
 
 // PORT NOTE: `Action.DCS` nested struct, hoisted to top-level. The reference
 // defaults `intermediates = ""` and `params = &.{}`; the owned `Vec`s are empty
-// by default at the call site. The `DCS.C` extern struct is the C ABI mirror
-// (ported in rustty-vt-c) and is kept as a commented reference.
+// by default at the call site. The `DCS.C` extern struct is the C ABI mirror,
+// kept as a commented reference: it is DEFERRED until a C stream/DCS surface is
+// ported — the reference itself has no C-ABI consumer of `Action.DCS.C` (no
+// `@export` path uses it; `include/ghostty/vt/*.h` define no DCS type;
+// `lib_vt.zig:63` is a Zig-module type export, not a C export), so rustty-vt-c
+// intentionally has no DCS mirror today (LIFETIMES audit 2026-07-10).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DCS {
     pub intermediates: Vec<u8>,

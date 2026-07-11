@@ -3784,3 +3784,86 @@ fork:
 
 The cli C2 entry's "Non-macOS Fontconfig discovery is still DEFERRED in the
 shaper" note points here.
+
+## LIFETIMES-AUDIT findings (2026-07-10) [added 2026-07-10, T16 audit close]
+
+The retroactive pointer-field ownership audit (`.port/audits/GHOSTTY_LIFETIMES.tsv`,
+ledger `.port/audits/LIFETIMES_AUDIT_2026-07-10.md`) closed with 20 findings:
+0 high, 2 medium, 18 low. The 2 mediums are SB-class latent UB whose fix must
+reproduce-then-prove on an isolated mirihar harness per doctrine
+(shaper-hook-sb-clean-interleave; precedent `.port/phase-2/mirihar-chunk3b`) —
+too large for the close pass, so they are FILED here with the fix prescription.
+Two low-severity cleanups are filed alongside. All four TSV rows involved carry
+`[audited-against-port 2026-07-10: ... FILED in DEFERRALS.md]` cross-references.
+
+### 1. rustty-xev kqueue — `&mut` coercions into the self-referential MPSC queue (MEDIUM, latent SB UB, dead branch)
+
+Three sites in `crates/rustty-xev/src/kqueue.rs` reach the Vyukov intrusive
+MPSC queue (`thread_pool_completions: TaskCompletionQueue`) through a fresh
+`&mut` place expression coerced to `*mut Self`, contradicting `queue_mpsc.rs`'s
+own PORT NOTE (lines 14-17: "a `&mut self` receiver would invalidate the stored
+stub pointer under Stacked Borrows") and the TSV head/tail rows'
+`AtomicPtr::from_ptr`-through-stable-`*mut` prescription:
+
+- **`kqueue.rs:630`** — `TaskCompletionQueue::init(&mut self.thread_pool_completions)`
+  (tick_inner first-init). The stub self-pointers written into head/tail carry
+  this borrow's provenance.
+- **`kqueue.rs:740`** — `TaskCompletionQueue::pop(&mut self.thread_pool_completions)`
+  (tick_inner drain loop). Each fresh `&mut` retag invalidates the
+  provenance of the stub pointers stored by line 630's tag (and by every
+  earlier tick's `&mut self`), so pop's deref of the stored tail is SB UB even
+  single-threaded.
+- **`kqueue.rs:1394`** — `TaskCompletionQueue::push(&mut (*(*c).task_loop).thread_pool_completions, c)`
+  in `thread_perform`, which runs ON A POOL THREAD: a unique `&mut` formed
+  concurrently with the loop thread's accesses is UB regardless of the
+  AtomicPtr operations inside, on top of the same retag-invalidation hazard.
+
+**Why dead today (and why MEDIUM, not HIGH):** every site is behind
+`self.thread_pool.is_some()` (kqueue.rs:629, :738) or only reachable from the
+threadpool `StartAction` arm; the port's `Loop::init` hardcodes
+`Options::default()` (kqueue.rs:321, per the §1 scope: ghostty only ever calls
+`Loop.init(.{})`), so `thread_pool` is ALWAYS `None`, and
+`ThreadPool::schedule` is itself `unimplemented!()` (thread_pool.rs:99-103).
+No execution path reaches the UB. The Zig reference has no such hazard (plain
+`*Self` method calls, no aliasing model) — this is a port-side latency, not a
+fidelity break.
+
+**Fix prescription (for the un-defer pass, NOT applied now):** route all three
+sites through stable raw pointers — `ptr::addr_of_mut!((*self_ptr).thread_pool_completions)`
+using the existing `self_ptr: *mut Loop` (kqueue.rs:623) for the two tick_inner
+sites, and `ptr::addr_of_mut!((*(*c).task_loop).thread_pool_completions)` in
+`thread_perform`. CAVEAT the harness must settle: `addr_of_mut!` through a
+`self_ptr` re-derived from each tick's fresh `&mut self` gives valid access to
+the queue STRUCT, but the stub self-pointers STORED in head/tail still carry
+the init-tick's provenance — the harness must decide whether `tick(&mut self)`
+itself needs a raw-receiver seam (or the queue's head/tail need
+`AtomicPtr<T>`/UnsafeCell fields proper) for the stored pointers to survive
+cross-tick retags under SB. Prove on an isolated non-FFI Miri harness
+(mirihar) reproducing: init-queue → retag via new `&mut` → pop, expecting an
+SB violation before the fix and none after, under both SB and TB.
+
+**Un-defer trigger:** the XEV_BLUEPRINT §6 ThreadPool body landing (the moment
+`thread_pool` can be `Some`, this becomes HIGH and MUST be fixed first — the
+§6 chunk should treat this entry as a pre-requisite gate).
+
+### 2. rustty-vt `sys.rs` decode_png — non-lib default decoder parity (LOW, fidelity gap)
+
+The reference comptime-defaults the module-global to `&decodePngWuffs` for
+non-lib artifacts (sys.zig:18-24); the port defaults `None` with
+`decodePngWuffs` preserved only as a commented DEFERRED-SEAM block
+(rustty-vt/src/sys.rs:73-104) — even though `rustty-wuffs` now exists with
+`png::decode`. Type/discipline of the global itself is verified faithful
+(`RwLock<Option<DecodePngFn>>`, sys.rs:58; runtime-swapped by vt-c
+sys.rs:239-243). **Un-defer trigger:** wiring the built-in PNG decode default
+for non-lib builds (kitty-graphics PNG parity pass, or any consumer hitting
+`decode_png == None` where ghostty-the-app would have had wuffs).
+
+### 3. rustty-termio `shell_integration.rs` — lossy path byte source (LOW, cleanup)
+
+`TmpResourcesDir` (test-only helper) builds its owned `Vec<u8>` paths via
+`to_string_lossy().into_owned().into_bytes()` (shell_integration.rs:1708, and
+the `realpath_bytes` helper :1753-1763), deviating from the
+zig-byteslice-to-rust-rawbytes rule (raw `OsStr` bytes, never lossy String).
+Behaviorally benign (macOS tmp paths are UTF-8 in practice); ownership/free
+discipline is faithful. **Fix:** `std::os::unix::ffi::OsStrExt::as_bytes` in a
+later cleanup pass.
