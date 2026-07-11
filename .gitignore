@@ -53,3 +53,6 @@ __pycache__/
 
 # rustc/Miri ICE crash dumps (transient; appear under heavy parallel Miri load)
 rustc-ice-*.txt
+
+# regenerable G4 differential per-case output
+.port/phase-0/harness/results/diag/
