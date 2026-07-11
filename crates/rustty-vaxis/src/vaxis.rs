@@ -6,25 +6,25 @@
 //! so `handle_event_generic` + `winsize_callback` still compile (intrusive-ptr-and-
 //! placeholder-fill discipline).
 //!
-//! PORT-NOTE (`Vaxis<'a>` lifetime): `Vaxis` OWNS `Screen<'a>` (whose cells borrow their
+//! PORT NOTE (`Vaxis<'a>` lifetime): `Vaxis` OWNS `Screen<'a>` (whose cells borrow their
 //! grapheme bytes `&'a [u8]`), so `Vaxis` inherits `'a`. `Default`/`init` produce a
 //! `Vaxis<'a>` with an empty (0-length, no-borrow) buffer, so `'a` is free at
 //! construction.
 //!
-//! PORT-NOTE (`*IoWriter` → `&mut W: std::io::Write`): Zig's `std.io.Writer` is a generic
+//! PORT NOTE (`*IoWriter` → `&mut W: std::io::Write`): Zig's `std.io.Writer` is a generic
 //! writer; the faithful Rust image is a generic type param `W: std::io::Write`. This makes
 //! the render engine pure over a generic sink (Miri-able, R6) AND directly testable against
 //! a `Vec<u8>`. `TtyWriter` (native) infers `W = TtyWriter` at the loop_ call sites.
 //!
-//! PORT-NOTE (`tty.print(template, args)` → inline byte emission): Zig applies the
+//! PORT NOTE (`tty.print(template, args)` → inline byte emission): Zig applies the
 //! `ctlseqs.*` `{d}`/`{s}`/`{c}`/`{x:0>2}` templates at runtime via `std.fmt`. Rust cannot
 //! feed a `&[u8]` const to `write!`, so the render engine emits inline: `write_all` the
 //! const sequences; `write!` the numeric slots; `write_all` the raw byte-slice (`{s}`)
 //! slots (graphemes/URIs are non-UTF-8 bytes — must NOT go through `{}`). Every emit
 //! carries a comment naming the `ctlseqs` template it mirrors.
 //!
-//! PORT-NOTE (`log`/`catch` dropped): `log = std.log.scoped(.vaxis)` and every `log.*`
-//! call is dropped (crate precedent — see `internal_screen.rs`/`tty.rs` PORT-NOTEs).
+//! PORT NOTE (`log`/`catch` dropped): `log = std.log.scoped(.vaxis)` and every `log.*`
+//! call is dropped (crate precedent — see `internal_screen.rs`/`tty.rs` PORT NOTEs).
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -81,7 +81,7 @@ pub struct Options {
     /// requests. If not supplied, it won't be possible to request the system
     /// clipboard
     ///
-    /// PORT-NOTE (§1/§10): Zig `system_clipboard_allocator: ?std.mem.Allocator` — the
+    /// PORT NOTE (§1/§10): Zig `system_clipboard_allocator: ?std.mem.Allocator` — the
     /// allocator's *presence* is what gated `requestSystemClipboard` (`== null →
     /// NoClipboardAllocator`). Ported as `system_clipboard: bool` (default `false`); a
     /// `bool` faithfully preserves that guard while paste/clipboard own their own `Vec`.
@@ -137,7 +137,7 @@ pub struct Vaxis<'a> {
     /// blocks the main thread until a DA1 query has been received, or the
     /// futex times out
     ///
-    /// PORT-NOTE (atomics): Zig uses `.unordered` loads/stores; the Rust port uses
+    /// PORT NOTE (atomics): Zig uses `.unordered` loads/stores; the Rust port uses
     /// `AtomicU32` (`query_futex`) + `AtomicBool` (`queries_done`), both accessed
     /// `Relaxed` (weakest, closest to `.unordered`).
     pub query_futex: AtomicU32,
@@ -198,7 +198,7 @@ impl From<io::Error> for ImageError {
 impl<'a> Vaxis<'a> {
     /// Initialize Vaxis with runtime options
     ///
-    /// PORT-NOTE: `alloc` dropped; `screen = Screen::default()` (0×0), `screen_last =
+    /// PORT NOTE: `alloc` dropped; `screen = Screen::default()` (0×0), `screen_last =
     /// InternalScreen::init(0, 0)`.
     pub fn init(opts: Options) -> Vaxis<'a> {
         Vaxis {
@@ -214,7 +214,7 @@ impl<'a> Vaxis<'a> {
     /// optional so applications can choose to not free resources when the
     /// application will be exiting anyways
     ///
-    /// PORT-NOTE: `alloc?` dropped → `Vec` `Drop` frees the buffers (Rust always frees
+    /// PORT NOTE: `alloc?` dropped → `Vec` `Drop` frees the buffers (Rust always frees
     /// on drop); the `resetState` errors are swallowed (Zig `catch {}`).
     pub fn deinit<W: Write>(&mut self, tty: &mut W) {
         let _ = self.reset_state(tty);
@@ -287,7 +287,7 @@ impl<'a> Vaxis<'a> {
     /// freed when resizing. The cursor will be sent to it's home position and a
     /// hardware clear-below-cursor will be sent
     ///
-    /// PORT-NOTE: `log.debug` dropped; `alloc` dropped.
+    /// PORT NOTE: `log.debug` dropped; `alloc` dropped.
     pub fn resize<W: Write>(&mut self, tty: &mut W, winsize: Winsize) -> io::Result<()> {
         self.screen.deinit();
         self.screen = Screen::init(winsize);
@@ -354,7 +354,7 @@ impl<'a> Vaxis<'a> {
         self.query_terminal_send(tty)?;
         // 1 second timeout
         //
-        // PORT-NOTE (§8.1): Rust std has no stable `std.Thread.Futex` API. `Futex.timedWait`
+        // PORT NOTE (§8.1): Rust std has no stable `std.Thread.Futex` API. `Futex.timedWait`
         // blocks until the word changes from `expect` (0) or the timeout elapses; the DA1
         // handler calls `Futex.wake`. The faithful image is a bounded timed wait keyed on the
         // atomic (`query_futex`): `wake_query_futex` stores a non-zero value so the loop
@@ -376,7 +376,7 @@ impl<'a> Vaxis<'a> {
     /// you are using Loop.run()
     pub fn query_terminal_send<W: Write>(&mut self, tty: &mut W) -> io::Result<()> {
         self.queries_done.store(false, Ordering::Relaxed);
-        // PORT-NOTE (§8.1 repeated-call fidelity): Zig's `Futex.wake` never mutates the
+        // PORT NOTE (§8.1 repeated-call fidelity): Zig's `Futex.wake` never mutates the
         // word, so `timedWait(&query_futex, 0, …)` always waits fresh on value==0. Our
         // `wake_query_futex` *stores 1*, so the word must be reset to 0 before each wait or a
         // second `queryTerminal` returns instantly. Reset here to re-arm the wait.
@@ -435,7 +435,7 @@ impl<'a> Vaxis<'a> {
     /// is only for use with a custom main loop. Call Vaxis.queryTerminal() if
     /// you are using Loop.run()
     pub fn enable_detected_features<W: Write>(&mut self, tty: &mut W) -> io::Result<()> {
-        // PORT-NOTE: `builtin.os.tag` switch → `#[cfg(windows)]`/`#[cfg(not(windows))]`;
+        // PORT NOTE: `builtin.os.tag` switch → `#[cfg(windows)]`/`#[cfg(not(windows))]`;
         // `std.posix.getenv` → `std::env::var_os`.
         #[cfg(windows)]
         {
@@ -580,7 +580,7 @@ impl<'a> Vaxis<'a> {
                 // If cell is the same as our last frame, we don't need to do
                 // anything.
                 //
-                // PORT-NOTE (§6.5): Zig `const last = self.screen_last.buf[i]` is a COPY;
+                // PORT NOTE (§6.5): Zig `const last = self.screen_last.buf[i]` is a COPY;
                 // `InternalCell` is NOT `Copy` (owns three `Vec`s). Capture the three needed
                 // values into `bool` locals before any `&mut self.screen_last` write.
                 let (last_eql, last_skipped, last_skip) = {
@@ -865,7 +865,7 @@ impl<'a> Vaxis<'a> {
 
     /// Change the mouse reporting mode
     ///
-    /// PORT-NOTE: `log.debug` dropped.
+    /// PORT NOTE: `log.debug` dropped.
     pub fn set_mouse_mode<W: Write>(&mut self, tty: &mut W, enable: bool) -> io::Result<()> {
         if enable {
             self.state.mouse = true;
@@ -885,7 +885,7 @@ impl<'a> Vaxis<'a> {
 
     /// Translate pixel mouse coordinates to cell + offset
     ///
-    /// PORT-NOTE: Zig takes `self` by value; `&self` is faithful (it only reads).
+    /// PORT NOTE: Zig takes `self` by value; `&self` is faithful (it only reads).
     /// Fills the Chunk-3b placeholder leaf.
     pub fn translate_mouse(&self, mouse: Mouse) -> Mouse {
         if self.screen.width == 0 || self.screen.height == 0 {
@@ -1020,7 +1020,7 @@ impl<'a> Vaxis<'a> {
 
     /// deletes an image from the terminal's memory
     ///
-    /// PORT-NOTE: errors swallowed (Zig `catch`); `log.err` dropped.
+    /// PORT NOTE: errors swallowed (Zig `catch`); `log.err` dropped.
     pub fn free_image<W: Write>(&self, tty: &mut W, id: u32) {
         // tty.print("\x1b_Ga=d,d=I,i={d};\x1b\\", .{id}) catch |err| { log.err(...); return; };
         if write!(tty, "\x1b_Ga=d,d=I,i={};\x1b\\", id).is_err() {
@@ -1043,7 +1043,7 @@ impl<'a> Vaxis<'a> {
     }
 
     pub fn request_system_clipboard<W: Write>(&self, tty: &mut W) -> io::Result<()> {
-        // PORT-NOTE (§10): Zig `if (self.opts.system_clipboard_allocator == null) return
+        // PORT NOTE (§10): Zig `if (self.opts.system_clipboard_allocator == null) return
         // error.NoClipboardAllocator;` — the allocator's presence is ported as the
         // `system_clipboard: bool` guard.
         if !self.opts.system_clipboard {
@@ -1133,7 +1133,7 @@ impl<'a> Vaxis<'a> {
         Ok(())
     }
 
-    /// PORT-NOTE: fills the Chunk-3b placeholder leaf; `loop_.rs`'s `stop` call site
+    /// PORT NOTE: fills the Chunk-3b placeholder leaf; `loop_.rs`'s `stop` call site
     /// (`Vaxis::device_status_report(&mut *Tty::writer_raw(tty))`) infers
     /// `W = TtyWriter`. SELF-LESS on purpose (H1): upstream libvaxis 0.5.1 is
     /// `pub fn deviceStatusReport(_: Vaxis, tty: *IoWriter)` — the receiver is
@@ -1188,7 +1188,7 @@ impl<'a> Vaxis<'a> {
         let mut cursor_pos_row: u16 = 0;
         let mut cursor_pos_col: u16 = 0;
 
-        // PORT-NOTE (§7): Zig `prettyPrint` uses `var i: u16` (§1140) whereas `render` uses
+        // PORT NOTE (§7): Zig `prettyPrint` uses `var i: u16` (§1140) whereas `render` uses
         // `usize`. Reproduce `u16` for strict fidelity (matching the `w: u16` advance); `j`
         // is computed in `usize` for indexing (benign — only differs for >65535-cell screens,
         // where Zig's `i + w` would overflow-panic).
@@ -1303,7 +1303,7 @@ impl<'a> Vaxis<'a> {
         #[cfg(not(windows))]
         let hostname: Option<std::ffi::OsString> = std::env::var_os("HOSTNAME");
 
-        // PORT-NOTE (§10.4): Zig builds a `std.Uri{ scheme:"file", host:.{.raw=hostname},
+        // PORT NOTE (§10.4): Zig builds a `std.Uri{ scheme:"file", host:.{.raw=hostname},
         // path:.{.raw=path} }` and formats it into `ctlseqs::osc7` (`"\x1b]7;{f}\x1b\\"`).
         // The `.raw` components are emitted VERBATIM (no percent-encoding), so the URI is
         // `file://<hostname><path>` written byte-for-byte. Used by neither list_themes nor boo.

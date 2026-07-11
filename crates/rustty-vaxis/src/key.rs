@@ -3,18 +3,18 @@
 //! and the loose-matching algorithm (`matches`/`matchesAny`/`matchShortcut`/
 //! `matchShiftedCodepoint`/`matchText`/`matchExact`/`isModifier`).
 //!
-//! PORT-NOTE (codepoint width): Zig `codepoint: u21` → Rust `u32`. `u32` (not `char`)
+//! PORT NOTE (codepoint width): Zig `codepoint: u21` → Rust `u32`. `u32` (not `char`)
 //! is REQUIRED — `multicodepoint = 1_114_113` exceeds `char::MAX` (0x10FFFF), so
 //! `char` would be wrong. `shifted_codepoint`/`base_layout_codepoint` (`?u21`) → `Option<u32>`.
 //!
-//! PORT-NOTE (byte-slice): `Key.text` (`?[]const u8`) is grapheme BYTES backed by a
+//! PORT NOTE (byte-slice): `Key.text` (`?[]const u8`) is grapheme BYTES backed by a
 //! caller-managed ring buffer → `Option<&'a [u8]>`, NEVER a lossy `String`.
 //!
-//! PORT-NOTE (packed-struct fidelity, §7): `Modifiers` is a `packed struct(u8)`,
+//! PORT NOTE (packed-struct fidelity, §7): `Modifiers` is a `packed struct(u8)`,
 //! LSB-first; `@bitCast` to `u8` is the equality `std.meta.eql` uses, and the matchers
 //! rely on it. We reproduce it via an explicit `to_u8()` bit-pack + `Modifiers::eql`.
 //!
-//! PORT-NOTE (const casing): the Zig key constants are lowercase (`tab`, `f1`, `kp_0`).
+//! PORT NOTE (const casing): the Zig key constants are lowercase (`tab`, `f1`, `kp_0`).
 //! We keep the exact Zig identifiers (R1/R2), so the module allows `non_upper_case_globals`.
 //! The two Zig quoted idents `@"f16"`/`@"f32"` → plain `f16_`/`f32_` (Rust reserves the
 //! bare `f16`/`f32` primitive-type names).
@@ -22,10 +22,10 @@
 
 /// Modifier Keys for a Key Match Event.
 ///
-/// PORT-NOTE: Zig `super` field → `super_` (`super` is a Rust keyword that cannot be a
+/// PORT NOTE: Zig `super` field → `super_` (`super` is a Rust keyword that cannot be a
 /// raw identifier). LSB bit order (§7): shift0 alt1 ctrl2 super3 hyper4 meta5 caps6 num7.
 ///
-/// PORT-NOTE (Chunk 3a): `PartialEq`/`Eq` added — the field-by-field bool compare is
+/// PORT NOTE (Chunk 3a): `PartialEq`/`Eq` added — the field-by-field bool compare is
 /// identical to the existing bitcast `eql`, and is needed to derive `PartialEq` on `Key`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Modifiers {
@@ -59,7 +59,7 @@ impl Modifiers {
     }
 
     /// `@bitCast(u8) -> Modifiers` — the inverse of [`to_u8`]; unpacks the LSB-first
-    /// packed bit layout (§7). PORT-NOTE (Chunk 3a): used at the CSI decode sites
+    /// packed bit layout (§7). PORT NOTE (Chunk 3a): used at the CSI decode sites
     /// (`key.mods = @bitCast(modifier_mask -| 1)`).
     pub fn from_u8(bits: u8) -> Modifiers {
         Modifiers {
@@ -103,10 +103,10 @@ impl Default for KittyFlags {
 
 /// The `Key` value struct. Ported from the top-level `Key.zig` fields.
 ///
-/// PORT-NOTE: Zig `Key` has no default (`codepoint` has no default value), so this
+/// PORT NOTE: Zig `Key` has no default (`codepoint` has no default value), so this
 /// struct intentionally does NOT derive `Default`.
 ///
-/// PORT-NOTE (Chunk 3a): `PartialEq` added so the Parser tests can `assert_eq!` a whole
+/// PORT NOTE (Chunk 3a): `PartialEq` added so the Parser tests can `assert_eq!` a whole
 /// `Key` (Zig `expectEqual`/`expectEqualDeep`). `text: Option<&[u8]>` compares by
 /// byte-slice equality — the robust faithful semantic (Zig's `expectEqual` on a slice is
 /// pointer-identity that happens to pass via literal interning; `expectEqualDeep` is
@@ -199,7 +199,7 @@ impl Key<'_> {
         self_mods.shift = false;
         self_mods.caps_lock = false;
         self_mods.num_lock = false;
-        // PORT-NOTE (faithful quirk): Zig clears caps_lock/num_lock on `tgt_mods` here
+        // PORT NOTE (faithful quirk): Zig clears caps_lock/num_lock on `tgt_mods` here
         // but then compares `self_mods` against the ORIGINAL `mods` (not `tgt_mods`).
         // Reproduced exactly — this is a real asymmetry, not a bug to "fix".
         let mut tgt_mods = mods;

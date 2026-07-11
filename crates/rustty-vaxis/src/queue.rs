@@ -3,7 +3,7 @@
 //! main thread). Faithful Rust: the lock-guarded mutable state lives in a
 //! `Mutex<Inner>` and the two condition variables sit beside it.
 //!
-//! PORT-NOTE (`undefined` → `Option::None`, §2.2): Zig `buf: [size]T = undefined`
+//! PORT NOTE (`undefined` → `Option::None`, §2.2): Zig `buf: [size]T = undefined`
 //! stores `T` by value in undefined slots, occupancy tracked purely by the ring
 //! indices. The faithful-and-safe port stores `[Option<T>; N]` — push = `Some(item)`,
 //! pop = `.take().unwrap()`. This is fully SAFE (zero `unsafe`), so the ONE module we
@@ -11,14 +11,14 @@
 //! redundant `None` tag (the ring indices already track occupancy) — behaviorally
 //! identical.
 //!
-//! PORT-NOTE (`&self`, not `&mut self`): every method takes `&self` — the whole point
+//! PORT NOTE (`&self`, not `&mut self`): every method takes `&self` — the whole point
 //! of the internal `Mutex` (load-bearing for the Loop, where the read thread and the
 //! main thread both hold only `&Queue`). `signal()` → `Condvar::notify_one()`;
 //! `wait(&mutex)` → `Condvar::wait(guard)` (returns the re-acquired guard). The
 //! `while` (not `if`) predicate re-check is exactly what tests 5/6 assert (spurious
 //! wakeups) — kept verbatim.
 //!
-//! PORT-NOTE (`lock`/`unlock`/`drain`): Rust RAII makes Zig's split `lock()` +
+//! PORT NOTE (`lock`/`unlock`/`drain`): Rust RAII makes Zig's split `lock()` +
 //! `unlock()` awkward, so `drain` takes/returns the guard (the externally-held-lock
 //! drain API; no test exercises it).
 
@@ -28,7 +28,7 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 /// `Condvar`s sit beside it in [`Queue`]. Its fields are private — the type name is
 /// public only so the guard-shaped `lock`/`unlock`/`drain` API can name it.
 pub struct Inner<T, const N: usize> {
-    buf: [Option<T>; N], // Zig `buf: [size]T = undefined`; see the module PORT-NOTE
+    buf: [Option<T>; N], // Zig `buf: [size]T = undefined`; see the module PORT NOTE
     read_index: usize,   // = 0
     write_index: usize,  // = 0
 }

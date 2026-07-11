@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/env.zig` — every line, comment, and `test {}`
 //! is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, `Allocator`, `posix`, and
+// PORT NOTE: the Zig reference imports `std`, `builtin`, `Allocator`, `posix`, and
 // `isFlatpak` from `flatpak.zig`. In Rust we use the standard library and `libc`
 // for the POSIX/Windows `getenv`/`setenv`/`unsetenv` bindings (R3: bindings to
 // the SAME system library, not a reimplementation).
@@ -31,7 +31,7 @@ fn is_flatpak() -> bool {
     }
 }
 
-// PORT: `pub const Error = Allocator.Error;`. Rust's allocation failure is not a
+// PORT NOTE: `pub const Error = Allocator.Error;`. Rust's allocation failure is not a
 // recoverable error in the std collections used here; the parity-preserving
 // equivalent is the infallible allocation model. The error type is kept as a
 // type alias for fidelity with the reference's public surface.
@@ -83,7 +83,7 @@ pub fn prependEnv(current: &str, value: &str) -> String {
     format!("{}{}{}", value, MAIN_SEPARATOR_LIST_DELIMITER, current)
 }
 
-// PORT: `std.fs.path.delimiter` is the PATH-list separator: ';' on Windows, ':'
+// PORT NOTE: `std.fs.path.delimiter` is the PATH-list separator: ';' on Windows, ':'
 // elsewhere. Rust's std does not expose this directly, so we reproduce the
 // reference's `std.fs.path.delimiter` value here as a single byte.
 mod path {
@@ -101,7 +101,7 @@ pub struct GetEnvResult {
 }
 
 impl GetEnvResult {
-    // PORT: `deinit` frees on Windows only; in Rust ownership/Drop handles this
+    // PORT NOTE: `deinit` frees on Windows only; in Rust ownership/Drop handles this
     // for `String` on all platforms. Kept as a no-op method for parity with the
     // reference's public surface (the comment is preserved verbatim).
     #[allow(clippy::unused_self)]
@@ -115,7 +115,7 @@ impl GetEnvResult {
 /// value should have deinit called to do the proper cleanup no matter what
 /// platform you are on.
 pub fn getenv(key: &str) -> Result<Option<GetEnvResult>, Error> {
-    // PORT: Zig branches on `builtin.os.tag`. Rust's `std::env::var` handles both
+    // PORT NOTE: Zig branches on `builtin.os.tag`. Rust's `std::env::var` handles both
     // the Windows allocation and the non-Windows lookup uniformly; a missing key
     // or an invalid-unicode value both map to `None` (matching the reference's
     // `EnvironmentVariableNotFound`/`InvalidWtf8` → null on Windows, and

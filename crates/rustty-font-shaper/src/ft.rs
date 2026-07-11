@@ -27,7 +27,7 @@ pub struct FtError {
 }
 
 /// Map a raw `FT_Error` to `Result`: `FT_Err_Ok` (0) → `Ok`, else `Err`.
-// PORT: `errors.intToError`.
+// PORT NOTE: `errors.intToError`.
 #[inline]
 pub fn int_to_error(err: c::FT_Error) -> Result<(), FtError> {
     if err == 0 {
@@ -38,14 +38,14 @@ pub fn int_to_error(err: c::FT_Error) -> Result<(), FtError> {
 }
 
 /// Compute (a*b)/0x10000 with maximum accuracy.
-// PORT: `computations.mulFix`.
+// PORT NOTE: `computations.mulFix`.
 pub fn mul_fix(a: i32, b: i32) -> i32 {
     // c.FT_MulFix(a: FT_Long, b: FT_Long) -> FT_Long
     unsafe { c::FT_MulFix(a as c::FT_Long, b as c::FT_Long) as i32 }
 }
 
 /// FT_Tag.
-// PORT: `tag.zig`'s `Tag = packed struct(u32) { d, c, b, a }`.
+// PORT NOTE: `tag.zig`'s `Tag = packed struct(u32) { d, c, b, a }`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tag {
     pub d: u8,
@@ -73,7 +73,7 @@ impl Tag {
 }
 
 /// Character-set encoding tags for `FT_Select_Charmap`.
-// PORT: `face.zig`'s `Encoding` (only the variants the face uses are carved).
+// PORT NOTE: `face.zig`'s `Encoding` (only the variants the face uses are carved).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Encoding {
     Unicode,
@@ -88,7 +88,7 @@ impl Encoding {
 }
 
 /// Render modes for `FT_Render_Glyph`.
-// PORT: `face.zig`'s `RenderMode` (only `normal`/`mono` are carved — the only
+// PORT NOTE: `face.zig`'s `RenderMode` (only `normal`/`mono` are carved — the only
 // modes the face requests).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderMode {
@@ -106,7 +106,7 @@ impl RenderMode {
 }
 
 /// Target hinting mode for `LoadFlags`.
-// PORT: `face.zig`'s `LoadFlags.Target = enum(u4)`.
+// PORT NOTE: `face.zig`'s `LoadFlags.Target = enum(u4)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
     Normal = 0,
@@ -117,7 +117,7 @@ pub enum Target {
 }
 
 /// Flags for `FT_Load_Glyph`.
-// PORT: `face.zig`'s `LoadFlags = packed struct(c_int)`. The full 32-bit layout
+// PORT NOTE: `face.zig`'s `LoadFlags = packed struct(c_int)`. The full 32-bit layout
 // is reproduced by [`LoadFlags::to_bits`]; the face only sets a subset of these,
 // but the whole struct is carried for fidelity.
 #[derive(Clone, Copy, Debug)]
@@ -212,7 +212,7 @@ impl LoadFlags {
 }
 
 /// SFNT table tags for `FT_Get_Sfnt_Table`.
-// PORT: `face.zig`'s `SfntTag`. Rust has no comptime `DataType()`; instead the
+// PORT NOTE: `face.zig`'s `SfntTag`. Rust has no comptime `DataType()`; instead the
 // [`Face`] exposes one typed accessor per tag the face reads.
 #[derive(Clone, Copy, Debug)]
 pub enum SfntTag {
@@ -234,7 +234,7 @@ impl SfntTag {
 }
 
 /// A FreeType library object.
-// PORT: `pkg/freetype/Library.zig`.
+// PORT NOTE: `pkg/freetype/Library.zig`.
 #[derive(Clone, Copy, Debug)]
 pub struct Library {
     pub handle: c::FT_Library,
@@ -242,7 +242,7 @@ pub struct Library {
 
 impl Library {
     /// Initialize a new FreeType library object.
-    // PORT: `Library.init`.
+    // PORT NOTE: `Library.init`.
     pub fn init() -> Result<Library, FtError> {
         let mut handle: c::FT_Library = std::ptr::null_mut();
         int_to_error(unsafe { c::FT_Init_FreeType(&mut handle) })?;
@@ -250,7 +250,7 @@ impl Library {
     }
 
     /// Destroy a given FreeType library object and all of its children.
-    // PORT: `Library.deinit`.
+    // PORT NOTE: `Library.deinit`.
     pub fn deinit(self) {
         unsafe {
             c::FT_Done_FreeType(self.handle);
@@ -258,7 +258,7 @@ impl Library {
     }
 
     /// Call FT_New_Face to open a font from a file.
-    // PORT: `Library.initFace`.
+    // PORT NOTE: `Library.initFace`.
     pub fn init_face(self, path: &std::ffi::CStr, index: i32) -> Result<Face, FtError> {
         let mut handle: c::FT_Face = std::ptr::null_mut();
         int_to_error(unsafe {
@@ -268,7 +268,7 @@ impl Library {
     }
 
     /// Call FT_Open_Face to open a font that has been loaded into memory.
-    // PORT: `Library.initMemoryFace`.
+    // PORT NOTE: `Library.initMemoryFace`.
     pub fn init_memory_face(self, data: &[u8], index: i32) -> Result<Face, FtError> {
         let mut handle: c::FT_Face = std::ptr::null_mut();
         int_to_error(unsafe {
@@ -284,7 +284,7 @@ impl Library {
     }
 
     /// Call when you're done with a loaded MM var.
-    // PORT: `Library.doneMMVar`. `mm` is an opaque handle handed straight back to
+    // PORT NOTE: `Library.doneMMVar`. `mm` is an opaque handle handed straight back to
     // FreeType (not dereferenced here); it must come from `Face::get_mm_var`.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn done_mm_var(self, mm: *mut c::FT_MM_Var) {
@@ -295,7 +295,7 @@ impl Library {
 }
 
 /// A FreeType face object.
-// PORT: `pkg/freetype/face.zig`'s `Face`.
+// PORT NOTE: `pkg/freetype/face.zig`'s `Face`.
 #[derive(Clone, Copy, Debug)]
 pub struct Face {
     pub handle: c::FT_Face,
@@ -303,7 +303,7 @@ pub struct Face {
 
 impl Face {
     /// Decrement the reference counter, destroying the face at zero.
-    // PORT: `Face.deinit`.
+    // PORT NOTE: `Face.deinit`.
     pub fn deinit(self) {
         unsafe {
             c::FT_Done_Face(self.handle);
@@ -311,7 +311,7 @@ impl Face {
     }
 
     /// Increment the counter of the face.
-    // PORT: `Face.ref`.
+    // PORT NOTE: `Face.ref`.
     pub fn ref_(self) {
         unsafe {
             c::FT_Reference_Face(self.handle);
@@ -319,38 +319,38 @@ impl Face {
     }
 
     /// True whenever a face object contains some embedded bitmaps.
-    // PORT: `Face.hasFixedSizes` (`c.FT_HAS_FIXED_SIZES`).
+    // PORT NOTE: `Face.hasFixedSizes` (`c.FT_HAS_FIXED_SIZES`).
     pub fn has_fixed_sizes(self) -> bool {
         (unsafe { (*self.handle).face_flags } & (c::FT_FACE_FLAG_FIXED_SIZES as c::FT_Long)) != 0
     }
 
     /// True whenever a face object contains tables for color glyphs.
-    // PORT: `Face.hasColor` (`c.FT_HAS_COLOR`).
+    // PORT NOTE: `Face.hasColor` (`c.FT_HAS_COLOR`).
     pub fn has_color(self) -> bool {
         (unsafe { (*self.handle).face_flags } & (c::FT_FACE_FLAG_COLOR as c::FT_Long)) != 0
     }
 
     /// True whenever a face object contains some multiple masters.
-    // PORT: `Face.hasMultipleMasters` (`c.FT_HAS_MULTIPLE_MASTERS`).
+    // PORT NOTE: `Face.hasMultipleMasters` (`c.FT_HAS_MULTIPLE_MASTERS`).
     pub fn has_multiple_masters(self) -> bool {
         (unsafe { (*self.handle).face_flags } & (c::FT_FACE_FLAG_MULTIPLE_MASTERS as c::FT_Long))
             != 0
     }
 
     /// True whenever a face object contains a scalable font face.
-    // PORT: `Face.isScalable` (`c.FT_IS_SCALABLE`).
+    // PORT NOTE: `Face.isScalable` (`c.FT_IS_SCALABLE`).
     pub fn is_scalable(self) -> bool {
         (unsafe { (*self.handle).face_flags } & (c::FT_FACE_FLAG_SCALABLE as c::FT_Long)) != 0
     }
 
     /// Select a given charmap by its encoding tag.
-    // PORT: `Face.selectCharmap`.
+    // PORT NOTE: `Face.selectCharmap`.
     pub fn select_charmap(self, encoding: Encoding) -> Result<(), FtError> {
         int_to_error(unsafe { c::FT_Select_Charmap(self.handle, encoding.to_ft()) })
     }
 
     /// Request the nominal size (in points).
-    // PORT: `Face.setCharSize`.
+    // PORT NOTE: `Face.setCharSize`.
     pub fn set_char_size(
         self,
         char_width: i32,
@@ -370,13 +370,13 @@ impl Face {
     }
 
     /// Select a bitmap strike.
-    // PORT: `Face.selectSize`.
+    // PORT NOTE: `Face.selectSize`.
     pub fn select_size(self, idx: i32) -> Result<(), FtError> {
         int_to_error(unsafe { c::FT_Select_Size(self.handle, idx as std::os::raw::c_int) })
     }
 
     /// Return the glyph index of a given character code, or `None`.
-    // PORT: `Face.getCharIndex`.
+    // PORT NOTE: `Face.getCharIndex`.
     pub fn get_char_index(self, char: u32) -> Option<u32> {
         let i = unsafe { c::FT_Get_Char_Index(self.handle, char as c::FT_ULong) };
         if i == 0 {
@@ -387,7 +387,7 @@ impl Face {
     }
 
     /// Load a glyph into the glyph slot of a face object.
-    // PORT: `Face.loadGlyph`.
+    // PORT NOTE: `Face.loadGlyph`.
     pub fn load_glyph(self, glyph_index: u32, load_flags: LoadFlags) -> Result<(), FtError> {
         int_to_error(unsafe {
             c::FT_Load_Glyph(self.handle, glyph_index as c::FT_UInt, load_flags.to_bits())
@@ -395,19 +395,19 @@ impl Face {
     }
 
     /// Convert a given glyph image to a bitmap.
-    // PORT: `Face.renderGlyph`.
+    // PORT NOTE: `Face.renderGlyph`.
     pub fn render_glyph(self, render_mode: RenderMode) -> Result<(), FtError> {
         int_to_error(unsafe { c::FT_Render_Glyph((*self.handle).glyph, render_mode.to_ft()) })
     }
 
     /// Retrieve the number of name strings in the SFNT 'name' table.
-    // PORT: `Face.getSfntNameCount`.
+    // PORT NOTE: `Face.getSfntNameCount`.
     pub fn get_sfnt_name_count(self) -> usize {
         unsafe { c::FT_Get_Sfnt_Name_Count(self.handle) as usize }
     }
 
     /// Retrieve a string of the SFNT 'name' table for a given index.
-    // PORT: `Face.getSfntName`.
+    // PORT NOTE: `Face.getSfntName`.
     pub fn get_sfnt_name(self, i: usize) -> Result<c::FT_SfntName, FtError> {
         let mut name: c::FT_SfntName = unsafe { std::mem::zeroed() };
         int_to_error(unsafe { c::FT_Get_Sfnt_Name(self.handle, i as c::FT_UInt, &mut name) })?;
@@ -415,7 +415,7 @@ impl Face {
     }
 
     /// Return a pointer to the 'head' SFNT table, or `None`.
-    // PORT: `Face.getSfntTable(.head)`.
+    // PORT NOTE: `Face.getSfntTable(.head)`.
     pub fn get_sfnt_head(self) -> Option<*mut c::TT_Header> {
         let p = unsafe { c::FT_Get_Sfnt_Table(self.handle, SfntTag::Head.to_ft()) };
         if p.is_null() {
@@ -426,7 +426,7 @@ impl Face {
     }
 
     /// Return a pointer to the 'OS/2' SFNT table, or `None`.
-    // PORT: `Face.getSfntTable(.os2)`.
+    // PORT NOTE: `Face.getSfntTable(.os2)`.
     pub fn get_sfnt_os2(self) -> Option<*mut c::TT_OS2> {
         let p = unsafe { c::FT_Get_Sfnt_Table(self.handle, SfntTag::Os2.to_ft()) };
         if p.is_null() {
@@ -437,7 +437,7 @@ impl Face {
     }
 
     /// Return a pointer to the 'post' SFNT table, or `None`.
-    // PORT: `Face.getSfntTable(.post)`.
+    // PORT NOTE: `Face.getSfntTable(.post)`.
     pub fn get_sfnt_post(self) -> Option<*mut c::TT_Postscript> {
         let p = unsafe { c::FT_Get_Sfnt_Table(self.handle, SfntTag::Post.to_ft()) };
         if p.is_null() {
@@ -448,7 +448,7 @@ impl Face {
     }
 
     /// Return a pointer to the 'hhea' SFNT table, or `None`.
-    // PORT: `Face.getSfntTable(.hhea)`.
+    // PORT NOTE: `Face.getSfntTable(.hhea)`.
     pub fn get_sfnt_hhea(self) -> Option<*mut c::TT_HoriHeader> {
         let p = unsafe { c::FT_Get_Sfnt_Table(self.handle, SfntTag::Hhea.to_ft()) };
         if p.is_null() {
@@ -459,7 +459,7 @@ impl Face {
     }
 
     /// Load any SFNT font table into client memory.
-    // PORT: `Face.loadSfntTable`.
+    // PORT NOTE: `Face.loadSfntTable`.
     pub fn load_sfnt_table(self, tag: Tag) -> Result<Option<Vec<u8>>, FtError> {
         let tag_c: std::os::raw::c_ulong = tag.to_u32() as std::os::raw::c_ulong;
 
@@ -484,7 +484,7 @@ impl Face {
     }
 
     /// Retrieve the font variation descriptor for a font.
-    // PORT: `Face.getMMVar`.
+    // PORT NOTE: `Face.getMMVar`.
     pub fn get_mm_var(self) -> Result<*mut c::FT_MM_Var, FtError> {
         let mut result: *mut c::FT_MM_Var = std::ptr::null_mut();
         int_to_error(unsafe { c::FT_Get_MM_Var(self.handle, &mut result) })?;
@@ -492,7 +492,7 @@ impl Face {
     }
 
     /// Get the design coordinates of the currently selected interpolated font.
-    // PORT: `Face.getVarDesignCoordinates`.
+    // PORT NOTE: `Face.getVarDesignCoordinates`.
     pub fn get_var_design_coordinates(self, coords: &mut [c::FT_Fixed]) -> Result<(), FtError> {
         int_to_error(unsafe {
             c::FT_Get_Var_Design_Coordinates(
@@ -504,7 +504,7 @@ impl Face {
     }
 
     /// Choose an interpolated font design through design coordinates.
-    // PORT: `Face.setVarDesignCoordinates`.
+    // PORT NOTE: `Face.setVarDesignCoordinates`.
     pub fn set_var_design_coordinates(self, coords: &mut [c::FT_Fixed]) -> Result<(), FtError> {
         int_to_error(unsafe {
             c::FT_Set_Var_Design_Coordinates(

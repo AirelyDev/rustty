@@ -1268,7 +1268,7 @@ impl ColorState {
 }
 
 /// If true, the default font features should be disabled for the given face.
-// PORT: `quirks.disableDefaultFontFeatures`.
+// PORT NOTE: `quirks.disableDefaultFontFeatures`.
 fn quirks_disable_default_font_features(face: &Face) -> bool {
     let _ = face;
 
@@ -1280,14 +1280,14 @@ fn quirks_disable_default_font_features(face: &Face) -> bool {
 }
 
 /// Build a big-endian FourCC `CTFontTableTag` from a 4-byte tag.
-// PORT: `macos.text.FontTableTag.init(v)` = `@bitCast(FourCharCode.init(v))`, i.e.
+// PORT NOTE: `macos.text.FontTableTag.init(v)` = `@bitCast(FourCharCode.init(v))`, i.e.
 // `(v[0]<<24) | (v[1]<<16) | (v[2]<<8) | v[3]`.
 fn fourcc(v: &[u8; 4]) -> u32 {
     ((v[0] as u32) << 24) | ((v[1] as u32) << 16) | ((v[2] as u32) << 8) | (v[3] as u32)
 }
 
 /// Copy the raw font-table `CFData` for `tag`, or `None` if absent.
-// PORT: `ct_font.copyTable(FontTableTag.init(tag))`.
+// PORT NOTE: `ct_font.copyTable(FontTableTag.init(tag))`.
 // (crate-visible: `discovery`'s `Score.score` reads the 'head'/'OS/2' tables the
 // same way.)
 pub(crate) fn copy_table_data(font: &CTFont, tag: &[u8; 4]) -> Option<CFRetained<CFData>> {
@@ -1295,7 +1295,7 @@ pub(crate) fn copy_table_data(font: &CTFont, tag: &[u8; 4]) -> Option<CFRetained
 }
 
 /// Create a no-copy `CFData` view over `source` (kept alive by the caller).
-// PORT: `macos.foundation.Data.createWithBytesNoCopy(source)` — the `null`
+// PORT NOTE: `macos.foundation.Data.createWithBytesNoCopy(source)` — the `null`
 // allocator + `kCFAllocatorNull` deallocator mean CoreFoundation neither copies
 // nor frees `source`.
 fn new_data_no_copy(source: &[u8]) -> Option<CFRetained<CFData>> {
@@ -1310,7 +1310,7 @@ fn new_data_no_copy(source: &[u8]) -> Option<CFRetained<CFData>> {
 }
 
 /// Create a UTF-8 `CFString` for the given bytes (test helper).
-// PORT: `macos.foundation.String.createWithBytes(bs, .utf8, false)`.
+// PORT NOTE: `macos.foundation.String.createWithBytes(bs, .utf8, false)`.
 #[cfg(test)]
 fn new_string_utf8(bs: &[u8]) -> Option<CFRetained<objc2_core_foundation::CFString>> {
     unsafe {
@@ -1348,7 +1348,7 @@ mod tests {
     }
 
     /// Build a CTFont for a named system font at the given size (test helper).
-    // PORT: the shared `String -> FontDescriptor -> Font` dance the tests repeat.
+    // PORT NOTE: the shared `String -> FontDescriptor -> Font` dance the tests repeat.
     fn named_font(name: &str, size: f64) -> CFRetained<CTFont> {
         let cf_name = new_string_utf8(name.as_bytes()).unwrap();
         let desc = unsafe { CTFontDescriptor::with_name_and_size(&cf_name, size) };

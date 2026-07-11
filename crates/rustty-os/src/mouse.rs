@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/mouse.zig` — every line, comment, and `test {}`
 //! is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, and `objc`, and uses
+// PORT NOTE: the Zig reference imports `std`, `builtin`, and `objc`, and uses
 // `std.log.scoped(.os)`. In Rust the macOS branch binds to the SAME Objective-C
 // runtime via `objc2` (R3: a binding, not a reimplementation); we send the
 // `doubleClickInterval` message to the `NSEvent` class. The non-macOS branch
@@ -27,7 +27,7 @@ pub fn clickInterval() -> Option<u32> {
         };
 
         // Get the interval and convert to ms
-        // PORT: `NSEvent.msgSend(f64, objc.sel("doubleClickInterval"), .{})`.
+        // PORT NOTE: `NSEvent.msgSend(f64, objc.sel("doubleClickInterval"), .{})`.
         let interval: f64 = unsafe { objc2::msg_send![ns_event, doubleClickInterval] };
         let ms = (interval * 1000.0).ceil() as u32;
         Some(ms)

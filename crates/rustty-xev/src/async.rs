@@ -33,7 +33,7 @@ use core::ffi::c_void;
 use core::ptr::NonNull;
 
 // ---------------------------------------------------------------------------
-// PORT (§0/§7): the sibling `Async` variants are COMPTIME-ELIDED on macOS and
+// PORT NOTE (§0/§7): the sibling `Async` variants are COMPTIME-ELIDED on macOS and
 // DEFERRED (not weakened). The reference `pub fn Async(comptime xev: type) type`
 // dispatches on `xev.backend`: `.io_uring`/`.epoll` -> `AsyncEventFd`,
 // `.wasi_poll` -> `AsyncLoopState`, `.iocp` -> `AsyncIOCP`, and (the live arm)
@@ -85,7 +85,7 @@ use core::ptr::NonNull;
 //   distinctive doc comments; deferred with the other backends.
 // ---------------------------------------------------------------------------
 
-/// PORT: `pub const WaitError = xev.Sys.MachPortError;`.
+/// PORT NOTE: `pub const WaitError = xev.Sys.MachPortError;`.
 /// The error that can come in the wait callback.
 pub type WaitError = MachPortError;
 
@@ -406,7 +406,7 @@ impl Async {
 }
 
 // ---------------------------------------------------------------------------
-// PORT: `AsyncTests(xev, AsyncMachPort)` (async.zig:714). On macOS the single
+// PORT NOTE: `AsyncTests(xev, AsyncMachPort)` (async.zig:714). On macOS the single
 // `Async` instantiation is `AsyncMachPort` (§0/§7), so `Impl == Async`. The three
 // reference `test{}` land as live Rust tests, plus rustty KAT 1 (§7) which proves
 // the cross-thread wakeup on a real kqueue (Miri can't — real mach syscalls).

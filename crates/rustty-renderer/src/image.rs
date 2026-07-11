@@ -352,7 +352,7 @@ impl State {
     ///
     /// This reads/writes state used by drawing.
     //
-    // PORT (R-d, RENDERER_KITTY_IMAGE_PATH_DESIGN §1.1): the Kitty terminal-walk
+    // PORT NOTE (R-d, RENDERER_KITTY_IMAGE_PATH_DESIGN §1.1): the Kitty terminal-walk
     // (viewport pins, per-placement rects, z-sort, bg/text split). Exercised by the
     // offscreen APC-driven test. Verbatim Zig reference (also mapped inline below):
     //
@@ -650,7 +650,7 @@ impl State {
     /// Get the viewport-relative position for this
     /// placement and add it to the placements list.
     //
-    // PORT (R-d §1.2): `rect`/`pixelSize`/`pointFromPin` walk; called from
+    // PORT NOTE (R-d §1.2): `rect`/`pixelSize`/`pointFromPin` walk; called from
     // `kitty_update`. Verbatim Zig reference (also mapped inline below):
     //
     // fn prepKittyPlacement(
@@ -798,7 +798,7 @@ impl State {
         Ok(())
     }
 
-    // PORT (R-d §1.3): `unicode.placementIterator`/`renderPlacement` virtual walk;
+    // PORT NOTE (R-d §1.3): `unicode.placementIterator`/`renderPlacement` virtual walk;
     // called from `kitty_update`. Verbatim Zig reference (also mapped inline below):
     //
     // fn prepKittyVirtualPlacement(
@@ -1008,7 +1008,7 @@ impl State {
     /// Prepare the provided Kitty image for upload to the GPU by copying its
     /// data with our allocator and setting it to the pending state.
     //
-    // PORT (R-d §1.4): called from the Kitty walk; the `.png => unreachable`
+    // PORT NOTE (R-d §1.4): called from the Kitty walk; the `.png => unreachable`
     // format switch feeds `prep_image`. Verbatim Zig reference (mapped inline below):
     //
     // fn prepKittyImage(
@@ -1362,7 +1362,7 @@ impl Image {
     /// If the data is already in a format that can be uploaded, this is a
     /// no-op.
     //
-    // PORT (R-d, RENDERER_KITTY_IMAGE_PATH_DESIGN §3): the `wuffs` swizzle path.
+    // PORT NOTE (R-d, RENDERER_KITTY_IMAGE_PATH_DESIGN §3): the `wuffs` swizzle path.
     // `wuffs` has no Rust home, so it is re-homed as a pure-Rust per-pixel
     // RGBA_PREMUL loop below. The `.rgba => return` early-out lives INSIDE this
     // body (already-RGBA data is a no-op). Verbatim Zig reference (mapped inline

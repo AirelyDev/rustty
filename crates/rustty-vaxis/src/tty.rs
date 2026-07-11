@@ -6,22 +6,22 @@
 //! (restore the saved termios). [`WindowsTty`] is a `#[cfg(windows)]` R5 seam;
 //! [`TestTty`] is the pipe-backed mock enabling the device-free Loop test path.
 //!
-//! PORT-NOTE (R6): this module is the crate's ONLY FFI surface (`libc`). It cannot run
+//! PORT NOTE (R6): this module is the crate's ONLY FFI surface (`libc`). It cannot run
 //! under Miri (see `.port/phase-2/MIRI_EXCEPTIONS.md`); `/dev/tty` is absent in the
 //! sandbox, so any device smoke test is `#[ignore]`-on-device. The R6 gate here is
 //! ASan/native. `TestTty` (pipe-backed) covers the device-free path.
 //!
-//! PORT-NOTE (async-signal-safety): locking a mutex + `ioctl`/queue-push inside the
+//! PORT NOTE (async-signal-safety): locking a mutex + `ioctl`/queue-push inside the
 //! SIGWINCH handler is NOT async-signal-safe — but it is Zig's exact design and the
 //! faithful port keeps it (the impure-backend contract, ASan/native-tested, never Miri).
 //!
-//! PORT-NOTE (§3.4 buffer/writer): Zig `init(buffer: []u8)` hands a caller write buffer
+//! PORT NOTE (§3.4 buffer/writer): Zig `init(buffer: []u8)` hands a caller write buffer
 //! to `std.fs.File.Writer`. Rust buffers writes over the RAW `fd` WITHOUT owning it (so
 //! `deinit`'s `close` is the only close): a small [`TtyWriter`] (`fd` + owned `Vec<u8>`)
 //! that impls `std::io::Write` and does NOT own/close `fd`. The caller `buffer` becomes
 //! the writer's initial owned `Vec` (a documented divergence — owned, not borrowed).
 //!
-//! PORT-NOTE (§10.16): `log.*` calls are dropped; `system_clipboard_allocator` is
+//! PORT NOTE (§10.16): `log.*` calls are dropped; `system_clipboard_allocator` is
 //! dropped (paste owns its `Vec`).
 
 use crate::Winsize;
@@ -74,7 +74,7 @@ struct GlobalTty {
 static GLOBAL_TTY: Mutex<Option<GlobalTty>> = Mutex::new(None);
 
 /// A buffered writer over the raw tty `fd` that does NOT own/close it (see the module
-/// PORT-NOTE). `write` appends to `buf`; `flush` drains it via `libc::write`.
+/// PORT NOTE). `write` appends to `buf`; `flush` drains it via `libc::write`.
 pub struct TtyWriter {
     fd: c_int,
     buf: Vec<u8>,
@@ -300,7 +300,7 @@ impl PosixTty {
     // frees the slot where Zig would keep consuming one of the 8 — strictly more
     // permissive, and unreachable upstream (upstream loops live for the app).
     // Locking the same Mutex `handle_winch` locks is the module's documented
-    // (Zig-faithful) non-async-signal-safe design — see the module PORT-NOTE.
+    // (Zig-faithful) non-async-signal-safe design — see the module PORT NOTE.
     pub fn deregister_winsize(context: *mut c_void) {
         let mut state = HANDLERS.lock().unwrap();
         let mut w: usize = 0;
@@ -452,7 +452,7 @@ mod windows_tty {
 /// `libc::pipe()` pair + a `TtyWriter` sink + a fixed `get_winsize`. `libc::pipe` works
 /// in the sandbox (unlike `/dev/tty`), so the Loop scaffolding is exercisable here.
 ///
-/// PORT-NOTE: Zig's `tty_writer` is an allocating `Vec` sink; the Rust port uses the
+/// PORT NOTE: Zig's `tty_writer` is an allocating `Vec` sink; the Rust port uses the
 /// same [`TtyWriter`] type as `PosixTty` (over the `pipe_write` fd) so `writer()` has
 /// ONE return type across ttys and the generic Loop compiles uniformly.
 #[cfg(test)]

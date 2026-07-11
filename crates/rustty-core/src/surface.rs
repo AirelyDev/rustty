@@ -43,7 +43,7 @@
 //! `clipboardWrite`/`copySelectionToClipboards`/`setSelection`(`AndCopy`)
 //! LIVE — `imePoint`'s no-defer lock/unlock paired verbatim with the
 //! reference lines; the std.base64/std.fs.path analogues are the file-scope
-//! PORT helpers at the bottom; chunk C10 landed the key tier, Surface.zig:
+//! PORT NOTE: helpers at the bottom; chunk C10 landed the key tier, Surface.zig:
 //! 2605-3281 + 6014-end — `keyEventIsBinding`/`keyCallback`/
 //! `maybeHandleBinding`/`deactivateAllKeyTables`/`catchAllIsIgnore`/
 //! `endKeySequence`/`encodeKey`(`Opts`) LIVE (keyCallback's inspector defer
@@ -696,7 +696,7 @@ pub struct Keyboard {
     pub last_trigger: Option<u64>,
 }
 
-/// PORT: the reference's anonymous `table_stack` element struct (see the
+/// PORT NOTE: the reference's anonymous `table_stack` element struct (see the
 /// [`Keyboard::table_stack`] PORT NOTE). `Copy` — the reference reads
 /// elements out BY VALUE (`const table = table_items[rev_i];`,
 /// maybeHandleBinding Surface.zig:2903).
@@ -2072,7 +2072,7 @@ where
             // don't leak GHOSTTY_LOG to any subprocesses
             // env.remove("GHOSTTY_LOG");
             //
-            // PORT (R2 identity): the reference's `GHOSTTY_*` env names carry
+            // PORT NOTE (R2 identity): the reference's `GHOSTTY_*` env names carry
             // the product identity — `<APP_NAME upper>_<suffix>` (the termio
             // shell_integration `env_name` precedent).
             env.remove(&format!("{}_LOG", rustty_identity::APP_NAME.to_uppercase()));
@@ -3679,7 +3679,7 @@ where
                 (*t).set_attribute(terminal::sgr::Attribute::Bold)?;
                 // try t.printString("Ghostty failed to launch the requested command:");
                 //
-                // PORT (R2 identity): the product name in the user-facing
+                // PORT NOTE (R2 identity): the product name in the user-facing
                 // message — `rustty_identity::APP_NAME`.
                 (*t).print_string(
                     format!(
@@ -5975,7 +5975,7 @@ where
         // Apply key remappings for consistency with keyCallback
         // var event = event_orig;
         //
-        // (PORT: `event_orig` moves into `event` — the Rust KeyEvent owns its
+        // (PORT NOTE: `event_orig` moves into `event` — the Rust KeyEvent owns its
         // utf8 bytes; both `event_orig.mods` reads below still see the
         // pre-assignment mods, the RHS evaluates first.)
         let mut event = event_orig;
@@ -6065,7 +6065,7 @@ where
         // This allows users to remap modifier keys at the app level.
         // var event = event_orig;
         //
-        // (PORT: the keyEventIsBinding move-and-read note above.)
+        // (PORT NOTE: the keyEventIsBinding move-and-read note above.)
         let mut event = event_orig;
         // if (self.config.key_remaps.isRemapped(event_orig.mods)) {
         if self.config.key_remaps.is_remapped(event.mods) {
@@ -12878,7 +12878,7 @@ enum KeySequenceMemory {
     Free,
 }
 
-/// PORT helper — Zig `@intFromFloat` for the scroll/selection GESTURE pixel
+/// PORT NOTE: helper — Zig `@intFromFloat` for the scroll/selection GESTURE pixel
 /// math (`scrollCallback`'s `@intFromFloat(@trunc(amount))` /
 /// `@intFromFloat(@round(xoff))` and `performBindingAction`'s
 /// `.scroll_page_fractional` `@intFromFloat(@trunc(fraction * rows))`).
@@ -12921,7 +12921,7 @@ struct ScrollAmount {
     delta: isize,
 }
 
-/// PORT: the anonymous `enum { down_left, up_right }` return type of
+/// PORT NOTE: the anonymous `enum { down_left, up_right }` return type of
 /// `ScrollAmount.direction`, hoisted to a named enum (the TextViewport
 /// hoist precedent).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -13016,7 +13016,7 @@ pub struct Text {
     pub viewport: Option<TextViewport>,
 }
 
-/// PORT: the nested `Text.Viewport` (Surface.zig:1875), hoisted to a
+/// PORT NOTE: the nested `Text.Viewport` (Surface.zig:1875), hoisted to a
 /// top-level name (the `DerivedConfigLink` precedent).
 // pub const Viewport = struct {
 pub struct TextViewport {
@@ -13055,7 +13055,7 @@ impl Text {
     }
 }
 
-/// PORT: the file-scope `Link` returned by `linkAtPos` (Surface.zig:4271 —
+/// PORT NOTE: the file-scope `Link` returned by `linkAtPos` (Surface.zig:4271 —
 /// declared between `maybePromptClick` and `linkAtPos`; Rust impl blocks
 /// cannot hold type items, so it lives in this trailing cluster with a
 /// position pointer at the reference site). NOT the `DerivedConfig.Link`
@@ -13185,7 +13185,7 @@ impl<A: apprt::App + 'static> Clone for SurfaceMailbox<A> {
 impl<A: apprt::App + 'static> Copy for SurfaceMailbox<A> {}
 
 // ===========================================================================
-// PORT helpers — std analogues used above (std.fs.path / std.fs.access /
+// PORT NOTE: helpers — std analogues used above (std.fs.path / std.fs.access /
 // std.base64 / the Zig `Options` value-copy). These add nothing the reference
 // doesn't already do (R1): they are the minimal Rust glue for the std calls
 // the reference makes inline (the rustty-config theme.rs / path.rs and

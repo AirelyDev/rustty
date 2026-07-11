@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/string_encoding.zig` — every line, comment, and
 //! `test {}` is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports only `std`. The decode/encode routines write to
+// PORT NOTE: the Zig reference imports only `std`. The decode/encode routines write to
 // a `*std.Io.Writer` and may fail with `std.Io.Writer.Error` or `DecodeError`.
 // We model the writer as the `Writer` trait below (the `std.Io.Writer`
 // interface's `writeByte`/`writeAll` surface used here) and the error union as
@@ -14,7 +14,7 @@
 
 use std::convert::Infallible;
 
-/// PORT: `std.Io.Writer` — the subset (`writeByte`, `writeAll`) used by this
+/// PORT NOTE: `std.Io.Writer` — the subset (`writeByte`, `writeAll`) used by this
 /// module, with the associated `Writer.Error`.
 pub trait Writer {
     type Error;
@@ -24,7 +24,7 @@ pub trait Writer {
     fn writeAll(&mut self, bytes: &[u8]) -> Result<(), Self::Error>;
 }
 
-/// PORT: the error union `std.Io.Writer.Error || error{DecodeError}`. `W` is the
+/// PORT NOTE: the error union `std.Io.Writer.Error || error{DecodeError}`. `W` is the
 /// concrete writer's `Error` type; `DecodeError` is the reference's added error.
 #[derive(Debug)]
 pub enum WriteOrDecodeError<W> {
@@ -32,7 +32,7 @@ pub enum WriteOrDecodeError<W> {
     DecodeError,
 }
 
-/// PORT: `std.Io.Writer.Allocating` — an allocating writer accumulating into an
+/// PORT NOTE: `std.Io.Writer.Allocating` — an allocating writer accumulating into an
 /// owned buffer; `written()` returns the accumulated bytes.
 #[derive(Default)]
 pub struct AllocatingWriter {
@@ -60,14 +60,14 @@ impl Writer for AllocatingWriter {
     }
 }
 
-/// PORT: `std.Io.Writer.fixed(&buf)` — a writer over a fixed-size buffer.
+/// PORT NOTE: `std.Io.Writer.fixed(&buf)` — a writer over a fixed-size buffer.
 /// `buffered()` returns the bytes written so far.
 pub struct FixedWriter<'a> {
     buf: &'a mut [u8],
     end: usize,
 }
 
-/// PORT: the writer overflowing its fixed buffer maps to `Writer.Error`'s
+/// PORT NOTE: the writer overflowing its fixed buffer maps to `Writer.Error`'s
 /// `WriteFailed` (here, a unit error).
 #[derive(Debug)]
 pub struct WriteFailed;
@@ -184,7 +184,7 @@ pub fn printfQDecode<Wr: Writer>(
     Ok(())
 }
 
-// PORT: `std.ascii.control_code.{esc,lf,cr,ht,vt}` — the ASCII control byte
+// PORT NOTE: `std.ascii.control_code.{esc,lf,cr,ht,vt}` — the ASCII control byte
 // values used by `printfQDecode`.
 mod control_code {
     pub const ESC: u8 = 0x1b;
@@ -233,7 +233,7 @@ pub fn urlPercentDecode<Wr: Writer>(
     Ok(())
 }
 
-// PORT: `std.math.shl(u8, x, 4)` — left shift saturating to 0 on overshift.
+// PORT NOTE: `std.math.shl(u8, x, 4)` — left shift saturating to 0 on overshift.
 // Here the shift is always 4 on a `u4`-widened value, so it is a plain `<< 4`.
 fn shl(x: u8, amt: u32) -> u8 {
     x.checked_shl(amt).unwrap_or(0)
@@ -251,7 +251,7 @@ fn hex(c: u8) -> u8 {
 /// Is the given character valid in URI percent encoding?
 #[allow(non_snake_case)]
 fn isValidChar(c: u8) -> bool {
-    // PORT: `std.ascii.isPrint(c)` is true for printable ASCII 0x20..=0x7e (space
+    // PORT NOTE: `std.ascii.isPrint(c)` is true for printable ASCII 0x20..=0x7e (space
     // through `~`). Space is already excluded by the first arm (returns false),
     // so on the `else` arm `c` is never space; thus `is_ascii_graphic()`
     // (0x21..=0x7e) computes exactly `isPrint(c)` for every byte reaching it.
@@ -351,7 +351,7 @@ mod tests {
     fn printf_q_8() {
         let mut w = AllocatingWriter::init();
         let s: &[u8] = b"$'";
-        // PORT: the reference copies `s` into a sentinel-terminated `src` buffer
+        // PORT NOTE: the reference copies `s` into a sentinel-terminated `src` buffer
         // (`var src: [s.len:0]u8`) that is otherwise unused before calling
         // `printfQDecode(&w.writer, s)`. The decode is performed on `s` itself.
         let mut src = [0u8; 2];
@@ -395,7 +395,7 @@ mod tests {
         for c in 0..255usize {
             let mut w = AllocatingWriter::init();
 
-            // PORT: `std.fmt.bufPrintZ(&buf, "%{x:0>2}", .{c})` formats one
+            // PORT NOTE: `std.fmt.bufPrintZ(&buf, "%{x:0>2}", .{c})` formats one
             // lowercase-hex `%XX` escape. The expected decoded byte is `c`
             // itself (an independent oracle: encode the literal value, decode it
             // back, expect the same value).

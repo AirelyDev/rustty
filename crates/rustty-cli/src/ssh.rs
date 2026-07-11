@@ -906,7 +906,7 @@ fn child_exec(argv: &[Vec<u8>]) -> Result<u8, std::io::Error> {
 }
 
 // ---------------------------------------------------------------------------
-// PORT: support shims for std facilities used above.
+// PORT NOTE: support shims for std facilities used above.
 // ---------------------------------------------------------------------------
 
 /// `std.time.timestamp()` — current Unix time in whole seconds.

@@ -272,7 +272,7 @@ impl Spatial {
 ///
 /// The view that this tree contains.
 ///
-/// PORT: the reference `pub const View = V;` decl (naming the contained view
+/// PORT NOTE: the reference `pub const View = V;` decl (naming the contained view
 /// type) maps to the `V: View` generic parameter here.
 pub struct SplitTree<V: View> {
     /// All the nodes in the tree. Node at index 0 is always the root.
@@ -281,7 +281,7 @@ pub struct SplitTree<V: View> {
     /// Since the tree is an immutable structure, this lets us
     /// cleanly free all memory when the tree is deinitialized.
     ///
-    /// PORT: In Zig this is `[]const Node` backed by a per-tree
+    /// PORT NOTE: In Zig this is `[]const Node` backed by a per-tree
     /// `ArenaAllocator`. In Rust the owned `Vec<Node>` plays both roles (it
     /// owns the single allocation and frees on `Drop`).
     pub nodes: Vec<Node<V>>,
@@ -299,7 +299,7 @@ impl<V: View> SplitTree<V> {
             // Arena can be undefined because we have zero allocated nodes.
             // If our nodes are empty our deinit function doesn't touch the
             // arena.
-            // (PORT: the Rust port has no separate arena field — an empty
+            // (PORT NOTE: the Rust port has no separate arena field — an empty
             // `Vec` allocates nothing and frees nothing on `Drop`.)
             nodes: Vec::new(),
             zoomed: None,
@@ -335,7 +335,7 @@ impl<V: View> SplitTree<V> {
         }
 
         // Create a new arena allocator for the clone.
-        // (PORT: the Rust port has no separate arena field — the owned
+        // (PORT NOTE: the Rust port has no separate arena field — the owned
         // `Vec<Node>` below subsumes the reference's `ArenaAllocator`.)
 
         // Allocate a new nodes array and copy the existing nodes into it.
@@ -638,7 +638,7 @@ impl<V: View> SplitTree<V> {
         insert: &Self,
     ) -> Result<Self, Error> {
         // The new arena for our new tree.
-        // (PORT: the owned `Vec` below is the per-tree allocation the reference
+        // (PORT NOTE: the owned `Vec` below is the per-tree allocation the reference
         // backs with a fresh `ArenaAllocator`.)
 
         // We know we're going to need the sum total of the nodes
@@ -717,7 +717,7 @@ impl<V: View> SplitTree<V> {
         }
 
         // The new arena for our new tree.
-        // (PORT: the owned `Vec` below is the per-tree allocation the reference
+        // (PORT NOTE: the owned `Vec` below is the per-tree allocation the reference
         // backs with a fresh `ArenaAllocator`.)
 
         // Allocate our new nodes list with the number of nodes we'll
@@ -883,7 +883,7 @@ impl<V: View> SplitTree<V> {
         }
 
         // Create a new arena allocator for the clone.
-        // (PORT: the Rust port has no separate arena field — the owned
+        // (PORT NOTE: the Rust port has no separate arena field — the owned
         // `Vec<Node>` below subsumes the reference's `ArenaAllocator`.)
 
         // Allocate a new nodes array and copy the existing nodes into it.

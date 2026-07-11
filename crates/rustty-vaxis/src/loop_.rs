@@ -130,7 +130,7 @@ pub struct Loop<'a, T> {
 /// A `Send` newtype carrying the raw `*mut Loop<T>` into the read thread (§4.2). Sound:
 /// the pointee is pinned for the thread's life and only ever touched via narrow field
 /// projections on both sides.
-// PORT-NOTE (`'a` erasure across the thread boundary): `std::thread::spawn` requires a
+// PORT NOTE (`'a` erasure across the thread boundary): `std::thread::spawn` requires a
 // `'static` closure, so `SendLoop` carries a LIFETIME-ERASED `*mut Loop<'static, T>` (cast
 // in `start`). This is sound: the read thread only projects lifetime-agnostic fields
 // (`tty`/`vaxis` caps/state/`screen.width_method`/`queries_done`/`query_futex`) and NEVER
@@ -183,12 +183,12 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
             return Ok(());
         }
         let self_ptr: *mut Loop<'a, T> = self as *const Self as *mut Self;
-        // Erase `'a` for the thread boundary (see the SendLoop PORT-NOTE). clippy sees the
+        // Erase `'a` for the thread boundary (see the SendLoop PORT NOTE). clippy sees the
         // cast as a no-op because it ignores lifetimes, but it is load-bearing: raw pointers
         // are invariant, so `*mut Loop<'a, T>` does NOT coerce to `*mut Loop<'static, T>`.
         #[allow(clippy::unnecessary_cast)]
         let send = SendLoop(self_ptr as *mut Loop<'static, T>);
-        // PORT-NOTE: Zig passes `self.vaxis.opts.system_clipboard_allocator` as the paste
+        // PORT NOTE: Zig passes `self.vaxis.opts.system_clipboard_allocator` as the paste
         // allocator; dropped here (paste owns its `Vec`, §5/3a precedent).
         let handle = std::thread::Builder::new().spawn(move || {
             let s = send;
@@ -373,7 +373,7 @@ impl<'a, T> Drop for Loop<'a, T> {
 /// `unimplemented!()` leaves. `self_ptr`/`vx` are raw so the routing does narrow
 /// projections only (§4.2). The queued `T` OWNS its text via [`Key::into_owned`].
 ///
-/// PORT-NOTE (the two `builtin.os.tag` arms): Zig has a `.windows` switch-arm (a strict
+/// PORT NOTE (the two `builtin.os.tag` arms): Zig has a `.windows` switch-arm (a strict
 /// subset of the `else` arm, with a `winsize` that skips the in-band-resize latch/
 /// `resetSignalHandler`, and no mouse_leave/paste/color handling) and an `else` arm. The
 /// `else` arm is the LIVE one ported here; the windows arm folds into the WindowsTty R5

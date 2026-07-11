@@ -62,7 +62,7 @@ impl Value {
 
     pub fn initBool(value: bool) -> Value {
         Value {
-            // PORT: `@intFromBool(value)`.
+            // PORT NOTE: `@intFromBool(value)`.
             value: unsafe { c::sentry_value_new_bool(std::ffi::c_int::from(value)) },
         }
     }
@@ -77,7 +77,7 @@ impl Value {
         unsafe { c::sentry_value_decref(self.value) }
     }
 
-    // PORT: the reference body is `c.sentry_value_incref(self.value);` with a
+    // PORT NOTE: the reference body is `c.sentry_value_incref(self.value);` with a
     // `Value` return type and NO return statement — it is never referenced, so
     // Zig's lazy semantic analysis never compiles the body. The Rust port must
     // compile; returning `self` (the increfed value) is the evident intent.
@@ -99,7 +99,7 @@ impl Value {
     }
 
     /// sentry_value_set_by_key_n
-    // (PORT: doc comment preserved verbatim from the reference, which repeats
+    // (PORT NOTE: doc comment preserved verbatim from the reference, which repeats
     // the `set_by_key_n` name on `get`; the C call below is `get_by_key_n`.)
     pub fn get(self, key: &str) -> Option<Value> {
         // const val: Value = .{ .value = c.sentry_value_get_by_key_n(...) };

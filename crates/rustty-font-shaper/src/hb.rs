@@ -10,12 +10,12 @@
 use harfbuzz_sys as c;
 
 /// HarfBuzz error.
-// PORT: stands in for `pkg/harfbuzz/errors.zig`'s `Error.HarfbuzzFailed`.
+// PORT NOTE: stands in for `pkg/harfbuzz/errors.zig`'s `Error.HarfbuzzFailed`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HarfbuzzFailed;
 
 /// A HarfBuzz font object.
-// PORT: `pkg/harfbuzz/font.zig`'s `Font`.
+// PORT NOTE: `pkg/harfbuzz/font.zig`'s `Font`.
 #[derive(Clone, Copy, Debug)]
 pub struct Font {
     pub handle: *mut c::hb_font_t,
@@ -24,14 +24,14 @@ pub struct Font {
 impl Font {
     /// Decreases the reference count on the given font object, destroying it at
     /// zero and freeing all memory.
-    // PORT: `Font.destroy`.
+    // PORT NOTE: `Font.destroy`.
     pub fn destroy(self) {
         unsafe {
             c::hb_font_destroy(self.handle);
         }
     }
 
-    // PORT: `pkg/harfbuzz/font.zig`'s `Font.setScale`.
+    // PORT NOTE: `pkg/harfbuzz/font.zig`'s `Font.setScale`.
     // pub fn setScale(self: *Font, x: u32, y: u32) void {
     //     c.hb_font_set_scale(self.handle, @intCast(x), @intCast(y));
     // }
@@ -44,7 +44,7 @@ impl Font {
 
 /// Creates an `hb_font_t` font object from the specified `CTFontRef`.
 ///
-// PORT: `pkg/harfbuzz/coretext.zig`'s `createFont` (the `hb_coretext_font_create`
+// PORT NOTE: `pkg/harfbuzz/coretext.zig`'s `createFont` (the `hb_coretext_font_create`
 // bridge, enabled by `HAVE_CORETEXT` in the vendored HarfBuzz build). `ct_font`
 // is a type-erased `CTFontRef` (the caller passes its `objc2` `CTFont` pointer);
 // it is cast to the bindgen `CTFontRef` (same underlying `CTFontRef`), mirroring
@@ -60,33 +60,33 @@ pub fn create_font_coretext(ct_font: *const core::ffi::c_void) -> Result<Font, H
 }
 
 /// The starting cluster of a global feature (inclusive).
-// PORT: `harfbuzz.c.HB_FEATURE_GLOBAL_START`.
+// PORT NOTE: `harfbuzz.c.HB_FEATURE_GLOBAL_START`.
 pub const HB_FEATURE_GLOBAL_START: u32 = c::HB_FEATURE_GLOBAL_START;
 
 /// The ending cluster of a global feature (exclusive).
-// PORT: `harfbuzz.c.HB_FEATURE_GLOBAL_END`. HarfBuzz defines this as
+// PORT NOTE: `harfbuzz.c.HB_FEATURE_GLOBAL_END`. HarfBuzz defines this as
 // `((unsigned int) -1)`; bindgen cannot const-evaluate that macro so it is
 // reproduced here as `u32::MAX` (the identical bit pattern).
 pub const HB_FEATURE_GLOBAL_END: u32 = u32::MAX;
 
 /// Represents an OpenType feature setting passed to `shape`.
-// PORT: `pkg/harfbuzz/common.zig`'s `Feature` (`extern struct`). The bindgen
+// PORT NOTE: `pkg/harfbuzz/common.zig`'s `Feature` (`extern struct`). The bindgen
 // `hb_feature_t` has the identical layout (`tag`/`value`/`start`/`end`), so it
 // is re-exported directly rather than re-declared.
 pub type Feature = c::hb_feature_t;
 
 /// The `hb_glyph_info_t` result of shaping (glyph index + source cluster).
-// PORT: `pkg/harfbuzz/common.zig`'s `GlyphInfo` (`extern struct`). The shaper
+// PORT NOTE: `pkg/harfbuzz/common.zig`'s `GlyphInfo` (`extern struct`). The shaper
 // reads `.codepoint` (glyph index after shaping) and `.cluster`.
 pub type GlyphInfo = c::hb_glyph_info_t;
 
 /// The `hb_glyph_position_t` result of shaping (advances + offsets).
-// PORT: `pkg/harfbuzz/common.zig`'s `GlyphPosition` (`extern struct`). The
+// PORT NOTE: `pkg/harfbuzz/common.zig`'s `GlyphPosition` (`extern struct`). The
 // shaper reads `.x_advance`/`.y_advance`/`.x_offset`/`.y_offset`.
 pub type GlyphPosition = c::hb_glyph_position_t;
 
 /// The type of buffer contents.
-// PORT: `pkg/harfbuzz/buffer.zig`'s `ContentType` (`enum(u2)`).
+// PORT NOTE: `pkg/harfbuzz/buffer.zig`'s `ContentType` (`enum(u2)`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContentType {
     /// Initial value for new buffer.
@@ -110,7 +110,7 @@ impl ContentType {
 }
 
 /// HarfBuzz clustering behavior options.
-// PORT: `pkg/harfbuzz/buffer.zig`'s `ClusterLevel` (`enum(u2)`).
+// PORT NOTE: `pkg/harfbuzz/buffer.zig`'s `ClusterLevel` (`enum(u2)`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClusterLevel {
     /// Non-base characters merged into the preceding base cluster (default).
@@ -146,7 +146,7 @@ impl ClusterLevel {
 }
 
 /// The text flow direction of a buffer.
-// PORT: `pkg/harfbuzz/common.zig`'s `Direction` (`enum(u3)`). Only the variants
+// PORT NOTE: `pkg/harfbuzz/common.zig`'s `Direction` (`enum(u3)`). Only the variants
 // the shaper touches are exercised; the rest round out the enum for fidelity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
@@ -175,7 +175,7 @@ impl Direction {
 
 /// Buffers serve a dual role in HarfBuzz; before shaping, they hold the input
 /// characters passed to `shape`, and after shaping they hold the output glyphs.
-// PORT: `pkg/harfbuzz/buffer.zig`'s `Buffer` (only the surface the shaper uses).
+// PORT NOTE: `pkg/harfbuzz/buffer.zig`'s `Buffer` (only the surface the shaper uses).
 #[derive(Clone, Copy, Debug)]
 pub struct Buffer {
     pub handle: *mut c::hb_buffer_t,
@@ -284,7 +284,7 @@ impl Buffer {
 
 /// Shapes `buf` using `font`, turning its Unicode content into positioned
 /// glyphs. If `features` is non-empty it controls the applied features.
-// PORT: `pkg/harfbuzz/shape.zig`'s `shape`.
+// PORT NOTE: `pkg/harfbuzz/shape.zig`'s `shape`.
 // pub fn shape(font: Font, buf: Buffer, features: ?[]const Feature) void { ... }
 pub fn shape(font: Font, buf: Buffer, features: Option<&[Feature]>) {
     // const hb_feats: [*c]const c.hb_feature_t = feats: {
@@ -313,7 +313,7 @@ pub fn shape(font: Font, buf: Buffer, features: Option<&[Feature]>) {
 ///
 /// Calls `FT_Reference_Face` on `ft_face`, ensuring it remains alive as long as
 /// the resulting font object does, and `FT_Done_Face` when the font is destroyed.
-// PORT: `pkg/harfbuzz/freetype.zig`'s `createFont` (via the custom extern
+// PORT NOTE: `pkg/harfbuzz/freetype.zig`'s `createFont` (via the custom extern
 // `hb_ft_font_create_referenced` so the correct FreeType struct is used).
 pub fn create_font(face: freetype_sys::FT_Face) -> Result<Font, HarfbuzzFailed> {
     // `harfbuzz-sys` binds its own `FT_Face` type; cast the `freetype-sys`

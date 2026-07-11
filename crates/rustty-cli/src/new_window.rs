@@ -91,7 +91,7 @@ pub struct Options {
     // _diagnostics: diagnostics.DiagnosticList = .{},
     pub _diagnostics: DiagnosticList,
 
-    /// PORT glue: the raw args the reference `parseManuallyHook` drains from
+    /// PORT NOTE: glue: the raw args the reference `parseManuallyHook` drains from
     /// `iter` (the triggering arg + the rest), collected here by the driver's
     /// ConsumeRest path (`parse_manually_hook` + `record_replay_arg`) and turned
     /// into `_arguments` by `gather_arguments` after `parse`. The transformation

@@ -831,7 +831,7 @@ where
 
     // Our allocator is our config's arena
     // const alloc = copy._arena.?.allocator();
-    // (PORT: collapses — `pwd` returns an owned `Vec<u8>` via the global
+    // (PORT NOTE: collapses — `pwd` returns an owned `Vec<u8>` via the global
     // allocator.)
 
     // Get our previously focused surface for some inherited values.

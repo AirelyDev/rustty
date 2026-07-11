@@ -1,6 +1,6 @@
 //! Software IEEE 754 half-precision (`f16`) arithmetic.
 //!
-//! PORT/GLUE: The Zig reference (`split_tree.zig`) uses the native `f16` type
+//! PORT NOTE (glue): The Zig reference (`split_tree.zig`) uses the native `f16` type
 //! for split ratios and spatial layout math. Rust's `f16` is still an unstable
 //! nightly-only primitive and the rustty toolchain is pinned to stable
 //! (1.93.1), so we cannot use it directly in this Miri-able leaf crate. To

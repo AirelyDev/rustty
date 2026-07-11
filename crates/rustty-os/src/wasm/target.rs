@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/wasm/target.zig` — every line, comment, and
 //! `test {}` is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, and `options = build_options`.
+// PORT NOTE: the Zig reference imports `std`, `builtin`, and `options = build_options`.
 // `Target` is an enum and `target` is `null` on non-wasm builds, else the
 // configured `options.wasm_target`. In Rust `Target` is an enum and `target` is
 // an `Option<Target>` that is `None` off-wasm (`cfg(not(target_arch = "wasm32"))`)
@@ -21,14 +21,14 @@ pub enum Target {
 }
 
 /// Our specific target platform.
-// PORT: `pub const target: ?Target = if (!isWasm()) null else target: { ... };`.
+// PORT NOTE: `pub const target: ?Target = if (!isWasm()) null else target: { ... };`.
 // On non-wasm builds it is `None`.
 #[cfg(not(target_arch = "wasm32"))]
 pub const TARGET: Option<Target> = None;
 
 #[cfg(target_arch = "wasm32")]
 pub const TARGET: Option<Target> = {
-    // PORT: the reference does
+    // PORT NOTE: the reference does
     //   `const result = @as(Target, @enumFromInt(@intFromEnum(options.wasm_target)));`
     // then asserts the tag names match. `rustty_build_config::wasm_target` carries
     // the configured value; on wasm32 our only supported target is `browser`.

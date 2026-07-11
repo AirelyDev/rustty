@@ -13,14 +13,14 @@
 //! pub const Window = struct {};
 //! ```
 
-// PORT: reference `const internal_os = @import("../os/main.zig");` — reached as
+// PORT NOTE: reference `const internal_os = @import("../os/main.zig");` — reached as
 // the rustty `rustty_os` crate.
 
-/// PORT: reference `pub const resourcesDir = internal_os.resourcesDir;`.
+/// PORT NOTE: reference `pub const resourcesDir = internal_os.resourcesDir;`.
 pub use rustty_os::resourcesDir;
 
-/// PORT: reference `pub const App = struct {};`.
+/// PORT NOTE: reference `pub const App = struct {};`.
 pub struct App;
 
-/// PORT: reference `pub const Window = struct {};`.
+/// PORT NOTE: reference `pub const Window = struct {};`.
 pub struct Window;

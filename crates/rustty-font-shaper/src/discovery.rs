@@ -196,7 +196,7 @@ impl Descriptor {
     }
 
     // ----------------------------------------------------------------------
-    // PORT (DEFERRED — Fontconfig): `toFcPattern` builds a `fontconfig.Pattern`
+    // PORT NOTE (DEFERRED — Fontconfig): `toFcPattern` builds a `fontconfig.Pattern`
     // from the descriptor. It lands with the Fontconfig backend. Recorded verbatim:
     //
     // /// Convert to Fontconfig pattern to use for lookup. The pattern does
@@ -260,7 +260,7 @@ impl From<rustty_font::codepoint_map::Descriptor> for Descriptor {
 }
 
 // ---------------------------------------------------------------------------
-// PORT (DEFERRED — Fontconfig backend): `pub const Fontconfig = struct { ... }`
+// PORT NOTE (DEFERRED — Fontconfig backend): `pub const Fontconfig = struct { ... }`
 // is the Linux-default discoverer. It lands with the Fontconfig backend; recorded
 // here verbatim:
 //
@@ -425,7 +425,7 @@ mod coretext_impl {
 
     /// Create a fresh empty mutable `CFDictionary` with CoreFoundation type
     /// key/value callbacks (retain/release/equal/hash for CF objects).
-    // PORT: `macos.foundation.MutableDictionary.create(0)`.
+    // PORT NOTE: `macos.foundation.MutableDictionary.create(0)`.
     fn new_mutable_dictionary() -> CFRetained<CFMutableDictionary> {
         unsafe {
             CFMutableDictionary::new(
@@ -439,7 +439,7 @@ mod coretext_impl {
     }
 
     /// Set `attrs[key] = value` where both are CoreFoundation objects.
-    // PORT: `attrs.setValue(key, value)`.
+    // PORT NOTE: `attrs.setValue(key, value)`.
     fn dict_set(attrs: &CFMutableDictionary, key: &CFString, value: &CFType) {
         unsafe {
             CFMutableDictionary::set_value(
@@ -451,7 +451,7 @@ mod coretext_impl {
     }
 
     /// Look up `dict[key]` as a borrowed CF object (no retain), or `None`.
-    // PORT: `dict.getValue(T, key)` — CFDictionaryGetValue returns a borrowed ref.
+    // PORT NOTE: `dict.getValue(T, key)` — CFDictionaryGetValue returns a borrowed ref.
     unsafe fn dict_get(dict: &CFDictionary, key: *const c_void) -> Option<&CFType> {
         let p = unsafe { dict.value(key) };
         if p.is_null() {
@@ -1466,7 +1466,7 @@ mod coretext_impl {
 }
 
 // ---------------------------------------------------------------------------
-// PORT (DEFERRED — Windows FreeType-scan backend `freetype_windows`): the
+// PORT NOTE (DEFERRED — Windows FreeType-scan backend `freetype_windows`): the
 // `Windows` discoverer walks the system + per-user font directories, opening
 // candidate files with FreeType only as needed and matching by `family_name`
 // (with an SFNT-name-table fallback). It lands with the Windows backend; recorded

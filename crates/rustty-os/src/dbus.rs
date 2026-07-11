@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/dbus.zig` — every line, comment, and `test {}`
 //! is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std` and `builtin` and switches on
+// PORT NOTE: the Zig reference imports `std` and `builtin` and switches on
 // `builtin.os.tag`. In Rust the OS switch is expressed with `cfg!(target_os)`;
 // the environment lookups use `std::env::var_os` (the reference's
 // `std.posix.getenv`).

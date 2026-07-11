@@ -11,7 +11,7 @@
 
 use std::convert::Infallible;
 
-/// PORT: `std.Io.Writer` — the subset (`writeAll`, used to back `print`) needed
+/// PORT NOTE: `std.Io.Writer` — the subset (`writeAll`, used to back `print`) needed
 /// by `formatEntry`, with the associated `Writer.Error`.
 //
 // PORT NOTE: the reference calls `writer.print("{s} = {}\n", ...)`. `print` is
@@ -23,7 +23,7 @@ pub trait Writer {
     fn write_all(&mut self, bytes: &[u8]) -> Result<(), Self::Error>;
 }
 
-/// PORT: `std.Io.Writer.Allocating` — an allocating writer accumulating into an
+/// PORT NOTE: `std.Io.Writer.Allocating` — an allocating writer accumulating into an
 /// owned buffer; `written()` returns the accumulated bytes.
 #[derive(Default)]
 pub struct AllocatingWriter {

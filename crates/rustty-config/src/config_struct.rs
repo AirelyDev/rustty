@@ -5174,7 +5174,7 @@ impl ReplayStep {
 }
 
 // ===========================================================================
-// PORT support — the std/OS glue + error/iterator types the machinery above
+// PORT NOTE: support — the std/OS glue + error/iterator types the machinery above
 // uses. These add nothing the reference doesn't already do (R1): they are the
 // minimal Rust counterparts of the inline std calls in the reference functions.
 // ===========================================================================

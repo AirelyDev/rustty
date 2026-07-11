@@ -38,7 +38,7 @@
 //! [1]: https://github.com/kprotty/zap
 //! [2]: https://zig.news/kprotty/resource-efficient-thread-pools-with-zig-3291
 //
-// PORT SCOPE [ADV-FIX / XEV_BLUEPRINT §1/§6]: ghostty calls `Loop.init(.{})` with
+// PORT NOTE: SCOPE [ADV-FIX / XEV_BLUEPRINT §1/§6]: ghostty calls `Loop.init(.{})` with
 // NO `thread_pool` (termio/Thread.zig, renderer/Thread.zig) — the pool is
 // reachable only via `flags.threadpool = true` (xev.File / explicit) which
 // ghostty never sets. So ONLY the TYPE SURFACE (`Task`, `Batch.from`, `schedule`,
@@ -48,7 +48,7 @@
 
 #![allow(dead_code)]
 
-/// PORT: the `ThreadPool = @This()` root struct. Fields are the work-stealing
+/// PORT NOTE: the `ThreadPool = @This()` root struct. Fields are the work-stealing
 /// pool's internal state; the deferred BODY owns them, so they are held as an
 /// opaque zero-information placeholder here (only the type NAME + the method
 /// signatures kqueue.rs references are load-bearing in C3).
@@ -70,7 +70,7 @@ pub struct Config {
 impl ThreadPool {
     /// Statically initialize the thread pool using the configuration.
     //
-    // PORT (type surface only): the reference computes `stack_size`/`max_threads`
+    // PORT NOTE (type surface only): the reference computes `stack_size`/`max_threads`
     // defaults and returns the pool. The BODY is deferred (§6) — this signature
     // exists so the kqueue "file IO on thread pool" skip-stub test names it.
     pub fn init(_config: Config) -> ThreadPool {

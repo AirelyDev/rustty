@@ -8,7 +8,7 @@
 //! Ports the reference's `src/os/TempDir.zig` — every line, comment, and
 //! `test {}` is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `Dir = std.fs.Dir`, and
+// PORT NOTE: the Zig reference imports `std`, `Dir = std.fs.Dir`, and
 // `file = @import("file.zig")`. In Rust the directory "handles" are modeled as
 // owned `PathBuf`s rooted at the absolute directory path (Rust's `std::fs` has
 // no openable `Dir` handle type); the filesystem operations are reproduced over
@@ -99,7 +99,7 @@ impl TempDir {
 }
 
 // ---------------------------------------------------------------------------
-// PORT: support shims for the `std.fs.Dir` operations used above.
+// PORT NOTE: support shims for the `std.fs.Dir` operations used above.
 // ---------------------------------------------------------------------------
 
 /// `std.fs.Dir`: a directory handle, modeled here as its absolute path.

@@ -1,7 +1,7 @@
 //! A library represents the shared state that the underlying font
 //! library implementation(s) require per-process.
 //!
-//! PORT: ghostty `src/font/library.zig`. That file is
+//! PORT NOTE: ghostty `src/font/library.zig`. That file is
 //! `pub const Library = switch (options.backend)` over `FreetypeLibrary`
 //! (freetype-active backends) and `NoopLibrary` (CoreText/Canvas). Both arms and
 //! the backend `switch` are ported here so the `Library` type resolves to the
@@ -19,7 +19,7 @@ use crate::ft;
 pub type Mutex = std::sync::Mutex<()>;
 
 /// Library implementation for the compile options.
-// PORT: `library.zig`'s `pub const Library = switch (options.backend) { ...
+// PORT NOTE: `library.zig`'s `pub const Library = switch (options.backend) { ...
 // FreetypeLibrary ... NoopLibrary ... }`. Modeled with `cfg(target_os)` matching
 // `Backend.default`: macOS → `NoopLibrary`, everything else → `FreetypeLibrary`.
 #[cfg(target_os = "macos")]
@@ -28,7 +28,7 @@ pub type Library = NoopLibrary;
 pub type Library = FreetypeLibrary;
 
 /// Library implementation for the freetype backend.
-// PORT: `library.zig`'s `FreetypeLibrary`.
+// PORT NOTE: `library.zig`'s `FreetypeLibrary`.
 #[derive(Clone, Copy, Debug)]
 pub struct FreetypeLibrary {
     /// The underlying FreeType library.
@@ -44,7 +44,7 @@ pub struct FreetypeLibrary {
 
 impl FreetypeLibrary {
     /// Initialize the library and its mutex.
-    // PORT: `FreetypeLibrary.init`.
+    // PORT NOTE: `FreetypeLibrary.init`.
     pub fn init() -> Result<FreetypeLibrary, ft::FtError> {
         let lib = ft::Library::init()?;
         // errdefer lib.deinit();
@@ -54,7 +54,7 @@ impl FreetypeLibrary {
     }
 
     /// Destroy the mutex and the underlying FreeType library.
-    // PORT: `FreetypeLibrary.deinit`.
+    // PORT NOTE: `FreetypeLibrary.deinit`.
     pub fn deinit(&mut self) {
         // self.alloc.destroy(self.mutex);
         unsafe {
@@ -66,7 +66,7 @@ impl FreetypeLibrary {
 
 /// Library implementation for backends that don't need a "library" (CoreText,
 /// Canvas).
-// PORT: `library.zig`'s `NoopLibrary`.
+// PORT NOTE: `library.zig`'s `NoopLibrary`.
 //
 //   pub const NoopLibrary = struct {
 //       pub const InitError = error{};
@@ -92,14 +92,14 @@ pub enum LibraryError {}
 
 impl NoopLibrary {
     /// Initialize the (noop) library.
-    // PORT: `NoopLibrary.init`.
+    // PORT NOTE: `NoopLibrary.init`.
     #[cfg(target_os = "macos")]
     pub fn init() -> Result<NoopLibrary, LibraryError> {
         Ok(NoopLibrary)
     }
 
     /// Destroy the (noop) library.
-    // PORT: `NoopLibrary.deinit`.
+    // PORT NOTE: `NoopLibrary.deinit`.
     pub fn deinit(&mut self) {
         // _ = self;
     }

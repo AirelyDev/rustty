@@ -5,7 +5,7 @@
 //! Ports the reference's `src/pty.zig` — every line, comment, and `test {}`
 //! is ported here (R1). Retargeted only for product identity (R2).
 //!
-//! PORT: the Zig reference imports `std`, `builtin`,
+//! PORT NOTE: the Zig reference imports `std`, `builtin`,
 //! `windows = @import("os/main.zig").windows`, `posix = std.posix`, and
 //! `assert = quirks.inlineAssert`, plus `c = @import("pty-c")` (the vendored
 //! `pty.c`, which is includes + `#define`s that surface the platform `TIOC*`
@@ -56,7 +56,7 @@ impl Default for winsize {
     }
 }
 
-// PORT: `pub const Pty = switch (builtin.os.tag) { .windows => WindowsPty,
+// PORT NOTE: `pub const Pty = switch (builtin.os.tag) { .windows => WindowsPty,
 // .ios => NullPty, else => PosixPty };`. Selected at compile time via `cfg`.
 #[cfg(target_os = "ios")]
 pub use NullPty as Pty;
@@ -101,7 +101,7 @@ pub enum ProcessInfo {
     tty_name,
 }
 
-// PORT: `pub fn Type(comptime info: ProcessInfo) type` returns `u64` for
+// PORT NOTE: `pub fn Type(comptime info: ProcessInfo) type` returns `u64` for
 // `foreground_pid` and `[:0]const u8` for `tty_name`. Rust has no comptime
 // type-from-value; the two `getProcessInfo` accessors below return the concrete
 // types (`u64` / `&CStr`) matching this mapping.
@@ -179,7 +179,7 @@ pub struct PosixPty {
     /// The name of slave tty. If `null` it has not yet been computed or
     /// may not be available. Should not be accessed directly, but through
     /// `self.getProcessInfo(.tty_name)`
-    // PORT: the reference stores `?[:0]const u8` pointing into `tty_name_buf`. In
+    // PORT NOTE: the reference stores `?[:0]const u8` pointing into `tty_name_buf`. In
     // Rust we store the byte length (the NUL-terminated name is `&tty_name_buf[..len]`),
     // avoiding a self-referential pointer; `None` means not yet computed.
     tty_name: Option<usize>,
@@ -188,7 +188,7 @@ pub struct PosixPty {
 #[cfg(not(any(windows, target_os = "ios")))]
 pub type PosixPtyFd = libc::c_int;
 
-// PORT: `std.fs.max_path_bytes`. The reference's buffer is
+// PORT NOTE: `std.fs.max_path_bytes`. The reference's buffer is
 // `[std.fs.max_path_bytes:0]u8` (NUL-terminated). We size for the path bytes
 // plus the trailing NUL.
 #[cfg(not(any(windows, target_os = "ios")))]
@@ -226,7 +226,7 @@ impl PosixPty {
         if rc < 0 {
             return Err(PosixPtyError::OpenptyFailed);
         }
-        // PORT: `errdefer { _ = posix.system.close(master_fd); _ = posix.system.close(slave_fd); }`.
+        // PORT NOTE: `errdefer { _ = posix.system.close(master_fd); _ = posix.system.close(slave_fd); }`.
         let mut errdefer_guard = OpenErrdefer {
             master_fd,
             slave_fd,
@@ -279,7 +279,7 @@ impl PosixPty {
         unsafe {
             libc::close(self.master);
         }
-        // PORT: `self.* = undefined;` — the value is left in an unspecified state;
+        // PORT NOTE: `self.* = undefined;` — the value is left in an unspecified state;
         // Rust drops it after the borrow ends.
     }
 
@@ -405,7 +405,7 @@ impl PosixPty {
         {
             let mut pgrp: i32 = 0;
             let rc = unsafe { libc::tcgetpgrp(self.master) };
-            // PORT: the reference uses `linux.tcgetpgrp(master, &pgrp)` returning a
+            // PORT NOTE: the reference uses `linux.tcgetpgrp(master, &pgrp)` returning a
             // raw rc; libc's `tcgetpgrp` returns the pgid directly or -1 on error.
             let _ = &mut pgrp;
             if rc < 0 {
@@ -476,7 +476,7 @@ impl PosixPty {
     }
 }
 
-// PORT: `errdefer` helper for `PosixPty.open` — closes both fds if the open path
+// PORT NOTE: `errdefer` helper for `PosixPty.open` — closes both fds if the open path
 // fails before returning success.
 #[cfg(not(any(windows, target_os = "ios")))]
 struct OpenErrdefer {
@@ -497,7 +497,7 @@ impl Drop for OpenErrdefer {
     }
 }
 
-// PORT: `std.mem.sliceTo(&buf, 0)` — length of the bytes before the first NUL.
+// PORT NOTE: `std.mem.sliceTo(&buf, 0)` — length of the bytes before the first NUL.
 #[cfg(not(any(windows, target_os = "ios")))]
 fn sliceTo0(buf: &[u8]) -> usize {
     buf.iter().position(|&b| b == 0).unwrap_or(buf.len())
@@ -709,7 +709,7 @@ mod tests {
         };
 
         let mut pty = Pty::open(ws).unwrap();
-        // PORT: `defer pty.deinit();` — the reference closes the master fd at
+        // PORT NOTE: `defer pty.deinit();` — the reference closes the master fd at
         // scope exit. We call `pty.deinit()` explicitly at the end of the test so
         // the borrows for the assertions stay simple; the effect is identical.
 
@@ -721,7 +721,7 @@ mod tests {
         pty.setSize(ws).unwrap();
         assert_eq!(ws, pty.getSize().unwrap());
 
-        // PORT: the reference switches on `builtin.os.tag` to assert the tty name
+        // PORT NOTE: the reference switches on `builtin.os.tag` to assert the tty name
         // prefix per platform. The independent expected prefixes come from the OS
         // contract (POSIX `/dev/...`; Linux `/dev/pts/...`), not from the code
         // under test.

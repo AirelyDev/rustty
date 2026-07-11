@@ -1,17 +1,17 @@
 //! Port of `libvaxis` `Mouse.zig` (50 LOC) — the `Mouse` value struct + its nested
 //! `Shape`/`Button`/`Modifiers`/`Type`.
 //!
-//! PORT-NOTE: Zig field `type: Type` → Rust `r#type` (verbatim fidelity — `type` is a
+//! PORT NOTE: Zig field `type: Type` → Rust `r#type` (verbatim fidelity — `type` is a
 //! Rust keyword, kept as a raw identifier). Zig kebab enum variants `@"ew-resize"`/
 //! `@"ns-resize"` → `EwResize`/`NsResize`. `Mouse.Modifiers` is a `packed struct(u3)`
 //! (shift/alt/ctrl), DISTINCT from `Key.Modifiers`'s u8.
 
 /// A mouse event
 ///
-/// PORT-NOTE: Zig `Mouse` has no default (`col`/`row`/`button`/`mods`/`type` have no
+/// PORT NOTE: Zig `Mouse` has no default (`col`/`row`/`button`/`mods`/`type` have no
 /// default values), so this struct intentionally does NOT derive `Default`.
 ///
-/// PORT-NOTE (Chunk 3a): `PartialEq` added so the Parser tests can `assert_eq!` a whole
+/// PORT NOTE (Chunk 3a): `PartialEq` added so the Parser tests can `assert_eq!` a whole
 /// `Mouse` (Zig `testing.expectEqual`); all fields already compare by value.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Mouse {
@@ -58,7 +58,7 @@ pub enum Button {
 
 impl Button {
     /// `@enumFromInt(v)` — the SGR/xterm mouse `button_mask & buttons` decode
-    /// (Parser). PORT-NOTE (Chunk 3a): faithful to Zig's checked `@enumFromInt`
+    /// (Parser). PORT NOTE (Chunk 3a): faithful to Zig's checked `@enumFromInt`
     /// illegal-behavior — a masked value with both wheel bits (6+7) set is an
     /// invalid button (192..195); Zig safe-mode panics there, so we `unreachable!()`.
     /// Provably not hit by the SGR corpus (button masks never set both wheel bits).

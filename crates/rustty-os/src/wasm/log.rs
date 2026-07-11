@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/wasm/log.zig` — every line, comment, and
 //! `test {}` is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std` and `wasm = @import("../wasm.zig")`. The
+// PORT NOTE: the Zig reference imports `std` and `wasm = @import("../wasm.zig")`. The
 // implementation is wasm-only (freestanding browser target) and calls an
 // `extern "env" fn log`. In Rust the module body is `cfg(target_arch = "wasm32")`;
 // `std.log`'s level/scope formatting maps to a formatted byte string handed to
@@ -21,7 +21,7 @@ pub use freestanding::log;
 pub mod freestanding {
     // The function std.log will call.
     //
-    // PORT: the reference is a `comptime`-generic `fn log(level, scope, format,
+    // PORT NOTE: the reference is a `comptime`-generic `fn log(level, scope, format,
     // args)` matching the `std.log` signature. In Rust there is no equivalent
     // comptime log hook; the parity-preserving shape is a function that takes the
     // already-formatted level text, scope, format string, and formatted args and
@@ -34,7 +34,7 @@ pub mod freestanding {
         let mut buf = [0u8; 2048];
 
         // Build the string
-        // PORT: `const prefix = if (scope == .default) ": " else "(" ++ @tagName(scope)
+        // PORT NOTE: `const prefix = if (scope == .default) ": " else "(" ++ @tagName(scope)
         // ++ "): ";` then `const txt = level_txt ++ prefix ++ format;`.
         let prefix = if scope == "default" {
             ": ".to_string()

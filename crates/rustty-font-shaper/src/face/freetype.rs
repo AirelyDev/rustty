@@ -142,7 +142,7 @@ pub struct Options {
 }
 
 /// Synthetic style state applied to the face.
-// PORT: the reference's anonymous `synthetic: packed struct { italic, bold }`.
+// PORT NOTE: the reference's anonymous `synthetic: packed struct { italic, bold }`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Synthetic {
     pub italic: bool,
@@ -190,7 +190,7 @@ pub struct Face {
 
 impl Face {
     /// Initialize a new font face with the given source in-memory.
-    // PORT: `initFile`.
+    // PORT NOTE: `initFile`.
     pub fn init_file(
         lib: Library,
         path: &std::ffi::CStr,
@@ -210,7 +210,7 @@ impl Face {
     }
 
     /// Initialize a new font face with the given source in-memory.
-    // PORT: `init`.
+    // PORT NOTE: `init`.
     pub fn init(lib: Library, source: &[u8], opts: Options) -> Result<Face, Error> {
         let _guard = unsafe { (*lib.mutex).lock().unwrap() };
         let face = lib.lib.init_memory_face(source, 0)?;
@@ -224,7 +224,7 @@ impl Face {
         }
     }
 
-    // PORT: `initFace`.
+    // PORT NOTE: `initFace`.
     fn init_face(lib: Library, face: ft::Face, opts: Options) -> Result<Face, Error> {
         face.select_charmap(Encoding::Unicode)?;
         set_size_(face, opts.size)?;
@@ -282,7 +282,7 @@ impl Face {
         Ok(result)
     }
 
-    // PORT: `deinit`.
+    // PORT NOTE: `deinit`.
     pub fn deinit(&mut self) {
         // self.lib.alloc.destroy(self.ft_mutex);
         unsafe {
@@ -357,7 +357,7 @@ impl Face {
 
     /// Return a new face that is the same as this but also has synthetic
     /// bold applied.
-    // PORT: `syntheticBold`.
+    // PORT NOTE: `syntheticBold`.
     pub fn synthetic_bold(&self, opts: Options) -> Result<Face, Error> {
         // Increase face ref count
         self.face.ref_();
@@ -378,7 +378,7 @@ impl Face {
 
     /// Return a new face that is the same as this but has a transformation
     /// matrix applied to italicize it.
-    // PORT: `syntheticItalic`.
+    // PORT NOTE: `syntheticItalic`.
     pub fn synthetic_italic(&self, opts: Options) -> Result<Face, Error> {
         // Increase face ref count
         self.face.ref_();
@@ -399,7 +399,7 @@ impl Face {
 
     /// Resize the font in-place. If this succeeds, the caller is responsible
     /// for clearing any glyph caches, font atlas data, etc.
-    // PORT: `setSize`.
+    // PORT NOTE: `setSize`.
     pub fn set_size(&mut self, opts: Options) -> Result<(), Error> {
         set_size_(self.face, opts.size)?;
         self.size = opts.size;
@@ -408,7 +408,7 @@ impl Face {
 
     /// Set the variation axes for this font. This will modify this font
     /// in-place.
-    // PORT: `setVariations`.
+    // PORT NOTE: `setVariations`.
     pub fn set_variations(&mut self, vs: &[super::Variation], opts: Options) -> Result<(), Error> {
         let _ = opts;
 
@@ -463,20 +463,20 @@ impl Face {
 
     /// Returns the glyph index for the given Unicode code point. If this
     /// face doesn't support this glyph, null is returned.
-    // PORT: `glyphIndex`.
+    // PORT NOTE: `glyphIndex`.
     pub fn glyph_index(&self, cp: u32) -> Option<u32> {
         self.face.get_char_index(cp)
     }
 
     /// Returns true if this font is colored. This can be used by callers to
     /// determine what kind of atlas to pass in.
-    // PORT: `hasColor`.
+    // PORT NOTE: `hasColor`.
     pub fn has_color(&self) -> bool {
         self.face.has_color()
     }
 
     /// Returns true if the given glyph ID is colorized.
-    // PORT: `isColorGlyph`.
+    // PORT NOTE: `isColorGlyph`.
     pub fn is_color_glyph(&self, glyph_id: u32) -> bool {
         let _guard = unsafe { (*self.ft_mutex).lock().unwrap() };
 
@@ -509,7 +509,7 @@ impl Face {
 
     /// Set the load flags to use when loading a glyph for measurement or
     /// rendering.
-    // PORT: `glyphLoadFlags`.
+    // PORT NOTE: `glyphLoadFlags`.
     fn glyph_load_flags(&self, constrained: bool) -> LoadFlags {
         // Hinting should only be enabled if the configured load flags specify
         // it and the provided constraint doesn't actually do anything, since
@@ -555,7 +555,7 @@ impl Face {
 
     /// Render a glyph using the glyph index. The rendered glyph is stored in the
     /// given texture atlas.
-    // PORT: `renderGlyph`.
+    // PORT NOTE: `renderGlyph`.
     pub fn render_glyph<A: Allocator + Copy>(
         &self,
         alloc: A,
@@ -933,7 +933,7 @@ impl Face {
 
     /// Convert 16.6 pixel format to pixels based on the scale factor of the
     /// current font size.
-    // PORT: `unitsToPxY`.
+    // PORT NOTE: `unitsToPxY`.
     // PORT NOTE: kept verbatim though currently unused in the reference too
     // (a private helper); `#[allow(dead_code)]` mirrors Zig not warning on it.
     #[allow(dead_code)]
@@ -945,7 +945,7 @@ impl Face {
     }
 
     /// Get the `FaceMetrics` for this face.
-    // PORT: `getMetrics`.
+    // PORT NOTE: `getMetrics`.
     pub fn get_metrics(&self) -> FaceMetrics {
         let face = self.face;
 
@@ -1293,7 +1293,7 @@ impl Face {
     }
 
     /// Copy the font table data for the given tag.
-    // PORT: `copyTable`.
+    // PORT NOTE: `copyTable`.
     pub fn copy_table<A: Allocator + Copy>(
         &self,
         _alloc: A,
@@ -1321,7 +1321,7 @@ impl Drop for BitmapGuard {
 }
 
 /// If true, the default font features should be disabled for the given face.
-// PORT: `quirks.disableDefaultFontFeatures`.
+// PORT NOTE: `quirks.disableDefaultFontFeatures`.
 fn disable_default_font_features(face: &Face) -> bool {
     let _ = face;
 
@@ -1333,7 +1333,7 @@ fn disable_default_font_features(face: &Face) -> bool {
 }
 
 /// Get a rect that represents the position and size of the loaded glyph.
-// PORT: `getGlyphSize`.
+// PORT NOTE: `getGlyphSize`.
 fn get_glyph_size(glyph: *mut c::FT_GlyphSlotRec_) -> Size {
     // If we're dealing with an outline glyph then we get the
     // outline's bounding box instead of using the built-in
@@ -1367,7 +1367,7 @@ fn get_glyph_size(glyph: *mut c::FT_GlyphSlotRec_) -> Size {
 }
 
 /// Resize helper.
-// PORT: `setSize_`.
+// PORT NOTE: `setSize_`.
 fn set_size_(face: ft::Face, size: DesiredSize) -> Result<(), Error> {
     // If we have fixed sizes, we just have to try to pick the one closest
     // to what the user requested. Otherwise, we can choose an arbitrary
@@ -1383,7 +1383,7 @@ fn set_size_(face: ft::Face, size: DesiredSize) -> Result<(), Error> {
 
 /// Selects the fixed size in the loaded face that is closest to the
 /// requested pixel size.
-// PORT: `selectSizeNearest`.
+// PORT NOTE: `selectSizeNearest`.
 fn select_size_nearest(face: ft::Face, size: u32) -> Result<(), Error> {
     let mut i: i32 = 0;
     let mut best_i: i32 = 0;
@@ -1403,13 +1403,13 @@ fn select_size_nearest(face: ft::Face, size: u32) -> Result<(), Error> {
 }
 
 /// Convert 26.6 pixel format to f32
-// PORT: `f26dot6ToFloat` (currently unused in the reference too).
+// PORT NOTE: `f26dot6ToFloat` (currently unused in the reference too).
 #[allow(dead_code)]
 fn f26dot6_to_float(v: c::FT_F26Dot6) -> f32 {
     (v >> 6) as f32
 }
 
-// PORT: `f26dot6ToF64`.
+// PORT NOTE: `f26dot6ToF64`.
 fn f26dot6_to_f64(v: c::FT_F26Dot6) -> f64 {
     F26Dot6::from_raw(v as i32).to_f64()
 }

@@ -32,10 +32,10 @@ pub mod config;
 pub mod deferred_face;
 pub mod discovery;
 pub mod face;
-// PORT: `shape.zig` (the `Shaper` interface + backend selector) and its
+// PORT NOTE: `shape.zig` (the `Shaper` interface + backend selector) and its
 // `shaper/` sub-files (`run`/`feature`/`Cache`/`noop`) — the shaper framework.
 pub mod shape;
-// PORT: `SharedGrid.zig` (the shared glyph-atlas grid the renderer reads —
+// PORT NOTE: `SharedGrid.zig` (the shared glyph-atlas grid the renderer reads —
 // `renderGlyph` caching over Collection+Atlas) and `SharedGridSet.zig` (the set
 // keyed by config/font descriptors).
 pub mod shared_grid;
@@ -66,7 +66,7 @@ pub use rustty_font::glyph::RenderOptions;
 pub use rustty_font::metrics::Metrics;
 
 // ---------------------------------------------------------------------------
-// PORT: the `main.zig`-level declarations of the `font` module. `main.zig`
+// PORT NOTE: the `main.zig`-level declarations of the `font` module. `main.zig`
 // re-exports the sub-files as one namespace and defines the small shared enums,
 // the build `options`, and the fallback constants. In rustty the pure leaf
 // (`rustty-font`) owns `Atlas`/`Glyph`/`Metrics`/`CodepointMap`/`sprite`/

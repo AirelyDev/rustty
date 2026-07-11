@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/homedir.zig` — every line, comment, and
 //! `test {}` is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, `passwd = @import("passwd.zig")`,
+// PORT NOTE: the Zig reference imports `std`, `builtin`, `passwd = @import("passwd.zig")`,
 // `posix = std.posix`, and `objc`. In Rust we use the ported `passwd` sibling
 // module, the standard library, and `objc2`/`objc2-foundation` (R3: bindings to
 // the SAME Objective-C runtime/Foundation framework the reference uses).
@@ -92,7 +92,7 @@ fn homeUnix(buf: &mut [u8]) -> Result<Option<&[u8]>, Error> {
     }
 
     // Everything below here will require some allocation
-    // PORT: the reference uses a `FixedBufferAllocator` over a 1024-byte stack
+    // PORT NOTE: the reference uses a `FixedBufferAllocator` over a 1024-byte stack
     // buffer. In Rust `passwd.get`/`Command` allocate via the global allocator;
     // no separate fixed buffer is needed to preserve behavior.
 
@@ -134,7 +134,7 @@ fn homeUnix(buf: &mut [u8]) -> Result<Option<&[u8]>, Error> {
 #[cfg(windows)]
 #[allow(non_snake_case)]
 fn homeWindows(buf: &mut [u8]) -> Result<Option<&[u8]>, Error> {
-    // PORT: the reference uses a `std.heap.FixedBufferAllocator.init(buf)` and
+    // PORT NOTE: the reference uses a `std.heap.FixedBufferAllocator.init(buf)` and
     // allocates `HOMEDRIVE` (then `HOMEPATH`) into it via
     // `std.process.getEnvVarOwned`, so the env var bytes are written *in place*
     // starting at `buf.ptr`. `getEnvVarOwned` maps `error.OutOfMemory` (the FBA
@@ -176,7 +176,7 @@ fn homeWindows(buf: &mut [u8]) -> Result<Option<&[u8]>, Error> {
     Ok(Some(&buf[0..drive_len + path_len]))
 }
 
-// PORT: the equivalent of `std.process.getEnvVarOwned(fba, key)` where `fba` is a
+// PORT NOTE: the equivalent of `std.process.getEnvVarOwned(fba, key)` where `fba` is a
 // `FixedBufferAllocator` over `dst`: writes the value of the environment variable
 // `key` into the head of `dst` in place, returning the written sub-slice. Returns
 // `Ok(None)` for a missing variable (`error.EnvironmentVariableNotFound`) and
@@ -263,7 +263,7 @@ fn expandHomeUnix<'a>(path: &'a [u8], buf: &'a mut [u8]) -> Result<&'a [u8], Exp
     if !path.starts_with(b"~/") {
         return Ok(path);
     }
-    // PORT: the reference does `const home_dir = if (home(buf)) |home_| home_
+    // PORT NOTE: the reference does `const home_dir = if (home(buf)) |home_| home_
     // orelse return error.HomeDetectionFailed else |_| return
     // error.HomeDetectionFailed;`. `home` writes into `buf`, so we compute the
     // home length first, then operate on `buf` directly.
@@ -278,7 +278,7 @@ fn expandHomeUnix<'a>(path: &'a [u8], buf: &'a mut [u8]) -> Result<&'a [u8], Exp
     if expanded_len > buf.len() {
         return Err(ExpandError::BufferTooSmall);
     }
-    // PORT: `@memcpy(buf[home_dir.len..expanded_len], rest);` — copy `rest`
+    // PORT NOTE: `@memcpy(buf[home_dir.len..expanded_len], rest);` — copy `rest`
     // after the home dir already written into `buf` by `home`. We copy from a
     // local snapshot of `rest` to avoid aliasing `buf` with itself.
     let rest_owned = rest.to_vec();

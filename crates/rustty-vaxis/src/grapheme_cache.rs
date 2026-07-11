@@ -1,7 +1,7 @@
 //! Port of `libvaxis` `GraphemeCache.zig` (20 LOC) — an 8 KiB ring buffer backing the
 //! transient grapheme/`Key.text` byte-slices.
 //!
-//! PORT-NOTE: Zig `buf: [1024*8]u8 = undefined` → Rust `[0u8; 1024 * 8]`. Zig's
+//! PORT NOTE: Zig `buf: [1024*8]u8 = undefined` → Rust `[0u8; 1024 * 8]`. Zig's
 //! uninitialized read is only ever of bytes it just wrote, so zero-initialization is
 //! behaviorally identical and Miri-safe (a benign divergence).
 

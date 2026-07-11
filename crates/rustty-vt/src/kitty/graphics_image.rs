@@ -777,7 +777,7 @@ pub struct Rect {
 }
 
 // ---------------------------------------------------------------------------
-// PORT: support shims for the std/posix facilities used above.
+// PORT NOTE: support shims for the std/posix facilities used above.
 // ---------------------------------------------------------------------------
 
 /// `std.mem.startsWith(u8, haystack, needle)`.

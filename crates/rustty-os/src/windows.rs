@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/windows.zig` — every line, comment, and
 //! `test {}` is ported here (R1). Retargeted only for product identity (R2).
 //!
-//! PORT: the reference is `const std = @import("std"); const windows =
+//! PORT NOTE: the reference is `const std = @import("std"); const windows =
 //! std.os.windows;` followed by a set of re-exports of Win32 constants, types,
 //! and functions "so we can just import one file". Zig's `std.os.windows`
 //! provides those declarations; Rust has no equivalent std module, so we bind
@@ -19,7 +19,7 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 
-// PORT: Win32 ABI base types. In the reference these come from `std.os.windows`;
+// PORT NOTE: Win32 ABI base types. In the reference these come from `std.os.windows`;
 // here they are local aliases to the same C ABI types so the bindings below have
 // matching signatures.
 use std::os::raw::{c_int, c_void};
@@ -114,7 +114,7 @@ pub mod kernel32 {
     }
 }
 
-/// PORT: `windows.unexpectedError` from `std.os.windows`. Maps a Win32 error code
+/// PORT NOTE: `windows.unexpectedError` from `std.os.windows`. Maps a Win32 error code
 /// to the same kind of unexpected-error result the reference returns. We return
 /// an `io::Error` so the bytes-for-bytes error path is preserved.
 pub fn unexpectedError<T>(err: DWORD) -> std::io::Result<T> {
@@ -135,7 +135,7 @@ pub fn GetCurrentProcessId() -> DWORD {
     unsafe { GetCurrentProcessId() }
 }
 
-/// PORT: `windows.SetHandleInformation` returns a `BOOL` from the Win32 call but
+/// PORT NOTE: `windows.SetHandleInformation` returns a `BOOL` from the Win32 call but
 /// the reference's std wrapper returns `!void`. We mirror the wrapper's error
 /// propagation by returning an `io::Result`.
 pub fn SetHandleInformation(hObject: HANDLE, dwMask: DWORD, dwFlags: DWORD) -> std::io::Result<()> {
@@ -145,7 +145,7 @@ pub fn SetHandleInformation(hObject: HANDLE, dwMask: DWORD, dwFlags: DWORD) -> s
     Ok(())
 }
 
-/// PORT: BOOL GetComputerNameA(LPSTR lpBuffer, LPDWORD nSize)
+/// PORT NOTE: BOOL GetComputerNameA(LPSTR lpBuffer, LPDWORD nSize)
 pub fn GetComputerNameA(lpBuffer: LPSTR, nSize: *mut DWORD) -> BOOL {
     extern "system" {
         fn GetComputerNameA(lpBuffer: LPSTR, nSize: *mut DWORD) -> BOOL;
@@ -153,7 +153,7 @@ pub fn GetComputerNameA(lpBuffer: LPSTR, nSize: *mut DWORD) -> BOOL {
     unsafe { GetComputerNameA(lpBuffer, nSize) }
 }
 
-// PORT: `pub const OpenFile = windows.OpenFile;` — re-export of the std
+// PORT NOTE: `pub const OpenFile = windows.OpenFile;` — re-export of the std
 // `std.os.windows.OpenFile` wrapper. It is not used by any module in this group
 // (the Windows pty path calls `CreateFileW` directly), so the binding is provided
 // for completeness; callers that need it bind to the same NtCreateFile-based

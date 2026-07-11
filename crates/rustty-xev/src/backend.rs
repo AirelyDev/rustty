@@ -13,7 +13,7 @@
 //! `main.zig`/`api.zig` re-exports). So `Api()` has NO runtime analogue and is
 //! intentionally not ported as a method; the crate module IS the kqueue `Api()`.
 
-/// PORT: `pub const Backend = enum { io_uring, epoll, kqueue, wasi_poll, iocp }`.
+/// PORT NOTE: `pub const Backend = enum { io_uring, epoll, kqueue, wasi_poll, iocp }`.
 ///
 /// The backend types. Every variant is preserved (R3/R5) even though only
 /// `kqueue` is live on macOS — the others are whole follow-up platform ports
@@ -34,7 +34,7 @@ pub enum Backend {
 
 /// Returns a recommend default backend from inspecting the system.
 //
-// PORT: `pub fn default() Backend` mapped to Rust's `Default` trait so the call
+// PORT NOTE: `pub fn default() Backend` mapped to Rust's `Default` trait so the call
 // site reads identically (`Backend::default()`), and clippy stays clean.
 //
 // PORT NOTE: the reference switches on `builtin.os.tag` (a comptime value); the

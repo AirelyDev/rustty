@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/uri.zig` — every line, comment, and `test {}`
 //! is ported here (R1). Retargeted only for product identity (R2).
 //!
-//! PORT (R3, no ghostty/Zig-std dependency): the reference wraps `std.Uri`.
+//! PORT NOTE (R3, no ghostty/Zig-std dependency): the reference wraps `std.Uri`.
 //! Rust's `url` crate has DIFFERENT (WHATWG) semantics, so it is NOT used. We
 //! faithfully reimplement the subset of Zig 0.15.2 `std.Uri` that `os/uri.zig`
 //! relies on — `parse`, `parseAfterScheme`, the `Component` union (`raw` /
@@ -29,7 +29,7 @@ use crate::string_encoding::Writer;
 //    robust against URIs in the wild."
 // ===========================================================================
 
-/// PORT: `std.Uri.Component` — a tagged union of `raw` (invalid characters must
+/// PORT NOTE: `std.Uri.Component` — a tagged union of `raw` (invalid characters must
 /// be percent encoded before printing) and `percent_encoded` (already
 /// percent-encoded, can be printed directly). Slices point into the original
 /// parsed text.
@@ -53,7 +53,7 @@ impl<'a> Component<'a> {
         }
     }
 
-    /// PORT: `percent_encoded` accessor — `os/uri.zig` reads `.percent_encoded`
+    /// PORT NOTE: `percent_encoded` accessor — `os/uri.zig` reads `.percent_encoded`
     /// directly on components it knows are percent-encoded. Mirrors a union field
     /// access; for a `Raw` component this is the raw bytes (the reference would
     /// not access `.percent_encoded` on a `raw`-tagged value).
@@ -83,7 +83,7 @@ impl<'a> Component<'a> {
         }
     }
 
-    /// PORT: `std.Uri.Component.formatRaw` — writes the component with each valid
+    /// PORT NOTE: `std.Uri.Component.formatRaw` — writes the component with each valid
     /// `%XX` escape decoded back to its byte; invalid escapes are passed through.
     pub fn formatRaw<W: Writer>(&self, w: &mut W) -> Result<(), W::Error> {
         match self {
@@ -112,7 +112,7 @@ impl<'a> Component<'a> {
         }
     }
 
-    /// PORT: `std.Uri.Component.percentEncode` — writes `raw`, percent-encoding
+    /// PORT NOTE: `std.Uri.Component.percentEncode` — writes `raw`, percent-encoding
     /// every byte for which `isValidChar` returns false as `%XX` (uppercase hex).
     pub fn percentEncode<W: Writer>(
         w: &mut W,
@@ -132,11 +132,11 @@ impl<'a> Component<'a> {
     }
 }
 
-/// PORT: `error{NoSpaceLeft}` — `Component.toRaw`'s error.
+/// PORT NOTE: `error{NoSpaceLeft}` — `Component.toRaw`'s error.
 #[derive(Debug, PartialEq, Eq)]
 pub struct NoSpaceLeft;
 
-/// PORT: `std.Uri` — only the fields `os/uri.zig` touches are exercised, but all
+/// PORT NOTE: `std.Uri` — only the fields `os/uri.zig` touches are exercised, but all
 /// are modeled to mirror the struct.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Uri<'a> {
@@ -297,7 +297,7 @@ fn isSchemeChar(c: u8) -> bool {
 const AUTHORITY_SEP: [u8; 3] = [b'/', b'?', b'#'];
 const PATH_SEP: [u8; 2] = [b'?', b'#'];
 
-// PORT helpers reproducing the `std.mem`/`std.fmt` primitives std.Uri uses.
+// PORT NOTE: helpers reproducing the `std.mem`/`std.fmt` primitives std.Uri uses.
 fn index_of_any_pos(haystack: &[u8], start: usize, needles: &[u8]) -> Option<usize> {
     // std.mem.indexOfAnyPos(u8, haystack, start, needles)
     (start..haystack.len()).find(|&i| needles.contains(&haystack[i]))
@@ -335,7 +335,7 @@ fn parse_int_u8_hex(s: &[u8]) -> Option<u8> {
     u8::from_str_radix(txt, 16).ok()
 }
 
-/// PORT: a fixed-buffer writer used to back `Component.toRaw`'s `bufPrint`.
+/// PORT NOTE: a fixed-buffer writer used to back `Component.toRaw`'s `bufPrint`.
 struct FixedBuf<'b> {
     buf: &'b mut [u8],
     len: usize,
@@ -369,7 +369,7 @@ impl Writer for FixedBuf<'_> {
 // os/uri.zig
 // ===========================================================================
 
-// PORT: `ParseOptions` uses field defaults (`= false`). Rust has no struct field
+// PORT NOTE: `ParseOptions` uses field defaults (`= false`). Rust has no struct field
 // defaults; `#[derive(Default)]` reproduces the reference defaults (both false),
 // and callers/tests construct it explicitly via `ParseOptions { .. }`.
 #[derive(Default)]
@@ -501,13 +501,13 @@ pub fn parse(text: &[u8], options: ParseOptions) -> Result<Uri<'_>, ParseError> 
     Ok(uri)
 }
 
-// PORT: `@intFromPtr(slice.ptr) - @intFromPtr(text.ptr)` — the byte offset of a
+// PORT NOTE: `@intFromPtr(slice.ptr) - @intFromPtr(text.ptr)` — the byte offset of a
 // sub-slice within `text`. Both slices point into the same backing buffer.
 fn ptr_offset(sub: &[u8], text: &[u8]) -> usize {
     (sub.as_ptr() as usize) - (text.as_ptr() as usize)
 }
 
-// PORT: `std.mem.count(u8, host, ":")`
+// PORT NOTE: `std.mem.count(u8, host, ":")`
 fn count(haystack: &[u8], needle: u8) -> usize {
     haystack.iter().filter(|&&b| b == needle).count()
 }

@@ -1,6 +1,6 @@
 //! Generates random terminal OSC requests.
 //!
-//! PORT: `synthetic/Osc.zig`.
+//! PORT NOTE: `synthetic/Osc.zig`.
 
 use crate::bytes::{generate_alphabet, is_alphabetic, is_alphanumeric, is_print, Bytes, BEL, ESC};
 use crate::enums::EnumArray;
@@ -27,7 +27,7 @@ pub enum ValidKind {
 }
 
 impl ValidKind {
-    /// PORT: the `EnumArray(ValidKind, f64).Indexer.keyForIndex(idx)` mapping
+    /// PORT NOTE: the `EnumArray(ValidKind, f64).Indexer.keyForIndex(idx)` mapping
     /// (index → variant, declaration order).
     pub fn key_for_index(idx: usize) -> ValidKind {
         match idx {
@@ -60,7 +60,7 @@ pub enum InvalidKind {
 }
 
 impl InvalidKind {
-    /// PORT: `EnumArray(InvalidKind, f64).Indexer.keyForIndex(idx)`.
+    /// PORT NOTE: `EnumArray(InvalidKind, f64).Indexer.keyForIndex(idx)`.
     pub fn key_for_index(idx: usize) -> InvalidKind {
         match idx {
             0 => InvalidKind::Random,
@@ -70,7 +70,7 @@ impl InvalidKind {
     }
 }
 
-/// PORT: `Osc` — the `@This()` struct.
+/// PORT NOTE: `Osc` — the `@This()` struct.
 pub struct Osc<'a> {
     /// Random number generator.
     pub rand: Rng<'a>,
@@ -86,7 +86,7 @@ pub struct Osc<'a> {
     pub p_invalid_kind: EnumArray<2>,
 }
 
-// PORT: `checkKvAlphabet` — omit 0x1B, 0x07, ';', '='.
+// PORT NOTE: `checkKvAlphabet` — omit 0x1B, 0x07, ';', '='.
 // The alphabet for random bytes in OSC key/value pairs (omitting 0x1B,
 // 0x07, ';', '=').
 generate_alphabet!(pub kv_alphabet, |c| match c {
@@ -94,26 +94,26 @@ generate_alphabet!(pub kv_alphabet, |c| match c {
     _ => is_print(c),
 });
 
-// PORT: `checkOscAlphabet` — omit 0x1B and 0x07.
+// PORT NOTE: `checkOscAlphabet` — omit 0x1B and 0x07.
 // The alphabet for random bytes in OSCs (omitting 0x1B and 0x07).
 generate_alphabet!(pub osc_alphabet, |c| !matches!(c, ESC | BEL));
 generate_alphabet!(pub ascii_alphabet, |c| is_print(c));
 generate_alphabet!(pub alphabetic_alphabet, |c| is_alphabetic(c));
 generate_alphabet!(pub alphanumeric_alphabet, |c| is_alphanumeric(c));
 
-/// PORT: `const osc = std.fmt.comptimePrint("{c}]", .{esc})` — bytes `1B 5D`.
+/// PORT NOTE: `const osc = std.fmt.comptimePrint("{c}]", .{esc})` — bytes `1B 5D`.
 const OSC: &[u8] = b"\x1b]";
-/// PORT: `const st = std.fmt.comptimePrint("{c}", .{bel})` — byte `07`.
+/// PORT NOTE: `const st = std.fmt.comptimePrint("{c}", .{bel})` — byte `07`.
 const ST: &[u8] = b"\x07";
 
-/// PORT: `const Validity = enum { valid, invalid }`.
+/// PORT NOTE: `const Validity = enum { valid, invalid }`.
 enum Validity {
     Valid,
     Invalid,
 }
 
 impl<'a> Osc<'a> {
-    /// PORT: the struct-literal defaults (`p_valid = 1.0`,
+    /// PORT NOTE: the struct-literal defaults (`p_valid = 1.0`,
     /// `p_valid_kind = .initFill(1.0)`, `p_invalid_kind = .initFill(1.0)`).
     pub fn new(rand: Rng<'a>) -> Osc<'a> {
         Osc {
@@ -176,7 +176,7 @@ impl<'a> Osc<'a> {
         }
     }
 
-    // PORT: several arms keep a running `remaining` whose final decrement is
+    // PORT NOTE: several arms keep a running `remaining` whose final decrement is
     // unread (the reference does the same); the assignments are faithful.
     #[allow(unused_assignments)]
     fn next_unwrapped_valid_exact<W: Writer<Error = WriteFailed>>(

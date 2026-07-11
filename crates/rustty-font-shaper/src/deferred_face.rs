@@ -51,7 +51,7 @@ pub struct DeferredFace {
 }
 
 // ---------------------------------------------------------------------------
-// PORT (DEFERRED backend payloads): the Fontconfig / Windows / WebCanvas structs
+// PORT NOTE (DEFERRED backend payloads): the Fontconfig / Windows / WebCanvas structs
 // are recorded verbatim as reference comments; their ports land with those
 // backends.
 //
@@ -188,7 +188,7 @@ mod coretext_payload {
     }
 
     /// Create a UTF-8 `CFString` from raw bytes.
-    // PORT: `macos.foundation.String.createWithBytes(bytes, .utf8, false)` — the
+    // PORT NOTE: `macos.foundation.String.createWithBytes(bytes, .utf8, false)` — the
     // `discovery.Descriptor` family/style/codepoint strings are byte slices
     // (`[:0]const u8`), not necessarily valid `str`.
     pub fn new_cfstring_bytes(bytes: &[u8]) -> Option<CFRetained<CFString>> {
@@ -362,7 +362,7 @@ mod coretext_payload {
 }
 
 // ---------------------------------------------------------------------------
-// PORT (DEFERRED): the non-CoreText arms of `familyName`/`name`/`load`/
+// PORT NOTE (DEFERRED): the non-CoreText arms of `familyName`/`name`/`load`/
 // `hasCodepoint` and the wasm `Wasm` C-ABI struct are recorded verbatim and land
 // with their backends:
 //

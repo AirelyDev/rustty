@@ -4,7 +4,7 @@
 //! `MachMsgE` that `Async`(mach) and the loop `Wakeup` ride on macOS/kqueue.
 //! `#[cfg(target_os = "macos")]`-gated (the whole xev port is kqueue-only for now).
 //!
-//! PORT SCOPE (blueprint §3, [ADV-FIX F4/F5]):
+//! PORT NOTE: SCOPE (blueprint §3, [ADV-FIX F4/F5]):
 //! - The kqueue syscall **consts** (`EVFILT_*`, `EV_*`, `NOTE_*`) and the
 //!   `kevent64` / `kevent64_s` syscall come from the **`libc` crate directly**
 //!   (libc-0.2.186 apple/mod.rs) — they are NOT re-declared here; the kqueue
@@ -23,7 +23,7 @@
 //!   `posix.system.*` (std.c) surface, or the async.zig-local "Missing Mach APIs
 //!   from Zig stdlib" block.
 
-// PORT: the reference file header comment.
+// PORT NOTE: the reference file header comment.
 //   //! These are copied from Zig's stdlib as of Zig 0.14 because
 //   //! they are no longer exported. This is probably going to be
 //   //! fixed in the future: https://github.com/ziglang/zig/pull/21218
@@ -33,7 +33,7 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
-// PORT: `const std = @import("std");` — Rust binds the `std.c` equivalents
+// PORT NOTE: `const std = @import("std");` — Rust binds the `std.c` equivalents
 // (`kern_return_t`, the mach primitives) through the platform `libc` crate.
 
 pub const MACH_SEND_MSG: mach_msg_option_t = 0x00000001;
@@ -85,7 +85,7 @@ pub type mach_msg_type_name_t = libc::c_uint;
 pub type mach_msg_option_t = integer_t;
 pub type mach_msg_size_t = natural_t;
 pub type mach_msg_timeout_t = natural_t;
-// PORT: `pub const mach_msg_return_t = std.c.kern_return_t;`
+// PORT NOTE: `pub const mach_msg_return_t = std.c.kern_return_t;`
 pub type mach_msg_return_t = libc::kern_return_t;
 
 // PORT NOTE: `#[derive(Clone, Copy)]` — the reference is a plain `extern struct`
@@ -104,7 +104,7 @@ pub struct mach_msg_header_t {
 }
 
 extern "C" {
-    // PORT: `pub extern "c" fn mach_msg(...) std.c.kern_return_t`. The reference
+    // PORT NOTE: `pub extern "c" fn mach_msg(...) std.c.kern_return_t`. The reference
     // `?*mach_msg_header_t` (optional pointer) is a nullable raw pointer in Rust.
     pub fn mach_msg(
         msg: *mut mach_msg_header_t,
@@ -117,7 +117,7 @@ extern "C" {
     ) -> libc::kern_return_t;
 }
 
-// PORT: `pub fn getKernError(err: std.c.kern_return_t) KernE`.
+// PORT NOTE: `pub fn getKernError(err: std.c.kern_return_t) KernE`.
 pub fn getKernError(err: libc::kern_return_t) -> KernE {
     // return @as(KernE, @enumFromInt(@as(u32, @truncate(@as(usize, @intCast(err))))));
     //
@@ -360,7 +360,7 @@ impl KernE {
     // `_,` — non-exhaustive: any other `u32` is representable via `KernE(n)`.
 }
 
-// PORT: `pub fn getMachMsgError(err: mach_msg_return_t) MachMsgE`.
+// PORT NOTE: `pub fn getMachMsgError(err: mach_msg_return_t) MachMsgE`.
 pub fn getMachMsgError(err: mach_msg_return_t) -> MachMsgE {
     // return @as(MachMsgE, @enumFromInt(@as(u32, @truncate(@as(usize, @intCast(err))))));
     MachMsgE(err as usize as u32)
@@ -471,17 +471,17 @@ impl MachMsgE {
 // (`mach_task_self` is NOT here — it IS in libc: `libc::mach_task_self()`.)
 // ---------------------------------------------------------------------------
 
-/// PORT: `posix.system.ipc_space_t` (Zig std.c) — the mach task/ipc-space port.
+/// PORT NOTE: `posix.system.ipc_space_t` (Zig std.c) — the mach task/ipc-space port.
 pub type ipc_space_t = mach_port_t;
-/// PORT: `posix.system.mach_port_right_t` (Zig std.c) — the `right` argument of
+/// PORT NOTE: `posix.system.mach_port_right_t` (Zig std.c) — the `right` argument of
 /// `mach_port_allocate` (`@intFromEnum(MACH_PORT_RIGHT.RECEIVE)`).
 pub type mach_port_right_t = natural_t;
-/// PORT: async.zig-local `const mach_port_flavor_t = c_int;` ("Missing Mach APIs
+/// PORT NOTE: async.zig-local `const mach_port_flavor_t = c_int;` ("Missing Mach APIs
 /// from Zig stdlib. Data from xnu: osfmk/mach/port.h").
 pub type mach_port_flavor_t = libc::c_int;
 
 extern "C" {
-    /// PORT: `posix.system.mach_port_allocate` (Zig std.c) — used by async.zig
+    /// PORT NOTE: `posix.system.mach_port_allocate` (Zig std.c) — used by async.zig
     /// `init` to allocate the RECEIVE port.
     pub fn mach_port_allocate(
         task: ipc_space_t,
@@ -489,7 +489,7 @@ extern "C" {
         name: *mut mach_port_name_t,
     ) -> libc::kern_return_t;
 
-    /// PORT: `posix.system.mach_port_insert_right` (Zig std.c) — used by
+    /// PORT NOTE: `posix.system.mach_port_insert_right` (Zig std.c) — used by
     /// async.zig `init` to insert the MAKE_SEND right.
     pub fn mach_port_insert_right(
         task: ipc_space_t,
@@ -498,11 +498,11 @@ extern "C" {
         poly_poly: mach_msg_type_name_t,
     ) -> libc::kern_return_t;
 
-    /// PORT: `posix.system.mach_port_deallocate` (Zig std.c) — used by the
+    /// PORT NOTE: `posix.system.mach_port_deallocate` (Zig std.c) — used by the
     /// kqueue "mach port" test (kqueue.zig:2598) to release the send right.
     pub fn mach_port_deallocate(task: ipc_space_t, name: mach_port_name_t) -> libc::kern_return_t;
 
-    /// PORT: async.zig-local `extern "c" fn mach_port_set_attributes(...)`
+    /// PORT NOTE: async.zig-local `extern "c" fn mach_port_set_attributes(...)`
     /// ("Missing Mach APIs from Zig stdlib") — used by async.zig `init` to set
     /// the port queue limit (qlimit=1). The reference `info: *anyopaque` is a
     /// `*mut c_void` in Rust.
@@ -514,7 +514,7 @@ extern "C" {
         count: mach_msg_type_number_t,
     ) -> libc::kern_return_t;
 
-    /// PORT: async.zig-local `extern "c" fn mach_port_destroy(...)` ("Missing
+    /// PORT NOTE: async.zig-local `extern "c" fn mach_port_destroy(...)` ("Missing
     /// Mach APIs from Zig stdlib") — used by async.zig `init` errdefer / `deinit`.
     pub fn mach_port_destroy(task: ipc_space_t, name: mach_port_name_t) -> libc::kern_return_t;
 }
@@ -528,7 +528,7 @@ extern "C" {
 // exactly where the reference `@intFromEnum(...)` does.
 // ---------------------------------------------------------------------------
 
-/// PORT: `posix.system.MACH_PORT_RIGHT` (Zig std.c) — the `right` values passed
+/// PORT NOTE: `posix.system.MACH_PORT_RIGHT` (Zig std.c) — the `right` values passed
 /// to `mach_port_allocate` (`@intFromEnum(MACH_PORT_RIGHT.RECEIVE)`).
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -544,7 +544,7 @@ impl MACH_PORT_RIGHT {
     pub const NUMBER: MACH_PORT_RIGHT = MACH_PORT_RIGHT(6);
 }
 
-/// PORT: `posix.system.MACH_MSG_TYPE` (Zig std.c) — the message-header disposition
+/// PORT NOTE: `posix.system.MACH_MSG_TYPE` (Zig std.c) — the message-header disposition
 /// bits (`@intFromEnum(MACH_MSG_TYPE.MAKE_SEND)` etc.) used by `Async` and the
 /// kqueue "mach port" test.
 #[repr(transparent)]
@@ -564,7 +564,7 @@ impl MACH_MSG_TYPE {
     pub const DISPOSE_SEND_ONCE: MACH_MSG_TYPE = MACH_MSG_TYPE(26);
 }
 
-/// PORT: async.zig-local `const mach_port_limits = extern struct { mpl_qlimit:
+/// PORT NOTE: async.zig-local `const mach_port_limits = extern struct { mpl_qlimit:
 /// c_uint };` ("Missing Mach APIs from Zig stdlib. Data from xnu:
 /// osfmk/mach/port.h") — the `info` payload of `mach_port_set_attributes` used by
 /// `Async.init` to set the port queue size (qlimit = 1).
@@ -574,6 +574,6 @@ pub struct mach_port_limits {
     pub mpl_qlimit: libc::c_uint,
 }
 
-/// PORT: async.zig-local `const MACH_PORT_LIMITS_INFO = 1;` — the `flavor`
+/// PORT NOTE: async.zig-local `const MACH_PORT_LIMITS_INFO = 1;` — the `flavor`
 /// argument of `mach_port_set_attributes`.
 pub const MACH_PORT_LIMITS_INFO: mach_port_flavor_t = 1;

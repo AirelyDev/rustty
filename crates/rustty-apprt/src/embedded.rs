@@ -107,7 +107,7 @@ type CoreApp = rustty_core::app::App<App>;
 // const CoreSurface = @import("../Surface.zig");
 type CoreSurface = rustty_core::surface::Surface<App>;
 
-// PORT: reference `pub const resourcesDir = internal_os.resourcesDir;`
+// PORT NOTE: reference `pub const resourcesDir = internal_os.resourcesDir;`
 // (embedded.zig:27).
 pub use rustty_os::resourcesDir;
 
@@ -620,7 +620,7 @@ impl ApprtApp for App {
         self.performPreAction(&target, &action);
 
         // log.debug("dispatching action target={t} action={} value={any}", .{ target, action, value });
-        // (PORT: no logging shim — the reference `log.debug` is preserved as this
+        // (PORT NOTE: no logging shim — the reference `log.debug` is preserved as this
         // comment, the established core/termio convention.)
 
         // return self.opts.action(self, target.cval(), @unionInit(apprt.Action, @tagName(action), value).cval());
@@ -1037,7 +1037,7 @@ impl Surface {
 
         // Add ourselves to the list of surfaces on the app.
         // try app.core_app.addSurface(self);
-        // (PORT: rustty `addSurface` is infallible — no `try`.)
+        // (PORT NOTE: rustty `addSurface` is infallible — no `try`.)
         unsafe { (*(*app).core_app).addSurface(surface) };
         // errdefer app.core_app.deleteSurface(self);
         // (an errdefer — realized manually on the fallible paths below.)
@@ -1046,7 +1046,7 @@ impl Surface {
         // var config = try apprt.surface.newConfig(app.core_app, &app.config, opts.context);
         // defer config.deinit();
         //
-        // (PORT: rustty `new_config` is infallible; `config` has an explicit
+        // (PORT NOTE: rustty `new_config` is infallible; `config` has an explicit
         // `deinit` — no Drop — realized on the success and error paths below.)
         let mut config = rustty_core::app::new_config(
             unsafe { &*(*app).core_app },
@@ -1159,7 +1159,7 @@ impl Surface {
             // config.input.list.clearRetainingCapacity();
             config.input.list.clear();
             // try config.input.list.append(alloc, .{ .raw = try buf.toOwnedSliceSentinel(0) });
-            // (PORT: rustty `ReadableIO::Raw` stores an owned `Vec<u8>` — no NUL
+            // (PORT NOTE: rustty `ReadableIO::Raw` stores an owned `Vec<u8>` — no NUL
             // sentinel; the Zig `toOwnedSliceSentinel(0)` sentinel is a storage
             // detail with no rustty counterpart.)
             config.input.list.push(ReadableIO::Raw(buf));
@@ -1307,7 +1307,7 @@ impl Surface {
         confirmed: bool,
     ) {
         // const alloc = self.app.core_app.alloc;
-        // (PORT: `state` is a Rust `Box` from `clipboard_request`; it is reclaimed +
+        // (PORT NOTE: `state` is a Rust `Box` from `clipboard_request`; it is reclaimed +
         // freed via `Box::from_raw` below — no core-app `alloc` handle is needed.)
 
         // Attempt to complete the request, but we may request
@@ -1367,7 +1367,7 @@ impl Surface {
         // preserves the clipboard request.
         // alloc.destroy(state);
         //
-        // (PORT: reclaim + drop the `Box` allocated in [`Surface::clipboard_request`].)
+        // (PORT NOTE: reclaim + drop the `Box` allocated in [`Surface::clipboard_request`].)
         unsafe { drop(Box::from_raw(state)) };
     }
 
@@ -2237,7 +2237,7 @@ impl ApprtSurface for Surface {
 
         // Free our title
         // if (self.title) |v| self.app.core_app.alloc.free(v);
-        // (PORT: drop the owned `CString`.)
+        // (PORT NOTE: drop the owned `CString`.)
         self.title = None;
 
         // Remove ourselves from the list of known surfaces in the app.
@@ -2379,7 +2379,7 @@ impl ApprtSurface for Surface {
         // var env = try internal_os.getEnvMap(alloc);
         // errdefer env.deinit();
         //
-        // (PORT: rustty `getEnvMap` is infallible and returns an owned map; on
+        // (PORT NOTE: rustty `getEnvMap` is infallible and returns an owned map; on
         // non-darwin `env` is never mutated below — silence `unused_mut` there.)
         #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(unused_mut))]
         let mut env = rustty_os::env::getEnvMap();
@@ -2403,7 +2403,7 @@ impl ApprtSurface for Surface {
             // Remove this so that running `rustty` within Rustty works.
             // env.remove("GHOSTTY_MAC_LAUNCH_SOURCE");
             //
-            // PORT (R2 identity): the launch-source env var is `RUSTTY_MAC_LAUNCH_SOURCE`
+            // PORT NOTE (R2 identity): the launch-source env var is `RUSTTY_MAC_LAUNCH_SOURCE`
             // (the rustty-os `desktop.rs` `launchedFromDesktop` precedent).
             env.remove("RUSTTY_MAC_LAUNCH_SOURCE");
 

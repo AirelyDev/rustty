@@ -1,11 +1,11 @@
 //! Port of `libvaxis` `event.zig` (30 LOC) — the `Event` union (the events Vaxis
 //! emits internally) plus the re-exports of `Key`/`Mouse`/`Color`/`Winsize`.
 //!
-//! PORT-NOTE (variant casing): the Zig union fields are snake_case (`key_press`,
+//! PORT NOTE (variant casing): the Zig union fields are snake_case (`key_press`,
 //! `cap_kitty_keyboard`); Rust enum variants are CamelCase (`KeyPress`,
 //! `CapKittyKeyboard`). Faithful 1:1 rename.
 //!
-//! PORT-NOTE (paste ownership): Zig `paste: []const u8` is a base64-decoded
+//! PORT NOTE (paste ownership): Zig `paste: []const u8` is a base64-decoded
 //! allocation the caller must free (`osc 52 paste, caller must free`). Rust owns it
 //! as `Paste(Vec<u8>)` — it drops itself, so there is no "caller must free" caveat
 //! and `Event` is NOT `Copy`. Grapheme bytes are `&[u8]`, never a lossy `String`.

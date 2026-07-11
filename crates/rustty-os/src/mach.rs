@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/mach.zig` — every line, comment, and `test {}`
 //! is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `assert = quirks.inlineAssert`,
+// PORT NOTE: the Zig reference imports `std`, `assert = quirks.inlineAssert`,
 // `mem = std.mem`, and `Allocator = std.mem.Allocator`. In Rust we use
 // `rustty_util::quirks::inlineAssert` for the assert seam (the reference imports
 // it from `../quirks.zig`; that file is ported in rustty-util per R4) and the
@@ -17,7 +17,7 @@ use rustty_util::quirks::inlineAssert as assert;
 /// macOS virtual memory tags for use with mach_vm_map/mach_vm_allocate.
 /// These identify memory regions in tools like vmmap and Instruments.
 //
-// PORT: `enum(u8)` with explicit application_specific_1..16 values plus the
+// PORT NOTE: `enum(u8)` with explicit application_specific_1..16 values plus the
 // non-exhaustive `_` tag. Modeled as a `u8`-valued wrapper so that the
 // non-exhaustive ("We ignore the rest...") tag is representable, matching Zig's
 // open enum.
@@ -44,7 +44,7 @@ impl VMTag {
     pub const application_specific_16: VMTag = VMTag(255);
 
     // We ignore the rest because we never realistic set them.
-    // PORT: Zig's open-enum `_` member. Any other `u8` value is representable via
+    // PORT NOTE: Zig's open-enum `_` member. Any other `u8` value is representable via
     // `VMTag(n)`; `intFromEnum`/`enumFromInt` are the inner `u8`.
     pub const fn from_int(n: u8) -> VMTag {
         VMTag(n)
@@ -63,7 +63,7 @@ impl VMTag {
 /// Creates a page allocator that tags all allocated memory with the given
 /// VMTag.
 //
-// PORT: the Zig reference returns a `std.mem.Allocator` whose `.ptr` smuggles
+// PORT NOTE: the Zig reference returns a `std.mem.Allocator` whose `.ptr` smuggles
 // the tag in as the context pointer and whose `.vtable` is
 // `TaggedPageAllocator.vtable`. Rust's stable allocator surface differs, so we
 // return a concrete `TaggedPageAllocator` value carrying the tag; its methods
@@ -76,7 +76,7 @@ pub fn taggedPageAllocator(tag: VMTag) -> TaggedPageAllocator {
 /// This is based heavily on the Zig 0.15.2 PageAllocator implementation,
 /// with only the posix implementation. Zig 0.15.2 is MIT licensed.
 //
-// PORT: the reference is a `struct` with a static `vtable` and free functions
+// PORT NOTE: the reference is a `struct` with a static `vtable` and free functions
 // taking an opaque `context`. The context (`*anyopaque`) carries the `VMTag` as
 // an integer (see `taggedPageAllocator`). We carry the tag as a field instead;
 // `mem.Alignment` is modeled as a byte count (`usize`), matching its sole use as
@@ -86,7 +86,7 @@ pub struct TaggedPageAllocator {
 }
 
 impl TaggedPageAllocator {
-    // PORT: `pub const vtable: Allocator.VTable = .{ .alloc, .resize, .remap,
+    // PORT NOTE: `pub const vtable: Allocator.VTable = .{ .alloc, .resize, .remap,
     // .free }`. The four entries are reproduced as the methods below.
 
     pub fn alloc(&self, n: usize, alignment: usize, ra: usize) -> Option<*mut u8> {
@@ -140,7 +140,7 @@ impl TaggedPageAllocator {
         } else {
             mem_align_forward(aligned_len + max_drop_len, page_size)
         };
-        // PORT: `next_mmap_addr_hint` is a Zig std internal mmap-placement hint
+        // PORT NOTE: `next_mmap_addr_hint` is a Zig std internal mmap-placement hint
         // with no Rust std equivalent. The reference seeds the kernel hint and
         // updates it post-map purely as an optimization; passing a null hint (let
         // the kernel choose) is behavior-equivalent for allocation correctness.
@@ -179,7 +179,7 @@ impl TaggedPageAllocator {
                 )
             };
         }
-        // PORT: post-map update of `next_mmap_addr_hint` (a hint-only Zig std
+        // PORT NOTE: post-map update of `next_mmap_addr_hint` (a hint-only Zig std
         // internal) is omitted; see the hint note above.
         Some(result_ptr)
     }
@@ -199,7 +199,7 @@ impl TaggedPageAllocator {
             return Some(memory.as_mut_ptr());
         }
 
-        // PORT: `std.posix.MREMAP` is `void` on platforms without `mremap`
+        // PORT NOTE: `std.posix.MREMAP` is `void` on platforms without `mremap`
         // (notably Darwin/macOS, this module's target). The reference guards the
         // `mremap` fast path on `MREMAP != void`; on Darwin that branch is dead,
         // so it is reproduced here as a `cfg(target_os = "linux")` path (Linux
@@ -236,7 +236,7 @@ impl TaggedPageAllocator {
     }
 }
 
-// PORT helpers reproducing the `std.heap`/`std.mem` primitives the reference
+// PORT NOTE: helpers reproducing the `std.heap`/`std.mem` primitives the reference
 // uses: `std.heap.pageSize()`, `mem.alignForward`, and `mem.alignPointer`.
 fn page_size() -> usize {
     // std.heap.pageSize()
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn VMTag_make() {
-        // PORT: the reference computes the expected value via
+        // PORT NOTE: the reference computes the expected value via
         // `@as(i32, @bitCast(@as(u32, 240) << 24))` — i.e. VM_MAKE_TAG(240).
         // To keep this an INDEPENDENT oracle (not re-deriving it from `make`),
         // the expected value is the literal result of that bit math, computed by

@@ -1,4 +1,4 @@
-// PORT: ghostty src/font/glyf_rasterize_png_test.zig.
+// PORT NOTE: ghostty src/font/glyf_rasterize_png_test.zig.
 //
 // The Zig test renders a visual atlas of the bubbletea glyph-protocol example
 // outlines, exports it to a PNG via `z2d.png_exporter`, and byte-compares the

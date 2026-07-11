@@ -8,7 +8,7 @@
 //! Ports the reference's `src/os/xdg.zig` — every line, comment, and `test {}`
 //! is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, `Allocator`, `posix`,
+// PORT NOTE: the Zig reference imports `std`, `builtin`, `Allocator`, `posix`,
 // `homedir = @import("homedir.zig")`, and `env_os = @import("env.zig")`. In Rust
 // we use those ported sibling modules plus the standard library. Allocation in
 // Rust is infallible for the collections used here, so the reference's
@@ -102,7 +102,7 @@ fn dir(opts: Options, internal_opts: InternalOptions) -> Result<String, DirError
             }
         }
     };
-    // PORT: `defer if (env_) |env| env.deinit(alloc);` — `GetEnvResult`'s deinit
+    // PORT NOTE: `defer if (env_) |env| env.deinit(alloc);` — `GetEnvResult`'s deinit
     // is Drop in Rust, so `env_` is released automatically when this function
     // returns.
 
@@ -118,7 +118,7 @@ fn dir(opts: Options, internal_opts: InternalOptions) -> Result<String, DirError
     // Get our home dir
     let mut buf = [0u8; 1024];
     if let Some(home) = homedir::home(&mut buf).map_err(|_| DirError::NoHomeDir)? {
-        // PORT: `homedir.home` returns `[]const u8`; convert to `&str` for the
+        // PORT NOTE: `homedir.home` returns `[]const u8`; convert to `&str` for the
         // path-join shim (home paths are UTF-8 on the supported platforms).
         let home = std::str::from_utf8(home).map_err(|_| DirError::NoHomeDir)?;
         return Ok(path_join(&[
@@ -150,7 +150,7 @@ pub fn parseTerminalExec<'a>(argv: &'a [&'a str]) -> Option<&'a [&'a str]> {
 }
 
 // ---------------------------------------------------------------------------
-// PORT: support shims for `std.fs.path.{join,basename}` used above.
+// PORT NOTE: support shims for `std.fs.path.{join,basename}` used above.
 // ---------------------------------------------------------------------------
 
 // `std.fs.path.sep` / `isSep`.
@@ -422,7 +422,7 @@ mod tests {
         }
     }
 
-    // PORT helper: a Drop guard reproducing the reference test's `defer env: {...}`
+    // PORT NOTE: helper: a Drop guard reproducing the reference test's `defer env: {...}`
     // blocks that save/restore (or unset) an environment variable.
     struct RestoreEnv {
         key: &'static std::ffi::CStr,

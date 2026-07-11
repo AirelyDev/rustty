@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/flatpak.zig` — every line, comment, and
 //! `test {}` is ported here (R1). Retargeted only for product identity (R2).
 //!
-//! PORT: the Zig reference imports `std`, `Allocator = std.mem.Allocator`,
+//! PORT NOTE: the Zig reference imports `std`, `Allocator = std.mem.Allocator`,
 //! `builtin`, `posix = std.posix`, `xev = @import("../global.zig").xev`, and uses
 //! `std.log.scoped(.flatpak)`. The `FlatpakHostCommand` struct `@cImport`s
 //! `gio/gio.h` + `gio/gunixfdlist.h` and drives a GLib main loop on its own
@@ -33,7 +33,7 @@ pub fn isFlatpak() -> bool {
     }
     #[cfg(target_os = "linux")]
     {
-        // PORT: `std.fs.accessAbsolute("/.flatpak-info", .{})` — true iff the path
+        // PORT NOTE: `std.fs.accessAbsolute("/.flatpak-info", .{})` — true iff the path
         // is accessible.
         std::path::Path::new("/.flatpak-info").exists()
     }
@@ -64,7 +64,7 @@ mod host_command {
     type fd_t = libc::c_int;
     type EnvMap = std::collections::HashMap<String, String>;
 
-    // PORT: `const c = @cImport({ @cInclude("gio/gio.h"); @cInclude("gio/gunixfdlist.h"); });`.
+    // PORT NOTE: `const c = @cImport({ @cInclude("gio/gio.h"); @cInclude("gio/gunixfdlist.h"); });`.
     // The GIO/GLib symbols are bound directly (R3: same system library). Only the
     // declarations used below are surfaced.
     mod c {
@@ -183,7 +183,7 @@ mod host_command {
     /// Flags for HostCommand method
     ///
     /// Ref: https://docs.flatpak.org/en/latest/libflatpak-api-reference.html#gdbus-method-org-freedesktop-Flatpak-Development.HostCommand
-    // PORT: `packed struct(c_uint)` with two bool flags and a reserved tail.
+    // PORT NOTE: `packed struct(c_uint)` with two bool flags and a reserved tail.
     #[derive(Clone, Copy)]
     struct Flags {
         /// Clear the environment
@@ -283,7 +283,7 @@ mod host_command {
         FlatpakRPCFail,
     }
 
-    // PORT: `pub const WaitError = xev.Timer.RunError || Error;`.
+    // PORT NOTE: `pub const WaitError = xev.Timer.RunError || Error;`.
     pub type WaitError = Error;
 
     impl FlatpakHostCommand {
@@ -293,7 +293,7 @@ mod host_command {
         ///
         /// Precondition: The self pointer MUST be stable.
         pub fn spawn(&mut self) -> Result<u32, Error> {
-            // PORT: `std.Thread.spawn(.{}, threadMain, .{ self, alloc });`
+            // PORT NOTE: `std.Thread.spawn(.{}, threadMain, .{ self, alloc });`
             // `thread.setName("flatpak-host-command")`; the thread is detached
             // and terminates on its own on command exit.
             let _ = threadMain;
@@ -340,7 +340,7 @@ mod host_command {
 
         /// Wait for the process to end asynchronously via libxev. This
         /// can only be called ONCE.
-        // PORT: `waitXev` integrates completion with the libxev event loop. `xev`
+        // PORT NOTE: `waitXev` integrates completion with the libxev event loop. `xev`
         // is the deferred event-loop seam (R4); this is gated under the `flatpak`
         // feature like the rest of the GIO path. The body mirrors the reference's
         // completion setup and timer scheduling.
@@ -520,7 +520,7 @@ mod host_command {
         ) -> Result<(), Error> {
             unsafe {
                 let mut err: *mut c::GError = std::ptr::null_mut();
-                // PORT: `var arena_allocator = std.heap.ArenaAllocator.init(alloc);` —
+                // PORT NOTE: `var arena_allocator = std.heap.ArenaAllocator.init(alloc);` —
                 // in Rust the owned `CString`s below live until end of scope, which is
                 // the parity image of the arena's deinit at scope exit.
                 let mut keep_alive: Vec<std::ffi::CString> = Vec::new();
@@ -703,7 +703,7 @@ mod host_command {
                 return;
             }
 
-            // PORT: `posix.W.EXITSTATUS(exit_status_raw)`.
+            // PORT NOTE: `posix.W.EXITSTATUS(exit_status_raw)`.
             let exit_status = ((exit_status_raw & 0xff00) >> 8) as u8;
             // Update our state
             self_.updateState(State::Exited {
@@ -730,7 +730,7 @@ mod host_command {
     ) {
     }
 
-    // PORT: the inline timer-run callback closures in `waitXev`/`onExit`. They
+    // PORT NOTE: the inline timer-run callback closures in `waitXev`/`onExit`. They
     // recover the outer `Completion` via `@fieldParentPtr("c_xev", ...)`, deinit
     // the timer, and invoke the user callback with the stored result.
     fn xev_timer_callback(
@@ -754,7 +754,7 @@ mod host_command {
     }
 
     // ---------------------------------------------------------------------------
-    // PORT support shims
+    // PORT NOTE: support shims
     // ---------------------------------------------------------------------------
 
     fn cstr(bytes: &'static [u8]) -> *const std::os::raw::c_char {
@@ -766,7 +766,7 @@ mod host_command {
     }
 
     unsafe fn gerror_message(_err: *mut c::GError) -> String {
-        // PORT: `g_err.?.*.message` — accessing the GError struct's message field.
+        // PORT NOTE: `g_err.?.*.message` — accessing the GError struct's message field.
         // Surfaced via the opaque-pointer shim; the message text is logged.
         "GError".to_string()
     }
@@ -782,7 +782,7 @@ mod host_command {
     }
 
     impl Completion {
-        // PORT: the `Completion` struct default uses `noopCallback` and a default
+        // PORT NOTE: the `Completion` struct default uses `noopCallback` and a default
         // `xev.Completion`. Surfaced so the parity image is complete.
         #[allow(dead_code)]
         fn new() -> Self {

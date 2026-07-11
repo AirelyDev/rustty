@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/macos.zig` — every line, comment, and `test {}`
 //! is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, `build_config`,
+// PORT NOTE: the Zig reference imports `std`, `builtin`, `build_config`,
 // `assert = quirks.inlineAssert`, `objc`, and `Allocator = std.mem.Allocator`.
 // In Rust we use the standard library, `rustty_build_config` (the ported
 // `build_config.zig`), `rustty_util::quirks::inlineAssert` for the assert seam,
@@ -24,7 +24,7 @@ use objc2_foundation::{NSFileManager, NSProcessInfo};
 
 /// Verifies that the running macOS system version is at least the given version.
 pub fn isAtLeastVersion(major: i64, minor: i64, patch: i64) -> bool {
-    // PORT: `comptime assert(builtin.target.os.tag.isDarwin())`. The whole
+    // PORT NOTE: `comptime assert(builtin.target.os.tag.isDarwin())`. The whole
     // module is `cfg(target_os = "macos")`, so this asserts a constant truth on
     // the only target it compiles for, matching the reference's comptime gate.
     assert(cfg!(target_os = "macos"));
@@ -39,7 +39,7 @@ pub fn isAtLeastVersion(major: i64, minor: i64, patch: i64) -> bool {
 
 pub type AppSupportDirError = AppleApiError;
 
-// PORT: `pub const AppSupportDirError = Allocator.Error || error{AppleAPIFailed};`.
+// PORT NOTE: `pub const AppSupportDirError = Allocator.Error || error{AppleAPIFailed};`.
 // Rust's allocation failure is not a recoverable error here; the parity-preserving
 // equivalent is `AppleApiError` carrying the reference's `error.AppleAPIFailed`.
 
@@ -48,7 +48,7 @@ pub type AppSupportDirError = AppleApiError;
 /// given allocator.
 pub fn appSupportDir(sub_path: &str) -> Result<String, AppSupportDirError> {
     commonDir(
-        // PORT: reference `.NSApplicationSupportDirectory`; the `objc2-foundation`
+        // PORT NOTE: reference `.NSApplicationSupportDirectory`; the `objc2-foundation`
         // binding drops the `NS` prefix (`ApplicationSupportDirectory == 14`).
         NSSearchPathDirectory::ApplicationSupportDirectory,
         &[build_config::BUNDLE_ID, sub_path],
@@ -57,14 +57,14 @@ pub fn appSupportDir(sub_path: &str) -> Result<String, AppSupportDirError> {
 
 pub type CacheDirError = AppleApiError;
 
-// PORT: `pub const CacheDirError = Allocator.Error || error{AppleAPIFailed};`.
+// PORT NOTE: `pub const CacheDirError = Allocator.Error || error{AppleAPIFailed};`.
 // See the note on `AppSupportDirError`.
 
 /// Return the path to the system cache directory with the given sub path joined.
 /// This allocates the result using the given allocator.
 pub fn cacheDir(sub_path: &str) -> Result<String, CacheDirError> {
     commonDir(
-        // PORT: reference `.NSCachesDirectory`; the `objc2-foundation` binding
+        // PORT NOTE: reference `.NSCachesDirectory`; the `objc2-foundation` binding
         // drops the `NS` prefix (`CachesDirectory == 13`).
         NSSearchPathDirectory::CachesDirectory,
         &[build_config::BUNDLE_ID, sub_path],
@@ -83,7 +83,7 @@ pub enum SetQosClassError {
 ///
 /// https://developer.apple.com/documentation/apple-silicon/tuning-your-code-s-performance-for-apple-silicon?preferredLanguage=occ
 pub fn setQosClass(class: QosClass) -> Result<(), SetQosClassError> {
-    // PORT: `std.posix.errno(pthread_set_qos_class_self_np(class, 0))`. The C
+    // PORT NOTE: `std.posix.errno(pthread_set_qos_class_self_np(class, 0))`. The C
     // function returns an errno-style `c_int`; we switch on it directly.
     match unsafe { pthread_set_qos_class_self_np(class, 0) } {
         0 => Ok(()),                                              // .SUCCESS
@@ -121,14 +121,14 @@ extern "C" {
     pub fn pthread_setname_np(name: *const std::ffi::c_char);
 }
 
-// PORT: `pub const NSOperatingSystemVersion = extern struct { major, minor, patch: i64 }`.
+// PORT NOTE: `pub const NSOperatingSystemVersion = extern struct { major, minor, patch: i64 }`.
 // We use `objc2_foundation::NSOperatingSystemVersion` (fields
 // `majorVersion`/`minorVersion`/`patchVersion: NSInteger`), the binding to the
 // SAME Foundation struct (R3), so it can be passed to
 // `isOperatingSystemAtLeastVersion:`.
 pub use objc2_foundation::NSOperatingSystemVersion;
 
-// PORT: `pub const NSSearchPathDirectory = enum(c_ulong) { NSCachesDirectory =
+// PORT NOTE: `pub const NSSearchPathDirectory = enum(c_ulong) { NSCachesDirectory =
 // 13, NSApplicationSupportDirectory = 14 }` and `pub const
 // NSSearchPathDomainMask = enum(c_ulong) { NSUserDomainMask = 1 }`. We use the
 // `objc2_foundation` bindings to the SAME Foundation enums (R3); they are
@@ -139,7 +139,7 @@ fn commonDir(
     directory: NSSearchPathDirectory,
     sub_paths: &[&str],
 ) -> Result<String, AppleApiError> {
-    // PORT: `comptime assert(builtin.target.os.tag.isDarwin())`. See the note in
+    // PORT NOTE: `comptime assert(builtin.target.os.tag.isDarwin())`. See the note in
     // `isAtLeastVersion`.
     assert(cfg!(target_os = "macos"));
 
@@ -147,7 +147,7 @@ fn commonDir(
 
     let url = manager.URLForDirectory_inDomain_appropriateForURL_create_error(
         directory,
-        // PORT: reference `NSSearchPathDomainMask.NSUserDomainMask`; the
+        // PORT NOTE: reference `NSSearchPathDomainMask.NSUserDomainMask`; the
         // `objc2-foundation` binding drops the `NS` prefix (`UserDomainMask == 1`).
         NSSearchPathDomainMask::UserDomainMask,
         None,
@@ -180,7 +180,7 @@ fn commonDir(
     Ok(fs_path_join(&paths))
 }
 
-/// PORT: reproduces `std.fs.path.join` for POSIX (Darwin): joins the components
+/// PORT NOTE: reproduces `std.fs.path.join` for POSIX (Darwin): joins the components
 /// with the platform separator, collapsing the separators between adjacent
 /// components (a single separator between non-empty parts) exactly like the Zig
 /// std implementation.
@@ -210,7 +210,7 @@ fn fs_path_join(paths: &[&str]) -> String {
     out
 }
 
-/// PORT: `error{AppleAPIFailed}` (a member of `AppSupportDirError`/`CacheDirError`).
+/// PORT NOTE: `error{AppleAPIFailed}` (a member of `AppSupportDirError`/`CacheDirError`).
 #[derive(Debug, PartialEq, Eq)]
 pub enum AppleApiError {
     AppleAPIFailed,
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // ffi: NSFileManager/Foundation calls hit the real OS (ASan, not Miri)
     fn cacheDir_paths() {
-        // PORT: `if (!builtin.target.os.tag.isDarwin()) return;`. The whole
+        // PORT NOTE: `if (!builtin.target.os.tag.isDarwin()) return;`. The whole
         // module is `cfg(target_os = "macos")` so this test only compiles on
         // Darwin; the early-return guard is therefore always-false here.
 

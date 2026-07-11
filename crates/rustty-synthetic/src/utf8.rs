@@ -4,18 +4,18 @@
 //! has the ability to generate a custom distribution of UTF-8
 //! encoding lengths (1, 2, 3, or 4 bytes).
 //!
-//! PORT: `synthetic/Utf8.zig`.
+//! PORT NOTE: `synthetic/Utf8.zig`.
 
 use crate::enums::EnumArray;
 use crate::generator::Generator;
 use crate::io::{WriteFailed, Writer};
 use crate::rand::{Rng, U21};
 
-/// PORT: the `std.unicode` helpers `Utf8.zig` (and its tests) lean on. Ported
+/// PORT NOTE: the `std.unicode` helpers `Utf8.zig` (and its tests) lean on. Ported
 /// locally — synthetic's allowed deps don't cleanly expose these, and they are
 /// fully specified by the UTF-8 encoding rules.
 mod unicode {
-    /// PORT: `utf8CodepointSequenceLength(c) !u3`.
+    /// PORT NOTE: `utf8CodepointSequenceLength(c) !u3`.
     pub fn utf8_codepoint_sequence_length(c: u32) -> Result<u8, ()> {
         if c < 0x80 {
             return Ok(1);
@@ -32,19 +32,19 @@ mod unicode {
         Err(()) // error.CodepointTooLarge
     }
 
-    /// PORT: `isSurrogateCodepoint(c)`.
+    /// PORT NOTE: `isSurrogateCodepoint(c)`.
     pub fn is_surrogate_codepoint(c: u32) -> bool {
         (0xD800..=0xDFFF).contains(&c)
     }
 
-    /// PORT: the two-variant error of `utf8Encode`.
+    /// PORT NOTE: the two-variant error of `utf8Encode`.
     pub enum EncodeError {
         Utf8CannotEncodeSurrogateHalf,
         #[allow(dead_code)]
         CodepointTooLarge,
     }
 
-    /// PORT: `utf8Encode(c, out)` — writes 1-4 bytes with the standard lead /
+    /// PORT NOTE: `utf8Encode(c, out)` — writes 1-4 bytes with the standard lead /
     /// continuation masks. Returns the number of bytes written.
     pub fn utf8_encode(c: u32, out: &mut [u8]) -> Result<u8, EncodeError> {
         let length = match utf8_codepoint_sequence_length(c) {
@@ -81,7 +81,7 @@ mod unicode {
         Ok(length)
     }
 
-    // PORT: `utf8ValidateSlice` and its `first` table are only consumed by the
+    // PORT NOTE: `utf8ValidateSlice` and its `first` table are only consumed by the
     // ported `test {}` (mirroring std.unicode used in the Zig tests), so they
     // live under `cfg(test)`.
     #[cfg(test)]
@@ -105,7 +105,7 @@ mod unicode {
     #[cfg(test)]
     const S7: u8 = 0x44; // accept 4, size 4
 
-    /// PORT: the `first` table — info about the first byte in a UTF-8 sequence.
+    /// PORT NOTE: the `first` table — info about the first byte in a UTF-8 sequence.
     #[cfg(test)]
     const FIRST: [u8; 256] = {
         let mut t = [AS; 256];
@@ -128,11 +128,11 @@ mod unicode {
         t
     };
 
-    /// PORT: `utf8ValidateSlice(input)` — returns true if the input consists
+    /// PORT NOTE: `utf8ValidateSlice(input)` — returns true if the input consists
     /// entirely of UTF-8 codepoints. The SIMD ASCII fast-path is a
     /// behaviour-identical optimisation; the scalar table walk is ported.
     #[cfg(test)]
-    // PORT: continuation-byte bounds keep the reference's `x < lo or hi < x` form.
+    // PORT NOTE: continuation-byte bounds keep the reference's `x < lo or hi < x` form.
     #[allow(clippy::manual_range_contains)]
     pub fn utf8_validate_slice(input: &[u8]) -> bool {
         let remaining = input;
@@ -219,12 +219,12 @@ pub enum Utf8Len {
 }
 
 impl Utf8Len {
-    /// PORT: `@intFromEnum(utf8_len)` — the encoding length value (1-4).
+    /// PORT NOTE: `@intFromEnum(utf8_len)` — the encoding length value (1-4).
     fn value(self) -> u8 {
         self as u8
     }
 
-    /// PORT: `@enumFromInt(v)` for the length values 1-4.
+    /// PORT NOTE: `@enumFromInt(v)` for the length values 1-4.
     fn from_value(v: u8) -> Utf8Len {
         match v {
             1 => Utf8Len::One,
@@ -235,7 +235,7 @@ impl Utf8Len {
         }
     }
 
-    /// PORT: `EnumArray(Utf8Len, f64).Indexer.keyForIndex(idx)` (declaration
+    /// PORT NOTE: `EnumArray(Utf8Len, f64).Indexer.keyForIndex(idx)` (declaration
     /// order: one, two, three, four).
     fn key_for_index(idx: usize) -> Utf8Len {
         match idx {
@@ -247,7 +247,7 @@ impl Utf8Len {
         }
     }
 
-    /// PORT: the declaration-order index (for `.set`).
+    /// PORT NOTE: the declaration-order index (for `.set`).
     pub fn index(self) -> usize {
         match self {
             Utf8Len::One => 0,
@@ -258,7 +258,7 @@ impl Utf8Len {
     }
 }
 
-/// PORT: `const InvalidSequence = struct { len: u3, bytes: [4]u8 }`.
+/// PORT NOTE: `const InvalidSequence = struct { len: u3, bytes: [4]u8 }`.
 #[derive(Clone, Copy)]
 struct InvalidSequence {
     len: u8,
@@ -310,7 +310,7 @@ const INVALID_SEQUENCES: [InvalidSequence; 9] = [
     },
 ];
 
-/// PORT: `Utf8` — the `@This()` struct.
+/// PORT NOTE: `Utf8` — the `@This()` struct.
 pub struct Utf8<'a> {
     /// Random number generator.
     pub rand: Rng<'a>,
@@ -341,7 +341,7 @@ pub struct Utf8<'a> {
 }
 
 impl<'a> Utf8<'a> {
-    /// PORT: the struct-literal defaults.
+    /// PORT NOTE: the struct-literal defaults.
     pub fn new(rand: Rng<'a>) -> Utf8<'a> {
         Utf8 {
             rand,

@@ -1357,19 +1357,19 @@ pub(crate) mod cf_release {
     // released (never dereferenced) on the receiving thread.
     unsafe impl Send for SendableRefs {}
 
-    // PORT: the reference `CFReleaseThread.Message` union (`.release`), plus the
+    // PORT NOTE: the reference `CFReleaseThread.Message` union (`.release`), plus the
     // `stop` async modeled as the `Stop` message.
     pub enum Msg {
         Release(SendableRefs),
         Stop,
     }
 
-    // PORT: `macos.foundation.CFRelease`. R3 binding to the SAME framework.
+    // PORT NOTE: `macos.foundation.CFRelease`. R3 binding to the SAME framework.
     extern "C" {
         pub fn CFRelease(cf: *mut c_void);
     }
 
-    // PORT: `CFReleaseThread.threadMain` -> `drainMailbox` (the `.release` arm
+    // PORT NOTE: `CFReleaseThread.threadMain` -> `drainMailbox` (the `.release` arm
     // `for (msg.refs) |ref| CFRelease(ref)`), looping until `stop`.
     pub fn thread_main(rx: std::sync::mpsc::Receiver<Msg>) {
         while let Ok(msg) = rx.recv() {

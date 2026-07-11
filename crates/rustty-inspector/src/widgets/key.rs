@@ -137,7 +137,7 @@ impl Event {
     pub fn label<'a>(&self, buf: &'a mut [u8]) -> Result<&'a [u8], Error> {
         // var buf_stream = std.io.fixedBufferStream(buf);
         // const writer = buf_stream.writer();
-        // (PORT: the fixed-buffer writer — `pos` tracks `buf_stream.pos`.)
+        // (PORT NOTE: the fixed-buffer writer — `pos` tracks `buf_stream.pos`.)
         let mut pos: usize = 0;
         fn write_all(buf: &mut [u8], pos: &mut usize, bytes: &[u8]) -> Result<(), Error> {
             if *pos + bytes.len() > buf.len() {

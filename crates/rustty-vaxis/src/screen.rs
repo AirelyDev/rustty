@@ -1,13 +1,13 @@
 //! `vaxis/src/Screen.zig` (73 LOC, 1 test) — the flat cell buffer (VAXIS_C2_DESIGN §2).
 //!
-//! PORT-NOTE (ownership): Zig `buf: []Cell` (allocator-owned slice) → `Vec<Cell<'a>>`
+//! PORT NOTE (ownership): Zig `buf: []Cell` (allocator-owned slice) → `Vec<Cell<'a>>`
 //! (the crate OWNS the flat cell buffer). `Cell<'a>` carries `'a` because
 //! `Character.grapheme: &'a [u8]`; cells written into the buffer borrow their grapheme
 //! bytes from caller memory (segment text / `'static` border glyphs) — Zig's exact
 //! "caller keeps the text alive" contract, made explicit by threading `'a` through
 //! `Screen<'a>` and `Window<'a>`.
 //!
-//! PORT-NOTE (allocator/error dropped): Zig `init(alloc, winsize) Allocator.Error!Screen`
+//! PORT NOTE (allocator/error dropped): Zig `init(alloc, winsize) Allocator.Error!Screen`
 //! and `deinit(alloc)` drop the allocator param and the error union — `Vec` alloc is
 //! infallible (aborts on OOM), consistent with the crate's pure-leaf model; `deinit`
 //! becomes `Drop` of the `Vec`.
@@ -38,7 +38,7 @@ pub struct Screen<'a> {
 
 impl Default for Screen<'_> {
     fn default() -> Self {
-        // PORT-NOTE: the non-zero Zig field-level defaults live at the field-declaration
+        // PORT NOTE: the non-zero Zig field-level defaults live at the field-declaration
         // site (`width_method: Method = .wcwidth`, `mouse_shape: Shape = .default`,
         // `cursor_shape: Cell.CursorShape = .default`), NOT as enum-level defaults;
         // reproduce them explicitly here (a manual `Default`, not `derive`).
@@ -77,7 +77,7 @@ impl<'a> Screen<'a> {
     }
 
     pub fn deinit(&mut self) {
-        // PORT-NOTE: Zig `alloc.free(self.buf)` → `Vec`'s `Drop` frees the buffer. This
+        // PORT NOTE: Zig `alloc.free(self.buf)` → `Vec`'s `Drop` frees the buffer. This
         // shim is kept for parity; it just clears the buffer.
         self.buf.clear();
     }

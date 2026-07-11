@@ -134,7 +134,7 @@ pub struct SearchMatch {
     pub r#match: highlight::Flattened,
 }
 
-/// PORT: the inferred error set of [`Message::initChangeConfig`]
+/// PORT NOTE: the inferred error set of [`Message::initChangeConfig`]
 /// (`Allocator.Error` from the two `alloc.create`s +
 /// `Renderer.DerivedConfig.init`'s inferred set). Now that the `DerivedConfig`
 /// bodies have landed, the renderer `DerivedConfig::init` error is collapsed into
@@ -168,7 +168,7 @@ impl Message {
 
     /// Initialize a change_config message.
     //
-    // PORT: reference `initChangeConfig(alloc, config: *const configpkg.Config)`.
+    // PORT NOTE: reference `initChangeConfig(alloc, config: *const configpkg.Config)`.
     // `C` is bounded by the renderer-defined `RendererConfig` accessor trait (R4/G7 —
     // the renderer may not name `rustty_config::Config`); the concrete
     // `C = rustty_config::Config` binds in core (`updateConfig`, Surface.zig:1782).

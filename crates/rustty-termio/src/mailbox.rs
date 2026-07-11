@@ -32,7 +32,7 @@ use crate::Message;
 
 // const log = std.log.scoped(.io_writer);
 //
-// PORT: routed through named log helpers below that preserve the reference's
+// PORT NOTE: routed through named log helpers below that preserve the reference's
 // messages verbatim (rustty-os cf_release_thread precedent).
 
 /// A queue used for storing messages that is periodically drained.
@@ -198,13 +198,13 @@ impl Mailbox {
     }
 }
 
-// PORT: the `log.warn` call site in `notify`, preserved verbatim (cf_release
+// PORT NOTE: the `log.warn` call site in `notify`, preserved verbatim (cf_release
 // log-helper precedent).
 fn log_warn_notify_failed(_err: &xev::NotifyError) {
     // log.warn("failed to notify writer, data will be dropped err={}", .{err});
 }
 
-// PORT: the `log.warn` call site in `send`'s slow path, preserved verbatim.
+// PORT NOTE: the `log.warn` call site in `send`'s slow path, preserved verbatim.
 fn log_warn_wake_failed(_err: &xev::NotifyError) {
     // log.warn("failed to wake up writer, data will be dropped err={}", .{err});
 }

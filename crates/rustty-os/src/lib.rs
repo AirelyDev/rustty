@@ -22,7 +22,7 @@
 // public re-exports from os/main.zig (GetEnvResult, getEnvMap, home, open, ...)
 // are reconstructed below now that every module is ported.
 
-// PORT: the reference imports `builtin` for the `test {}` os-tag switch below.
+// PORT NOTE: the reference imports `builtin` for the `test {}` os-tag switch below.
 // In Rust the os switch is `cfg!(...)`.
 
 pub mod args;
@@ -43,7 +43,7 @@ pub mod mach;
 pub mod macos;
 pub mod mouse;
 pub mod open;
-// PORT: `PageList.pageAllocator()` (src/terminal/PageList.zig). The page
+// PORT NOTE: `PageList.pageAllocator()` (src/terminal/PageList.zig). The page
 // allocator is OS-specific (darwin tagged mmap vs generic posix page allocator),
 // so it is hosted in this `os` crate, mirroring the reference's reach into
 // `../os/mach.zig` for the darwin path.
@@ -64,13 +64,13 @@ pub mod xdg;
 // `os/wasm.zig` plus the `os/wasm/` subdirectory (log.zig, target.zig).
 pub mod wasm;
 
-// PORT: `pty.zig` lives at `src/pty.zig` in the reference (not under `src/os/`),
+// PORT NOTE: `pty.zig` lives at `src/pty.zig` in the reference (not under `src/os/`),
 // and `os/main.zig` does not re-export it; it is hosted in this crate per the
 // porting task and is reached as `rustty_os::pty`. (Module declared above.)
 
 // Namespaces
 //
-// PORT: `os/main.zig` declares the `pub const args/cgroup/hostname/i18n/mach/
+// PORT NOTE: `os/main.zig` declares the `pub const args/cgroup/hostname/i18n/mach/
 // path/passwd/xdg/windows/macos/shell/uri` namespaces (and the private `const`
 // imports `dbus/desktop/env/file/flatpak/homedir/locale/mouse/openpkg = open/
 // pipepkg = pipe/resourcesdir/systemd/kernel_info`). In Rust every file is a
@@ -108,7 +108,7 @@ pub use crate::mouse::clickInterval;
 pub use crate::open::open;
 pub use crate::systemd::launchedBySystemd;
 pub use crate::tempdir as TempDir;
-// PORT: the reference's `pub const OpenType = openpkg.Type;`. The port renames
+// PORT NOTE: the reference's `pub const OpenType = openpkg.Type;`. The port renames
 // the type to `Kind` (the R4 parity image of `apprt.action.OpenUrl.Kind`); the
 // `OpenType` alias is preserved.
 pub use crate::kernel_info::getKernelInfo;
@@ -118,7 +118,7 @@ pub use crate::resourcesdir::resourcesDir;
 pub use crate::resourcesdir::ResourcesDir;
 pub use crate::shell::ShellEscapeWriter;
 
-// PORT (test-only glue, R1 "no-loss, not no-addition"): the reference's Zig test
+// PORT NOTE (test-only glue, R1 "no-loss, not no-addition"): the reference's Zig test
 // runner executes a file's `test {}` blocks SERIALLY, so tests that read or
 // mutate the process-global environment (`HOME`/`XDG_*`, via `setenv`/`unsetenv`/
 // `getenv`) never observe each other's mutations. Rust's `libtest` runner instead
@@ -130,7 +130,7 @@ pub use crate::shell::ShellEscapeWriter;
 #[cfg(test)]
 pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// PORT (test-only glue): acquire the shared env lock. Returns the guard; held
+/// PORT NOTE (test-only glue): acquire the shared env lock. Returns the guard; held
 /// for the rest of the calling test so env reads/writes are serialized exactly
 /// as the reference's serial test runner guarantees. The lock is poison-tolerant
 /// (a panicking test must not deadlock the rest of the suite).
@@ -145,7 +145,7 @@ pub(crate) fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
 mod tests {
     #[test]
     fn main_test_refs() {
-        // PORT: the reference's `os/main.zig` `test {}` block forces the test
+        // PORT NOTE: the reference's `os/main.zig` `test {}` block forces the test
         // analysis of the named submodules:
         //     _ = file; _ = i18n; _ = path; _ = uri; _ = shell;
         //     if (comptime builtin.os.tag == .linux) { _ = kernel_info; }

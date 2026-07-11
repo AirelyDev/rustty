@@ -102,7 +102,7 @@ impl Entry {
 }
 
 // ---------------------------------------------------------------------------
-// PORT: support shims for the `std.mem`/`std.fmt`/`std.log` facilities used above.
+// PORT NOTE: support shims for the `std.mem`/`std.fmt`/`std.log` facilities used above.
 // ---------------------------------------------------------------------------
 
 /// `std.mem.trim(u8, s, set)`: strip leading/trailing bytes that appear in `set`.

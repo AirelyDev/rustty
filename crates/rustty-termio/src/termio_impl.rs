@@ -88,10 +88,10 @@ static GLOBAL_ZIG_ALLOCATOR_FOR_OSC: rustty_lib::allocator::GlobalZigAllocator =
 
 // const log = std.log.scoped(.io_exec);
 //
-// PORT: routed through named log helpers below that preserve the reference's
+// PORT NOTE: routed through named log helpers below that preserve the reference's
 // messages verbatim (rustty-os cf_release_thread precedent).
 
-/// PORT: the reference `terminal_stream` field type `StreamHandler.Stream`
+/// PORT NOTE: the reference `terminal_stream` field type `StreamHandler.Stream`
 /// (= `terminal.Stream(StreamHandler)`, src/termio/stream_handler.zig — landed
 /// stage 4). The vt Stream's OSC-parser allocator lifetime is `'static` here
 /// (the field owns its handler for the Termio lifetime; only the deferred
@@ -196,10 +196,10 @@ impl ThreadEnterState {
         }
 
         // Create our arena allocator
-        // (PORT: collapses into the owned Box/Vec allocations below.)
+        // (PORT NOTE: collapses into the owned Box/Vec allocations below.)
 
         // Allocate our ThreadEnterState
-        // (PORT: the `arena_alloc.create(ThreadEnterState)` is the Box below.)
+        // (PORT NOTE: the `arena_alloc.create(ThreadEnterState)` is the Box below.)
 
         // Copy the input from the config
         let input = config.input.clone_parsed();
@@ -293,7 +293,7 @@ impl DerivedConfig {
         // var arena = ArenaAllocator.init(alloc_gpa);
         // errdefer arena.deinit();
         // const alloc = arena.allocator();
-        // (PORT: the arena collapses to Rust ownership — the `dupe` below is a
+        // (PORT NOTE: the arena collapses to Rust ownership — the `dupe` below is a
         // `Vec` clone with the global allocator.)
 
         let palette: color::Palette = 'palette: {
@@ -335,7 +335,7 @@ impl DerivedConfig {
             // This has to be last so that we copy AFTER the arena allocations
             // above happen (Zig assigns in order).
             //
-            // (PORT: the `arena` field collapsed — see the struct PORT NOTE.)
+            // (PORT NOTE: the `arena` field collapsed — see the struct PORT NOTE.)
         }
     }
 
@@ -496,7 +496,7 @@ impl<M: AppMailbox> Termio<M> {
         //     break :modes modes;
         // };
         //
-        // (PORT: the packed-bit-set field writes `modes.grapheme_cluster = true`
+        // (PORT NOTE: the packed-bit-set field writes `modes.grapheme_cluster = true`
         // / `modes.cursor_blinking = ...` use the public `ModeState::set` +
         // `.values` path since `ModePacked`'s per-field bit helpers are private —
         // the `terminal_full_reset_default_modes` test precedent.)
@@ -558,11 +558,11 @@ impl<M: AppMailbox> Termio<M> {
                 kitty_image_loading_limits: Limits::ALL,
             },
         )
-        // (PORT: `Terminal::init`'s `OutOfMemory` maps to the opaque termio
+        // (PORT NOTE: `Terminal::init`'s `OutOfMemory` maps to the opaque termio
         // `crate::Error` — the reference `try` bubbles the alloc failure.)
         .map_err(|_| Error)?;
         // errdefer term.deinit(alloc);
-        // (PORT: `Terminal::init` is the sole fallible step and runs BEFORE any
+        // (PORT NOTE: `Terminal::init` is the sole fallible step and runs BEFORE any
         // write into `*self_`; on error we return before writing, so no
         // partial-init cleanup is needed — the errdefer collapses.)
 
@@ -585,7 +585,7 @@ impl<M: AppMailbox> Termio<M> {
         let mut backend = opts.backend;
         backend.initTerminal(&mut term);
 
-        // (PORT: read every `opts.config.*` scalar the handler needs BEFORE the
+        // (PORT NOTE: read every `opts.config.*` scalar the handler needs BEFORE the
         // `opts.config` value is moved into `self.config` below — Zig copies the
         // fields by value; Rust must not read a moved-out value. `enquiry_response`
         // is the one owned field, cloned as the handler's owned copy — see the
@@ -596,7 +596,7 @@ impl<M: AppMailbox> Termio<M> {
         let handler_cursor_style = opts.config.cursor_style;
         let handler_cursor_blink = opts.config.cursor_blink;
 
-        // (PORT: `opts.surface_mailbox`/`opts.renderer_wakeup`/`opts.renderer_state`
+        // (PORT NOTE: `opts.surface_mailbox`/`opts.renderer_wakeup`/`opts.renderer_state`
         // /`opts.renderer_mailbox`/`alloc` are all `Copy` — the reference uses each
         // in BOTH `self.*` and the handler; the `M: Copy` bound makes the double
         // use a copy, not a move.)
@@ -606,13 +606,13 @@ impl<M: AppMailbox> Termio<M> {
         let renderer_mailbox = opts.renderer_mailbox;
 
         // const thread_enter_state = try ThreadEnterState.create(alloc, opts.full_config);
-        // (PORT: `ThreadEnterState::create` is infallible — the arena OOM half of
+        // (PORT NOTE: `ThreadEnterState::create` is infallible — the arena OOM half of
         // the reference `!` collapsed; returns `Option<Box<ThreadEnterState>>`.)
         let thread_enter_state = ThreadEnterState::create(opts.full_config);
 
         // self.* = .{ ... };
         //
-        // (PORT: the reference `self.* = .{...}` overwrites the out-pointer's
+        // (PORT NOTE: the reference `self.* = .{...}` overwrites the out-pointer's
         // storage in one shot; Rust writes each field via `ptr::write` into the
         // uninitialized `*self_` — no old value is dropped, and every field is
         // written exactly once. `terminal`/`size`/`mailbox` are written FIRST so
@@ -811,7 +811,7 @@ impl<M: AppMailbox> Termio<M> {
             // const inputs: ?[]const ThreadEnterState.Input = if (self.thread_enter_state) |v|
             //     try v.prepareInput() else null;
             let inputs: Option<Vec<Input>> = match unsafe { (*self_).thread_enter_state.as_mut() } {
-                // (PORT: `try v.prepareInput()` — the `InputNotFound` error maps to
+                // (PORT NOTE: `try v.prepareInput()` — the `InputNotFound` error maps to
                 // the opaque `crate::Error`; the reference bubbles it to
                 // `threadMain`'s error switch, unreachable while `Error` is opaque.)
                 Some(v) => Some(v.prepareInput().map_err(|_| Error)?),
@@ -851,7 +851,7 @@ impl<M: AppMailbox> Termio<M> {
                     .threadEnter((*self_).alloc, self_, &mut *data)
             }?;
             // errdefer self.backend.threadExit(data);
-            // (PORT: fired explicitly on each input-queue error below — the sole
+            // (PORT NOTE: fired explicitly on each input-queue error below — the sole
             // steps after `backend.threadEnter` succeeds.)
 
             // If we have inputs, then queue them all up.
@@ -1026,7 +1026,7 @@ impl<M: AppMailbox> Termio<M> {
         // Set the image limits
         // try self.terminal.setKittyGraphicsSizeLimit(self.alloc, config.image_storage_limit);
         //
-        // (PORT: the reference `try` returns early on error, and the guard-less
+        // (PORT NOTE: the reference `try` returns early on error, and the guard-less
         // `defer unlock` still fires; `setKittyGraphicsLoadingLimits` below is
         // only reached on success — mirrored by the `is_ok()` fall-through.)
         let size_limit = self
@@ -1532,7 +1532,7 @@ impl<M: AppMailbox> Termio<M> {
         //     log.warn("failed to get current time err={}", .{err});
         // }
         //
-        // (PORT: Rust's `Instant::now()` is infallible, so the `else |err|` warn
+        // (PORT NOTE: Rust's `Instant::now()` is infallible, so the `else |err|` warn
         // arm never fires; `since` -> `duration_since`, `500 * ns_per_ms` ->
         // `Duration::from_millis(500)`.)
         let now = std::time::Instant::now();
@@ -1698,7 +1698,7 @@ impl<M: AppMailbox> ThreadData<M> {
     pub fn deinit(&mut self) {
         self.backend.deinit(self.alloc);
         // self.* = undefined;
-        // (PORT: the reference poisons the struct; Rust ownership leaves the
+        // (PORT NOTE: the reference poisons the struct; Rust ownership leaves the
         // value in place — callers must not reuse it after deinit.)
     }
 }
@@ -1738,13 +1738,13 @@ impl core::fmt::Write for FixedWriter<'_> {
     }
 }
 
-// PORT: the `log.warn` call site in `prepareInput`, preserved verbatim
+// PORT NOTE: the `log.warn` call site in `prepareInput`, preserved verbatim
 // (cf_release log-helper precedent).
 fn log_warn_input_open_failed(_path: &[u8], _err: &std::io::Error) {
     // log.warn("failed to open input file={s} err={}", .{ path, err });
 }
 
-/// PORT: `std.fs.File.readToEndAlloc(alloc, max_bytes)` — reads the whole file
+/// PORT NOTE: `std.fs.File.readToEndAlloc(alloc, max_bytes)` — reads the whole file
 /// into an owned buffer, erroring if it exceeds `max_bytes` (the reference's
 /// `error.FileTooBig`). Consumed by `Termio::threadEnter`'s input-file arm,
 /// whose caller maps any error to `error.InputFailed`.

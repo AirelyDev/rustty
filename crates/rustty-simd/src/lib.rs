@@ -20,7 +20,7 @@ pub mod index_of;
 pub mod vt;
 pub use codepoint_width::codepointWidth;
 
-// PORT: `base64_scalar.zig` is imported transitively by `base64.zig` (it is not
+// PORT NOTE: `base64_scalar.zig` is imported transitively by `base64.zig` (it is not
 // re-exported by main.zig). It is a private submodule of this crate here.
 mod base64_scalar;
 
@@ -28,7 +28,7 @@ mod base64_scalar;
 mod tests {
     // @import("std").testing.refAllDecls(@This());
     //
-    // PORT: Zig's `refAllDecls` forces every public declaration in the module
+    // PORT NOTE: Zig's `refAllDecls` forces every public declaration in the module
     // tree to be referenced (and thus semantically analyzed / its tests
     // discovered) at test time. Rust's test harness already compiles and runs
     // every `#[test]` in every submodule unconditionally, so this is a no-op

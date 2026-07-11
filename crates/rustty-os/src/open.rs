@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/open.zig` — every line, comment, and `test {}`
 //! is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, `Allocator = std.mem.Allocator`,
+// PORT NOTE: the Zig reference imports `std`, `builtin`, `Allocator = std.mem.Allocator`,
 // `build_config = @import("../build_config.zig")`, and `apprt = @import("../apprt.zig")`,
 // and uses `std.log.scoped(.@"os-open")`.
 //
@@ -24,7 +24,7 @@ use rustty_build_config as build_config;
 #[allow(dead_code)]
 const LOG_SCOPE: &str = "os-open";
 
-/// PORT (R4 seam): the parity image of `apprt.action.OpenUrl.Kind`. The type of
+/// PORT NOTE (R4 seam): the parity image of `apprt.action.OpenUrl.Kind`. The type of
 /// the data at the URL to open. This is used as a hint to potentially open the
 /// URL in a different way.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -37,7 +37,7 @@ pub enum Kind {
     Html,
 }
 
-/// PORT: the reference's error union from `open`/`std.process.Child` operations.
+/// PORT NOTE: the reference's error union from `open`/`std.process.Child` operations.
 #[derive(Debug)]
 pub enum OpenError {
     Unimplemented,

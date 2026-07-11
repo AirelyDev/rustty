@@ -1,6 +1,6 @@
 //! A common interface for all generators.
 //!
-//! PORT: `synthetic/Generator.zig`. The Zig `Generator` is a `{ptr, nextFn}`
+//! PORT NOTE: `synthetic/Generator.zig`. The Zig `Generator` is a `{ptr, nextFn}`
 //! vtable that type-erases the concrete generator so `Bytes`/`Osc`/`Utf8` share
 //! one type. We reproduce the vtable as a `ptr + next_fn` pair, generic over the
 //! writer `W` (Zig's `*std.Io.Writer` is a single runtime interface type; in
@@ -15,7 +15,7 @@ pub use crate::io::{Writer, WriterExt};
 /// For generators, this is the only error that is allowed to be
 /// returned by the next function.
 ///
-/// PORT: `pub const Error = error{WriteFailed}`. In the generic port the error
+/// PORT NOTE: `pub const Error = error{WriteFailed}`. In the generic port the error
 /// is the writer's own `Error`; for the fixed-buffer writers the generators run
 /// against, that error IS `WriteFailed`.
 pub type Error = crate::io::WriteFailed;
@@ -32,7 +32,7 @@ impl<'a, W: Writer> Generator<'a, W> {
     /// This usually is only called by generator implementations, not
     /// generator users.
     ///
-    /// PORT: the `comptime nextFn` closure that `@ptrCast`s `ptr` back to the
+    /// PORT NOTE: the `comptime nextFn` closure that `@ptrCast`s `ptr` back to the
     /// concrete generator is the caller-supplied `next_fn` trampoline here. The
     /// Zig `init` asserts on the pointer become compile-time guarantees:
     // assert(@typeInfo(Ptr) == .pointer); // Must be a pointer

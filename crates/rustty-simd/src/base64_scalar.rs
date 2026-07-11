@@ -5,7 +5,7 @@
 use rustty_util::quirks::inlineAssert as assert;
 use std::sync::LazyLock;
 
-// PORT: the reference declares `scalar_decoder` as a comptime `const` whose
+// PORT NOTE: the reference declares `scalar_decoder` as a comptime `const` whose
 // `init` runs `assert`s at compile time. Rust's const-fn cannot call the
 // (non-const) `quirks.inlineAssert`, so this is a lazily-initialized singleton
 // instead; `init` runs identically (same asserts) on first access. The value is

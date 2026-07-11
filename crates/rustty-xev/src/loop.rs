@@ -15,7 +15,7 @@
 
 use crate::kqueue::{Completion, Loop};
 
-// PORT: `const std = @import("std");` / `const assert = std.debug.assert;` /
+// PORT NOTE: `const std = @import("std");` / `const assert = std.debug.assert;` /
 // `const xev = @import("main.zig");` — the Rust equivalents are the concrete
 // `crate::kqueue` types imported above (the macOS single-backend `xev`).
 

@@ -4,7 +4,7 @@
 //! This file provides info extracted from the nerd fonts patcher script,
 //! specifying the scaling/positioning attributes of various glyphs.
 //
-// PORT: ghostty src/font/nerd_font_attributes.zig (a generated lookup table).
+// PORT NOTE: ghostty src/font/nerd_font_attributes.zig (a generated lookup table).
 // `const Constraint = @import("Glyph.zig").RenderOptions.Constraint;` maps to
 // `crate::glyph::Constraint` (the reference's `RenderOptions.Constraint`). The
 // Zig `switch (cp)` over `u21` becomes a Rust `match cp` over `u32`; each arm

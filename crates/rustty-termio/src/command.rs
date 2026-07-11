@@ -67,7 +67,7 @@ use core::fmt::Write as _;
 #[cfg(not(windows))]
 use std::os::fd::{AsRawFd as _, RawFd};
 
-/// PORT: `EnvMap = std.process.EnvMap` — a string-keyed hash map of
+/// PORT NOTE: `EnvMap = std.process.EnvMap` — a string-keyed hash map of
 /// environment variables (the same shape rustty-os `getEnvMap` returns).
 pub type EnvMap = std::collections::HashMap<String, String>;
 
@@ -75,7 +75,7 @@ pub type EnvMap = std::collections::HashMap<String, String>;
 /// fork, but before exec'ing the command. If the function returns a u8, the
 /// child process will be exited with that error code.
 //
-// PORT: reference `const PreExecFn = fn (*Command) ?u8;` — the struct fields
+// PORT NOTE: reference `const PreExecFn = fn (*Command) ?u8;` — the struct fields
 // below carry `?*const PreExecFn`, i.e. optional function POINTERS, which is
 // exactly Rust's `Option<fn(..)>`. (Zig leaks the file-private type through the
 // pub fields; Rust requires the alias itself to be pub.)
@@ -84,7 +84,7 @@ pub type PreExecFn = for<'a, 'b> fn(&'b mut Command<'a>) -> Option<u8>;
 /// Allowable set of errors that can be returned by a post fork function. Any
 /// errors will result in the failure to create the surface.
 //
-// PORT: reference `pub const PostForkError = error{PostForkError};` — a
+// PORT NOTE: reference `pub const PostForkError = error{PostForkError};` — a
 // single-member Zig error set; a unit struct carries it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PostForkError;
@@ -100,7 +100,7 @@ impl std::error::Error for PostForkError {}
 /// Function prototype for a function executed /in the parent process/
 /// after the fork.
 //
-// PORT: reference `const PostForkFn = fn (*Command) PostForkError!void;`.
+// PORT NOTE: reference `const PostForkFn = fn (*Command) PostForkError!void;`.
 pub type PostForkFn = for<'a, 'b> fn(&'b mut Command<'a>) -> Result<(), PostForkError>;
 
 /// PORT NOTE (Rust-only glue): the reference's `start`/`wait` error sets are
@@ -173,7 +173,7 @@ pub struct Command<'a> {
     /// This field is null-terminated to avoid a copy for the sake of
     /// adding a null terminator since POSIX systems are so common.
     //
-    // PORT: `path: [:0]const u8` -> `&CStr` (Rust's borrowed null-terminated
+    // PORT NOTE: `path: [:0]const u8` -> `&CStr` (Rust's borrowed null-terminated
     // byte slice; NEVER a lossy String — R1 byte-slice rule).
     pub path: &'a CStr,
 
@@ -181,26 +181,26 @@ pub struct Command<'a> {
     /// args[0] to the command. If args is empty then args[0] will automatically
     /// be set to equal path.
     //
-    // PORT: `args: []const [:0]const u8` -> `&[&CStr]`.
+    // PORT NOTE: `args: []const [:0]const u8` -> `&[&CStr]`.
     pub args: &'a [&'a CStr],
 
     /// Environment variables for the child process. If this is null, inherits
     /// the environment variables from this process. These are the exact
     /// environment variables to set; these are /not/ merged.
     //
-    // PORT: `env: ?*const EnvMap = null` -> borrowed `Option<&EnvMap>`.
+    // PORT NOTE: `env: ?*const EnvMap = null` -> borrowed `Option<&EnvMap>`.
     pub env: Option<&'a EnvMap>,
 
     /// Working directory to change to in the child process. If not set, the
     /// working directory of the calling process is preserved.
     //
-    // PORT: `cwd: ?[]const u8 = null` -> `Option<&[u8]>` (raw path bytes).
+    // PORT NOTE: `cwd: ?[]const u8 = null` -> `Option<&[u8]>` (raw path bytes).
     pub cwd: Option<&'a [u8]>,
 
     /// The file handle to set for stdin/out/err. If this isn't set, we do
     /// nothing explicitly so it is up to the behavior of the operating system.
     //
-    // PORT: `?File = null` -> `Option<&File>`. Zig's `File` is a copyable fd
+    // PORT NOTE: `?File = null` -> `Option<&File>`. Zig's `File` is a copyable fd
     // wrapper that Command never closes; the Rust borrow preserves exactly
     // that (the caller keeps ownership and closes).
     pub stdin: Option<&'a File>,
@@ -233,7 +233,7 @@ pub struct Command<'a> {
     /// If set, then the process will be created attached to this pseudo console.
     /// `stdin`, `stdout`, and `stderr` will be ignored if set.
     //
-    // PORT: reference `pseudo_console: if (builtin.os.tag == .windows)
+    // PORT NOTE: reference `pseudo_console: if (builtin.os.tag == .windows)
     // ?windows.exp.HPCON else void = if (windows) null else {}` — the
     // comptime-windows field maps to a cfg-gated field (absent on posix, like
     // the reference's zero-size `void`).
@@ -243,12 +243,12 @@ pub struct Command<'a> {
     /// User data that is sent to the callback. Set with setData and getData
     /// for a more user-friendly API.
     //
-    // PORT: `data: ?*anyopaque = null` -> `Option<*mut c_void>`.
+    // PORT NOTE: `data: ?*anyopaque = null` -> `Option<*mut c_void>`.
     pub data: Option<*mut c_void>,
 
     /// Process ID is set after start is called.
     //
-    // PORT: `pid: ?posix.pid_t = null`. On windows the reference stores the
+    // PORT NOTE: `pid: ?posix.pid_t = null`. On windows the reference stores the
     // process HANDLE here (`self.pid = process_information.hProcess`).
     #[cfg(not(windows))]
     pub pid: Option<libc::pid_t>,
@@ -258,7 +258,7 @@ pub struct Command<'a> {
 
 /// The various methods a process may exit.
 //
-// PORT: reference `pub const Exit = if (builtin.os.tag == .windows)
+// PORT NOTE: reference `pub const Exit = if (builtin.os.tag == .windows)
 // union(enum) { Exited: u32 } else union(enum) { ... }` — cfg-gated enums.
 #[cfg(windows)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,7 +286,7 @@ pub enum Exit {
 #[cfg(not(windows))]
 impl Exit {
     pub fn init(status: u32) -> Exit {
-        // PORT: Zig `posix.W.IFEXITED/EXITSTATUS/IFSIGNALED/TERMSIG/IFSTOPPED/
+        // PORT NOTE: Zig `posix.W.IFEXITED/EXITSTATUS/IFSIGNALED/TERMSIG/IFSTOPPED/
         // STOPSIG` == the libc W* status macros (same libc).
         let st = status as libc::c_int;
         if libc::WIFEXITED(st) {
@@ -347,14 +347,14 @@ impl<'a> Command<'a> {
     ///
     /// After this is successful, self.pid is available.
     //
-    // PORT: `pub fn start(self: *Command, alloc: Allocator) !void`.
+    // PORT NOTE: `pub fn start(self: *Command, alloc: Allocator) !void`.
     pub fn start(&mut self, _alloc: Allocator) -> Result<(), Error> {
         // Use an arena allocator for the temporary allocations we need in this func.
         // IMPORTANT: do all allocation prior to the fork(). I believe it is undefined
         // behavior if you malloc between fork and exec. The source of the Zig
         // stdlib seems to verify this as well as Go.
         //
-        // PORT: `var arena_allocator = std.heap.ArenaAllocator.init(alloc);
+        // PORT NOTE: `var arena_allocator = std.heap.ArenaAllocator.init(alloc);
         // defer arena_allocator.deinit(); const arena = arena_allocator.allocator();`
         // — the arena collapses to owned temporaries created in
         // startPosix/startWindows BEFORE the fork() and dropped when this call
@@ -375,13 +375,13 @@ impl<'a> Command<'a> {
         }
     }
 
-    // PORT: `fn startPosix(self: *Command, arena: Allocator) !void` — the
+    // PORT NOTE: `fn startPosix(self: *Command, arena: Allocator) !void` — the
     // arena parameter collapses into the owned temporaries below, which are
     // all created before the fork() (see `start`).
     #[cfg(not(windows))]
     fn startPosix(&mut self) -> Result<(), Error> {
         // Null-terminate all our arguments
-        // PORT: `const argsZ = try arena.allocSentinel(?[*:0]const u8,
+        // PORT NOTE: `const argsZ = try arena.allocSentinel(?[*:0]const u8,
         // self.args.len, null); for (self.args, 0..) |arg, i| argsZ[i] = arg.ptr;`
         let mut argsZ: Vec<*const c_char> = Vec::with_capacity(self.args.len() + 1);
         for arg in self.args {
@@ -390,7 +390,7 @@ impl<'a> Command<'a> {
         argsZ.push(std::ptr::null()); // (the allocSentinel null terminator)
 
         // Determine our env vars
-        // PORT: `const envp = if (self.env) |env_map|
+        // PORT NOTE: `const envp = if (self.env) |env_map|
         //     (try createNullDelimitedEnvMap(arena, env_map)).ptr
         // else if (builtin.link_libc)
         //     std.c.environ
@@ -405,7 +405,7 @@ impl<'a> Command<'a> {
         };
 
         // Fork.
-        // PORT: Zig `posix.fork()` maps EAGAIN/ENOMEM to `error.SystemResources`
+        // PORT NOTE: Zig `posix.fork()` maps EAGAIN/ENOMEM to `error.SystemResources`
         // and anything else to `unexpectedErrno`.
         let pid = unsafe { libc::fork() };
         if pid < 0 {
@@ -454,7 +454,7 @@ impl<'a> Command<'a> {
         // Restore any rlimits that were set by Ghostty. This might fail but
         // any failures are ignored (its best effort).
         //
-        // PORT: `global_state.rlimits.restore();` — rustty-global's `STATE`
+        // PORT NOTE: `global_state.rlimits.restore();` — rustty-global's `STATE`
         // OnceLock is the memory-safe analogue of the reference's
         // undefined-until-init global `state`; when unset (e.g. under
         // `cargo test`) there is nothing to restore (best effort, matching
@@ -488,7 +488,7 @@ impl<'a> Command<'a> {
         // something reasonable. Its important to note we MUST NOT return
         // any other error condition from here on out.
         //
-        // PORT: `var stderr_buf: [1024]u8 = undefined; var stderr_writer =
+        // PORT NOTE: `var stderr_buf: [1024]u8 = undefined; var stderr_writer =
         // std.fs.File.stderr().writer(&stderr_buf); const stderr =
         // &stderr_writer.interface;` — a fixed stack-buffer writer over fd 2
         // (NO heap allocation in the forked child).
@@ -518,7 +518,7 @@ impl<'a> Command<'a> {
         Err(Error::ExecFailedInChild)
     }
 
-    // PORT: `fn startWindows(self: *Command, arena: Allocator) !void` — the
+    // PORT NOTE: `fn startWindows(self: *Command, arena: Allocator) !void` — the
     // arena collapses into the owned temporaries below. cfg-gated structural
     // port (pty.rs WindowsPty precedent); unverified on a Windows target
     // (DEFERRALS.md, Windows spawn path).
@@ -549,7 +549,7 @@ impl<'a> Command<'a> {
         let env_w = self.env.map(createWindowsEnvBlock);
 
         let any_null_fd = self.stdin.is_none() || self.stdout.is_none() || self.stderr.is_none();
-        // PORT: `try windows.OpenFile(&[_]u16{ '\\','D','e','v','i','c','e',
+        // PORT NOTE: `try windows.OpenFile(&[_]u16{ '\\','D','e','v','i','c','e',
         // '\\','N','u','l','l' }, .{ .access_mask = windows.GENERIC_READ |
         // windows.SYNCHRONIZE, .share_access = windows.FILE_SHARE_READ,
         // .creation = windows.OPEN_EXISTING })` — std.os.windows.OpenFile is
@@ -563,7 +563,7 @@ impl<'a> Command<'a> {
             None
         };
         // defer if (null_fd) |fd| posix.close(fd);
-        // (PORT: Zig `posix.close` on a Windows handle is CloseHandle; the
+        // (PORT NOTE: Zig `posix.close` on a Windows handle is CloseHandle; the
         // guard's Drop runs it on every exit path.)
         let _null_fd_guard = CloseHandleGuard(null_fd);
 
@@ -717,7 +717,7 @@ impl<'a> Command<'a> {
 
     /// Wait for the command to exit and return information about how it exited.
     //
-    // PORT: `pub fn wait(self: Command, block: bool) !Exit` — Zig takes the
+    // PORT NOTE: `pub fn wait(self: Command, block: bool) !Exit` — Zig takes the
     // struct by (copyable) value; `&self` is the Rust equivalent read.
     pub fn wait(&self, block: bool) -> Result<Exit, Error> {
         // if (comptime builtin.os.tag == .windows) { ... }
@@ -775,7 +775,7 @@ impl<'a> Command<'a> {
 
     /// Returns command->data.
     //
-    // PORT: `pub fn getData(self: Command, comptime DT: type) ?*DT` — the
+    // PORT NOTE: `pub fn getData(self: Command, comptime DT: type) ?*DT` — the
     // `@ptrCast(@alignCast(ptr))` is the raw-pointer cast (no dereference).
     pub fn getData<DT>(&self) -> Option<*mut DT> {
         // return if (self.data) |ptr| @ptrCast(@alignCast(ptr)) else null;
@@ -783,7 +783,7 @@ impl<'a> Command<'a> {
     }
 }
 
-// PORT: the arena-owned return of `createNullDelimitedEnvMap`
+// PORT NOTE: the arena-owned return of `createNullDelimitedEnvMap`
 // (`[:0]?[*:0]u8`): `ptrs` is the null-POINTER-terminated `envp` array (the
 // `[:0]` sentinel is the trailing null pointer, NOT counted by `len()`), and
 // `_bufs` owns the underlying `KEY=VALUE\0` allocations for the array's
@@ -813,7 +813,7 @@ impl NullDelimitedEnvMap {
 // Copied from Zig. This is a publicly exported function but there is no
 // way to get it from the std package.
 //
-// PORT: `fn createNullDelimitedEnvMap(arena: mem.Allocator, env_map: *const
+// PORT NOTE: `fn createNullDelimitedEnvMap(arena: mem.Allocator, env_map: *const
 // EnvMap) ![:0]?[*:0]u8` — the arena parameter collapses into the owned
 // `NullDelimitedEnvMap` (dropped with the caller's frame); infallible in
 // Rust's allocation model (the `!` was `Allocator.Error`). All allocation
@@ -861,7 +861,7 @@ fn createNullDelimitedEnvMap(env_map: &EnvMap) -> NullDelimitedEnvMap {
 // Copied from Zig. This is a publicly exported function but there is no
 // way to get it from the std package.
 //
-// PORT: `fn createWindowsEnvBlock(allocator: mem.Allocator, env_map: *const
+// PORT NOTE: `fn createWindowsEnvBlock(allocator: mem.Allocator, env_map: *const
 // EnvMap) ![]u16` — the allocator collapses into the returned Vec. Compiled
 // on all targets (pure re-encode logic); only `startWindows` calls it.
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -913,7 +913,7 @@ fn createWindowsEnvBlock(env_map: &EnvMap) -> Vec<u16> {
 
 /// Copied from Zig. This function could be made public in child_process.zig instead.
 //
-// PORT: `fn windowsCreateCommandLine(allocator: mem.Allocator, argv: []const
+// PORT NOTE: `fn windowsCreateCommandLine(allocator: mem.Allocator, argv: []const
 // []const u8) ![:0]u8` — the `std.Io.Writer.Allocating` buffer maps to an
 // owned `Vec<u8>`; callers pass their `[:0]` args (`&CStr`), which Zig
 // coerces to plain `[]const u8` here. The returned `[:0]` sentinel is not
@@ -1030,19 +1030,19 @@ fn setupFd(src: RawFd, target: i32) -> Result<(), Error> {
 }
 
 // ---------------------------------------------------------------------------
-// PORT (Zig-std shims, Rust-only glue): the `std.posix`/`std.c` surface the
+// PORT NOTE (Zig-std shims, Rust-only glue): the `std.posix`/`std.c` surface the
 // reference calls into, reproduced faithfully over the same libc (R3). None of
 // these heap-allocate — several run in the forked child where allocation is
 // forbidden (see `start`).
 // ---------------------------------------------------------------------------
 
-/// PORT (Zig-std shim): `posix.errno(rc)` — the calling thread's errno value.
+/// PORT NOTE (Zig-std shim): `posix.errno(rc)` — the calling thread's errno value.
 #[cfg(not(windows))]
 fn errno() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
 
-/// PORT (Zig-std shim): `posix.exit(code)` — the reference links libc, so this
+/// PORT NOTE (Zig-std shim): `posix.exit(code)` — the reference links libc, so this
 /// is `std.c.exit(status)`: the libc `exit(3)` (atexit handlers + C-stdio
 /// flush) and NOTHING more. Deliberately NOT Rust's `std::process::exit`,
 /// which first runs `rt::cleanup()` — that takes the Rust stdout lock and
@@ -1060,7 +1060,7 @@ pub(crate) fn posix_exit(status: u8) -> ! {
     unsafe { libc::exit(i32::from(status)) }
 }
 
-/// PORT (Zig-std shim): `std.c.environ` — the libc-provided environment block
+/// PORT NOTE (Zig-std shim): `std.c.environ` — the libc-provided environment block
 /// used when `self.env` is null (inherit). On Apple platforms the dylib-safe
 /// accessor is `_NSGetEnviron`; elsewhere the global `environ` symbol.
 #[cfg(not(windows))]
@@ -1078,7 +1078,7 @@ fn environ() -> *const *const c_char {
     }
 }
 
-/// PORT (Zig-std shim): `posix.chdir([]const u8)` — copies the (non-sentinel)
+/// PORT NOTE (Zig-std shim): `posix.chdir([]const u8)` — copies the (non-sentinel)
 /// path into a stack `PATH_MAX` buffer (no heap allocation; called in the
 /// forked child) and issues the chdir syscall. Over-long paths map to
 /// `error.NameTooLong` (the caller ignores every failure).
@@ -1096,7 +1096,7 @@ fn posix_chdir(dir_path: &[u8]) -> Result<(), i32> {
     Ok(())
 }
 
-/// PORT (Zig-std shim): `posix.dup2` — loops on EBUSY/EINTR; EMFILE maps to
+/// PORT NOTE (Zig-std shim): `posix.dup2` — loops on EBUSY/EINTR; EMFILE maps to
 /// `error.ProcessFdQuotaExceeded`; EINVAL/EBADF are unreachable (invalid
 /// parameters / invalid file descriptor).
 #[cfg(any(target_os = "freebsd", target_os = "ios", target_os = "macos"))]
@@ -1115,7 +1115,7 @@ fn posix_dup2(old_fd: RawFd, new_fd: RawFd) -> Result<(), Error> {
     }
 }
 
-/// PORT (Zig-std shim): `std.posix.WaitPidResult` — the `{ pid, status }`
+/// PORT NOTE (Zig-std shim): `std.posix.WaitPidResult` — the `{ pid, status }`
 /// pair `waitpid` yields.
 //
 // (pub(crate): Exec.zig's killPid calls the same `posix.waitpid` shim —
@@ -1126,7 +1126,7 @@ pub(crate) struct WaitPidResult {
     pub(crate) status: u32,
 }
 
-/// PORT (Zig-std shim): `posix.waitpid` — loops on EINTR; ECHILD/EINVAL are
+/// PORT NOTE (Zig-std shim): `posix.waitpid` — loops on EINTR; ECHILD/EINVAL are
 /// unreachable per the Zig std contract (the process exists and is ours; the
 /// flags are valid).
 #[cfg(not(windows))]
@@ -1149,7 +1149,7 @@ pub(crate) fn posix_waitpid(pid: libc::pid_t, flags: u32) -> WaitPidResult {
     }
 }
 
-/// PORT (Zig-std shim): the `ExecveError` set of `posix.execveZ` — the errno
+/// PORT NOTE (Zig-std shim): the `ExecveError` set of `posix.execveZ` — the errno
 /// mapping the reference's failed-exec reporting switches over.
 #[cfg(not(windows))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1193,7 +1193,7 @@ impl core::fmt::Display for ExecveError {
     }
 }
 
-/// PORT (Zig-std shim): `posix.execveZ` — issues execve(2) and maps the errno
+/// PORT NOTE (Zig-std shim): `posix.execveZ` — issues execve(2) and maps the errno
 /// exactly as the Zig std does (only returns on failure).
 #[cfg(not(windows))]
 fn execveZ(
@@ -1236,7 +1236,7 @@ fn execveZ(
     }
 }
 
-/// PORT (Zig-std shim): `posix.execvpeZ` — Zig implements the `p`-variant in
+/// PORT NOTE (Zig-std shim): `posix.execvpeZ` — Zig implements the `p`-variant in
 /// userspace (macOS has no execvpe(3)): a file containing '/' execs directly;
 /// otherwise every PATH segment is tried with the candidate built in a stack
 /// buffer. NO heap allocation (we are between fork and exec — see `start`).
@@ -1292,7 +1292,7 @@ fn execvpeZ(
     err
 }
 
-/// PORT: the reference's fixed `stderr_buf: [1024]u8` +
+/// PORT NOTE: the reference's fixed `stderr_buf: [1024]u8` +
 /// `File.stderr().writer(&stderr_buf)` — a stack-buffered `fmt` writer so the
 /// failed-exec message is formatted WITHOUT heap allocation in the forked
 /// child; `flush` issues the single write(2) to fd 2. (Content beyond the
@@ -1328,7 +1328,7 @@ impl StackWriter<'_> {
 }
 
 // ---------------------------------------------------------------------------
-// PORT (kernel32 shims local to Command, windows-only): the Win32 calls the
+// PORT NOTE (kernel32 shims local to Command, windows-only): the Win32 calls the
 // reference reaches through `std.os.windows` that rustty-os::windows does not
 // yet bind — declared here against the same DLL.
 // ---------------------------------------------------------------------------
@@ -1342,14 +1342,14 @@ mod win_kernel32 {
     }
 }
 
-/// PORT: `windows.unexpectedError(windows.kernel32.GetLastError())` — mapped
+/// PORT NOTE: `windows.unexpectedError(windows.kernel32.GetLastError())` — mapped
 /// into the named `Error` union (payload carries the Win32 error code).
 #[cfg(windows)]
 fn win_unexpected(err: rustty_os::windows::DWORD) -> Error {
     Error::Unexpected(err as i32)
 }
 
-/// PORT (Zig-std shim): `std.unicode.utf8ToUtf16LeAllocZ` — validates UTF-8
+/// PORT NOTE (Zig-std shim): `std.unicode.utf8ToUtf16LeAllocZ` — validates UTF-8
 /// and re-encodes into a null-terminated UTF-16 buffer.
 #[cfg(windows)]
 fn utf8ToUtf16LeAllocZ(s: &[u8]) -> Result<Vec<u16>, Error> {
@@ -1359,7 +1359,7 @@ fn utf8ToUtf16LeAllocZ(s: &[u8]) -> Result<Vec<u16>, Error> {
     Ok(out)
 }
 
-/// See the `windows.OpenFile` PORT note at the call site in `startWindows`.
+/// See the `windows.OpenFile` PORT NOTE at the call site in `startWindows`.
 #[cfg(windows)]
 fn openDeviceNull() -> Result<rustty_os::windows::HANDLE, Error> {
     use rustty_os::windows;
@@ -1381,7 +1381,7 @@ fn openDeviceNull() -> Result<rustty_os::windows::HANDLE, Error> {
     Ok(handle)
 }
 
-/// PORT: the `defer if (null_fd) |fd| posix.close(fd);` of `startWindows`
+/// PORT NOTE: the `defer if (null_fd) |fd| posix.close(fd);` of `startWindows`
 /// (Zig `posix.close` on windows is CloseHandle) as a Drop guard.
 #[cfg(windows)]
 struct CloseHandleGuard(Option<rustty_os::windows::HANDLE>);
@@ -1432,7 +1432,7 @@ mod tests {
 
         // var arena = std.heap.ArenaAllocator.init(allocator);
         // defer arena.deinit();
-        // (PORT: the arena collapses — NullDelimitedEnvMap owns its buffers.)
+        // (PORT NOTE: the arena collapses — NullDelimitedEnvMap owns its buffers.)
         // const environ = try createNullDelimitedEnvMap(arena.allocator(), &envmap);
         let environ = createNullDelimitedEnvMap(&envmap);
 
@@ -1468,7 +1468,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // real fork/exec/waitpid syscalls (termio's G6 tool is ASan, not Miri)
     fn command_os_pre_exec_1() {
         // if (builtin.os.tag == .windows) return error.SkipZigTest;
-        // (PORT: the reference's windows SkipZigTest maps to cfg-gating the
+        // (PORT NOTE: the reference's windows SkipZigTest maps to cfg-gating the
         // body — on windows the test compiles to the skip, mirroring the
         // F3 DirectWrite precedent.)
         #[cfg(not(windows))]
@@ -1734,7 +1734,7 @@ mod tests {
         // const file = try dir.createFile("stderr.txt", .{ .read = true });
         let file = dir.createFile("stderr.txt", true)?;
         // if (builtin.os.tag == .windows) { try windows.SetHandleInformation(...); }
-        // (PORT: the windows branch mirrors createTestStdout's above; this
+        // (PORT NOTE: the windows branch mirrors createTestStdout's above; this
         // helper is compiled only on posix — the sole caller is
         // windows-skipped, matching the reference's lazy compilation.)
 

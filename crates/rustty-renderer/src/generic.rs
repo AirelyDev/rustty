@@ -264,7 +264,7 @@ impl RepeatablePath {
     }
 }
 
-/// PORT: the inferred error set of [`DerivedConfig::init`] (`ArenaAllocator`
+/// PORT NOTE: the inferred error set of [`DerivedConfig::init`] (`ArenaAllocator`
 /// OOM + the config clones + `link::Set::from_config`'s `oni::Error`) — an
 /// opaque growth-point marker until the config-coupled body lands (precedent:
 /// `message::InitChangeConfigError`).
@@ -419,7 +419,7 @@ impl DerivedConfig {
     //     };
     // }
     //
-    // PORT: the reference reads `config.@"…"` fields directly off `*const
+    // PORT NOTE: the reference reads `config.@"…"` fields directly off `*const
     // configpkg.Config`; here the `renderer -> config` edge would cycle (R4/G7), so
     // the reads go through the renderer-defined [`RendererConfig`] accessor trait
     // (`crate::config`), impl-ed by `Config` IN rustty-config. `C` is bare-bounded
@@ -920,7 +920,7 @@ mod macos_impl {
     // matching the comptime source (do NOT hand-drop the dead branch).
     const CUSTOM_SHADER_Y_IS_DOWN: bool = Metal::CUSTOM_SHADER_Y_IS_DOWN;
 
-    /// PORT: the aggregate renderer error. Reference `generic.zig` methods return
+    /// PORT NOTE: the aggregate renderer error. Reference `generic.zig` methods return
     /// Zig `!T` (inferred error unions of the Metal leaf errors + OOM). Rust `?`
     /// needs a common type, so this enum aggregates the leaf errors via the `From`
     /// impls below (R1 cycle-break glue — the faithful mapping of Zig's error-set
@@ -2441,7 +2441,7 @@ mod macos_impl {
 
         // pub fn changeConfig(self: *Self, config: *DerivedConfig) !void
         //
-        // SIGNATURE PORT (§4.3): the reference does a shallow `self.config = config.*`
+        // SIGNATURE PORT NOTE (§4.3): the reference does a shallow `self.config = config.*`
         // (a Zig move-by-copy) and relies on the caller's later `Message.deinit`. In
         // Rust `DerivedConfig` is non-`Copy` (owns `ArenaAllocator`/`Vec`/`link::Set`),
         // so this is ported as by-value ownership transfer; the `Message::ChangeConfig`
@@ -2745,7 +2745,7 @@ mod macos_impl {
         SearchSelected,
     }
 
-    /// PORT: the un-caught error sources of `rebuild_row` (the reference `!void`).
+    /// PORT NOTE: the un-caught error sources of `rebuild_row` (the reference `!void`).
     /// The only `try`s that are NOT `catch`-logged inline are `run_iter.next` (a
     /// `collection::Error`) and `font_shaper.shape` (the active shaper's `Error`,
     /// `coretext` on macOS). `rebuild_cells` catches this → `clear(y)` + log. (The

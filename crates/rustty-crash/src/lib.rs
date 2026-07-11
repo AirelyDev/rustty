@@ -17,7 +17,7 @@
 //! it later; see sentry.rs + DEFERRALS.md).
 
 // const dir = @import("dir.zig");
-// (PORT: Zig-private file imports widen to `pub mod` — the R1/G3b gates and
+// (PORT NOTE: Zig-private file imports widen to `pub mod` — the R1/G3b gates and
 // in-crate consumers address items by module path; the reference's public
 // surface is the explicit re-export list below.)
 pub mod dir;

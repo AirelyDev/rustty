@@ -41,7 +41,7 @@ pub mod none;
 /// rest of the reference error set arrives with the deferred full `state.init()`.
 #[derive(Debug)]
 pub enum InitError {
-    /// PORT: `apprt.runtime.resourcesDir(self.alloc)` failed (global.zig `init`).
+    /// PORT NOTE: `apprt.runtime.resourcesDir(self.alloc)` failed (global.zig `init`).
     ResourcesDir(rustty_os::resourcesdir::ResourcesDirError),
 }
 

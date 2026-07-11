@@ -14,7 +14,7 @@ use rustty_os as internal_os;
 
 /// Returns a Dir for the default directory. The Dir.path field must be
 /// freed with the given allocator.
-// PORT: `pub fn defaultDir(alloc: Allocator) !Dir` — the allocator parameter
+// PORT NOTE: `pub fn defaultDir(alloc: Allocator) !Dir` — the allocator parameter
 // collapses (Rust's String owns/frees its allocation; break #1 keeps
 // rustty-global injected, not a hard dep). Error set = the xdg lookup's.
 pub fn defaultDir() -> Result<Dir, internal_os::xdg::DirError> {
@@ -62,7 +62,7 @@ impl Dir {
 
 #[derive(Default)]
 pub struct ReportIterator {
-    // PORT: the reference splits the open handle (`dir: ?std.fs.Dir = null`)
+    // PORT NOTE: the reference splits the open handle (`dir: ?std.fs.Dir = null`)
     // from its iterator (`it: std.fs.Dir.Iterator = undefined`); Rust's
     // `ReadDir` is both, so one Option field carries the pair.
     pub dir: Option<std::fs::ReadDir>,
@@ -74,7 +74,7 @@ impl ReportIterator {
         self.dir = None;
     }
 
-    // PORT: `pub fn next(self: *ReportIterator) !?Report` — an inherent `next`
+    // PORT NOTE: `pub fn next(self: *ReportIterator) !?Report` — an inherent `next`
     // (NOT Iterator::next; the fallible `!?Report` shape doesn't fit the trait).
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> std::io::Result<Option<Report>> {
@@ -102,10 +102,10 @@ impl ReportIterator {
         // const stat = try dir.statFile(entry.name);
         let stat = std::fs::metadata(entry.path())?;
         Ok(Some(Report {
-            // PORT: the reference's `entry.name` is a borrow into the iterator
+            // PORT NOTE: the reference's `entry.name` is a borrow into the iterator
             // (invalidated by the next `next()`); Rust owns the bytes.
             name: entry.file_name().into_encoded_bytes(),
-            // PORT: `stat.mtime` — Zig reports nanoseconds since the epoch as
+            // PORT NOTE: `stat.mtime` — Zig reports nanoseconds since the epoch as
             // an i128 (negative for pre-epoch times).
             mtime: mtime_nanos(stat.modified()?),
         }))
@@ -113,13 +113,13 @@ impl ReportIterator {
 }
 
 pub struct Report {
-    // PORT: `name: []const u8` -> owned bytes (R1 byte-slice rule; file names
+    // PORT NOTE: `name: []const u8` -> owned bytes (R1 byte-slice rule; file names
     // are raw bytes on POSIX).
     pub name: Vec<u8>,
     pub mtime: i128,
 }
 
-// PORT helper: Zig `std.fs.Dir.statFile(...).mtime` is signed nanoseconds
+// PORT NOTE: helper: Zig `std.fs.Dir.statFile(...).mtime` is signed nanoseconds
 // since the Unix epoch; `SystemTime` is converted to the same representation.
 fn mtime_nanos(mtime: std::time::SystemTime) -> i128 {
     match mtime.duration_since(std::time::UNIX_EPOCH) {

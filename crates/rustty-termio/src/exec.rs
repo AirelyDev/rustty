@@ -84,7 +84,7 @@ use rustty_datastruct::blocking_queue::Timeout;
 
 // const log = std.log.scoped(.io_exec);
 //
-// PORT: the reference's log call sites are preserved verbatim as comments at
+// PORT NOTE: the reference's log call sites are preserved verbatim as comments at
 // each site (termio stage-2 precedent).
 
 /// The termios poll rate in milliseconds.
@@ -149,7 +149,7 @@ impl Exec {
     pub fn init(alloc: Allocator, cfg: Config) -> Result<Exec, InitError> {
         // var subprocess = try Subprocess.init(alloc, cfg);
         // errdefer subprocess.deinit();
-        // (PORT: on the error path the partially-built Subprocess drops.)
+        // (PORT NOTE: on the error path the partially-built Subprocess drops.)
         let subprocess = Subprocess::init(alloc, cfg)?;
 
         // return .{ .subprocess = subprocess };
@@ -358,7 +358,7 @@ impl Exec {
         // error and bubbles up.)
         let pty_fds = self.subprocess.start(alloc)?;
         // errdefer self.subprocess.stop();
-        // (PORT: no `errdefer`; each fallible step below runs the accumulated
+        // (PORT NOTE: no `errdefer`; each fallible step below runs the accumulated
         // cleanup explicitly, in reverse registration order, before returning.)
 
         // Watcher to detect subprocess exit
@@ -367,7 +367,7 @@ impl Exec {
         //     .flatpak => null,
         // } else return error.ProcessNotStarted;
         //
-        // (PORT: copy the pid out from behind the `&self.subprocess.process`
+        // (PORT NOTE: copy the pid out from behind the `&self.subprocess.process`
         // borrow first, so the error arms can call `&mut self.subprocess.stop()`
         // — the `errdefer self.subprocess.stop()` — without a borrow conflict.)
         enum ProcessWhich {
@@ -461,7 +461,7 @@ impl Exec {
         // );
         // read_thread.setName("io-reader") catch {};
         //
-        // (PORT: `io: *mut Termio<M>` is `!Send`, so the spawn captures it behind
+        // (PORT NOTE: `io: *mut Termio<M>` is `!Send`, so the spawn captures it behind
         // the `ReadThreadArgs` Send wrapper — the `IoThreadArgs` precedent
         // (surface.rs), whose sole toucher of `*io` for `processOutput` is this
         // read thread, between spawn and `threadExit`'s `join()`; blueprint §3.)
@@ -535,7 +535,7 @@ impl Exec {
         // A raw pointer into the now-installed `td.backend.exec` for the
         // loop-stored completion pointers (`&td.backend.exec.*_c`) — stable for
         // the loop's life (frame-pinned `td`).
-        // (PORT: `td.backend.exec` — a single-variant `union(Kind){exec}` field
+        // (PORT NOTE: `td.backend.exec` — a single-variant `union(Kind){exec}` field
         // access; the irrefutable `let` binds the sole `Exec` variant.)
         let crate::backend::ThreadData::Exec(exec_ptr) = &mut td.backend;
         let exec_ptr: *mut ThreadData = exec_ptr;
@@ -557,7 +557,7 @@ impl Exec {
         //     }
         // }
         //
-        // (PORT: `build_config.flatpak` is const false — the `else if` flatpak arm
+        // (PORT NOTE: `build_config.flatpak` is const false — the `else if` flatpak arm
         // + `flatpakExit` are comptime-elided, exactly as Zig's lazy compilation
         // leaves them; verbatim in the reference blocks above.)
         if let Some(p) = process {
@@ -640,7 +640,7 @@ impl Exec {
     ) {
         // assert(td.backend == .exec);
         // const exec = &td.backend.exec;
-        // (PORT: single-variant `union(Kind){exec}` field access.)
+        // (PORT NOTE: single-variant `union(Kind){exec}` field access.)
         let crate::backend::ThreadData::Exec(exec) = &mut td.backend;
 
         // if (exec.exited) self.subprocess.externalExit();
@@ -701,7 +701,7 @@ impl Exec {
 
         // exec.read_thread.join();
         //
-        // (PORT: the reference `join()` returns `void`; Rust's returns a `Result`
+        // (PORT NOTE: the reference `join()` returns `void`; Rust's returns a `Result`
         // that is `Err` if the read thread panicked — the reference ignores it,
         // so we do too. `JoinHandle::join` consumes the handle by value, but
         // `exec` is a `&mut` place, so the handle is moved out via `mem::replace`
@@ -758,7 +758,7 @@ impl Exec {
         // assert(td.backend == .exec);
         // const execdata = &td.backend.exec;
         let td_ptr: *mut crate::termio_impl::ThreadData<M> = td;
-        // (PORT: single-variant `union(Kind){exec}` field access.)
+        // (PORT NOTE: single-variant `union(Kind){exec}` field access.)
         let crate::backend::ThreadData::Exec(execdata) = &mut td.backend;
         let execdata: *mut ThreadData = execdata;
 
@@ -978,7 +978,7 @@ impl Exec {
     ) {
         // assert(td.backend == .exec);
         // const execdata = &td.backend.exec;
-        // (PORT: single-variant `union(Kind){exec}` field access.)
+        // (PORT NOTE: single-variant `union(Kind){exec}` field access.)
         let crate::backend::ThreadData::Exec(execdata) = unsafe { &mut (*td).backend };
         let execdata: *mut ThreadData = execdata;
         // execdata.exited = true;
@@ -994,7 +994,7 @@ impl Exec {
         //     break :runtime runtime_ms;
         // };
         //
-        // (PORT: Rust's `Instant::now()` is infallible, so the `catch ... null`
+        // (PORT NOTE: Rust's `Instant::now()` is infallible, so the `catch ... null`
         // arm never fires; `since` -> `duration_since`, `/ ns_per_ms` ->
         // `as_nanos() / 1_000_000`.)
         let runtime_ms: Option<u64> = {
@@ -1082,7 +1082,7 @@ impl Exec {
         let td = td_;
         // assert(td.backend == .exec);
         // const exec = &td.backend.exec;
-        // (PORT: single-variant `union(Kind){exec}` field access.)
+        // (PORT NOTE: single-variant `union(Kind){exec}` field access.)
         let crate::backend::ThreadData::Exec(exec) = unsafe { &mut (*td).backend };
         let exec: *mut ThreadData = exec;
 
@@ -1093,11 +1093,11 @@ impl Exec {
         //     break :err .{};
         // };
         //
-        // (PORT: Rust struct privacy forbids the inline `Pty{ .master, .slave =
+        // (PORT NOTE: Rust struct privacy forbids the inline `Pty{ .master, .slave =
         // undefined }` literal; `Pty::init_master_only` is that throwaway
         // master-only Pty — see its rustty-os PORT NOTE.)
         let master = unsafe { (*exec).read_thread_fd };
-        // (PORT: kept as a `match` — not `.unwrap_or_default()` — to preserve the
+        // (PORT NOTE: kept as a `match` — not `.unwrap_or_default()` — to preserve the
         // reference's `catch |err| { log.warn(...); break :err .{} }` error arm,
         // which logs before falling back to the default `Mode`.)
         #[allow(clippy::manual_unwrap_or_default)]
@@ -1278,7 +1278,7 @@ impl Exec {
         // shared loop — never a long-lived `&mut` (`rust-mut-args-strongly-
         // protected`).
         let loop_: *mut xev::Loop = td.loop_;
-        // (PORT: single-variant `union(Kind){exec}` field access.)
+        // (PORT NOTE: single-variant `union(Kind){exec}` field access.)
         let crate::backend::ThreadData::Exec(exec) = &mut td.backend;
         let exec: *mut ThreadData = exec;
 
@@ -1302,7 +1302,7 @@ impl Exec {
                     .map_err(|_| crate::Error)?
             };
             // const buf = try exec.write_buf_pool.getGrow(alloc);
-            // (PORT: the pool element is `WriteBuf([u8; 64])`; `buf` is the inner
+            // (PORT NOTE: the pool element is `WriteBuf([u8; 64])`; `buf` is the inner
             // 64-byte array — `buf.len` == 64.)
             let buf_wrap: *mut WriteBuf = unsafe {
                 (*exec)
@@ -1503,7 +1503,7 @@ pub struct ThreadData {
     /// The pool of available buffers for writing to the pty.
     // write_buf_pool: SegmentedPool([64]u8, WRITE_REQ_PREALLOC) = .{},
     //
-    // (PORT: `WriteBuf` wraps the `[64]u8` element — see its note.)
+    // (PORT NOTE: `WriteBuf` wraps the `[64]u8` element — see its note.)
     pub write_buf_pool: SegmentedPool<WriteBuf>,
 
     /// The write queue for the data stream.
@@ -1529,7 +1529,7 @@ pub struct ThreadData {
     pub read_thread_pipe: std::os::fd::RawFd,
     #[cfg(not(windows))]
     pub read_thread_fd: std::os::fd::RawFd,
-    // (PORT: on windows `posix.fd_t` is a HANDLE.)
+    // (PORT NOTE: on windows `posix.fd_t` is a HANDLE.)
     #[cfg(windows)]
     pub read_thread_pipe: rustty_os::windows::HANDLE,
     #[cfg(windows)]
@@ -1616,7 +1616,7 @@ impl ThreadData {
         // drop this.
         // self.write_req_pool.deinit(alloc);
         // self.write_buf_pool.deinit(alloc);
-        // (PORT: the pools' memory frees on Drop; the alloc param collapses.)
+        // (PORT NOTE: the pools' memory frees on Drop; the alloc param collapses.)
         let _ = alloc;
 
         // Stop our process watcher
@@ -1674,10 +1674,10 @@ pub struct Subprocess {
     //     @cInclude("signal.h");
     //     @cInclude("unistd.h");
     // });
-    // (PORT: the `libc` binding — the SAME system headers; R3.)
+    // (PORT NOTE: the `libc` binding — the SAME system headers; R3.)
 
     // arena: std.heap.ArenaAllocator,
-    // (PORT: the arena collapses into the owned fields below — crash-tier
+    // (PORT NOTE: the arena collapses into the owned fields below — crash-tier
     // precedent.)
     // cwd: ?[:0]const u8,
     pub cwd: Option<CString>,
@@ -1791,7 +1791,7 @@ impl Subprocess {
         // var arena = std.heap.ArenaAllocator.init(gpa);
         // errdefer arena.deinit();
         // const alloc = arena.allocator();
-        // (PORT: the arena collapses into the owned fields below.)
+        // (PORT NOTE: the arena collapses into the owned fields below.)
 
         // Get our env. If a default env isn't provided by the caller
         // then we get it ourselves.
@@ -1939,7 +1939,7 @@ impl Subprocess {
             // } else |err| {
             //     log.warn("error building {s}; err={}", .{ xdg_data_dir_key, err });
             // }
-            // (PORT: the bufPrint NoSpaceLeft error branch collapses with the
+            // (PORT NOTE: the bufPrint NoSpaceLeft error branch collapses with the
             // growable format.)
             let data_dir = format!("{}/..", env_string(resources_dir));
             let current = env
@@ -2146,7 +2146,7 @@ impl Subprocess {
         //     error.SystemError => return err,
         // };
         //
-        // (PORT: the OutOfMemory arm collapses with Rust's infallible-
+        // (PORT NOTE: the OutOfMemory arm collapses with Rust's infallible-
         // allocation model — preserved verbatim above; SystemError propagates.)
         let args: Vec<CString> = match execCommand::<OsPasswd>(&shell_command) {
             Ok(args) => args,
@@ -2213,7 +2213,7 @@ impl Subprocess {
         self.env = None;
         // self.arena.deinit();
         // self.* = undefined;
-        // (PORT: the arena's memory is the owned fields, freed with the value;
+        // (PORT NOTE: the arena's memory is the owned fields, freed with the value;
         // the poison is Rust's "must not reuse after deinit" contract.)
     }
 
@@ -2463,7 +2463,7 @@ impl Subprocess {
             })
             .map_err(|_| crate::Error)?;
             // self.pty = pty;
-            // (PORT: the Rust `Pty` is not `Copy`; capture the slave/master fds
+            // (PORT NOTE: the Rust `Pty` is not `Copy`; capture the slave/master fds
             // before the move — the reference's errdefer/defer read the local
             // copy's `pty.slave`/`pty.master`.)
             let slave = pty.slave;
@@ -2473,10 +2473,10 @@ impl Subprocess {
             //     self.pty = null; ... };
             // defer if (!in_child and self.process != null) { ...
             //     posix.close(pty.slave); ... env.deinit(); self.env = null; ... };
-            // (PORT: Rust has no defer/errdefer; both are modeled explicitly at
+            // (PORT NOTE: Rust has no defer/errdefer; both are modeled explicitly at
             // the exit points below, gated by `in_child` / `self.process`.)
 
-            // (PORT: `rt_*_info` are trivially-copyable ZSTs; read once for both
+            // (PORT NOTE: `rt_*_info` are trivially-copyable ZSTs; read once for both
             // the spawn Command and the stored pid-only handle.)
             let rt_pre = self.rt_pre_exec_info;
             let rt_post = self.rt_post_fork_info;
@@ -2533,7 +2533,7 @@ impl Subprocess {
             // dropping `File` here would double-close (fd-reuse race).
             let pty_slave_file = ManuallyDrop::new(unsafe { File::from_raw_fd(slave) });
 
-            // (PORT: the transient argv VIEW over self.args (Vec<CString>) — a
+            // (PORT NOTE: the transient argv VIEW over self.args (Vec<CString>) — a
             // stack local, valid for this frame only; nothing post-start reads
             // it. This is the Rust materialization of the Zig `self.args` slice.)
             let argv: Vec<&CStr> = self.args.iter().map(|c| c.as_c_str()).collect();
@@ -2601,7 +2601,7 @@ impl Subprocess {
                 // errdefer killCommand(&cmd) catch |err| {
                 //     log.warn("error killing command during cleanup err={}", .{err});
                 // };
-                // (PORT: there is no reachable error return between here and the
+                // (PORT NOTE: there is no reachable error return between here and the
                 // success `return` below — the straight-line body never triggers
                 // this errdefer — so no cleanup is registered for it.)
                 // log.info("started subcommand path={s} pid={?}", .{ self.args[0], cmd.pid });
@@ -2610,7 +2610,7 @@ impl Subprocess {
                 let pid = cmd.pid;
 
                 // self.process = .{ .fork_exec = cmd };
-                // (PORT §2: store a pid-only handle — the stored Command's
+                // (PORT NOTE §2: store a pid-only handle — the stored Command's
                 // reference fields are TRUE 'static empties, so no
                 // self-referential borrow can exist at rest.)
                 self.process = Some(Process::ForkExec(Command {
@@ -2759,7 +2759,7 @@ impl Subprocess {
                 //         log.err("error waiting for command to exit: {}", .{err});
                 // },
                 //
-                // (PORT: `build_config.flatpak` is const false — the comptime-
+                // (PORT NOTE: `build_config.flatpak` is const false — the comptime-
                 // false arm body is compiled out, exactly as Zig's lazy
                 // compilation leaves it unanalyzed; verbatim above.)
                 Process::Flatpak(_cmd) => {}
@@ -2799,7 +2799,7 @@ impl Subprocess {
             //     .ws_ypixel = std.math.cast(u16, screen_size.height) orelse std.math.maxInt(u16),
             // });
             //
-            // (PORT: `GridSize`'s units are already u16 — those casts are
+            // (PORT NOTE: `GridSize`'s units are already u16 — those casts are
             // identities; the pixel casts clamp.)
             pty.setSize(ptypkg::winsize {
                 ws_row: grid_size.rows,
@@ -3182,7 +3182,7 @@ impl ReadThread {
         // Always close our end of the pipe when we exit.
         // defer posix.close(quit);
         //
-        // PORT: `defer` -> a Drop guard (the `CloseHandleGuard` precedent) so the
+        // PORT NOTE: `defer` -> a Drop guard (the `CloseHandleGuard` precedent) so the
         // quit-pipe read end is closed on EVERY return path below.
         struct QuitFdCloser(std::os::fd::RawFd);
         impl Drop for QuitFdCloser {
@@ -3288,7 +3288,7 @@ impl ReadThread {
                 //     }
                 // };
                 //
-                // (PORT: `posix.read` wraps `read(2)` and retries EINTR internally
+                // (PORT NOTE: `posix.read` wraps `read(2)` and retries EINTR internally
                 // (Zig std) — modeled by the inner retry loop; the Zig error set
                 // maps EBADF -> NotOpenForReading, EIO -> InputOutput, EAGAIN ->
                 // WouldBlock.)
@@ -3747,16 +3747,16 @@ fn execCommand<P: PasswdPkg>(
 }
 
 // ---------------------------------------------------------------------------
-// PORT support shims (Rust-only glue).
+// PORT NOTE: support shims (Rust-only glue).
 // ---------------------------------------------------------------------------
 
-/// PORT (Zig-std shim): `posix.errno(rc)` — the calling thread's errno value.
+/// PORT NOTE (Zig-std shim): `posix.errno(rc)` — the calling thread's errno value.
 #[cfg(not(windows))]
 fn errno() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
 
-/// PORT (Zig-std shim): `std.fs.path.dirname` — the path up to (not
+/// PORT NOTE (Zig-std shim): `std.fs.path.dirname` — the path up to (not
 /// including) the final separator; `None` for a root/relative-basename path.
 fn dirname(path: &[u8]) -> Option<&[u8]> {
     let sep = std::path::MAIN_SEPARATOR as u8;
@@ -3768,7 +3768,7 @@ fn dirname(path: &[u8]) -> Option<&[u8]> {
     Some(&path[..idx])
 }
 
-/// PORT (Zig-std shim): the `[:0]const u8` sentinel model — an owned
+/// PORT NOTE (Zig-std shim): the `[:0]const u8` sentinel model — an owned
 /// NUL-terminated copy of the byte slice (Command.zig `&CStr` convention).
 /// Interior NULs cannot occur in the reference's `[:0]`-typed sources.
 fn cstring(bytes: &[u8]) -> CString {
@@ -3807,7 +3807,7 @@ mod tests {
     #[test]
     fn exec_command_darwin_shell_command() {
         // if (comptime !builtin.os.tag.isDarwin()) return error.SkipZigTest;
-        // (PORT: cfg-gating the body is the SkipZigTest analogue — stage-3
+        // (PORT NOTE: cfg-gating the body is the SkipZigTest analogue — stage-3
         // Command / F3 DirectWrite precedent.)
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
@@ -4068,7 +4068,7 @@ mod tests {
 
             // command_arena.deinit();
             //
-            // (PORT: the reference frees the source command BEFORE reading the
+            // (PORT NOTE: the reference frees the source command BEFORE reading the
             // result, proving execCommand cloned it; Rust's drop is the same
             // proof.)
             drop(command);

@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/shell.zig` — every line, comment, and `test {}`
 //! is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `testing`, `Allocator`, and
+// PORT NOTE: the Zig reference imports `std`, `testing`, `Allocator`, and
 // `Writer = std.Io.Writer`. The writer interface is the crate-local `Writer`
 // trait (defined in `string_encoding`, mirroring the `std.Io.Writer`
 // `writeByte`/`writeAll` surface used here). The `Allocating` writer is modeled
@@ -18,7 +18,7 @@ use crate::string_encoding::Writer;
 /// Builder for constructing space-separated shell command strings.
 /// Uses a caller-provided allocator (typically with stackFallback).
 //
-// PORT: `buffer: std.Io.Writer.Allocating` is modeled by an owned `Vec<u8>`.
+// PORT NOTE: `buffer: std.Io.Writer.Allocating` is modeled by an owned `Vec<u8>`.
 // The reference's `init(allocator)` takes the allocator; in Rust allocation is
 // implicit, so `init()` takes no allocator argument.
 pub struct ShellCommandBuilder {
@@ -34,14 +34,14 @@ impl ShellCommandBuilder {
         // self.buffer.deinit();
     }
 
-    /// PORT: `self.buffer.written()` — the bytes accumulated so far.
+    /// PORT NOTE: `self.buffer.written()` — the bytes accumulated so far.
     pub fn written(&self) -> &[u8] {
         &self.buffer
     }
 
     /// Append an argument to the command with automatic space separation.
     pub fn appendArg(&mut self, arg: &[u8]) {
-        // PORT: the reference returns `(Allocator.Error || Writer.Error)!void`;
+        // PORT NOTE: the reference returns `(Allocator.Error || Writer.Error)!void`;
         // the `Vec`/allocating writer here cannot fail in this environment.
         if arg.is_empty() {
             return;
@@ -55,7 +55,7 @@ impl ShellCommandBuilder {
     /// Get the final null-terminated command string, transferring ownership to caller.
     /// Calling deinit() after this is safe but unnecessary.
     //
-    // PORT: `toOwnedSliceSentinel(0)` returns a `[:0]const u8` (NUL-terminated,
+    // PORT NOTE: `toOwnedSliceSentinel(0)` returns a `[:0]const u8` (NUL-terminated,
     // length excludes the NUL). Modeled as an owned `Vec<u8>` whose final byte is
     // the NUL terminator; the logical command length is `len() - 1`.
     pub fn toOwnedSlice(mut self) -> Vec<u8> {
@@ -68,7 +68,7 @@ impl ShellCommandBuilder {
 /// risk of injection attacks or other such weirdness. Specifically excludes
 /// linefeeds so that they can be used to delineate lists of file paths.
 //
-// PORT: the reference embeds a `std.Io.Writer` (`writer`) whose vtable `drain`
+// PORT NOTE: the reference embeds a `std.Io.Writer` (`writer`) whose vtable `drain`
 // dispatches to `writeEscaped`, and holds a `child: *Writer`. We model
 // `ShellEscapeWriter` as a `Writer` whose `writeAll`/`writeByte` perform the
 // escaping (the `drain`/`writeEscaped` logic) and forward to `child`. The
@@ -76,7 +76,7 @@ impl ShellCommandBuilder {
 // (i.e. `shell.writer.writeAll(..)` becomes `shell.writeAll(..)`).
 pub struct ShellEscapeWriter<'c, C: Writer> {
     child: &'c mut C,
-    // PORT: `count: usize` tracks the number of source bytes consumed (the
+    // PORT NOTE: `count: usize` tracks the number of source bytes consumed (the
     // reference's `drain` return value). It is maintained for fidelity.
     count: usize,
 }
@@ -90,7 +90,7 @@ impl<'c, C: Writer> ShellEscapeWriter<'c, C> {
         }
     }
 
-    // PORT: the reference's `drain(w, data, splat)` iterates the data chunks
+    // PORT NOTE: the reference's `drain(w, data, splat)` iterates the data chunks
     // (last one repeated `splat` times) and escapes each. Our `Writer::writeAll`
     // receives a single contiguous chunk, so it forwards directly to
     // `writeEscaped`. The fidelity-preserving body and comments are kept:

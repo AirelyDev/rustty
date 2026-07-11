@@ -1,4 +1,4 @@
-//! PORT: `synthetic/cli.zig`.
+//! PORT NOTE: `synthetic/cli.zig`.
 
 pub mod ascii;
 pub mod osc;
@@ -8,7 +8,7 @@ pub mod utf8;
 /// synthetic generators. View docs for each individual one in the
 /// predictably named files under `cli/`.
 ///
-/// PORT: `pub const Action = enum { ascii, osc, utf8 }`. The `Struct(action)`
+/// PORT NOTE: `pub const Action = enum { ascii, osc, utf8 }`. The `Struct(action)`
 /// comptime mapping (action → impl module) is expressed in Rust as the per-arm
 /// dispatch in `main_action` below; each impl module exposes `Options`,
 /// `create`, `destroy`, and `run`.
@@ -18,7 +18,7 @@ pub enum Action {
     Utf8,
 }
 
-// PORT: `pub fn Struct(comptime action: Action) type` — the action → impl
+// PORT NOTE: `pub fn Struct(comptime action: Action) type` — the action → impl
 // module mapping (`.ascii => cli/Ascii`, `.osc => cli/Osc`, `.utf8 => cli/Utf8`):
 //
 // Returns the struct associated with the action. The struct
@@ -30,7 +30,7 @@ pub enum Action {
 //
 // See TerminalStream for an example.
 
-/// PORT: `pub const Args = union(enum) { cli, string: []const u8 }`.
+/// PORT NOTE: `pub const Args = union(enum) { cli, string: []const u8 }`.
 pub enum Args<'a> {
     /// The arguments passed to the CLI via argc/argv.
     Cli,
@@ -41,7 +41,7 @@ pub enum Args<'a> {
 
 /// An entrypoint for the synthetic generator CLI.
 ///
-/// PORT (binary-entry seam, per the placeholder-leaf-doctrine): `main()` uses
+/// PORT NOTE (binary-entry seam, per the placeholder-leaf-doctrine): `main()` uses
 /// `cli.action.detectArgs` (generic `+action` detection over an args iterator),
 /// which lives above `synthetic` in the acyclic Rust split and is not reachable
 /// here without a cycle. None of the ported `test {}` exercise it. The
@@ -56,7 +56,7 @@ pub fn main() -> Result<(), ()> {
     unimplemented!("binary-entry seam: cli.action.detectArgs")
 }
 
-/// PORT: `pub fn mainAction(alloc, action, args)` — dispatches on the action to
+/// PORT NOTE: `pub fn mainAction(alloc, action, args)` — dispatches on the action to
 /// the concrete impl. The `.cli` argv branch and the `.string`
 /// `ArgIteratorGeneral` branch (both feeding `cli.args.parse`) are binary-entry
 /// seams, not exercised by the ported tests.
@@ -69,7 +69,7 @@ pub fn main_action(action: Action, _args: Args) -> Result<(), ()> {
     }
 }
 
-// PORT: `mainActionImpl(comptime Impl, alloc, args)`. The Zig implementation
+// PORT NOTE: `mainActionImpl(comptime Impl, alloc, args)`. The Zig implementation
 // parses CLI options (via `cli.args.parse` over an argv/string iterator), seeds
 // a DefaultPrng from `std.time.nanoTimestamp`, and runs the impl into stdout,
 // flushing at the end. The option-parsing + stdout wiring is a binary-entry
@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn ref_all_actions() {
         // Make sure we ref all our actions
-        // (PORT: `inline for (@typeInfo(Action).@"enum".fields) |field| { … _ = Impl; }`)
+        // (PORT NOTE: `inline for (@typeInfo(Action).@"enum".fields) |field| { … _ = Impl; }`)
         let _ = core::mem::size_of::<ascii::Ascii>();
         let _ = core::mem::size_of::<osc::Osc>();
         let _ = core::mem::size_of::<utf8::Utf8>();

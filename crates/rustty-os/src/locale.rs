@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/locale.zig` — every line, comment, and
 //! `test {}` is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, `assert =
+// PORT NOTE: the Zig reference imports `std`, `builtin`, `assert =
 // quirks.inlineAssert`, `macos`, `objc`, `internal_os = main.zig`, and `i18n =
 // internal_os.i18n`. In Rust we use the standard library,
 // `rustty_util::quirks::inlineAssert`, `objc2`/`objc2-foundation` (R3: bindings
@@ -20,19 +20,19 @@ use rustty_util::quirks::inlineAssert as assert;
 use crate::env as internal_os;
 use crate::i18n;
 
-// PORT: `const log = std.log.scoped(.os_locale);`. Routed through the log facade
+// PORT NOTE: `const log = std.log.scoped(.os_locale);`. Routed through the log facade
 // where used.
 
 /// Ensure that the locale is set.
 pub fn ensureLocale() -> std::io::Result<()> {
-    // PORT: `assert(builtin.link_libc)`. rustty-os links libc unconditionally
+    // PORT NOTE: `assert(builtin.link_libc)`. rustty-os links libc unconditionally
     // (R3), so this asserts a constant truth, matching the reference's gate.
     assert(true);
 
     // Get our LANG env var. We use this many times but we also need
     // the original value later.
     let lang = internal_os::getenv("LANG").unwrap();
-    // PORT: `defer if (lang) |v| v.deinit(alloc);` — the `GetEnvResult` is
+    // PORT NOTE: `defer if (lang) |v| v.deinit(alloc);` — the `GetEnvResult` is
     // dropped at scope end; on Windows that frees the allocation (no-op
     // elsewhere). Rust ownership/Drop handles this.
 
@@ -89,7 +89,7 @@ pub fn ensureLocale() -> std::io::Result<()> {
     }
 }
 
-// PORT: the `log.info`/`log.warn` calls in `ensureLocale`. Routed to the log
+// PORT NOTE: the `log.info`/`log.warn` calls in `ensureLocale`. Routed to the log
 // facade; reproduced as named no-op helpers preserving the reference's log sites
 // and messages.
 fn log_info_setlocale_env(_v: &std::ffi::CStr) {
@@ -116,7 +116,7 @@ fn setLangFromCocoa() {
 
     objc2::rc::autoreleasepool(|_pool| {
         // The classes we're going to need.
-        // PORT: `objc.getClass("NSLocale") orelse { log.warn(...); return; }`.
+        // PORT NOTE: `objc.getClass("NSLocale") orelse { log.warn(...); return; }`.
         // The `objc2-foundation` `NSLocale` binding always resolves the class, so
         // the "class not found" warning branch is unreachable here; it is
         // preserved as the comment below.
@@ -134,7 +134,7 @@ fn setLangFromCocoa() {
         #[allow(deprecated)]
         let country = locale.countryCode();
 
-        // PORT: `if (lang.value == null or country.value == null) { ... }`. In the
+        // PORT NOTE: `if (lang.value == null or country.value == null) { ... }`. In the
         // bindings `languageCode` is non-optional and `countryCode` is optional;
         // a missing country code triggers the reference's warning/return.
         let country = match country {
@@ -155,7 +155,7 @@ fn setLangFromCocoa() {
 
         // Format our locale as "<lang>_<country>.UTF-8" and set it as LANG.
         {
-            // PORT: `var buf: [128]u8` + `bufPrintZ`. We build a NUL-terminated
+            // PORT NOTE: `var buf: [128]u8` + `bufPrintZ`. We build a NUL-terminated
             // `CString`; a formatting failure maps to the reference's error log.
             let env_value = format!(
                 "{}_{}.UTF-8",
@@ -227,7 +227,7 @@ fn setLangFromCocoa() {
 fn preferredLanguageFromCocoa(buf: &mut [u8]) -> Result<Option<Vec<u8>>, NoSpaceLeft> {
     use objc2_foundation::NSLocale;
 
-    // PORT: the reference uses a `std.io.fixedBufferStream(buf)` + writer and
+    // PORT NOTE: the reference uses a `std.io.fixedBufferStream(buf)` + writer and
     // tracks `fbs.pos`. We build the result into a `Vec` (the canonicalize step
     // still writes into the remaining `buf` for parity with the reference's
     // in-buffer canonicalization), then return an owned copy.
@@ -237,7 +237,7 @@ fn preferredLanguageFromCocoa(buf: &mut [u8]) -> Result<Option<Vec<u8>>, NoSpace
     // match the system locale (NSLocale.currentLocale).
     let preferred = NSLocale::preferredLanguages();
     for i in 0..preferred.count() {
-        // PORT: `var str_buf: [255:0]u8` used by `str.cstring(&str_buf, .utf8)`.
+        // PORT NOTE: `var str_buf: [255:0]u8` used by `str.cstring(&str_buf, .utf8)`.
         let str = preferred.objectAtIndex(i);
         let c_str = str.UTF8String();
         if c_str.is_null() {
@@ -255,7 +255,7 @@ fn preferredLanguageFromCocoa(buf: &mut [u8]) -> Result<Option<Vec<u8>>, NoSpace
 
         // Apple languages are in BCP-47 format, and we need to
         // canonicalize them to the POSIX format.
-        // PORT: `i18n.canonicalizeLocale(fbs.buffer[fbs.pos..], c_str)`. We
+        // PORT NOTE: `i18n.canonicalizeLocale(fbs.buffer[fbs.pos..], c_str)`. We
         // canonicalize into the tail of `buf` (after the bytes written so far)
         // exactly like the reference, then append the result to `out`.
         let pos = out.len();
@@ -279,24 +279,24 @@ fn preferredLanguageFromCocoa(buf: &mut [u8]) -> Result<Option<Vec<u8>>, NoSpace
     }
 
     // Null terminate it
-    // PORT: the reference writes a trailing NUL byte into the buffer
+    // PORT NOTE: the reference writes a trailing NUL byte into the buffer
     // (`writer.writeByte(0)`). In Rust the caller converts the returned bytes to
     // a `CString`, which appends the NUL; we therefore do not push it here.
 
     // Get our slice, this won't be null terminated so we have to
     // reslice it with the null terminator.
-    // PORT: the reference does `slice[0 .. slice.len - 1 :0]` to return a
+    // PORT NOTE: the reference does `slice[0 .. slice.len - 1 :0]` to return a
     // sentinel-terminated `[:0]const u8`. We return the bytes (no trailing NUL);
     // the caller converts to a `CString`.
     Ok(Some(out))
 }
 
-/// PORT: `error{NoSpaceLeft}` — the error of `preferredLanguageFromCocoa`.
+/// PORT NOTE: `error{NoSpaceLeft}` — the error of `preferredLanguageFromCocoa`.
 #[cfg(target_os = "macos")]
 #[derive(Debug, PartialEq, Eq)]
 pub struct NoSpaceLeft;
 
-// PORT: the reference imports `const c = @import("locale-c")` (a thin
+// PORT NOTE: the reference imports `const c = @import("locale-c")` (a thin
 // `#include <locale.h>`) and aliases `LC_ALL`, `LC_ALL_MASK`, `locale_t`,
 // `setlocale`, `newlocale`, `freelocale`. These come from `libc` (R3 binding to
 // the SAME C library). `LC_ALL_MASK`/`newlocale`/`freelocale` are unused by the

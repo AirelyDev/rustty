@@ -1,4 +1,4 @@
-//! PORT: ghostty `src/font/backend.zig` — the `Backend` enum that names the
+//! PORT NOTE: ghostty `src/font/backend.zig` — the `Backend` enum that names the
 //! font discovery/rendering/shaping stack in use, plus the comptime/runtime
 //! `has*` dependency predicates and the `default` selector.
 

@@ -10,7 +10,7 @@
 use super::c;
 use super::envelope::Envelope;
 
-// PORT: the reference nests these in `Transport` (`Transport.SendFunc`);
+// PORT NOTE: the reference nests these in `Transport` (`Transport.SendFunc`);
 // Rust inherent associated types are unstable, so they are hoisted to the
 // module level.
 // pub const SendFunc = *const fn (envelope: *Envelope, state: ?*anyopaque) callconv(.c) void;
@@ -19,7 +19,7 @@ pub type SendFunc = unsafe extern "C" fn(envelope: *mut Envelope, state: *mut st
 pub type FreeFunc = unsafe extern "C" fn(state: *mut std::ffi::c_void);
 
 /// sentry_transport_t
-// PORT: `pub const Transport = opaque { ... }` — an opaque C type; only ever
+// PORT NOTE: `pub const Transport = opaque { ... }` — an opaque C type; only ever
 // handled behind `*mut Transport` raw pointers.
 #[repr(C)]
 pub struct Transport {

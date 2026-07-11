@@ -1,6 +1,6 @@
 //! `vaxis/src/Window.zig` (889 LOC, 8 test) — the window view (VAXIS_C2_DESIGN §4-6).
 //!
-//! PORT-NOTE (the `Window → Screen` back-reference, §5): Zig `Window` holds `screen:
+//! PORT NOTE (the `Window → Screen` back-reference, §5): Zig `Window` holds `screen:
 //! *Screen` and is a `Copy` value type (`self: Window` by value, `child()` returns a new
 //! Window sharing the SAME `*Screen`). We port it as `screen: *mut Screen<'a>` and keep
 //! `Window<'a>` `Copy`. `&mut Screen` is non-`Copy` and forbids the aliasing that
@@ -10,10 +10,10 @@
 //! `unsafe { &*self.screen }`; no long-lived `&mut` is held across another access to the
 //! same screen (see `fill`/`scroll`).
 //!
-//! PORT-NOTE (`i17 → i32`, §5): the four offset fields are Zig `i17`; Rust has no `i17`, so
+//! PORT NOTE (`i17 → i32`, §5): the four offset fields are Zig `i17`; Rust has no `i17`, so
 //! they widen to `i32` — it covers the range and the clip math stays exact.
 //!
-//! PORT-NOTE (`undefined` screen → `null_mut()`, §5): the five "Window size" tests build a
+//! PORT NOTE (`undefined` screen → `null_mut()`, §5): the five "Window size" tests build a
 //! Window over a Zig `undefined` screen; their `initChild`/`readCell`/`writeCell` all
 //! bounds-guard-return BEFORE any deref (and `initChild` only copies the pointer). We map
 //! `undefined` → `std::ptr::null_mut()`; it is provably never read.
@@ -428,7 +428,7 @@ impl<'a> Window<'a> {
                         has_break: true,
                     };
                     while let Some(line) = line_iter.next() {
-                        // PORT-NOTE (§6): Zig runs a `defer` at each line-body exit — on the
+                        // PORT NOTE (§6): Zig runs a `defer` at each line-body exit — on the
                         // normal path AND while unwinding a `break :outer` through the body.
                         // Rust has no `defer`; we run the `has_break` bump on EVERY exit of
                         // the line body (tracked by `broke_outer`).
@@ -571,7 +571,7 @@ impl<'a> Window<'a> {
                 PrintResult { row, col, overflow }
             }
         }
-        // PORT-NOTE (§6): Zig closes `print` with a dead `return false;` after the
+        // PORT NOTE (§6): Zig closes `print` with a dead `return false;` after the
         // exhaustive `switch` (unreachable, wrong type). OMITTED — the Rust `match` is
         // exhaustive and each arm returns `PrintResult`.
     }

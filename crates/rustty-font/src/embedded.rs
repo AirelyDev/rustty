@@ -20,7 +20,7 @@
 // `include_bytes!`.
 
 /// Default fonts that we prefer for Ghostty.
-// PORT: the reference `variable = @embedFile("jetbrains_mono_variable")` is a
+// PORT NOTE: the reference `variable = @embedFile("jetbrains_mono_variable")` is a
 // build-anonymous import of `fonts/variable/JetBrainsMono[wght].ttf` from the
 // `jetbrains_mono` build dependency (JetBrains Mono 2.304, SIL OFL — redistributable
 // per R3), not a `font/` source-tree file. It is required by the freetype face's
@@ -29,7 +29,7 @@
 // uses it.)
 pub const VARIABLE: &[u8] = include_bytes!("../res/JetBrainsMono-Variable.ttf");
 
-// PORT: the reference `variable_italic = @embedFile("jetbrains_mono_variable_italic")`
+// PORT NOTE: the reference `variable_italic = @embedFile("jetbrains_mono_variable_italic")`
 // is a build-anonymous import of `fonts/variable/JetBrainsMono-Italic[wght].ttf`
 // from the `jetbrains_mono` build dependency (JetBrains Mono 2.304, SIL OFL —
 // redistributable per R3), not a `font/` source-tree file. It is required by the
@@ -39,7 +39,7 @@ pub const VARIABLE: &[u8] = include_bytes!("../res/JetBrainsMono-Variable.ttf");
 pub const VARIABLE_ITALIC: &[u8] = include_bytes!("../res/JetBrainsMono-Variable-Italic.ttf");
 
 /// Symbols-only nerd font.
-// PORT: the reference `symbols_nerd_font = @embedFile("nerd_fonts_symbols_only")`
+// PORT NOTE: the reference `symbols_nerd_font = @embedFile("nerd_fonts_symbols_only")`
 // is a build-anonymous import of `SymbolsNerdFont-Regular.ttf` from the
 // `nerd_fonts_symbols_only` build dependency (NerdFontsSymbolsOnly 3.4.0,
 // https://deps.files.ghostty.org/NerdFontsSymbolsOnly-3.4.0.tar.gz — the Symbols
@@ -50,7 +50,7 @@ pub const VARIABLE_ITALIC: &[u8] = include_bytes!("../res/JetBrainsMono-Variable
 pub const SYMBOLS_NERD_FONT: &[u8] = include_bytes!("../res/SymbolsNerdFont-Regular.ttf");
 
 /// Static jetbrains mono faces, currently unused.
-// PORT: the reference `regular = @embedFile("jetbrains_mono_regular")` is a
+// PORT NOTE: the reference `regular = @embedFile("jetbrains_mono_regular")` is a
 // build-anonymous import of `fonts/ttf/JetBrainsMono-Regular.ttf` from the
 // `jetbrains_mono` build dependency (JetBrains Mono 2.304, SIL OFL —
 // redistributable per R3), not a `font/` source-tree file. It is required by the

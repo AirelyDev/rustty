@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/i18n.zig` — every line, comment, and `test {}`
 //! is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, `build_config`, and
+// PORT NOTE: the Zig reference imports `std`, `builtin`, `build_config`, and
 // `locales = @import("i18n_locales.zig")`. In Rust we use the standard library,
 // `rustty_build_config` (the ported `build_config.zig`), the sibling
 // `crate::i18n_locales` module (ported in its own group), and `gettext-sys`
@@ -18,17 +18,17 @@
 
 use rustty_build_config as build_config;
 
-// PORT: `const locales = @import("i18n_locales.zig")`; the reference references
+// PORT NOTE: `const locales = @import("i18n_locales.zig")`; the reference references
 // `locales.len` and iterates `locales`. The sibling `i18n_locales` module is
 // ported in its own group; we use its `locales` slice here.
 use crate::i18n_locales::locales;
 
-// PORT: `const log = std.log.scoped(.i18n);`. Logging is routed through the
+// PORT NOTE: `const log = std.log.scoped(.i18n);`. Logging is routed through the
 // `log` facade where used; the reference only logs in `init`.
 
 /// Set for faster membership lookup of locales.
 //
-// PORT: the reference builds a comptime `std.StaticStringMap(void)` from
+// PORT NOTE: the reference builds a comptime `std.StaticStringMap(void)` from
 // `locales`. Rust's standard library has no comptime perfect-hash map; the
 // parity-preserving equivalent is a membership predicate over the same `locales`
 // slice. `locales_map` exposes `.has(name)` mirroring the reference map's only
@@ -78,7 +78,7 @@ pub fn init(resources_dir: &str) -> Result<(), InitError> {
         };
 
         // Build our locale path
-        // PORT: the reference formats into a `[std.fs.max_path_bytes]u8` stack
+        // PORT NOTE: the reference formats into a `[std.fs.max_path_bytes]u8` stack
         // buffer with `bufPrintZ`, returning `error.OutOfMemory` on overflow. We
         // build a NUL-terminated `CString`; an interior NUL maps to the same
         // `OutOfMemory` failure path.
@@ -97,7 +97,7 @@ pub fn init(resources_dir: &str) -> Result<(), InitError> {
     }
 }
 
-// PORT: `log.debug("binding domain={s} path={s}", .{ build_config.bundle_id, path });`.
+// PORT NOTE: `log.debug("binding domain={s} path={s}", .{ build_config.bundle_id, path });`.
 #[cfg(not(windows))]
 fn log_debug_binding(domain: &str, path: &std::ffi::CStr) {
     let _ = (domain, path);
@@ -121,18 +121,18 @@ pub fn initGlobalDomain() -> Result<(), OutOfMemoryError> {
     Ok(())
 }
 
-/// PORT: `error{OutOfMemory}` — the error set of `initGlobalDomain`.
+/// PORT NOTE: `error{OutOfMemory}` — the error set of `initGlobalDomain`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct OutOfMemoryError;
 
 /// Translate a message for the Rustty domain.
 //
-// PORT: the reference's function is named `_` (used as `_("...")`). `_` is not a
+// PORT NOTE: the reference's function is named `_` (used as `_("...")`). `_` is not a
 // valid function name in Rust, so it is named `gettext_` here; its behavior is
 // identical.
 pub fn gettext_(msgid: &std::ffi::CStr) -> &'static std::ffi::CStr {
     if !build_config::i18n() {
-        // PORT: the reference returns `msgid` directly; we extend its lifetime to
+        // PORT NOTE: the reference returns `msgid` directly; we extend its lifetime to
         // `'static` to match the C-string return surface. Callers pass
         // `'static` literals here in practice.
         return unsafe { std::ffi::CStr::from_ptr(msgid.as_ptr()) };
@@ -140,7 +140,7 @@ pub fn gettext_(msgid: &std::ffi::CStr) -> &'static std::ffi::CStr {
     let domain = c"";
     let _ = domain;
     let domain = build_config::BUNDLE_ID;
-    // PORT: `return dgettext(build_config.bundle_id, msgid);`. dgettext returns a
+    // PORT NOTE: `return dgettext(build_config.bundle_id, msgid);`. dgettext returns a
     // pointer into gettext-managed storage (valid for the program lifetime).
     let domain_c = std::ffi::CString::new(domain).expect("bundle id has no interior NUL");
     let ptr = unsafe { dgettext(domain_c.as_ptr(), msgid.as_ptr()) };
@@ -197,7 +197,7 @@ pub fn canonicalizeLocale<'a>(buf: &'a mut [u8], locale: &str) -> Result<&'a [u8
     buf[0..locale.len()].copy_from_slice(locale);
     buf[locale.len()] = 0;
 
-    // PORT: `_libintl_locale_name_canonicalize(buf[0..locale.len :0])`. The
+    // PORT NOTE: `_libintl_locale_name_canonicalize(buf[0..locale.len :0])`. The
     // gnulib function rewrites the NUL-terminated buffer in place; we pass the
     // buffer pointer (NUL-terminated above).
     unsafe { gettext_sys_canonicalize(buf.as_mut_ptr().cast()) };
@@ -210,7 +210,7 @@ pub fn canonicalizeLocale<'a>(buf: &'a mut [u8], locale: &str) -> Result<&'a [u8
     Ok(&buf[0..slice_len])
 }
 
-/// PORT: `error{NoSpaceLeft}` — the error of `canonicalizeLocale`.
+/// PORT NOTE: `error{NoSpaceLeft}` — the error of `canonicalizeLocale`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct NoSpaceLeft;
 
@@ -249,7 +249,7 @@ fn fixZhLocale(locale: &[u8]) -> Option<&'static [u8]> {
 /// This can be called at any point a compile-time-known locale is
 /// available. This will use comptime to verify the locale is supported.
 //
-// PORT: the reference is `pub fn staticLocale(comptime v: [*:0]const u8)
+// PORT NOTE: the reference is `pub fn staticLocale(comptime v: [*:0]const u8)
 // [*:0]const u8` and `@compileError("unsupported locale")` for an unknown
 // locale. Rust has no per-call comptime string verification with a compile
 // error; the parity-preserving equivalent verifies membership and panics for an
@@ -283,7 +283,7 @@ extern "C" {
 // since its otherwise not exported. We only need it on macOS
 // currently but probably will on Windows as well.
 //
-// PORT: `extern fn _libintl_locale_name_canonicalize(name: [*:0]u8) void;`. On
+// PORT NOTE: `extern fn _libintl_locale_name_canonicalize(name: [*:0]u8) void;`. On
 // macOS this resolves to the vendored gnulib symbol exposed by `gettext-sys`
 // (R3). On other platforms the symbol is provided by the system libintl; we wrap
 // it behind `gettext_sys_canonicalize` so the macOS path uses the vendored crate.
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // ffi: vendored gnulib canonicalizer (gettext-sys) crosses the C boundary (ASan, not Miri)
     fn canonicalizeLocale_darwin() {
-        // PORT: `if (!builtin.target.os.tag.isDarwin()) return error.SkipZigTest;`
+        // PORT NOTE: `if (!builtin.target.os.tag.isDarwin()) return error.SkipZigTest;`
         if !cfg!(target_os = "macos") {
             return; // error.SkipZigTest
         }

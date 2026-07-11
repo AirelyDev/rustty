@@ -449,7 +449,7 @@ fn should_include_theme(theme_filter: ColorScheme, theme_config: &Config) -> boo
 }
 
 // ===========================================================================
-// PORT helpers — the std.fs / std.ascii analogues `run` uses inline. These add
+// PORT NOTE: helpers — the std.fs / std.ascii analogues `run` uses inline. These add
 // nothing the reference doesn't already do (R1): minimal Rust glue for the std
 // calls the reference makes inline (mirrors config/theme.rs's own helpers).
 // ===========================================================================

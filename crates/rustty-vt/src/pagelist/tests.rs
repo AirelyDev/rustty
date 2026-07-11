@@ -1386,7 +1386,7 @@ fn pagelist_reset() {
     s.deinit();
 }
 
-// PORT AUDIT (#2/#4 lazy-zero): not a reference `test {}` block. Asserts the
+// PORT NOTE: AUDIT (#2/#4 lazy-zero): not a reference `test {}` block. Asserts the
 // faithful zero CONTRACT after the PagePool -> MemoryPoolAligned/arena rework.
 //
 // `Page::init_buf` initializes the page structures (rows/styles/etc.) but does

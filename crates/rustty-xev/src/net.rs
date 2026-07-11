@@ -25,21 +25,21 @@
 
 use core::mem::size_of;
 
-/// PORT: `posix.socklen_t` (macOS `u32`).
+/// PORT NOTE: `posix.socklen_t` (macOS `u32`).
 pub type socklen_t = libc::socklen_t;
-/// PORT: `posix.sa_family_t` (the darwin `sockaddr` `family` byte, `u8`).
+/// PORT NOTE: `posix.sa_family_t` (the darwin `sockaddr` `family` byte, `u8`).
 pub type sa_family_t = u8;
-/// PORT: `posix.in_port_t` (network-order port, `u16`).
+/// PORT NOTE: `posix.in_port_t` (network-order port, `u16`).
 pub type in_port_t = u16;
 
-/// PORT: `posix.AF.INET` (`std.c` darwin `AF.INET`).
+/// PORT NOTE: `posix.AF.INET` (`std.c` darwin `AF.INET`).
 pub const AF_INET: sa_family_t = libc::AF_INET as sa_family_t;
-/// PORT: `posix.AF.INET6`.
+/// PORT NOTE: `posix.AF.INET6`.
 pub const AF_INET6: sa_family_t = libc::AF_INET6 as sa_family_t;
-/// PORT: `posix.AF.UNIX`.
+/// PORT NOTE: `posix.AF.UNIX`.
 pub const AF_UNIX: sa_family_t = libc::AF_UNIX as sa_family_t;
 
-/// PORT: the `std.c` (darwin) `posix.sockaddr` family — the extern structs the
+/// PORT NOTE: the `std.c` (darwin) `posix.sockaddr` family — the extern structs the
 /// `Address` union overlays. Field names + defaults mirror the Zig `extern
 /// struct`s verbatim (`len = @sizeOf(...)`, `family = AF.*`); Rust has no
 /// per-field defaults, so `Ip4Address::{parse,init}` set `len`/`family`/`zero`
@@ -47,7 +47,7 @@ pub const AF_UNIX: sa_family_t = libc::AF_UNIX as sa_family_t;
 pub mod sockaddr {
     use super::{in_port_t, sa_family_t};
 
-    /// PORT: `posix.sockaddr` (the generic `any`): `{ len, family, data: [14]u8 }`.
+    /// PORT NOTE: `posix.sockaddr` (the generic `any`): `{ len, family, data: [14]u8 }`.
     #[repr(C)]
     #[derive(Clone, Copy)]
     pub struct Any {
@@ -56,7 +56,7 @@ pub mod sockaddr {
         pub data: [u8; 14],
     }
 
-    /// PORT: `posix.sockaddr.in`: `{ len = @sizeOf(in), family = AF.INET, port,
+    /// PORT NOTE: `posix.sockaddr.in`: `{ len = @sizeOf(in), family = AF.INET, port,
     /// addr, zero: [8]u8 = {0}*8 }`.
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -68,7 +68,7 @@ pub mod sockaddr {
         pub zero: [u8; 8],
     }
 
-    /// PORT: `posix.sockaddr.in6`: `{ len = @sizeOf(in6), family = AF.INET6, port,
+    /// PORT NOTE: `posix.sockaddr.in6`: `{ len = @sizeOf(in6), family = AF.INET6, port,
     /// flowinfo, addr: [16]u8, scope_id }`.
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -81,7 +81,7 @@ pub mod sockaddr {
         pub scope_id: u32,
     }
 
-    /// PORT: `posix.sockaddr.un` (UNIX domain socket): `{ len = @sizeOf(un),
+    /// PORT NOTE: `posix.sockaddr.un` (UNIX domain socket): `{ len = @sizeOf(un),
     /// family = AF.UNIX, path: [104]u8 }`.
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -92,7 +92,7 @@ pub mod sockaddr {
     }
 }
 
-/// PORT: `std.net.IParseError` subset — the `Ip4Address.parse` error set
+/// PORT NOTE: `std.net.IParseError` subset — the `Ip4Address.parse` error set
 /// (`IPv4ParseError = IPParseError || error{NonCanonical}`; the `std.math`
 /// overflow surfaces as `Overflow`). Only the variants `parse` returns are
 /// modeled; consumers `catch` them or (in the tests) never hit them.
@@ -105,7 +105,7 @@ pub enum IPv4ParseError {
     NonCanonical,
 }
 
-/// PORT: `std.net.Ip4Address = extern struct { sa: posix.sockaddr.in }`.
+/// PORT NOTE: `std.net.Ip4Address = extern struct { sa: posix.sockaddr.in }`.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Ip4Address {
@@ -113,7 +113,7 @@ pub struct Ip4Address {
 }
 
 impl Ip4Address {
-    /// PORT: `Ip4Address.parse(buf, port)`.
+    /// PORT NOTE: `Ip4Address.parse(buf, port)`.
     pub fn parse(buf: &[u8], port: u16) -> core::result::Result<Ip4Address, IPv4ParseError> {
         let mut result: Ip4Address = Ip4Address {
             sa: sockaddr::In {
@@ -171,7 +171,7 @@ impl Ip4Address {
         Err(IPv4ParseError::Incomplete)
     }
 
-    /// PORT: `Ip4Address.init(addr, port)`.
+    /// PORT NOTE: `Ip4Address.init(addr, port)`.
     pub fn init(addr: [u8; 4], port: u16) -> Ip4Address {
         Ip4Address {
             sa: sockaddr::In {
@@ -186,13 +186,13 @@ impl Ip4Address {
         }
     }
 
-    /// PORT: `Ip4Address.getOsSockLen(self)`.
+    /// PORT NOTE: `Ip4Address.getOsSockLen(self)`.
     pub fn get_os_sock_len(self) -> socklen_t {
         size_of::<sockaddr::In>() as socklen_t
     }
 }
 
-/// PORT: `std.net.Ip6Address = extern struct { sa: posix.sockaddr.in6 }`. Only
+/// PORT NOTE: `std.net.Ip6Address = extern struct { sa: posix.sockaddr.in6 }`. Only
 /// the struct + `getOsSockLen` are reached by the kqueue backend (the INET6 arm
 /// of `Address.getOsSockLen`; the tests are IPv4-only). `Ip6Address.parse` is
 /// unused by the kqueue backend and is not ported.
@@ -203,13 +203,13 @@ pub struct Ip6Address {
 }
 
 impl Ip6Address {
-    /// PORT: `Ip6Address.getOsSockLen(self)`.
+    /// PORT NOTE: `Ip6Address.getOsSockLen(self)`.
     pub fn get_os_sock_len(self) -> socklen_t {
         size_of::<sockaddr::In6>() as socklen_t
     }
 }
 
-/// PORT: `std.net.Address = extern union { any, in, in6, un }`. Union field
+/// PORT NOTE: `std.net.Address = extern union { any, in, in6, un }`. Union field
 /// access is `unsafe` in Rust (exactly Zig's active-field discipline); the
 /// kqueue backend reads `.any.family` (dispatch) + `&.any` (the connect
 /// syscall) and writes via `.in`. `#[derive(Copy)]`: all members are POD
@@ -228,21 +228,21 @@ pub union Address {
 }
 
 impl Address {
-    /// PORT: `Address.parseIp4(buf, port)`.
+    /// PORT NOTE: `Address.parseIp4(buf, port)`.
     pub fn parse_ip4(buf: &[u8], port: u16) -> core::result::Result<Address, IPv4ParseError> {
         Ok(Address {
             in_: Ip4Address::parse(buf, port)?,
         })
     }
 
-    /// PORT: `Address.initIp4(addr, port)`.
+    /// PORT NOTE: `Address.initIp4(addr, port)`.
     pub fn init_ip4(addr: [u8; 4], port: u16) -> Address {
         Address {
             in_: Ip4Address::init(addr, port),
         }
     }
 
-    /// PORT: `Address.getOsSockLen(self)`.
+    /// PORT NOTE: `Address.getOsSockLen(self)`.
     //
     // PORT NOTE: the `else => unreachable` (non-IP/UNIX family) ports as a Rust
     // `unreachable!()`; `has_unix_sockets` is always true on macOS so the

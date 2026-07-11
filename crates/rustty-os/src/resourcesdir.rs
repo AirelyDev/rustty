@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/resourcesdir.zig` — every line, comment, and
 //! `test {}` is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, and `Allocator =
+// PORT NOTE: the Zig reference imports `std`, `builtin`, and `Allocator =
 // std.mem.Allocator`. In Rust we use the standard library; allocation failure is
 // not a recoverable error here, so the public `Result` carries
 // `ResourcesDirError`. Product-identity strings (the `GHOSTTY_RESOURCES_DIR`
@@ -27,7 +27,7 @@ impl ResourcesDir {
     /// Free resources held. Requires the same allocator as when resourcesDir()
     /// is called.
     //
-    // PORT: the reference frees `app_path`/`host_path` with the allocator; in
+    // PORT NOTE: the reference frees `app_path`/`host_path` with the allocator; in
     // Rust the owned `String`s are dropped here. Kept as a method for parity with
     // the reference's public surface.
     pub fn deinit(self) {
@@ -51,7 +51,7 @@ impl ResourcesDir {
     }
 }
 
-/// PORT: the union of `Allocator.Error`, env-var errors, and `selfExePath`/`join`
+/// PORT NOTE: the union of `Allocator.Error`, env-var errors, and `selfExePath`/`join`
 /// errors the reference's `resourcesDir` can return.
 #[derive(Debug)]
 pub enum ResourcesDirError {
@@ -176,7 +176,7 @@ pub fn resourcesDir() -> Result<ResourcesDir, ResourcesDirError> {
 /// "buf" must be large enough to fit base + sub + suffix. This is generally
 /// max_path_bytes so its not a big deal.
 //
-// PORT: the reference returns a slice into `buf` (`buf[0..len]`) covering
+// PORT NOTE: the reference returns a slice into `buf` (`buf[0..len]`) covering
 // `base/sub`. We return an owned `String` of `base/sub` (the bytes up to the
 // suffix), which avoids the borrow-checker tangle of returning a slice of `buf`
 // while `buf` is reused across loop iterations; behavior is identical.
@@ -186,7 +186,7 @@ pub fn maybeDir(
     sub: &str,
     suffix: &str,
 ) -> Result<Option<String>, ResourcesDirError> {
-    // PORT: `std.fmt.bufPrint(buf, "{s}/{s}/{s}", .{ base, sub, suffix })` — the
+    // PORT NOTE: `std.fmt.bufPrint(buf, "{s}/{s}/{s}", .{ base, sub, suffix })` — the
     // reference formats into `buf` and would error `NoSpaceLeft` on overflow.
     let path = format!("{}/{}/{}", base, sub, suffix);
     let bytes = path.as_bytes();
@@ -207,20 +207,20 @@ pub fn maybeDir(
 }
 
 // ---------------------------------------------------------------------------
-// PORT support shims for the std/identity values the reference uses.
+// PORT NOTE: support shims for the std/identity values the reference uses.
 // ---------------------------------------------------------------------------
 
-/// PORT: the reference reads the `GHOSTTY_RESOURCES_DIR` env var. Retargeted to
+/// PORT NOTE: the reference reads the `GHOSTTY_RESOURCES_DIR` env var. Retargeted to
 /// the published `rustty` identity (R2): `<APP_NAME upper>_RESOURCES_DIR`.
 fn resources_dir_env_var() -> String {
     format!("{}_RESOURCES_DIR", rustty_identity::APP_NAME.to_uppercase())
 }
 
-/// PORT: the reference's terminfo sentinels. Retargeted to the `rustty`
+/// PORT NOTE: the reference's terminfo sentinels. Retargeted to the `rustty`
 /// identity (R2): `xterm-ghostty` -> `TERMINFO_PRIMARY_NAME`, `ghostty` ->
 /// `TERMINFO_PREFERRED_NAME`.
 fn sentinels() -> &'static [&'static str] {
-    // PORT: the reference computes these as a comptime tuple per target. We use a
+    // PORT NOTE: the reference computes these as a comptime tuple per target. We use a
     // `OnceLock` because the identity strings are runtime constants here.
     use std::sync::OnceLock;
     static CELL: OnceLock<Vec<&'static str>> = OnceLock::new();
@@ -262,7 +262,7 @@ fn sentinels() -> &'static [&'static str] {
     .as_slice()
 }
 
-/// PORT: the trailing resources subdir the reference joins (`"ghostty"`).
+/// PORT NOTE: the trailing resources subdir the reference joins (`"ghostty"`).
 /// Retargeted to the published app name (R2).
 fn app_subdir() -> &'static str {
     rustty_identity::APP_NAME
@@ -289,7 +289,7 @@ fn dir_str(dir: &Path) -> &str {
     dir.to_str().unwrap_or("")
 }
 
-/// PORT: reproduces `std.fs.path.join` for the two-component joins used here
+/// PORT NOTE: reproduces `std.fs.path.join` for the two-component joins used here
 /// (a single separator between non-empty parts).
 fn fs_path_join(paths: &[&str]) -> String {
     let mut out = String::new();

@@ -1,28 +1,28 @@
 //! Generates bytes.
 //!
-//! PORT: `synthetic/Bytes.zig`.
+//! PORT NOTE: `synthetic/Bytes.zig`.
 
 use crate::generator::Generator;
 use crate::io::{WriteFailed, Writer};
 use crate::rand::Rng;
 
-/// PORT: `std.ascii.control_code.esc`.
+/// PORT NOTE: `std.ascii.control_code.esc`.
 pub(crate) const ESC: u8 = 0x1b;
-/// PORT: `std.ascii.control_code.bel`.
+/// PORT NOTE: `std.ascii.control_code.bel`.
 pub(crate) const BEL: u8 = 0x07;
 
-/// PORT: `std.ascii.isPrint` — printable ASCII `0x20..=0x7E` (excludes DEL 0x7F
+/// PORT NOTE: `std.ascii.isPrint` — printable ASCII `0x20..=0x7E` (excludes DEL 0x7F
 /// and everything >= 0x80).
 pub(crate) const fn is_print(c: u8) -> bool {
     c >= 0x20 && c <= 0x7e
 }
 
-/// PORT: `std.ascii.isAlphabetic` — `A-Za-z`.
+/// PORT NOTE: `std.ascii.isAlphabetic` — `A-Za-z`.
 pub(crate) const fn is_alphabetic(c: u8) -> bool {
     (c >= b'A' && c <= b'Z') || (c >= b'a' && c <= b'z')
 }
 
-/// PORT: `std.ascii.isAlphanumeric` — `A-Za-z0-9`.
+/// PORT NOTE: `std.ascii.isAlphanumeric` — `A-Za-z0-9`.
 pub(crate) const fn is_alphanumeric(c: u8) -> bool {
     is_alphabetic(c) || (c >= b'0' && c <= b'9')
 }
@@ -30,7 +30,7 @@ pub(crate) const fn is_alphanumeric(c: u8) -> bool {
 /// Generate an alphabet given a function that returns true/false for a
 /// given byte.
 ///
-/// PORT: `Bytes.generateAlphabet(comptime func)` — builds a `[]const u8` by
+/// PORT NOTE: `Bytes.generateAlphabet(comptime func)` — builds a `[]const u8` by
 /// scanning `0..256` in ascending order, keeping the bytes for which `func`
 /// returns true. The exact set and order of bytes must match. Modelled as an
 /// accessor returning a `&'static [u8]` sliced from a const-evaluated fixed
@@ -58,7 +58,7 @@ macro_rules! generate_alphabet {
 }
 pub(crate) use generate_alphabet;
 
-/// PORT: `Bytes` — the `@This()` struct.
+/// PORT NOTE: `Bytes` — the `@This()` struct.
 pub struct Bytes<'a> {
     /// Random number generator.
     pub rand: Rng<'a>,
@@ -74,7 +74,7 @@ pub struct Bytes<'a> {
 }
 
 impl<'a> Bytes<'a> {
-    /// PORT: the struct-literal defaults (`min_len = 1`, `max_len =
+    /// PORT NOTE: the struct-literal defaults (`min_len = 1`, `max_len =
     /// std.math.maxInt(usize)`, `alphabet = null`).
     pub fn new(rand: Rng<'a>) -> Bytes<'a> {
         Bytes {
@@ -138,7 +138,7 @@ impl<'a> Bytes<'a> {
         Ok(())
     }
 
-    /// PORT: `Bytes.format` — NOT `Display`; a stateful side-effecting write of
+    /// PORT NOTE: `Bytes.format` — NOT `Display`; a stateful side-effecting write of
     /// random bytes. Everywhere Zig invokes the `{f}` hook we call this.
     pub fn format<W: Writer<Error = WriteFailed>>(
         &self,

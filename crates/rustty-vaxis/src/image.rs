@@ -11,7 +11,7 @@
 //! only constructed through `Vaxis::transmit_image`/`load_image`, themselves the
 //! zigimg R5 seams. See DEFERRALS.md "rustty-vaxis Chunks 4a/4b".
 //!
-//! PORT-NOTE: `Image::Source` byte-slices → `&'a [u8]` (never lossy `String`).
+//! PORT NOTE: `Image::Source` byte-slices → `&'a [u8]` (never lossy `String`).
 //! `transmit`/`transmitImage` (the consumers of `TRANSMIT_OPENER`/`TransmitFormat`/
 //! `TransmitMedium`) live in `Vaxis.zig` (`vaxis.rs`, Chunk 4a — live above the
 //! zigimg seams).

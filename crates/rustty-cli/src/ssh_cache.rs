@@ -656,7 +656,7 @@ fn relative_age(now: i64, ts: i64) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// PORT: support shims for the std.time facilities used above.
+// PORT NOTE: support shims for the std.time facilities used above.
 // ---------------------------------------------------------------------------
 
 // std.time nanosecond/second constants.

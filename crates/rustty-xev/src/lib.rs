@@ -30,7 +30,7 @@
 //! never change. Milestone A (isolated real `rustty-xev`) is DONE. See
 //! .port/phase-2/XEV_BLUEPRINT.md + DEFERRALS.md + NEXT_PHASE_PLAN.md.
 
-// PORT: `rustty_global::seam::Xev` (= `()`), the deferred xev backend package.
+// PORT NOTE: `rustty_global::seam::Xev` (= `()`), the deferred xev backend package.
 #[allow(unused_imports)]
 use rustty_global::xev as _DeferredXevBackend;
 
@@ -200,7 +200,7 @@ pub use timer::RunError as TimerRunError;
 #[cfg(target_os = "macos")]
 pub use async_watcher::WaitError;
 
-// PORT: `main.zig` also forwards `File`/`TCP`/`UDP` (watchers) + `Dynamic`/
+// PORT NOTE: `main.zig` also forwards `File`/`TCP`/`UDP` (watchers) + `Dynamic`/
 // `DynamicXev` (the runtime backend switch) + `IO_Uring`/`Epoll`/`Kqueue`/
 // `WasiPoll`/`IOCP` (the per-backend Api()s) + `Sys`/`dynamic`/`backend`/
 // `available`. On macOS these are DEFERRED (XEV_BLUEPRINT §0/§1): `File`/`TCP`/
@@ -209,13 +209,13 @@ pub use async_watcher::WaitError;
 // ports; `Sys`/`dynamic`(=false)/`backend`(=kqueue)/`available` are the internal
 // Api()-selection decls. See DEFERRALS.md.
 
-/// PORT: the error set of `Loop.init`/`Async.init`/`Timer.init` — the unified D6
+/// PORT NOTE: the error set of `Loop.init`/`Async.init`/`Timer.init` — the unified D6
 /// seam error (every libxev alloc/syscall failure collapses here; termio
 /// propagates `Loop::init()?`/`Async::init()?`/`Timer::init()?` through one type).
 #[derive(Debug)]
 pub struct Error;
 
-/// PORT: `xev.Async.NotifyError` (the error set of `Async.notify`).
+/// PORT NOTE: `xev.Async.NotifyError` (the error set of `Async.notify`).
 //
 // PORT NOTE: the derives are required by rustty-core's `surface::Error` union
 // (core C7), which embeds this error and itself derives `Copy`/`PartialEq` (Zig
@@ -233,7 +233,7 @@ pub struct NotifyError;
 // anchor exactly as `global.zig`'s `pub const xev` is (§0 consequence 4).
 
 // ---------------------------------------------------------------------------
-// PORT: `api.zig`'s 2 `test{}` — the `Xev(be, T)` decl-forwarding struct's tests.
+// PORT NOTE: `api.zig`'s 2 `test{}` — the `Xev(be, T)` decl-forwarding struct's tests.
 // On macOS the Api() collapses to THIS crate's public surface (§0/§1: `main.zig`
 // re-exports the kqueue Api() decls), so api.zig's tests live here at the package
 // root. The anonymous `test { refAllDecls(@This()); }` → `ref_all_decls` (a helper
@@ -314,27 +314,27 @@ pub use non_macos_seam::*;
 mod non_macos_seam {
     use super::Error;
 
-    /// PORT: `xev.Loop` placeholder (non-macOS backend deferred).
+    /// PORT NOTE: `xev.Loop` placeholder (non-macOS backend deferred).
     pub struct Loop {}
-    /// PORT: `xev.Async` placeholder (non-macOS backend deferred).
+    /// PORT NOTE: `xev.Async` placeholder (non-macOS backend deferred).
     #[derive(Clone, Copy)]
     pub struct Async {}
-    /// PORT: `xev.Completion` placeholder (non-macOS backend deferred).
+    /// PORT NOTE: `xev.Completion` placeholder (non-macOS backend deferred).
     #[derive(Default)]
     pub struct Completion {}
-    /// PORT: `xev.Timer` placeholder (non-macOS backend deferred).
+    /// PORT NOTE: `xev.Timer` placeholder (non-macOS backend deferred).
     pub struct Timer {}
-    /// PORT: `xev.Process` placeholder (non-macOS backend deferred).
+    /// PORT NOTE: `xev.Process` placeholder (non-macOS backend deferred).
     #[derive(Clone, Copy)]
     pub struct Process {}
-    /// PORT: `xev.Stream` placeholder (non-macOS backend deferred).
+    /// PORT NOTE: `xev.Stream` placeholder (non-macOS backend deferred).
     #[derive(Clone, Copy)]
     pub struct Stream {}
-    /// PORT: `xev.WriteRequest` placeholder (non-macOS backend deferred) — Exec's
+    /// PORT NOTE: `xev.WriteRequest` placeholder (non-macOS backend deferred) — Exec's
     /// `SegmentedPool<xev::WriteRequest>` requires `Default`.
     #[derive(Default)]
     pub struct WriteRequest {}
-    /// PORT: `xev.WriteQueue` placeholder (non-macOS backend deferred) — Exec's
+    /// PORT NOTE: `xev.WriteQueue` placeholder (non-macOS backend deferred) — Exec's
     /// `write_queue` field default-constructs it.
     #[derive(Default)]
     pub struct WriteQueue {}

@@ -70,7 +70,7 @@ pub struct Options {
     pub type_: Option<&'static str>,
 }
 
-/// PORT: `pub const ReadMethod = enum { none, read, recv };`.
+/// PORT NOTE: `pub const ReadMethod = enum { none, read, recv };`.
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ReadMethod {
@@ -79,7 +79,7 @@ pub enum ReadMethod {
     Recv,
 }
 
-/// PORT: `pub const WriteMethod = enum { none, write, send };`.
+/// PORT NOTE: `pub const WriteMethod = enum { none, write, send };`.
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum WriteMethod {
@@ -97,7 +97,7 @@ pub enum WriteMethod {
 /// WriteQueue is the queue of write requests for ordered writes.
 /// This can be copied around.
 //
-// PORT: `pub const WriteQueue = queue.Intrusive(WriteRequest);` — the intrusive
+// PORT NOTE: `pub const WriteQueue = queue.Intrusive(WriteRequest);` — the intrusive
 // singly-linked FIFO of `WriteRequest` (C1 `queue::Intrusive`). [ADV-FIX F3]:
 // termio default-constructs it (`write_queue: xev.WriteQueue = .{}`); the
 // hand-written `Default` (head/tail = null) comes from `queue::Intrusive`.
@@ -151,7 +151,7 @@ impl Default for WriteRequest {
     }
 }
 
-// PORT: intrusive `next` link seam for `queue::Intrusive<WriteRequest>` (the
+// PORT NOTE: intrusive `next` link seam for `queue::Intrusive<WriteRequest>` (the
 // `WriteQueue`). Mirrors the `queue::Node` impl for `Completion` (kqueue.rs).
 impl queue::Node for WriteRequest {
     unsafe fn next_field(this: *mut Self) -> *mut *mut Self {
@@ -173,7 +173,7 @@ impl WriteRequest {
     /// originally is from a write request. This is useful for getting
     /// the WriteRequest back in a callback from queuedWrite.
     //
-    // PORT: `return @fieldParentPtr("completion", c);` — recovers the enclosing
+    // PORT NOTE: `return @fieldParentPtr("completion", c);` — recovers the enclosing
     // `WriteRequest` from its embedded `completion` field via `container_of`
     // (offset-of), the `vtc-effects-trampoline-seam` pattern.
     pub fn from(c: *mut Completion) -> *mut WriteRequest {
@@ -185,14 +185,14 @@ impl WriteRequest {
 
 /// Errors that can be returned from polling.
 //
-// PORT: `PollError = switch (xev.backend) { .kqueue => xev.ReadError, ... }` —
+// PORT NOTE: `PollError = switch (xev.backend) { .kqueue => xev.ReadError, ... }` —
 // the kqueue arm. (io_uring/epoll = `xev.Sys.PollError`; iocp/wasi = `error{}` —
 // comptime-elided.)
 pub type PollError = ReadError;
 
 /// Events that can be polled for using the high level streams.
 //
-// PORT: `PollEvent = enum(u32) { read = switch (xev.backend) { .kqueue => 0, ...
+// PORT NOTE: `PollEvent = enum(u32) { read = switch (xev.backend) { .kqueue => 0, ...
 // } }` — the kqueue arm (`read = 0`, "doesn't matter").
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,7 +201,7 @@ pub enum PollEvent {
 }
 
 impl PollEvent {
-    // PORT: `fn fromResult(c, result) PollError!PollEvent` — the kqueue arm:
+    // PORT NOTE: `fn fromResult(c, result) PollError!PollEvent` — the kqueue arm:
     //   .kqueue => switch (c.op) { .read, .recv => .read, else => unreachable },
     // (io_uring/epoll consult `result.poll`; iocp/wasi `@compileError` — elided.)
     // On kqueue the result is never inspected: read/recv ops always map to `.read`.
@@ -239,7 +239,7 @@ impl PollEvent {
 // (satisfied below: the `fd` field + the `init_fd` decl.)
 // ---------------------------------------------------------------------------
 
-/// PORT: `GenericStream(kqueue)`. `#[derive(Clone, Copy)]`: the reference
+/// PORT NOTE: `GenericStream(kqueue)`. `#[derive(Clone, Copy)]`: the reference
 /// `read`/`write`/`close`/`poll`/`queueWrite` take `self: Self` by value (a
 /// trivially-copyable `fd` handle), and termio holds `xev::Stream` by value; the
 /// `fd: fd_t` field makes it auto-`Send`.
@@ -657,7 +657,7 @@ impl Stream {
 
     /// Extracts the result from a completion for a write callback.
     //
-    // PORT: the `inline fn write_result(c, r) struct { writer, buf, result }` —
+    // PORT NOTE: the `inline fn write_result(c, r) struct { writer, buf, result }` —
     // the `.write` arm (`options.write == .write` for GenericStream; the `.send`
     // arm is comptime-elided).
     fn write_result(c: *mut Completion, r: Result) -> WriteResult {
@@ -681,7 +681,7 @@ impl Stream {
     /// Initialize the completion c for a write. This does NOT set
     /// userdata or a callback.
     //
-    // PORT: the `.write` arm (`options.write == .write`). `c.* = .{ .op = .{ .write
+    // PORT NOTE: the `.write` arm (`options.write == .write`). `c.* = .{ .op = .{ .write
     // = { .fd, .buffer } } }` is a full reset (userdata = null, callback =
     // noopCallback, internals default) — `Completion::new_op` with the noop
     // callback + null userdata reproduces it. `flags` is module-private; the
@@ -929,7 +929,7 @@ impl Stream {
     }
 }
 
-/// PORT: the anonymous return struct of `write_result` (`struct { writer: Self,
+/// PORT NOTE: the anonymous return struct of `write_result` (`struct { writer: Self,
 /// buf: WriteBuffer, result: WriteError!usize }`).
 struct WriteResult {
     writer: Stream,

@@ -30,7 +30,7 @@ use core::ffi::c_void;
 use core::ptr::NonNull;
 
 // ---------------------------------------------------------------------------
-// PORT (§0/§7): the sibling `Process` variants are COMPTIME-ELIDED on macOS and
+// PORT NOTE (§0/§7): the sibling `Process` variants are COMPTIME-ELIDED on macOS and
 // DEFERRED (not weakened). The reference `pub fn Process(comptime xev: type) type`
 // — doc comment "Process management, such as waiting for process exit." — dispatches
 // on `xev.backend`:
@@ -70,11 +70,11 @@ use core::ptr::NonNull;
 //   deferred with the other backends.
 // ---------------------------------------------------------------------------
 
-/// PORT: `pub const WaitError = xev.Sys.ProcError;`.
+/// PORT NOTE: `pub const WaitError = xev.Sys.ProcError;`.
 /// The error that can come in the wait callback.
 pub type WaitError = ProcError;
 
-/// PORT: `ProcessKqueue` monomorphized. `#[derive(Clone, Copy)]`: the reference
+/// PORT NOTE: `ProcessKqueue` monomorphized. `#[derive(Clone, Copy)]`: the reference
 /// `wait` takes `self: Self` by value (a trivially-copyable `pid` handle) and
 /// termio holds `xev::Process` fields by value; the `pid: pid_t` field makes it
 /// auto-`Send`.
@@ -218,7 +218,7 @@ impl Process {
 }
 
 // ---------------------------------------------------------------------------
-// PORT: `ProcessTests(xev, Impl)` (process.zig:455). On macOS the single `Process`
+// PORT NOTE: `ProcessTests(xev, Impl)` (process.zig:455). On macOS the single `Process`
 // instantiation is `ProcessKqueue` (§0/§7), so `Impl == Process`. The three
 // reference `test{}` land as live Rust tests, plus rustty KAT 3 (§7) which proves
 // the spawn+exit round-trip on a real kqueue (Miri can't — real EVFILT_PROC /
@@ -231,7 +231,7 @@ mod tests {
     use crate::looppkg::RunMode;
     use std::process::Command;
 
-    // PORT: `argv_0`/`argv_42` — the `builtin.os.tag` switch's non-windows arm
+    // PORT NOTE: `argv_0`/`argv_42` — the `builtin.os.tag` switch's non-windows arm
     // (`&.{ "sh", "-c", "exit N" }`); the `.windows => &.{ "cmd.exe", "/C", "exit N" }`
     // arm is comptime-elided on this macOS-gated module.
     const ARGV_0: [&str; 3] = ["sh", "-c", "exit 0"];

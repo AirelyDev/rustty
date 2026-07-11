@@ -38,7 +38,7 @@ pub mod keymap_darwin;
 pub mod keymap_noop;
 pub mod link;
 
-// PORT: `input.zig:39-44` —
+// PORT NOTE: `input.zig:39-44` —
 //   // Keymap is only available on macOS right now. We could implement it
 //   // in theory for XKB too on Linux but we don't as of writing this.
 //   pub const Keymap = switch (builtin.os.tag) {

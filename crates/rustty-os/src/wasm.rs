@@ -8,7 +8,7 @@
 //! plus the `src/os/wasm/` subdirectory — every line, comment, and `test {}` is
 //! ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, `options = build_options`,
+// PORT NOTE: the Zig reference imports `std`, `builtin`, `options = build_options`,
 // and has a `comptime` guard `@compileError("wasm.zig should only be analyzed
 // for wasm32 builds")`. In Rust the equivalent is a `cfg(target_arch = "wasm32")`
 // gate on the module body so it is only compiled for wasm; the guard message is
@@ -19,7 +19,7 @@
 pub mod log;
 pub mod target;
 
-// PORT: `comptime { if (!builtin.target.cpu.arch.isWasm()) @compileError("wasm.zig
+// PORT NOTE: `comptime { if (!builtin.target.cpu.arch.isWasm()) @compileError("wasm.zig
 // should only be analyzed for wasm32 builds"); }`. The whole `wasm_impl` module is
 // `cfg(target_arch = "wasm32")`, which is the parity-preserving equivalent: the
 // declarations below are only compiled for wasm32 builds.
@@ -37,7 +37,7 @@ mod wasm_impl {
     /// unless toHostOwned is called on them. In this case, the caller is expected
     /// to call free. If a pointer is NOT host-owned, then the wasm module is
     /// expected to call the normal alloc.free/destroy functions.
-    // PORT: `pub const alloc = if (builtin.is_test) std.testing.allocator else
+    // PORT NOTE: `pub const alloc = if (builtin.is_test) std.testing.allocator else
     // std.heap.wasm_allocator;`. The Rust global allocator fulfills both roles
     // (the test allocator's leak-checking is covered by Miri per R6); `alloc`
     // names the wasm heap allocator used in wasm environments.

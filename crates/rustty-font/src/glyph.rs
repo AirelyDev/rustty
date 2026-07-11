@@ -1,5 +1,5 @@
 //! Glyph is a single loaded glyph for a face.
-// PORT: ghostty src/font/Glyph.zig (`const Glyph = @This();`). The Zig file
+// PORT NOTE: ghostty src/font/Glyph.zig (`const Glyph = @This();`). The Zig file
 // imports `std` and `Metrics = @import("Metrics.zig")`; here `Metrics` is
 // `crate::metrics::Metrics`.
 

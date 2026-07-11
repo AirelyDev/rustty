@@ -5,7 +5,7 @@
 //! resize, DECRPM/DSR/primary-DA/kitty-multi-cursor capability probes, color-report +
 //! color-scheme reports, and the c1b `uucode` grapheme-text path.
 //!
-//! PORT-NOTE (THE KEY DECISION, VAXIS_C3A_DESIGN §2): `parse` maps `&[u8] →
+//! PORT NOTE (THE KEY DECISION, VAXIS_C3A_DESIGN §2): `parse` maps `&[u8] →
 //! (Option<Event>, n)` and is PURE (no `Tty`/`Loop`/`queue` coupling — those are chunk
 //! 3b). A returned `Key.text` borrows EITHER `input` (ground path) OR the Parser's
 //! internal `buf` (CSI paths), so `parse<'a>(&'a mut self, input: &'a [u8]) ->
@@ -14,7 +14,7 @@
 //! caveat (Zig lets a second `parse` clobber `buf` under a still-live prior slice; Rust
 //! forbids it — a strictly sound tightening).
 //!
-//! PORT-NOTE (dropped): the Zig `paste_allocator` param + the error-union's OOM arm are
+//! PORT NOTE (dropped): the Zig `paste_allocator` param + the error-union's OOM arm are
 //! dropped (crate precedent — `Vec` self-allocates, infallible; `Paste` owns its `Vec`,
 //! no "caller must free"). The `log.warn`/`log.debug` calls are dropped (crate
 //! precedent). `std.debug.assert` → `debug_assert!`.
@@ -28,7 +28,7 @@ use crate::{cell, uucode, Winsize};
 /// The return type of our parse method. Contains an Event and the number of
 /// bytes read from the buffer.
 ///
-/// PORT-NOTE: Zig `Result` → `ParseResult` (avoids shadowing `std::result::Result`).
+/// PORT NOTE: Zig `Result` → `ParseResult` (avoids shadowing `std::result::Result`).
 pub struct ParseResult<'a> {
     pub event: Option<Event<'a>>,
     pub n: usize,
@@ -36,7 +36,7 @@ pub struct ParseResult<'a> {
 
 /// The error set of [`Parser::parse`].
 ///
-/// PORT-NOTE: Zig's `parse` error set = `error.InvalidUTF8` (parseGround) ∪
+/// PORT NOTE: Zig's `parse` error set = `error.InvalidUTF8` (parseGround) ∪
 /// `Color.rgbFromSpec` errors ∪ base64 `Decoder` errors ∪ `Allocator.Error` (dropped —
 /// `Vec` is infallible). No test exercises `Err` (all 34 assert `Ok`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,7 +46,7 @@ pub enum ParseError {
     Base64,                      // std.base64.standard.Decoder failure (OSC 52)
 }
 
-// PORT-NOTE: `mouse_bits` is a Zig struct-of-consts (`motion`/`buttons`/`shift`/`alt`/
+// PORT NOTE: `mouse_bits` is a Zig struct-of-consts (`motion`/`buttons`/`shift`/`alt`/
 // `ctrl` are `u8`, `leave` is `u16`); ported as a private const module of the same types.
 mod mouse_bits {
     pub const MOTION: u8 = 0b0010_0000;
@@ -59,7 +59,7 @@ mod mouse_bits {
 
 // the state of the parser
 //
-// PORT-NOTE: `State` is declared in Zig but used only as documentation — the dispatch is
+// PORT NOTE: `State` is declared in Zig but used only as documentation — the dispatch is
 // a direct `input[1]` switch, no stored state. Kept `#[allow(dead_code)]` for parity.
 #[allow(dead_code)]
 enum State {
@@ -84,7 +84,7 @@ pub struct Parser {
 
 impl Default for Parser {
     fn default() -> Self {
-        // PORT-NOTE: Zig `buf: [128]u8 = undefined` → zeroed here (never read before
+        // PORT NOTE: Zig `buf: [128]u8 = undefined` → zeroed here (never read before
         // written — the text-encode arms fill it before slicing).
         Parser { buf: [0u8; 128] }
     }
@@ -355,7 +355,7 @@ fn parse_osc(input: &[u8]) -> Result<ParseResult<'static>, ParseError> {
                 n: sequence.len(),
             })
         }
-        // PORT-NOTE (R1): Zig's explicit `10, 11, 12 =>` list is kept verbatim (not
+        // PORT NOTE (R1): Zig's explicit `10, 11, 12 =>` list is kept verbatim (not
         // collapsed to a range) — the inner `match ps` maps each to fg/bg/cursor.
         #[allow(clippy::manual_range_patterns)]
         10 | 11 | 12 => {
@@ -715,7 +715,7 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
                 };
             }
 
-            // PORT-NOTE: Zig `key.codepoint = undefined` → 0 placeholder (overwritten in
+            // PORT NOTE: Zig `key.codepoint = undefined` → 0 placeholder (overwritten in
             // field1 before any read).
             let mut key: Key<'b> = key_with_codepoint(0);
             // Split first into fields delimited by ';'
@@ -963,7 +963,7 @@ fn parse_mouse(input: &[u8], full_input: &[u8]) -> ParseResult<'static> {
         mouse::Type::Press
     };
 
-    // PORT-NOTE: Zig field defaults `xoffset`/`yoffset = 0` set explicitly (Mouse has no
+    // PORT NOTE: Zig field defaults `xoffset`/`yoffset = 0` set explicitly (Mouse has no
     // `Default`).
     let mouse_ev = Mouse {
         button,

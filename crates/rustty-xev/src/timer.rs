@@ -23,7 +23,7 @@ use crate::looppkg::CallbackAction;
 /// repeat by returning "rearm" in the callback or by rescheduling the
 /// start within the callback.
 //
-// PORT: this is the `TimerLoop` instantiation (on macOS `xev.dynamic == false`,
+// PORT NOTE: this is the `TimerLoop` instantiation (on macOS `xev.dynamic == false`,
 // §0, so `Timer(xev)` is `TimerLoop(xev)`, never `TimerDynamic`).
 // An implementation that uses the loop timer methods.
 //
@@ -287,7 +287,7 @@ impl Timer {
 
 /// Error that could happen while running a timer.
 //
-// PORT: `pub const RunError = error{Canceled, Unexpected}`.
+// PORT NOTE: `pub const RunError = error{Canceled, Unexpected}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunError {
     /// The timer was canceled before it could expire
@@ -296,12 +296,12 @@ pub enum RunError {
     Unexpected,
 }
 
-// PORT: `pub const CancelError = xev.CancelError;` — the timer watcher forwards
+// PORT NOTE: `pub const CancelError = xev.CancelError;` — the timer watcher forwards
 // the loop's cancel error set unchanged (`crate::kqueue::CancelError`, imported
 // at the top of this module and used by `cancel`/`cancel_trampoline`).
 
 // ---------------------------------------------------------------------------
-// PORT: `watcher/timer.zig`'s `TimerTests(xev, Impl)` — the 5 R1 `test{}`s of the
+// PORT NOTE: `watcher/timer.zig`'s `TimerTests(xev, Impl)` — the 5 R1 `test{}`s of the
 // timer watcher (`timer`, `timer reset`, `timer reset before tick`, `timer reset
 // after trigger`, `timer cancel`). These drive the real kqueue loop (Miri can't —
 // real syscalls); `#[cfg(target_os = "macos")]` via the module gate. `undefined`

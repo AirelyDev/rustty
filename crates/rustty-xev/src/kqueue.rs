@@ -4,7 +4,7 @@
 //! Backend to use kqueue. This is currently only tested on macOS but
 //! support for BSDs is planned (if it doesn't already work).
 //
-// PORT SCOPE (XEV_BLUEPRINT §0): on macOS `xev.Dynamic` IS the static kqueue
+// PORT NOTE: SCOPE (XEV_BLUEPRINT §0): on macOS `xev.Dynamic` IS the static kqueue
 // `Api()` (the single-candidate `Backend.candidates()` collapses `dynamic.zig`
 // at comptime), so this is the concrete flat loop. Everything is
 // `#[cfg(target_os = "macos")]`; the FreeBSD `posix.Kevent` fast paths are
@@ -25,7 +25,7 @@
 
 // (module is `#[cfg(target_os = "macos")]`-gated in lib.rs)
 #![allow(non_upper_case_globals)]
-// PORT: `posix.fd_t`/`socket_t`/`pid_t`/`socklen_t` keep their Zig/C snake_case
+// PORT NOTE: `posix.fd_t`/`socket_t`/`pid_t`/`socklen_t` keep their Zig/C snake_case
 // type names (they mirror `std.posix` identifiers, R2 identifier-fidelity).
 #![allow(non_camel_case_types)]
 
@@ -42,26 +42,26 @@ use crate::queue_mpsc;
 use crate::thread_pool::{self, ThreadPool};
 use crate::Error;
 
-// PORT: `const log = std.log.scoped(.libxev_kqueue);` — Zig scoped logging has no
+// PORT NOTE: `const log = std.log.scoped(.libxev_kqueue);` — Zig scoped logging has no
 // Rust equivalent that we wire here; the two `log.err`/`log.warn` call sites are
 // preserved as comments at their locations (unreachable/invalid-state diagnostics).
 
-// PORT: the `std.posix` type aliases the backend threads through. On macOS these
+// PORT NOTE: the `std.posix` type aliases the backend threads through. On macOS these
 // are the platform C ints.
-/// PORT: `posix.fd_t`.
+/// PORT NOTE: `posix.fd_t`.
 pub type fd_t = libc::c_int;
-/// PORT: `posix.socket_t`.
+/// PORT NOTE: `posix.socket_t`.
 pub type socket_t = libc::c_int;
-/// PORT: `posix.pid_t`.
+/// PORT NOTE: `posix.pid_t`.
 pub type pid_t = libc::pid_t;
-/// PORT: `posix.socklen_t`.
+/// PORT NOTE: `posix.socklen_t`.
 pub type socklen_t = libc::socklen_t;
-/// PORT: `posix.timespec` — the monotonic-clock instant the loop caches + the
+/// PORT NOTE: `posix.timespec` — the monotonic-clock instant the loop caches + the
 /// timer-heap key. macOS `timespec` (`{ tv_sec: isize, tv_nsec: isize }`), from
 /// `libc`; Zig `.sec`/`.nsec` map to `.tv_sec`/`.tv_nsec`.
 pub type Timespec = libc::timespec;
 
-// PORT: `std.time.*` constants used by `now`/`update_now`/timer math.
+// PORT NOTE: `std.time.*` constants used by `now`/`update_now`/timer math.
 const ms_per_s: u64 = 1_000;
 const ns_per_ms: u64 = 1_000_000;
 const ns_per_s: u64 = 1_000_000_000;
@@ -92,14 +92,14 @@ pub fn available() -> bool {
     true
 }
 
-/// PORT: `pub const NOTE_EXIT_FLAGS` (macOS arm: `NOTE.EXIT | NOTE.EXITSTATUS`).
+/// PORT NOTE: `pub const NOTE_EXIT_FLAGS` (macOS arm: `NOTE.EXIT | NOTE.EXITSTATUS`).
 pub const NOTE_EXIT_FLAGS: u32 = libc::NOTE_EXIT | libc::NOTE_EXITSTATUS;
 
-/// PORT: `posix.SOCK.CLOEXEC` (the Zig-emulated close-on-exec flag `posix.accept`
+/// PORT NOTE: `posix.SOCK.CLOEXEC` (the Zig-emulated close-on-exec flag `posix.accept`
 /// applies via `fcntl` on macOS). The `accept` op's `flags` default.
 pub const SOCK_CLOEXEC: u32 = 0x8000;
 
-/// The current thread's `errno`. PORT: `posix.errno(rc)` reads the C `errno`
+/// The current thread's `errno`. PORT NOTE: `posix.errno(rc)` reads the C `errno`
 /// global when `rc == -1` (macOS `std.c._errno()`), else `.SUCCESS`.
 #[inline]
 fn errno() -> i32 {
@@ -115,7 +115,7 @@ fn errno() -> i32 {
 /// Kevent is either kevent_s or kevent64_s depending on the target platform.
 /// This lets us support both Mac and non-Mac platforms.
 //
-// PORT: `const Kevent = switch (...) { .macos => kevent64_s, ... }` — the macOS arm.
+// PORT NOTE: `const Kevent = switch (...) { .macos => kevent64_s, ... }` — the macOS arm.
 pub type Kevent = libc::kevent64_s;
 
 /// The fields of a `posix.Kevent` (the base, non-64 kevent) that `kevent_init`
@@ -132,7 +132,7 @@ struct KeventInit {
 /// kevent_init initializes a Kevent from an posix.Kevent. This is used when
 /// the "ext" fields are zero.
 //
-// PORT: `inline fn kevent_init(ev: posix.Kevent) Kevent`. The `Kevent ==
+// PORT NOTE: `inline fn kevent_init(ev: posix.Kevent) Kevent`. The `Kevent ==
 // posix.Kevent` FreeBSD fast path is cfg-elided; macOS fills `.ext = {0, 0}`.
 #[inline]
 fn kevent_init(ev: KeventInit) -> Kevent {
@@ -150,7 +150,7 @@ fn kevent_init(ev: KeventInit) -> Kevent {
 /// kevent calls either kevent or kevent64 depending on the
 /// target platform.
 //
-// PORT: `fn kevent_syscall(...) posix.KEventError!usize` (macOS: the `kevent64`
+// PORT NOTE: `fn kevent_syscall(...) posix.KEventError!usize` (macOS: the `kevent64`
 // variant).
 //
 // PORT NOTE: the reference takes `changelist: []const Kevent, eventlist:
@@ -214,7 +214,7 @@ unsafe fn kevent_syscall(
     }
 }
 
-/// PORT: `posix.KEventError` — the error set of `kevent_syscall`.
+/// PORT NOTE: `posix.KEventError` — the error set of `kevent_syscall`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KEventError {
     AccessDenied,
@@ -236,12 +236,12 @@ impl From<KEventError> for Error {
 // The Loop (kqueue.zig:48).
 // ---------------------------------------------------------------------------
 
-// PORT: `const TimerHeap = heap.Intrusive(Timer, void, Timer.less);`
+// PORT NOTE: `const TimerHeap = heap.Intrusive(Timer, void, Timer.less);`
 type TimerHeap = heap::Intrusive<Timer, ()>;
-// PORT: `const TaskCompletionQueue = queue_mpsc.Intrusive(Completion);`
+// PORT NOTE: `const TaskCompletionQueue = queue_mpsc.Intrusive(Completion);`
 type TaskCompletionQueue = queue_mpsc::Intrusive<Completion>;
 
-/// PORT: `pub const Loop = struct { ... }`.
+/// PORT NOTE: `pub const Loop = struct { ... }`.
 pub struct Loop {
     /// The fd of the kqueue.
     kqueue_fd: fd_t,
@@ -287,7 +287,7 @@ pub struct Loop {
     flags: LoopFlags,
 }
 
-/// PORT: the `flags: packed struct { init, in_run, stopped }` sub-struct.
+/// PORT NOTE: the `flags: packed struct { init, in_run, stopped }` sub-struct.
 #[derive(Clone, Copy, Default)]
 struct LoopFlags {
     /// True once it is initialized.
@@ -845,7 +845,7 @@ impl Loop {
             // back even if are done waiting (wait_rem == 0) because if we have
             // to make a syscall to submit changes, we might as well also check
             // for done events too.
-            // PORT: the reference wraps this in a `completed: while (true) { break
+            // PORT NOTE: the reference wraps this in a `completed: while (true) { break
             // :completed kevent_syscall(...) catch |err| switch ... }` labeled-break
             // (EINTR retry lives inside `kevent_syscall` itself), so it never
             // actually loops — ported as a direct match.
@@ -1343,7 +1343,7 @@ impl Loop {
 
         // Inspect other operations. WARNING: the state can be ANYTHING
         // here so per op be sure to check the state flag.
-        // PORT: `switch (c.op) { .timer => |*v| {...}, else => {} }` — the sole
+        // PORT NOTE: `switch (c.op) { .timer => |*v| {...}, else => {} }` — the sole
         // meaningful arm is `.timer`; ported as `if let` (the `else => {}` no-op).
         if let Operation::Timer(v) = unsafe { &mut (*c).op } {
             if unsafe { (*c).flags.state } == State::Active {
@@ -1378,7 +1378,7 @@ impl Loop {
     /// This is the main callback for the threadpool to perform work
     /// on completions for the loop.
     //
-    // PORT: the dead thread-pool branch (never taken while thread_pool is None,
+    // PORT NOTE: the dead thread-pool branch (never taken while thread_pool is None,
     // §1/§6); ported for faithfulness. `@fieldParentPtr("task", t)` recovers the
     // owning Completion via `container_of` (offset-of).
     fn thread_perform(t: *mut thread_pool::Task) {
@@ -1406,7 +1406,7 @@ impl Loop {
     }
 }
 
-/// PORT: the local `StartAction = union(enum) { kevent, timer, cancel,
+/// PORT NOTE: the local `StartAction = union(enum) { kevent, timer, cancel,
 /// threadpool, result: i32 }` in `Loop.start`.
 enum StartAction {
     /// We have set the kevent out parameter
@@ -1453,7 +1453,7 @@ pub struct Completion {
     task_loop: *mut Loop,
 }
 
-/// PORT: the `flags: packed struct { state: State, threadpool: bool }` sub-struct.
+/// PORT NOTE: the `flags: packed struct { state: State, threadpool: bool }` sub-struct.
 #[derive(Clone, Copy)]
 struct CompletionFlags {
     /// Watch state of this completion. We use this to determine whether
@@ -1467,7 +1467,7 @@ struct CompletionFlags {
     threadpool: bool,
 }
 
-/// PORT: `const State = enum(u3) { dead, adding, deleting, active }`.
+/// PORT NOTE: `const State = enum(u3) { dead, adding, deleting, active }`.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
@@ -1508,7 +1508,7 @@ impl Default for Completion {
 }
 
 impl Completion {
-    /// PORT: the `c.* = .{ .op, .userdata, .callback }` initialization the watcher
+    /// PORT NOTE: the `c.* = .{ .op, .userdata, .callback }` initialization the watcher
     /// `wait`/`run` methods perform (e.g. `async.zig:326`, `timer.zig`) — a FULL
     /// reset with the internal fields (`next`/`result`/`flags`/`task`/`task_loop`)
     /// taking their `Default` values. Exposed `pub(crate)` so sibling watcher
@@ -1528,7 +1528,7 @@ impl Completion {
         }
     }
 
-    /// PORT: the `c.flags.threadpool = true` assignment the stream `Closeable`
+    /// PORT NOTE: the `c.flags.threadpool = true` assignment the stream `Closeable`
     /// (and the `Readable`/`Writeable` kqueue arms when `options.threadpool`)
     /// perform inside the package (stream.zig:434/609/998). `flags` is module-
     /// private, so this `pub(crate)` seam lets the sibling `stream` module
@@ -1548,7 +1548,7 @@ impl Completion {
 // exactly the owning event-loop thread, so transferring ownership is sound.
 unsafe impl Send for Completion {}
 
-// PORT: intrusive `next` link seam for `queue::Intrusive<Completion>`
+// PORT NOTE: intrusive `next` link seam for `queue::Intrusive<Completion>`
 // (submissions/cancellations/completions).
 impl queue::Node for Completion {
     unsafe fn next_field(this: *mut Self) -> *mut *mut Self {
@@ -1556,7 +1556,7 @@ impl queue::Node for Completion {
     }
 }
 
-// PORT: intrusive `next` link seam for `queue_mpsc::Intrusive<Completion>`
+// PORT NOTE: intrusive `next` link seam for `queue_mpsc::Intrusive<Completion>`
 // (thread_pool_completions).
 impl queue_mpsc::Node for Completion {
     unsafe fn next_field(this: *mut Self) -> *mut *mut Self {
@@ -2058,7 +2058,7 @@ impl Completion {
 
 /// The struct used for loop wakeup. This is only internal state.
 //
-// PORT: the `if (builtin.os.tag.isDarwin())` Darwin arm. The non-Darwin `else`
+// PORT NOTE: the `if (builtin.os.tag.isDarwin())` Darwin arm. The non-Darwin `else`
 // branch is cfg-elided (kqueue port is macOS-only); its verbatim comments (a
 // follow-up BSD port):
 //   // TODO: We should use eventfd for FreeBSD. Until this is
@@ -2125,7 +2125,7 @@ impl Wakeup {
 // Operation / Result unions (kqueue.zig:1503/1527/1616) + errors + buffers.
 // ---------------------------------------------------------------------------
 
-// PORT: `pub const OperationType = enum { ... }` — the 17-variant tag. In Rust
+// PORT NOTE: `pub const OperationType = enum { ... }` — the 17-variant tag. In Rust
 // the tag is carried by the `Operation` enum itself (no separate type needed);
 // the variant order is preserved for fidelity.
 
@@ -2134,7 +2134,7 @@ impl Wakeup {
 /// on the underlying system in use. The high level operations are
 /// done by initializing the request handles.
 //
-// PORT: `pub const Operation = union(OperationType) { ... }`.
+// PORT NOTE: `pub const Operation = union(OperationType) { ... }`.
 // `op: Operation = .{ .noop = {} }` — the `#[default]` `Noop` variant.
 #[derive(Default)]
 pub enum Operation {
@@ -2227,7 +2227,7 @@ pub enum Operation {
     },
 }
 
-/// PORT: `posix.ShutdownHow` — the `how` selector of the `shutdown` op
+/// PORT NOTE: `posix.ShutdownHow` — the `how` selector of the `shutdown` op
 /// (`.both` default).
 #[derive(Clone, Copy)]
 pub enum ShutdownHow {
@@ -2236,7 +2236,7 @@ pub enum ShutdownHow {
     Both,
 }
 
-/// PORT: `pub const Result = union(OperationType) { ... }`.
+/// PORT NOTE: `pub const Result = union(OperationType) { ... }`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Result {
     Noop,
@@ -2268,13 +2268,13 @@ pub enum Result {
 // errno collapses to the `Unexpected` variant here (the mapping helpers below) —
 // the faithful observable behavior. (memory `right-tool-for-the-job`.)
 
-/// PORT: `pub const CancelError = error{Canceled}`.
+/// PORT NOTE: `pub const CancelError = error{Canceled}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CancelError {
     Canceled,
 }
 
-/// PORT: `pub const AcceptError = posix.KEventError || posix.AcceptError ||
+/// PORT NOTE: `pub const AcceptError = posix.KEventError || posix.AcceptError ||
 /// error{Canceled, Unexpected}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcceptError {
@@ -2282,7 +2282,7 @@ pub enum AcceptError {
     Unexpected,
 }
 
-/// PORT: `pub const ConnectError = posix.KEventError || posix.ConnectError ||
+/// PORT NOTE: `pub const ConnectError = posix.KEventError || posix.ConnectError ||
 /// error{Canceled, Unexpected}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectError {
@@ -2290,7 +2290,7 @@ pub enum ConnectError {
     Unexpected,
 }
 
-/// PORT: `pub const ReadError = posix.KEventError || posix.ReadError ||
+/// PORT NOTE: `pub const ReadError = posix.KEventError || posix.ReadError ||
 /// posix.PReadError || posix.RecvFromError || error{EOF, Canceled, MissingKevent,
 /// PermissionDenied, Unexpected}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2302,7 +2302,7 @@ pub enum ReadError {
     Unexpected,
 }
 
-/// PORT: `pub const WriteError = posix.KEventError || posix.WriteError ||
+/// PORT NOTE: `pub const WriteError = posix.KEventError || posix.WriteError ||
 /// posix.PWriteError || posix.SendError || posix.SendMsgError || posix.SendToError
 /// || error{Canceled, PermissionDenied, Unexpected}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2312,7 +2312,7 @@ pub enum WriteError {
     Unexpected,
 }
 
-/// PORT: `pub const MachPortError = posix.KEventError || error{Canceled,
+/// PORT NOTE: `pub const MachPortError = posix.KEventError || error{Canceled,
 /// Unexpected}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MachPortError {
@@ -2320,7 +2320,7 @@ pub enum MachPortError {
     Unexpected,
 }
 
-/// PORT: `pub const ProcError = posix.KEventError || error{Canceled,
+/// PORT NOTE: `pub const ProcError = posix.KEventError || error{Canceled,
 /// MissingKevent, Unexpected, NoSuchProcess}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcError {
@@ -2330,7 +2330,7 @@ pub enum ProcError {
     NoSuchProcess,
 }
 
-/// PORT: `pub const ShutdownError = posix.ShutdownError || error{Canceled,
+/// PORT NOTE: `pub const ShutdownError = posix.ShutdownError || error{Canceled,
 /// Unexpected}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShutdownError {
@@ -2338,7 +2338,7 @@ pub enum ShutdownError {
     Unexpected,
 }
 
-/// PORT: `const ThreadPoolError = error{ThreadPoolRequired,
+/// PORT NOTE: `const ThreadPoolError = error{ThreadPoolRequired,
 /// ThreadPoolUnsupported}` folded into `CloseError = ThreadPoolError ||
 /// error{Canceled, Unexpected}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2349,14 +2349,14 @@ pub enum CloseError {
     Unexpected,
 }
 
-/// PORT: `pub const TimerError = error{Canceled, Unexpected}`.
+/// PORT NOTE: `pub const TimerError = error{Canceled, Unexpected}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimerError {
     Canceled,
     Unexpected,
 }
 
-/// PORT: `pub const TimerTrigger = enum { request, expiration, cancel }`.
+/// PORT NOTE: `pub const TimerTrigger = enum { request, expiration, cancel }`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimerTrigger {
     /// Unused with epoll
@@ -2367,7 +2367,7 @@ pub enum TimerTrigger {
     Cancel,
 }
 
-// PORT: the errno → error mappers. `posix.unexpectedErrno(e)` → `Unexpected`;
+// PORT NOTE: the errno → error mappers. `posix.unexpectedErrno(e)` → `Unexpected`;
 // `ECANCELED` → `Canceled` (used by the perform syscall paths). Named-errno arms
 // that a specific op maps (`EPERM`/`ESRCH`) are handled at the op's call site.
 fn accept_err(e: i32) -> AcceptError {
@@ -2423,7 +2423,7 @@ fn close_err(e: i32) -> CloseError {
     }
 }
 
-// PORT: the `posix.*` syscall wrappers `perform` calls (read/write families +
+// PORT NOTE: the `posix.*` syscall wrappers `perform` calls (read/write families +
 // sendto/recvfrom). Each returns the value or a mapped error (see the collapse
 // note above). Raw `libc` bindings (§3).
 unsafe fn posix_write(
@@ -2538,7 +2538,7 @@ unsafe fn posix_recvfrom(
     }
 }
 
-/// PORT: `posix.getsockoptError(socket)` — reads `SO_ERROR` and maps to a
+/// PORT NOTE: `posix.getsockoptError(socket)` — reads `SO_ERROR` and maps to a
 /// `ConnectError` (0 → success).
 ///
 /// # Safety
@@ -2562,7 +2562,7 @@ unsafe fn getsockopt_error(socket: socket_t) -> core::result::Result<(), Connect
     }
 }
 
-// PORT: `posix.W.IFEXITED` / `posix.W.EXITSTATUS` (the proc-watch exit decode).
+// PORT NOTE: `posix.W.IFEXITED` / `posix.W.EXITSTATUS` (the proc-watch exit decode).
 fn libc_wifexited(status: u32) -> bool {
     (status & 0x7f) == 0
 }
@@ -2640,7 +2640,7 @@ pub struct Timer {
     c: *mut Completion,
 }
 
-// PORT: the intrusive `heap` field seam for `heap::Intrusive<Timer, ()>` (the
+// PORT NOTE: the intrusive `heap` field seam for `heap::Intrusive<Timer, ()>` (the
 // loop's `TimerHeap`).
 impl heap::Node for Timer {
     unsafe fn heap_field(this: *mut Self) -> *mut heap::IntrusiveField<Self> {
@@ -2649,7 +2649,7 @@ impl heap::Node for Timer {
 }
 
 impl Timer {
-    /// PORT: `fn less(_: void, a: *const Timer, b: *const Timer) bool`.
+    /// PORT NOTE: `fn less(_: void, a: *const Timer, b: *const Timer) bool`.
     fn less(_: (), a: *mut Timer, b: *mut Timer) -> bool {
         unsafe { Timer::ns(a) < Timer::ns(b) }
     }
@@ -2675,7 +2675,7 @@ impl Timer {
     }
 }
 
-// PORT: `comptime { if (@sizeOf(Completion) != 256) { @compileLog(...); unreachable; } }`
+// PORT NOTE: `comptime { if (@sizeOf(Completion) != 256) { @compileLog(...); unreachable; } }`
 // — the layout tripwire (kqueue.zig:1866).
 //
 // PORT NOTE: the reference asserts the Zig `@sizeOf(Completion) == 256`. Rust's
@@ -2720,7 +2720,7 @@ mod tests {
         WriteBuffer::Slice(ptr::slice_from_raw_parts(buf.as_ptr(), buf.len()))
     }
 
-    // PORT: `posix.socket(family, ty, 0)` — macOS emulates SOCK.CLOEXEC/NONBLOCK
+    // PORT NOTE: `posix.socket(family, ty, 0)` — macOS emulates SOCK.CLOEXEC/NONBLOCK
     // via fcntl (the Zig std.posix.socket behavior).
     unsafe fn new_socket(family: libc::c_int, nonblock: bool) -> socket_t {
         let fd = unsafe { libc::socket(family, libc::SOCK_STREAM, 0) };
@@ -3533,7 +3533,7 @@ mod tests {
         loop_.deinit();
     }
 
-    // PORT (deferred skip-stub, XEV_BLUEPRINT §7): "file IO on thread pool" builds
+    // PORT NOTE (deferred skip-stub, XEV_BLUEPRINT §7): "file IO on thread pool" builds
     // a real ThreadPool and asserts thread-pool file IO round-trips. The ThreadPool
     // work-stealing BODY is deferred (§1/§6, DEFERRALS.md), so this is a
     // SkipZigTest-style skip-stub — the `#[test]` exists so the R1 count holds and

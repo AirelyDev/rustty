@@ -20,7 +20,7 @@
 //! is not limited to that and we may want to extract this to a
 //! standalone package one day.
 //!
-//! PORT: `synthetic/main.zig` — the package root. The `pub use`s below mirror
+//! PORT NOTE: `synthetic/main.zig` — the package root. The `pub use`s below mirror
 //! `pub const cli / Generator / Bytes / Utf8 / Osc`. `rand` / `enums` / `io` are
 //! the net-new local support modules (`std.Random`, `std.enums.EnumArray`,
 //! `std.Io.Writer`) the package leans on.
@@ -41,7 +41,7 @@ pub use utf8::Utf8;
 
 #[cfg(test)]
 mod tests {
-    /// PORT: `test { @import("std").testing.refAllDecls(@This()); }` — touch each
+    /// PORT NOTE: `test { @import("std").testing.refAllDecls(@This()); }` — touch each
     /// public item so it is type-checked.
     #[test]
     fn ref_all_decls() {

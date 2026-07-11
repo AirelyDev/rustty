@@ -6,22 +6,22 @@
 //! tty — so there is **no R5 seam**; every method ports LIVE. It is a **pure leaf** →
 //! R6 Miri is the primary gate over the gap-buffer / raw-ptr copy paths.
 //!
-//! PORT-NOTE (allocator, crate model): Zig's `Buffer` takes an `std.mem.Allocator` and
+//! PORT NOTE (allocator, crate model): Zig's `Buffer` takes an `std.mem.Allocator` and
 //! its `grow`/`insertSliceAtCursor`/`toOwnedSlice` return `std.mem.Allocator.Error!void`.
 //! Rust `Vec` owns/frees its own storage and its allocation is infallible (aborts on OOM),
 //! so the allocator field is DROPPED and those methods become non-`Result` — matching the
 //! crate convention (`Screen`, `InternalScreen`). The `try` at every call site drops.
 //! `init`/`deinit`/`clearAndFree` keep their allocator-free shims for API parity.
 //!
-//! PORT-NOTE (zero-filled gap): `grow` builds a fresh `vec![0u8; new_size]`; the gap region
+//! PORT NOTE (zero-filled gap): `grow` builds a fresh `vec![0u8; new_size]`; the gap region
 //! is never read (Zig invariant "the gap is never within a grapheme"), so zero-filling it is
 //! a benign, Miri-safe divergence from Zig's `undefined` gap bytes (cf. the `GraphemeCache`
-//! PORT-NOTE).
+//! PORT NOTE).
 //!
-//! PORT-NOTE (grapheme bytes): grapheme text stays `&[u8]`/`Vec<u8>` throughout, NEVER a
+//! PORT NOTE (grapheme bytes): grapheme text stays `&[u8]`/`Vec<u8>` throughout, NEVER a
 //! lossy `String` (zig-byteslice-to-rust-rawbytes).
 //!
-//! PORT-NOTE (`&self` demotions): `sliceToCursor` (Zig `*TextInput`, read-only) and
+//! PORT NOTE (`&self` demotions): `sliceToCursor` (Zig `*TextInput`, read-only) and
 //! `byteOffsetToCursor` (Zig by-value `TextInput`) demote to `&self` — they never mutate.
 
 use crate::cell::{Cell, Character, Style};
@@ -31,7 +31,7 @@ use crate::window::Window;
 
 /// The events that this widget handles
 ///
-/// PORT-NOTE: Zig `union(enum) { key_press: Key }`. `Event<'a>` carries `'a` because
+/// PORT NOTE: Zig `union(enum) { key_press: Key }`. `Event<'a>` carries `'a` because
 /// `Key<'a>` borrows its `text`. This is the widget-local event, NOT the crate-level
 /// `event::Event`.
 pub enum Event<'a> {
@@ -273,7 +273,7 @@ impl TextInput {
         self.draw_with_style(win, Style::default());
     }
 
-    // PORT-NOTE (draw record-then-replay, VAXIS_C4B_DESIGN §6): `win.write_cell` stores the
+    // PORT NOTE (draw record-then-replay, VAXIS_C4B_DESIGN §6): `win.write_cell` stores the
     // grapheme slice BY REFERENCE — `Screen<'a>` keeps `Cell<'a>` with `grapheme: &'a [u8]`,
     // and `Window<'a>` is invariant in `'a`, so the widget must be borrowed for the screen's
     // lifetime (`&'s mut self`, `Window<'s>`). Zig's single loop interleaves `writeCell(g)`

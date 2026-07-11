@@ -441,7 +441,7 @@ pub struct Thread<A: apprt::App + 'static> {
     pub flags: Flags,
 }
 
-/// PORT: the reference's inline `flags: packed struct { ... } = .{}`
+/// PORT NOTE: the reference's inline `flags: packed struct { ... } = .{}`
 /// (renderer/Thread.zig:94).
 pub struct Flags {
     /// This is true when a blinking cursor should be visible and false
@@ -604,7 +604,7 @@ impl<A: apprt::App + 'static> Thread<A> {
         // var mailbox = try Mailbox.create(alloc);
         // errdefer mailbox.destroy(alloc);
         //
-        // (PORT: `Mailbox.create(alloc)` -> the REAL infallible
+        // (PORT NOTE: `Mailbox.create(alloc)` -> the REAL infallible
         // `BlockingQueue::create()` returning `Box<Self>`; `Box::into_raw` for
         // the `*mut Mailbox` field. No `try`/errdefer — infallible.)
         let mailbox: *mut thread::Mailbox = Box::into_raw(thread::Mailbox::create());
@@ -614,7 +614,7 @@ impl<A: apprt::App + 'static> Thread<A> {
             // .alloc = alloc,  (collapsed — Box ownership)
             // .config = .init(config),
             //
-            // (PORT: `rustty_config::Config` impls the renderer-defined
+            // (PORT NOTE: `rustty_config::Config` impls the renderer-defined
             // `RendererConfig` accessor, so the thread `DerivedConfig::init` runs
             // with `C = rustty_config::Config`.)
             config: thread::DerivedConfig::init(config),
@@ -679,7 +679,7 @@ impl<A: apprt::App + 'static> Thread<A> {
         // Nothing can possibly access the mailbox anymore, destroy it.
         // self.mailbox.destroy(self.alloc);
         //
-        // (PORT: `Mailbox.destroy(alloc)` -> `BlockingQueue::destroy(Box<Self>)`;
+        // (PORT NOTE: `Mailbox.destroy(alloc)` -> `BlockingQueue::destroy(Box<Self>)`;
         // reconstitute the owning `Box` from the raw pointer. `deinit` runs
         // post-join — the child is dead, no aliasing.)
         unsafe { thread::Mailbox::destroy(Box::from_raw(self.mailbox)) };
@@ -752,7 +752,7 @@ where
         // };
         // defer crash.sentry.thread_state = null;
         //
-        // (PORT: the real Renderer dropped `surface_mailbox` (the surface-mailbox
+        // (PORT NOTE: the real Renderer dropped `surface_mailbox` (the surface-mailbox
         // seam), so the `ThreadStateSurface` target — the core `Surface<A>` — is
         // obtained from the Thread's apprt surface via `.core()`. Core's
         // `Surface<A>` impls `crash::sentry::ThreadStateSurface`.)
@@ -983,7 +983,7 @@ where
                         // self.renderer.updateFrame(self.state, self.flags.cursor_blink_visible)
                         //     catch |err| log.warn("error rendering on visibility regain err={}", .{err});
                         //
-                        // (PORT: `update_frame` takes a SHARED `&State` — it mutates
+                        // (PORT NOTE: `update_frame` takes a SHARED `&State` — it mutates
                         // only through the stored `*mut Terminal` — so the `*mut
                         // State` is narrow-shared-deref'd; the error is the
                         // `VtOutOfMemory` type, logged not propagated.)
@@ -1112,7 +1112,7 @@ where
                     unsafe { (*(*self_).renderer).0.set_font_grid(grid) };
                     // grid.set.deref(grid.old_key);
                     unsafe { (*set).deref(old_key) };
-                    // (PORT: `new_key` is an OWNED `Key` copy the reference discards
+                    // (PORT NOTE: `new_key` is an OWNED `Key` copy the reference discards
                     // here; drop it to free its descriptors and avoid a leak — the
                     // surface.rs `font_grid_key` owned-copy precedent.)
                     drop(new_key);
@@ -1125,7 +1125,7 @@ where
                 Message::ChangeConfig { thread, r#impl } => {
                     // defer config.alloc.destroy(config.thread);
                     // defer config.alloc.destroy(config.impl);
-                    // (PORT: both `alloc.destroy`s collapse into the `Box` drops at
+                    // (PORT NOTE: both `alloc.destroy`s collapse into the `Box` drops at
                     // the end of this arm — the `Message::ChangeConfig` owns them.)
                     // try self.changeConfig(config.thread);
                     Self::changeConfig(self_, *thread);
@@ -1143,7 +1143,7 @@ where
                     // Note we don't free the new value because we expect our
                     // allocators to match.
                     // if (self.renderer.search_matches) |*m| m.arena.deinit();
-                    // (PORT: the `arena.deinit()` collapses into the drop of the old
+                    // (PORT NOTE: the `arena.deinit()` collapses into the drop of the old
                     // `Option`'s owned `Vec` when the field is reassigned below.)
                     // self.renderer.search_matches = v;
                     unsafe { (*(*self_).renderer).0.search_matches = Some(v) };
@@ -1180,7 +1180,7 @@ where
 
     // fn changeConfig(self: *Thread, config: *const DerivedConfig) !void {
     //
-    // (PORT: the reference takes a `*const DerivedConfig` and copies `config.*`;
+    // (PORT NOTE: the reference takes a `*const DerivedConfig` and copies `config.*`;
     // the port takes the value BY MOVE — the caller owns the `Box<DerivedConfig>`
     // and unboxes it. The `!void` is infallible.)
     fn changeConfig(self_: *mut Thread<A>, config: thread::DerivedConfig) {
@@ -1354,7 +1354,7 @@ where
         // t.renderer.updateFrame(t.state, t.flags.cursor_blink_visible)
         //     catch |err| log.warn("error rendering err={}", .{err});
         //
-        // (PORT: `update_frame` takes a SHARED `&State`; the error is
+        // (PORT NOTE: `update_frame` takes a SHARED `&State`; the error is
         // `VtOutOfMemory`, logged not propagated.)
         if let Err(_err) = unsafe {
             (*(*self_).renderer)
@@ -1419,7 +1419,7 @@ where
     // fn cursorCancelCallback(_: ?*void, _: *xev.Loop, _: *xev.Completion,
     //     r: xev.Timer.CancelError!void) xev.CallbackAction {
     //
-    // (PORT: the userdata is `?*void` — a `*mut ()` here.)
+    // (PORT NOTE: the userdata is `?*void` — a `*mut ()` here.)
     fn cursorCancelCallback(
         _ud: *mut (),
         _l: *mut xev::Loop,
@@ -1435,7 +1435,7 @@ where
         //     else => { log.warn(...); unreachable; },
         // };
         //
-        // (PORT: rustty's `CancelError` set is `error{Canceled}` — its sole
+        // (PORT NOTE: rustty's `CancelError` set is `error{Canceled}` — its sole
         // variant is the success case; the NotFound/unreachable arms above have
         // no counterpart yet and are preserved verbatim in the comment.)
         if let Err(_err) = r {

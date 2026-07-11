@@ -38,7 +38,7 @@ use crate::command::EnvMap;
 
 // const log = std.log.scoped(.shell_integration);
 //
-// PORT: the reference's log call sites are preserved verbatim as comments at
+// PORT NOTE: the reference's log call sites are preserved verbatim as comments at
 // each site (rustty-os cf_release_thread precedent).
 
 /// Shell types we support
@@ -53,7 +53,7 @@ pub enum Shell {
 }
 
 impl Shell {
-    /// PORT (Zig-std shim): `@tagName(shell)` — the lowercase tag name.
+    /// PORT NOTE (Zig-std shim): `@tagName(shell)` — the lowercase tag name.
     pub fn tag_name(self) -> &'static str {
         match self {
             Shell::Bash => "bash",
@@ -348,7 +348,7 @@ fn setupBash(
     // var cmd = internal_os.shell.ShellCommandBuilder.init(stack_fallback.get());
     // defer cmd.deinit();
     //
-    // (PORT: the stackFallback allocator collapses into the builder's owned
+    // (PORT NOTE: the stackFallback allocator collapses into the builder's owned
     // buffer; `deinit` is Drop.)
     let mut cmd = ShellCommandBuilder::init();
 
@@ -378,7 +378,7 @@ fn setupBash(
     // var inject: std.Io.Writer = .fixed(&buf);
     // try inject.writeAll("1");
     //
-    // (PORT: the fixed 32-byte writer collapses into a `String`.)
+    // (PORT NOTE: the fixed 32-byte writer collapses into a `String`.)
     let mut inject = String::from("1");
 
     // Walk through the rest of the given arguments. If we see an option that
@@ -521,7 +521,7 @@ fn setupBash(
     // Return a copy of our modified command line to use as the shell command.
     // return .{ .shell = try alloc.dupeZ(u8, try cmd.toOwnedSlice()) };
     //
-    // (PORT: `toOwnedSlice` yields the sentinel-terminated bytes; the `dupeZ`
+    // (PORT NOTE: `toOwnedSlice` yields the sentinel-terminated bytes; the `dupeZ`
     // copy strips into the owned `Command::Shell` payload, which carries no
     // sentinel — config command.rs precedent.)
     let owned = cmd.toOwnedSlice();
@@ -582,7 +582,7 @@ fn setupXdgDataDirs(resource_dir: &[u8], env: &mut EnvMap) -> bool {
     // var stack_alloc_state = std.heap.stackFallback(4096, alloc);
     // const stack_alloc = stack_alloc_state.get();
     //
-    // (PORT: the stackFallback allocator collapses into `prependEnv`'s owned
+    // (PORT NOTE: the stackFallback allocator collapses into `prependEnv`'s owned
     // `String` return.)
 
     // If no XDG_DATA_DIRS set use the default value as specified.
@@ -769,10 +769,10 @@ fn setupZsh(
 }
 
 // ---------------------------------------------------------------------------
-// PORT support shims (Rust-only glue).
+// PORT NOTE: support shims (Rust-only glue).
 // ---------------------------------------------------------------------------
 
-/// PORT (Zig-std shim): `std.fs.path.basename` — the final path component
+/// PORT NOTE (Zig-std shim): `std.fs.path.basename` — the final path component
 /// (config theme.rs precedent).
 fn basename(path: &[u8]) -> &[u8] {
     let sep = std::path::MAIN_SEPARATOR as u8;
@@ -782,7 +782,7 @@ fn basename(path: &[u8]) -> &[u8] {
     }
 }
 
-/// PORT (R2 identity): the reference's `GHOSTTY_*` env-var names carry the
+/// PORT NOTE (R2 identity): the reference's `GHOSTTY_*` env-var names carry the
 /// product identity: `<APP_NAME upper>_<suffix>` (rustty-os resourcesdir
 /// precedent).
 pub(crate) fn env_name(suffix: &str) -> String {
@@ -1699,7 +1699,7 @@ mod tests {
             let relative_shell_path = format!("shell-integration/{}", shell.tag_name());
             // try tmp_dir.dir.makePath(relative_shell_path);
             //
-            // (PORT: `makePath` == create_dir_all rooted at the tmp dir.)
+            // (PORT NOTE: `makePath` == create_dir_all rooted at the tmp dir.)
             let base = tmp_dir.dir().realpath(".").unwrap();
             std::fs::create_dir_all(base.join(&relative_shell_path)).unwrap();
 
@@ -1750,7 +1750,7 @@ mod tests {
         }
     }
 
-    /// PORT (test shim): `tmp_dir.dir.realpathAlloc(alloc, ".")` — the resolved
+    /// PORT NOTE (test shim): `tmp_dir.dir.realpathAlloc(alloc, ".")` — the resolved
     /// absolute tmp path as bytes.
     fn realpath_bytes(tmp_dir: &TempDir) -> Vec<u8> {
         tmp_dir

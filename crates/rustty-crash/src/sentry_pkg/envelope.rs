@@ -10,14 +10,14 @@
 use super::c;
 use super::value::Value;
 
-/// PORT: `error.WriteFailed` (the inferred error set of `writeToFile`).
+/// PORT NOTE: `error.WriteFailed` (the inferred error set of `writeToFile`).
 #[derive(Debug, PartialEq, Eq)]
 pub enum WriteError {
     WriteFailed,
 }
 
 /// sentry_envelope_t
-// PORT: `pub const Envelope = opaque { ... }` — an opaque C type; only ever
+// PORT NOTE: `pub const Envelope = opaque { ... }` — an opaque C type; only ever
 // handled behind `*mut Envelope` raw pointers.
 #[repr(C)]
 pub struct Envelope {

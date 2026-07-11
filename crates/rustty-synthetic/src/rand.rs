@@ -39,7 +39,7 @@ impl SplitMix64 {
         SplitMix64 { s: seed }
     }
 
-    // PORT: faithfully named `next` (not `Iterator::next`).
+    // PORT NOTE: faithfully named `next` (not `Iterator::next`).
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> u64 {
         self.s = self.s.wrapping_add(0x9e3779b97f4a7c15);
@@ -62,7 +62,7 @@ pub struct Xoshiro256 {
     s: [u64; 4],
 }
 
-/// PORT: Zig's `u256` used only by `jump()`. Modelled as four little-endian
+/// PORT NOTE: Zig's `u256` used only by `jump()`. Modelled as four little-endian
 /// 64-bit limbs (`limbs[0]` is the low word) with the bit operations `jump`
 /// needs. `@as(u256, @bitCast(self.s))` maps `s[i]` to `limbs[i]`.
 #[derive(Clone, Copy)]
@@ -99,7 +99,7 @@ impl U256 {
     }
 }
 
-/// PORT: `math.rotl(u64, x, k)`.
+/// PORT NOTE: `math.rotl(u64, x, k)`.
 #[inline]
 fn rotl(x: u64, k: u32) -> u64 {
     x.rotate_left(k)
@@ -113,7 +113,7 @@ impl Xoshiro256 {
         x
     }
 
-    // PORT: faithfully named `next` (not `Iterator::next`).
+    // PORT NOTE: faithfully named `next` (not `Iterator::next`).
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> u64 {
         let r = rotl(self.s[0].wrapping_add(self.s[3]), 23).wrapping_add(self.s[0]);
@@ -199,7 +199,7 @@ impl Xoshiro256 {
 // DefaultPrng + the shared std.Random handle
 // ===========================================================================
 
-/// PORT: `std.Random.DefaultPrng = Xoshiro256`. Wraps the generator in a
+/// PORT NOTE: `std.Random.DefaultPrng = Xoshiro256`. Wraps the generator in a
 /// `RefCell` so `.random()` can hand out a `Copy` handle aliasing the one
 /// generator, matching Zig's by-value `std.Random` vtable.
 pub struct DefaultPrng {
@@ -213,13 +213,13 @@ impl DefaultPrng {
         }
     }
 
-    /// PORT: `Xoshiro256.random(self) std.Random`.
+    /// PORT NOTE: `Xoshiro256.random(self) std.Random`.
     pub fn random(&self) -> Rng<'_> {
         Rng { inner: &self.inner }
     }
 }
 
-/// PORT: `std.Random` — the `{ptr, fillFn}` handle. `Copy`, so it may be freely
+/// PORT NOTE: `std.Random` — the `{ptr, fillFn}` handle. `Copy`, so it may be freely
 /// copied (as `Osc.bytes()` / `Bytes.newAlphabet` / `atMost` do) while every
 /// copy draws from the one shared generator.
 #[derive(Clone, Copy)]
@@ -232,7 +232,7 @@ pub struct Rng<'a> {
 // over the concrete widths synthetic actually uses.
 // ---------------------------------------------------------------------------
 
-/// PORT: the `comptime T: type` integer parameter of `int`/`uintLessThan`/…
+/// PORT NOTE: the `comptime T: type` integer parameter of `int`/`uintLessThan`/…
 /// specialised to the unsigned widths synthetic draws (`u1, u3, u8, u21, u64,
 /// usize`). `to_u128`/`from_u128` carry the value through 128-bit arithmetic;
 /// `from_u128` performs the `@truncate` to `BITS` bits.
@@ -248,13 +248,13 @@ pub trait Uint: Copy {
     }
 }
 
-/// PORT: `u1` (the type `boolean()` draws through).
+/// PORT NOTE: `u1` (the type `boolean()` draws through).
 #[derive(Clone, Copy)]
 pub struct U1(pub u64);
-/// PORT: `u3` (conemu progress state; also `Utf8Len`'s tag width).
+/// PORT NOTE: `u3` (conemu progress state; also `Utf8Len`'s tag width).
 #[derive(Clone, Copy)]
 pub struct U3(pub u64);
-/// PORT: `u21` (a Unicode scalar value / codepoint draw).
+/// PORT NOTE: `u21` (a Unicode scalar value / codepoint draw).
 #[derive(Clone, Copy)]
 pub struct U21(pub u64);
 
@@ -303,12 +303,12 @@ impl_uint_prim!(usize, 64, 8);
 impl Rng<'_> {
     // -- the fill primitive: the one place the shared generator is borrowed --
 
-    /// PORT: `std.Random.bytes(r, buf)` → `r.fillFn(r.ptr, buf)`.
+    /// PORT NOTE: `std.Random.bytes(r, buf)` → `r.fillFn(r.ptr, buf)`.
     pub fn bytes(&self, buf: &mut [u8]) {
         self.inner.borrow_mut().fill(buf);
     }
 
-    /// PORT: `int(r, comptime T)`. Fills `ceil(bits/8)` bytes,
+    /// PORT NOTE: `int(r, comptime T)`. Fills `ceil(bits/8)` bytes,
     /// `readInt(ByteAligned, .little)`, truncates to `T`. LE byte order is
     /// load-bearing.
     pub fn int<T: Uint>(&self) -> T {
@@ -324,24 +324,24 @@ impl Rng<'_> {
         T::from_u128(byte_aligned_result)
     }
 
-    /// PORT: `boolean(r)` = `int(u1) != 0`.
+    /// PORT NOTE: `boolean(r)` = `int(u1) != 0`.
     pub fn boolean(&self) -> bool {
         self.int::<U1>().0 != 0
     }
 
-    /// PORT: `limitRangeBiased(comptime T, random_int, less_than)`.
+    /// PORT NOTE: `limitRangeBiased(comptime T, random_int, less_than)`.
     fn limit_range_biased<T: Uint>(random_int: T, less_than: T) -> T {
         // "Integer Multiplication (Biased)"
         let m = random_int.to_u128() * less_than.to_u128();
         T::from_u128(m >> T::BITS)
     }
 
-    /// PORT: `uintLessThanBiased(r, comptime T, less_than)`.
+    /// PORT NOTE: `uintLessThanBiased(r, comptime T, less_than)`.
     pub fn uint_less_than_biased<T: Uint>(&self, less_than: T) -> T {
         Self::limit_range_biased::<T>(self.int::<T>(), less_than)
     }
 
-    /// PORT: `uintLessThan(r, comptime T, less_than)`. Lemire's, with the extra
+    /// PORT NOTE: `uintLessThan(r, comptime T, less_than)`. Lemire's, with the extra
     /// tweak. The number of `int()` draws consumed on rejection changes the
     /// whole downstream stream, so the loop is ported exactly.
     pub fn uint_less_than<T: Uint>(&self, less_than: T) -> T {
@@ -374,7 +374,7 @@ impl Rng<'_> {
         T::from_u128(m >> bits)
     }
 
-    /// PORT: `uintAtMostBiased(r, comptime T, at_most)`.
+    /// PORT NOTE: `uintAtMostBiased(r, comptime T, at_most)`.
     pub fn uint_at_most_biased<T: Uint>(&self, at_most: T) -> T {
         if at_most.to_u128() == T::mask() {
             // have the full range
@@ -383,7 +383,7 @@ impl Rng<'_> {
         self.uint_less_than_biased::<T>(T::from_u128(at_most.to_u128() + 1))
     }
 
-    /// PORT: `uintAtMost(r, comptime T, at_most)`.
+    /// PORT NOTE: `uintAtMost(r, comptime T, at_most)`.
     pub fn uint_at_most<T: Uint>(&self, at_most: T) -> T {
         if at_most.to_u128() == T::mask() {
             // have the full range
@@ -392,21 +392,21 @@ impl Rng<'_> {
         self.uint_less_than::<T>(T::from_u128(at_most.to_u128() + 1))
     }
 
-    /// PORT: `intRangeAtMost(r, comptime T, at_least, at_most)`, unsigned branch
+    /// PORT NOTE: `intRangeAtMost(r, comptime T, at_least, at_most)`, unsigned branch
     /// (synthetic only uses unsigned `usize`/`u8`/`u3`).
     pub fn int_range_at_most<T: Uint>(&self, at_least: T, at_most: T) -> T {
         let d = T::from_u128(at_most.to_u128() - at_least.to_u128());
         T::from_u128(at_least.to_u128() + self.uint_at_most::<T>(d).to_u128())
     }
 
-    /// PORT: `intRangeAtMostBiased(r, comptime T, at_least, at_most)`, unsigned
+    /// PORT NOTE: `intRangeAtMostBiased(r, comptime T, at_least, at_most)`, unsigned
     /// branch.
     pub fn int_range_at_most_biased<T: Uint>(&self, at_least: T, at_most: T) -> T {
         let d = T::from_u128(at_most.to_u128() - at_least.to_u128());
         T::from_u128(at_least.to_u128() + self.uint_at_most_biased::<T>(d).to_u128())
     }
 
-    /// PORT: `float(r, f64)`. The mantissa + biased-exponent construction with
+    /// PORT NOTE: `float(r, f64)`. The mantissa + biased-exponent construction with
     /// the `@clz` leading-zero loop. The rare extra-draw loop must match to keep
     /// the stream aligned.
     pub fn float_f64(&self) -> f64 {
@@ -435,7 +435,7 @@ impl Rng<'_> {
         f64::from_bits(exponent | mantissa)
     }
 
-    /// PORT: `weightedIndex(r, f64, proportions)` — the float path. Selects the
+    /// PORT NOTE: `weightedIndex(r, f64, proportions)` — the float path. Selects the
     /// OSC ValidKind/InvalidKind and the Utf8 length; must be exact.
     pub fn weighted_index_f64(&self, proportions: &[f64]) -> usize {
         // This implementation works by summing the proportions and picking a

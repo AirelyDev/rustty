@@ -60,7 +60,7 @@ use core::fmt::Write as _;
 
 // const log = std.log.scoped(.io_handler);
 //
-// PORT: the reference's log call sites are preserved verbatim as comments at
+// PORT NOTE: the reference's log call sites are preserved verbatim as comments at
 // each site (termio stage-2 precedent).
 
 /// `pub const Stream = terminal.Stream(StreamHandler);`
@@ -219,7 +219,7 @@ impl<M: AppMailbox> StreamHandler<M> {
         self.osc_color_report_format = config.osc_color_report_format;
         self.clipboard_write = config.clipboard_write;
         // self.enquiry_response = config.enquiry_response;
-        // (PORT: owned copy — see the field's PORT NOTE.)
+        // (PORT NOTE: owned copy — see the field's PORT NOTE.)
         self.enquiry_response = config.enquiry_response.clone();
         self.default_cursor_style = config.cursor_style;
         self.default_cursor_blink = config.cursor_blink;
@@ -386,7 +386,7 @@ impl<M: AppMailbox> StreamHandler<M> {
     #[inline]
     pub fn dcsHook(&mut self, dcs: rustty_vt::parser::DCS) -> Result<(), crate::Error> {
         // var cmd = self.dcs.hook(self.alloc, dcs) orelse return;
-        // (PORT: the trait hands the parser's owned DCS; the dcs Handler takes
+        // (PORT NOTE: the trait hands the parser's owned DCS; the dcs Handler takes
         // the borrowed view — the same coercion Zig's `terminal.DCS` does.)
         let mut cmd = match self.dcs.hook(
             self.alloc,
@@ -1814,7 +1814,7 @@ impl<M: AppMailbox> StreamHandler<M> {
         // defer arena_alloc.deinit();
         // const path = try uri.path.toRawMaybeAlloc(stack_alloc.get());
         //
-        // (PORT: the stackFallback/arena collapse into the owned Vec.)
+        // (PORT NOTE: the stackFallback/arena collapse into the owned Vec.)
         let path: Vec<u8> = {
             let mut w = VecWriter(Vec::new());
             uri.path.formatRaw(&mut w).map_err(|_| crate::Error)?;
@@ -1833,7 +1833,7 @@ impl<M: AppMailbox> StreamHandler<M> {
         //     log.warn("error notifying surface of pwd change err={}", .{err});
         // }
         //
-        // (PORT: `WriteReq.init` is infallible in Rust's allocation model —
+        // (PORT NOTE: `WriteReq.init` is infallible in Rust's allocation model —
         // the error branch collapses, preserved verbatim above.)
         let req = rustty_apprt_api::surface::WriteReq::init(&path);
         self.surfaceMessageWriter(SurfaceMessage::PwdChange(req));
@@ -1878,7 +1878,7 @@ impl<M: AppMailbox> StreamHandler<M> {
         // var response: std.ArrayListUnmanaged(u8) = .empty;
         // const writer = response.writer(alloc);
         //
-        // (PORT: the fixed-buffer allocator + unmanaged list collapse into the
+        // (PORT NOTE: the fixed-buffer allocator + unmanaged list collapse into the
         // owned response Vec/String accumulator.)
         let mut response: Vec<u8> = Vec::new();
 
@@ -2265,7 +2265,7 @@ impl<M: AppMailbox> StreamHandler<M> {
         let mut body_buf = [0u8; 256];
 
         // const title_len = @min(title.len, message.desktop_notification.title.len);
-        // (PORT: the reference arrays are `[63:0]u8`/`[255:0]u8` — usable
+        // (PORT NOTE: the reference arrays are `[63:0]u8`/`[255:0]u8` — usable
         // lengths 63/255 + NUL sentinel; apprt-api models them as [u8;64]/
         // [u8;256].)
         let title_len = title.len().min(title_buf.len() - 1);
@@ -3141,10 +3141,10 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
 }
 
 // ---------------------------------------------------------------------------
-// PORT support shims (Rust-only glue).
+// PORT NOTE: support shims (Rust-only glue).
 // ---------------------------------------------------------------------------
 
-/// PORT: `comptime terminfo.ghostty.xtgettcapMap()` — the comptime-static
+/// PORT NOTE: `comptime terminfo.ghostty.xtgettcapMap()` — the comptime-static
 /// XTGETTCAP response map, realized as a process-lifetime `OnceLock` (the
 /// entries' `'static` lifetime matches the reference's comptime data, which
 /// the `write_stable` message contract requires).
@@ -3154,16 +3154,16 @@ fn xtgettcapMap() -> &'static std::collections::HashMap<Vec<u8>, Vec<u8>> {
     MAP.get_or_init(|| rustty_terminfo::rustty().xtgettcap_map())
 }
 
-/// PORT (Zig-std shim): `std.Uri.host_name_max` (the fixed host buffer size).
+/// PORT NOTE (Zig-std shim): `std.Uri.host_name_max` (the fixed host buffer size).
 const URI_HOST_NAME_MAX: usize = 255;
 
-/// PORT (Zig-std shim): the error set of `std.Uri.getHost`.
+/// PORT NOTE (Zig-std shim): the error set of `std.Uri.getHost`.
 enum GetHostError {
     UriMissingHost,
     UriHostTooLong,
 }
 
-/// PORT (Zig-std shim): `std.Uri.getHost` — the percent-decoded host component
+/// PORT NOTE (Zig-std shim): `std.Uri.getHost` — the percent-decoded host component
 /// written into the caller's buffer.
 fn uri_get_host<'b>(
     uri: &rustty_os::uri::Uri<'b>,
@@ -3173,7 +3173,7 @@ fn uri_get_host<'b>(
     host.toRaw(buffer).map_err(|_| GetHostError::UriHostTooLong)
 }
 
-/// PORT (Zig-std shim): a fixed-buffer `std.Io.Writer` — formats into the
+/// PORT NOTE (Zig-std shim): a fixed-buffer `std.Io.Writer` — formats into the
 /// buffer and reports the written length; overflow is `NoSpaceLeft` (mapped to
 /// the crate's opaque error at the call sites).
 fn write_fixed(buf: &mut [u8], args: core::fmt::Arguments<'_>) -> Result<usize, crate::Error> {
@@ -3202,7 +3202,7 @@ impl core::fmt::Write for FixedFmt<'_> {
     }
 }
 
-/// PORT (Zig-std shim): a `core::fmt::Write` adapter over a byte `Vec` (the
+/// PORT NOTE (Zig-std shim): a `core::fmt::Write` adapter over a byte `Vec` (the
 /// reference's fixed-buffer-allocator-backed ArrayList writer).
 struct VecFmt<'b>(&'b mut Vec<u8>);
 
@@ -3213,7 +3213,7 @@ impl core::fmt::Write for VecFmt<'_> {
     }
 }
 
-/// PORT (Zig-std shim): the rustty-os `string_encoding::Writer` adapter over a
+/// PORT NOTE (Zig-std shim): the rustty-os `string_encoding::Writer` adapter over a
 /// byte `Vec` (for `uri.path.toRawMaybeAlloc`'s decode target).
 struct VecWriter(Vec<u8>);
 

@@ -10,7 +10,7 @@
 // const assert = std.debug.assert;
 // const Allocator = std.mem.Allocator;
 //
-// PORT: `std.json` maps to `serde_json` with the `preserve_order` feature —
+// PORT NOTE: `std.json` maps to `serde_json` with the `preserve_order` feature —
 // `std.json.ObjectMap` is a `StringArrayHashMap(Value)` (insertion-order
 // preserving), which `serde_json::Map` reproduces (IndexMap-backed). The
 // `std.Io.Reader` surface (`streamDelimiterLimit`/`discardDelimiterInclusive`/
@@ -22,10 +22,10 @@ use std::io::BufRead;
 
 // const log = std.log.scoped(.sentry_envelope);
 
-/// PORT: `std.json.ObjectMap` — the decoded JSON object map.
+/// PORT NOTE: `std.json.ObjectMap` — the decoded JSON object map.
 pub type ObjectMap = serde_json::Map<String, serde_json::Value>;
 
-/// PORT: the Zig error set of the envelope operations (the inferred `!`
+/// PORT NOTE: the Zig error set of the envelope operations (the inferred `!`
 /// unions), reified. The named variants preserve the reference error tags;
 /// `Io`/`Json` carry the reader/writer (`error.ReadFailed`/`error.WriteFailed`)
 /// and `std.json` parse errors.
@@ -37,7 +37,7 @@ pub enum Error {
     EnvelopeItemLengthMalformed,
     EnvelopeItemPayloadTooShort,
     EnvelopeItemPayloadNoNewline,
-    /// PORT: `error.StreamTooLong` propagated by `parseHeader` when the
+    /// PORT NOTE: `error.StreamTooLong` propagated by `parseHeader` when the
     /// envelope header line exceeds its limit.
     StreamTooLong,
     Io(std::io::Error),
@@ -89,7 +89,7 @@ pub struct Envelope {
     // The arena that the envelope is allocated in. All items are welcome
     // to use this allocator for their data, which is freed on deinit.
     //
-    // PORT: `arena: std.heap.ArenaAllocator` — in Rust the headers/items own
+    // PORT NOTE: `arena: std.heap.ArenaAllocator` — in Rust the headers/items own
     // their data directly; `deinit` is Drop.
     //
     /// The headers of the envelope decoded into a json ObjectMap.
@@ -117,7 +117,7 @@ impl Envelope {
         // to reference the arena-allocated memory if it can. That way both
         // our temp and perm memory is part of the same arena. This slightly
         // bloats our memory requirements but reduces allocations.
-        // PORT: the arena (+ `errdefer arena.deinit()`) collapses to Rust
+        // PORT NOTE: the arena (+ `errdefer arena.deinit()`) collapses to Rust
         // ownership — every intermediate buffer is freed on all paths.
 
         // Parse our elements. We do this outside of the struct assignment
@@ -243,7 +243,7 @@ impl Envelope {
         //     ) orelse .unknown,
         //     else => return error.EnvelopeItemTypeMissing,
         // } else return error.EnvelopeItemTypeMissing;
-        // (PORT: the reference's `if |v| switch (v)` nesting is collapsed into
+        // (PORT NOTE: the reference's `if |v| switch (v)` nesting is collapsed into
         // one match — clippy::collapsible_match — with identical arms.)
         let typ: ItemType = match headers.get("type") {
             Some(serde_json::Value::String(str)) => {
@@ -347,13 +347,13 @@ impl Envelope {
     // pub fn deinit(self: *Envelope) void {
     //     self.arena.deinit();
     // }
-    // PORT: `deinit` is Drop (the owned headers/items free on scope exit).
+    // PORT NOTE: `deinit` is Drop (the owned headers/items free on scope exit).
 
     // /// The arena allocator associated with this envelope
     // pub fn allocator(self: *Envelope) Allocator {
     //     return self.arena.allocator();
     // }
-    // PORT: the arena-allocator accessor collapses (Rust ownership; callers
+    // PORT NOTE: the arena-allocator accessor collapses (Rust ownership; callers
     // like `Item.decode(v.allocator())` take no allocator).
 
     /// Serialize the envelope to the given writer.
@@ -370,7 +370,7 @@ impl Envelope {
         //     std.json.Value{ .object = self.headers },
         //     json_opts,
         // )});
-        // (PORT: `json_opts` == `.whitespace = .minified` == serde_json's
+        // (PORT NOTE: `json_opts` == `.whitespace = .minified` == serde_json's
         // compact default; see the `json_opts` note at the bottom.)
         serde_json::to_writer(&mut *writer, &self.headers)?;
         writer.write_all(b"\n")?;
@@ -385,7 +385,7 @@ impl Envelope {
 
             // const encoded = try item.encode(alloc);
             // assert(item.* == .encoded);
-            // (PORT: `encode` returns a borrow of the now-`.encoded` item, so
+            // (PORT NOTE: `encode` returns a borrow of the now-`.encoded` item, so
             // the reference's assert is enforced by construction.)
             let encoded = item.encode();
 
@@ -432,7 +432,7 @@ pub enum ItemType {
 }
 
 impl ItemType {
-    /// PORT: `std.meta.stringToEnum(ItemType, str)` — lookup by the reference
+    /// PORT NOTE: `std.meta.stringToEnum(ItemType, str)` — lookup by the reference
     /// enum tag names.
     pub fn stringToEnum(str: &str) -> Option<ItemType> {
         Some(match str {
@@ -470,7 +470,7 @@ pub enum Item {
     Attachment(Attachment),
 }
 
-/// PORT: `pub const DecodeError = Allocator.Error || error{...}` (nested in
+/// PORT NOTE: `pub const DecodeError = Allocator.Error || error{...}` (nested in
 /// `Item` in the reference; hoisted — Rust inherent associated types are
 /// unstable). Allocation is infallible in Rust, so only the named cases remain.
 #[derive(Debug, PartialEq, Eq)]
@@ -487,7 +487,7 @@ impl Item {
     //     self: *Item,
     //     alloc: Allocator,
     // ) !EncodedItem {
-    // PORT: returns a borrow of the in-place encoded item (the reference
+    // PORT NOTE: returns a borrow of the in-place encoded item (the reference
     // returns the arena-aliased `EncodedItem` by value); the allocator
     // parameter collapses, and with it the `!` (allocation is infallible).
     pub fn encode(&mut self) -> &EncodedItem {
@@ -565,7 +565,7 @@ impl Item {
 #[derive(Debug)]
 pub struct EncodedItem {
     pub headers: ObjectMap,
-    // PORT: `type: ItemType` — `type` is a Rust keyword.
+    // PORT NOTE: `type: ItemType` — `type` is a Rust keyword.
     pub type_: ItemType,
     pub payload: Vec<u8>,
 }
@@ -582,7 +582,7 @@ pub struct Attachment {
     /// A special "type" associated with the attachment. This
     /// is documented on the Sentry website. In the future we should
     /// make this an enum.
-    // PORT: `type: ?[]const u8 = null` — `type` is a Rust keyword; the value
+    // PORT NOTE: `type: ?[]const u8 = null` — `type` is a Rust keyword; the value
     // originates from (and returns to) a JSON string, so `String` is lossless.
     pub type_: Option<String>,
 
@@ -599,7 +599,7 @@ impl Attachment {
     //     item: EncodedItem,
     // ) Item.DecodeError!Attachment {
     //     _ = alloc;
-    // PORT: the arena lets the reference alias `item`'s memory; Rust clones
+    // PORT NOTE: the arena lets the reference alias `item`'s memory; Rust clones
     // (the encoded item stays untouched on error, per `Item.decode`'s doc).
     pub fn decode(item: &EncodedItem) -> Result<Attachment, DecodeError> {
         Ok(Attachment {
@@ -638,7 +638,7 @@ impl Attachment {
     //     self: *Attachment,
     //     alloc: Allocator,
     // ) !EncodedItem {
-    // PORT: infallible (allocation); the caller (`Item.encode`) replaces the
+    // PORT NOTE: infallible (allocation); the caller (`Item.encode`) replaces the
     // attachment with the result, so the headers/payload are moved out
     // (`mem::take`) rather than arena-aliased.
     pub fn encode(&mut self) -> EncodedItem {
@@ -687,7 +687,7 @@ impl Attachment {
 /// them alongside all our items without the overhead of duplicated
 /// allocators. Additional, items do not own their own memory so this
 /// makes it clear that deinit of an item will not free the memory.
-// PORT: the managed/unmanaged split is a Zig allocator-plumbing distinction
+// PORT NOTE: the managed/unmanaged split is a Zig allocator-plumbing distinction
 // with no Rust counterpart — both alias the same order-preserving map type.
 pub type ObjectMapUnmanaged = ObjectMap;
 
@@ -699,11 +699,11 @@ pub type ObjectMapUnmanaged = ObjectMap;
 //     // All JSON headers in the envelope must be on a single line.
 //     .whitespace = .minified,
 // };
-// PORT: serde_json's `to_writer` is minified (compact, no newlines) by
+// PORT NOTE: serde_json's `to_writer` is minified (compact, no newlines) by
 // default, which is exactly the required option.
 
 // ---------------------------------------------------------------------------
-// PORT: `std.Io.Reader` helpers. Zig 0.15.2 semantics reproduced exactly:
+// PORT NOTE: `std.Io.Reader` helpers. Zig 0.15.2 semantics reproduced exactly:
 //   * streamDelimiterLimit — appends to `w` until `delimiter` (NOT consumed,
 //     NOT written) or EOF (returns bytes streamed); `error.StreamTooLong` if
 //     the limit is exhausted before the delimiter.
@@ -713,7 +713,7 @@ pub type ObjectMapUnmanaged = ObjectMap;
 //   * takeByte — one byte or `error.EndOfStream`.
 // ---------------------------------------------------------------------------
 
-/// PORT: the Zig stream-error variants used above (`error.EndOfStream`,
+/// PORT NOTE: the Zig stream-error variants used above (`error.EndOfStream`,
 /// `error.StreamTooLong`, `error.ReadFailed`).
 #[derive(Debug)]
 enum StreamErr {
@@ -804,7 +804,7 @@ fn takeByte<R: BufRead>(r: &mut R) -> Result<u8, StreamErr> {
     Ok(byte)
 }
 
-/// PORT: `std.mem.trim(u8, slice, values_to_strip)` — strip leading and
+/// PORT NOTE: `std.mem.trim(u8, slice, values_to_strip)` — strip leading and
 /// trailing bytes that appear in `strip`.
 fn trim<'a>(slice: &'a [u8], strip: &[u8]) -> &'a [u8] {
     let mut start = 0;

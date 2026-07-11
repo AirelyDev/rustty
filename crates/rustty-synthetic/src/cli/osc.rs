@@ -1,12 +1,12 @@
-//! PORT: `synthetic/cli/Osc.zig`.
+//! PORT NOTE: `synthetic/cli/Osc.zig`.
 
 use crate::io::{FixedWriter, WriteFailed, Writer, WriterExt};
 use crate::osc as synthetic_osc;
 use crate::rand::Rng;
 
-// PORT: `const log = std.log.scoped(.@"terminal-stream-bench")` — logging seam.
+// PORT NOTE: `const log = std.log.scoped(.@"terminal-stream-bench")` — logging seam.
 
-/// PORT: the `style` option's inline enum.
+/// PORT NOTE: the `style` option's inline enum.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum Style {
     /// Write all OSC data, including ESC ] and ST for end-to-end tests
@@ -17,7 +17,7 @@ pub enum Style {
     Parser,
 }
 
-/// PORT: `pub const Options = struct { ... }`.
+/// PORT NOTE: `pub const Options = struct { ... }`.
 pub struct Options {
     /// Probability of generating a valid value.
     pub p_valid: f64,
@@ -34,7 +34,7 @@ impl Default for Options {
     }
 }
 
-/// PORT: `const Osc = @This()`.
+/// PORT NOTE: `const Osc = @This()`.
 pub struct Osc {
     opts: Options,
 }

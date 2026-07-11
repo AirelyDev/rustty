@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/args.zig` — every line, comment, and `test {}`
 //! is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, `Allocator = std.mem.Allocator`,
+// PORT NOTE: the Zig reference imports `std`, `builtin`, `Allocator = std.mem.Allocator`,
 // `objc`, and `macos`. In Rust we use the standard library plus, on macOS,
 // `objc2`/`objc2-foundation` (R3: bindings to the SAME Objective-C
 // runtime/Foundation framework the reference uses) for the `NSProcessInfo`
@@ -22,7 +22,7 @@ pub fn iterator() -> Result<ArgIterator, InitError> {
     ArgIterator::initWithAllocator()
 }
 
-// PORT: `pub const ArgIterator = switch (builtin.os.tag) { .macos =>
+// PORT NOTE: `pub const ArgIterator = switch (builtin.os.tag) { .macos =>
 // IteratorMacOS, else => std.process.ArgIterator };`. Duck-typed to
 // std.process.ArgIterator.
 //
@@ -33,7 +33,7 @@ pub fn iterator() -> Result<ArgIterator, InitError> {
 #[cfg(target_os = "macos")]
 pub type ArgIterator = IteratorMacOS;
 
-/// PORT: `error{...}` for the macOS iterator init; the reference is
+/// PORT NOTE: `error{...}` for the macOS iterator init; the reference is
 /// `Allocator.Error`. Rust's allocation failure is not a recoverable error, so
 /// the parity-preserving init error type is the empty error set; we model it as
 /// a unit error so the public `Result` surface matches the reference.
@@ -43,7 +43,7 @@ pub enum InitError {}
 #[cfg(not(target_os = "macos"))]
 pub type ArgIterator = IteratorStd;
 
-/// PORT: the `else => std.process.ArgIterator` branch. A thin wrapper over
+/// PORT NOTE: the `else => std.process.ArgIterator` branch. A thin wrapper over
 /// `std::env::args` that exposes the same `next`/`skip`/`deinit` surface as the
 /// macOS iterator (duck-typed to std.process.ArgIterator).
 #[cfg(not(target_os = "macos"))]
@@ -85,7 +85,7 @@ impl IteratorStd {
 pub struct IteratorMacOS {
     index: usize,
     count: usize,
-    // PORT: the reference holds an explicit sentinel-terminated heap `buf` that it
+    // PORT NOTE: the reference holds an explicit sentinel-terminated heap `buf` that it
     // reuses across `next` calls (precomputed to the max arg length) and the
     // `args` NSArray object. In Rust we hold the retained `NSArray<NSString>`; the
     // per-call byte buffer below is reproduced as `buf` to mirror the reference's
@@ -110,7 +110,7 @@ impl IteratorMacOS {
             let nsstr = args.objectAtIndex(i);
 
             let maxlen: usize = nsstr.maximumLengthOfBytesUsingEncoding(
-                // PORT: reference passes `@as(c_ulong, 4)` (NSUTF8StringEncoding).
+                // PORT NOTE: reference passes `@as(c_ulong, 4)` (NSUTF8StringEncoding).
                 4 as objc2_foundation::NSStringEncoding,
             );
 
@@ -129,7 +129,7 @@ impl IteratorMacOS {
     }
 
     pub fn deinit(&mut self) {
-        // PORT: the reference frees its `buf`; in Rust the `Vec` is dropped here.
+        // PORT NOTE: the reference frees its `buf`; in Rust the `Vec` is dropped here.
 
         // Note: we don't release self.args because it is a pointer copy
         // not a retained object.
@@ -150,7 +150,7 @@ impl IteratorMacOS {
         // Convert to string using getCString. Our buffer should always
         // be big enough because we precomputed the maximum length.
         //
-        // PORT: the reference calls `getCString:maxLength:encoding:` into the
+        // PORT NOTE: the reference calls `getCString:maxLength:encoding:` into the
         // precomputed `self.buf`. On this runtime the Swift-bridged
         // `__StringStorage` exposes that selector with a legacy 'c' (signed-char
         // BOOL) return encoding that disagrees with objc2's modern 'B' encoding,

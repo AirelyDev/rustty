@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/file.zig` — every line, comment, and `test {}`
 //! is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, `posix = std.posix`, and
+// PORT NOTE: the Zig reference imports `std`, `builtin`, `posix = std.posix`, and
 // `windows = @import("windows.zig")`. In Rust we use the standard library plus
 // `libc` (R3: a binding to the SAME system library) for the `rlimit`
 // get/setrlimit syscalls and the CSPRNG used by `randomBasename`.
@@ -15,7 +15,7 @@ use std::ffi::c_int;
 
 const LOG_SCOPE: &str = "os";
 
-// PORT: `pub const rlimit = if (@hasDecl(posix.system, "rlimit")) posix.rlimit
+// PORT NOTE: `pub const rlimit = if (@hasDecl(posix.system, "rlimit")) posix.rlimit
 // else struct {};` — on platforms without `rlimit` this is an empty struct. We
 // reproduce that conditionally: on Unix it aliases `libc::rlimit`; elsewhere it
 // is a zero-sized stand-in.
@@ -139,7 +139,7 @@ pub fn allocTmpDir() -> String {
 /// This is a no-op on POSIX.
 #[allow(non_snake_case)]
 pub fn freeTmpDir(_dir: &str) {
-    // PORT: in Rust the returned `String` owns its allocation on all platforms
+    // PORT NOTE: in Rust the returned `String` owns its allocation on all platforms
     // and is freed by Drop; the reference frees only on Windows. The comment is
     // preserved verbatim above.
 }
@@ -151,7 +151,7 @@ pub enum RandomBasenameError {
     BufferTooSmall,
 }
 
-// PORT: `std.base64.url_safe_no_pad.Encoder` — the URL-safe alphabet without
+// PORT NOTE: `std.base64.url_safe_no_pad.Encoder` — the URL-safe alphabet without
 // padding. `calcSize` for N input bytes (no padding) is
 // `N/3*4 + (N%3*8 + 5)/6`.
 mod b64_encoder {
@@ -222,7 +222,7 @@ pub fn randomTmpPath(prefix: &str) -> String {
     let tmp_dir = allocTmpDir();
     let mut name_buf = [0u8; random_basename_len];
     let basename = randomBasename(&mut name_buf).unwrap_or_else(|_| unreachable!());
-    // PORT: `std.fmt.allocPrint(.., "{s}{c}{s}{s}", .{ tmp_dir, sep, prefix, basename })`.
+    // PORT NOTE: `std.fmt.allocPrint(.., "{s}{c}{s}{s}", .{ tmp_dir, sep, prefix, basename })`.
     let basename = std::str::from_utf8(basename).expect("base64 output is ASCII");
     let result = format!("{tmp_dir}{}{prefix}{basename}", PATH_SEP as char);
     freeTmpDir(&tmp_dir);
@@ -230,7 +230,7 @@ pub fn randomTmpPath(prefix: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// PORT: support shims for the std/posix facilities used above.
+// PORT NOTE: support shims for the std/posix facilities used above.
 // ---------------------------------------------------------------------------
 
 // `std.fs.path.sep`.

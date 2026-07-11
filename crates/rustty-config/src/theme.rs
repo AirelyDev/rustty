@@ -546,7 +546,7 @@ pub fn open_absolute(theme: &[u8], diags: &mut DiagnosticList) -> Option<std::fs
 }
 
 // ===========================================================================
-// PORT helpers — std.fs / std.fmt analogues used above. These add nothing the
+// PORT NOTE: helpers — std.fs / std.fmt analogues used above. These add nothing the
 // reference doesn't already do (R1): they are the minimal Rust glue for the std
 // calls the reference makes inline.
 // ===========================================================================

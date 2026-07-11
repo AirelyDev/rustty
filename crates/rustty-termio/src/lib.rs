@@ -73,7 +73,7 @@
 pub mod stream_handler;
 
 // const message = @import("termio/message.zig");
-// (PORT: Zig-private file imports widen to `pub mod` — the R1/G3b gates and
+// (PORT NOTE: Zig-private file imports widen to `pub mod` — the R1/G3b gates and
 // in-crate consumers address items by module path; the reference's public
 // surface is the explicit re-export list below.)
 pub mod message;
@@ -84,7 +84,7 @@ pub mod mailbox;
 // pub const Exec = @import("termio/Exec.zig");
 pub mod exec;
 pub use exec::Exec;
-// (PORT: shell_integration.zig is file-private to the reference — imported
+// (PORT NOTE: shell_integration.zig is file-private to the reference — imported
 // only by Exec.zig and the root reify test; `pub mod` per the Zig-private
 // widening rule above.)
 pub mod shell_integration;

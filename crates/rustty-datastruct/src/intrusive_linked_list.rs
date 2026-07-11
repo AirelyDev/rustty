@@ -264,7 +264,7 @@ mod tests {
         let l: DoublyLinkedList<TestNode> = DoublyLinkedList::default();
         let mut list = l;
 
-        // PORT/MIRI NOTE: The Zig test declares the nodes as `var one: Node`
+        // PORT NOTE (MIRI): The Zig test declares the nodes as `var one: Node`
         // stack values and passes `&one` to the list. Under Rust's Stacked
         // Borrows model, taking `&mut one` for a *second* call invalidates the
         // raw pointer the list already stored from the first `&mut one`. To stay

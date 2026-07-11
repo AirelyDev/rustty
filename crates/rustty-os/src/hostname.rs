@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/hostname.zig` — every line, comment, and
 //! `test {}` is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, and `posix = std.posix`. In
+// PORT NOTE: the Zig reference imports `std`, `builtin`, and `posix = std.posix`. In
 // Rust we use `libc` (R3: a binding to the SAME system library) for the POSIX
 // `gethostname` syscall and constants used by `isLocal`.
 
@@ -15,7 +15,7 @@ pub enum LocalHostnameValidationError {
     Unexpected,
 }
 
-// PORT: `posix.HOST_NAME_MAX` — Zig's per-OS value (lib/std/c.zig). macOS/iOS
+// PORT NOTE: `posix.HOST_NAME_MAX` — Zig's per-OS value (lib/std/c.zig). macOS/iOS
 // family = 72; Linux = 64 (`linux.HOST_NAME_MAX`); the BSD family = 255. We
 // reproduce the exact value for the build target so the buffer matches.
 #[cfg(not(windows))]
@@ -138,7 +138,7 @@ pub fn isLocal(hostname: &[u8]) -> Result<bool, LocalHostnameValidationError> {
     // If hostname is not "localhost" it must match our hostname.
     #[cfg(windows)]
     {
-        // PORT: the Windows branch uses `windows.exp.kernel32.GetComputerNameA`.
+        // PORT NOTE: the Windows branch uses `windows.exp.kernel32.GetComputerNameA`.
         // It is reproduced faithfully against the Win32 API binding (R3).
         let mut buf = [0u8; 256];
         let mut n_size: u32 = buf.len() as u32;
@@ -157,7 +157,7 @@ pub fn isLocal(hostname: &[u8]) -> Result<bool, LocalHostnameValidationError> {
     }
 }
 
-// PORT: `posix.gethostname(&buf)` — fills `buf` with the host name and returns
+// PORT NOTE: `posix.gethostname(&buf)` — fills `buf` with the host name and returns
 // the resulting slice. Reproduced over the POSIX `gethostname` binding (R3); on
 // error it maps to the reference's `LocalHostnameValidationError` set.
 #[cfg(not(windows))]
@@ -188,7 +188,7 @@ mod windows {
 mod tests {
     use super::*;
 
-    // PORT helper: build the repeated-string slices used by the `isValid` test.
+    // PORT NOTE: helper: build the repeated-string slices used by the `isValid` test.
     // Zig's `"a" ** 63` / `"a." ** 126 ++ "a"` are reproduced as runtime byte
     // vectors with identical contents (an independent construction, not derived
     // from `isValid` itself — preserving the test's discriminating power).

@@ -6,7 +6,7 @@
 //! Interfaces (`init`/`release`/`set_surface`/`set_surface_sync`/
 //! `set_display_callback`/`as_ca_layer`).
 //!
-//! PORT: `const log = std.log.scoped(.IOSurfaceLayer);` — routed to the log
+//! PORT NOTE: `const log = std.log.scoped(.IOSurfaceLayer);` — routed to the log
 //! facade where used; the wrong-size-discard message is preserved as a comment.
 
 use std::ffi::c_void;
@@ -19,14 +19,14 @@ use objc2_core_foundation::{CFRetained, CGFloat, CGRect, Type};
 use objc2_io_surface::IOSurfaceRef;
 use objc2_quartz_core::{kCAGravityTopLeft, CALayer};
 
-// PORT: `var Subclass: ?objc.Class = null;` (lines 14-16):
+// PORT NOTE: `var Subclass: ?objc.Class = null;` (lines 14-16):
 //   We subclass CALayer with a custom display handler, we only need
 //   to make the subclass once, and then we can use it as a singleton.
 // In objc2 the `define_class!` macro registers the class pair EXACTLY ONCE, lazily
 // at the first `IOSurfaceLayerClass::class()` (subsuming the `var Subclass` +
 // `getSubclass()` singleton + `allocateClassPair`/`registerClassPair` dance).
 
-/// PORT: the error set `error{ObjCFailed}` of `getSubclass()`/`init`. The objc2
+/// PORT NOTE: the error set `error{ObjCFailed}` of `getSubclass()`/`init`. The objc2
 /// class registration is infallible, so `init` always returns `Ok`; the type is
 /// kept for the reference's `!void`/`error.ObjCFailed` parity.
 #[derive(Debug)]
@@ -34,7 +34,7 @@ pub enum Error {
     ObjCFailed,
 }
 
-/// PORT: `pub const DisplayCallback = ?*align(8) const fn (?*anyopaque) void;`
+/// PORT NOTE: `pub const DisplayCallback = ?*align(8) const fn (?*anyopaque) void;`
 /// (line 121). An optional C function pointer taking an opaque context.
 // PORT NOTE (§3c.3): plain `extern "C"`, never the unwinding C ABI variant — a
 // Zig fn never unwinds (a Zig panic aborts), and this callback is invoked from
@@ -44,7 +44,7 @@ pub enum Error {
 // `display_callback` additionally catch_unwind+aborts explicitly (metal_impl.rs).
 pub type DisplayCallback = Option<unsafe extern "C" fn(*mut c_void)>;
 
-// PORT: `subclass.addIvar("display_cb"); subclass.addIvar("display_ctx")` (lines
+// PORT NOTE: `subclass.addIvar("display_cb"); subclass.addIvar("display_ctx")` (lines
 // 148-149). objc2 ivars can't hold an `Option<fn>`, so `DisplayCallback` is
 // stored as raw bits (transmute round-trip) exactly as the reference stores it via
 // `setInstanceVariable` of an objc id built from `@intFromPtr(display_cb)`.
@@ -72,11 +72,11 @@ define_class!(
     pub struct IOSurfaceLayerClass;
 
     impl IOSurfaceLayerClass {
-        // PORT: `subclass.replaceMethod("display", ...)` (lines 151-162).
+        // PORT NOTE: `subclass.replaceMethod("display", ...)` (lines 151-162).
         #[unsafe(method(display))]
         fn display(&self) {
             let bits: *mut c_void = self.ivars().display_cb.load(Ordering::SeqCst);
-            // PORT: `const display_cb: DisplayCallback = @ptrFromInt(@intFromPtr(
+            // PORT NOTE: `const display_cb: DisplayCallback = @ptrFromInt(@intFromPtr(
             //   self.getInstanceVariable("display_cb").value));`
             // DisplayCallback = Option<unsafe extern "C" fn(*mut c_void)>; a
             // null `*const c_void` transmutes to `None` (fn-pointer niche), a
@@ -94,7 +94,7 @@ define_class!(
             }
         }
 
-        // PORT: Disable all animations for this layer by returning null for all
+        // PORT NOTE: Disable all animations for this layer by returning null for all
         // actions (`subclass.replaceMethod("actionForKey:", ...)`, lines 164-176).
         #[unsafe(method(actionForKey:))]
         fn action_for_key(&self, _key: *mut AnyObject) -> *mut AnyObject {
@@ -104,7 +104,7 @@ define_class!(
     }
 );
 
-// PORT: `const SetSurfaceBlock = objc.Block(struct { layer: objc.c.id,
+// PORT NOTE: `const SetSurfaceBlock = objc.Block(struct { layer: objc.c.id,
 // surface: *IOSurface }, .{}, void);` (lines 87-90). The block context struct that
 // carries the layer id + retained surface across the main-thread dispatch hop.
 // `Send` is sound: `layer` is a retained CALayer id (thread-safe to
@@ -120,14 +120,14 @@ struct SetSurfaceArg {
 // main queue, and CFRetained<IOSurfaceRef> is Send.
 unsafe impl Send for SetSurfaceArg {}
 
-/// PORT: `layer: objc.Object` — the underlying CALayer (our registered subclass).
+/// PORT NOTE: `layer: objc.Object` — the underlying CALayer (our registered subclass).
 pub struct IOSurfaceLayer {
     pub layer: Retained<IOSurfaceLayerClass>,
 }
 
 impl IOSurfaceLayer {
     pub fn init() -> Result<IOSurfaceLayer, Error> {
-        // PORT (lines 21-30): The layer returned by `[CALayer layer]` is
+        // PORT NOTE (lines 21-30): The layer returned by `[CALayer layer]` is
         // autoreleased, which means that at the end of the current autorelease pool
         // it will be deallocated if it isn't retained, so we retain it here manually
         // an extra time. In objc2 `alloc().set_ivars(..).init()` nets the same
@@ -141,7 +141,7 @@ impl IOSurfaceLayer {
         });
         let layer: Retained<IOSurfaceLayerClass> = unsafe { msg_send![super(this), init] };
 
-        // PORT (lines 32-34): The layer gravity is set to top-left so that the
+        // PORT NOTE (lines 32-34): The layer gravity is set to top-left so that the
         // contents aren't stretched during resize operations before a new frame has
         // been drawn.
         layer.setContentsGravity(unsafe { kCAGravityTopLeft });
@@ -149,7 +149,7 @@ impl IOSurfaceLayer {
         Ok(IOSurfaceLayer { layer })
     }
 
-    // PORT: `pub fn release(self: *IOSurfaceLayer) void { self.layer.release(); }`
+    // PORT NOTE: `pub fn release(self: *IOSurfaceLayer) void { self.layer.release(); }`
     // (lines 42-44). Under ARC the `Retained<IOSurfaceLayerClass>` CFReleases when
     // `IOSurfaceLayer` drops; the Canonical Interface mandates `&mut self`, so this
     // documents the reference's manual release (the real teardown is the value drop).
@@ -157,7 +157,7 @@ impl IOSurfaceLayer {
         // no-op relative to Drop — the `Retained` releases on drop.
     }
 
-    /// PORT: Canonical upcast to the base `CALayer` (for the W1 NSView attach).
+    /// PORT NOTE: Canonical upcast to the base `CALayer` (for the W1 NSView attach).
     /// `define_class super(CALayer)` ⇒ `Deref<Target = CALayer>`.
     pub fn as_ca_layer(&self) -> &CALayer {
         &self.layer
@@ -201,12 +201,12 @@ impl IOSurfaceLayer {
     ///
     /// Does not ensure this happens on the main thread.
     pub fn set_surface_sync(&self, surface: &IOSurfaceRef) {
-        // PORT: `self.layer.setProperty("contents", surface);` (lines 83-85).
+        // PORT NOTE: `self.layer.setProperty("contents", surface);` (lines 83-85).
         let obj = (surface as *const IOSurfaceRef).cast::<AnyObject>();
         unsafe { self.layer.setContents(Some(&*obj)) };
     }
 
-    // PORT: `fn setSurfaceCallback(block: *const SetSurfaceBlock.Context)` (lines
+    // PORT NOTE: `fn setSurfaceCallback(block: *const SetSurfaceBlock.Context)` (lines
     // 92-119). The main-thread body that actually sets `contents`.
     fn set_surface_callback(arg: SetSurfaceArg) {
         // const layer = objc.Object.fromId(block.layer);
@@ -243,7 +243,7 @@ impl IOSurfaceLayer {
     }
 
     pub fn set_display_callback(&self, display_cb: DisplayCallback, display_ctx: *mut c_void) {
-        // PORT: `self.layer.setInstanceVariable("display_cb"/"display_ctx", ...)`
+        // PORT NOTE: `self.layer.setInstanceVariable("display_cb"/"display_ctx", ...)`
         // (lines 128-135). The fn pointer is stored as raw bits (null == None);
         // atomic stores per the Ivars PORT NOTE (§3c.10).
         self.layer.ivars().display_cb.store(

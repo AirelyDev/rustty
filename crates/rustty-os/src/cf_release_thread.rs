@@ -20,10 +20,10 @@
 //! `CallbackAction`/`WaitError=MachPortError`/`RunMode::UntilDone`). No reference
 //! logic, comment, or behavior is dropped.
 
-// PORT: `pub const Thread = @This();` — the file *is* the `Thread` struct in
+// PORT NOTE: `pub const Thread = @This();` — the file *is* the `Thread` struct in
 // Zig. In Rust the file is a module and `Thread` is a named struct below.
 
-// PORT: the Zig reference imports `std`, `builtin`, `macos`, `internal_os =
+// PORT NOTE: the Zig reference imports `std`, `builtin`, `macos`, `internal_os =
 // os/main.zig`, `xev = global.zig.xev`, `BlockingQueue = datastruct/main.zig`,
 // `Allocator = std.mem.Allocator`, and `log = std.log.scoped(.cf_release_thread)`.
 // In Rust we use the ported `crate::macos` sibling, `rustty_datastruct::BlockingQueue`,
@@ -36,11 +36,11 @@
 
 use rustty_datastruct::BlockingQueue;
 
-// PORT: `const xev = @import("../global.zig").xev;` — now the real kqueue backend.
+// PORT NOTE: `const xev = @import("../global.zig").xev;` — now the real kqueue backend.
 #[cfg(target_os = "macos")]
 use rustty_xev as xev;
 
-// PORT: `const log = std.log.scoped(.cf_release_thread);`. Routed through the
+// PORT NOTE: `const log = std.log.scoped(.cf_release_thread);`. Routed through the
 // log facade where used; the call sites preserve the reference's messages.
 
 pub enum Message {
@@ -58,7 +58,7 @@ pub type Mailbox = BlockingQueue<Message, 64>;
 /// here, except the reference's first field (see the `alloc` PARITY note below)
 /// which Rust ownership subsumes; all remaining fields are verbatim.
 //
-// PORT: macOS-gated because `loop_`/`wakeup`/`stop` name `rustty_xev::Loop`/
+// PORT NOTE: macOS-gated because `loop_`/`wakeup`/`stop` name `rustty_xev::Loop`/
 // `Async`, which are `#[cfg(target_os = "macos")]` (the kqueue backend is
 // macOS-only). `Message`/`Mailbox` (no xev) stay cross-platform below.
 #[cfg(target_os = "macos")]
@@ -93,7 +93,7 @@ pub struct Thread {
     flags: Flags,
 }
 
-/// PORT: the reference's inline `flags: packed struct { drain: bool = false }`.
+/// PORT NOTE: the reference's inline `flags: packed struct { drain: bool = false }`.
 #[cfg(target_os = "macos")]
 #[derive(Default)]
 pub struct Flags {
@@ -148,7 +148,7 @@ impl Thread {
 
     /// The main entrypoint for the thread.
     //
-    // PORT (SB/TB, `rust-mut-args-strongly-protected`): the reference
+    // PORT NOTE (SB/TB, `rust-mut-args-strongly-protected`): the reference
     // `threadMain(self: *Thread)` keeps `&mut self` here, but delegates to the
     // raw-`*mut Thread` child so the raw aliasing (the loop simultaneously holds
     // `&raw mut (*self_).loop_`/`(*self_).wakeup_c` as raw pointers) lives only
@@ -191,7 +191,7 @@ impl Thread {
         // Start the async handlers. We start these first so that they're
         // registered even if anything below fails so we can drain the mailbox.
         //
-        // PORT: `self.wakeup.wait(&self.loop, &self.wakeup_c, Thread, self,
+        // PORT NOTE: `self.wakeup.wait(&self.loop, &self.wakeup_c, Thread, self,
         // wakeupCallback)` — `wakeup` is read out by-copy as the `.wait(self, ..)`
         // receiver (Async is Copy), which does NOT create a `&mut` to `wakeup`, so
         // there is no aliasing with the `&raw mut (*self_).wakeup_c` argument. The
@@ -239,7 +239,7 @@ impl Thread {
                         unsafe { CFRelease(*r) };
                     }
                     // log.debug("Released {} CFTypeRefs.", .{ msg.refs.len });
-                    // PORT: `msg.alloc.free(msg.refs);` — the `Vec<*mut c_void>`
+                    // PORT NOTE: `msg.alloc.free(msg.refs);` — the `Vec<*mut c_void>`
                     // is dropped here, freeing the slice.
                     drop(refs);
                 }
@@ -249,7 +249,7 @@ impl Thread {
     }
 }
 
-// PORT: the raw-`*mut Thread` callback ABI (matching termio thread.rs). The real
+// PORT NOTE: the raw-`*mut Thread` callback ABI (matching termio thread.rs). The real
 // `Async::wait` hands the userdata + loop/completion back as raw pointers held
 // across ticks; the callback error type is `xev::MachPortError` (the wakeup
 // async's `WaitError`), NOT the deleted placeholder `AsyncWaitError`.
@@ -290,7 +290,7 @@ fn stopCallback(
     xev::CallbackAction::Disarm
 }
 
-// PORT: the `log.*` call sites in the reference, routed to the log facade and
+// PORT NOTE: the `log.*` call sites in the reference, routed to the log facade and
 // reproduced as named helpers that preserve the reference's messages verbatim.
 // macOS-gated: several name `xev::Error`/`xev::MachPortError`, and all are only
 // reached from the macOS-gated `Thread` logic above.
@@ -327,7 +327,7 @@ fn log_err_drain_mailbox(_err: &xev::Error) {
     // log.err("error draining mailbox err={}", .{err});
 }
 
-// PORT: `macos.foundation.CFRelease`. CoreFoundation's `CFRelease` declared as
+// PORT NOTE: `macos.foundation.CFRelease`. CoreFoundation's `CFRelease` declared as
 // `extern "C"` (R3 binding to the SAME framework). It takes a CFTypeRef
 // (`*anyopaque`).
 #[cfg(target_os = "macos")]
@@ -335,7 +335,7 @@ extern "C" {
     fn CFRelease(cf: *mut std::ffi::c_void);
 }
 
-// PORT: on non-Darwin targets there is no CoreFoundation; the reference module
+// PORT NOTE: on non-Darwin targets there is no CoreFoundation; the reference module
 // is only ever used on Darwin. We provide a never-called shim so the file
 // type-checks on all targets (the `Release` path is Darwin-only in practice).
 #[cfg(not(target_os = "macos"))]

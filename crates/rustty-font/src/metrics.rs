@@ -1,4 +1,4 @@
-// PORT: ghostty src/font/Metrics.zig (`const Metrics = @This();`). The Zig file
+// PORT NOTE: ghostty src/font/Metrics.zig (`const Metrics = @This();`). The Zig file
 // imports `std` and `assert = quirks.inlineAssert`; here the assert seam is
 // `rustty_util::quirks::inlineAssert` and the `ModifierSet` hash map is the std
 // `HashMap` (the reference uses `std.AutoHashMapUnmanaged`).

@@ -2,14 +2,14 @@
 //! nested value types `Segment`, `Character`, `CursorShape`, `Hyperlink`, `Scale`,
 //! `Style` (+ `Underline`) and `Color` (+ `Kind`/`Report`/`Scheme`).
 //!
-//! PORT-NOTE (byte-slice representation, VAXIS_C1_DESIGN §7): Zig's byte-slice
+//! PORT NOTE (byte-slice representation, VAXIS_C1_DESIGN §7): Zig's byte-slice
 //! fields (`Segment.text`, `Character.grapheme`, `Hyperlink.uri/params`) are
 //! borrowed `[]const u8` with caller-managed lifetimes. We port them as `&'a [u8]`
 //! with `&'static [u8]` defaults (the zero-copy, borrow-faithful representation),
 //! NEVER a lossy `String` (zig-byteslice-to-rust-rawbytes; these are grapheme/UTF-8
 //! bytes). `Cell`/`Segment`/`Character`/`Hyperlink` therefore carry the lifetime `'a`.
 //!
-//! PORT-NOTE (packed-struct fidelity, §7): Zig `packed struct` fields are LSB-first
+//! PORT NOTE (packed-struct fidelity, §7): Zig `packed struct` fields are LSB-first
 //! and `@bitCast` to the backing integer is the canonical equality `std.meta.eql`
 //! uses. `Scale` (u13) and the `Style` SGR bits (u7) reproduce that layout via an
 //! explicit bit-pack (`to_u13` / the `SGRBits` pack in `Style::eql`).
@@ -23,7 +23,7 @@ use crate::image;
 // default: bool = false,
 // wrapped: bool = ...,
 // scale: Scale = .{},
-// PORT-NOTE: every field's Zig default equals its Rust `Default`
+// PORT NOTE: every field's Zig default equals its Rust `Default`
 // (Character/Hyperlink/Style/Scale carry Default impls, image=None, bools=false), so
 // the whole-struct default is `derive(Default)` — faithful to the Zig `.{}` literal.
 #[derive(Clone, Copy, Debug, Default)]
@@ -288,7 +288,7 @@ impl Color {
 }
 
 // pub const Kind = union(enum) { fg, bg, cursor, index: u8 };
-// PORT-NOTE (Chunk 3a): `PartialEq`/`Eq` added so the Parser color-report tests can
+// PORT NOTE (Chunk 3a): `PartialEq`/`Eq` added so the Parser color-report tests can
 // `assert_eq!` a whole `Report`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {

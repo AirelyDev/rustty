@@ -1,4 +1,4 @@
-//! PORT: the `*std.Io.Writer` surface the synthetic package writes through.
+//! PORT NOTE: the `*std.Io.Writer` surface the synthetic package writes through.
 //!
 //! We reuse `rustty_os::string_encoding`'s `Writer` trait (so the generators can
 //! hand their writer straight to `urlPercentEncode`, which is generic over it)
@@ -7,10 +7,10 @@
 
 pub use rustty_os::string_encoding::{FixedWriter, WriteFailed, Writer};
 
-/// PORT: the `writer.print`/`writer.writeInt` helpers layered on `std.Io.Writer`.
+/// PORT NOTE: the `writer.print`/`writer.writeInt` helpers layered on `std.Io.Writer`.
 /// Blanket-implemented for every `Writer`.
 pub trait WriterExt: Writer {
-    /// PORT: `writer.print("{d}", .{v})` for an unsigned integer — decimal,
+    /// PORT NOTE: `writer.print("{d}", .{v})` for an unsigned integer — decimal,
     /// no leading zeros.
     #[allow(non_snake_case)]
     fn writeUint(&mut self, v: u64) -> Result<(), Self::Error> {
@@ -28,7 +28,7 @@ pub trait WriterExt: Writer {
         self.writeAll(&buf[i..])
     }
 
-    /// PORT: `writer.writeInt(usize, v, .little)` — a fixed 8-byte LE encoding
+    /// PORT NOTE: `writer.writeInt(usize, v, .little)` — a fixed 8-byte LE encoding
     /// (`usize` is 64-bit on the target).
     #[allow(non_snake_case)]
     fn writeIntUsizeLittle(&mut self, v: usize) -> Result<(), Self::Error> {

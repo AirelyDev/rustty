@@ -132,7 +132,7 @@ pub struct Thread {
     pub flags: Flags,
 }
 
-/// PORT: the reference's inline `flags: packed struct { ... }`.
+/// PORT NOTE: the reference's inline `flags: packed struct { ... }`.
 #[derive(Default)]
 pub struct Flags {
     /// This is set to true only when an abnormal exit is detected. It
@@ -340,7 +340,7 @@ impl Thread {
             // defer arena.deinit();
             // const alloc = arena.allocator();
             //
-            // (PORT: the arena collapses to Rust ownership — the error message is an
+            // (PORT NOTE: the arena collapses to Rust ownership — the error message is an
             // owned `String` freed on drop; no `self.alloc` field exists, see the
             // `Thread::init` PORT NOTE.)
 
@@ -389,7 +389,7 @@ impl Thread {
                  \n\
                  This terminal is non-functional. Please close it and try again."
             );
-            // (PORT: Rust `format!` doesn't fail on OOM the way `allocPrint` does, so
+            // (PORT NOTE: Rust `format!` doesn't fail on OOM the way `allocPrint` does, so
             // the reference `catch "Out of memory..."` fallback is unreachable; the
             // fallback string is preserved in the comment above.)
 
@@ -768,7 +768,7 @@ impl Thread {
         //     // else => return error.TermioUnsupportedMailbox,
         // };
         //
-        // (PORT: extract the `wakeup` Async — `Copy` — for the `wait` below; the
+        // (PORT NOTE: extract the `wakeup` Async — `Copy` — for the `wait` below; the
         // queue itself is reached via `cb.io` in `drainMailbox`. Single-variant
         // match, irrefutable.)
         let mailbox_wakeup = match unsafe { &(*io).mailbox } {
@@ -799,7 +799,7 @@ impl Thread {
         unsafe { Termio::threadEnter(io, self_, (*cb_ptr).data.as_mut_ptr()) }?;
         // defer cb.data.deinit();
         // defer io.threadExit(&cb.data);
-        // (PORT: both `defer`s run — in reverse registration order, threadExit then
+        // (PORT NOTE: both `defer`s run — in reverse registration order, threadExit then
         // data.deinit — AFTER `loop.run` returns; formed as explicit calls at the
         // single exit below, where the loop no longer aliases `cb.data`.)
 
@@ -896,7 +896,7 @@ impl Thread {
             // log.debug("mailbox message={s}", .{@tagName(message)});
             // switch (message) {
             //
-            // (PORT: each `io.method(data, ...)` forms a transient `&mut *io` +
+            // (PORT NOTE: each `io.method(data, ...)` forms a transient `&mut *io` +
             // `&mut *data` — disjoint objects; the reference threads raw `io`/`data`.
             // The borrow never outlives the handler call, so it does not cross a loop
             // tick; shared terminal state is renderer-mutex-guarded inside each.)
@@ -912,7 +912,7 @@ impl Thread {
                 //     try io.changeConfig(data, config.ptr);
                 // },
                 Message::ChangeConfig { ptr } => {
-                    // (PORT: `config.alloc.destroy(config.ptr)` collapses into the
+                    // (PORT NOTE: `config.alloc.destroy(config.ptr)` collapses into the
                     // `Box<DerivedConfig>` drop — `*ptr` moves the value into
                     // `changeConfig` (by value here) and frees the box.)
                     unsafe { (*io).changeConfig(&mut *data, *ptr) }?
@@ -962,7 +962,7 @@ impl Thread {
                 //     try io.queueWrite(data, v.data, self.flags.linefeed_mode);
                 // },
                 Message::WriteAlloc(v) => {
-                    // (PORT: `v.alloc.free(v.data)` collapses into the `Box<[u8]>`
+                    // (PORT NOTE: `v.alloc.free(v.data)` collapses into the `Box<[u8]>`
                     // drop — `v` drops at the end of this arm.)
                     let linefeed = unsafe { (*self_).flags.linefeed_mode };
                     unsafe { (*io).queueWrite(&mut *data, &v.data, linefeed) }?
@@ -1101,7 +1101,7 @@ impl Thread {
         //     cb.io.resize(&cb.data, v) catch |err| { log.warn("error during resize err={}", .{err}); };
         // }
         let self_ = unsafe { (*cb).self_ };
-        // (PORT: `.take()` reads the resize AND clears it — the reference's `if
+        // (PORT NOTE: `.take()` reads the resize AND clears it — the reference's `if
         // (...) |v| { ...resize = null; ... }`.)
         if let Some(v) = unsafe { (*self_).coalesce_data.resize.take() } {
             let io = unsafe { (*cb).io };

@@ -1,15 +1,15 @@
-//! PORT: `synthetic/cli/Utf8.zig`.
+//! PORT NOTE: `synthetic/cli/Utf8.zig`.
 
 use crate::io::{WriteFailed, Writer};
 use crate::rand::{DefaultPrng, Rng};
 use crate::utf8 as synthetic_utf8;
 use crate::utf8::Utf8Len;
 
-/// PORT: the `error.InvalidValue` returned by `create` on a bad option.
+/// PORT NOTE: the `error.InvalidValue` returned by `create` on a bad option.
 #[derive(Debug)]
 pub struct InvalidValue;
 
-/// PORT: `pub const Options = struct { ... }`.
+/// PORT NOTE: `pub const Options = struct { ... }`.
 pub struct Options {
     /// Seed to use for deterministic generation. If unset, a time-based
     /// seed is used by the generic synthetic CLI.
@@ -48,7 +48,7 @@ impl Default for Options {
     }
 }
 
-/// PORT: `const Utf8 = @This()`.
+/// PORT NOTE: `const Utf8 = @This()`.
 pub struct Utf8 {
     opts: Options,
 }

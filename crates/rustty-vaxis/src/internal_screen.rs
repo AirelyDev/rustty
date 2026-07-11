@@ -1,7 +1,7 @@
 //! `vaxis/src/InternalScreen.zig` (133 LOC, 0 test) — the allocating back buffer for
 //! diffing (VAXIS_C2_DESIGN §3).
 //!
-//! PORT-NOTE (arena → per-cell `Vec<u8>`): Zig backs `char`/`uri`/`uri_id`
+//! PORT NOTE (arena → per-cell `Vec<u8>`): Zig backs `char`/`uri`/`uri_id`
 //! (`ArrayListUnmanaged(u8)`) with a per-screen `*ArenaAllocator` (bump-alloc, freed
 //! wholesale in `deinit`). Rust replaces the arena with plain owned `Vec<u8>` per field —
 //! each `InternalCell` owns its bytes; `deinit` becomes `Drop`. This is the faithful
@@ -10,10 +10,10 @@
 //! parameter on `InternalScreen`/`InternalCell` — they hold no borrows. The
 //! `arena: *ArenaAllocator` field is dropped.
 //!
-//! PORT-NOTE (allocator/error dropped): Zig `init(alloc, w, h) !InternalScreen` creates
+//! PORT NOTE (allocator/error dropped): Zig `init(alloc, w, h) !InternalScreen` creates
 //! the arena and returns an error union; Rust drops both (infallible `Vec`).
 //!
-//! PORT-NOTE (`log`/`catch` dropped): Zig wraps each `appendSlice` in `catch { log.warn }`.
+//! PORT NOTE (`log`/`catch` dropped): Zig wraps each `appendSlice` in `catch { log.warn }`.
 //! Rust `Vec` alloc is infallible → no error path; the `log = std.log.scoped(.vaxis)`
 //! import and the three `catch`/`log.warn` blocks are dropped (the OOM branch is
 //! unreachable in Rust).
@@ -42,7 +42,7 @@ pub struct InternalCell {
 
 impl Default for InternalCell {
     fn default() -> Self {
-        // PORT-NOTE (`default = true` quirk): the back-buffer cell defaults `default=true`
+        // PORT NOTE (`default = true` quirk): the back-buffer cell defaults `default=true`
         // (a fresh diff cell IS "the default cell"), UNLIKE `Cell.default = false`. `eql`'s
         // fast-path depends on it. Preserve.
         InternalCell {
@@ -89,7 +89,7 @@ pub struct InternalScreen {
 impl InternalScreen {
     /// sets each cell to the default cell
     pub fn init(w: u16, h: u16) -> InternalScreen {
-        // PORT-NOTE: the per-cell Zig `initCapacity(alloc, 1)` + `appendAssumeCapacity(' ')`
+        // PORT NOTE: the per-cell Zig `initCapacity(alloc, 1)` + `appendAssumeCapacity(' ')`
         // → `char: vec![b' ']`; `uri`/`uri_id` empty; other fields default (`default=true`).
         let mut buf: Vec<InternalCell> = Vec::with_capacity((w as usize) * (h as usize));
         for _ in 0..(w as usize) * (h as usize) {
@@ -113,7 +113,7 @@ impl InternalScreen {
     }
 
     pub fn deinit(&mut self) {
-        // PORT-NOTE: Zig `arena.deinit(); alloc.destroy(arena); self.* = undefined` →
+        // PORT NOTE: Zig `arena.deinit(); alloc.destroy(arena); self.* = undefined` →
         // `Drop` of the `Vec<InternalCell>`. The `self.* = undefined` poisoning has no Rust
         // analogue (the value is moved-from / dropped). This shim clears the buffer.
         self.buf.clear();
@@ -121,7 +121,7 @@ impl InternalScreen {
 
     /// writes a cell to a location. 0 indexed
     pub fn write_cell(&mut self, col: u16, row: u16, cell: &Cell) {
-        // PORT-NOTE (`<` bounds quirk): Zig uses `self.width < col` / `self.height < row`
+        // PORT NOTE (`<` bounds quirk): Zig uses `self.width < col` / `self.height < row`
         // (NOT `>=`) — an off-by-one asymmetry vs `Screen`'s `>=`. Preserved VERBATIM.
         if self.width < col {
             // column out of bounds
@@ -154,7 +154,7 @@ impl InternalScreen {
             // height out of bounds
             return None;
         }
-        // PORT-NOTE (index asymmetry): Zig `readCell` uses `(row * self.width) + col` in
+        // PORT NOTE (index asymmetry): Zig `readCell` uses `(row * self.width) + col` in
         // u16 arithmetic (no `@intCast(usize)` unlike `writeCell`), then uses the result as
         // usize. Reproduced as usize arithmetic — value-identical for in-range inputs.
         let i = (row as usize) * (self.width as usize) + col as usize;

@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/pipe.zig` — every line, comment, and `test {}`
 //! is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, `windows = @import("windows.zig")`,
+// PORT NOTE: the Zig reference imports `std`, `builtin`, `windows = @import("windows.zig")`,
 // and `posix = std.posix`. In Rust we use `libc` (R3: a binding to the SAME
 // system library `std.posix` targets) for the POSIX `pipe2` syscall and the
 // `windows` module's `CreatePipe`/error helpers for the Windows path. `fd_t`
@@ -23,7 +23,7 @@ pub type fd_t = crate::windows::HANDLE;
 pub fn pipe() -> std::io::Result<[fd_t; 2]> {
     #[cfg(not(windows))]
     {
-        // PORT: `posix.pipe2(.{ .CLOEXEC = true })`. On platforms with the
+        // PORT NOTE: `posix.pipe2(.{ .CLOEXEC = true })`. On platforms with the
         // `pipe2` syscall (Linux/BSD) we pass `O_CLOEXEC` directly, matching the
         // syscall the reference issues. On macOS there is no `pipe2`, so — exactly
         // as Zig's std does for `posix.pipe2` on such targets — we `pipe()` then

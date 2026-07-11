@@ -31,17 +31,17 @@
 //! pub const Surface = struct {};
 //! ```
 
-// PORT: reference `const std`/`const Allocator = std.mem.Allocator;` — a
+// PORT NOTE: reference `const std`/`const Allocator = std.mem.Allocator;` — a
 // passed-in `std.mem.Allocator` maps to the `allocator_api2` `Allocator` trait
 // (the established workspace map, cf. `rustty_apprt_api::ipc`). `internal_os` and
 // `apprt` are reached as the rustty `rustty_os` / `rustty_apprt_api` crates.
 use allocator_api2::alloc::Allocator;
 use rustty_apprt_api::ipc;
 
-/// PORT: reference `pub const resourcesDir = internal_os.resourcesDir;`.
+/// PORT NOTE: reference `pub const resourcesDir = internal_os.resourcesDir;`.
 pub use rustty_os::resourcesDir;
 
-/// PORT: reference `pub const App = struct { ... };`.
+/// PORT NOTE: reference `pub const App = struct { ... };`.
 pub struct App;
 
 impl App {
@@ -64,5 +64,5 @@ impl App {
     }
 }
 
-/// PORT: reference `pub const Surface = struct {};`.
+/// PORT NOTE: reference `pub const Surface = struct {};`.
 pub struct Surface;

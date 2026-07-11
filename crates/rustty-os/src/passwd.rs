@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/passwd.zig` — every line, comment, and
 //! `test {}` is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, `internal_os = @import("main.zig")`,
+// PORT NOTE: the Zig reference imports `std`, `builtin`, `internal_os = @import("main.zig")`,
 // `build_config`, `Allocator`, `ArenaAllocator`, and `posix = std.posix`. In Rust
 // we use `libc` (R3: a binding to the SAME system library) for the
 // `getpwuid_r`/`getuid` C API and `rustty-build-config` for the `flatpak`
@@ -16,12 +16,12 @@ use rustty_build_config as build_config;
 const LOG_SCOPE: &str = "passwd";
 
 // We want to be extra sure since this will force bad symbols into our import table
-// PORT: `comptime { if (builtin.target.cpu.arch.isWasm()) @compileError("passwd
+// PORT NOTE: `comptime { if (builtin.target.cpu.arch.isWasm()) @compileError("passwd
 // is not available for wasm"); }`.
 #[cfg(target_family = "wasm")]
 compile_error!("passwd is not available for wasm");
 
-// PORT: `const c = if (builtin.os.tag != .windows) @cImport({ sys/types.h;
+// PORT NOTE: `const c = if (builtin.os.tag != .windows) @cImport({ sys/types.h;
 // unistd.h; pwd.h }) else {};` — used to determine the default shell and
 // directory on Unixes. In Rust the `libc` crate provides `passwd`, `getpwuid_r`,
 // and `getuid` for the same system headers.
@@ -179,13 +179,13 @@ pub fn get() -> Result<Entry, Error> {
 
 #[cfg(windows)]
 pub fn get() -> Result<Entry, Error> {
-    // PORT: `if (builtin.os.tag == .windows) @compileError("passwd is not
+    // PORT NOTE: `if (builtin.os.tag == .windows) @compileError("passwd is not
     // available on windows");` — the reference makes this a compile error. We
     // keep the same intent at compile time below.
     compile_error!("passwd is not available on windows")
 }
 
-// PORT: `std.mem.sliceTo(pw.pw_name, 0)` rendered as a `&str` for the flatpak
+// PORT NOTE: `std.mem.sliceTo(pw.pw_name, 0)` rendered as a `&str` for the flatpak
 // host command formatting.
 #[cfg(all(not(windows), feature = "flatpak"))]
 fn slice_to_str(ptr: *mut std::ffi::c_char) -> String {

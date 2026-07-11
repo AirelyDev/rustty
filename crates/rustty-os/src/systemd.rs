@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/systemd.zig` — every line, comment, and
 //! `test {}` is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, and uses
+// PORT NOTE: the Zig reference imports `std`, `builtin`, and uses
 // `std.log.scoped(.systemd)`. The OS switch is `builtin.os.tag`; here it is
 // `cfg!(target_os = "linux")`. The Linux paths use raw `libc` syscalls
 // (R3: a binding to the SAME system library `std.os.linux` targets) for the
@@ -104,7 +104,7 @@ pub mod notify {
     #[allow(dead_code)]
     fn send(message: &[u8]) {
         // systemd is Linux-only so this is a no-op anywhere else
-        // PORT: `if (comptime builtin.os.tag != .linux) return;` — on non-Linux
+        // PORT NOTE: `if (comptime builtin.os.tag != .linux) return;` — on non-Linux
         // the body below is `cfg`-excluded, which is the parity image of the
         // early `return` (the function does nothing).
         #[cfg(target_os = "linux")]
@@ -139,7 +139,7 @@ pub mod notify {
 
             socket_address.sun_family = libc::AF_UNIX as libc::sa_family_t;
 
-            // PORT: `@memcpy(socket_address.path[0..socket_path.len], socket_path);`
+            // PORT NOTE: `@memcpy(socket_address.path[0..socket_path.len], socket_path);`
             // then `socket_address.path[socket_path.len] = 0;`. `sun_path` is
             // `c_char` (i8); copy the bytes preserving the trailing NUL.
             for (i, &b) in socket_path.iter().enumerate() {
@@ -161,7 +161,7 @@ pub mod notify {
                 rc
             };
 
-            // PORT: `defer _ = std.os.linux.close(socket);` — close at scope exit.
+            // PORT NOTE: `defer _ = std.os.linux.close(socket);` — close at scope exit.
             let _guard = SocketGuard(socket);
 
             // connect
@@ -215,7 +215,7 @@ pub mod notify {
     /// Tell systemd that we are ready or that we are finished reloading.
     /// See: https://www.freedesktop.org/software/systemd/man/latest/sd_notify.html#READY=1
     pub fn ready() {
-        // PORT: `if (comptime builtin.os.tag != .linux) return;` — gated below.
+        // PORT NOTE: `if (comptime builtin.os.tag != .linux) return;` — gated below.
         #[cfg(target_os = "linux")]
         send(b"READY=1");
     }
@@ -224,7 +224,7 @@ pub mod notify {
     /// See: https://www.freedesktop.org/software/systemd/man/latest/sd_notify.html#RELOADING=1
     /// and: https://www.freedesktop.org/software/systemd/man/latest/sd_notify.html#MONOTONIC_USEC=%E2%80%A6
     pub fn reloading() {
-        // PORT: `if (comptime builtin.os.tag != .linux) return;` — gated below.
+        // PORT NOTE: `if (comptime builtin.os.tag != .linux) return;` — gated below.
         #[cfg(target_os = "linux")]
         {
             let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
@@ -237,7 +237,7 @@ pub mod notify {
                 return;
             }
 
-            // PORT: `ts.sec * std.time.us_per_s + @divFloor(ts.nsec, std.time.ns_per_us)`.
+            // PORT NOTE: `ts.sec * std.time.us_per_s + @divFloor(ts.nsec, std.time.ns_per_us)`.
             const US_PER_S: i64 = 1_000_000;
             const NS_PER_US: i64 = 1_000;
             let now = ts.tv_sec as i64 * US_PER_S + (ts.tv_nsec as i64).div_euclid(NS_PER_US);
@@ -259,7 +259,7 @@ pub mod notify {
     }
 }
 
-// PORT: `std.mem.trimRight(u8, slice, "\n")`.
+// PORT NOTE: `std.mem.trimRight(u8, slice, "\n")`.
 #[cfg(target_os = "linux")]
 fn trim_right<'a>(slice: &'a [u8], strip: &[u8]) -> &'a [u8] {
     let mut end = slice.len();

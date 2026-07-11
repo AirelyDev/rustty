@@ -32,7 +32,7 @@
 //! the behavior the reference relies on and is what fixes the audit's eager-zero
 //! RSS regression. Memory is released with `munmap`.
 //
-// PORT: the reference's test-only branch (`if (builtin.is_test) return
+// PORT NOTE: the reference's test-only branch (`if (builtin.is_test) return
 // std.testing.allocator;`) swaps in Zig's leak-detecting testing allocator so
 // PageList's own tests catch leaks. That is a property of the Zig test runner,
 // not of the page allocator's observable allocation behavior; the leak-detection
@@ -54,7 +54,7 @@ use crate::mach::TaggedPageAllocator;
 
 /// The page allocator PageList uses for all underlying VM page allocations.
 ///
-/// PORT: the reference `pageAllocator()` returns a `std.mem.Allocator`. We return
+/// PORT NOTE: the reference `pageAllocator()` returns a `std.mem.Allocator`. We return
 /// a concrete value implementing the explicit-allocator trait; the
 /// darwin/non-darwin selection is reproduced in [`page_allocator`].
 //
@@ -73,7 +73,7 @@ pub struct PageAllocator {
 
 /// Creates the page allocator for PageList's VM page allocations.
 ///
-/// PORT: faithful map of `PageList.pageAllocator()`. On Darwin it tags memory as
+/// PORT NOTE: faithful map of `PageList.pageAllocator()`. On Darwin it tags memory as
 /// `application_specific_1` (so it shows up under our core terminal usage in
 /// vmmap/Instruments); on every other OS it is the standard generic page
 /// allocator (`std.heap.page_allocator`).
@@ -81,7 +81,7 @@ pub fn page_allocator() -> PageAllocator {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
         // On macOS we want to tag our memory so we can assign it to our core
-        // terminal usage. PORT: `mach.taggedPageAllocator(.application_specific_1)`.
+        // terminal usage. PORT NOTE: `mach.taggedPageAllocator(.application_specific_1)`.
         PageAllocator {
             tag: VMTag::application_specific_1,
         }
@@ -94,7 +94,7 @@ pub fn page_allocator() -> PageAllocator {
     }
 }
 
-// PORT: `std.mem.Allocator`'s `rawAlloc`/`rawFree` map to the trait's
+// PORT NOTE: `std.mem.Allocator`'s `rawAlloc`/`rawFree` map to the trait's
 // `allocate`/`deallocate`. The reference's `alloc`/`free` vtable entries assert
 // `n > 0` and forward to `map`/`unmap`; the trait guarantees `layout.size() > 0`
 // is NOT enforced by the contract, so we treat a zero-size request the same way
@@ -108,7 +108,7 @@ unsafe impl Allocator for PageAllocator {
     // memory) is identical to the mmap path; only the backing differs.
     #[cfg(not(miri))]
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        // PORT: `map(n, alignment)` — `n` is the byte count, `alignment` the
+        // PORT NOTE: `map(n, alignment)` — `n` is the byte count, `alignment` the
         // requested byte alignment. The mmap'd region is lazily OS-zeroed.
         let n = layout.size();
         let align = layout.align();
@@ -136,7 +136,7 @@ unsafe impl Allocator for PageAllocator {
 
     #[cfg(not(miri))]
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        // PORT: `free(memory, ...)` -> `unmap(memory)`. `unmap` page-rounds the
+        // PORT NOTE: `free(memory, ...)` -> `unmap(memory)`. `unmap` page-rounds the
         // length and `munmap`s it. A zero-size allocation mapped one page (see
         // `allocate`); free at least one byte's worth so the same page is unmapped.
         let len = if layout.size() == 0 { 1 } else { layout.size() };
@@ -197,7 +197,7 @@ mod miri_alloc {
     }
 }
 
-// PORT: dispatch the actual mmap/munmap to the platform path. On Darwin this is
+// PORT NOTE: dispatch the actual mmap/munmap to the platform path. On Darwin this is
 // `mach::TaggedPageAllocator` (the tagged posix `mmap`); on other unix it is the
 // identical untagged posix path (Zig's generic `std.heap.PageAllocator.map`).
 //
@@ -301,7 +301,7 @@ fn align_pointer(ptr: *mut u8, align: usize) -> Option<*mut u8> {
     Some(aligned as *mut u8)
 }
 
-// PORT: the reference's non-darwin, non-unix path is Zig's windows
+// PORT NOTE: the reference's non-darwin, non-unix path is Zig's windows
 // `std.heap.PageAllocator` (ntdll NtAllocateVirtualMemory == VirtualAlloc). This
 // crate establishes no windows VM bindings yet; like `mach.rs`'s deferred
 // `mremap` branch, the windows mapping path is left unported until a windows
@@ -318,7 +318,7 @@ impl PageAllocator {
     }
 }
 
-// PORT: these tests exercise the property the reference relies on — `mmap`'d
+// PORT NOTE: these tests exercise the property the reference relies on — `mmap`'d
 // pages come back page-aligned and lazily OS-zeroed. Miri cannot model the
 // `mmap`/`munmap` syscalls, so the entire test module is gated out under Miri
 // (the rest of the crate's Miri run stays green; this module simply does not run

@@ -671,7 +671,7 @@ fn is_valid_user(user: &[u8]) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// PORT: support shims for the std facilities used above.
+// PORT NOTE: support shims for the std facilities used above.
 // ---------------------------------------------------------------------------
 
 // `std.fs.path.sep`.
@@ -847,7 +847,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    // PORT (test-only glue): a per-test temporary directory with unique naming and
+    // PORT NOTE (test-only glue): a per-test temporary directory with unique naming and
     // Drop cleanup, reproducing the reference's `std.testing.tmpDir(.{})` +
     // `defer tmp.cleanup()`. Per-test isolation keeps the parallel `cargo test`
     // runner from racing on a shared cache path (the parallel-init isolation

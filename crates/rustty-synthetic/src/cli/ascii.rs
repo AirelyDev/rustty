@@ -1,23 +1,23 @@
-//! PORT: `synthetic/cli/Ascii.zig`.
+//! PORT NOTE: `synthetic/cli/Ascii.zig`.
 
 use crate::bytes::{generate_alphabet, is_print, Bytes};
 use crate::io::{WriteFailed, Writer};
 use crate::rand::Rng;
 
-// PORT: `const log = std.log.scoped(.@"terminal-stream-bench")` — logging seam,
+// PORT NOTE: `const log = std.log.scoped(.@"terminal-stream-bench")` — logging seam,
 // not exercised by the generator path.
 
-/// PORT: `pub const Options = struct {}`.
+/// PORT NOTE: `pub const Options = struct {}`.
 #[derive(Default)]
 pub struct Options {}
 
-// PORT: `checkAsciiAlphabet` — printable ASCII minus the space.
+// PORT NOTE: `checkAsciiAlphabet` — printable ASCII minus the space.
 generate_alphabet!(pub ascii, |c| match c {
     b' ' => false,
     _ => is_print(c),
 });
 
-/// PORT: `const Ascii = @This()`.
+/// PORT NOTE: `const Ascii = @This()`.
 pub struct Ascii {}
 
 impl Ascii {
@@ -26,7 +26,7 @@ impl Ascii {
         Ok(Ascii {})
     }
 
-    /// PORT: `destroy(self, alloc)` — frees the heap instance; a no-op here (the
+    /// PORT NOTE: `destroy(self, alloc)` — frees the heap instance; a no-op here (the
     /// struct is owned by the caller).
     pub fn destroy(self) {}
 

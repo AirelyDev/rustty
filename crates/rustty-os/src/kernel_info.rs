@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/kernel_info.zig` — every line, comment, and
 //! `test {}` is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std` and `builtin`. In Rust we use the
+// PORT NOTE: the Zig reference imports `std` and `builtin`. In Rust we use the
 // standard library for the `/proc` file read; no extra system binding is needed.
 
 #[allow(non_snake_case)]
@@ -20,7 +20,7 @@ pub fn getKernelInfo() -> Option<Vec<u8>> {
     };
 
     // 128 bytes should be enough to hold the kernel information
-    // PORT: `file.readToEndAlloc(alloc, 128)` caps the read at 128 bytes and
+    // PORT NOTE: `file.readToEndAlloc(alloc, 128)` caps the read at 128 bytes and
     // returns an error (→ null) if the file is larger; we reproduce the cap by
     // returning null when more than 128 bytes are present.
     if kernel_info.len() > 128 {

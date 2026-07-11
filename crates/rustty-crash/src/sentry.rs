@@ -22,7 +22,7 @@ use rustty_build_config as build_config;
 // const build_options = @import("build_options");
 use crate::build_options;
 // const sentry = if (build_options.sentry) @import("sentry");
-// (PORT: the Zig binding package `pkg/sentry` is hosted in-crate as
+// (PORT NOTE: the Zig binding package `pkg/sentry` is hosted in-crate as
 // `sentry_pkg`; the `if (build_options.sentry)` comptime gate collapses — the
 // module always compiles, and every reaching path is behind the same
 // `build_options.sentry` runtime-const checks the reference uses.)
@@ -36,7 +36,7 @@ use crate as crash;
 // use is `state.alloc` as `sendInternal`'s arena child allocator, which
 // collapses into Rust ownership below.)
 // const Surface = @import("../Surface.zig");
-// (PORT: seamed via `ThreadStateSurface` — see the module doc above. crash
+// (PORT NOTE: seamed via `ThreadStateSurface` — see the module doc above. crash
 // must also NOT dep rustty-renderer for the size types: renderer already deps
 // crash, so the reverse edge would cycle — hence plain `(u32, u32)` tuples.)
 
@@ -45,7 +45,7 @@ use crate as crash;
 /// The global state for the Sentry SDK. This is unavoidable since crash
 /// handling is a global process-wide thing.
 // var init_thread: ?std.Thread = null;
-// PORT: Zig's plain global (init/deinit "should only be called from one
+// PORT NOTE: Zig's plain global (init/deinit "should only be called from one
 // thread" per the doc below); Rust statics must be Sync, so the handle rides
 // in a Mutex. `JoinHandle::join` consumes the handle, so deinit `take`s it.
 static INIT_THREAD: std::sync::Mutex<Option<std::thread::JoinHandle<Result<(), InitThreadError>>>> =
@@ -75,11 +75,11 @@ pub trait ThreadStateSurface {
 /// on our own in the on crash callback.
 pub struct ThreadState<S: ThreadStateSurface> {
     /// Thread type, used to tag the crash
-    // PORT: `type: Type` — `type` is a Rust keyword.
+    // PORT NOTE: `type: Type` — `type` is a Rust keyword.
     pub type_: Type,
 
     /// The surface that this thread is attached to.
-    // PORT: `surface: *Surface` -> a raw `*const S` through the seam trait.
+    // PORT NOTE: `surface: *Surface` -> a raw `*const S` through the seam trait.
     // `beforeSend` keeps the reference's LIVE (possibly-torn) raw-pointer read
     // semantics — see its "likely unsafe... most likely fine" comment; a
     // snapshot here would change those semantics, so do NOT snapshot.
@@ -87,7 +87,7 @@ pub struct ThreadState<S: ThreadStateSurface> {
 }
 
 // pub const Type = enum { main, renderer, io };
-// PORT: nested as `ThreadState.Type` in the reference; hoisted to module
+// PORT NOTE: nested as `ThreadState.Type` in the reference; hoisted to module
 // level (Rust inherent associated types are unstable; `ThreadState` is also
 // generic over the seam, which the tag is not).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +98,7 @@ pub enum Type {
 }
 
 impl Type {
-    /// PORT: Zig `@tagName(thr_state.type)` — the reference enum tag names.
+    /// PORT NOTE: Zig `@tagName(thr_state.type)` — the reference enum tag names.
     const fn tagName(self) -> &'static str {
         match self {
             Type::Main => "main",
@@ -111,7 +111,7 @@ impl Type {
 // See ThreadState. This should only ever be set by the owner of the
 // thread entry function.
 // pub threadlocal var thread_state: ?ThreadState = null;
-// PORT: the reference assigns the threadlocal directly
+// PORT NOTE: the reference assigns the threadlocal directly
 // (`crash.sentry.thread_state = .{...}` / `= null`); Rust thread-locals are
 // accessed through `setThreadState`/`clearThreadState` below, and the stored
 // form erases the seam type parameter to `*const dyn ThreadStateSurface`
@@ -123,14 +123,14 @@ thread_local! {
 }
 
 /// The type-erased image of a [`ThreadState<S>`] (what the thread-local
-/// actually stores; see the PORT note above).
+/// actually stores; see the PORT NOTE above).
 #[derive(Clone, Copy)]
 struct ErasedThreadState {
     type_: Type,
     surface: *const dyn ThreadStateSurface,
 }
 
-/// PORT: `crash.sentry.thread_state = .{ .type = ..., .surface = ... };`.
+/// PORT NOTE: `crash.sentry.thread_state = .{ .type = ..., .surface = ... };`.
 pub fn setThreadState<S: ThreadStateSurface + 'static>(state: ThreadState<S>) {
     THREAD_STATE.set(Some(ErasedThreadState {
         type_: state.type_,
@@ -138,13 +138,13 @@ pub fn setThreadState<S: ThreadStateSurface + 'static>(state: ThreadState<S>) {
     }));
 }
 
-/// PORT: `crash.sentry.thread_state = null;` (the callers' paired
+/// PORT NOTE: `crash.sentry.thread_state = null;` (the callers' paired
 /// `defer crash.sentry.thread_state = null`).
 pub fn clearThreadState() {
     THREAD_STATE.set(None);
 }
 
-/// PORT: the reified error set of `init`'s `!void` — `std.Thread.spawn`'s
+/// PORT NOTE: the reified error set of `init`'s `!void` — `std.Thread.spawn`'s
 /// failure (Rust: `Builder::spawn`'s io::Error).
 #[derive(Debug)]
 pub enum InitError {
@@ -162,7 +162,7 @@ pub enum InitError {
 /// It is up to the user to grab the logs and manually send them to us
 /// (or they own Sentry instance) if they want to.
 // pub fn init(gpa: Allocator) !void {
-// PORT: the `gpa: Allocator` parameter collapses (break #1 — the injected
+// PORT NOTE: the `gpa: Allocator` parameter collapses (break #1 — the injected
 // allocator is Rust's global allocator; same collapse as dir.rs).
 pub fn init() -> Result<(), InitError> {
     // if (comptime !build_options.sentry) return;
@@ -200,7 +200,7 @@ pub fn init() -> Result<(), InitError> {
     //     .{gpa},
     // );
     // thr.setName("sentry-init") catch {};
-    // PORT: Rust can only name a thread AT spawn (`Builder::name`) — the same
+    // PORT NOTE: Rust can only name a thread AT spawn (`Builder::name`) — the same
     // "sentry-init" name the reference sets post-spawn (and re-sets from
     // within the thread on Darwin; see initThread).
     let thr = std::thread::Builder::new()
@@ -212,7 +212,7 @@ pub fn init() -> Result<(), InitError> {
     Ok(())
 }
 
-/// PORT: the reified error set of `initThread`'s `!void` — the cache-dir
+/// PORT NOTE: the reified error set of `initThread`'s `!void` — the cache-dir
 /// lookups' errors + `error.SentryInitFailed`.
 #[derive(Debug)]
 enum InitThreadError {
@@ -237,7 +237,7 @@ fn initThread() -> Result<(), InitThreadError> {
     // if (builtin.os.tag.isDarwin()) {
     //     internal_os.macos.pthread_setname_np(&"sentry-init".*);
     // }
-    // (PORT: rustty-os gates its macos module on `target_os = "macos"` — the
+    // (PORT NOTE: rustty-os gates its macos module on `target_os = "macos"` — the
     // macOS member of the reference's Darwin set this crate builds for.)
     #[cfg(target_os = "macos")]
     unsafe {
@@ -247,7 +247,7 @@ fn initThread() -> Result<(), InitThreadError> {
     // var arena = std.heap.ArenaAllocator.init(gpa);
     // defer arena.deinit();
     // const alloc = arena.allocator();
-    // (PORT: the arena collapses to Rust ownership — every allocation below
+    // (PORT NOTE: the arena collapses to Rust ownership — every allocation below
     // frees on all paths.)
 
     // const transport = sentry.Transport.init(&Transport.send);
@@ -261,7 +261,7 @@ fn initThread() -> Result<(), InitThreadError> {
     // const opts = sentry.c.sentry_options_new();
     let opts = unsafe { sentry::c::sentry_options_new() };
     // errdefer sentry.c.sentry_options_free(opts);
-    // PORT: errdefer -> drop guard, forgotten at the function's success exit;
+    // PORT NOTE: errdefer -> drop guard, forgotten at the function's success exit;
     // it stays armed across `sentry_init` exactly like the reference (the
     // `error.SentryInitFailed` return path frees `opts` there too).
     struct OptsErrdefer(*mut sentry::c::sentry_options_t);
@@ -393,14 +393,14 @@ pub fn deinit() {
     // is highly unlikely since init is a very fast operation but we want
     // to avoid the possibility.
     // const thr = init_thread orelse return;
-    // PORT: `JoinHandle::join` consumes the handle, so it is `take`n out of
+    // PORT NOTE: `JoinHandle::join` consumes the handle, so it is `take`n out of
     // the global (the reference leaves the joined `std.Thread` value behind).
     let thr = match INIT_THREAD.lock().unwrap().take() {
         Some(thr) => thr,
         None => return,
     };
     // thr.join();
-    // (PORT: the reference's spawn wrapper discards `initThread`'s error;
+    // (PORT NOTE: the reference's spawn wrapper discards `initThread`'s error;
     // the joined Result is likewise discarded.)
     let _ = thr.join();
     // _ = sentry.c.sentry_close();
@@ -481,7 +481,7 @@ unsafe extern "C" fn beforeSend(
     {
         let obj = sentry::Value::initObject();
         // errdefer obj.decref();
-        // (PORT: nothing below is fallible; the errdefer collapses.)
+        // (PORT NOTE: nothing below is fallible; the errdefer collapses.)
         // const surface = thr_state.surface;
         let surface = thr_state.surface;
         // SEAM: the reference reads `surface.size.screen`/`surface.size.grid()`
@@ -528,7 +528,7 @@ unsafe extern "C" fn beforeSend(
     event_val
 }
 
-/// PORT: Zig `@tagName(build_config.app_runtime)` — the reference
+/// PORT NOTE: Zig `@tagName(build_config.app_runtime)` — the reference
 /// `apprt.Runtime` enum tag names (src/apprt/runtime.zig), byte-exact.
 const fn tagNameRuntime(v: build_config::Runtime) -> &'static str {
     match v {
@@ -537,7 +537,7 @@ const fn tagNameRuntime(v: build_config::Runtime) -> &'static str {
     }
 }
 
-/// PORT: Zig `@tagName(build_config.font_backend)` — the reference
+/// PORT NOTE: Zig `@tagName(build_config.font_backend)` — the reference
 /// `font.Backend` enum tag names (src/font/backend.zig), byte-exact.
 const fn tagNameFontBackend(v: build_config::font::Backend) -> &'static str {
     match v {
@@ -552,7 +552,7 @@ const fn tagNameFontBackend(v: build_config::font::Backend) -> &'static str {
     }
 }
 
-/// PORT: Zig `@tagName(build_config.renderer)` — the reference
+/// PORT NOTE: Zig `@tagName(build_config.renderer)` — the reference
 /// `renderer.Backend` enum tag names (src/renderer/backend.zig), byte-exact.
 const fn tagNameRenderer(v: build_config::renderer::Backend) -> &'static str {
     match v {
@@ -562,7 +562,7 @@ const fn tagNameRenderer(v: build_config::renderer::Backend) -> &'static str {
     }
 }
 
-/// PORT: the reified error set of `Transport.sendInternal`'s `!void` — the
+/// PORT NOTE: the reified error set of `Transport.sendInternal`'s `!void` — the
 /// envelope parse errors + the crash-dir lookup + the filesystem writes.
 // (The payloads are carried for the reference's `log.warn("... err={}", .{err})`
 // — currently a comment, like every log line in the port — and for Debug;
@@ -605,7 +605,7 @@ impl Transport {
         // _ = ud;
         let _ = ud;
         // defer envelope.deinit();
-        // (PORT: single exit path; the deferred deinit runs after the catch.)
+        // (PORT NOTE: single exit path; the deferred deinit runs after the catch.)
 
         // Call our internal impl. If it fails there is nothing we can do
         // but log to the user.
@@ -648,7 +648,7 @@ impl Transport {
         //     var reader: std.Io.Reader = .fixed(json);
         //     break :parsed try crash.Envelope.parse(alloc, &reader);
         // };
-        // (PORT: Zig's `var` binding — never mutated after parse, so no `mut`.)
+        // (PORT NOTE: Zig's `var` binding — never mutated after parse, so no `mut`.)
         let parsed: crash::Envelope = {
             let mut reader: &[u8] = json;
             crash::Envelope::parse(&mut reader)?
@@ -687,7 +687,7 @@ impl Transport {
         let uuid_string = uuid.string();
         let path = std::path::Path::new(&dir.path).join(format!(
             "{}.{}crash",
-            // (PORT: `uuid.string()` is `[36:0]u8` — `{s}` formats the 36
+            // (PORT NOTE: `uuid.string()` is `[36:0]u8` — `{s}` formats the 36
             // UUID chars before the NUL sentinel.)
             std::str::from_utf8(&uuid_string[..36]).unwrap(),
             // (R2: the `.ghosttycrash` report extension's app-name segment is
@@ -701,7 +701,7 @@ impl Transport {
         // var file_writer = file.writer(&buf);
         // try file_writer.interface.writeAll(json);
         // try file_writer.end();
-        // (PORT: the fixed 4096-byte buffered writer + `end()` flush collapse
+        // (PORT NOTE: the fixed 4096-byte buffered writer + `end()` flush collapse
         // to one full write.)
         std::io::Write::write_all(&mut file, json)?;
 
@@ -711,7 +711,7 @@ impl Transport {
     }
 
     // fn shouldDiscard(envelope: *const crash.Envelope) !bool {
-    // (PORT: the reference `!bool` never errors in the body; the Result shape
+    // (PORT NOTE: the reference `!bool` never errors in the body; the Result shape
     // is kept for the caller's `try`.)
     fn shouldDiscard(envelope: &crash::Envelope) -> Result<bool, SendError> {
         // If we have an event item then we're good.

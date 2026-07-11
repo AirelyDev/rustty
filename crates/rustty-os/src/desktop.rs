@@ -5,14 +5,14 @@
 //! Ports the reference's `src/os/desktop.zig` — every line, comment, and
 //! `test {}` is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, `build_config =
+// PORT NOTE: the Zig reference imports `std`, `builtin`, `build_config =
 // @import("../build_config.zig")`, `posix = std.posix`, and a `@cImport` of
 // `unistd.h`. In Rust we use `rustty-build-config` for the build flags and
 // `libc` (R3: a binding to the SAME system library) for `getppid`/`getpid`.
 
 use rustty_build_config as build_config;
 
-// PORT: `const c = @cImport({ @cInclude("unistd.h"); });`.
+// PORT NOTE: `const c = @cImport({ @cInclude("unistd.h"); });`.
 #[cfg(not(windows))]
 use libc as c;
 
@@ -126,7 +126,7 @@ pub fn desktopEnvironment() -> DesktopEnvironment {
     }
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
-        // PORT: `if (@inComptime()) @compileError("Checking for the desktop
+        // PORT NOTE: `if (@inComptime()) @compileError("Checking for the desktop
         // environment on Linux/BSD must be done at runtime.");` — Rust has no
         // const-eval reachability here; this function is always runtime.
 
@@ -241,14 +241,14 @@ mod tests {
             target_os = "freebsd"
         )))]
         {
-            // PORT: the reference test's `else` arm calls `DesktopEnvironment()`
+            // PORT NOTE: the reference test's `else` arm calls `DesktopEnvironment()`
             // (the type, capitalized) rather than `desktopEnvironment()`. We
             // reproduce the intended assertion against the function.
             assert_eq!(DesktopEnvironment::Other, desktopEnvironment());
         }
     }
 
-    // PORT helper: a Drop guard reproducing the reference test's `defer if (...)
+    // PORT NOTE: helper: a Drop guard reproducing the reference test's `defer if (...)
     // |v| setenv else unsetenv` env save/restore behavior.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     struct RestoreEnv {

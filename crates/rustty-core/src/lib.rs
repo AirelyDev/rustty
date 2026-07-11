@@ -58,7 +58,7 @@ pub type GlobalState = rustty_global::GlobalState<(), rustty_os::resourcesdir::R
 /// empty until the entrypoint (`main()` / `rustty_init()`, unported) sets it.
 pub static STATE: std::sync::OnceLock<GlobalState> = std::sync::OnceLock::new();
 
-/// PORT (Rust-only glue): the `global_state.<field>` read. The reference
+/// PORT NOTE (Rust-only glue): the `global_state.<field>` read. The reference
 /// contract guarantees `state` is initialized in `main()`/`ghostty_init()`
 /// before any consumer runs (dereferencing Zig `undefined` is UB; here it is
 /// a defined panic).

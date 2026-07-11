@@ -3,7 +3,7 @@
 //! This module intentionally lives in `font` rather than `font/opentype`
 //! because I wanted to keep `font/opentype` dependency free on the font
 //! package.
-// PORT: ghostty src/font/glyf_rasterize.zig. The Zig file imports `std`,
+// PORT NOTE: ghostty src/font/glyf_rasterize.zig. The Zig file imports `std`,
 // `z2d`, `Glyph = @import("Glyph.zig")`, and `glyf = @import("opentype/glyf.zig")`.
 // Here `z2d` is the `rustty_z2d` crate, `Glyph`/`DesignMetrics`/`RenderOptions`
 // are `crate::glyph::*`, and `glyf` is `crate::opentype::glyf`.
@@ -490,7 +490,7 @@ mod tests {
         }
     }
 
-    // PORT: ghostty's leading `test { _ = @import("glyf_rasterize_png_test.zig"); }`
+    // PORT NOTE: ghostty's leading `test { _ = @import("glyf_rasterize_png_test.zig"); }`
     // — the reference-import test block that pulls the PNG known-answer test file
     // into the test binary. In Rust that inclusion is the
     // `#[cfg(test)] mod glyf_rasterize_png_test;` declaration in the parent

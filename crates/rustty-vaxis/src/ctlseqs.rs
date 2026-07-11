@@ -3,11 +3,11 @@
 //! screen, SGR colors/underlines/attributes, OSC sequences, kitty graphics, and the
 //! color control sequences).
 //!
-//! PORT-NOTE (byte-slices, R1): every Zig `[]const u8` string literal → a Rust
+//! PORT NOTE (byte-slices, R1): every Zig `[]const u8` string literal → a Rust
 //! `pub const … : &[u8] = b"…"` byte constant, NEVER a lossy `String` — these are raw
 //! control bytes. The exact Zig snake_case identifiers are preserved.
 //!
-//! PORT-NOTE (format templates): the `{d}`/`{s}`/`{f}`/`{x:0>2}` placeholders are Zig
+//! PORT NOTE (format templates): the `{d}`/`{s}`/`{f}`/`{x:0>2}` placeholders are Zig
 //! `std.fmt` templates that the later tty/renderer chunks fill; chunk 3a lands them
 //! verbatim as byte constants (the format-application seam is a later chunk).
 #![allow(non_upper_case_globals)]

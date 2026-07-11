@@ -5,7 +5,7 @@
 //! Ports the reference's `src/os/path.zig` — every line, comment, and `test {}`
 //! is ported here (R1). Retargeted only for product identity (R2).
 
-// PORT: the Zig reference imports `std`, `builtin`, `Allocator = std.mem.Allocator`,
+// PORT NOTE: the Zig reference imports `std`, `builtin`, `Allocator = std.mem.Allocator`,
 // and `testing = std.testing`. In Rust we use the standard library plus `libc`
 // (R3: a binding to the SAME system library) for `std.fs.max_path_bytes`
 // (`PATH_MAX`) and the executable permission bits.
@@ -31,7 +31,7 @@ pub fn expand(cmd: &str) -> Result<Option<Vec<u8>>, ExpandError> {
         return Ok(Some(cmd.as_bytes().to_vec()));
     }
 
-    // PORT: the Zig reference branches on `builtin.os.tag`: on Windows it reads
+    // PORT NOTE: the Zig reference branches on `builtin.os.tag`: on Windows it reads
     // `PATH` via `getenvW` and converts UTF-16→UTF-8; everywhere else it uses
     // `posix.getenvZ("PATH")`. In Rust `std::env::var_os` covers both uniformly
     // (a missing variable maps to the reference's `orelse return null`).
@@ -98,7 +98,7 @@ fn isExecutable(mode: Mode) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// PORT: support shims for the std types used by `expand`.
+// PORT NOTE: support shims for the std types used by `expand`.
 //
 // The reference relies on `std.fs` (`cwd().openFile`, `File.stat`,
 // `File.Mode`, `File.Kind`), `std.fs.path.{sep,delimiter}`, and

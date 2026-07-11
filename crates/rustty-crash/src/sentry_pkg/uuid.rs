@@ -31,7 +31,7 @@ impl UUID {
     }
 
     // pub fn string(self: UUID) [36:0]u8 {
-    // PORT: Zig's `[36:0]u8` is a 36-char array with a NUL sentinel — a 37-byte
+    // PORT NOTE: Zig's `[36:0]u8` is a 36-char array with a NUL sentinel — a 37-byte
     // buffer (`sentry_uuid_as_string` expects `char[37]`). The 36 UUID
     // characters are `buf[..36]`.
     pub fn string(&self) -> [u8; 37] {
