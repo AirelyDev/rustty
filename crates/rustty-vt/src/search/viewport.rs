@@ -577,6 +577,7 @@ mod tests {
     }
 
     // test "history search, no active area"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn history_search_no_active_area() {
         let alloc = Allocator;

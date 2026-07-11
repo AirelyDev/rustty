@@ -3714,6 +3714,7 @@ mod tests {
     }
 
     // test "PageList plain spanning two pages"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn pagelist_plain_spanning_two_pages() {
         let mut builder: Vec<u8> = Vec::new();
@@ -3786,6 +3787,7 @@ mod tests {
     }
 
     // test "PageList soft-wrapped line spanning two pages without unwrap"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn pagelist_soft_wrapped_line_spanning_two_pages_without_unwrap() {
         let mut builder: Vec<u8> = Vec::new();
@@ -3845,6 +3847,7 @@ mod tests {
     }
 
     // test "PageList soft-wrapped line spanning two pages with unwrap"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn pagelist_soft_wrapped_line_spanning_two_pages_with_unwrap() {
         let mut builder: Vec<u8> = Vec::new();
@@ -3908,6 +3911,7 @@ mod tests {
     }
 
     // test "PageList VT spanning two pages"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn pagelist_vt_spanning_two_pages() {
         let mut builder: Vec<u8> = Vec::new();
@@ -4011,6 +4015,7 @@ mod tests {
     }
 
     // test "PageList plain with x offset spanning two pages"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn pagelist_plain_with_x_offset_spanning_two_pages() {
         let mut builder: Vec<u8> = Vec::new();

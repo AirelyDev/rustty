@@ -831,3 +831,31 @@ tests that deliberately build a REAL `Config` (they even carry the
 Both tests are individually annotated at source with this reason
 (`crates/rustty-core/src/surface.rs`, `#[cfg_attr(miri, ignore = ...)]`), the
 same convention as the 58 pre-existing real-OS-state in-lib ignores.
+
+## rustty-vt — full-sweep Miri exceptions (2026-07-11)
+
+The first exhaustive `rustty-vt` Miri sweep (all 2037 lib tests; see
+`.port/phase-2/VT_MIRI_SWEEP.md`) routed the following via `#[cfg_attr(miri, ignore)]`.
+Each was measured (parallel discovery + isolation re-verify) and carries compensating
+coverage. R5/R6: routed, never silently skipped — all run natively and under ASan.
+
+**4-criterion basis (all entries):** (1) intractable/unrunnable under Miri as measured;
+(2) compensating coverage exists — native `cargo test -p rustty-vt` (2035 pass) + the
+ASan lane (`sanitizers.sh`, all PageList tests ~18s); (3) the excluded behavior is not a
+Miri-detectable soundness property (timeouts/FFI/ICE, not UB — the sweep's 9 real UB
+findings were FIXED, commit 9e3fe1c, not excepted); (4) documented here with cause.
+
+- **Multi-page-PageList intractable (70 tests):** build/reflow multi-page PageLists that
+  exceed Miri's interpreter budget (>20min isolated). In `pagelist/tests.rs`,
+  `terminal.rs`, `screen.rs`, `formatter.rs`, `search/{viewport,sliding_window}.rs`.
+  This is the same class as the pre-existing 23 PageList exceptions (now enforced in
+  source). Isolation-confirmed for the 6 sub-timeout candidates; the 64 hit the full
+  1200s discovery budget. ASan runs all PageList tests in ~18s.
+- **zlib C FFI (3 tests):** `kitty::graphics_image::image_load_rgb_zlib_compressed_*` —
+  Miri cannot call the vendored zlib `inflateInit2_` (foreign function). ASan covers the
+  C boundary.
+- **rustc/Miri ICE (1 test):** `search::thread::search_thread` — Miri interpreter ICE
+  (`rustc_const_eval/.../operand.rs:160`, an upstream Miri bug, not a soundness signal).
+
+Full per-test list + measured durations: `/Users/gael/.claude/jobs/22556231/tmp/miri_master.txt`
+(regenerable) and the `#[cfg_attr(miri, ignore = "MIRI EXCEPTION ...")]` reason strings in source.

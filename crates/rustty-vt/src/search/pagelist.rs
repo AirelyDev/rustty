@@ -308,6 +308,7 @@ mod tests {
     }
 
     // test "feed multiple pages with matches"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn feed_multiple_pages_with_matches() {
         let alloc = Allocator;
@@ -377,6 +378,7 @@ mod tests {
     }
 
     // test "feed multiple pages no matches"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn feed_multiple_pages_no_matches() {
         let alloc = Allocator;
@@ -427,6 +429,7 @@ mod tests {
     }
 
     // test "feed iteratively through multiple matches"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn feed_iteratively_through_multiple_matches() {
         let alloc = Allocator;
@@ -480,6 +483,7 @@ mod tests {
     }
 
     // test "feed with match spanning page boundary"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn feed_with_match_spanning_page_boundary() {
         let alloc = Allocator;
@@ -563,6 +567,7 @@ mod tests {
     }
 
     // test "feed with match spanning page boundary with newline"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn feed_with_match_spanning_page_boundary_with_newline() {
         let alloc = Allocator;
@@ -613,6 +618,7 @@ mod tests {
     }
 
     // test "feed with pruned page"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn feed_with_pruned_page() {
         // const alloc = testing.allocator;

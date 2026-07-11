@@ -5037,6 +5037,7 @@ mod tests {
     }
 
     // test "Screen: cursorAbsolute to page with insufficient capacity"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn screen_cursor_absolute_to_page_with_insufficient_capacity() {
         // This test checks for a very specific edge case
@@ -11091,6 +11092,7 @@ mod tests {
     }
 
     // test "Screen: scrolling when viewport is pruned"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn screen_scrolling_when_viewport_is_pruned() {
         let mut s = mkscreen(215, 3, 1);
@@ -12046,6 +12048,7 @@ mod tests {
     }
 
     // test "Screen: cursorSetHyperlink OOM + URI too large for string alloc"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn screen_cursor_set_hyperlink_oom_uri_too_large_for_string_alloc() {
         let mut s = mkscreen(80, 24, 0);
@@ -12512,6 +12515,7 @@ mod tests {
     }
 
     // test "Screen setAttribute splits page on OutOfSpace at max styles"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn screen_set_attribute_splits_page_on_out_of_space_at_max_styles() {
         let mut s = mkscreen(10, 10, 0);

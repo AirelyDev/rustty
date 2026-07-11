@@ -1538,6 +1538,7 @@ mod tests {
     }
 
     // test "simple search with history"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn simple_search_with_history() {
         let alloc = Allocator;
@@ -1591,6 +1592,7 @@ mod tests {
     }
 
     // test "reload active with history change"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn reload_active_with_history_change() {
         let alloc = Allocator;
@@ -1880,6 +1882,7 @@ mod tests {
     }
 
     // test "select into history"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn select_into_history() {
         let alloc = Allocator;
@@ -2076,6 +2079,7 @@ mod tests {
     }
 
     // test "select prev with history"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn select_prev_with_history() {
         let alloc = Allocator;
@@ -2134,6 +2138,7 @@ mod tests {
     }
 
     // test "select prev wraps when all matches are in history"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn select_prev_wraps_when_all_matches_are_in_history() {
         // Regression test: when every match is in scrollback (the active area
@@ -2243,6 +2248,7 @@ mod tests {
     }
 
     // test "reloadActive partial history cleanup on appendSlice error"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn reload_active_partial_history_cleanup_on_append_slice_error() {
         // This test verifies that when reloadActive fails at appendSlice (after
@@ -2305,6 +2311,7 @@ mod tests {
     }
 
     // test "reloadActive partial history cleanup on loop append error"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn reload_active_partial_history_cleanup_on_loop_append_error() {
         // This test verifies that when reloadActive fails inside the loop
@@ -2365,6 +2372,7 @@ mod tests {
     }
 
     // test "select after clearing scrollback"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn select_after_clearing_scrollback() {
         // Regression test for: https://github.com/ghostty-org/ghostty/issues/11957

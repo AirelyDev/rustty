@@ -1620,6 +1620,7 @@ mod tests {
     }
 
     // test "SlidingWindow two pages"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn sliding_window_two_pages() {
         let alloc = Allocator;
@@ -1681,6 +1682,7 @@ mod tests {
     }
 
     // test "SlidingWindow two pages single char"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn sliding_window_two_pages_single_char() {
         let alloc = Allocator;
@@ -1738,6 +1740,7 @@ mod tests {
     }
 
     // test "SlidingWindow two pages match across boundary"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn sliding_window_two_pages_match_across_boundary() {
         let alloc = Allocator;
@@ -1787,6 +1790,7 @@ mod tests {
     }
 
     // test "SlidingWindow two pages no match across boundary with newline"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn sliding_window_two_pages_no_match_across_boundary_with_newline() {
         let alloc = Allocator;
@@ -1824,6 +1828,7 @@ mod tests {
     }
 
     // test "SlidingWindow two pages no match across boundary with newline reverse"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn sliding_window_two_pages_no_match_across_boundary_with_newline_reverse() {
         let alloc = Allocator;
@@ -1859,6 +1864,7 @@ mod tests {
     }
 
     // test "SlidingWindow two pages no match prunes first page"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn sliding_window_two_pages_no_match_prunes_first_page() {
         let alloc = Allocator;
@@ -1898,6 +1904,7 @@ mod tests {
     }
 
     // test "SlidingWindow two pages no match keeps both pages"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn sliding_window_two_pages_no_match_keeps_both_pages() {
         let alloc = Allocator;
@@ -2133,6 +2140,7 @@ mod tests {
     }
 
     // test "SlidingWindow two pages reversed"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn sliding_window_two_pages_reversed() {
         let alloc = Allocator;
@@ -2192,6 +2200,7 @@ mod tests {
     }
 
     // test "SlidingWindow two pages match across boundary reversed"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn sliding_window_two_pages_match_across_boundary_reversed() {
         let alloc = Allocator;
@@ -2243,6 +2252,7 @@ mod tests {
     }
 
     // test "SlidingWindow two pages no match prunes first page reversed"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn sliding_window_two_pages_no_match_prunes_first_page_reversed() {
         let alloc = Allocator;
@@ -2283,6 +2293,7 @@ mod tests {
     }
 
     // test "SlidingWindow two pages no match keeps both pages reversed"
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
     #[test]
     fn sliding_window_two_pages_no_match_keeps_both_pages_reversed() {
         let alloc = Allocator;

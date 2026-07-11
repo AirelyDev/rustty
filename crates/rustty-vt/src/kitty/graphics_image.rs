@@ -934,6 +934,7 @@ mod tests {
         assert_eq!(Err(Error::DimensionsTooLarge), loading.complete());
     }
 
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored zlib C FFI (inflateInit2_) -- foreign function; covered natively + by ASan")]
     #[test]
     fn image_load_rgb_zlib_compressed_direct() {
         let cmd: command::Command = command::Command {
@@ -979,6 +980,7 @@ mod tests {
         assert!(img.compression == command::Compression::None);
     }
 
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored zlib C FFI (inflateInit2_) -- foreign function; covered natively + by ASan")]
     #[test]
     fn image_load_rgb_zlib_compressed_direct_chunked() {
         let data = include_bytes!("testdata/image-rgb-zlib_deflate-128x96-2147483647-raw.data");
@@ -1017,6 +1019,7 @@ mod tests {
         assert!(img.compression == command::Compression::None);
     }
 
+    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): Miri cannot call the vendored zlib C FFI (inflateInit2_) -- foreign function; covered natively + by ASan")]
     #[test]
     fn image_load_rgb_zlib_compressed_direct_chunked_with_zero_initial_chunk() {
         let data = include_bytes!("testdata/image-rgb-zlib_deflate-128x96-2147483647-raw.data");
