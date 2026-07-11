@@ -1,0 +1,907 @@
+{
+  "commit": "b4845f4",
+  "commit_full": "b4845f4273cd1c45663d5080907dd44d8682df4a",
+  "generated": "2026-07-10",
+  "tool": ".port/audits/count-unsafe.sh",
+  "pattern": "unsafe \\{|unsafe fn|unsafe extern|unsafe impl|unsafe trait",
+  "engine": "python-fallback (identical pattern/file set; install rg to cross-check)",
+  "file_set": "crates/**/*.rs + crates-sys/**/*.rs + xtask/**/*.rs, excluding **/vendor/** and **/cbits/** (vendored upstream source)",
+  "tier_rule": "ffi-asan = FFI_CRATES from .port/tools/gates/check_leaks.sh; sys = crates-sys/* (never mixed into pure-Rust tiers); pure-miri = every other crate",
+  "totals": {
+    "sites": 11145,
+    "by_category": {
+      "unsafe_block": 10399,
+      "unsafe_fn": 454,
+      "unsafe_extern": 265,
+      "unsafe_impl": 27
+    },
+    "loc": 412464,
+    "density_per_kloc": 27.02,
+    "reconciles": true,
+    "safety_tagged": 0,
+    "safety_tag_enforcement": "advisory until wf-safety-tags (T17 step 2) lands"
+  },
+  "by_tier": {
+    "ffi-asan": {
+      "crates": 11,
+      "sites": 1291,
+      "loc": 129260,
+      "by_category": {
+        "unsafe_block": 1217,
+        "unsafe_fn": 40,
+        "unsafe_extern": 28,
+        "unsafe_impl": 6,
+        "unsafe_trait": 0
+      },
+      "density_per_kloc": 9.99
+    },
+    "pure-miri": {
+      "crates": 30,
+      "sites": 9824,
+      "loc": 279617,
+      "by_category": {
+        "unsafe_block": 9153,
+        "unsafe_fn": 413,
+        "unsafe_extern": 237,
+        "unsafe_impl": 21,
+        "unsafe_trait": 0
+      },
+      "density_per_kloc": 35.13
+    },
+    "sys": {
+      "crates": 14,
+      "sites": 30,
+      "loc": 3587,
+      "by_category": {
+        "unsafe_block": 29,
+        "unsafe_fn": 1,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "density_per_kloc": 8.36
+    }
+  },
+  "crates": [
+    {
+      "crate": "rustty-vt-c",
+      "tier": "pure-miri",
+      "loc": 29194,
+      "sites": 2774,
+      "density_per_kloc": 95.02,
+      "by_category": {
+        "unsafe_block": 2415,
+        "unsafe_fn": 204,
+        "unsafe_extern": 154,
+        "unsafe_impl": 1,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-apprt-c",
+      "tier": "pure-miri",
+      "loc": 3862,
+      "sites": 228,
+      "density_per_kloc": 59.04,
+      "by_category": {
+        "unsafe_block": 148,
+        "unsafe_fn": 5,
+        "unsafe_extern": 75,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-xev",
+      "tier": "pure-miri",
+      "loc": 9756,
+      "sites": 449,
+      "density_per_kloc": 46.02,
+      "by_category": {
+        "unsafe_block": 383,
+        "unsafe_fn": 59,
+        "unsafe_extern": 0,
+        "unsafe_impl": 7,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-vt",
+      "tier": "pure-miri",
+      "loc": 136459,
+      "sites": 5168,
+      "density_per_kloc": 37.87,
+      "by_category": {
+        "unsafe_block": 5122,
+        "unsafe_fn": 44,
+        "unsafe_extern": 0,
+        "unsafe_impl": 2,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-zigstd",
+      "tier": "pure-miri",
+      "loc": 2882,
+      "sites": 96,
+      "density_per_kloc": 33.31,
+      "by_category": {
+        "unsafe_block": 83,
+        "unsafe_fn": 10,
+        "unsafe_extern": 0,
+        "unsafe_impl": 3,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-core",
+      "tier": "pure-miri",
+      "loc": 17414,
+      "sites": 567,
+      "density_per_kloc": 32.56,
+      "by_category": {
+        "unsafe_block": 551,
+        "unsafe_fn": 12,
+        "unsafe_extern": 0,
+        "unsafe_impl": 4,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-wuffs",
+      "tier": "ffi-asan",
+      "loc": 982,
+      "sites": 27,
+      "density_per_kloc": 27.49,
+      "by_category": {
+        "unsafe_block": 27,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-bench",
+      "tier": "pure-miri",
+      "loc": 2898,
+      "sites": 74,
+      "density_per_kloc": 25.53,
+      "by_category": {
+        "unsafe_block": 40,
+        "unsafe_fn": 32,
+        "unsafe_extern": 2,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-font-shaper",
+      "tier": "ffi-asan",
+      "loc": 21319,
+      "sites": 543,
+      "density_per_kloc": 25.47,
+      "by_category": {
+        "unsafe_block": 539,
+        "unsafe_fn": 2,
+        "unsafe_extern": 1,
+        "unsafe_impl": 1,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-crash",
+      "tier": "ffi-asan",
+      "loc": 2557,
+      "sites": 63,
+      "density_per_kloc": 24.64,
+      "by_category": {
+        "unsafe_block": 48,
+        "unsafe_fn": 10,
+        "unsafe_extern": 5,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-datastruct",
+      "tier": "pure-miri",
+      "loc": 6194,
+      "sites": 144,
+      "density_per_kloc": 23.25,
+      "by_category": {
+        "unsafe_block": 123,
+        "unsafe_fn": 21,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "wuffs-sys",
+      "tier": "sys",
+      "loc": 277,
+      "sites": 6,
+      "density_per_kloc": 21.66,
+      "by_category": {
+        "unsafe_block": 6,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "zlib-sys",
+      "tier": "sys",
+      "loc": 357,
+      "sites": 7,
+      "density_per_kloc": 19.61,
+      "by_category": {
+        "unsafe_block": 7,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-apprt",
+      "tier": "pure-miri",
+      "loc": 2615,
+      "sites": 48,
+      "density_per_kloc": 18.36,
+      "by_category": {
+        "unsafe_block": 46,
+        "unsafe_fn": 2,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "simdutf-sys",
+      "tier": "sys",
+      "loc": 121,
+      "sites": 2,
+      "density_per_kloc": 16.53,
+      "by_category": {
+        "unsafe_block": 2,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-lib",
+      "tier": "pure-miri",
+      "loc": 1528,
+      "sites": 25,
+      "density_per_kloc": 16.36,
+      "by_category": {
+        "unsafe_block": 24,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 1,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "gettext-sys",
+      "tier": "sys",
+      "loc": 185,
+      "sites": 3,
+      "density_per_kloc": 16.22,
+      "by_category": {
+        "unsafe_block": 2,
+        "unsafe_fn": 1,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-renderer",
+      "tier": "ffi-asan",
+      "loc": 19219,
+      "sites": 304,
+      "density_per_kloc": 15.82,
+      "by_category": {
+        "unsafe_block": 279,
+        "unsafe_fn": 15,
+        "unsafe_extern": 8,
+        "unsafe_impl": 2,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-termio",
+      "tier": "ffi-asan",
+      "loc": 16248,
+      "sites": 246,
+      "density_per_kloc": 15.14,
+      "by_category": {
+        "unsafe_block": 234,
+        "unsafe_fn": 10,
+        "unsafe_extern": 0,
+        "unsafe_impl": 2,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-os",
+      "tier": "pure-miri",
+      "loc": 9664,
+      "sites": 143,
+      "density_per_kloc": 14.8,
+      "by_category": {
+        "unsafe_block": 131,
+        "unsafe_fn": 10,
+        "unsafe_extern": 1,
+        "unsafe_impl": 1,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "highway-sys",
+      "tier": "sys",
+      "loc": 144,
+      "sites": 2,
+      "density_per_kloc": 13.89,
+      "by_category": {
+        "unsafe_block": 2,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-zf",
+      "tier": "pure-miri",
+      "loc": 1621,
+      "sites": 21,
+      "density_per_kloc": 12.95,
+      "by_category": {
+        "unsafe_block": 15,
+        "unsafe_fn": 1,
+        "unsafe_extern": 5,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "libpng-sys",
+      "tier": "sys",
+      "loc": 237,
+      "sites": 3,
+      "density_per_kloc": 12.66,
+      "by_category": {
+        "unsafe_block": 3,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-oniguruma",
+      "tier": "ffi-asan",
+      "loc": 1055,
+      "sites": 13,
+      "density_per_kloc": 12.32,
+      "by_category": {
+        "unsafe_block": 13,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-render-types",
+      "tier": "pure-miri",
+      "loc": 1197,
+      "sites": 12,
+      "density_per_kloc": 10.03,
+      "by_category": {
+        "unsafe_block": 7,
+        "unsafe_fn": 5,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-vaxis",
+      "tier": "pure-miri",
+      "loc": 11067,
+      "sites": 50,
+      "density_per_kloc": 4.52,
+      "by_category": {
+        "unsafe_block": 41,
+        "unsafe_fn": 7,
+        "unsafe_extern": 0,
+        "unsafe_impl": 2,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-simd",
+      "tier": "ffi-asan",
+      "loc": 1287,
+      "sites": 5,
+      "density_per_kloc": 3.89,
+      "by_category": {
+        "unsafe_block": 5,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "dcimgui-sys",
+      "tier": "sys",
+      "loc": 286,
+      "sites": 1,
+      "density_per_kloc": 3.5,
+      "by_category": {
+        "unsafe_block": 1,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "sentry-sys",
+      "tier": "sys",
+      "loc": 308,
+      "sites": 1,
+      "density_per_kloc": 3.25,
+      "by_category": {
+        "unsafe_block": 1,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "oniguruma-sys",
+      "tier": "sys",
+      "loc": 320,
+      "sites": 1,
+      "density_per_kloc": 3.12,
+      "by_category": {
+        "unsafe_block": 1,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "spirv-cross-sys",
+      "tier": "sys",
+      "loc": 324,
+      "sites": 1,
+      "density_per_kloc": 3.09,
+      "by_category": {
+        "unsafe_block": 1,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "freetype-sys",
+      "tier": "sys",
+      "loc": 329,
+      "sites": 1,
+      "density_per_kloc": 3.04,
+      "by_category": {
+        "unsafe_block": 1,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "glslang-sys",
+      "tier": "sys",
+      "loc": 334,
+      "sites": 1,
+      "density_per_kloc": 2.99,
+      "by_category": {
+        "unsafe_block": 1,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "harfbuzz-sys",
+      "tier": "sys",
+      "loc": 340,
+      "sites": 1,
+      "density_per_kloc": 2.94,
+      "by_category": {
+        "unsafe_block": 1,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-config",
+      "tier": "ffi-asan",
+      "loc": 28777,
+      "sites": 75,
+      "density_per_kloc": 2.61,
+      "by_category": {
+        "unsafe_block": 60,
+        "unsafe_fn": 1,
+        "unsafe_extern": 14,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-apprt-api",
+      "tier": "pure-miri",
+      "loc": 2891,
+      "sites": 5,
+      "density_per_kloc": 1.73,
+      "by_category": {
+        "unsafe_block": 4,
+        "unsafe_fn": 1,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-synthetic",
+      "tier": "pure-miri",
+      "loc": 2449,
+      "sites": 3,
+      "density_per_kloc": 1.22,
+      "by_category": {
+        "unsafe_block": 3,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-util",
+      "tier": "pure-miri",
+      "loc": 829,
+      "sites": 1,
+      "density_per_kloc": 1.21,
+      "by_category": {
+        "unsafe_block": 1,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-cli",
+      "tier": "pure-miri",
+      "loc": 13322,
+      "sites": 16,
+      "density_per_kloc": 1.2,
+      "by_category": {
+        "unsafe_block": 16,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-input",
+      "tier": "ffi-asan",
+      "loc": 12421,
+      "sites": 11,
+      "density_per_kloc": 0.89,
+      "by_category": {
+        "unsafe_block": 10,
+        "unsafe_fn": 1,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-font",
+      "tier": "ffi-asan",
+      "loc": 24632,
+      "sites": 4,
+      "density_per_kloc": 0.16,
+      "by_category": {
+        "unsafe_block": 2,
+        "unsafe_fn": 1,
+        "unsafe_extern": 0,
+        "unsafe_impl": 1,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty",
+      "tier": "pure-miri",
+      "loc": 797,
+      "sites": 0,
+      "density_per_kloc": 0.0,
+      "by_category": {
+        "unsafe_block": 0,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-args",
+      "tier": "pure-miri",
+      "loc": 4374,
+      "sites": 0,
+      "density_per_kloc": 0.0,
+      "by_category": {
+        "unsafe_block": 0,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-build-config",
+      "tier": "pure-miri",
+      "loc": 838,
+      "sites": 0,
+      "density_per_kloc": 0.0,
+      "by_category": {
+        "unsafe_block": 0,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-cfg-fmt",
+      "tier": "pure-miri",
+      "loc": 631,
+      "sites": 0,
+      "density_per_kloc": 0.0,
+      "by_category": {
+        "unsafe_block": 0,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-extra",
+      "tier": "pure-miri",
+      "loc": 1222,
+      "sites": 0,
+      "density_per_kloc": 0.0,
+      "by_category": {
+        "unsafe_block": 0,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-global",
+      "tier": "pure-miri",
+      "loc": 401,
+      "sites": 0,
+      "density_per_kloc": 0.0,
+      "by_category": {
+        "unsafe_block": 0,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-helpgen",
+      "tier": "pure-miri",
+      "loc": 259,
+      "sites": 0,
+      "density_per_kloc": 0.0,
+      "by_category": {
+        "unsafe_block": 0,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-identity",
+      "tier": "pure-miri",
+      "loc": 291,
+      "sites": 0,
+      "density_per_kloc": 0.0,
+      "by_category": {
+        "unsafe_block": 0,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-inspector",
+      "tier": "ffi-asan",
+      "loc": 763,
+      "sites": 0,
+      "density_per_kloc": 0.0,
+      "by_category": {
+        "unsafe_block": 0,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-terminfo",
+      "tier": "pure-miri",
+      "loc": 801,
+      "sites": 0,
+      "density_per_kloc": 0.0,
+      "by_category": {
+        "unsafe_block": 0,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-unicode",
+      "tier": "pure-miri",
+      "loc": 3675,
+      "sites": 0,
+      "density_per_kloc": 0.0,
+      "by_category": {
+        "unsafe_block": 0,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "rustty-z2d",
+      "tier": "pure-miri",
+      "loc": 10324,
+      "sites": 0,
+      "density_per_kloc": 0.0,
+      "by_category": {
+        "unsafe_block": 0,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "fontconfig-sys",
+      "tier": "sys",
+      "loc": 25,
+      "sites": 0,
+      "density_per_kloc": 0.0,
+      "by_category": {
+        "unsafe_block": 0,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    },
+    {
+      "crate": "xtask",
+      "tier": "pure-miri",
+      "loc": 162,
+      "sites": 0,
+      "density_per_kloc": 0.0,
+      "by_category": {
+        "unsafe_block": 0,
+        "unsafe_fn": 0,
+        "unsafe_extern": 0,
+        "unsafe_impl": 0,
+        "unsafe_trait": 0
+      },
+      "safety_tagged": 0
+    }
+  ],
+  "block_span_distribution": {
+    "blocks": 10399,
+    "single_line": 8154,
+    "structural": 2241,
+    "buckets": {
+      "1": 8154,
+      "2-5": 1283,
+      "6-20": 916,
+      "21-50": 27,
+      "51+": 15
+    },
+    "max_span": 172,
+    "in_comment_or_string": 4,
+    "unresolved": 0
+  }
+}
