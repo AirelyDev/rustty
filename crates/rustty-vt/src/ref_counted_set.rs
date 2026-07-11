@@ -815,6 +815,17 @@ where
         unsafe { self.lookup_context(base, value) }
     }
     unsafe fn lookup_context<B: IntFromBase + Copy>(&self, base: B, value: T) -> Option<Id> {
+        // A zero-capacity set (a valid special case of Layout.init)
+        // contains nothing and has a zero-size table, so we can't
+        // probe it: table[0] would read whatever memory follows the
+        // set in the backing buffer.
+        // PORT NOTE (parity e44f5cb0f): the reference marks this branch
+        // `@branchHint(.cold)`; Rust has no stable branch-hint intrinsic, the
+        // guard itself is the fix.
+        if self.layout.table_cap == 0 {
+            return None;
+        }
+
         let table = unsafe { self.table.ptr(base) };
         let items = unsafe { self.items.ptr(base) };
 

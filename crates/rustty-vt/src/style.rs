@@ -1384,4 +1384,46 @@ mod tests {
         // _ = Set.Layout.init(16384);
         let _ = crate::ref_counted_set::Layout::<Id>::init::<Style, size::CellCountInt>(16384);
     }
+
+    // test "Set zero capacity"
+    // PORT NOTE (parity e44f5cb0f): test hunk of the upstream zero-capacity
+    // RefCountedSet lookup guard.
+    #[test]
+    fn set_zero_capacity() {
+        // A zero-capacity set is a valid special case (see Layout.init).
+        // It occurs in practice for pages with exact capacities where no
+        // cell is styled (see Page.exactRowCapacity).
+        let layout = crate::ref_counted_set::Layout::<Id>::init::<Style, size::CellCountInt>(0);
+        assert_eq!(0, layout.total_size);
+
+        // We allocate a nonzero buffer filled with 0xFF to simulate the
+        // set being embedded in a larger structure (e.g. a Page) where
+        // other data follows it. Lookups must not probe the zero-size
+        // table: table[0] would read this adjacent memory and treat it
+        // as an item ID, leading to far out-of-bounds item reads.
+        let buf = AlignedBuf::new(64, Set::base_align());
+        unsafe { core::ptr::write_bytes(buf.ptr, 0xFF, 64) };
+
+        let mut set = unsafe { Set::init(buf.offset_buf(), layout, SetContext) };
+        let base = buf.base();
+
+        let style = Style {
+            flags: Flags {
+                bold: true,
+                ..Flags::default()
+            },
+            ..Style::default()
+        };
+        assert_eq!(None, unsafe { set.lookup(base, style) });
+        assert_eq!(
+            Err(crate::ref_counted_set::AddError::OutOfMemory),
+            unsafe { set.add(base, style) }
+        );
+        assert_eq!(0, set.count());
+
+        // The adjacent memory must be untouched.
+        for i in 0..64usize {
+            assert_eq!(0xFFu8, unsafe { *buf.ptr.add(i) });
+        }
+    }
 }

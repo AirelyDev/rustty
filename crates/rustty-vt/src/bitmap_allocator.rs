@@ -326,7 +326,13 @@ impl<const CHUNK_SIZE: usize> BitmapAllocator<CHUNK_SIZE> {
         let bitmap_end = core::mem::size_of::<u64>() * bitmap_count;
         // const chunks_start = alignForward(usize, bitmap_end, @alignOf(u8));
         let chunks_start = align_forward(bitmap_end, core::mem::align_of::<u8>());
-        let chunks_end = chunks_start + (aligned_cap * CHUNK_SIZE);
+
+        // The chunks region must be exactly the bytes addressable by
+        // the bitmaps: one chunk per bit of every bitmap. Anything more
+        // is unreachable waste, while anything less would let alloc
+        // hand out memory beyond the region, since init marks every
+        // bitmap bit as free.
+        let chunks_end = chunks_start + (aligned_chunk_count * CHUNK_SIZE);
         let total_size = chunks_end;
 
         Layout {
@@ -648,6 +654,96 @@ mod tests {
 
         // We expect to use one bitmap since the cap is bytes.
         assert_eq!(1usize, layout.bitmap_count);
+    }
+
+    // test "BitmapAllocator layout chunks region matches bitmap addressable bytes"
+    // PORT NOTE (parity b953bb346): upstream fixed `layout` to size the chunks
+    // region as `aligned_chunk_count * chunk_size` instead of
+    // `aligned_cap * chunk_size`; these two tests are that commit's test hunks.
+    #[test]
+    fn BitmapAllocator_layout_chunks_region_matches_bitmap_addressable_bytes() {
+        // The chunks region must be exactly the bytes addressable by the
+        // bitmaps: one chunk per bit of every bitmap. Prior to this being
+        // fixed, the region was over-reserved by a factor of chunk_size
+        // (~186 KiB of dead space per standard page), while capacities
+        // smaller than one full bitmap were under-reserved, allowing
+        // out-of-bounds allocations.
+        // PORT NOTE: the reference `inline for (.{ 1, 2, 4, 16, 32 }) |chunk|`
+        // instantiates the comptime-generic per chunk size; the const-generic
+        // helper invoked once per size below is the analogue.
+        fn check_chunk<const CHUNK: usize>() {
+            for cap in [
+                1usize,
+                CHUNK,
+                CHUNK + 1,
+                48,
+                64,
+                512,
+                1024,
+                2048,
+                8192,
+                8193,
+            ] {
+                let layout = BitmapAllocator::<CHUNK>::layout(cap);
+                let chunks_size = layout.total_size - layout.chunks_start;
+
+                // Reserved == addressable by the bitmaps. This must match
+                // capacityBytes() which is computed from the bitmap count.
+                assert_eq!(
+                    layout.bitmap_count * BitmapAllocator::<CHUNK>::BITMAP_BIT_SIZE * CHUNK,
+                    chunks_size,
+                );
+
+                // We always reserve at least the requested capacity.
+                assert!(chunks_size >= cap);
+            }
+        }
+        check_chunk::<1>();
+        check_chunk::<2>();
+        check_chunk::<4>();
+        check_chunk::<16>();
+        check_chunk::<32>();
+    }
+
+    // test "BitmapAllocator layout small capacity cannot alloc out of bounds"
+    #[test]
+    fn BitmapAllocator_layout_small_capacity_cannot_alloc_out_of_bounds() {
+        // Regression test: for capacities smaller than one full bitmap of
+        // chunks, init marks all bitmap bits as free, so alloc will hand out
+        // chunks up to the full bitmap. The layout must reserve that entire
+        // addressable region or those allocations would be out of bounds of
+        // the backing buffer.
+        type Alloc = BitmapAllocator<16>;
+        let cap = 48; // 3 chunks, bitmap addresses 64
+
+        let layout = Alloc::layout(cap);
+        let buf = AlignedBuf::new(layout.total_size, Alloc::BASE_ALIGN);
+
+        let mut bm = unsafe { Alloc::init(buf.offset_buf(), layout) };
+
+        // Allocate every chunk the bitmap can hand out and verify each is
+        // fully within the backing buffer. Writing to each allocation lets
+        // the testing allocator catch any out-of-bounds corruption.
+        // PORT NOTE: the reference iterates `while (bm.alloc(..)) |slice| ...
+        // else |err|`; the loop/match below is the same control flow.
+        let buf_start = buf.base() as usize;
+        let buf_end = buf_start + layout.total_size;
+        let mut count: usize = 0;
+        loop {
+            match unsafe { bm.alloc::<u8, _>(buf.base(), 16) } {
+                Ok(slice) => {
+                    assert!(slice.as_ptr() as usize >= buf_start);
+                    assert!(slice.as_ptr() as usize + slice.len() <= buf_end);
+                    slice.fill(0xAA);
+                    count += 1;
+                }
+                Err(err) => {
+                    assert_eq!(OutOfMemory, err);
+                    break;
+                }
+            }
+        }
+        assert_eq!(Alloc::BITMAP_BIT_SIZE, count);
     }
 
     #[test]

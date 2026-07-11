@@ -2480,21 +2480,26 @@ impl Terminal {
         // Calculate our new x/y
         // const row = if (row_req == 0) 1 else row_req;
         // const col = if (col_req == 0) 1 else col_req;
-        // const x = @min(params.x_max, col + params.x_offset) -| 1;
-        // const y = @min(params.y_max, row + params.y_offset) -| 1;
+        // const x = @min(params.x_max, col +| params.x_offset) -| 1;
+        // const y = @min(params.y_max, row +| params.y_offset) -| 1;
         let row = if row_req == 0 { 1 } else { row_req };
         let col = if col_req == 0 { 1 } else { col_req };
-        // PORT NOTE: `col + params.x_offset` is `usize + CellCountInt`; we widen
+        // PORT NOTE: `col +| params.x_offset` is `usize +| CellCountInt`; we widen
         // the offset to usize for the add, then `@min` with `x_max` (also widened)
         // keeps the result within `CellCountInt` range before the saturating `-| 1`.
-        let x: size::CellCountInt =
-            (core::cmp::min(params.x_max as usize, col + params.x_offset as usize)
-                as size::CellCountInt)
-                .saturating_sub(1);
-        let y: size::CellCountInt =
-            (core::cmp::min(params.y_max as usize, row + params.y_offset as usize)
-                as size::CellCountInt)
-                .saturating_sub(1);
+        // PORT NOTE (parity 0aaedf436): the origin-offset adds are saturating
+        // (`+|`); requests near maxInt(usize) land on the region boundary
+        // instead of overflowing.
+        let x: size::CellCountInt = (core::cmp::min(
+            params.x_max as usize,
+            col.saturating_add(params.x_offset as usize),
+        ) as size::CellCountInt)
+            .saturating_sub(1);
+        let y: size::CellCountInt = (core::cmp::min(
+            params.y_max as usize,
+            row.saturating_add(params.y_offset as usize),
+        ) as size::CellCountInt)
+            .saturating_sub(1);
 
         // If the y is unchanged then this is fast pointer math
         // if (y == self.screens.active.cursor.y) {
@@ -4346,23 +4351,35 @@ impl Terminal {
 
         // Resize our tabstops
         // if (self.cols != cols) {
+        //     const tabstops: Tabstops = try .init(
+        //         alloc,
+        //         cols,
+        //         TABSTOP_INTERVAL,
+        //     );
         //     self.tabstops.deinit(alloc);
-        //     self.tabstops = try .init(alloc, cols, 8);
+        //     self.tabstops = tabstops;
         // }
+        // PORT NOTE (parity 91f0cf67d): allocate and initialize the replacement
+        // FIRST, release the old tab stops only after allocation succeeds. A
+        // failed resize retains the original tab stops and remains safe to
+        // destroy. (The upstream FailingAllocator test hunk is not portable:
+        // this port's `Allocator` is the infallible `Global` handle with no
+        // failure-injection seam on `Tabstops::init` — see MAIN_PARITY.md.)
         if self.cols != cols {
+            // PORT NOTE: `Tabstops::init`'s allocation-failure type is its own
+            // `OutOfMemory`; both map to the reference `Allocator.Error`. We
+            // normalize to `pagelist::OutOfMemory` (this crate's canonical OOM)
+            // to match the `resize` signature.
+            let tabstops = match Tabstops::init(alloc, cols as usize, TABSTOP_INTERVAL as usize) {
+                Ok(t) => t,
+                Err(_e) => return Err(OutOfMemory),
+            };
             // PORT NOTE: `Tabstops::deinit` consumes `self` by value (mirrors
             // the reference `self.tabstops.deinit(alloc)`); we take the field
             // out via `core::mem::take` (leaving an empty default) to call it,
             // then overwrite with the freshly initialized tabstops.
             core::mem::take(&mut self.tabstops).deinit(alloc);
-            // PORT NOTE: `Tabstops::init`'s allocation-failure type is its own
-            // `OutOfMemory`; both map to the reference `Allocator.Error`. We
-            // normalize to `pagelist::OutOfMemory` (this crate's canonical OOM)
-            // to match the `resize` signature.
-            self.tabstops = match Tabstops::init(alloc, cols as usize, 8) {
-                Ok(t) => t,
-                Err(_e) => return Err(OutOfMemory),
-            };
+            self.tabstops = tabstops;
         }
 
         // Resize primary screen, which supports reflow
@@ -16122,6 +16139,35 @@ mod tests {
     // ===========================================================================
     // vt-12 recovery: Terminal input-sweep family + full-diff stragglers.
     // ===========================================================================
+
+    // test "Terminal: setCursorPos saturates overflowing origin offsets"
+    // PORT NOTE (parity 0aaedf436): test hunk of the upstream saturating
+    // origin-offset fix in setCursorPos.
+    #[test]
+    fn terminal_set_cursor_pos_saturates_overflowing_origin_offsets() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 10)).unwrap();
+
+        t.scrolling_region = ScrollingRegion {
+            top: 2,
+            bottom: 7,
+            left: 3,
+            right: 8,
+        };
+        t.modes.set(modespkg::Mode::Origin, true);
+
+        t.set_cursor_pos(usize::MAX, usize::MAX);
+        // try testing.expectEqual(@as(size.CellCountInt, 8), t.screens.active.cursor.x);
+        assert_eq!(8 as size::CellCountInt, unsafe {
+            (*t.screens.active).cursor.x
+        });
+        // try testing.expectEqual(@as(size.CellCountInt, 7), t.screens.active.cursor.y);
+        assert_eq!(7 as size::CellCountInt, unsafe {
+            (*t.screens.active).cursor.y
+        });
+
+        t.deinit(alloc);
+    }
 
     // test "Terminal: input with no control characters"
     #[test]

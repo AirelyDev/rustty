@@ -132,20 +132,24 @@ impl PageList {
                 if n < midpoint {
                     // Iterate forward from the first node.
                     let mut node_it = self.pages.first;
-                    let mut rem: size::CellCountInt = match size::CellCountInt::try_from(n) {
-                        Ok(v) => v,
-                        Err(_) => {
-                            self.viewport = Viewport::Active;
-                            break 'row;
-                        }
-                    };
+                    // PORT NOTE (parity 5fa37f2b7): `rem` stays `usize` so long
+                    // scrollback histories don't bail to `.active`; the
+                    // `CellCountInt` cast happens only at the pin `y`
+                    // assignment, where `rem` is already < the page's rows.
+                    let mut rem: usize = n;
                     while !node_it.is_null() {
                         let node = node_it;
-                        if rem < unsafe { (*node).data.size.rows } {
+                        if rem < unsafe { (*node).data.size.rows } as usize {
                             unsafe {
                                 *self.viewport_pin = Pin {
                                     node,
-                                    y: rem,
+                                    y: match size::CellCountInt::try_from(rem) {
+                                        Ok(v) => v,
+                                        Err(_) => {
+                                            self.viewport = Viewport::Active;
+                                            break 'row;
+                                        }
+                                    },
                                     x: 0,
                                     garbage: false,
                                 };
@@ -153,27 +157,31 @@ impl PageList {
                             break 'row;
                         }
 
-                        rem -= unsafe { (*node).data.size.rows };
+                        rem -= unsafe { (*node).data.size.rows } as usize;
                         node_it = unsafe { (*node).next };
                     }
                 } else {
                     // Iterate backwards from the last node.
                     let mut node_it = self.pages.last;
-                    let mut rem: size::CellCountInt =
-                        match size::CellCountInt::try_from(self.total_rows - n) {
-                            Ok(v) => v,
-                            Err(_) => {
-                                self.viewport = Viewport::Active;
-                                break 'row;
-                            }
-                        };
+                    // PORT NOTE (parity 5fa37f2b7): as above, `rem` stays
+                    // `usize`; the cast happens at the `y` assignment where
+                    // `node.rows - rem` fits `CellCountInt` by construction.
+                    let mut rem: usize = self.total_rows - n;
                     while !node_it.is_null() {
                         let node = node_it;
-                        if rem <= unsafe { (*node).data.size.rows } {
+                        if rem <= unsafe { (*node).data.size.rows } as usize {
                             unsafe {
                                 *self.viewport_pin = Pin {
                                     node,
-                                    y: (*node).data.size.rows - rem,
+                                    y: match size::CellCountInt::try_from(
+                                        (*node).data.size.rows as usize - rem,
+                                    ) {
+                                        Ok(v) => v,
+                                        Err(_) => {
+                                            self.viewport = Viewport::Active;
+                                            break 'row;
+                                        }
+                                    },
                                     x: 0,
                                     garbage: false,
                                 };
@@ -181,7 +189,7 @@ impl PageList {
                             break 'row;
                         }
 
-                        rem -= unsafe { (*node).data.size.rows };
+                        rem -= unsafe { (*node).data.size.rows } as usize;
                         node_it = unsafe { (*node).prev };
                     }
                 }

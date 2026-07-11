@@ -557,7 +557,14 @@ impl SelectionGesture {
                 Some(prev_time) => prev_time,
                 None => fail!(),
             };
-            let since = time_since(time, prev_time);
+            // const since = timeSince(time, prev_time) orelse
+            //     return error.PressRequiresReset;
+            // PORT NOTE (parity 8f1c2fe95): backwards timestamps are failed
+            // repeats; the next press becomes a new single-click anchor.
+            let since = match time_since(time, prev_time) {
+                Some(since) => since,
+                None => fail!(),
+            };
             if since > p.repeat_interval {
                 fail!();
             }
@@ -645,7 +652,8 @@ impl SelectionGesture {
 }
 
 pub struct Press<'a> {
-    /// The time when the press event occurred. Use a monotonic timer.
+    /// The time when the press event occurred. Prefer a monotonic timer;
+    /// backwards timestamps reset the repeat sequence.
     /// This can be null if you're on a system that doesn't support
     /// time for some reason. In that case, we only support single clicks.
     pub time: Option<Time>,
@@ -775,8 +783,15 @@ struct PressRequiresReset;
 // nanoseconds. `std::time::Instant::duration_since` is the faithful analogue;
 // the freestanding-wasm `time -| prev_time` branch is unreachable for this
 // target (see `Time`).
-fn time_since(time: Time, prev_time: Time) -> u64 {
-    time.duration_since(prev_time).as_nanos() as u64
+// PORT NOTE (parity 8f1c2fe95): backwards timestamps return None (`null`),
+// mirroring `if (time.order(prev_time) == .lt) return null;`. (Rust's
+// `duration_since` saturates to zero rather than panicking, but a zero
+// elapsed time would wrongly count as a valid fast repeat.)
+fn time_since(time: Time, prev_time: Time) -> Option<u64> {
+    if time < prev_time {
+        return None;
+    }
+    Some(time.duration_since(prev_time).as_nanos() as u64)
 }
 
 /// Calculates the appropriate selection given pins and pixel x positions for
@@ -2317,6 +2332,38 @@ mod tests {
         let _ = gesture.press(&mut t, event).unwrap();
 
         assert_eq!(1_u8, gesture.left_click_count);
+
+        gesture.deinit(&mut t);
+        t.deinit(Allocator);
+    }
+
+    // test "SelectionGesture backwards repeat time resets click count"
+    // PORT NOTE (parity 8f1c2fe95): test hunk of the upstream backwards-
+    // timestamp fix. The reference builds instants from raw ns via a
+    // `testInstant` helper; Rust's `std::time::Instant` is opaque (no raw
+    // constructor), so the two ordered instants derive from one `now()` anchor
+    // plus Duration offsets, preserving the same earlier/later relationship.
+    #[test]
+    fn backwards_repeat_time_resets_click_count() {
+        let mut t = Terminal::init(Allocator, opts(5, 5)).unwrap();
+
+        let mut gesture: SelectionGesture = SelectionGesture::INIT;
+
+        // const earlier = testInstant(std.time.ns_per_s);
+        // const later = testInstant(2 * std.time.ns_per_s);
+        let anchor = std::time::Instant::now();
+        let earlier = anchor + std::time::Duration::from_secs(1);
+        let later = anchor + std::time::Duration::from_secs(2);
+
+        let __ev_later = test_press(&mut t, 1, 1, Some(later));
+        let _ = gesture.press(&mut t, __ev_later).unwrap();
+        let __ev_earlier = test_press(&mut t, 1, 1, Some(earlier));
+        let _ = gesture.press(&mut t, __ev_earlier).unwrap();
+
+        // try testing.expectEqual(@as(u3, 1), gesture.left_click_count);
+        assert_eq!(1_u8, gesture.left_click_count);
+        // try testing.expectEqual(.eq, gesture.left_click_time.?.order(earlier));
+        assert_eq!(Some(earlier), gesture.left_click_time);
 
         gesture.deinit(&mut t);
         t.deinit(Allocator);

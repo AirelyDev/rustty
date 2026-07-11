@@ -691,8 +691,27 @@ impl Face {
             width => metrics.cell_width * width as u32,
         };
 
-        // const height = metrics.cell_height;
-        let height = metrics.cell_height;
+        // Sprite glyphs generally get the full cell height, but cursor glyphs need
+        // to be affected by `adjust-cursor-height`, so we use `cursor_height` for
+        // the height if it's one of the full-height cursors.
+        // const height = switch (cp) {
+        //     @intFromEnum(Sprite.cursor_rect),
+        //     @intFromEnum(Sprite.cursor_hollow_rect),
+        //     @intFromEnum(Sprite.cursor_bar),
+        //     => metrics.cursor_height,
+        //     else => metrics.cell_height,
+        // };
+        // PORT NOTE (parity dac341cad): upstream regression fix from the sprite
+        // face rework (#7732); cursor sprites must respect adjust-cursor-height.
+        let height = match cp {
+            x if x == Sprite::CursorRect as u32
+                || x == Sprite::CursorHollowRect as u32
+                || x == Sprite::CursorBar as u32 =>
+            {
+                metrics.cursor_height
+            }
+            _ => metrics.cell_height,
+        };
 
         // const padding_x = width / 4;
         let padding_x = width / 4;
@@ -711,19 +730,36 @@ impl Face {
         // const region = try canvas.writeAtlas(alloc, atlas);
         let region = canvas.writeAtlas(alloc, atlas)?;
 
-        // return .{
-        //     .width = region.width,
-        //     .height = region.height,
-        //     .offset_x = @as(i32, @intCast(canvas.clip_left)) - @as(i32, @intCast(padding_x)),
-        //     .offset_y = @as(i32, @intCast(region.height +| canvas.clip_bottom)) - @as(i32, @intCast(padding_y)),
-        //     .atlas_x = region.x,
-        //     .atlas_y = region.y,
-        // };
+        // The X offset is the displacement from the left edge of the cell that our
+        // drawn sprite will be drawn in the grid. That's the same as the distance
+        // we have calculated from the left of the canvas, minus the padding, since
+        // the padding represents extra pixels to the left of the cell.
+        // const offset_x: i32 =
+        //     @as(i32, @intCast(canvas.clip_left)) -
+        //     @as(i32, @intCast(padding_x));
+        let offset_x: i32 = canvas.clip_left as i32 - padding_x as i32;
+        // Similar logic applies for the Y offset, but with the additional factor
+        // that we want to re-center cursor glyphs in the cell if they were drawn
+        // taller or shorter than a normal cell is; this only applies to cursors
+        // currently, but could conceivably apply to other things in the future.
+        // const offset_y: i32 =
+        //     @as(i32, @intCast(region.height +| canvas.clip_bottom)) -
+        //     @as(i32, @intCast(padding_y)) +
+        //     @divTrunc(
+        //         @as(i32, @intCast(metrics.cell_height)) - @as(i32, @intCast(height)),
+        //         2,
+        //     );
+        let offset_y: i32 = region.height.saturating_add(canvas.clip_bottom) as i32
+            - padding_y as i32
+            // By adding half the difference between the cell height and the
+            // height we passed to the draw function, we center it in the cell.
+            + (metrics.cell_height as i32 - height as i32) / 2;
+
         Ok(Glyph {
             width: region.width,
             height: region.height,
-            offset_x: canvas.clip_left as i32 - padding_x as i32,
-            offset_y: region.height.saturating_add(canvas.clip_bottom) as i32 - padding_y as i32,
+            offset_x,
+            offset_y,
             atlas_x: region.x,
             atlas_y: region.y,
         })
@@ -1114,6 +1150,96 @@ mod tests {
 
         // try std.testing.expect(!diff); // There should be no diffs from reference.
         assert!(!diff); // There should be no diffs from reference.
+    }
+
+    // test "full height cursor sprites respect cursor height metric"
+    // PORT NOTE (parity e8f3f6c43): regression-test hunk for the upstream
+    // adjust-cursor-height fix (dac341cad). The reference builds metrics via
+    // `.calc(.{ px_per_em, cell_width, ascent, descent, line_gap })`; the
+    // remaining FaceMetrics fields default to null and are spelled `None` here.
+    #[test]
+    fn full_height_cursor_sprites_respect_cursor_height_metric() {
+        let alloc = allocator_api2::alloc::Global;
+
+        // var atlas: font.Atlas = try .init(alloc, 128, .grayscale);
+        // defer atlas.deinit(alloc);
+        let mut atlas = Atlas::init(alloc, 128, crate::atlas::Format::Grayscale).unwrap();
+
+        // face with a 8x16 cell dimension.
+        let mut face = Face {
+            metrics: Metrics::calc(crate::metrics::FaceMetrics {
+                // Fudged number, not used in anything we care about here.
+                px_per_em: 16.0,
+
+                cell_width: 8.0,
+                ascent: 12.0,
+                descent: -4.0,
+                line_gap: 0.0,
+                underline_thickness: None,
+                strikethrough_thickness: None,
+                underline_position: None,
+                strikethrough_position: None,
+                cap_height: None,
+                ex_height: None,
+                ascii_height: None,
+                ic_width: None,
+            }),
+        };
+
+        // try testing.expectEqual(16, face.metrics.cell_height);
+        assert_eq!(16, face.metrics.cell_height);
+
+        // PORT NOTE: the reference repeats a render+assert block per cursor
+        // sprite and cursor_height; this helper is that block, kept
+        // assertion-for-assertion.
+        fn check(
+            face: &Face,
+            atlas: &mut Atlas,
+            cp: u32,
+            want_height: u32,
+            want_offset_y: i32,
+        ) {
+            let glyph = face
+                .render_glyph(
+                    allocator_api2::alloc::Global,
+                    atlas,
+                    cp,
+                    crate::glyph::RenderOptions {
+                        grid_metrics: face.metrics,
+                        ..crate::glyph::RenderOptions::default()
+                    },
+                )
+                .unwrap();
+            assert_eq!(want_height, glyph.height);
+            assert_eq!(want_offset_y, glyph.offset_y);
+        }
+
+        // --- smaller than cell height ---
+        face.metrics.cursor_height = 12;
+        // bar
+        check(&face, &mut atlas, Sprite::CursorBar as u32, 12, 14);
+        // rect
+        check(&face, &mut atlas, Sprite::CursorRect as u32, 12, 14);
+        // hollow rect
+        check(&face, &mut atlas, Sprite::CursorHollowRect as u32, 12, 14);
+
+        // --- equal to the cell height ---
+        face.metrics.cursor_height = 16;
+        // bar
+        check(&face, &mut atlas, Sprite::CursorBar as u32, 16, 16);
+        // rect
+        check(&face, &mut atlas, Sprite::CursorRect as u32, 16, 16);
+        // hollow rect
+        check(&face, &mut atlas, Sprite::CursorHollowRect as u32, 16, 16);
+
+        // --- greater than the cell height ---
+        face.metrics.cursor_height = 20;
+        // bar
+        check(&face, &mut atlas, Sprite::CursorBar as u32, 20, 18);
+        // rect
+        check(&face, &mut atlas, Sprite::CursorRect as u32, 20, 18);
+        // hollow rect
+        check(&face, &mut atlas, Sprite::CursorHollowRect as u32, 20, 18);
     }
 
     // A tiny compile/behaviour smoke over the public surface, standing in for the

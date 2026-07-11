@@ -2010,6 +2010,14 @@ impl Screen {
     /// `assert_integrity()` call.
     #[allow(clippy::not_unsafe_ptr_arg_deref)] // reference takes `page: *Page, row: *Row, cells: []Cell`
     pub fn clear_cells(&mut self, page: *mut Page, row: *mut Row, cells: *mut [Cell]) {
+        // if (cells.len == 0) return;
+        // PORT NOTE (parity 0cb004734): the runtime-safety validation below
+        // indexes the first and last elements unconditionally; an empty range
+        // is a valid no-op clear.
+        if cells.len() == 0 {
+            return;
+        }
+
         let cells_base = cells as *mut Cell;
         let cells_len = cells.len();
 
@@ -2019,7 +2027,8 @@ impl Screen {
 
         // PORT NOTE: the reference uses a `defer` block to resume integrity
         // checks + assert at every exit; with a single exit path we run it at
-        // the end. (No early returns in this body.)
+        // the end. (No early returns in this body after the empty-range
+        // guard, which returns before checks are paused.)
 
         if cfg!(debug_assertions) {
             // Our row and cells should be within the page.
@@ -2733,6 +2742,15 @@ impl Screen {
             }
 
             Attribute::Unknown(_) => return Ok(()),
+        }
+
+        // If the attribute didn't change our style then we can skip the
+        // style update entirely: our current style ID is already correct.
+        // This is a common case in the wild where programs re-assert the
+        // same style repeatedly (e.g. per span or per line).
+        // PORT NOTE (parity cee35cabf).
+        if self.cursor.style.eql(&old_style) {
+            return Ok(());
         }
 
         match self.manual_style_update() {
@@ -9858,6 +9876,28 @@ mod tests {
             )
             .unwrap();
         assert_eq!(str, b"");
+
+        s.deinit();
+    }
+
+    // test "Screen clearCells empty range"
+    // PORT NOTE (parity 0cb004734): test hunk of the upstream empty-cell-clear
+    // guard in clearCells.
+    #[test]
+    fn screen_clear_cells_empty_range() {
+        // var s = try Screen.init(testing.allocator, .default);
+        // defer s.deinit();
+        let mut s = Screen::init(Allocator, Options::default()).unwrap();
+
+        // const page = s.cursor.page_pin.node.page();
+        let page: *mut Page = unsafe { core::ptr::addr_of_mut!((*(*s.cursor.page_pin).node).data) };
+        // const row = s.cursor.page_row;
+        let row: *mut Row = s.cursor.page_row;
+        // const cells = page.getCells(row);
+        let cells: *mut [Cell] = unsafe { (*page).get_cells(row) };
+        // s.clearCells(page, row, cells[0..0]);
+        let empty: *mut [Cell] = core::ptr::slice_from_raw_parts_mut(cells as *mut Cell, 0);
+        s.clear_cells(page, row, empty);
 
         s.deinit();
     }

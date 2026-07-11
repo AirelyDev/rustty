@@ -309,12 +309,17 @@ impl<A: Allocator> Tabstops<A> {
         // @memset(self.dynamic_stops, 0);
         self.dynamic_stops.fill(0);
 
-        if interval > 0 {
-            let mut i: usize = interval;
-            while i < self.cols - 1 {
-                self.set(i);
-                i += interval;
-            }
+        // if (interval == 0 or self.cols <= 1) return;
+        // PORT NOTE (parity 3d08161b5): `self.cols - 1` underflowed (Zig: safety
+        // panic; Rust: debug panic / release wrap) for zero/one-column grids.
+        if interval == 0 || self.cols <= 1 {
+            return;
+        }
+
+        let mut i: usize = interval;
+        while i < self.cols - 1 {
+            self.set(i);
+            i += interval;
         }
     }
 }
@@ -436,6 +441,21 @@ mod tests {
         assert!(!t.get(5));
         // try testing.expect(t.get(8));
         assert!(t.get(8));
+
+        t.deinit(Global);
+    }
+
+    // test "Tabstops: interval with zero columns"
+    // PORT NOTE (parity 3d08161b5): test hunk of the upstream empty-tabstop-range
+    // fix; init with zero columns used to underflow in `reset`.
+    #[test]
+    fn tabstops_interval_with_zero_columns() {
+        // var t: Tabstops = try init(testing.allocator, 0, 8);
+        // defer t.deinit(testing.allocator);
+        let t: Tabstops = Tabstops::init(Global, 0, 8).unwrap();
+
+        // try testing.expectEqual(@as(usize, 0), t.cols);
+        assert_eq!(0usize, t.cols);
 
         t.deinit(Global);
     }
