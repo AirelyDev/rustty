@@ -56,3 +56,4 @@ rustc-ice-*.txt
 
 # regenerable G4 differential per-case output
 .port/phase-0/harness/results/diag/
+rust_out
