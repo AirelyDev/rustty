@@ -1,0 +1,25 @@
+# rustty-d6-canary — detector D6 sanitizer-visibility canary (kills Bun class 5, #30875).
+#
+# STANDALONE proof artifact, NOT a rustty workspace member (empty [workspace]
+# table detaches it, like the .port/phase-2/mirihar-* harnesses). It is built &
+# run ONLY by .port/tools/gates/check_sanitizer_canary.sh under a sanitizer
+# RUSTFLAG; a plain `cargo build/test --workspace` never touches it, so it can
+# NEVER pollute the normal cargo lanes (its canary tests are `cfg(sanitize=…)`
+# gated and vanish entirely outside a sanitizer build).
+#
+# WHY it exists: Bun #30875 hard-coded `#[global_allocator] Mimalloc`, so ASan's
+# malloc interceptor never saw the port's allocations and the ASan/LSan lane went
+# GREEN while BLIND — for the whole 1.4 line. The canaries below deliberately
+# heap-overflow and leak. If the sanitizer lane can SEE the port's heap they make
+# it RED; if it stays GREEN the gate is blind (the #30875 shape) and D6 fails.
+[package]
+name = "rustty-d6-canary"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# Standalone: detached from the rustty root workspace (a proof artifact).
+[workspace]
