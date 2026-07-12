@@ -68,3 +68,6 @@ macos/DerivedData/
 
 # regenerable xcframework output (cargo run -p xtask -- xcframework)
 dist/
+
+# llvm coverage profiling artifacts
+*.profraw
