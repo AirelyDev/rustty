@@ -2239,13 +2239,24 @@ impl ApprtSurface for Surface {
         self.app
     }
 
-    // W-ATTACH: expose the host NSView pointer + content scale so core routes
+    // W-ATTACH: expose the host view pointer + content scale so core routes
     // them into the renderer's windowed layer-attach at finalizeSurfaceInit
-    // (embedded holds the raw view in `platform.macos.nsview`, blueprint §5/§8.1).
+    // (embedded holds the raw view in `platform.macos.nsview` /
+    // `platform.ios.uiview`, blueprint §5/§8.1).
+    //
+    // PORT NOTE (R1 parity): the reference `Metal.init` reads BOTH the macOS
+    // `nsview` and the iOS `uiview` off `apprt.Surface`'s platform union; the iOS
+    // arm was previously dropped (returned null), so restore it. The `nsview` /
+    // `uiview` field access only exists on darwin (`MacOS`/`IOS` are ZSTs
+    // off-darwin, §2.9), so both concrete arms are `#[cfg]`-gated to darwin and a
+    // non-darwin wildcard returns null (the platform never renders there).
     fn host_view(&self) -> *mut c_void {
         match &self.platform {
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
             Platform::MacOS(m) => m.nsview,
-            #[allow(unreachable_patterns)]
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            Platform::IOS(i) => i.uiview,
+            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
             _ => core::ptr::null_mut(),
         }
     }
