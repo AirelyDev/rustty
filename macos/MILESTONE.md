@@ -45,3 +45,25 @@ AppKit app, running as a real macOS terminal.
 - **Deployment target**: staticlib built for macOS 26.5 vs app target 13.0 (harmless warnings;
   set MACOSX_DEPLOYMENT_TARGET on the cargo build to match).
 - **Deferred features**: quicklook, live inspector, the 5 non-display Darwin exports.
+
+## ✅ CORRECTED (2026-07-12) — the window ACTUALLY RENDERS now (W-ATTACH fixed)
+
+**Correction to the claim above:** the first "RUNNABLE" entry was premature — the window opened
+but was BLANK (renderer presented to a detached offscreen IOSurface; I inferred rendering from the
+process tree instead of looking). A 6-agent critical-path audit (`.port/phase-2/MACOS_APP_GAPS.md`)
+found W-ATTACH was the SINGLE blocker to pixels. Fixed in commit 96b0116 (route the host NSView
+into the renderer's windowed layer-attach at finalizeSurfaceInit).
+
+**Now verified by screenshot:** the terminal window renders the shell prompt, block cursor, and
+glyphs; typed input echoes and is interactive. A genuinely-working macOS terminal:
+window + render + shell + input, all driven by rustty's ported Rust core.
+
+### Remaining (from the gap audit — non-blocking for a usable terminal)
+- **Verify (should auto-work with W-ATTACH):** live window resize tracking the layer bounds (B4),
+  present-error propagation (B2), display-callback redraw on resize (B3). Un-ignore
+  `macos_window_host.rs::hosts_view_layer_and_presents_live_frame`.
+- **P2 on-feature crashers (panic=abort):** `quicklook_font`/`quicklook_word` abort on Look-Up /
+  force-click / accessibility; the inspector aborts if opened. Cheap interim: swap the
+  `unimplemented!()` leaves for graceful null/false returns, then port the bodies.
+- **P3 polish:** autoreleasepool shim, self-contained zlib+gettext lib, R2 identity rebrand, the
+  deployment-target warning.
