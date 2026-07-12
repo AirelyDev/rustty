@@ -11,12 +11,13 @@
 //!
 //! GENERATED from the `rustty_*` decls in `lib.rs` — one forwarder per app export
 //! DEFINED in this crate (the `apprt/embedded` surface + `rustty_init` /
-//! `rustty_string_free` + the `main_c` hub's `rustty_cli_try_action`). The 6
-//! Darwin-only exports (PREPORT §0) are gated `any(target_os = "macos", target_os =
-//! "ios")` — the iOS-in-scope lock widens the upstream `isDarwin()` comptime gate
-//! (PREPORT §5). The `config` / `benchmark` exports of the 90-symbol app C-ABI live
-//! in their own crates (`rustty-config` / `rustty-bench`) and carry their own alias
-//! layers; the remaining `main_c` exports `translate` / `info` are not yet ported.
+//! `rustty_string_free` + the `main_c` hub's `rustty_cli_try_action` / `rustty_info` /
+//! `rustty_translate`). The 6 Darwin-only exports (PREPORT §0) are gated
+//! `any(target_os = "macos", target_os = "ios")` — the iOS-in-scope lock widens the
+//! upstream `isDarwin()` comptime gate (PREPORT §5). The `config` / `benchmark`
+//! exports of the 90-symbol app C-ABI live in their own crates (`rustty-config` /
+//! `rustty-bench`) and carry their own alias layers; with `translate` / `info` now
+//! ported, this crate's forwarders cover all four `main_c` hub exports.
 
 #![allow(clippy::missing_safety_doc)]
 
