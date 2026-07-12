@@ -20,6 +20,7 @@ USAGE:
 SUBCOMMANDS:
     header-gen         Generate include/rustty.h from rustty-vt-c via cbindgen (R2)
     header-gen-apprt   Generate include/rustty-apprt.h from rustty-apprt-c via cbindgen (R2)
+    xcframework        Package rustty-apprt-c into dist/GhosttyKit.xcframework (macOS Swift-app tier)
     help               Show this help
 ";
 
@@ -43,6 +44,16 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("xtask: header-gen-apprt failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("xcframework") => match xcframework() {
+            Ok(out) => {
+                println!("wrote {}", out.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("xtask: xcframework failed: {e}");
                 ExitCode::FAILURE
             }
         },
@@ -159,4 +170,88 @@ fn header_gen_apprt() -> Result<PathBuf, String> {
         return Err(format!("cbindgen exited with {status}"));
     }
     Ok(output)
+}
+
+/// Package `rustty-apprt-c` into `dist/GhosttyKit.xcframework` for the macOS
+/// Swift-app tier (plan `2026-07-12-macos-swift-app-milestone` Task B1).
+///
+/// Mirrors ghostty's `src/build/GhosttyXCFramework.zig` recipe: build the
+/// per-arch static lib, stage a headers dir (rustty's frozen `include/ghostty.h`
+/// + a `GhosttyKit` module map — Branch A, so the reused Swift app links
+/// unchanged), then `xcodebuild -create-xcframework`. The staticlib is built
+/// under the `xcframework` profile (`panic = "abort"`, PREPORT_SWIFT_APP §4) with
+/// the `identity-ghostty` feature (emits the `ghostty_*` alias symbols).
+///
+/// macOS-arm64 slice only (the host target). A universal slice would add
+/// `x86_64-apple-darwin` via `lipo`; deferred until that target is installed.
+///
+/// R3: uses rustty's OWN vendored `include/ghostty.h` (byte-identical to the
+/// pinned upstream, frozen by `check_ghostty_h_abi.sh`), never the ghostty
+/// checkout.
+fn xcframework() -> Result<PathBuf, String> {
+    let root = workspace_root();
+    let target = "aarch64-apple-darwin";
+
+    // 1. Build the identity-ghostty staticlib under the abort profile.
+    let status = Command::new("cargo")
+        .args([
+            "build",
+            "-p",
+            "rustty-apprt-c",
+            "--profile",
+            "xcframework",
+            "--features",
+            "identity-ghostty",
+            "--target",
+            target,
+        ])
+        .current_dir(&root)
+        .status()
+        .map_err(|e| format!("spawn cargo build: {e}"))?;
+    if !status.success() {
+        return Err(format!("cargo build exited with {status}"));
+    }
+    let lib = root.join(format!(
+        "target/{target}/xcframework/librustty_apprt_c.a"
+    ));
+    if !lib.exists() {
+        return Err(format!("staticlib not found at {}", lib.display()));
+    }
+
+    // 2. Stage the headers dir: rustty's frozen ghostty.h + the GhosttyKit module map.
+    let dist = root.join("dist");
+    let headers = dist.join("xcframework-headers");
+    let _ = std::fs::remove_dir_all(&headers);
+    std::fs::create_dir_all(&headers).map_err(|e| format!("mkdir headers: {e}"))?;
+    let src_h = root.join("include/ghostty.h");
+    if !src_h.exists() {
+        return Err(format!("vendored header missing: {}", src_h.display()));
+    }
+    std::fs::copy(&src_h, headers.join("ghostty.h"))
+        .map_err(|e| format!("copy ghostty.h: {e}"))?;
+    // Umbrella module map — same shape as upstream GhosttyKit.xcframework.
+    std::fs::write(
+        headers.join("module.modulemap"),
+        "// GhosttyKit module for the rustty macOS Swift app (Branch A: ghostty_* ABI).\n\
+         module GhosttyKit {\n    umbrella header \"ghostty.h\"\n    export *\n}\n",
+    )
+    .map_err(|e| format!("write modulemap: {e}"))?;
+
+    // 3. xcodebuild -create-xcframework.
+    let out = dist.join("GhosttyKit.xcframework");
+    let _ = std::fs::remove_dir_all(&out);
+    let status = Command::new("xcodebuild")
+        .args(["-create-xcframework", "-library"])
+        .arg(&lib)
+        .arg("-headers")
+        .arg(&headers)
+        .arg("-output")
+        .arg(&out)
+        .current_dir(&root)
+        .status()
+        .map_err(|e| format!("spawn xcodebuild (need Xcode command-line tools): {e}"))?;
+    if !status.success() {
+        return Err(format!("xcodebuild exited with {status}"));
+    }
+    Ok(out)
 }

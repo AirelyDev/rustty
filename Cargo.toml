@@ -292,3 +292,12 @@ overflow-checks = false
 [profile.release-safe]
 inherits = "release"
 debug-assertions = true
+
+# Shipped macOS .xcframework staticlib profile (PREPORT_SWIFT_APP §4). panic = "abort"
+# so assert-class panics (assert!/unreachable!/debug_assert!/overflow-check) ABORT
+# exactly like Zig's ReleaseSafe trap — and an unwind can never cross the extern "C"
+# boundary into Swift. A DEDICATED profile (not [profile.release]) so the workspace
+# test build keeps panic = "unwind" (catch_unwind harnesses / #[should_panic]).
+[profile.xcframework]
+inherits = "release"
+panic = "abort"
