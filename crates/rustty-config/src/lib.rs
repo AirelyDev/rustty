@@ -22,6 +22,10 @@ pub mod edit;
 pub mod error_list;
 pub mod file_load;
 pub mod formatter_file;
+// Branch A `ghostty_config_*` C-ABI alias layer — compiled only under the
+// `identity-ghostty` feature (PREPORT_SWIFT_APP §3). See src/ghostty_alias.rs.
+#[cfg(feature = "identity-ghostty")]
+mod ghostty_alias;
 pub mod help_strings;
 pub mod io;
 pub mod path;

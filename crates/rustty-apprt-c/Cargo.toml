@@ -33,7 +33,10 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 # `src/ghostty_alias.rs`, adding a `ghostty_<name>` thin forwarder per app export so the
 # staticlib exports BOTH spellings and the upstream Ghostty Swift app links unchanged.
 [features]
-identity-ghostty = []
+# Enabling apprt-c's `identity-ghostty` also turns on rustty-config's `identity-ghostty`,
+# so the `ghostty_config_*` forwarders (defined in rustty-config, where their bodies live)
+# are pulled into this staticlib alongside apprt-c's own `ghostty_*` app-C-ABI aliases.
+identity-ghostty = ["rustty-config/identity-ghostty"]
 
 [dependencies]
 rustty-apprt = { workspace = true }
