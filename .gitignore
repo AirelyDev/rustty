@@ -65,3 +65,6 @@ rust_out
 macos/GhosttyKit.xcframework/
 macos/build/
 macos/DerivedData/
+
+# regenerable xcframework output (cargo run -p xtask -- xcframework)
+dist/
