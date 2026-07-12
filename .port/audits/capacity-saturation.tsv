@@ -1,0 +1,51 @@
+# capacity-saturation.tsv — detector D2 inventory (kills Bun regression Class 2a, oven-sh/bun#31503).
+# Generated: 2026-07-12
+# Gate: .port/tools/gates/check_capacity_saturation.sh
+# Tests: crates/rustty-vt/tests/d2_capacity_saturation.rs
+# Oracle: /Users/gael/projects/ghostty pinned @ 4749c4e9 (every zig_origin resolves against this pin).
+#
+# WHY THIS AUDIT EXISTS (Bun Class 2a):
+#   A `ptrs[allocated]` write-then-increment off-by-one was a SILENT out-of-bounds
+#   write in ReleaseFast Zig for years (oven-sh/bun#31503/#31504), but the naive Rust
+#   twin HARD PANICS on the identical index. Zig's own `IntFittingRange(0, max + 1)`
+#   already encoded the true capacity: the array length is derivable from the same
+#   expression the monotonic counter's range implies (`IntFittingRange(0, max+1)` =>
+#   `[T; MAX+1]`). So this is a ONE-TIME audited inventory of every fixed `[T; N]` +
+#   monotonic write-then-increment counter pair in rustty-vt HOT code (CSI param
+#   buffers, page capacities, kitty/apc quotas): for each, N is derived from the Zig
+#   counter-range expression, the port is confirmed to match, and a
+#   `<name>_capacity_saturation` #[test] drives the bounded store to (and one past)
+#   its ceiling so any off-by-one is a RED test, never a shipped OOB.
+#
+# TRIAGE RULE (process, not script): a Rust panic in a saturation test where the
+#   ghostty oracle "worked" => re-run the oracle under ReleaseSafe/Debug FIRST (R3);
+#   ReleaseFast Zig silently tolerates the OOB the port correctly refuses. Only after
+#   the oracle also faults under ReleaseSafe is the port's ceiling wrong.
+#
+# GATE CONTRACT (fail-closed, R5-clean — ADDITIVE, weakens nothing):
+#   * TSV absent            => BLOCKED (exit 3, surfaced as a WARNING by ci.sh).
+#   * a data row names NO test (col `test` empty)                  => RED (exit 1).
+#   * a named test is not defined in the tree (`fn <name>` absent) => RED (exit 1).
+#   * an array_site whose file does not exist                      => RED (exit 1).
+#   The gate is a source-level check (no build needed); the tests themselves run in
+#   the normal `cargo test --workspace` lane, where a bounds panic is a RED test.
+#
+# SCHEMA (7 tab-separated columns; comment lines start with '#'; blank lines ignored):
+#   1 pair          short id for the [T;N]+counter pair
+#   2 array_site    <repo-relative-file>:<line> of the fixed `[T; N]` declaration
+#   3 counter_site  <repo-relative-file>:<line> of the write-then-increment counter store
+#   4 N             the derived capacity N and how the counter-range expression implies it
+#   5 zig_origin    ghostty path:line + the reference declaration this ports
+#   6 test          name of the guarding `#[test] fn <name>_capacity_saturation` (must exist)
+#   7 notes         write/guard order and the ceiling the test drives to
+#
+# -------------------------------------------------------------------------------------------------
+pair	array_site	counter_site	N	zig_origin	test	notes
+csi_params	crates/rustty-vt/src/parser.rs:360	crates/rustty-vt/src/parser.rs:500	24 = MAX_PARAMS (parser.rs:345)	src/terminal/Parser.zig:213 `params: [MAX_PARAMS]u16` (MAX_PARAMS=24, :203)	parser_params_capacity_saturation	pre-write guard `params_idx >= MAX_PARAMS` (parser.rs:494/601/648). THE #31503 analog. Test feeds MAX_PARAMS+8 params; params_idx saturates at exactly 24.
+csi_intermediates	crates/rustty-vt/src/parser.rs:356	crates/rustty-vt/src/parser.rs:577	4 = MAX_INTERMEDIATE (parser.rs:332)	src/terminal/Parser.zig:209 `intermediates: [MAX_INTERMEDIATE]u8` (MAX_INTERMEDIATE=4, :190)	parser_intermediates_capacity_saturation	pre-write guard `intermediates_idx >= MAX_INTERMEDIATE` (parser.rs:571). Test feeds MAX_INTERMEDIATE+6 collect bytes; counter caps at 4.
+dcs_decrqss	crates/rustty-vt/src/dcs.rs:411	crates/rustty-vt/src/dcs.rs:238	2 = data.len() (reference counter `len: u2`, indexes 0..=2)	src/terminal/DCS.zig anon state `struct { data: [2]u8, len: u2 }`	dcs_decrqss_capacity_saturation	pre-write guard `len >= data.len()` (dcs.rs:234) -> Err -> Ignore. Test fills " q" to the 2-byte ceiling (decodes DECSCUSR), then a 3rd byte is dropped.
+kitty_kv_temp	crates/rustty-vt/src/kitty/graphics_command.rs:57	crates/rustty-vt/src/kitty/graphics_command.rs:307	11 = kv_temp.len() (reference counter `kv_temp_len: u4`, reset at 12 by the `> 11` guard)	src/terminal/kitty/graphics_command.zig:30 `kv_temp: [11]u8` (kv_temp_len: u4, :31)	kitty_kv_temp_capacity_saturation	increment-then-check-then-write: `kv_temp_len += 1; if kv_temp_len > 11 { overflow; reset } kv_temp[idx]=c` (graphics_command.rs:300-309); max write index 10. Test feeds 15 key bytes; overflow -> ControlKeyIgnore -> complete() Err.
+apc_identify	crates/rustty-vt/src/apc/mod.rs:369	crates/rustty-vt/src/apc/mod.rs:185	4 = buf.len() (reference counter `len: u3` = IntFittingRange(0,4+1), indexes 0..=4)	src/terminal/apc.zig:169 `buf: [4]u8` (len: u3, :168)	apc_identify_buf_capacity_saturation	pre-write guard `id.len >= id.buf.len()` (apc/mod.rs:178) -> Ignore. Canonical IntFittingRange shape. Test fills "25a1" to the 4-byte ceiling (glyph match), then a 5th identify byte is dropped.
+sgr_print_attributes	crates/rustty-vt/src/terminal.rs:4202	crates/rustty-vt/src/terminal.rs:4208	8 = count of style flags that can each push one byte (bold,faint,italic,underline,blink,inverse,invisible,strikethrough)	src/terminal/Terminal.zig:2793 `var attrs: [8]u8`	terminal_print_attributes_capacity_saturation	write-then-increment `attrs[i]=code; i+=1` per set flag (terminal.rs:4206-4243). N is the exact flag count; a pen with all 8 set drives i to the ceiling of 8. Test sets all 8 flags and asserts all codes emit.
+pagelist_pin_buf	crates/rustty-vt/src/pagelist/access.rs:228	crates/rustty-vt/src/pagelist/access.rs:239	16 = pin_buf.len() (post-store guard `pin_count >= pin_buf.len()`)	src/terminal/PageList.zig:4260 `pin_buf: [16]*Pin`	pagelist_pin_buf_capacity_saturation	write-then-increment-then-check: `pin_buf[pin_count]=p; pin_count+=1; if pin_count>=16 { Err(TooManyTrackedPinsInRow) }` (access.rs:239-242). Test tracks 16 pins in one row -> guard errors; 3 pins render fine.
+osc_capture_buffer	crates/rustty-vt/src/osc/mod.rs:496	crates/rustty-vt/src/osc/mod.rs:787	2048 = MAX_BUF (osc/mod.rs:484)	src/terminal/osc.zig:303 `buffer: [MAX_BUF]u8` (MAX_BUF=2048, :292)	osc_buffer_capacity_saturation	fixed-backing guard `if w.len() >= MAX_BUF { state = Invalid } else { push }` (osc/mod.rs:784). Test fills MAX_BUF bytes (still valid), then the MAX_BUF+1th flips State::Invalid.
