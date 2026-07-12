@@ -17,12 +17,16 @@ echo "== 2/3 generating app resources (zig-out/share) =="
 cargo run -q -p xtask -- resources
 
 echo "== 3/3 xcodebuild =="
-# -lz  : full system zlib (rustty's vendored libz.a is inflate-only; sentry needs deflate).
-# -lintl: gettext runtime (rustty's vendored gettext-sys is the localename slice only).
-# Both are follow-ups to fold into the self-contained lib (see MILESTONE.md).
+# zlib is now self-contained: rustty's vendored libz.a builds FULL zlib
+# (inflate + deflate; xtask P3 vendored deflate.c/trees.c/compress.c) and xtask
+# folds it into libGhosttyKit.a, so sentry's `deflate` resolves from the app's
+# own archive — no system `-lz` needed.
+# -lintl: gettext runtime. STILL required — rustty's vendored gettext-sys is the
+# localename slice only (no dgettext/bindtextdomain/textdomain). Folding full
+# libintl is a large vendor change; see DEFERRALS.md ("self-contained libintl").
 cd macos
 exec xcodebuild -project Ghostty.xcodeproj -scheme Ghostty -configuration Debug \
   -destination 'platform=macOS,arch=arm64' \
   CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
-  OTHER_LDFLAGS="-lstdc++ -lz -L/opt/homebrew/opt/gettext/lib -lintl" \
+  OTHER_LDFLAGS="-lstdc++ -L/opt/homebrew/opt/gettext/lib -lintl" \
   "$@"

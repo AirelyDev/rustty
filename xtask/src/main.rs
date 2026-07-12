@@ -204,11 +204,28 @@ fn header_gen_apprt() -> Result<PathBuf, String> {
 /// R3: uses rustty's OWN vendored `include/ghostty.h` (byte-identical to the
 /// pinned upstream, frozen by `check_ghostty_h_abi.sh`), never the ghostty
 /// checkout.
+/// The minimum macOS version the shipped staticlib targets. Matches the floor
+/// of the reused Swift app's `MACOSX_DEPLOYMENT_TARGET` in
+/// `macos/Ghostty.xcodeproj` (the main app + most configs are 13.0; a few
+/// helpers are 13.1/15.5). Pinning the Rust/C build to this floor makes the
+/// object files compatible with every app target and silences the ld
+/// "object file was built for newer macOS version than being linked" warnings
+/// that appear when the host toolchain defaults to the running OS (e.g. 26.x).
+const MACOS_DEPLOYMENT_TARGET: &str = "13.0";
+
 fn xcframework() -> Result<PathBuf, String> {
     let root = workspace_root();
     let target = "aarch64-apple-darwin";
 
     // 1. Build the identity-ghostty staticlib under the abort profile.
+    //
+    // MACOSX_DEPLOYMENT_TARGET pins the minimum-OS the compiler stamps into
+    // every object: rustc passes it to LLVM's target triple and the `cc`-driven
+    // -sys builds (zlib/freetype/harfbuzz/…) forward it to clang's
+    // `-mmacosx-version-min`. Without it the host toolchain stamps the running
+    // OS, so the app (deployment target 13.0) gets "built for newer macOS"
+    // linker warnings. Set as an env on the Command so it reaches BOTH rustc and
+    // every build-script `cc` invocation this cargo build spawns.
     let status = Command::new("cargo")
         .args([
             "build",
@@ -221,6 +238,7 @@ fn xcframework() -> Result<PathBuf, String> {
             "--target",
             target,
         ])
+        .env("MACOSX_DEPLOYMENT_TARGET", MACOS_DEPLOYMENT_TARGET)
         .current_dir(&root)
         .status()
         .map_err(|e| format!("spawn cargo build: {e}"))?;

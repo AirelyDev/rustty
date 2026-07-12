@@ -18,7 +18,16 @@
 //! (`terminal/kitty/graphics_image.zig`) needs DEFLATE decompression
 //! (`std.compress.flate`), so the verbatim upstream inflate translation units
 //! (`crc32`, `inftrees`, `inffast`, `inflate`) plus the one-shot `uncompr`
-//! entry point and shared `zutil` support are now vendored and compiled here.
+//! entry point and shared `zutil` support are vendored and compiled here.
+//!
+//! P3 self-contained lib: the DEFLATE **compression** translation units
+//! (`deflate`, `trees`, `compress`) are now vendored and compiled too, so the
+//! archive `cc` emits is FULL zlib — both inflate and deflate. The macOS Swift
+//! app links Sentry's crash reporter, which calls `deflate`/`deflateInit2_`/
+//! `deflateEnd` to gzip its envelopes; folding those objects into the combined
+//! `libGhosttyKit.a` (xtask `xcframework`) makes the shipped archive
+//! self-contained for zlib, so the app no longer needs a system `-lz`. All
+//! vendored `.c`/`.h` are verbatim upstream zlib 1.3.1 (byte-identical, R3).
 
 use std::path::PathBuf;
 
@@ -26,9 +35,11 @@ use std::path::PathBuf;
 ///
 /// `adler32`/`crc32` provide the checksums; `inftrees`/`inffast`/`inflate`
 /// provide the DEFLATE decompressor; `uncompr` provides the one-shot
-/// `uncompress` entry point; `zutil` provides the shared support routines.
-/// These are the verbatim upstream zlib 1.3.1 sources needed for the inflate
-/// (decompression) surface the reference's `std.compress.flate` covers.
+/// `uncompress` entry point; `deflate`/`trees` provide the DEFLATE compressor;
+/// `compress` provides the one-shot `compress`/`compress2` entry point; `zutil`
+/// provides the shared support routines. These are the verbatim upstream zlib
+/// 1.3.1 sources — the full inflate AND deflate surface, so the emitted archive
+/// is self-contained (P3: Sentry's crash reporter links `deflate`).
 const SOURCES: &[&str] = &[
     "vendor/adler32.c",
     "vendor/crc32.c",
@@ -36,6 +47,9 @@ const SOURCES: &[&str] = &[
     "vendor/inffast.c",
     "vendor/inflate.c",
     "vendor/uncompr.c",
+    "vendor/deflate.c",
+    "vendor/trees.c",
+    "vendor/compress.c",
     "vendor/zutil.c",
 ];
 
@@ -68,4 +82,6 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=vendor/zlib.h");
     println!("cargo:rerun-if-changed=vendor/zconf.h");
+    println!("cargo:rerun-if-changed=vendor/deflate.h");
+    println!("cargo:rerun-if-changed=vendor/trees.h");
 }
