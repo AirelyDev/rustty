@@ -45,6 +45,9 @@ __pycache__/
 .zig-cache/
 **/.zig-cache/
 /.port/phase-0/harness/**/zig-out/
+# Root zig-out/ resource tree — the macOS Copy-Resources share/ folders, fully
+# regenerable via `cargo run -p xtask -- resources`.
+/zig-out/
 
 # Phase-0 benchmark corpora (Goal-2 perf baseline): regenerable via the recipe in
 # .port/phase-0/baseline/METHODOLOGY.md (deterministic `ghostty-gen`/rustty-synthetic

@@ -11,6 +11,11 @@
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
+mod res_editor;
+mod res_misc;
+mod res_shell;
+mod res_terminfo;
+
 const USAGE: &str = "\
 xtask — rustty build orchestration
 
@@ -21,6 +26,7 @@ SUBCOMMANDS:
     header-gen         Generate include/rustty.h from rustty-vt-c via cbindgen (R2)
     header-gen-apprt   Generate include/rustty-apprt.h from rustty-apprt-c via cbindgen (R2)
     xcframework        Package rustty-apprt-c into dist/GhosttyKit.xcframework (macOS Swift-app tier)
+    resources          Generate zig-out/share/{terminfo,ghostty,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase
     help               Show this help
 ";
 
@@ -54,6 +60,16 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("xtask: xcframework failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("resources") => match resources() {
+            Ok(out) => {
+                println!("wrote {}", out.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("xtask: resources failed: {e}");
                 ExitCode::FAILURE
             }
         },
@@ -254,4 +270,35 @@ fn xcframework() -> Result<PathBuf, String> {
         return Err(format!("xcodebuild exited with {status}"));
     }
     Ok(out)
+}
+
+/// Generate the `zig-out/share/` resource tree the macOS Xcode Copy-Resources
+/// phase copies into `Ghostty.app` (referenced as `../zig-out/share/<name>`
+/// from `macos/Ghostty.xcodeproj`).
+///
+/// Ports the resource branch of ghostty's `zig build install` (the
+/// `GhosttyResources.zig` / `GhosttyDocs.zig` / `GhosttyI18n.zig` install steps
+/// that populate `zig-out/share/`). Each subtree is produced by its own
+/// disjoint generator module driving the already-ported pure Rust generators
+/// (`rustty-terminfo`, `rustty-extra`, `rustty-helpgen`, …):
+///
+///   * [`res_terminfo::gen_terminfo`] — `share/{terminfo,ghostty}` (runtime-critical).
+///   * [`res_shell::gen_shell`]       — `share/{bash-completion,zsh,fish}`.
+///   * [`res_editor::gen_editor`]     — `share/{vim,nvim}`.
+///   * [`res_misc::gen_misc`]         — `share/{man,locale,bat}`.
+///
+/// All ten folders end up present so the Xcode Copy-Resources phase resolves
+/// every reference (R5: any not-yet-ported generator still leaves a minimal
+/// VALID folder + a DEFERRALS entry, never fake content).
+fn resources() -> Result<PathBuf, String> {
+    let root = workspace_root();
+    let share = root.join("zig-out/share");
+    std::fs::create_dir_all(&share).map_err(|e| format!("create zig-out/share/: {e}"))?;
+
+    res_terminfo::gen_terminfo(&share).map_err(|e| format!("gen_terminfo: {e}"))?;
+    res_shell::gen_shell(&share).map_err(|e| format!("gen_shell: {e}"))?;
+    res_editor::gen_editor(&share).map_err(|e| format!("gen_editor: {e}"))?;
+    res_misc::gen_misc(&share).map_err(|e| format!("gen_misc: {e}"))?;
+
+    Ok(share)
 }
