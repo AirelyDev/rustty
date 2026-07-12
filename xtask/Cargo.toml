@@ -21,3 +21,4 @@ name = "xtask"
 path = "src/main.rs"
 
 [dependencies]
+rustty-extra = { workspace = true }
