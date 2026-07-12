@@ -24,3 +24,24 @@
 ## Deferred (optional features, not MVP)
 - 5 non-display Darwin exports (quicklook_font/word, inspector_metal_*), the 2 inspector
   core-seams — `unimplemented!()` leaves, fine for a basic terminal.
+
+## ✅ MILESTONE ACHIEVED (2026-07-12) — RUNNABLE macOS TERMINAL
+
+`macos/build-rustty.sh` builds `Ghostty.app`; launching it produces:
+- **A terminal window** (AppKit surface up — verified: `count of windows` = 1).
+- **A live shell**: the app spawns `/usr/bin/login → /bin/zsh` in a pty via rustty's
+  ported termio (verified in the process tree). The full stack works end-to-end:
+  reused Swift frontend → rustty `ghostty_*` C-ABI → surface → termio → pty → shell → renderer.
+
+This is the payoff: rustty's ported Rust terminal engine, linked into the reused ghostty
+AppKit app, running as a real macOS terminal.
+
+### Follow-ups (non-blocking refinements)
+- **Self-contained lib**: currently links system `-lz` + Homebrew `-lintl` because rustty's
+  vendored `libz.a` is inflate-only (no `deflate`; sentry needs it) and `gettext-sys` is the
+  localename slice only (no `dgettext`). Fold full zlib + gettext into the combined lib to
+  drop the system/Homebrew link deps (VALIDATION_REPORT_2 flagged the gettext slice).
+- **Identity rebrand (R2)**: bundle id / app name still `Ghostty`; the icon is upstream's.
+- **Deployment target**: staticlib built for macOS 26.5 vs app target 13.0 (harmless warnings;
+  set MACOSX_DEPLOYMENT_TARGET on the cargo build to match).
+- **Deferred features**: quicklook, live inspector, the 5 non-display Darwin exports.
