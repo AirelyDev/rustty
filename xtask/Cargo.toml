@@ -22,3 +22,7 @@ path = "src/main.rs"
 
 [dependencies]
 rustty-extra = { workspace = true }
+# identity-ghostty: emit the `xterm-ghostty` terminfo spelling so the reused
+# macOS Swift app's hard-coded `TERM=xterm-ghostty` resolves at runtime (R2;
+# `xterm-rustty` is the canonical name — see xtask/src/res_terminfo.rs).
+rustty-terminfo = { workspace = true, features = ["identity-ghostty"] }
