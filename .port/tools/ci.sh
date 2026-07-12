@@ -53,7 +53,22 @@
 #   G5  run_fuzz_smoke.sh            differential fuzz clean         -> PROGRESS*
 #   G6  check_leaks.sh               leak-free (tracking-alloc/Miri) -> PROGRESS*
 #
-#   HARD-FAIL gates must be green from day one (G7 holds via the topo-ordered
+#   D1-D9  Bun semantic-mismatch detectors (BUN_PORT_LEARNINGS §4) — each kills a
+#          class of invisible Zig->Rust divergence that slipped every Bun gate:
+#   D1  check_slice_reinterpret.sh    slice-reinterpret allowlist    -> PROGRESS
+#   D2  check_capacity_saturation.sh  fixed-array/counter inventory  -> PROGRESS
+#   D3  check_constants_parity.py     derived-constant expr parity   -> PROGRESS
+#   D4  check_comptime_phase.sh       golden VT bytes + ST-integrity -> PROGRESS
+#   D5  check_paired_invariants.sh    cross-site invariant catalog   -> PROGRESS
+#   D6  check_sanitizer_canary.sh     ASan-visibility canary + cfg   -> PROGRESS
+#   D8  check_clone_injection.sh      clone-injection review list    -> PROGRESS (advisory)
+#   D9  check_stale_comments.sh       stale-comment contract check   -> PROGRESS (advisory)
+#          Registered PROGRESS not HARD (R5): brand-new, fail-closed against
+#          hand-maintained audit ledgers; PROGRESS avoids a transiently
+#          un-passable CI while a new hit precedes its ledger row by a commit.
+#          All GREEN on today's tree; each fail-closed one ships a --self-test.
+#
+#  HARD-FAIL gates must be green from day one (G7 holds via the topo-ordered
 #   acyclic rustty Cargo graph; G4 is ARMED: it keys on the port driver
 #   harness/bin/vt_driver_port (override: $RUSTTY_VT_DRIVER; build it with
 #   .port/phase-0/harness/build_port_driver.sh) and runs the real byte-exact
@@ -135,6 +150,28 @@ GATE_REGISTRY=(
   "G8|PROGRESS|$PY $GATES/check_baseline_regression.py"
   "G5|PROGRESS|bash $GATES/run_fuzz_smoke.sh"
   "G6|PROGRESS|bash $GATES/check_leaks.sh --all-done"
+  # D1-D9 — Bun semantic-mismatch detectors (.port/phase-2/BUN_PORT_LEARNINGS.md
+  # §4). Each kills one class of the invisible Zig->Rust divergence that slipped
+  # every Bun gate. They are ADDITIVE (weaken no existing gate, R5). Registered
+  # PROGRESS, not HARD, on purpose: they are brand-new, fail-closed against
+  # hand-maintained audit ledgers (slice-reinterpret.tsv, capacity-saturation.tsv,
+  # VT_INVARIANTS.md, stale-comments-D9.tsv, …), so a legitimate new hit that
+  # lands one commit before its ledger row would flip a HARD gate RED and make CI
+  # transiently un-passable. PROGRESS keeps R5's "never un-passable" contract
+  # while the detectors bed in; they are proven GREEN on today's tree (each
+  # ships a --self-test proving the RED flip). Promote a detector to HARD once it
+  # has ridden the port clean for a while. D8/D9 are advisory by construction
+  # (exit 0 + a review list); the fail-closed ones (D1/D2/D4/D6) still surface a
+  # real RED — and in ci.sh's run_gate a PROGRESS RED (non-0/non-3) is still a
+  # HARD_FAILURE, so a genuine regression is never silently swallowed.
+  "D1|PROGRESS|bash $GATES/check_slice_reinterpret.sh"
+  "D2|PROGRESS|bash $GATES/check_capacity_saturation.sh"
+  "D3|PROGRESS|$PY $GATES/check_constants_parity.py"
+  "D4|PROGRESS|bash $GATES/check_comptime_phase.sh"
+  "D5|PROGRESS|bash $GATES/check_paired_invariants.sh"
+  "D6|PROGRESS|bash $GATES/check_sanitizer_canary.sh"
+  "D8|PROGRESS|bash $GATES/check_clone_injection.sh"
+  "D9|PROGRESS|bash $GATES/check_stale_comments.sh"
 )
 
 HARD_FAILURES=()   # hard-fail checks that failed, or a claimed-done regression

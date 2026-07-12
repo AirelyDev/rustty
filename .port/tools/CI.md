@@ -42,6 +42,14 @@ local iteration.
 | **G8** | `check_baseline_regression.py` | `_gatelib.py` | PROGRESS* |
 | **G5** | `run_fuzz_smoke.sh` | harness `FUZZ-INVENTORY.md`, `comparator.py` | PROGRESS* |
 | **G6** | `check_leaks.sh` | Miri (pure) / ASan (FFI + live-syscall tests), `_gatelib` done-detection; missing miri ⇒ exit 3 BLOCKED | PROGRESS* |
+| **D1** | `check_slice_reinterpret.sh` | `.port/audits/slice-reinterpret.tsv` | PROGRESS |
+| **D2** | `check_capacity_saturation.sh` | `.port/audits/capacity-saturation.tsv` | PROGRESS |
+| **D3** | `check_constants_parity.py` | port markers + ghostty oracle | PROGRESS |
+| **D4** | `check_comptime_phase.sh` | `check_comptime_phase.md`, `crates/rustty-vt/tests/d4_golden_vt_bytes.rs` | PROGRESS |
+| **D5** | `check_paired_invariants.sh` | `.port/phase-2/VT_INVARIANTS.md`, `crates/rustty-vt/tests/d5_paired_invariants.rs` | PROGRESS |
+| **D6** | `check_sanitizer_canary.sh` | `.port/phase-2/d6-canary/`, `d6_cfg_mapping_audit.py` | PROGRESS |
+| **D8** | `check_clone_injection.sh` | (advisory review list) | PROGRESS |
+| **D9** | `check_stale_comments.sh` | `.port/audits/stale-comments-D9.tsv`, `D9_STALE_COMMENT_CHECKLIST.md` | PROGRESS |
 
 > **G5 (differential fuzz)** and **G6 (leak-free)** are wired progress-mode
 > runners now. G5: if `cargo fuzz` + the `vt_diff` target in
@@ -154,6 +162,41 @@ A **BLOCKED** result from any of these (e.g. `tests-summary.json` lacks the
 `crate_map`, `parity-surface.json` absent, `BASELINE.json` unreadable) exits 3
 and is surfaced by ci.sh as a **WARNING** — pending contracts/tooling are
 BLOCKED, never GREEN-by-default (DoP §0/§5).
+
+---
+
+## Bun semantic-mismatch detectors (D1–D9)
+
+These are **additive** gates (they weaken no existing G-gate, R5) ported from the
+Bun post-mortem catalog in `.port/phase-2/BUN_PORT_LEARNINGS.md` §4. Each kills
+one class of *invisible* Zig→Rust divergence — a mismatch that produced no
+compile error, no Miri finding, and no failing test, so it slipped every one of
+Bun's gates. D7 is intentionally absent (no detector was carved for it).
+
+| DoP id | Kills (Bun class / issue) | What it checks | Kind |
+|---|---|---|---|
+| **D1** | Class 1 — slice reinterpret truncate-vs-panic (`oven-sh/bun#31188`) | every `bytemuck::cast_slice`/`align_to`/widening `from_raw_parts` hit is allowlisted in `slice-reinterpret.tsv` with a decision + guard test; unlisted/stale/unguarded ⇒ RED | PROGRESS |
+| **D2** | Class 2a — capacity off-by-one silent OOB write (`#31503`) | every fixed `[T; N]` + write-then-increment counter pair is inventoried and names a `_capacity_saturation` test that drives it to the ceiling | PROGRESS |
+| **D3** | Class 2b — constants-by-expression parity | derived Zig constants port as the *same expression*, not a folded literal; port markers clean | PROGRESS |
+| **D4** | Class 3 — comptime→runtime VT-string corruption (`#30693`) | byte-exact golden VT bytes + OSC/ST-integrity tests (`d4_golden_vt_bytes.rs`) | PROGRESS |
+| **D5** | Class 4 — dropped paired invariant (`#30678`) | the cross-site producer/consumer invariant catalog (`VT_INVARIANTS.md`) is complete and every anchor + seam test present | PROGRESS |
+| **D6** | Class 5 — sanitizer blinded by flattened build switch (`#30875`) | an ASan-visibility **canary** proves the sanitizer lane can still SEE the port's heap, + cfg-mapping/suppression audit | PROGRESS |
+| **D8** | clone-injection (perf/alloc) | advisory review list of unexplained copies; confirmed by the G8 bench lane at tier finales (always exit 0) | PROGRESS |
+| **D9** | stale-comment contract drift | candidate stale/semantic-mismatch comments printed for review; sealed via `stale-comments-D9.tsv` (always exit 0) | PROGRESS |
+
+**Why PROGRESS, not HARD** (even for the fail-closed ones D1/D2/D4/D6): they are
+brand-new and fail-closed against **hand-maintained audit ledgers**. A legitimate
+new hit that lands one commit *before* its ledger row is added would flip a HARD
+gate RED and make CI transiently **un-passable** — exactly what R5 forbids.
+PROGRESS lets them bed in. They are all **GREEN on today's tree**, and each
+fail-closed detector ships a `--self-test` proving it flips RED on an injected
+violation and GREEN once allowlisted. Note the ci.sh `run_gate` contract still
+treats a PROGRESS gate's RED (exit non-0/non-3) as a `HARD_FAILURE`, so a genuine
+regression is **never silently swallowed** — PROGRESS only changes the exit-0
+bucket (progress line vs PASSED), it does not hide a real finding. Promote a
+detector to HARD once it has ridden the port clean. D8/D9 are advisory by
+construction (exit 0 + a review list); their binding enforcement is the review
+step and, for D8, the G8 bench lane.
 
 ---
 
