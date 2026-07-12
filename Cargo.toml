@@ -189,6 +189,10 @@ rustty-apprt-c = { path = "crates/rustty-apprt-c" }
 rustty-cli = { path = "crates/rustty-cli" }
 # Shell-completion + editor-syntax generators (port of src/extra/). Above config+cli.
 rustty-extra = { path = "crates/rustty-extra" }
+# The benchmark suite + its `rustty_benchmark_cli` C-ABI export (port of src/benchmark/).
+# apprt-c force-links it (the `_ = benchmark.CApi` analog) so `ghostty_benchmark_cli` lands
+# in the app C-ABI staticlib under `identity-ghostty`.
+rustty-bench = { path = "crates/rustty-bench" }
 # Additive infra glue (R1): Zig stdlib equivalents; not in the parity contract.
 rustty-zigstd = { path = "crates/rustty-zigstd" }
 # Build-time help_strings doc-table extraction (R1 port of src/helpgen.zig). A

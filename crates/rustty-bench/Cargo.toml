@@ -15,6 +15,16 @@ authors.workspace = true
 [lints]
 workspace = true
 
+# Branch A `ghostty_benchmark_cli` symbol identity (PREPORT_SWIFT_APP §3). OFF by
+# default so the canonical product exports only `rustty_benchmark_cli` (R2); enabling
+# `identity-ghostty` compiles `src/ghostty_alias.rs`, adding the `ghostty_benchmark_cli`
+# thin forwarder over the canonical body. apprt-c enables this feature from its own
+# `identity-ghostty` so the alias lands in the linked staticlib alongside the app-C-ABI
+# ones (this is the `benchmark` slice of the 90-symbol app C-ABI; its body lives here,
+# so the alias lives here too — the `rustty-config` per-crate precedent).
+[features]
+identity-ghostty = []
+
 [dependencies]
 rustty-vt = { workspace = true }
 rustty-simd = { workspace = true }

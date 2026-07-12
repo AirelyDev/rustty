@@ -33,6 +33,15 @@ pub unsafe extern "C" fn ghostty_cli_try_action() {
     unsafe { crate::rustty_cli_try_action() }
 }
 #[no_mangle]
+pub extern "C" fn ghostty_info() -> Info {
+    crate::rustty_info()
+}
+#[no_mangle]
+pub unsafe extern "C" fn ghostty_translate(msgid: *const c_char) -> *const c_char {
+    // SAFETY: forwards the caller contract unchanged to the canonical rustty_* export.
+    unsafe { crate::rustty_translate(msgid) }
+}
+#[no_mangle]
 pub unsafe extern "C" fn ghostty_app_new(opts: *const Options, config: *const Config) -> *mut App {
     // SAFETY: forwards the caller contract unchanged to the canonical rustty_* export.
     unsafe { crate::rustty_app_new(opts, config) }

@@ -148,6 +148,24 @@ pub mod capi;
 #[cfg(feature = "identity-ghostty")]
 mod ghostty_alias;
 
+// reference (main_c.zig:31-46): the C API hub's `comptime` block force-references
+// the sibling C-API decls so their `export` fns are truly emitted by the C API lib:
+//   comptime {
+//       _ = @import("config.zig").CApi;                              // Config C ABI
+//       if (@hasDecl(apprt.runtime, "CAPI")) _ = apprt.runtime.CAPI; // apprt.embedded
+//       _ = @import("benchmark/main.zig").CApi;                      // benchmark
+//   }
+//
+// In rustty: `config.CApi` is force-linked already (this crate USES
+// `rustty_config::Config`, pulling its rlib — incl. the `rustty_config_*` /
+// `ghostty_config_*` exports — into the staticlib); `apprt.runtime.CAPI` IS this crate
+// (the exports below, plus the E5 `capi` structs). Only the benchmark slice needs an
+// explicit force-link: `rustty_benchmark_cli` (and its `ghostty_benchmark_cli` alias)
+// live in rustty-bench and are otherwise unreferenced here, so `extern crate ... as _`
+// links the rlib and pulls both symbols into the C API staticlib — the faithful analog
+// of the reference `_ = @import("benchmark/main.zig").CApi`.
+extern crate rustty_bench as _;
+
 // ===================================================================
 // C API exports — 1:1 with the reference `pub export fn ghostty_*` /
 // `@export(..., .{ .name = "ghostty_*" })` lines (rustty_ prefix per R2).
@@ -784,6 +802,153 @@ impl String {
 pub unsafe extern "C" fn rustty_string_free(str: String) {
     // str.deinit();
     str.deinit();
+}
+
+// ===================================================================
+// main_c.zig `ghostty_info` + `ghostty_translate` — the remaining two `main_c.zig`
+// C API hub exports of the 90-symbol app C-ABI (its `main_c` slice; `ghostty_init`
+// landed above, `ghostty_string_free` just above, and `ghostty_cli_try_action` stays
+// deferred with the BREAK #1 global-state seam). Authored 1:1 with the reference
+// `pub export fn ghostty_*` (rustty_ prefix per R2).
+// ===================================================================
+
+/// PORTS: `main_c.zig`'s `const Info = extern struct { ... }` (`ghostty_info_s`) —
+/// the build metadata [`rustty_info`] returns by value.
+//
+// /// ghostty_info_s
+// const Info = extern struct {
+//     mode: BuildMode,
+//     version: [*]const u8,
+//     version_len: usize,
+//     ...
+// };
+//
+// PORT NOTE: the reference `Info` is a private (`const`, non-`pub`) file-local struct
+// referenced only by `ghostty_info`'s return; the rustty projection is `pub` so cbindgen
+// emits `ghostty_info_s` into the header. `[*]const u8` → a plain `*const u8` (a
+// NON-sentinel byte pointer whose length is carried explicitly by `version_len`).
+#[repr(C)]
+pub struct Info {
+    // mode: BuildMode,
+    pub mode: BuildMode,
+    // version: [*]const u8,
+    pub version: *const u8,
+    // version_len: usize,
+    pub version_len: usize,
+}
+
+/// The `Info.BuildMode` optimization-mode enum (`ghostty_build_mode_e`). The ordinals
+/// are ABI-frozen (ghostty.h:385-390 / PREPORT_SWIFT_APP §6): `debug = 0`,
+/// `release_safe = 1`, `release_fast = 2`, `release_small = 3`.
+//
+// const BuildMode = enum(c_int) {
+//     debug,
+//     release_safe,
+//     release_fast,
+//     release_small,
+// };
+//
+// PORT NOTE: a fieldless `#[repr(C)]` enum lowers to a C `int` (== the reference
+// `enum(c_int)`); the variants keep the reference declaration order so the ordinals
+// match bit-for-bit (I9).
+#[repr(C)]
+pub enum BuildMode {
+    // debug,
+    Debug,
+    // release_safe,
+    ReleaseSafe,
+    // release_fast,
+    ReleaseFast,
+    // release_small,
+    ReleaseSmall,
+}
+
+/// C: rustty_info
+///
+/// Return metadata about Rustty, such as version, build mode, etc.
+//
+// pub export fn ghostty_info() Info {
+//     return .{
+//         .mode = switch (builtin.mode) {
+//             .Debug => .debug,
+//             .ReleaseSafe => .release_safe,
+//             .ReleaseFast => .release_fast,
+//             .ReleaseSmall => .release_small,
+//         },
+//         .version = build_config.version_string.ptr,
+//         .version_len = build_config.version_string.len,
+//     };
+// }
+//
+// PORT NOTE: Rust has no `builtin.mode` reflection over the four Zig optimization
+// modes; a build is only ever debug xor optimized, distinguished by
+// `cfg!(debug_assertions)` — exactly the split rustty-build-config's `mode_string()`
+// already collapses the four Zig modes to ("Debug" xor "ReleaseFast"). So a debug build
+// reports `.Debug` and an optimized build `.ReleaseFast` — the two modes rustty can
+// actually be built in; the `release_safe`/`release_small` arms have no rustty analog.
+// `version` is `rustty_build_config::VERSION_STRING` (the reference
+// `build_config.version_string`): a `&'static str` whose `.as_ptr()`/`.len()` map the
+// reference `[*]const u8` `.ptr`/`.len` — a plain (NON-NUL-terminated) byte pointer the
+// host reads for exactly `version_len` bytes. The pointer is into static storage, valid
+// for the whole program (no free).
+#[no_mangle]
+pub extern "C" fn rustty_info() -> Info {
+    // return .{ .mode = switch (builtin.mode) { ... }, .version = ..., .version_len = ... };
+    Info {
+        mode: if cfg!(debug_assertions) {
+            // .Debug => .debug
+            BuildMode::Debug
+        } else {
+            // .ReleaseFast => .release_fast (the only optimized mode rustty builds as)
+            BuildMode::ReleaseFast
+        },
+        // .version = build_config.version_string.ptr,
+        version: rustty_build_config::VERSION_STRING.as_ptr(),
+        // .version_len = build_config.version_string.len,
+        version_len: rustty_build_config::VERSION_STRING.len(),
+    }
+}
+
+/// C: rustty_translate
+///
+/// Translate a string maintained by libghostty into the current
+/// application language. This will return the same string (same pointer)
+/// if no translation is found, so the pointer must be stable through
+/// the function call.
+///
+/// This should only be used for singular strings maintained by Ghostty.
+//
+// pub export fn ghostty_translate(msgid: [*:0]const u8) [*:0]const u8 {
+//     return internal_os.i18n._(msgid);
+// }
+//
+// PORT NOTE (i18n deferred → faithful identity degradation): the reference forwards to
+// the gettext `_` wrapper (`internal_os.i18n._`, os/i18n.zig:65), which is
+// `if (!build_config.i18n) return msgid; return dgettext(bundle_id, msgid);`. That
+// wrapper IS ported (`rustty_os::i18n::gettext_`, `_` renamed since it is not a valid
+// Rust fn name), BUT the whole gettext RUNTIME is a BREAK #1 deferred seam: `i18n.init`
+// (the `bindtextdomain` bind) is never called (DEFERRALS.md — it stays in the deferred
+// `GlobalState::init` set alongside `ensureLocale`/`glslang.init`/`oni.init`), and the
+// `dgettext` symbol `gettext_` calls is NOT provided by the reduced vendored `gettext-sys`
+// (which exports only the gnulib `locale_name_canonicalize`), so linking `gettext_` into
+// this C-ABI staticlib/cdylib fails on `_dgettext`. Until the full libintl link lands with
+// the i18n seam, this returns `msgid` UNCHANGED — the identity translation. This is
+// behavior-equivalent to the deferred state anyway: with no domain ever bound, real
+// `dgettext` returns `msgid` verbatim too, so callers observe the exact
+// "same string (same pointer) if no translation is found" contract the doc-comment above
+// promises. `[*:0]const u8` ↔ `*const c_char`; the returned pointer IS `msgid`, so the
+// "pointer must be stable through the function call" contract holds trivially.
+///
+/// # Safety
+/// `msgid` must be a valid NUL-terminated C string that stays valid through the call
+/// (the reference `[*:0]const u8` contract — "the pointer must be stable through the
+/// function call").
+#[no_mangle]
+pub unsafe extern "C" fn rustty_translate(msgid: *const c_char) -> *const c_char {
+    // return internal_os.i18n._(msgid);
+    //   i18n deferred (see PORT NOTE): return the msgid unchanged — the identity path
+    //   the reference `_` itself takes when no translation domain is bound.
+    msgid
 }
 
 // ===================================================================

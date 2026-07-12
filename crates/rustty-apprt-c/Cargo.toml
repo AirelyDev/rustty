@@ -33,10 +33,12 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 # `src/ghostty_alias.rs`, adding a `ghostty_<name>` thin forwarder per app export so the
 # staticlib exports BOTH spellings and the upstream Ghostty Swift app links unchanged.
 [features]
-# Enabling apprt-c's `identity-ghostty` also turns on rustty-config's `identity-ghostty`,
-# so the `ghostty_config_*` forwarders (defined in rustty-config, where their bodies live)
-# are pulled into this staticlib alongside apprt-c's own `ghostty_*` app-C-ABI aliases.
-identity-ghostty = ["rustty-config/identity-ghostty"]
+# Enabling apprt-c's `identity-ghostty` also turns on rustty-config's + rustty-bench's
+# `identity-ghostty`, so the `ghostty_config_*` and `ghostty_benchmark_cli` forwarders
+# (defined in those crates, where their bodies live) are pulled into this staticlib
+# alongside apprt-c's own `ghostty_*` app-C-ABI aliases (config + benchmark are the two
+# non-`main_c` slices of the 90-symbol app C-ABI whose bodies live in sibling crates).
+identity-ghostty = ["rustty-config/identity-ghostty", "rustty-bench/identity-ghostty"]
 
 [dependencies]
 rustty-apprt = { workspace = true }
@@ -84,6 +86,18 @@ libc = "0.2"
 objc2 = { version = "0.6" }
 rustty-renderer = { workspace = true }
 rustty-datastruct = { workspace = true }
+# `ghostty_info` reads `build_config.version_string` + `builtin.mode` (main_c.zig:131);
+# rustty-build-config supplies `VERSION_STRING` + `mode_string()`. Forward edge (member 2,
+# far below apprt-c the top sink) — check_acyclic.sh stays GREEN.
+rustty-build-config = { workspace = true }
+# The benchmark C-ABI export (`ghostty_benchmark_cli` / canonical `rustty_benchmark_cli`)
+# lives in rustty-bench (`benchmark/CApi.zig`). The reference `main_c.zig` force-references
+# it via `comptime { _ = @import("benchmark/main.zig").CApi; }` so the export is linked into
+# the C API lib; apprt-c (this hub) mirrors that with an `extern crate rustty_bench as _;`
+# force-link in `lib.rs`, and enables its `identity-ghostty` feature (above) for the alias.
+# apprt-c is a TOP SINK (nothing depends on it), so this forward edge to member 28 keeps
+# check_acyclic.sh GREEN.
+rustty-bench = { workspace = true }
 
 [dev-dependencies]
 # W4-4 macos_window_host.rs. The HEADLESS proof hands a plain-NSObject MockHostView

@@ -568,6 +568,8 @@ dependencies = [
  "objc2-quartz-core",
  "rustty-apprt",
  "rustty-apprt-api",
+ "rustty-bench",
+ "rustty-build-config",
  "rustty-config",
  "rustty-core",
  "rustty-datastruct",
