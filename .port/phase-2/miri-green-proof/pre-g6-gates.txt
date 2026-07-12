@@ -1,0 +1,15 @@
+>> FAIL (1): cargo fmt --check
+>> PASS: cargo clippy -D warnings
+>> PASS: cargo build --workspace
+>> PASS: cargo test --workspace
+>> PASS: G7
+>> PASS: G4
+>> PASS: G4-uni
+>> PASS: G1
+>> PASS: G1b
+>> PASS: G2
+>> PASS: G3
+>> PASS: G3b
+>> PASS: G9
+>> PASS: G8
+>> PASS: G5

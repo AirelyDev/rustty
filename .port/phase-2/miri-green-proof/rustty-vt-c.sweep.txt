@@ -1,0 +1,3 @@
+# rustty-vt-c full Miri sweep (2026-07-12, post-fix 6f16c0a): 309/309, all ok
+   1 UB
+ 308 ok
