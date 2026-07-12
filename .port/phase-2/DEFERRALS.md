@@ -3925,3 +3925,97 @@ signal setup). Once wired, the documented `TODO(port)` tail in `rustty_cli_try_a
 becomes `std::process::exit(match action.run() { Ok(c) => c as c_int, Err(err) => {
 eprintln!(...); std::process::exit(1) } }); std::process::exit(0);` — faithful to the
 reference.
+
+## gettext-sys — self-contained libintl (`dgettext`/`bindtextdomain`/`textdomain`) deferred [added 2026-07-12, xtask P3 self-contained-lib]
+
+**Context (P3 self-contained-lib pass):** the macOS Swift-app link
+(`macos/build-rustty.sh` `OTHER_LDFLAGS`) still passes
+`-L/opt/homebrew/opt/gettext/lib -lintl` — a **Homebrew** dependency, violating
+the self-contained-archive goal (R3 wants rustty's OWN vendored C, folded into
+`libGhosttyKit.a` by xtask). **zlib was made self-contained in this same pass**
+(vendored `deflate.c`/`trees.c`/`compress.c` → full zlib, `-lz` dropped); libintl
+is NOT, and is deferred here.
+
+**Why deferred (large vendor change, not a small build.rs tweak):**
+`crates-sys/gettext-sys` currently vendors ONLY the gnulib-lib `localename`
+family — the six `.c` in `build.rs` `SOURCES` needed to define
+`gl_locale_name_canonicalize` (`_libintl_locale_name_canonicalize`). It provides
+**no** message-catalog runtime: `dgettext`/`dcgettext`/`dcigettext`/`ngettext`/
+`bindtextdomain`/`textdomain`/… are absent, so the app resolves them from
+Homebrew's `libintl`. Providing them means vendoring the **entire gettext-runtime
+`intl/` core** — per `ghostty/pkg/libintl/build.zig` `srcs`, ~23 additional
+translation units: `bindtextdom.c dcgettext.c dcigettext.c dcngettext.c
+dgettext.c dngettext.c explodename.c finddomain.c gettext.c hash-string.c
+intl-compat.c l10nflist.c langprefs.c loadmsgcat.c localealias.c log.c
+ngettext.c plural-exp.c plural.c setlocale.c textdomain.c version.c compat.c`
+plus their private headers (`gettextP.h`, `gmo.h`, `loadinfo.h`, `plural-exp.h`,
+`hash-string.h`, `gettext.h`, …) and the generated `config.h` knobs — notably
+`plural.c` is a **Bison/yacc-generated** parser (checked-in generated source).
+This is a substantial vendor+build.zig-flags port, not the "small build.rs
+change" bar P3 set for auto-doing, so it is scheduled rather than rushed.
+
+**What's needed to un-defer:** vendor the `intl/` core `.c`/`.h` above into
+`crates-sys/gettext-sys/vendor/` (verbatim upstream gettext, byte-faithful R3),
+extend `build.rs` `SOURCES` with them, forward `pkg/libintl/build.zig`'s compile
+flags (`-DHAVE_CONFIG_H -DIN_LIBINTL -DLOCALEDIR="" -DLOCALE_ALIAS_PATH=""` etc.)
+and any `config.h` additions, expand the `gettext-sys` FFI surface
+(`bindgen`/hand-written) to the catalog API, then drop
+`-L/opt/homebrew/opt/gettext/lib -lintl` from `macos/build-rustty.sh` (the folded
+`libGhosttyKit.a` will then resolve those symbols). **Until then `-lintl`
+stays** — the working build is NOT broken (P3 rule: keep the system/Homebrew link
+when the self-contained swap is a large change).
+
+## P2 crash-guard: on-feature quicklook/inspector leaves [added 2026-07-12, panic=abort abort-policy pass]
+
+**Context:** the shipped lib is `panic=abort` (assert-class aborts, like Zig's
+trap). Three not-yet-ported FEATURE leaves sit on user-triggerable paths in the
+live macOS app (W-ATTACH), so an `unimplemented!()` there would ABORT THE WHOLE
+APP the instant the user triggers the feature. Per PREPORT_SWIFT_APP §4 abort
+policy, a not-yet-ported FEATURE degrades to a recoverable no-op (faithful, and
+strictly better than aborting). Each `unimplemented!()` was replaced with the
+export's own error-sentinel — which in every case coincides with a genuine
+reference return value — plus an `eprintln!("<feature> not yet ported")` warn and
+a `TODO(port)` (the verbatim reference body is preserved above each). The Zig
+`log.warn`→`eprintln!` mapping matches this codebase's convention (e.g.
+`rustty_surface_inspector`'s `log.err`→`eprintln!`); the `log` crate is not a
+dep of apprt/apprt-c.
+
+**Guarded leaves (the REACHABLE-on-feature aborts):**
+
+1. **`rustty_surface_quicklook_font`** (`crates/rustty-apprt-c/src/lib.rs`, macOS
+   Darwin export). Trigger: Look-Up / force-click / accessibility
+   (SurfaceView_AppKit.swift:1521/1949/2361). Sentinel: `core::ptr::null_mut()` —
+   which is ALSO the reference's real early return for the non-CoreText backend
+   (`if backend != .coretext return null`). The Swift `if let fontRaw = …` just
+   skips the custom quicklook font.
+
+2. **`rustty_surface_quicklook_word`** (`crates/rustty-apprt-c/src/lib.rs`, macOS
+   Darwin export). Trigger: Look-Up (SurfaceView_AppKit.swift:1512). Sentinel:
+   `false` — the reference's "no word under cursor" return; Swift falls back to
+   `super.quickLook(with: event)`.
+
+3. **`embedded::Inspector::init`** (`crates/rustty-apprt/src/embedded.rs`).
+   Trigger: opening the inspector (`ghostty_surface_inspector` → `initInspector`
+   → here). This is the FIRST reachable leaf on the inspector feature. Sentinel:
+   `Err(ApprtError)` — the reference's own init-failure path: `rustty_surface_
+   inspector` catches it (`initInspector() catch return null`) and the macOS app
+   null-guards the result (SurfaceView_AppKit.swift:155 `guard let cInspector …
+   else { return nil }`), so the inspector simply does not open.
+
+**Why the downstream inspector leaves need NO guard (reachability analysis):**
+the core `Surface.activateInspector`/`deactivateInspector` (surface.rs), the
+`embedded::Inspector::deinit`/`initMetal`/`renderMetal` leaves, the
+`rustty_inspector_metal_*` exports, and `queueInspectorRender` are ALL reachable
+only via a *live* `Inspector` handle. Guarding `Inspector::init` (#3) makes that
+handle unconstructible, so none of them can fire on-feature — they stay honest
+Phase-3 `unimplemented!()` deferrals (untouched; R5). `activateInspector` /
+`deactivateInspector` additionally have zero live callers (the only reference is
+`Inspector::init`'s own verbatim-commented body). `redrawInspector` /
+`queueInspectorRender` have no C export or Swift caller at all.
+
+**Un-defer trigger:** the Phase-3 renderer/coretext/dcimgui fills. quicklook_font
+lands with the CoreText font-grid read (embedded.zig:2147-2186); quicklook_word
+with the renderer_state `selectWord`+`readTextLocked` path (embedded.zig:2193-2223);
+`Inspector::init` (+ its downstream metal chain) with the dcimgui ImGui context +
+Metal backend. On each fill, drop the `eprintln!` guard and restore the verbatim
+body — the export signatures already carry the faithful sentinel returns.

@@ -1863,11 +1863,28 @@ impl Inspector {
         //     .surface = surface,
         //     .ig_ctx = ig_ctx,
         // };
+        //
+        // TODO(port): dcimgui ImGui_CreateContext + core activateInspector (Phase-3
+        // leaf, embedded.zig:1015-1032). The verbatim body above is the not-yet-
+        // ported leaf. See DEFERRALS.md "P2 crash-guard: on-feature quicklook/
+        // inspector leaves".
+        //
+        // P2 INTERIM crash-guard (PREPORT_SWIFT_APP §4 abort policy): under
+        // panic=abort an `unimplemented!()` here ABORTS the whole app the moment the
+        // user OPENS the inspector — this is the FIRST reachable leaf on that feature
+        // (surface_inspector → initInspector → here), aborting before any of the
+        // downstream leaves (core `activateInspector`, `initMetal`/`renderMetal`) can
+        // run. Return the export's own init-failure sentinel `error`: the reference
+        // `rustty_surface_inspector` catches it (`initInspector() catch return null`)
+        // and the macOS app null-guards it (SurfaceView_AppKit.swift:155 `guard let
+        // cInspector … else { return nil }`), so the inspector simply does not open.
+        // Because no live `Inspector` can then exist, the whole downstream metal +
+        // `activateInspector` chain stays UNREACHABLE on-feature (nothing to guard
+        // there). Recoverable feature-unavailable, no abort. R1: faithful to the
+        // reference's own init-failure null path.
         let _ = surface;
-        unimplemented!(
-            "embedded::Inspector::init — dcimgui ImGui_CreateContext + core \
-             activateInspector (Phase-3 leaf, embedded.zig:1015-1032)"
-        )
+        eprintln!("inspector not yet ported");
+        Err(ApprtError)
     }
 
     // pub fn deinit(self: *Inspector) void { ... }

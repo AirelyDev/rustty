@@ -2624,12 +2624,23 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
     // ) catch return null;
     //
     // return copy;
+    //
+    // TODO(port): renderer font_grid + CoreText copyAttribute/copyWithAttributes
+    // (objc/coretext + renderer R-d Phase-3 leaf, embedded.zig:2147-2186). The
+    // verbatim body above is the not-yet-ported leaf. See DEFERRALS.md "P2 crash-
+    // guard: on-feature quicklook/inspector leaves".
+    //
+    // P2 INTERIM crash-guard (PREPORT_SWIFT_APP §4 abort policy): under panic=abort
+    // an `unimplemented!()` here ABORTS the whole app the moment the user triggers
+    // Look-Up / force-click / accessibility (SurfaceView_AppKit.swift:1521/1949/2361).
+    // A recoverable no-op is faithful for a not-yet-ported FEATURE and strictly
+    // better than aborting the app. Return the export's own sentinel: `null` — which
+    // is ALSO the reference's genuine early return for the non-CoreText backend
+    // (`if (font.options.backend != .coretext) return null;`), so the Swift caller's
+    // `if let fontRaw = …` simply skips the custom quicklook font. R1-faithful.
     let _ = ptr;
-    unimplemented!(
-        "rustty_surface_quicklook_font — renderer font_grid + CoreText \
-         copyAttribute/copyWithAttributes (objc/coretext + renderer R-d Phase-3 \
-         leaf, embedded.zig:2147-2186)"
-    )
+    eprintln!("quicklook_font not yet ported");
+    core::ptr::null_mut()
 }
 
 /// C: rustty_surface_quicklook_word
@@ -2684,12 +2695,21 @@ pub unsafe extern "C" fn rustty_surface_quicklook_word(
     //
     // // Read the selection
     // return readTextLocked(ptr, sel, result);
+    //
+    // TODO(port): renderer_state.mutex + selectWord + readTextLocked (renderer_state
+    // live-surface R-d Phase-3 leaf, embedded.zig:2193-2223). The verbatim body above
+    // is the not-yet-ported leaf. See DEFERRALS.md "P2 crash-guard: on-feature
+    // quicklook/inspector leaves".
+    //
+    // P2 INTERIM crash-guard (PREPORT_SWIFT_APP §4 abort policy): under panic=abort
+    // an `unimplemented!()` here ABORTS the whole app the moment the user triggers
+    // Look-Up (SurfaceView_AppKit.swift:1512). A recoverable no-op is faithful for a
+    // not-yet-ported FEATURE and strictly better than abort. Return the export's own
+    // sentinel `false` — the reference's "no word under cursor" return — on which the
+    // Swift caller falls back to `super.quickLook(with: event)`. Faithful degrade.
     let _ = (ptr, result);
-    unimplemented!(
-        "rustty_surface_quicklook_word — renderer_state.mutex + selectWord + \
-         readTextLocked (renderer_state live-surface R-d Phase-3 leaf, \
-         embedded.zig:2193-2223)"
-    )
+    eprintln!("quicklook_word not yet ported");
+    false
 }
 
 /// C: rustty_inspector_metal_init
