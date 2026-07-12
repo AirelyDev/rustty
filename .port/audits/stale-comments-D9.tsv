@@ -1,0 +1,12 @@
+# D9 stale-comment disposition ledger.
+# Format (TAB-separated):  path <TAB> line <TAB> disposition <TAB> note
+#   disposition ::= contract-ok | false-positive | needs-fix
+# Candidates are produced by .port/tools/gates/check_stale_comments.sh; the
+# review rule is .port/audits/D9_STALE_COMMENT_CHECKLIST.md.
+#
+# STATUS: open   (change to `# STATUS: SEALED` once every candidate is
+#                 dispositioned and all needs-fix are resolved — that flips the
+#                 default gate run from advisory to binding, R5 progress->bind).
+#
+# --- worked examples (spot-reviewed during D9 bring-up) ---------------------
+crates/rustty-cli/src/ssh_cache.rs	612	contract-ok	comment already states "Saturating so a garbage timestamp can't overflow" — the Rust saturating_sub contract is stated; heuristic tripped on the primitive+"overflow" proximity.
