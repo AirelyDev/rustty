@@ -1192,13 +1192,7 @@ mod tests {
         // PORT NOTE: the reference repeats a render+assert block per cursor
         // sprite and cursor_height; this helper is that block, kept
         // assertion-for-assertion.
-        fn check(
-            face: &Face,
-            atlas: &mut Atlas,
-            cp: u32,
-            want_height: u32,
-            want_offset_y: i32,
-        ) {
+        fn check(face: &Face, atlas: &mut Atlas, cp: u32, want_height: u32, want_offset_y: i32) {
             let glyph = face
                 .render_glyph(
                     allocator_api2::alloc::Global,

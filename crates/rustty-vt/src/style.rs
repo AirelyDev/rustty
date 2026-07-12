@@ -1415,10 +1415,9 @@ mod tests {
             ..Style::default()
         };
         assert_eq!(None, unsafe { set.lookup(base, style) });
-        assert_eq!(
-            Err(crate::ref_counted_set::AddError::OutOfMemory),
-            unsafe { set.add(base, style) }
-        );
+        assert_eq!(Err(crate::ref_counted_set::AddError::OutOfMemory), unsafe {
+            set.add(base, style)
+        });
         assert_eq!(0, set.count());
 
         // The adjacent memory must be untouched.

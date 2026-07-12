@@ -12020,7 +12020,10 @@ mod tests {
     }
 
     // test "Terminal: insertLines across page boundary marks all shifted rows dirty"
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
     #[test]
     fn terminal_insert_lines_across_page_boundary_marks_all_shifted_rows_dirty() {
         let mut t = Terminal::init(Global, opts_sb(10, 5, 1024)).unwrap();
@@ -12184,7 +12187,10 @@ mod tests {
     }
 
     // test "Terminal: deleteLines across page boundary marks all shifted rows dirty"
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
     #[test]
     fn terminal_delete_lines_across_page_boundary_marks_all_shifted_rows_dirty() {
         let mut t = Terminal::init(Global, opts_sb(10, 5, 1024)).unwrap();
@@ -13173,7 +13179,10 @@ mod tests {
     // tracker; this test drives multi-page scroll + insert churn and asserts
     // every page allocated during the scope is returned after `deinit` (no
     // page leak across the tracked-pin / page-split paths).
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
     #[test]
     fn terminal_pagepool_no_leak_scroll_insert_multi_page() {
         let scope = crate::pagelist::page_tracking::PageLeakScope::new();
@@ -13227,7 +13236,10 @@ mod tests {
     // tracker; this test drives resize grow + shrink churn (with reflow) and
     // asserts every page allocated during the scope is returned after `deinit`
     // (no page leak across the resize page-churn path).
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
     #[test]
     fn terminal_pagepool_no_leak_resize_grow() {
         let scope = crate::pagelist::page_tracking::PageLeakScope::new();
@@ -14900,7 +14912,10 @@ mod tests {
     }
 
     // test "Terminal: resize with high unique style per cell with wrapping"
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
     #[test]
     fn terminal_resize_with_high_unique_style_per_cell_with_wrapping() {
         let alloc = Global;
@@ -16282,7 +16297,10 @@ mod tests {
     }
 
     // test "Terminal: input glitch text"
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
     #[test]
     fn terminal_input_glitch_text() {
         const GLITCH: &[u8] = include_bytes!("res/glitch.txt");

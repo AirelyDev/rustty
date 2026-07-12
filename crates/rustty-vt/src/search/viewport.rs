@@ -446,11 +446,19 @@ mod tests {
             let sel = h.untracked();
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 0, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Active, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 3, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Active, sel.end)
+                }
             );
         }
         {
@@ -458,11 +466,19 @@ mod tests {
             let sel = h.untracked();
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 0, y: 2 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Active, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 3, y: 2 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Active, sel.end)
+                }
             );
         }
         assert!(search.next().is_none());
@@ -504,11 +520,19 @@ mod tests {
             let sel = h.untracked();
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 0, y: 1 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Active, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 3, y: 1 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Active, sel.end)
+                }
             );
         }
         assert!(search.next().is_none());
@@ -562,11 +586,19 @@ mod tests {
             let sel = h.untracked();
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 0, y: 1 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Active, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 3, y: 1 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Active, sel.end)
+                }
             );
         }
         assert!(search.next().is_none());
@@ -577,7 +609,10 @@ mod tests {
     }
 
     // test "history search, no active area"
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
     #[test]
     fn history_search_no_active_area() {
         let alloc = Allocator;
@@ -623,11 +658,19 @@ mod tests {
             let sel = h.untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
         assert!(search.next().is_none());

@@ -847,7 +847,10 @@ fn pagelist_grow_allows_exceeding_max_size_for_active_area() {
 }
 
 // ref: test "PageList grow prune required with a single page"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_grow_prune_required_with_a_single_page() {
     // Need scrollback > 0 to have a scrollbar to test
@@ -1018,7 +1021,10 @@ fn pagelist_grow_fit_in_capacity() {
 }
 
 // ref: test "PageList grow allocate"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_grow_allocate() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -1286,7 +1292,10 @@ fn pagelist_increaseCapacity_returns_OutOfSpace_at_max_capacity() {
 }
 
 // ref: test "PageList increaseCapacity multi-page"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_increaseCapacity_multi_page() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -1554,7 +1563,10 @@ fn pagelist_clears_history() {
 // =====================================================================
 
 // ref: test "PageList grow reuses non-standard page without leak"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_grow_reuses_non_standard_page_without_leak() {
     // Create a PageList with 3 * std_size max so we can fit multiple pages
@@ -1640,7 +1652,10 @@ fn pagelist_grow_reuses_non_standard_page_without_leak() {
 }
 
 // ref: test "PageList grow non-standard page prune protection"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_grow_non_standard_page_prune_protection() {
     // This test specifically verifies the fix for the bug where pruning a
@@ -1734,7 +1749,10 @@ fn pagelist_compact_std_size_page_returns_null() {
 }
 
 // ref: test "PageList compact oversized page"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_compact_oversized_page() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -3618,7 +3636,10 @@ fn screen_jump_forward_prompt_skips_multiline_continuation() {
 }
 
 // ref: test "PageList grow prune scrollback"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_grow_prune_scrollback() {
     // Use std_size to limit scrollback so pruning is triggered.
@@ -3710,7 +3731,10 @@ fn pagelist_grow_prune_scrollback() {
 }
 
 // ref: test "PageList grow prune scrollback with viewport pin not in pruned page"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_grow_prune_scrollback_with_viewport_pin_not_in_pruned_page() {
     // Use std_size to limit scrollback so pruning is triggered.
@@ -3783,7 +3807,10 @@ fn pagelist_grow_prune_scrollback_with_viewport_pin_not_in_pruned_page() {
 }
 
 // ref: test "PageList eraseRows invalidates viewport offset cache"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_eraseRows_invalidates_viewport_offset_cache() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -3842,7 +3869,10 @@ fn pagelist_eraseRows_invalidates_viewport_offset_cache() {
 }
 
 // ref: test "PageList eraseRow invalidates viewport offset cache"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_eraseRow_invalidates_viewport_offset_cache() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -3898,7 +3928,10 @@ fn pagelist_eraseRow_invalidates_viewport_offset_cache() {
 }
 
 // ref: test "PageList eraseRowBounded invalidates viewport offset cache"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_eraseRowBounded_invalidates_viewport_offset_cache() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -3955,7 +3988,10 @@ fn pagelist_eraseRowBounded_invalidates_viewport_offset_cache() {
 }
 
 // ref: test "PageList eraseRowBounded multi-page invalidates viewport offset cache"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_eraseRowBounded_multi_page_invalidates_viewport_offset_cache() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -4016,7 +4052,10 @@ fn pagelist_eraseRowBounded_multi_page_invalidates_viewport_offset_cache() {
 }
 
 // ref: test "PageList eraseRowBounded full page shift invalidates viewport offset cache"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_eraseRowBounded_full_page_shift_invalidates_viewport_offset_cache() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -4079,7 +4118,10 @@ fn pagelist_eraseRowBounded_full_page_shift_invalidates_viewport_offset_cache() 
 }
 
 // ref: test "PageList eraseRowBounded exhausts pages invalidates viewport offset cache"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_eraseRowBounded_exhausts_pages_invalidates_viewport_offset_cache() {
     let mut s = PageList::init(80, 24, None).unwrap();
@@ -7013,7 +7055,10 @@ fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_cursor_in_blank_line() 
 }
 
 // ref: test "PageList resize (no reflow) less rows trims blank lines erases pages"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_resize_no_reflow_less_rows_trims_blank_lines_erases_pages() {
     let mut s = PageList::init(100, 5, Some(0)).unwrap();
@@ -7442,7 +7487,10 @@ fn pagelist_resize_no_reflow_grow_cols_fast_path_with_spacer_head() {
 // don't have scrollback so our max size is very small. If we don't do this,
 // we end up pruning our pages and that causes resizes to fail!
 // ref: test "PageList resize (no reflow) more cols forces less rows per page"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_resize_no_reflow_more_cols_forces_less_rows_per_page() {
     // This test requires initially that our rows fit into one page.
@@ -7767,7 +7815,10 @@ fn pagelist_resize_no_reflow_more_rows_and_less_cols() {
 }
 
 // ref: test "PageList resize more rows and cols doesn't fit in single std page"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_resize_more_rows_and_cols_doesnt_fit_in_single_std_page() {
     let mut s = PageList::init(10, 10, Some(0)).unwrap();
@@ -7828,7 +7879,10 @@ fn pagelist_resize_no_reflow_empty_screen() {
 }
 
 // ref: test "PageList resize (no reflow) more cols forces smaller cap"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_resize_no_reflow_more_cols_forces_smaller_cap() {
     // We want a cap that forces us to have less rows
@@ -8161,7 +8215,10 @@ fn pagelist_resize_reflow_invalidates_viewport_offset_cache() {
 }
 
 // ref: test "PageList resize reflow more cols creates multiple pages"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_resize_reflow_more_cols_creates_multiple_pages() {
     // We want a wide viewport so our row limit is rather small. This will
@@ -8852,7 +8909,10 @@ fn pagelist_resize_reflow_more_cols_no_reflow_preserves_semantic_prompt() {
 }
 
 // ref: test "PageList resize reflow exceeds hyperlink memory forcing capacity increase"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase() {
     let mut s = PageList::init(2, 10, Some(0)).unwrap();
@@ -8967,7 +9027,10 @@ fn pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase() {
 }
 
 // ref: test "PageList resize reflow exceeds grapheme memory forcing capacity increase"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
     let mut s = PageList::init(2, 10, Some(0)).unwrap();
@@ -9059,7 +9122,10 @@ fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
 }
 
 // ref: test "PageList resize reflow exceeds style memory forcing capacity increase"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_resize_reflow_exceeds_style_memory_forcing_capacity_increase() {
     let mut s = PageList::init(std_capacity().styles - 1, 10, Some(0)).unwrap();
@@ -10827,7 +10893,10 @@ fn pagelist_resize_reflow_wrap_moves_kitty_placeholder() {
 }
 
 // ref: test "PageList resize reflow grapheme map capacity exceeded"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_resize_reflow_grapheme_map_capacity_exceeded() {
     // This test verifies that when reflowing content with many graphemes,
@@ -10987,7 +11056,10 @@ fn pagelist_resize_grow_cols_with_unwrap_fixes_viewport_pin() {
 }
 
 // ref: test "PageList resize (no reflow) more cols remaps pins in backfill path"
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_resize_no_reflow_more_cols_remaps_pins_in_backfill_path() {
     // Regression test: when resizeWithoutReflowGrowCols copies rows to a previous
@@ -11091,7 +11163,10 @@ use super::page_tracking::PageLeakScope;
 
 /// Grow scrollback to several pages, scroll around, then deinit — assert every
 /// page allocated during the churn was freed (no page leak).
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_pagepool_no_leak_grow_and_scroll() {
     let scope = PageLeakScope::new();
@@ -11131,7 +11206,10 @@ fn pagelist_pagepool_no_leak_grow_and_scroll() {
 /// HEAVY path: build a large scrollback, clone the whole thing (which builds a
 /// second PageList over many pages), then deinit both — assert no page leak. This
 /// is exactly the kind of many-page churn Miri cannot run to completion.
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_pagepool_no_leak_clone_many_pages() {
     let scope = PageLeakScope::new();
@@ -11164,7 +11242,10 @@ fn pagelist_pagepool_no_leak_clone_many_pages() {
 /// HEAVY path: resize with reflow over a multi-page scrollback (shrink then grow
 /// columns, forcing reflow to allocate and free pages), then deinit — assert no
 /// page leak. Reflow is the most allocation-churny PageList path.
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_pagepool_no_leak_resize_reflow() {
     let scope = PageLeakScope::new();
@@ -11224,7 +11305,10 @@ fn pagelist_pagepool_no_leak_resize_reflow() {
 
 /// `reset()` returns the pool to (near) baseline: build scrollback across several
 /// pages, reset, then deinit — assert no page leak across the reset+deinit cycle.
-#[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+#[cfg_attr(
+    miri,
+    ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+)]
 #[test]
 fn pagelist_pagepool_no_leak_reset_then_deinit() {
     let scope = PageLeakScope::new();

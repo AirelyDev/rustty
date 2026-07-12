@@ -679,10 +679,7 @@ impl ScreenSearch {
             // m.deinit(self.screen);
             // self.selected = null;
             // break :select_prev true;
-            self.selected
-                .take()
-                .unwrap()
-                .deinit(self.screen);
+            self.selected.take().unwrap().deinit(self.screen);
             true
         };
         // defer if (select_prev) { ... };
@@ -755,10 +752,7 @@ impl ScreenSearch {
                     let start_garbage =
                         unsafe { (*self.history.as_ref().unwrap().start_pin).garbage };
                     if start_garbage {
-                        self.history
-                            .as_mut()
-                            .unwrap()
-                            .deinit(self.screen);
+                        self.history.as_mut().unwrap().deinit(self.screen);
                         self.history = None;
                         for hl in self.history_results.iter_mut() {
                             hl.deinit();
@@ -983,10 +977,7 @@ impl ScreenSearch {
             // No history node means we have no history
             // if (self.history) |*h| { ... }
             if self.history.is_some() {
-                self.history
-                    .as_mut()
-                    .unwrap()
-                    .deinit(self.screen);
+                self.history.as_mut().unwrap().deinit(self.screen);
                 self.history = None;
                 for hl in self.history_results.iter_mut() {
                     hl.deinit();
@@ -1007,10 +998,7 @@ impl ScreenSearch {
                     }
                     // m.deinit(self.screen);
                     // self.selected = null;
-                    self.selected
-                        .take()
-                        .unwrap()
-                        .deinit(self.screen);
+                    self.selected.take().unwrap().deinit(self.screen);
                     // _ = self.select(.prev) catch |err| { ... };
                     if let Err(err) = self.select(Select::Prev) {
                         eprintln!(
@@ -1040,10 +1028,7 @@ impl ScreenSearch {
                 // our active area is probably gone, so we just go back
                 // to the first result because our selection can't be trusted.
                 if this.selected.is_some() {
-                    this.selected
-                        .take()
-                        .unwrap()
-                        .deinit(this.screen);
+                    this.selected.take().unwrap().deinit(this.screen);
                     if let Err(err) = this.select(Select::Next) {
                         eprintln!(
                             "info(search_screen): reload failed to reset search selection err={:?}",
@@ -1197,10 +1182,7 @@ impl ScreenSearch {
             // No match, just go back to the first match.
             // m.deinit(self.screen);
             // self.selected = null;
-            self.selected
-                .take()
-                .unwrap()
-                .deinit(self.screen);
+            self.selected.take().unwrap().deinit(self.screen);
             // _ = self.select(.next) catch |err| { ... };
             if let Err(err) = self.select(Select::Next) {
                 eprintln!(
@@ -1338,10 +1320,7 @@ impl ScreenSearch {
         // Free our previous match and setup our new selection
         // prev.deinit(self.screen);
         // self.selected = .{ .idx = next_idx, .highlight = tracked };
-        self.selected
-            .take()
-            .unwrap()
-            .deinit(self.screen);
+        self.selected.take().unwrap().deinit(self.screen);
         self.selected = Some(SelectedMatch {
             idx: next_idx,
             highlight: tracked,
@@ -1423,10 +1402,7 @@ impl ScreenSearch {
         // Free our previous match and setup our new selection
         // prev.deinit(self.screen);
         // self.selected = .{ .idx = next_idx, .highlight = tracked };
-        self.selected
-            .take()
-            .unwrap()
-            .deinit(self.screen);
+        self.selected.take().unwrap().deinit(self.screen);
         self.selected = Some(SelectedMatch {
             idx: next_idx,
             highlight: tracked,
@@ -1512,22 +1488,38 @@ mod tests {
             let sel = matches[0].untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 2 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 2 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
         {
             let sel = matches[1].untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -1538,7 +1530,10 @@ mod tests {
     }
 
     // test "simple search with history"
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
     #[test]
     fn simple_search_with_history() {
         let alloc = Allocator;
@@ -1577,11 +1572,19 @@ mod tests {
             let sel = matches[0].untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -1592,7 +1595,10 @@ mod tests {
     }
 
     // test "reload active with history change"
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
     #[test]
     fn reload_active_with_history_change() {
         let alloc = Allocator;
@@ -1637,22 +1643,38 @@ mod tests {
                 let sel = matches[1].untracked();
                 assert_eq!(
                     Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                    unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                    unsafe {
+                        (*active_ptr)
+                            .pages
+                            .point_from_pin(point::Tag::Screen, sel.start)
+                    }
                 );
                 assert_eq!(
                     Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                    unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                    unsafe {
+                        (*active_ptr)
+                            .pages
+                            .point_from_pin(point::Tag::Screen, sel.end)
+                    }
                 );
             }
             {
                 let sel = matches[0].untracked();
                 assert_eq!(
                     Some(Point::Active(point::Coordinate { x: 1, y: 1 })),
-                    unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.start) }
+                    unsafe {
+                        (*active_ptr)
+                            .pages
+                            .point_from_pin(point::Tag::Active, sel.start)
+                    }
                 );
                 assert_eq!(
                     Some(Point::Active(point::Coordinate { x: 4, y: 1 })),
-                    unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.end) }
+                    unsafe {
+                        (*active_ptr)
+                            .pages
+                            .point_from_pin(point::Tag::Active, sel.end)
+                    }
                 );
             }
         }
@@ -1683,11 +1705,19 @@ mod tests {
                 let sel = matches[0].untracked();
                 assert_eq!(
                     Some(Point::Active(point::Coordinate { x: 2, y: 0 })),
-                    unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.start) }
+                    unsafe {
+                        (*active_ptr)
+                            .pages
+                            .point_from_pin(point::Tag::Active, sel.start)
+                    }
                 );
                 assert_eq!(
                     Some(Point::Active(point::Coordinate { x: 5, y: 0 })),
-                    unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.end) }
+                    unsafe {
+                        (*active_ptr)
+                            .pages
+                            .point_from_pin(point::Tag::Active, sel.end)
+                    }
                 );
             }
         }
@@ -1730,11 +1760,19 @@ mod tests {
             let sel = matches[0].untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 1 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 1 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -1769,11 +1807,19 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 2 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 2 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -1783,11 +1829,19 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -1797,11 +1851,19 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 2 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 2 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -1832,11 +1894,19 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -1850,11 +1920,19 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 1 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 1 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -1868,11 +1946,19 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 1 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 1 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -1882,7 +1968,10 @@ mod tests {
     }
 
     // test "select into history"
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
     #[test]
     fn select_into_history() {
         let alloc = Allocator;
@@ -1913,11 +2002,19 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -1931,11 +2028,19 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -1948,11 +2053,19 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -1986,11 +2099,19 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -2000,11 +2121,19 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 2 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 2 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -2014,11 +2143,19 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -2049,7 +2186,11 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 2 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
         }
 
@@ -2059,7 +2200,11 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
         }
 
@@ -2069,7 +2214,11 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 2 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
         }
 
@@ -2079,7 +2228,10 @@ mod tests {
     }
 
     // test "select prev with history"
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
     #[test]
     fn select_prev_with_history() {
         let alloc = Allocator;
@@ -2110,11 +2262,19 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 0, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Screen(point::Coordinate { x: 3, y: 0 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Screen, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Screen, sel.end)
+                }
             );
         }
 
@@ -2124,11 +2284,19 @@ mod tests {
             let sel = search.selected_match().unwrap().untracked();
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 0, y: 1 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.start) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Active, sel.start)
+                }
             );
             assert_eq!(
                 Some(Point::Active(point::Coordinate { x: 3, y: 1 })),
-                unsafe { (*active_ptr).pages.point_from_pin(point::Tag::Active, sel.end) }
+                unsafe {
+                    (*active_ptr)
+                        .pages
+                        .point_from_pin(point::Tag::Active, sel.end)
+                }
             );
         }
 
@@ -2138,7 +2306,10 @@ mod tests {
     }
 
     // test "select prev wraps when all matches are in history"
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
     #[test]
     fn select_prev_wraps_when_all_matches_are_in_history() {
         // Regression test: when every match is in scrollback (the active area
@@ -2248,7 +2419,10 @@ mod tests {
     }
 
     // test "reloadActive partial history cleanup on appendSlice error"
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
     #[test]
     fn reload_active_partial_history_cleanup_on_append_slice_error() {
         // This test verifies that when reloadActive fails at appendSlice (after
@@ -2311,7 +2485,10 @@ mod tests {
     }
 
     // test "reloadActive partial history cleanup on loop append error"
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
     #[test]
     fn reload_active_partial_history_cleanup_on_loop_append_error() {
         // This test verifies that when reloadActive fails inside the loop
@@ -2372,7 +2549,10 @@ mod tests {
     }
 
     // test "select after clearing scrollback"
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (vt multi-page-PageList intractable, .port/phase-2/MIRI_EXCEPTIONS.md): builds/reflows multi-page PageLists that exceed Miri's interpreter budget (>20min); covered natively + by ASan (all PageList tests ~18s)"
+    )]
     #[test]
     fn select_after_clearing_scrollback() {
         // Regression test for: https://github.com/ghostty-org/ghostty/issues/11957

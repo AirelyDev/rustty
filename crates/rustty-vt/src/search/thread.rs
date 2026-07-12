@@ -2121,7 +2121,10 @@ mod tests {
     }
 
     // test {
-    #[cfg_attr(miri, ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): rustc/Miri interpreter ICE (operand.rs:160, upstream bug), not a soundness signal; covered natively + by ASan")]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md): rustc/Miri interpreter ICE (operand.rs:160, upstream bug), not a soundness signal; covered natively + by ASan"
+    )]
     #[test]
     fn search_thread() {
         // const alloc = testing.allocator;
