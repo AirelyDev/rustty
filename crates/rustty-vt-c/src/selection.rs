@@ -753,8 +753,21 @@ pub unsafe fn format_alloc(
     if ptr.is_null() && len != 0 {
         return Result::OutOfMemory;
     }
-    // SAFETY: `ptr` is a fresh `len`-byte allocation; `aw` holds `len` bytes.
-    unsafe { core::ptr::copy_nonoverlapping(aw.as_ptr(), ptr, len) };
+    // For an empty selection there is nothing to copy, and `copy_nonoverlapping`
+    // requires a NON-NULL dst even for count 0 — so a pathological caller
+    // allocator returning NULL for a 0-byte request would make the copy UB and
+    // hand back a NULL `out_ptr` (the reference `toOwnedSlice` always yields a
+    // non-null empty sentinel). Skip the copy and substitute a non-null aligned
+    // sentinel in that case, matching Zig. (VALIDATION_REPORT_2 apprt-c audit, LOW.)
+    let ptr = if len != 0 {
+        // SAFETY: `ptr` is a fresh `len`-byte allocation; `aw` holds `len` bytes.
+        unsafe { core::ptr::copy_nonoverlapping(aw.as_ptr(), ptr, len) };
+        ptr
+    } else if ptr.is_null() {
+        core::ptr::NonNull::<u8>::dangling().as_ptr()
+    } else {
+        ptr
+    };
     unsafe {
         *out_ptr = ptr;
         *out_len = len;
