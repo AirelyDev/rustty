@@ -213,6 +213,81 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
     }
 }
 
+/// C: rustty_cli_try_action
+///
+/// Runs an action if it is specified. If there is no action this returns
+/// (the GUI-launch path). If there is an action then this doesn't return
+/// (it `posix.exit`s with the action's result code).
+///
+/// PORT NOTE: rustty analogue of `ghostty_cli_try_action` (main_c.zig:120):
+/// ```zig
+/// pub export fn ghostty_cli_try_action() void {
+///     const action = state.action orelse return;
+///     std.log.info("executing CLI action={}", .{action});
+///     posix.exit(action.run(state.alloc) catch |err| {
+///         std.log.err("CLI action failed error={}", .{err});
+///         posix.exit(1);
+///     });
+///     posix.exit(0);
+/// }
+/// ```
+/// The reference `state.action` is `rustty_core::global_state().action`
+/// (`Option<Action>`), stashed by `state.init()` (via `rustty_init`). rustty-core
+/// currently binds the `GlobalState<Action>` type parameter to `()` — the BREAK #1
+/// deferred seam: `cli.action.detectArgs` is NOT yet wired into
+/// `rustty_apprt::init`, which hard-codes `action: None` — so no CLI action is ever
+/// stashed and this is the pure GUI-launch path: the `orelse return` fires and a
+/// windowed launch (the macOS Swift-app milestone's actual need) returns cleanly
+/// WITHOUT exiting. The non-null CLI-action-from-C path is a documented
+/// `TODO(port)` below (DEFERRALS "rustty-apprt-c `rustty_cli_try_action` — CLI
+/// action from C").
+///
+/// # Safety
+/// Marked `unsafe extern` only for signature uniformity with the rest of the C API.
+/// Reads process-global state that `rustty_init` must have initialized first (the
+/// reference `ghostty_init` → `ghostty_cli_try_action` ordering).
+#[no_mangle]
+pub unsafe extern "C" fn rustty_cli_try_action() {
+    // const action = state.action orelse return;
+    let _action = match rustty_core::global_state().action {
+        Some(action) => action,
+        // (no action → GUI launch: return WITHOUT exiting — the milestone path)
+        None => return,
+    };
+
+    // std.log.info("executing CLI action={}", .{action});
+    // (no scoped-log sink in this leaf — vt-c `rustty_build_info` precedent — so
+    // emit to stderr, as `rustty_init` does for its error log.)
+    eprintln!("executing CLI action");
+
+    // posix.exit(action.run(state.alloc) catch |err| {
+    //     std.log.err("CLI action failed error={}", .{err});
+    //     posix.exit(1);
+    // });
+    // posix.exit(0);
+    //
+    // TODO(port): the CLI-action-from-C path. The action RUNNER already exists
+    // (`rustty_cli::ghostty::Action::run(self) -> Result<u8, Error>`); the missing
+    // wiring is the `GlobalState<Action>` type parameter (rustty-core binds it to
+    // `()`) plus `cli.action.detectArgs` in the `rustty_apprt::init` bootstrap
+    // (BREAK #1). Once wired, `_action` is a `rustty_cli::ghostty::Action` and this
+    // tail becomes, faithful to the reference:
+    //     std::process::exit(match action.run() {
+    //         Ok(code) => code as c_int,
+    //         Err(err) => {
+    //             eprintln!("CLI action failed error={err:?}");
+    //             std::process::exit(1);
+    //         }
+    //     });
+    //     std::process::exit(0);
+    // Until then, `Action = ()` makes this arm unreachable (init never stashes a
+    // `Some`), so the GUI-launch `orelse return` above is the only live path.
+    unreachable!(
+        "CLI-action-from-C path is deferred: GlobalState<Action> = (), \
+         cli.action.detectArgs not yet wired into rustty_apprt::init (BREAK #1)"
+    )
+}
+
 // ===================================================================
 // App lifecycle exports — embedded.zig `CAPI` block (embedded.zig:1398-1535),
 // chunk E6. The 11 app-lifecycle exports + the 2 app/config exports. These are the
@@ -2631,5 +2706,25 @@ mod main_c_tests {
 
         // defer zig_string.deinit(); — frees `len` bytes at scope end.
         zig_string.deinit();
+    }
+
+    // The null-action GUI-launch path of `rustty_cli_try_action` (main_c.zig
+    // `ghostty_cli_try_action`): after `rustty_init` (which stashes `action: None`
+    // — the BREAK #1 detectArgs seam), `rustty_cli_try_action` must take the
+    // `state.action orelse return` branch and RETURN WITHOUT exiting (a windowed
+    // launch must not `posix.exit`). If the non-null `unreachable!` fired, or if the
+    // fn exited the process, this test would abort rather than complete.
+    #[test]
+    fn cli_try_action_null_action_returns() {
+        // reference `ghostty_init` sets the global state (with `action = null`).
+        // SAFETY: no argv is dereferenced by `rustty_init` (argc = 0).
+        let rc = unsafe { crate::rustty_init(0, core::ptr::null_mut()) };
+        assert_eq!(rc, 0, "rustty_init must initialize the global state");
+
+        // With no CLI action stashed, this returns cleanly (the GUI-launch path).
+        // SAFETY: `rustty_init` above initialized the global state this reads.
+        unsafe { crate::rustty_cli_try_action() };
+
+        // Reaching here proves the fn returned (did not exit / panic).
     }
 }

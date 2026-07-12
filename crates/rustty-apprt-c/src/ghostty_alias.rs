@@ -11,11 +11,12 @@
 //!
 //! GENERATED from the `rustty_*` decls in `lib.rs` — one forwarder per app export
 //! DEFINED in this crate (the `apprt/embedded` surface + `rustty_init` /
-//! `rustty_string_free`). The 6 Darwin-only exports (PREPORT §0) are gated
-//! `any(target_os = "macos", target_os = "ios")` — the iOS-in-scope lock widens the
-//! upstream `isDarwin()` comptime gate (PREPORT §5). The `config` / `benchmark` /
-//! `main_c` (`translate`/`info`/`cli_try_action`) exports of the 90-symbol app C-ABI
-//! live in their own crates and carry their own alias layers.
+//! `rustty_string_free` + the `main_c` hub's `rustty_cli_try_action`). The 6
+//! Darwin-only exports (PREPORT §0) are gated `any(target_os = "macos", target_os =
+//! "ios")` — the iOS-in-scope lock widens the upstream `isDarwin()` comptime gate
+//! (PREPORT §5). The `config` / `benchmark` exports of the 90-symbol app C-ABI live
+//! in their own crates (`rustty-config` / `rustty-bench`) and carry their own alias
+//! layers; the remaining `main_c` exports `translate` / `info` are not yet ported.
 
 #![allow(clippy::missing_safety_doc)]
 
@@ -25,6 +26,11 @@ use super::*;
 pub unsafe extern "C" fn ghostty_init(argc: usize, argv: *mut *mut c_char) -> c_int {
     // SAFETY: forwards the caller contract unchanged to the canonical rustty_* export.
     unsafe { crate::rustty_init(argc, argv) }
+}
+#[no_mangle]
+pub unsafe extern "C" fn ghostty_cli_try_action() {
+    // SAFETY: forwards the caller contract unchanged to the canonical rustty_* export.
+    unsafe { crate::rustty_cli_try_action() }
 }
 #[no_mangle]
 pub unsafe extern "C" fn ghostty_app_new(opts: *const Options, config: *const Config) -> *mut App {

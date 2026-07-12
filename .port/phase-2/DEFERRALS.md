@@ -3899,3 +3899,29 @@ zig-byteslice-to-rust-rawbytes rule (raw `OsStr` bytes, never lossy String).
 Behaviorally benign (macOS tmp paths are UTF-8 in practice); ownership/free
 discipline is faithful. **Fix:** `std::os::unix::ffi::OsStrExt::as_bytes` in a
 later cleanup pass.
+
+## rustty-apprt-c `rustty_cli_try_action` — CLI action from C (non-null path) [added 2026-07-12, Phase-A ghostty_* symbol closure]
+
+**Context:** `ghostty_cli_try_action` (main_c.zig:120) reads the CLI action stashed
+in the global C-API state during `ghostty_init` and, if present, runs it and
+`posix.exit`s with its code; if absent it returns (the GUI-launch path). Ported to
+`rustty_cli_try_action` in `crates/rustty-apprt-c/src/lib.rs` (+ the `ghostty_*`
+alias under `identity-ghostty`). **What's LIVE:** the null-action GUI-launch path —
+`state.action orelse return` — which is the macOS Swift-app milestone's actual need
+(a windowed launch stashes no action and returns cleanly WITHOUT exiting). **What's
+deferred:** the non-null CLI-action-from-C path. The state field
+`rustty_core::global_state().action` is `Option<()>` because rustty-core binds the
+`GlobalState<Action>` type parameter to `()` — the **BREAK #1** deferred seam:
+`cli.action.detectArgs` is not yet wired into the `rustty_apprt::init` bootstrap
+(`init` hard-codes `action: None`, apprt/src/lib.rs). So no action is ever stashed
+and the `Some(_)` arm is currently unreachable (guarded by an `unreachable!`).
+**Why deferred:** the action RUNNER already exists
+(`rustty_cli::ghostty::Action::run(self) -> Result<u8, Error>`, ghostty.rs:306); the
+only missing wiring is (a) binding `GlobalState<Action>` to the concrete
+`rustty_cli::ghostty::Action` in rustty-core (currently `()`), and (b) calling
+`detectArgs` in `rustty_apprt::init` to stash it. **What unblocks it:** the BREAK #1
+full `state.init()` port (CLI-action detection + logging-config + crash/locale/
+signal setup). Once wired, the documented `TODO(port)` tail in `rustty_cli_try_action`
+becomes `std::process::exit(match action.run() { Ok(c) => c as c_int, Err(err) => {
+eprintln!(...); std::process::exit(1) } }); std::process::exit(0);` — faithful to the
+reference.
