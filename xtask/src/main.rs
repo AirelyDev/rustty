@@ -227,11 +227,52 @@ fn xcframework() -> Result<PathBuf, String> {
     if !status.success() {
         return Err(format!("cargo build exited with {status}"));
     }
-    let lib = root.join(format!(
-        "target/{target}/xcframework/librustty_apprt_c.a"
-    ));
+    let rust_lib = root.join(format!("target/{target}/xcframework/librustty_apprt_c.a"));
+    if !rust_lib.exists() {
+        return Err(format!("staticlib not found at {}", rust_lib.display()));
+    }
+
+    // 1b. Combine the Rust staticlib with its vendored C archives into ONE
+    // self-contained lib (ghostty's CombineArchivesStep). A Rust `staticlib`
+    // records its C link deps as metadata but does NOT bundle the -sys crates'
+    // static archives (zlib/gettext/harfbuzz/freetype/oniguruma/…), so the final
+    // xcodebuild link would report undefined `_deflate`/`_dgettext`/… . libtool
+    // folds rustty's OWN vendored C archives (R3 — not Homebrew/system) into the
+    // shipped lib so the Swift app links against a single self-contained archive.
+    let build_dir = root.join(format!("target/{target}/xcframework/build"));
+    let mut archives: Vec<PathBuf> = vec![rust_lib.clone()];
+    if let Ok(entries) = std::fs::read_dir(&build_dir) {
+        for e in entries.flatten() {
+            let out = e.path().join("out");
+            if let Ok(outs) = std::fs::read_dir(&out) {
+                for f in outs.flatten() {
+                    let p = f.path();
+                    if p.extension().and_then(|s| s.to_str()) == Some("a") {
+                        archives.push(p);
+                    }
+                }
+            }
+        }
+    }
+    let lib = root.join(format!("target/{target}/xcframework/libGhosttyKit.a"));
+    let _ = std::fs::remove_file(&lib);
+    let mut lt = Command::new("libtool");
+    lt.arg("-static").arg("-o").arg(&lib);
+    for a in &archives {
+        lt.arg(a);
+    }
+    let status = lt
+        .current_dir(&root)
+        .status()
+        .map_err(|e| format!("spawn libtool: {e}"))?;
+    if !status.success() {
+        return Err(format!(
+            "libtool combine exited with {status} ({} archives)",
+            archives.len()
+        ));
+    }
     if !lib.exists() {
-        return Err(format!("staticlib not found at {}", lib.display()));
+        return Err(format!("combined lib not found at {}", lib.display()));
     }
 
     // 2. Stage the headers dir: rustty's frozen ghostty.h + the GhosttyKit module map.
