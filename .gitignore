@@ -57,3 +57,8 @@ rustc-ice-*.txt
 # regenerable G4 differential per-case output
 .port/phase-0/harness/results/diag/
 rust_out
+
+# macOS app: regenerable via `cargo run -p xtask -- xcframework`; build output
+macos/GhosttyKit.xcframework/
+macos/build/
+macos/DerivedData/
