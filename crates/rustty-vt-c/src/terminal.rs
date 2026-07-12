@@ -5293,9 +5293,15 @@ mod tests {
             let mut written: usize = 99;
 
             let keys = [TerminalData::Cols, TerminalData::Invalid];
+            // SB: build the two out-pointers with `addr_of_mut!` (raw), NOT
+            // `&mut cols as *mut _`. Both entries point at the same `cols` (the
+            // reference test passes `&cols` twice — raw C pointers); a second
+            // `&mut cols` reborrow retags the whole variable and pops the first
+            // pointer off the borrow stack, so `get_multi`'s write through
+            // `values[0]` would be UB (rust-mut-args-strongly-protected).
             let mut values: [*mut c_void; 2] = [
-                &mut cols as *mut _ as *mut c_void,
-                &mut cols as *mut _ as *mut c_void,
+                core::ptr::addr_of_mut!(cols) as *mut c_void,
+                core::ptr::addr_of_mut!(cols) as *mut c_void,
             ];
             assert_eq!(Result::InvalidValue, unsafe {
                 get_multi(
