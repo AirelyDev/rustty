@@ -21,6 +21,25 @@
 //! same pipeline emits the canonical entry with zero other changes.
 //!
 //! R5: the terminfo generator is fully ported, so terminfo carries no deferral.
+//! In addition to the compiled DB, this module now also emits the terminfo
+//! *source* (`share/terminfo/ghostty.terminfo`) and a `termcap` translation
+//! (`share/terminfo/ghostty.termcap`) alongside it — the `emit_terminfo` /
+//! `emit_termcap` installs of ghostty's `GhosttyResources.zig` (P1.3,
+//! INTEGRATION_PARITY §2.8). ghostty defaults those FALSE for Release and TRUE
+//! for Debug; rustty emits them unconditionally so `infocmp`/Debug tooling has
+//! byte-identical inputs regardless of profile. The termcap is produced by the
+//! system `/usr/bin/infotocap` reading that same source (exactly ghostty's
+//! `RunStep "infotocap" <source>`), whose stderr — capability-translation
+//! warnings + the 1023-byte-truncation notices termcap inherently requires — is
+//! captured and discarded, matching ghostty's `captureStdErr()`.
+//!
+//! R2 identity note (source/termcap filenames): the `ghostty.terminfo` and
+//! `ghostty.termcap` basenames KEEP ghostty's name — they mirror ghostty's own
+//! install paths (`share/terminfo/ghostty.terminfo`), and, like the compiled
+//! entry's `xterm-ghostty` primary name, are the data-identity the reused macOS
+//! Swift app + `infocmp xterm-ghostty` resolution expect. Rebranding drops the
+//! `identity-ghostty` feature (see above); these basenames follow suit then.
+//!
 //! The `share/ghostty/` tree (shell-integration scripts, themes) is NOT yet ported
 //! as rustty data — ghostty ships those as static files under
 //! `src/shell-integration/` with no generator, and rustty has not vendored them.
@@ -83,6 +102,11 @@ pub fn gen_terminfo(share_dir: &Path) -> Result<(), String> {
         ));
     }
 
+    // 3b. Emit the terminfo SOURCE + termcap alongside the compiled DB
+    //     (P1.3 / INTEGRATION_PARITY §2.8; ghostty GhosttyResources.zig
+    //     `emit_terminfo` + `emit_termcap` installs).
+    emit_source_and_termcap(&terminfo_dir, &src_bytes)?;
+
     // 4. The share/ghostty resource root.
     gen_ghostty_root(share_dir)?;
 
@@ -108,6 +132,44 @@ fn run_tic(out_dir: &Path, src: &Path) -> Result<(), String> {
             String::from_utf8_lossy(&output.stderr)
         ));
     }
+    Ok(())
+}
+
+/// Emit the terminfo *source* (`ghostty.terminfo`) and its `termcap` translation
+/// (`ghostty.termcap`) into `terminfo_dir`, mirroring ghostty's
+/// `GhosttyResources.zig` `emit_terminfo`/`emit_termcap` installs (P1.3,
+/// INTEGRATION_PARITY §2.8).
+///
+/// * `ghostty.terminfo` — the exact tic source bytes we compiled above (the
+///   captured stdout of ghostty's `+terminfo` build-data run).
+/// * `ghostty.termcap` — `/usr/bin/infotocap <source>` (ghostty's
+///   `RunStep "infotocap"`). termcap is a strictly lossier legacy format bounded
+///   to 1023 bytes/entry, so `infotocap` prints translation + truncation notices
+///   to stderr; we capture and DISCARD them (ghostty `captureStdErr()`), failing
+///   only on a non-zero exit or empty stdout.
+fn emit_source_and_termcap(terminfo_dir: &Path, src_bytes: &[u8]) -> Result<(), String> {
+    let src_path = terminfo_dir.join("ghostty.terminfo");
+    std::fs::write(&src_path, src_bytes)
+        .map_err(|e| format!("write {}: {e}", src_path.display()))?;
+
+    let output = Command::new("/usr/bin/infotocap")
+        .arg(&src_path)
+        .output()
+        .map_err(|e| format!("spawn /usr/bin/infotocap: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "infotocap exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    if output.stdout.is_empty() {
+        return Err("infotocap produced empty termcap output".to_string());
+    }
+
+    let cap_path = terminfo_dir.join("ghostty.termcap");
+    std::fs::write(&cap_path, &output.stdout)
+        .map_err(|e| format!("write {}: {e}", cap_path.display()))?;
     Ok(())
 }
 
@@ -190,6 +252,20 @@ mod tests {
             "no compiled xterm-ghostty entry under {}",
             share.join("terminfo").display()
         );
+        // Terminfo SOURCE + termcap emitted alongside the compiled DB (P1.3).
+        let src = share.join("terminfo/ghostty.terminfo");
+        let cap = share.join("terminfo/ghostty.termcap");
+        assert!(src.is_file(), "no ghostty.terminfo source at {}", src.display());
+        assert!(cap.is_file(), "no ghostty.termcap at {}", cap.display());
+        assert!(
+            std::fs::metadata(&src).unwrap().len() > 0,
+            "ghostty.terminfo source is empty"
+        );
+        assert!(
+            std::fs::metadata(&cap).unwrap().len() > 0,
+            "ghostty.termcap is empty"
+        );
+
         // share/ghostty root + note exist.
         assert!(share.join("ghostty").is_dir());
         assert!(share.join("ghostty/DEFERRALS.md").is_file());
