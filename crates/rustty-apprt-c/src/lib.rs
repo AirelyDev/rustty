@@ -2576,38 +2576,74 @@ pub unsafe extern "C" fn rustty_surface_set_display_id(ptr: *mut Surface, displa
 //
 // export fn ghostty_surface_quicklook_font(ptr: *Surface) ?*anyopaque { ... }
 //
-// PORT NOTE: reads the shared font grid's primary CoreText face and returns a
-// `copyWithAttributes`-resized `CTFontRef` (`?*anyopaque` → nullable `*mut
-// c_void`). It reaches the renderer's `font_grid` AND messages CoreText
-// (`face.font.copyAttribute`/`copyWithAttributes`) — an objc/coretext + renderer
-// Phase-3 leaf (no coretext dep this milestone, blueprint §5/§8.1). The
-// reference non-CoreText early return (`return null`) is subsumed: the whole
-// body is the leaf. Body preserved verbatim.
+// PORT NOTE (P2.2): reads the shared font grid's primary CoreText face and
+// returns a `copyWithAttributes`-resized `CTFontRef` (`?*anyopaque` → nullable
+// `*mut c_void`). It reaches the renderer's `font_grid` (`renderer_seam::Renderer
+// .0.font_grid`) AND messages CoreText via objc2-core-text (`Face.font.attribute`/
+// `copy_with_attributes`). The returned CTFont is +1 — the host balances it with a
+// CFRelease (I16). The reference non-CoreText early return (`return null`) is
+// elided: this export is Darwin-gated and the coretext backend is the Darwin
+// default, so there is never a non-CoreText grid here. Body ported faithfully.
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mut c_void {
+    // The shared-grid + CoreText symbols are macOS-only; scope the imports to the
+    // ported body (this whole export is Darwin-gated).
+    use objc2_core_foundation::{CFNumber, CFNumberType, CFRetained};
+    use objc2_core_text::{kCTFontSizeAttribute, CTFont};
+    use rustty_apprt_api::Surface as ApprtSurface;
+    use rustty_font_shaper::collection::Index;
+    use rustty_font_shaper::{SharedGrid, Style};
+
     // // For non-CoreText we just return null.
     // if (comptime font.options.backend != .coretext) {
     //     return null;
     // }
     //
-    // // We'll need content scale so fail early if we can't get it.
+    // (Elided — see the PORT NOTE above: this Darwin-gated export IS the CoreText
+    // build, so the non-CoreText early return can never fire.)
+
+    // We'll need content scale so fail early if we can't get it.
     // const content_scale = ptr.getContentScale() catch return null;
-    //
-    // // Get the shared font grid. We acquire a read lock to
-    // // read the font face. It should not be deferred since
-    // // we're loading the primary face.
+    // SAFETY: `ptr` validity is the caller's contract (`rustty_surface_new`).
+    let content_scale = match unsafe { (*ptr).get_content_scale() } {
+        Ok(cs) => cs,
+        Err(_) => return core::ptr::null_mut(),
+    };
+
+    // Get the shared font grid. We acquire a read lock to
+    // read the font face. It should not be deferred since
+    // we're loading the primary face.
     // const grid = ptr.core_surface.renderer.font_grid;
+    // SAFETY: the renderer's `font_grid` is the shared `*mut SharedGrid` handle
+    // (`renderer_seam::Renderer` newtype `.0` → `rustty_renderer::Renderer`).
+    let grid: *mut SharedGrid = unsafe { (*ptr).core_surface.renderer.0.font_grid };
     // grid.lock.lockShared();
     // defer grid.lock.unlockShared();
     //
+    // SAFETY: `grid` is the external `*mut SharedGrid` handle; `.lock` is its
+    // internal `RwLock` (the renderer `init` shared-read precedent, generic.rs).
+    // The guard is bound to `_read` (NOT `_`) so the shared lock is held until
+    // this function returns — the reference `defer grid.lock.unlockShared()`.
+    let _read = unsafe { (*grid).lock.read().unwrap() };
+
     // const collection = &grid.resolver.collection;
     // const face = collection.getFace(.{}) catch return null;
     //
-    // // We need to unscale the content scale. We apply the
-    // // content scale to our font stack because we are rendering
-    // // at 1x but callers of this should be using scaled or apply
-    // // scale themselves.
+    // SAFETY: through the raw `*mut SharedGrid` handle we reach the resolver's
+    // collection (a disjoint field from `.lock`, so the `&mut` reborrow does not
+    // alias the read guard). `getFace` loads the primary face — already resident,
+    // per the note above. `.{}` is `Index{ .style = .regular, .idx = 0 }`.
+    let collection = unsafe { &mut (*grid).resolver.collection };
+    let face = match collection.get_face(Index::new(Style::Regular, 0)) {
+        Ok(f) => f,
+        Err(_) => return core::ptr::null_mut(),
+    };
+
+    // We need to unscale the content scale. We apply the
+    // content scale to our font stack because we are rendering
+    // at 1x but callers of this should be using scaled or apply
+    // scale themselves.
     // const size: f32 = size: {
     //     const num = face.font.copyAttribute(.size) orelse
     //         break :size 12;
@@ -2617,30 +2653,54 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
     //     break :size v;
     // };
     //
+    // SAFETY: `face` is the `*mut Face` just returned; `.font` is its owned
+    // `CFRetained<CTFont>`. `attribute` copies the size attribute at +1 (a
+    // `CFRetained<CFType>` that releases on drop = the reference `defer
+    // num.release()`); `getValue(.float, &v)` → `CFNumberType::FloatType` (the C
+    // `float`). A missing/non-number attribute leaves the default 12.
+    let size: f32 = match unsafe { (*face).font.attribute(kCTFontSizeAttribute) } {
+        None => 12.0,
+        Some(num) => {
+            let mut v: f32 = 12.0;
+            if let Some(n) = num.downcast_ref::<CFNumber>() {
+                unsafe {
+                    n.value(
+                        CFNumberType::FloatType,
+                        &mut v as *mut f32 as *mut core::ffi::c_void,
+                    );
+                }
+            }
+            v
+        }
+    };
+
     // const copy = face.font.copyWithAttributes(
     //     size / content_scale.y,
     //     null,
     //     null,
     // ) catch return null;
     //
+    // PORT NOTE: objc2's `copy_with_attributes` folds the reference's null-check
+    // (`catch return null`) into a non-null `expect` — the same contract the
+    // CoreText face's own `init_font_copy` relies on (face/coretext.rs). The
+    // result is the +1 CTFont (created via `CFRetained::from_raw`). `size` is f32,
+    // `content_scale.y` f32; the quotient widens to the `CGFloat` (f64) argument.
+    // SAFETY: `matrix` is a null `*const CGAffineTransform`; `attributes` is None.
+    let copy: CFRetained<CTFont> = unsafe {
+        (*face).font.copy_with_attributes(
+            (size / content_scale.y) as f64,
+            core::ptr::null(),
+            None,
+        )
+    };
+
     // return copy;
     //
-    // TODO(port): renderer font_grid + CoreText copyAttribute/copyWithAttributes
-    // (objc/coretext + renderer R-d Phase-3 leaf, embedded.zig:2147-2186). The
-    // verbatim body above is the not-yet-ported leaf. See DEFERRALS.md "P2 crash-
-    // guard: on-feature quicklook/inspector leaves".
-    //
-    // P2 INTERIM crash-guard (PREPORT_SWIFT_APP §4 abort policy): under panic=abort
-    // an `unimplemented!()` here ABORTS the whole app the moment the user triggers
-    // Look-Up / force-click / accessibility (SurfaceView_AppKit.swift:1521/1949/2361).
-    // A recoverable no-op is faithful for a not-yet-ported FEATURE and strictly
-    // better than aborting the app. Return the export's own sentinel: `null` — which
-    // is ALSO the reference's genuine early return for the non-CoreText backend
-    // (`if (font.options.backend != .coretext) return null;`), so the Swift caller's
-    // `if let fontRaw = …` simply skips the custom quicklook font. R1-faithful.
-    let _ = ptr;
-    eprintln!("quicklook_font not yet ported");
-    core::ptr::null_mut()
+    // Transfer the +1 CTFont to the host (I16): `into_raw` releases NOTHING, so
+    // the CTFontRef crosses the ABI still at +1 and the host balances it with a
+    // single CFRelease (`ghostty_surface_quicklook_font`'s Swift caller). Over- or
+    // under-retaining here would leak or double-free the font.
+    CFRetained::into_raw(copy).as_ptr() as *mut c_void
 }
 
 /// C: rustty_surface_quicklook_word
@@ -3064,5 +3124,67 @@ mod quicklook_word_tests {
         assert!(s.select_word(pin, &WORD_BOUNDARY).is_none());
 
         s.deinit();
+    }
+}
+
+// Focused CTFont ownership KAT for the quicklook_font path (P2.2).
+//
+// The full `rustty_surface_quicklook_font` export needs a LIVE surface with a
+// GPU renderer + populated `font_grid` (Metal), so its end-to-end behavior is
+// verified in the macOS app shakedown, not here. What IS unit-testable — and is
+// the one load-bearing ownership decision in the port — is the +1 CTFont handoff
+// (I16): the export resizes the primary face with `copy_with_attributes` (a +1
+// CTFontRef) and hands it to the host via `CFRetained::into_raw` (which must NOT
+// release), the host balancing it with exactly one CFRelease. A regression to
+// `CFRetained::as_ptr` (no ownership transfer) would double-free; an extra
+// retain would leak. This test pins that balance using a real, standalone CTFont
+// (CoreText font creation needs neither the grid nor Metal nor the main thread).
+#[cfg(all(test, target_os = "macos"))]
+mod quicklook_font_tests {
+    use objc2_core_foundation::{CFRetained, CFString};
+    use objc2_core_text::CTFont;
+
+    #[test]
+    fn quicklook_font_handoff_is_plus_one_the_host_releases() {
+        // A real CTFont, standing in for the collection's primary face
+        // (`Face.font`). Menlo is present on every macOS; the exact face is
+        // irrelevant — only the retain balance is under test.
+        let name = CFString::from_str("Menlo");
+        // SAFETY: `name` is a valid CFString; `matrix` is null.
+        let base: CFRetained<CTFont> = unsafe { CTFont::with_name(&name, 12.0, core::ptr::null()) };
+
+        // Mirror the export's tail exactly: resize via copyWithAttributes → +1.
+        // SAFETY: `matrix` null; `attributes` None.
+        let copy: CFRetained<CTFont> = unsafe { base.copy_with_attributes(13.0, core::ptr::null(), None) };
+
+        // Hold an EXTRA retain so the object survives the "host" release and we
+        // can observe the count afterward (this `keeper` is NOT part of the
+        // export contract — it is the test's observation handle).
+        let keeper: CFRetained<CTFont> = copy.clone();
+        let rc_before = keeper.retain_count();
+
+        // The export hands the +1 to the host: `into_raw` transfers ownership
+        // WITHOUT releasing, so the retain count is unchanged by the handoff.
+        let raw = CFRetained::into_raw(copy);
+        // SAFETY: `raw` is the live CTFont just handed off (kept alive by `keeper`).
+        assert_eq!(
+            unsafe { raw.as_ref() }.retain_count(),
+            rc_before,
+            "into_raw must transfer ownership without releasing (I16)"
+        );
+
+        // The host balances the +1 with exactly ONE CFRelease. Modeling that as
+        // `from_raw` (the inverse of `into_raw`) + drop IS a single CFRelease.
+        // SAFETY: `raw` is the +1 the export handed the host; reclaiming it here
+        // consumes exactly that one reference (the host's `CFRelease`).
+        drop(unsafe { CFRetained::from_raw(raw) });
+
+        // The host's single release consumed exactly the export's +1: the count
+        // is back down by one, and `keeper`'s reference is untouched.
+        assert_eq!(
+            keeper.retain_count(),
+            rc_before - 1,
+            "the host's one CFRelease must consume exactly the export's +1 (no leak, no double-free)"
+        );
     }
 }
