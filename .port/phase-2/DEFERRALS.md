@@ -3676,6 +3676,23 @@ and is tracked here PER-TEST so `check_test_counts`/G2 auditors can resolve it:
 
 ## W-ATTACH — windowed host-attach unwired in core `renderer_seam::Renderer::init` (M4 triage, 2026-07-10)
 
+**RESOLVED — P0.1, 2026-07-12.** W-ATTACH (commit 96b0116) wired the on-screen
+host-attach (`Renderer::finalizeSurfaceInit` → `Metal::attach_view` sends
+`setLayer:`), so the KAT's first assertion passes. The residual red was a
+HEADLESS-HARNESS gap, NOT product: (1) the inert `MockHostView` never lays its
+hosted layer out, so the renderer's `surfaceSize()` (= `layer.bounds *
+contentsScale`, Metal.zig:217-218) read 0×0 and `drawFrame` early-returned at the
+zero-dimension guard, never presenting; and (2) the render thread's async
+`present(sync=false)` hops `set_surface` onto the MAIN dispatch queue, which no
+headless runloop drains. Fix is test-only: `pump_bounded` now sizes the hosted
+layer (AppKit-layout stand-in) and drives the layer's `-display` (CA-commit
+stand-in) — the reference on-screen SYNC present path (`display` → installed
+`displayCallback` → `drawFrame(true)` → `present(true)` → `setSurfaceSync`,
+Metal.zig:164-176/253-259; the renderer `golden_presents_frame_on_screen`
+precedent). NO product code changed; the real app renders unchanged.
+`hosts_view_layer_and_presents_live_frame` is now GREEN and UN-IGNORED. The
+historical triage below is retained for provenance.
+
 **The suppressed-then-rerun M4 KAT** (`crates/rustty-apprt-c/tests/macos_window_host.rs`
 `hosts_view_layer_and_presents_live_frame`) FAILS deterministically on a Metal host.
 Failure verbatim (run 2026-07-10, this machine):

@@ -24,18 +24,18 @@
 //! stale. The M4 re-run found the TRUE state:
 //! - `set_display_id_pushes_to_render_thread_panic_free` PASSES on a Metal host
 //!   (run 2026-07-10, this machine) — it is UN-IGNORED below.
-//! - `hosts_view_layer_and_presents_live_frame` FAILS at its FIRST assertion
-//!   ("host view is not layer-hosting", :329): `rustty_surface_new` never attaches
-//!   an IOSurfaceLayer to the host view because `generic::Renderer::init` builds
-//!   its `Metal` via the offscreen ctor (`Metal::init_offscreen`, generic.rs:1840,
-//!   the W1-7 apprt-free divergence) and the on-screen host-attach step —
-//!   `Metal::init(view)` wired at the renderer_seam (core renderer_seam.rs
-//!   `Renderer::init` currently DROPS `rt_surface`) — is the still-open
-//!   "live-windowing Renderer::init" seam. It stays `#[ignore]` with that HONEST
-//!   reason (an un-ignored always-failing KAT would poison the suite) and is a
-//!   TRIAGED FINDING, not a silent skip — full triage ledgered at
-//!   `.port/phase-2/DEFERRALS.md` "W-ATTACH"; the windowed host-attach chunk
-//!   (plan Task 23) must wire the attach and un-ignore it.
+//! - `hosts_view_layer_and_presents_live_frame` is now GREEN and UN-IGNORED
+//!   (RESOLVED P0.1, 2026-07-12). W-ATTACH (commit 96b0116) wired the on-screen
+//!   host-attach — `rustty_surface_new` → `Renderer::finalizeSurfaceInit` →
+//!   `Metal::attach_view` sends `setLayer:` to the host view, so the FIRST assertion
+//!   ("host view is layer-hosting") passes. The remaining red was purely a
+//!   headless-harness gap (NOT product): the inert MockHostView never lays its
+//!   hosted layer out, so `surfaceSize()` (= `layer.bounds * contentsScale`) read
+//!   0×0 and `drawFrame` early-returned; and the render thread's async
+//!   `present(sync=false)` hop lands on the main dispatch queue that no headless
+//!   runloop drains. `pump_bounded` now faithfully stands in for AppKit + the CA
+//!   commit (sizes the layer + drives `-display`, the reference sync present path);
+//!   see the RESOLVED note in `.port/phase-2/DEFERRALS.md` "W-ATTACH".
 //!   ALSO FOUND + HANDLED (2026-07-10, lldb): two
 //!   tests calling `rustty_app_new` on parallel libtest workers SIGABRT with zero
 //!   diagnostics inside HIToolbox (`Keymap::init` ->
@@ -260,11 +260,60 @@ impl HostedSurface {
     fn view_ptr(&self) -> *mut c_void {
         Retained::as_ptr(&self.view) as *mut c_void
     }
+    // AppKit-layout stand-in: a real layer-hosting NSView lays its hosted layer out
+    // to the view's bounds (in points); the renderer then reads `surfaceSize()` =
+    // `layer.bounds * contentsScale` (metal_impl `surface_size`) to size the frame.
+    // The inert `MockHostView` never lays anything out, so the attached
+    // `IOSurfaceLayer` keeps its default 0×0 bounds and `drawFrame` early-returns at
+    // the zero-dimension guard, never presenting. Mirror AppKit here: size the layer
+    // to the host view's logical bounds (contentsScale = 2.0 was set at attach, so
+    // 128×64 pt ⇒ a 256×128 px surface). Without this the renderer draws nothing.
+    fn size_host_layer(&self) {
+        use objc2_foundation::{NSPoint, NSRect, NSSize};
+        // SAFETY: `self.view` is a live MockHostView answering `layer`.
+        let l: *mut AnyObject = unsafe { msg_send![&*self.view, layer] };
+        if l.is_null() {
+            return;
+        }
+        let bounds = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(128.0, 64.0));
+        // SAFETY: `l` is the live CALayer; `setBounds:` takes a CGRect (== NSRect).
+        unsafe {
+            let _: () = msg_send![l, setBounds: bounds];
+        }
+    }
+    // CA-commit stand-in: in the live app the WindowServer/Core-Animation commit (and
+    // the CVDisplayLink) fire the layer's `display` method, which invokes the display
+    // callback the renderer installed at `loop_enter` → `drawFrame(sync=true)` →
+    // `present(sync=true)` → `set_surface_sync` → `CALayer.setContents(surface)` — the
+    // ON-MAIN-THREAD present path that needs NO dispatch-queue drain. The headless
+    // harness runs no CA runloop, so we drive `display` ourselves each pump tick (the
+    // renderer `golden_presents_frame_on_screen` precedent: `msg_send![layer,
+    // display]`). This is the faithful headless equivalent of the CA commit that
+    // presents on-screen in the real app; the render thread's own async
+    // `present(sync=false)` hop (to the main dispatch queue) cannot complete headless
+    // because no main-thread runloop drains that queue.
+    fn drive_display(&self) {
+        // SAFETY: `self.view` is a live MockHostView answering `layer`.
+        let l: *mut AnyObject = unsafe { msg_send![&*self.view, layer] };
+        if l.is_null() {
+            return;
+        }
+        // SAFETY: `l` is the live IOSurfaceLayer; `-display` invokes its overridden
+        // display method (fires the installed display callback under `draw_mutex`).
+        unsafe {
+            let _: () = msg_send![l, display];
+        }
+    }
     fn pump_bounded(&self) {
+        // Give the render thread its host-view size (AppKit-layout stand-in) so
+        // `surfaceSize()` is non-zero and frames actually draw.
+        self.size_host_layer();
         let deadline = Instant::now() + Duration::from_secs(5);
         for _ in 0..2000 {
             // SAFETY: `self.app` is a live App pointer for the surface's lifetime.
             unsafe { rustty_app_tick(self.app) };
+            // Drive the CA `display` present path (CA-commit stand-in).
+            self.drive_display();
             if self.layer_has_contents() {
                 break;
             }
@@ -344,19 +393,26 @@ impl Drop for HostedSurface {
 }
 
 #[test]
-#[ignore = "deferred: windowed host-attach unwired — core renderer_seam Renderer::init \
-            drops rt_surface and builds Metal via init_offscreen, so no IOSurfaceLayer \
-            is ever attached to the host view (FAILS at 'host view is not \
-            layer-hosting'); see DEFERRALS.md W-ATTACH — un-ignored by the \
-            windowed-attach chunk (plan Task 23)"]
 fn hosts_view_layer_and_presents_live_frame() {
-    // NO MainThreadMarker guard — MockHostView is main-thread-agnostic. The ONLY
-    // reason this is #[ignore] is the un-wired on-screen host-attach (see the
-    // REVISED W4 DEVIATION in the file header): `rustty_surface_new` builds the
-    // renderer offscreen and never sends `setLayer:` to the host view, so phase (1)
-    // below fails deterministically. Un-ignore once the live-windowing
-    // `Renderer::init` seam wires `Metal::init(view)` (DEFERRALS.md W-ATTACH, plan
-    // Task 23). The Metal probe is the skip guard for a no-Metal host.
+    // UN-IGNORED (P0.1, 2026-07-12): W-ATTACH (commit 96b0116) wired the windowed
+    // host-attach — `rustty_surface_new` now sends `setLayer:` to the host view via
+    // `Renderer::finalizeSurfaceInit` → `Metal::attach_view`, so phase (1) passes.
+    // NO MainThreadMarker guard — MockHostView is main-thread-agnostic.
+    //
+    // The remaining gap that kept it red was purely HEADLESS-HARNESS, not product:
+    // (a) a real layer-hosting NSView lays its hosted layer out to the view bounds,
+    //     which the renderer reads as `surfaceSize()` = `layer.bounds *
+    //     contentsScale` (Metal.zig:217-218) — the inert MockHostView never lays out,
+    //     so the attached IOSurfaceLayer kept its default 0×0 bounds and `drawFrame`
+    //     early-returned at the zero-dimension guard, never presenting; and
+    // (b) the render thread's `present(sync=false)` async-hops `set_surface` onto the
+    //     MAIN dispatch queue, which no headless runloop drains.
+    // `pump_bounded` now faithfully stands in for AppKit + the CA commit: it sizes
+    // the hosted layer (a) and drives the layer's `-display` (b) — the reference
+    // on-screen SYNC present path (`display` → installed displayCallback →
+    // `drawFrame(true)` → `present(true)` → `setSurfaceSync`, Metal.zig:164-176 /
+    // 253-259), the renderer `golden_presents_frame_on_screen` precedent. The Metal
+    // probe is the skip guard for a no-Metal host.
     let host = match HostedSurface::spawn() {
         Some(h) => h,
         None => {
