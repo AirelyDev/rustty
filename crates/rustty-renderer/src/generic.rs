@@ -14,9 +14,10 @@
 //!   cycle is broken by (a) hoisting the 6 clean config value-types to
 //!   `rustty-render-types` (Part A, landed), and (b) the `C`-generic seam (the
 //!   `renderer/Thread.zig` `DerivedConfig::init<C>` precedent, `thread.rs`).
-//!   `TerminalColor` is now a real renderer-local enum (Chunk 3b); `init<C>`
-//!   stays an `unimplemented!()` config-coupled seam (the golden/test build
-//!   `DerivedConfig` directly via a fixture). `Path`/`RepeatablePath` stay
+//!   `TerminalColor` is now a real renderer-local enum (Chunk 3b); `init<C>` is
+//!   LANDED — the config coupling is resolved by a renderer-defined
+//!   `RendererConfig` accessor trait impl'd IN `rustty-config` (the renderer
+//!   names no config type; no config edge). `Path`/`RepeatablePath` stay
 //!   inhabited placeholders (GPU_RD_CHUNK3A_DESIGN §B.1).
 //! - The `Renderer` struct (all fields, comments preserved) + nested
 //!   `SwapChain`/`FrameState`/`CustomShaderState` (+ the semaphore-backpressure
@@ -31,11 +32,18 @@
 //!   SB+TB-clean on the isolated Miri harness `.port/phase-2/mirihar-chunk3b/`
 //!   (see MIRI_EXCEPTIONS.md).
 //!
-//! DEFERRED (a later tier — R5 `unimplemented!()` seams, verbatim body preserved):
-//! `Renderer::{init,deinit}` (need a live NSView/apprt surface), `changeConfig`/
-//! `setScreenSize`/`setFontGrid` (resize + config-swap), the real windowed
-//! layer-present path, `prepBackgroundImage`/custom-shader load, and the
-//! inspector/kitty-pixel/overlay-render tiers. See DEFERRALS.md.
+//! LANDED SINCE (each was formerly a deferred seam — now real, live-tested):
+//! `DerivedConfig::init<C>`, `changeConfig`/`setScreenSize`/`setFontGrid` (resize
+//! + config-swap), `Renderer::{init,deinit}` (offscreen device ctor + the
+//! W-ATTACH host-view layer attach, `attach_host_view`), `prepBackgroundImage`/
+//! custom-shader load (`init_shaders`), and the kitty-pixel path. The real
+//! windowed layer-present path is RESOLVED (W-ATTACH, commit 96b0116) — there is
+//! NO remaining windowed-render seam.
+//!
+//! DEFERRED (a later tier — still an `unimplemented!()` seam, verbatim body
+//! preserved): only the inspector overlay-features seam
+//! (`inspector.rendererInfo().overlayFeatures`, a `rustty-inspector` stub —
+//! statically the `None` arm in the draw-frame overlay build). See DEFERRALS.md.
 //!
 //! DEAD-CODE (`-D warnings`): the reference `SwapChain`/`FrameState`/
 //! `CustomShaderState` are Renderer-private (`const … = struct`). Some of their
