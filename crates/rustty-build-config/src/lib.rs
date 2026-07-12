@@ -205,6 +205,13 @@ pub const fn flatpak() -> bool {
     CONFIG.flatpak
 }
 
+/// Reference: `os/wasm.zig` reads `options.wasm_shared`. Exposed here as a
+/// `pub const fn` mirroring the other option re-exports so wasm32 builds can
+/// read it without naming a non-existent crate-root item. (C4, VALIDATION_REPORT_2.)
+pub const fn wasm_shared() -> bool {
+    CONFIG.wasm_shared
+}
+
 /// Reference: `pub const snap = options.snap;`.
 pub const fn snap() -> bool {
     CONFIG.snap

@@ -73,10 +73,17 @@ pub fn pipe() -> std::io::Result<[fd_t; 2]> {
     {
         let mut read: crate::windows::HANDLE = std::ptr::null_mut();
         let mut write: crate::windows::HANDLE = std::ptr::null_mut();
-        if crate::windows::exp::kernel32::CreatePipe(&mut read, &mut write, std::ptr::null(), 0)
-            == 0
+        // SAFETY(ffi-boundary/stays-unsafe): `CreatePipe`/`GetLastError` are
+        // `extern "system"` (windows.rs:207-208); `read`/`write` are valid
+        // out-params and the attrs pointer is NULL (default security), matching
+        // the reference `std.os.windows.CreatePipe` call. (C1, VALIDATION_REPORT_2.)
+        if unsafe {
+            crate::windows::exp::kernel32::CreatePipe(&mut read, &mut write, std::ptr::null(), 0)
+        } == 0
         {
-            return crate::windows::unexpectedError(crate::windows::kernel32::GetLastError());
+            return crate::windows::unexpectedError(unsafe {
+                crate::windows::kernel32::GetLastError()
+            });
         }
 
         Ok([read, write])

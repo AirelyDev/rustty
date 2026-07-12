@@ -29,7 +29,7 @@ mod wasm_impl {
 
     /// True if we're in shared memory mode. If true, then the memory buffer
     /// in JS will be backed by a SharedArrayBuffer and some behaviors change.
-    pub const shared_mem: bool = rustty_build_config::wasm_shared;
+    pub const shared_mem: bool = rustty_build_config::wasm_shared();
 
     /// The allocator to use in wasm environments.
     ///
