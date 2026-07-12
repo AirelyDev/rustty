@@ -3985,9 +3985,15 @@ when the self-contained swap is a large change).
 ## P2 crash-guard: on-feature quicklook/inspector leaves [added 2026-07-12, panic=abort abort-policy pass]
 
 **Context:** the shipped lib is `panic=abort` (assert-class aborts, like Zig's
-trap). Three not-yet-ported FEATURE leaves sit on user-triggerable paths in the
+trap). These not-yet-ported FEATURE leaves sit on user-triggerable paths in the
 live macOS app (W-ATTACH), so an `unimplemented!()` there would ABORT THE WHOLE
-APP the instant the user triggers the feature. Per PREPORT_SWIFT_APP §4 abort
+APP the instant the user triggers the feature. (`rustty_surface_quicklook_word`
+was un-deferred + fully ported in P2.1 — it is objc-free core/vt, so it is now
+functional, not a guarded leaf. `rustty_surface_quicklook_font` was un-deferred +
+fully ported in P2.2 — it reads the shared font grid's primary CoreText face via
+objc2-core-text and returns the +1 CTFontRef (I16), so it too is now functional;
+the ONE remaining leaf — `Inspector::init` — stays guarded.) Per
+PREPORT_SWIFT_APP §4 abort
 policy, a not-yet-ported FEATURE degrades to a recoverable no-op (faithful, and
 strictly better than aborting). Each `unimplemented!()` was replaced with the
 export's own error-sentinel — which in every case coincides with a genuine
@@ -3999,19 +4005,7 @@ dep of apprt/apprt-c.
 
 **Guarded leaves (the REACHABLE-on-feature aborts):**
 
-1. **`rustty_surface_quicklook_font`** (`crates/rustty-apprt-c/src/lib.rs`, macOS
-   Darwin export). Trigger: Look-Up / force-click / accessibility
-   (SurfaceView_AppKit.swift:1521/1949/2361). Sentinel: `core::ptr::null_mut()` —
-   which is ALSO the reference's real early return for the non-CoreText backend
-   (`if backend != .coretext return null`). The Swift `if let fontRaw = …` just
-   skips the custom quicklook font.
-
-2. **`rustty_surface_quicklook_word`** (`crates/rustty-apprt-c/src/lib.rs`, macOS
-   Darwin export). Trigger: Look-Up (SurfaceView_AppKit.swift:1512). Sentinel:
-   `false` — the reference's "no word under cursor" return; Swift falls back to
-   `super.quickLook(with: event)`.
-
-3. **`embedded::Inspector::init`** (`crates/rustty-apprt/src/embedded.rs`).
+1. **`embedded::Inspector::init`** (`crates/rustty-apprt/src/embedded.rs`).
    Trigger: opening the inspector (`ghostty_surface_inspector` → `initInspector`
    → here). This is the FIRST reachable leaf on the inspector feature. Sentinel:
    `Err(ApprtError)` — the reference's own init-failure path: `rustty_surface_
@@ -4023,16 +4017,17 @@ dep of apprt/apprt-c.
 the core `Surface.activateInspector`/`deactivateInspector` (surface.rs), the
 `embedded::Inspector::deinit`/`initMetal`/`renderMetal` leaves, the
 `rustty_inspector_metal_*` exports, and `queueInspectorRender` are ALL reachable
-only via a *live* `Inspector` handle. Guarding `Inspector::init` (#3) makes that
+only via a *live* `Inspector` handle. Guarding `Inspector::init` (#1) makes that
 handle unconstructible, so none of them can fire on-feature — they stay honest
 Phase-3 `unimplemented!()` deferrals (untouched; R5). `activateInspector` /
 `deactivateInspector` additionally have zero live callers (the only reference is
 `Inspector::init`'s own verbatim-commented body). `redrawInspector` /
 `queueInspectorRender` have no C export or Swift caller at all.
 
-**Un-defer trigger:** the Phase-3 renderer/coretext/dcimgui fills. quicklook_font
-lands with the CoreText font-grid read (embedded.zig:2147-2186); quicklook_word
-with the renderer_state `selectWord`+`readTextLocked` path (embedded.zig:2193-2223);
-`Inspector::init` (+ its downstream metal chain) with the dcimgui ImGui context +
-Metal backend. On each fill, drop the `eprintln!` guard and restore the verbatim
-body — the export signatures already carry the faithful sentinel returns.
+**Un-defer trigger:** the Phase-3 renderer/dcimgui fill. `Inspector::init`
+(+ its downstream metal chain) lands with the dcimgui ImGui context + Metal
+backend. On that fill, drop the `eprintln!` guard and restore the verbatim body —
+the export signature already carries the faithful sentinel return. (quicklook_word:
+DONE in P2.1 — objc-free, needed no Phase-3 fill. quicklook_font: DONE in P2.2 —
+the CoreText font-grid read (embedded.zig:2147-2186) landed via objc2-core-text,
+returning the +1 CTFontRef the host releases (I16).)

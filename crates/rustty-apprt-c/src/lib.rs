@@ -2660,9 +2660,9 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
 // PORT NOTE: resolves the word under the cursor (`getCursorPos` + `posToViewport`
 // + `pages.pin` + `selectWord`) then reads it via `readTextLocked` (the E7
 // helper). It holds `renderer_state.mutex` and reads `renderer_state.terminal` —
-// the live-surface renderer_state seam (renderer R-d Phase-3). Grouped with the
-// Darwin block, it is a Phase-3 leaf reached only once a live surface exists.
-// Body preserved verbatim.
+// the live-surface renderer_state seam. It is objc-FREE: every step is core/vt
+// (renderer_state.mutex, Screen::select_word, readTextLocked) already ported in
+// rustty, so it functions the moment a live surface exists. Body ported 1:1.
 #[cfg(target_os = "macos")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_surface_quicklook_word(
@@ -2670,14 +2670,50 @@ pub unsafe extern "C" fn rustty_surface_quicklook_word(
     result: *mut Text,
 ) -> bool {
     // const surface = &ptr.core_surface;
+    // SAFETY: `ptr` validity is the caller's contract.
+    let core_surface: *mut CoreSurface =
+        unsafe { core::ptr::addr_of_mut!((*ptr).core_surface) };
+
     // surface.renderer_state.mutex.lock();
     // defer surface.renderer_state.mutex.unlock();
     //
+    // PORT NOTE: `renderer_state.mutex` is a `*mut Mutex`; the `defer unlock` runs on
+    // every scope exit. As in `rustty_surface_read_selection`, the read arm computes
+    // its result into a local and unlocks once before the single return; each early
+    // `orelse return false` unlocks first (the codebase's explicit-unlock precedent
+    // for a multi-exit `defer`, e.g. `Surface::clickLeft`).
+    let mutex = unsafe { (*core_surface).renderer_state.mutex };
+    unsafe { (*mutex).lock() };
+
     // // Get our word selection
     // const sel = sel: {
     //     const screen: *terminal.Screen = surface.renderer_state.terminal.screens.active;
+    let screen: *mut rustty_vt::screen::Screen =
+        unsafe { (*(*core_surface).renderer_state.terminal).screens.active };
+
     //     const pos = try ptr.getCursorPos();
+    //
+    // PORT NOTE: the reference `try` propagates the `getCursorPos` error out of a
+    // `bool`-returning export; rustty's `get_cursor_pos` is infallible (returns
+    // `Ok(self.cursor_pos)`), so the `Err` arm is effectively dead — mapped to the
+    // faithful degrade (`unlock` + `return false`: no cursor → no quicklook word).
+    let pos = match unsafe {
+        <Surface as rustty_apprt_api::Surface>::get_cursor_pos(&*ptr)
+    } {
+        Ok(v) => v,
+        Err(_) => {
+            unsafe { (*mutex).unlock() };
+            return false;
+        }
+    };
+
     //     const pt_viewport = surface.posToViewport(pos.x, pos.y);
+    //
+    // PORT NOTE: `posToViewport` takes `f64`; apprt `CursorPos` carries `f32`, so the
+    // fields widen at the call (the reference's implicit float coercion).
+    let pt_viewport =
+        unsafe { (*core_surface).posToViewport(f64::from(pos.x), f64::from(pos.y)) };
+
     //     const pin = screen.pages.pin(.{
     //         .viewport = .{
     //             .x = pt_viewport.x,
@@ -2687,29 +2723,50 @@ pub unsafe extern "C" fn rustty_surface_quicklook_word(
     //         if (comptime std.debug.runtime_safety) unreachable;
     //         return false;
     //     };
+    //
+    // PORT NOTE: `pages.pin` takes a read-only `&self`; the `orelse` block's
+    // `if (comptime std.debug.runtime_safety) unreachable` is an invariant assert —
+    // it aborts in debug (`cfg!(debug_assertions)`), and release returns `false`.
+    let pin = match unsafe { (*screen).pages.pin(rustty_vt::point::Point::Viewport(
+        rustty_vt::point::Coordinate {
+            x: pt_viewport.x,
+            y: pt_viewport.y,
+        },
+    )) } {
+        Some(p) => p,
+        None => {
+            if cfg!(debug_assertions) {
+                unreachable!("posToViewport produced an out-of-bounds viewport point");
+            }
+            unsafe { (*mutex).unlock() };
+            return false;
+        }
+    };
+
     //     break :sel surface.io.terminal.screens.active.selectWord(
     //         pin,
     //         surface.config.selection_word_chars,
     //     ) orelse return false;
     // };
-    //
+    let io_screen: *mut rustty_vt::screen::Screen =
+        unsafe { (*core_surface).io.terminal.screens.active };
+    let word_chars: &[u32] = &unsafe { &*core_surface }.config.selection_word_chars;
+    let sel = match unsafe { &*io_screen }.select_word(pin, word_chars) {
+        Some(v) => v,
+        None => {
+            unsafe { (*mutex).unlock() };
+            return false;
+        }
+    };
+
     // // Read the selection
     // return readTextLocked(ptr, sel, result);
     //
-    // TODO(port): renderer_state.mutex + selectWord + readTextLocked (renderer_state
-    // live-surface R-d Phase-3 leaf, embedded.zig:2193-2223). The verbatim body above
-    // is the not-yet-ported leaf. See DEFERRALS.md "P2 crash-guard: on-feature
-    // quicklook/inspector leaves".
-    //
-    // P2 INTERIM crash-guard (PREPORT_SWIFT_APP §4 abort policy): under panic=abort
-    // an `unimplemented!()` here ABORTS the whole app the moment the user triggers
-    // Look-Up (SurfaceView_AppKit.swift:1512). A recoverable no-op is faithful for a
-    // not-yet-ported FEATURE and strictly better than abort. Return the export's own
-    // sentinel `false` — the reference's "no word under cursor" return — on which the
-    // Swift caller falls back to `super.quickLook(with: event)`. Faithful degrade.
-    let _ = (ptr, result);
-    eprintln!("quicklook_word not yet ported");
-    false
+    // PORT NOTE: `readTextLocked` requires the mutex HELD (the "Locked" contract); it
+    // runs here still locked, and the single `unlock` below realizes the `defer`.
+    let out = unsafe { readTextLocked(ptr, sel, result) };
+    unsafe { (*mutex).unlock() };
+    out
 }
 
 /// C: rustty_inspector_metal_init
@@ -2911,5 +2968,101 @@ mod main_c_tests {
         unsafe { crate::rustty_cli_try_action() };
 
         // Reaching here proves the fn returned (did not exit / panic).
+    }
+}
+
+// ===================================================================
+// Focused unit test for the objc-FREE quicklook_word path (P2.1).
+//
+// The full `rustty_surface_quicklook_word` export needs a LIVE surface
+// (`renderer_state.mutex` + `dumpTextLocked` over a real `CoreSurface`), which
+// reaches the Phase-3 renderer seam and is impractical to stand up in-crate. Its
+// objc-free BODY, however, is pure core/vt: resolve a *viewport* `point.Coordinate`
+// (exactly what `posToViewport` yields for the cursor) → `pages.pin` → `select_word`
+// → read the word text. This test drives that exact wiring against a real vt
+// `Screen`, proving the ported path selects the word under the cursor coordinate and
+// reads back its text (the value the export ownership-transfers to the host as a
+// `Text`, I6).
+// ===================================================================
+#[cfg(test)]
+mod quicklook_word_tests {
+    use allocator_api2::alloc::Global;
+    use rustty_vt::point::{Coordinate, Point};
+    use rustty_vt::screen::{Options, Screen, SelectionString};
+
+    // The `selectWord` default word-boundary codepoints (subset: NUL + space are all
+    // that a `"hello world"` boundary needs; mirrors the vt `SELECT_WORD_BOUNDARY`).
+    const WORD_BOUNDARY: [u32; 2] = [0, b' ' as u32];
+
+    #[test]
+    fn quicklook_word_selects_word_under_cursor() {
+        // A small live screen with a two-word line.
+        let mut s = Screen::init(
+            Global,
+            Options {
+                cols: 20,
+                rows: 5,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits:
+                    rustty_vt::kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        s.test_write_string(b"hello world").unwrap();
+
+        // Build the *viewport* point the export forms from the cursor position
+        // (`posToViewport` → `point.Coordinate` → `.{ .viewport = .{ .x, .y } }`).
+        // Column 7 ('o' in "world") sits inside the second word.
+        let pt = Point::Viewport(Coordinate { x: 7, y: 0 });
+
+        // screen.pages.pin(...) orelse return false;
+        let pin = s.pages.pin(pt).expect("viewport point must resolve to a pin");
+
+        // screen.selectWord(pin, config.selection_word_chars) orelse return false;
+        let sel = s
+            .select_word(pin, &WORD_BOUNDARY)
+            .expect("a word under the cursor must select");
+
+        // readTextLocked → dumpTextLocked reads the selection text; the vt-level
+        // `selection_string` is that same read (the non-null `Text` the host gets).
+        let text = s
+            .selection_string(
+                Global,
+                SelectionString {
+                    sel,
+                    trim: true,
+                    map: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(text.as_slice(), b"world");
+
+        sel.deinit(&mut s);
+        s.deinit();
+    }
+
+    #[test]
+    fn quicklook_word_empty_cell_yields_no_word() {
+        // No text written: the cell under the cursor is empty, so `select_word`
+        // returns `None` — the export's `orelse return false` ("no word") degrade.
+        let mut s = Screen::init(
+            Global,
+            Options {
+                cols: 20,
+                rows: 5,
+                max_scrollback: 0,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits:
+                    rustty_vt::kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        let pt = Point::Viewport(Coordinate { x: 3, y: 0 });
+        let pin = s.pages.pin(pt).expect("viewport point must resolve to a pin");
+        assert!(s.select_word(pin, &WORD_BOUNDARY).is_none());
+
+        s.deinit();
     }
 }
