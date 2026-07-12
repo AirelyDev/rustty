@@ -464,6 +464,17 @@ impl App {
         // uninitialized heap slot; `init` writes through the out-pointer and the
         // Surface is NEVER moved afterwards (core `Surface::init` stores
         // `core_surface.rt_surface = &*surface`).
+        //
+        // SB/PIN NO-MOVE INVARIANT (I2 / R-E): `Box::into_raw` here lowers the box to
+        // a raw `*mut Surface` IMMEDIATELY — no movable `Box<Surface>` is ever held
+        // after this point, so the container's heap address is stable for its whole
+        // life and the self-referential `rt_surface` back-pointer never dangles.
+        // `closeSurface` frees via `ManuallyDrop` (below) WITHOUT moving. PROVEN on
+        // the non-FFI Miri harness `.port/phase-2/mirihar-surface-pin` (R5):
+        // `pin_shipped` CLEAN under SB+TB; the `pin_move*` negatives (relocate the
+        // Surface post-init) are UB at the `rt_surface` deref under both. Do NOT
+        // refactor this to return/store a `Box<Surface>` or reallocate the Surface
+        // after `init` — that reintroduces the R-E dangling-back-pointer UB.
         let uninit: *mut MaybeUninit<Surface> = Box::into_raw(Box::new(MaybeUninit::uninit()));
         let surface: *mut Surface = uninit.cast();
 

@@ -776,6 +776,21 @@ pub unsafe extern "C" fn rustty_surface_config_new() -> SurfaceOptions {
 /// non-null, is a heap-boxed + pinned surface (ADV-FIX 8) released with
 /// [`rustty_surface_free`].
 //
+// SB/PIN (I2 / R-E — the self-referential `rt_surface` pin): `App::newSurface`
+// (embedded.rs:467) boxes an uninitialized slot, lowers it IMMEDIATELY to a raw
+// `*mut Surface`, and inits in place; core `Surface::init` writes
+// `core_surface.rt_surface = <this container ptr>` (surface.rs:1953), so the
+// container's HEAP ADDRESS must stay stable for its whole life — every action
+// callback ships `v.rt_surface` (the container addr) to Swift and derefs it. This
+// export returns that raw ptr verbatim; no movable `Box<Surface>` ever exists after
+// init, and `rustty_surface_free` frees via `ManuallyDrop` WITHOUT moving. The pin
+// (no-move) is PROVEN on the isolated non-FFI Miri harness
+// `.port/phase-2/mirihar-surface-pin` (R5): `pin_shipped` (boxed + no-move) is CLEAN
+// under BOTH Stacked Borrows and Tree Borrows; the `pin_move*` negatives (relocate
+// the Surface after init, then follow the back-pointer) are flagged UB at the
+// `rt_surface` deref under both. A refactor that returns the Surface by value or
+// reallocates it post-init would reintroduce that UB.
+//
 // PORT NOTE (improper_ctypes_definitions): `*const SurfaceOptions` carries raw
 // pointers + the `Platform.C` union; pinned by the E5/E2 D2 const-asserts + cbindgen
 // (E11), faithful to the reference `*const apprt.Surface.Options` signature.

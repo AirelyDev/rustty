@@ -1,0 +1,11 @@
+[package]
+name = "mirihar-surface-pin"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "mirihar-surface-pin"
+path = "src/main.rs"
+
+# Standalone: not part of the rustty root workspace (this is a proof artifact).
+[workspace]
