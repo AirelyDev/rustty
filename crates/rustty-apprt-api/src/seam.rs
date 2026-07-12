@@ -169,6 +169,23 @@ pub trait Surface: Sized {
     // `getTitle` case).
     fn deinit(&mut self);
 
+    /// The raw host view pointer (macOS `NSView*` / iOS `UIView*`) this surface
+    /// renders into, or null if the backend is not view-hosted. rustty-only seam
+    /// (W-ATTACH / macos-swift-app tier): lets core route the host view into the
+    /// renderer's windowed layer-attach (`Renderer::attachHostView`) at
+    /// `finalizeSurfaceInit` time, reproducing ghostty's `Metal.init(opts)` which
+    /// reads `opts.rt_surface`'s `info.view`. Default null: non-embedded backends
+    /// (e.g. the GTK/none runtimes) render via their own path.
+    fn host_view(&self) -> *mut core::ffi::c_void {
+        core::ptr::null_mut()
+    }
+
+    /// The content scale (DPI ratio) at host-attach time — feeds the hosted
+    /// layer's `contentsScale`. Default 1.0. (W-ATTACH; paired with `host_view`.)
+    fn host_content_scale(&self) -> f64 {
+        1.0
+    }
+
     /// The content scale (DPI ratio) of the surface.
     //
     // PORT NOTE: `pub fn getContentScale(self: *const Surface) !apprt.ContentScale`

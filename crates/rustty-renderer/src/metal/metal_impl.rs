@@ -436,6 +436,37 @@ impl Metal {
         })
     }
 
+    /// W-ATTACH (macos-swift-app tier): attach an already-offscreen `Metal` to a
+    /// live host NSView, flipping `self.layer` from `None` (offscreen) to
+    /// `Some(IOSurfaceLayer)` (on-screen). This is the layer-hosting attach half
+    /// of `Metal::init` (`Metal.zig:110-126`) applied to the existing offscreen
+    /// device/queue/shaders — used because the live renderer is built via
+    /// `init_offscreen` (the apprt-free `Renderer::init`, generic.rs), then handed
+    /// its host view at `finalizeSurfaceInit`. Keeps device/queue; only creates +
+    /// attaches the layer. MUST run on the main thread, BEFORE the render thread's
+    /// `loop_enter` (so the display callback installs against `Some(layer)`).
+    pub fn attach_view(
+        &mut self,
+        view: &objc2::runtime::AnyObject,
+        scale_factor: f64,
+    ) -> Result<(), Error> {
+        let layer = IOSurfaceLayer::init()
+            .map_err(|iosurface_layer::Error::ObjCFailed| Error::ObjCFailed)?;
+        let l: *const objc2_quartz_core::CALayer = layer.as_ca_layer();
+        // SAFETY: `view` is a live NSView; layer-hosting via `setLayer:` BEFORE
+        // `setWantsLayer:true` (order load-bearing), reached over the type-erased
+        // `&AnyObject` (no app-kit dep, R4). Identical to `Metal::init`'s attach.
+        unsafe {
+            let _: () = objc2::msg_send![view, setLayer: l];
+            let _: () = objc2::msg_send![view, setWantsLayer: true];
+            let _: () = objc2::msg_send![view, setClipsToBounds: true];
+        }
+        layer.as_ca_layer().setContentsScale(scale_factor);
+        layer.as_ca_layer().setNeedsDisplayOnBoundsChange(true);
+        self.layer = Some(layer);
+        Ok(())
+    }
+
     /// Actions taken before doing anything in `drawFrame`.
     ///
     /// Right now we use this to start an AutoreleasePool.

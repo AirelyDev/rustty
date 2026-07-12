@@ -2200,6 +2200,40 @@ mod macos_impl {
             Ok(())
         }
 
+        /// W-ATTACH (macos-swift-app tier): attach the (offscreen-built) graphics
+        /// API to a live host NSView, so frames present to the window instead of a
+        /// dropped offscreen `IOSurface`. Core calls this from `Surface::init`
+        /// (right after `finalizeSurfaceInit`, before the render thread spawns)
+        /// with the raw view pointer it reads from `rt_surface.host_view()` — the
+        /// renderer never names an apprt/app-kit type (R4). No-op on a null view
+        /// (headless / non-hosted backends).
+        #[cfg(target_os = "macos")]
+        pub fn attach_host_view(
+            &mut self,
+            view: *mut core::ffi::c_void,
+            scale: f64,
+        ) -> Result<(), Error> {
+            if view.is_null() {
+                return Ok(());
+            }
+            // SAFETY: `view` is the live NSView the apprt surface was created with
+            // (host contract); reinterpret the type-erased pointer as `&AnyObject`
+            // for the objc2 layer-hosting messages inside `Metal::attach_view`.
+            let obj = unsafe { &*(view as *const objc2::runtime::AnyObject) };
+            self.api.attach_view(obj, scale)?;
+            Ok(())
+        }
+
+        /// Non-macOS: no windowed Metal host-attach (offscreen/other backends).
+        #[cfg(not(target_os = "macos"))]
+        pub fn attach_host_view(
+            &mut self,
+            _view: *mut core::ffi::c_void,
+            _scale: f64,
+        ) -> Result<(), Error> {
+            Ok(())
+        }
+
         // generic.zig:881-886 threadEnter. `@hasDecl(Metal,"threadEnter")` is FALSE
         // (Metal declares only loopEnter) ⇒ no api call; `surface` is the apprt
         // surface the hook is generic over (never named, R4).

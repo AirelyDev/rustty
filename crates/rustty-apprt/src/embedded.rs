@@ -2222,6 +2222,21 @@ impl ApprtSurface for Surface {
         self.app
     }
 
+    // W-ATTACH: expose the host NSView pointer + content scale so core routes
+    // them into the renderer's windowed layer-attach at finalizeSurfaceInit
+    // (embedded holds the raw view in `platform.macos.nsview`, blueprint §5/§8.1).
+    fn host_view(&self) -> *mut c_void {
+        match &self.platform {
+            Platform::MacOS(m) => m.nsview,
+            #[allow(unreachable_patterns)]
+            _ => core::ptr::null_mut(),
+        }
+    }
+
+    fn host_content_scale(&self) -> f64 {
+        self.content_scale.x.into()
+    }
+
     // pub fn close(self: *const Surface, process_alive: bool) void { ... }
     fn close(&self, process_alive: bool) {
         // const func = self.app.opts.close_surface orelse {

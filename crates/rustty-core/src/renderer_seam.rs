@@ -258,6 +258,19 @@ impl Renderer {
         self.0.finalize_surface_init(rt_surface)
     }
 
+    /// W-ATTACH: route the host NSView into the renderer's windowed layer-attach.
+    /// Forwards the raw view pointer + scale (core reads them from the apprt
+    /// surface's `host_view()`/`host_content_scale()`); the renderer never names an
+    /// apprt type (R4). Called from `Surface::init` right after
+    /// `finalizeSurfaceInit`, before the render thread spawns.
+    pub fn attachHostView(
+        &mut self,
+        view: *mut core::ffi::c_void,
+        scale: f64,
+    ) -> Result<(), RendererError> {
+        self.0.attach_host_view(view, scale)
+    }
+
     /// Callback called by renderer.Thread when it begins.
     //
     // PORT NOTE: `pub fn threadEnter(self: *const Self, surface:

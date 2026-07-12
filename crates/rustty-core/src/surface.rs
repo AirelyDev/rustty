@@ -2287,6 +2287,20 @@ where
             )
         }?;
 
+        // W-ATTACH (macos-swift-app tier): route the host NSView into the
+        // renderer's windowed layer-attach so frames present to the window (the
+        // renderer was built offscreen via `init_offscreen`; without this its
+        // `present` drops every frame into a detached `IOSurface` → a blank
+        // window). MUST run here — on the main thread, AFTER finalizeSurfaceInit,
+        // BEFORE the render thread spawn below — so `loop_enter` installs the
+        // display callback against `Some(layer)`. `host_view` is null for
+        // non-view-hosted backends, where `attachHostView` is a no-op.
+        unsafe {
+            let view = (*rt_surface).host_view();
+            let scale = (*rt_surface).host_content_scale();
+            Self::initTry(self_, true, (*self_).renderer.attachHostView(view, scale))
+        }?;
+
         // Start our renderer thread
         // self.renderer_thr = try std.Thread.spawn(
         //     .{},
