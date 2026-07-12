@@ -13,7 +13,20 @@ branch today. Disposition column: FIXED (this pass), FILED
 (TSV rust_type updated with an `[audited-against-port 2026-07-10: ...]` tag),
 NOTED (TSV row annotated, no correction needed), or VERIFIED (no TSV change).
 
-## Medium (2) — both FILED
+## Medium (2) — both ✅ RESOLVED 2026-07-12
+
+> **UPDATE 2026-07-12:** M1 + M2 FIXED and PROVEN on the isolated non-FFI Miri
+> harness `.port/phase-2/mirihar-xev-mpsc` (clean under BOTH stacked- and
+> tree-borrows, single- and cross-thread). The harness settled the fix shape the
+> close pass flagged as non-trivial: the one-line `addr_of_mut!` prescription and
+> `UnsafeCell`-class fields are BOTH insufficient (both still UB — the invalidated
+> lineage roots at the whole-`Loop` `&mut self` reborrow, not at the queue field);
+> the load-bearing fix is to give the self-referential queue its OWN heap
+> allocation so `Loop`'s per-tick reborrows never touch it. Applied to
+> `crates/rustty-xev/src/kqueue.rs` (`thread_pool_completions: Box<TaskCompletionQueue>`
+> + a cached stable raw handle; the three access sites route through the cache).
+> `queue_mpsc.rs` unchanged (methods already `*mut Self`). See DEFERRALS.md §1
+> RESOLUTION + the harness README. Disposition below updated FILED → RESOLVED.
 
 ### M1. kqueue thread_perform: cross-thread `&mut` into the MPSC queue
 - **Where:** `crates/rustty-xev/src/kqueue.rs:1394` (port of kqueue.zig:948-959).
@@ -27,9 +40,10 @@ NOTED (TSV row annotated, no correction needed), or VERIFIED (no TSV change).
   `Loop::init` hardcodes `Options::default()` at kqueue.rs:321;
   `ThreadPool::schedule` is `unimplemented!()`). Zig reference is clean
   (`*Self` method calls) — port-side hazard, not a fidelity break.
-- **Disposition:** FILED (DEFERRALS.md §1) with fix prescription
-  (`ptr::addr_of_mut!` chain, mirihar reproduce-then-prove) and an un-defer
-  gate on the §6 ThreadPool body. TSV rows cross-tagged.
+- **Disposition:** ✅ RESOLVED 2026-07-12 (was FILED, DEFERRALS.md §1). Fixed via
+  the heap-rooted-queue shape, PROVEN on `.port/phase-2/mirihar-xev-mpsc`
+  (`xthread_boxq`: the cross-thread `thread_perform` push through the loop's cached
+  raw handle is CLEAN under SB + TB). TSV rows re-tagged RESOLVED.
 
 ### M2. kqueue tick_inner: `&mut` retags invalidate the queue's stub pointers
 - **Where:** `crates/rustty-xev/src/kqueue.rs:630` (init) and `:740` (pop).
@@ -47,8 +61,11 @@ NOTED (TSV row annotated, no correction needed), or VERIFIED (no TSV change).
   `tick(&mut self)` retags, so the harness must settle whether the tick
   receiver itself needs a raw seam (or head/tail need UnsafeCell-class
   fields). Exactly the class of fix doctrine says must not be hand-reasoned.
-- **Disposition:** FILED (DEFERRALS.md §1, shared entry with M1). TSV rows
-  cross-tagged.
+- **Disposition:** ✅ RESOLVED 2026-07-12 (was FILED, DEFERRALS.md §1, shared
+  entry with M1). The close-pass caveat is now empirically settled: `plain_selfptr`
+  (the one-line `addr_of_mut!` fix) and `cell_selfptr` (UnsafeCell fields) are BOTH
+  UB under SB + TB; the heap-rooted queue (`boxq`) is CLEAN under both. Fixed and
+  proven on `.port/phase-2/mirihar-xev-mpsc`. TSV rows re-tagged RESOLVED.
 
 ## Low (18)
 

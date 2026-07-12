@@ -278,7 +278,39 @@ pub struct Loop {
     thread_pool: Option<*mut ThreadPool>,
 
     /// The MPSC queue for completed completions from the thread pool.
-    thread_pool_completions: TaskCompletionQueue,
+    //
+    // PORT NOTE [LIFETIMES-AUDIT M1+M2 fix, proven on
+    // `.port/phase-2/mirihar-xev-mpsc`]: the Zig field is inline
+    // (`thread_pool_completions: TaskCompletionQueue`), but that queue is
+    // SELF-REFERENTIAL — its `head`/`tail` point at the embedded `stub`, an
+    // address INSIDE this queue. `init` writes those stub self-pointers ONCE and
+    // `pop`/`push` re-deref them on every later tick. If the queue lived inline in
+    // `Loop`, each `tick(&mut self)` (and each `run(&mut self)` — the live driver
+    // reborrows up to 2000×) whole-`Loop` `&mut` reborrow would INVALIDATE the
+    // provenance the stub self-pointers were minted with, making the later deref
+    // Stacked/Tree-Borrows UB (mirihar candidates `plain_naive`/`plain_selfptr`/
+    // `cell_selfptr`/`inline_cached` are ALL UB under BOTH SB and TB — the
+    // one-line `addr_of_mut!` prescription and UnsafeCell fields are BOTH
+    // insufficient, because the popped lineage roots at the whole-`Loop` reborrow,
+    // not at the queue field). Giving the queue its OWN heap allocation (a `Box`)
+    // launders it: `tick`'s `&mut self` reborrows only the `Loop` allocation, never
+    // the queue's separate heap allocation, so the stub self-pointers survive
+    // across ticks — the same reason the OTHER (non-self-referential) intrusive
+    // queues stay clean (their links point at EXTERNAL completions). The Zig
+    // `*Self` method contract on `TaskCompletionQueue` is preserved verbatim; only
+    // the storage is heap-rooted. `thread_pool_completions_ptr` caches the stable
+    // raw handle established at `init` (from the `Box`), and every post-init access
+    // (`pop` in tick_inner, `push` in thread_perform) routes through THAT cache —
+    // the `Box` itself is never reborrowed again — so no `&mut`/`Box`-deref retag
+    // ever pops the queue's internal-pointer lineage (mirihar `boxq` +
+    // `xthread_boxq`: CLEAN under BOTH SB and TB, single- and cross-thread).
+    thread_pool_completions: Box<TaskCompletionQueue>,
+
+    /// Stable raw handle to `*thread_pool_completions`, cached at first-tick
+    /// `init` from the `Box` (null until then). The ONLY handle used post-init by
+    /// `pop`/`push` so the self-referential queue's stub pointers are never
+    /// invalidated by a `&mut self` reborrow. See the field PORT NOTE above.
+    thread_pool_completions_ptr: *mut TaskCompletionQueue,
 
     /// Cached time
     cached_now: Timespec,
@@ -343,7 +375,12 @@ impl Loop {
             thread_pool: options.thread_pool,
             // .thread_pool_completions = undefined — Rust has no undefined; place a
             // valid stub queue (never `init`'d/used while thread_pool is None).
-            thread_pool_completions: TaskCompletionQueue::new(Completion::default()),
+            // Heap-rooted (Box) so its self-referential stub pointers survive the
+            // per-tick `&mut self` reborrows (see the field PORT NOTE).
+            thread_pool_completions: Box::new(TaskCompletionQueue::new(Completion::default())),
+            // Cached at first-tick `init`; null until the (dead) thread-pool branch
+            // wires it. Never dereferenced while `thread_pool` is None.
+            thread_pool_completions_ptr: ptr::null_mut(),
             // .cached_now = undefined — populated by update_now() below.
             cached_now: unsafe { core::mem::zeroed() },
             active: 0,
@@ -627,7 +664,17 @@ impl Loop {
             self.flags.init = true;
 
             if self.thread_pool.is_some() {
-                unsafe { TaskCompletionQueue::init(&mut self.thread_pool_completions) };
+                // Establish the stable heap-rooted raw handle ONCE, then init the
+                // self-referential queue THROUGH it, so the stub self-pointers it
+                // writes carry the queue's own (Box) allocation provenance — not a
+                // per-tick `&mut self` tag that the next tick's reborrow would pop.
+                // (LIFETIMES-AUDIT M2 fix; mirihar `boxq`.)
+                unsafe {
+                    let qp: *mut TaskCompletionQueue =
+                        &raw mut *(*self_ptr).thread_pool_completions;
+                    ptr::addr_of_mut!((*self_ptr).thread_pool_completions_ptr).write(qp);
+                    TaskCompletionQueue::init(qp);
+                }
             }
 
             if let Err(err) = self.wakeup_state.setup(self.kqueue_fd) {
@@ -737,7 +784,13 @@ impl Loop {
             // TODO: unify the queues
             if self.thread_pool.is_some() {
                 loop {
-                    let c = unsafe { TaskCompletionQueue::pop(&mut self.thread_pool_completions) };
+                    // Drain through the cached stable raw handle (never a fresh
+                    // `&mut self.thread_pool_completions`, which would pop the
+                    // queue's stub-pointer lineage). LIFETIMES-AUDIT M2; mirihar
+                    // `boxq`.
+                    let c = unsafe {
+                        TaskCompletionQueue::pop((*self_ptr).thread_pool_completions_ptr)
+                    };
                     if c.is_null() {
                         break;
                     }
@@ -1390,8 +1443,17 @@ impl Loop {
         // Do our task
         unsafe { (*c).result = Some(Completion::perform(c, None)) };
 
-        // Add to our completion queue
-        unsafe { TaskCompletionQueue::push(&mut (*(*c).task_loop).thread_pool_completions, c) };
+        // Add to our completion queue. Push THROUGH the loop's cached stable raw
+        // handle (`thread_pool_completions_ptr`), never a fresh `&mut ...
+        // thread_pool_completions`: this runs ON A POOL THREAD, so a unique `&mut`
+        // reborrow of the queue (or of the owning `Loop`) formed here would be UB
+        // regardless of the atomics inside, AND would pop the queue's stub-pointer
+        // lineage. Reading the Copy raw handle + pushing through it touches only
+        // the queue's own (Box) allocation via its stable tag. (LIFETIMES-AUDIT M1;
+        // mirihar `xthread_boxq`: CLEAN under SB + TB.)
+        unsafe {
+            TaskCompletionQueue::push((*(*c).task_loop).thread_pool_completions_ptr, c)
+        };
 
         // Wake up our main loop (macos)
         unsafe {

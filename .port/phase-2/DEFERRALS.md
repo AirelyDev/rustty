@@ -3796,7 +3796,36 @@ too large for the close pass, so they are FILED here with the fix prescription.
 Two low-severity cleanups are filed alongside. All four TSV rows involved carry
 `[audited-against-port 2026-07-10: ... FILED in DEFERRALS.md]` cross-references.
 
-### 1. rustty-xev kqueue — `&mut` coercions into the self-referential MPSC queue (MEDIUM, latent SB UB, dead branch)
+### 1. rustty-xev kqueue — `&mut` coercions into the self-referential MPSC queue (MEDIUM, latent SB UB, dead branch) — ✅ RESOLVED 2026-07-12
+
+**RESOLUTION (2026-07-12):** FIXED and PROVEN on the isolated non-FFI Miri
+harness `.port/phase-2/mirihar-xev-mpsc` (SB + TB). The harness settled the open
+fix-shape questions the close pass could not: the one-line `addr_of_mut!`
+prescription below is **insufficient** (candidate `plain_selfptr`: UB under both
+SB and TB — the stub self-pointers minted on the init tick are popped by the NEXT
+tick's `&mut self` function-entry retag); `UnsafeCell`-class head/tail/stub fields
+are **also insufficient** (`cell_selfptr`: UB — the popped lineage roots at the
+whole-`Loop` raw coercion, not at the queue field); and caching a raw pointer that
+still points INTO the `Loop` allocation is insufficient (`inline_cached`: UB —
+proving the SEPARATE allocation, not the cache, is load-bearing). Two shapes are
+CLEAN under BOTH SB and TB: the Zig `tick(self: *Loop)` raw receiver
+(`plain_rawtick`) and — the **applied fix** — **heap-rooting the queue** so
+`Loop`'s per-tick reborrows never touch the queue's allocation (`boxq` +
+`xthread_boxq`, single- and cross-thread). Applied to `kqueue.rs`:
+`thread_pool_completions: TaskCompletionQueue` → `Box<TaskCompletionQueue>` plus a
+cached stable raw handle `thread_pool_completions_ptr` established at first-tick
+`init`; the three access sites (init/pop/thread_perform-push) route through the
+cache, never a fresh `&mut …thread_pool_completions`. `queue_mpsc.rs` is UNCHANGED
+(its methods already take `*mut Self`, faithful to Zig `*Self`; only the storage is
+heap-rooted). The raw-receiver route was rejected as it would require converting
+the public `tick`/`run` API and every driver (the live driver reborrows
+`loop_.run(NoWait)` up to 2000×) — a redesign of live tested code for a dead
+branch — whereas `boxq` is confined to the dead branch with zero API/caller/test
+change. `cargo build --workspace` + `cargo test -p rustty-xev` (42 tests) +
+`cargo +nightly miri test -p rustty-xev -- intrusive` / heap (SB + TB): all green.
+The historical finding text is retained below for provenance.
+
+---
 
 Three sites in `crates/rustty-xev/src/kqueue.rs` reach the Vyukov intrusive
 MPSC queue (`thread_pool_completions: TaskCompletionQueue`) through a fresh
@@ -3842,9 +3871,12 @@ cross-tick retags under SB. Prove on an isolated non-FFI Miri harness
 (mirihar) reproducing: init-queue → retag via new `&mut` → pop, expecting an
 SB violation before the fix and none after, under both SB and TB.
 
-**Un-defer trigger:** the XEV_BLUEPRINT §6 ThreadPool body landing (the moment
-`thread_pool` can be `Some`, this becomes HIGH and MUST be fixed first — the
-§6 chunk should treat this entry as a pre-requisite gate).
+**Un-defer trigger (NOW SATISFIED — fix applied ahead of the gate):** the
+XEV_BLUEPRINT §6 ThreadPool body landing was the trigger (the moment
+`thread_pool` can be `Some`, this becomes HIGH). The aliasing fix is now applied
+and proven, so when the §6 ThreadPool body lands it need only wire the queue (the
+SB/TB soundness of the completion-queue plumbing is already discharged); the
+harness `.port/phase-2/mirihar-xev-mpsc` remains the reproduction/regression proof.
 
 ### 2. rustty-vt `sys.rs` decode_png — non-lib default decoder parity (LOW, fidelity gap)
 
