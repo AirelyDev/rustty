@@ -14,7 +14,9 @@ use std::process::{Command, ExitCode};
 mod res_editor;
 mod res_misc;
 mod res_shell;
+mod res_shell_integration;
 mod res_terminfo;
+mod res_themes;
 
 const USAGE: &str = "\
 xtask — rustty build orchestration
@@ -358,6 +360,9 @@ fn resources() -> Result<PathBuf, String> {
     res_shell::gen_shell(&share).map_err(|e| format!("gen_shell: {e}"))?;
     res_editor::gen_editor(&share).map_err(|e| format!("gen_editor: {e}"))?;
     res_misc::gen_misc(&share).map_err(|e| format!("gen_misc: {e}"))?;
+    res_themes::gen_themes(&share).map_err(|e| format!("gen_themes: {e}"))?;
+    res_shell_integration::gen_shell_integration(&share)
+        .map_err(|e| format!("gen_shell_integration: {e}"))?;
 
     Ok(share)
 }
