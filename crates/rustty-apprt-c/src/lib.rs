@@ -139,6 +139,15 @@ type CoreSurface = rustty_core::surface::Surface<App>;
 // field type) stays in `rustty-apprt`; `capi` only re-asserts its ABI.
 pub mod capi;
 
+// The `ghostty_*` C-ABI alias layer (Branch A) — one thin `#[no_mangle]` forwarder
+// per app export in this crate, emitting the upstream `ghostty_*` spelling over the
+// canonical `rustty_*` body. Compiled only under the `identity-ghostty` feature so
+// the default rustty-native product does not carry the `ghostty_*` names (R2);
+// enabling it makes `librustty_apprt_c.a` a drop-in for the Ghostty Swift app.
+// PREPORT_SWIFT_APP §3 Branch A. (A2)
+#[cfg(feature = "identity-ghostty")]
+mod ghostty_alias;
+
 // ===================================================================
 // C API exports — 1:1 with the reference `pub export fn ghostty_*` /
 // `@export(..., .{ .name = "ghostty_*" })` lines (rustty_ prefix per R2).

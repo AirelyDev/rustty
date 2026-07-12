@@ -28,6 +28,13 @@ workspace = true
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
 
+# Branch A `ghostty_*` symbol identity (PREPORT_SWIFT_APP §3). OFF by default so the
+# canonical product exports only `rustty_*` (R2); enabling `identity-ghostty` compiles
+# `src/ghostty_alias.rs`, adding a `ghostty_<name>` thin forwarder per app export so the
+# staticlib exports BOTH spellings and the upstream Ghostty Swift app links unchanged.
+[features]
+identity-ghostty = []
+
 [dependencies]
 rustty-apprt = { workspace = true }
 # The reference `CAPI` extern structs' conversion methods reach the terminal types
