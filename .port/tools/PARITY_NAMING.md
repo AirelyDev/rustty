@@ -21,6 +21,7 @@ rebrand never makes the port look divergent from the oracle.
 - `.port/audits/GHOSTTY_LIFETIMES.tsv`           — lifetime audit OF ghostty source
 - the `ghostty_name` column of `CABI_SYMBOLS.tsv` — the oracle symbol names
 - every `#[cfg(feature = "identity-ghostty")]` string block — the oracle-string profile
+- `include/ghostty.h`                            — LOCAL frozen oracle umbrella (product = include/rustty-embed.h)
 
 ## Becomes rustty (the port — renamed by this plan)
 - all C exports: ghostty_* -> rustty_* (alias deleted, Task 1)
