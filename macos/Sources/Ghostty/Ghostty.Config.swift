@@ -411,7 +411,7 @@ extension Rustty {
 
         var macosCustomIcon: String {
             #if os(macOS)
-            let defaultValue = NSString("~/.config/ghostty/Rustty.icns").expandingTildeInPath
+            let defaultValue = NSString("~/.config/rustty/Rustty.icns").expandingTildeInPath
             guard let config = self.config else { return defaultValue }
             var v: UnsafePointer<Int8>?
             let key = "macos-custom-icon"
