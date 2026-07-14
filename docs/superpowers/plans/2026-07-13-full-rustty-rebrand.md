@@ -473,6 +473,53 @@ git add -A macos
 git commit -m "swift: rename Ghostty namespace enum + compounds -> Rustty (Task 6)"
 ```
 
+### Task 6b: Rename the lowercase Swift `ghostty` identifier + config-path family → `rustty` (keep upstream URLs)
+
+Context: discovered during Task 6 review — beyond the `ghostty_*` C symbols (Task 5) and the CamelCase `Ghostty` namespace (Task 6), the Swift app has a THIRD family: ~460 lowercase `ghostty` Swift identifiers, config paths, and user-facing strings (`ghostty` var, `ghosttyApplication()`, `ghosttySuite`, `ghosttyConfigDidChange`, `UserDefaults.ghostty`, `~/.config/ghostty/`, `config.ghostty`, `.appendingPathExtension("ghostty")`, `"Initialize ghostty backend failed"`, persisted keys `CustomGhosttyIcon`/`GhosttyCommit`). `rustty-identity` already commits (default profile) to `CONFIG_DIR="rustty"` / `CONFIG_FILE="config.rustty"`, so the Swift hardcodes are drift to be aligned, not a new decision. EXCEPTION — 25 upstream `github.com/ghostty-org/ghostty` URLs in comments are external references and MUST STAY.
+
+**Files:**
+- Modify: all `.swift` under `macos/Sources`, `macos/GhosttyUITests`, `macos/Tests`
+
+**Interfaces:**
+- Produces: Swift source where the lowercase identifier/config-path family reads `rustty` (config dir `~/.config/rustty/`, file `config.rustty`, ext `rustty`), upstream URLs preserved.
+
+- [ ] **Step 1: Snapshot the families + isolate what must stay.**
+```bash
+cd /Users/gael/projects/rustty
+echo "total lowercase ghostty refs: $(git grep -c 'ghostty' -- 'macos/**/*.swift' | awk -F: '{s+=$2} END{print s}')"
+echo "upstream URL lines (MUST STAY): $(git grep -c 'github.com/ghostty' -- 'macos/**/*.swift' | awk -F: '{s+=$2} END{print s}')"
+echo "bundle-id-like refs (flag for review, do NOT blind-rename): "; git grep -in 'com\.mitchellh\.ghostty\|mitchellh' -- 'macos/**/*.swift'
+```
+
+- [ ] **Step 2: Rename lowercase `ghostty`→`rustty` in `.swift`, protecting upstream-URL lines.** Use perl (BSD sed lacks lookarounds; the harness grep drops `-Z` — collect files via `git grep -l`). Skip any line containing `github.com/ghostty` (upstream URL) and any `com.mitchellh.ghostty` bundle-id token:
+```bash
+cd /Users/gael/projects/rustty
+for f in $(git grep -l 'ghostty' -- 'macos/**/*.swift'); do
+  perl -i -pe 's/ghostty/rustty/g unless /github\.com\/ghostty/ || /com\.mitchellh\.ghostty/' "$f"
+done
+```
+Then handle the config paths/extension explicitly (they are lowercase `ghostty` so already covered, but VERIFY): `~/.config/ghostty/`→`~/.config/rustty/`, `config.ghostty`→`config.rustty`, `.appendingPathExtension("ghostty")`→`("rustty")`.
+
+- [ ] **Step 3: Verify — lowercase `ghostty` remaining are ONLY upstream URLs (and any flagged bundle-id).**
+```bash
+cd /Users/gael/projects/rustty
+git grep -in 'ghostty' -- 'macos/**/*.swift' | grep -viE 'github.com/ghostty|com\.mitchellh\.ghostty'
+```
+Expected: **empty** (every remaining lowercase `ghostty` is an upstream URL or a deliberately-flagged bundle id). If a bundle-id token `com.mitchellh.ghostty` remains, report it in the task report for the human to decide (rebrand to `io.airely.rustty` vs keep) — do NOT silently rename a bundle identifier.
+
+- [ ] **Step 4: Confirm the config paths are now rustty-consistent.**
+```bash
+grep -rn 'config/rustty\|config.rustty\|"rustty"' macos/Sources macos/Tests macos/GhosttyUITests | grep -iE 'config|extension|icns' | head
+grep -rn 'config/ghostty\|config.ghostty' macos/Sources macos/Tests macos/GhosttyUITests
+```
+Expected: first shows the rustty config paths; second is empty.
+
+- [ ] **Step 5: Commit.**
+```bash
+git add -A macos
+git commit -m "swift: rename lowercase ghostty identifiers + config paths -> rustty (config.rustty, ~/.config/rustty); keep upstream URLs (Task 6b)"
+```
+
 ### Task 7: Rename the Swift source files and directories
 
 **Files (git mv — exact inventory):**
@@ -488,8 +535,22 @@ git commit -m "swift: rename Ghostty namespace enum + compounds -> Rustty (Task 
 - `macos/Sources/Features/Custom App Icon/ColorizedGhosttyIcon.swift` (+`Image`,`View`) → `ColorizedRusttyIcon*.swift`
 - `macos/Tests/ColorizedGhosttyIconTests.swift` → `ColorizedRusttyIconTests.swift`
 
+Also fixes an ObjC coupling introduced by Task 6: the `.m`/`.h` ObjC helper is NOT `.swift`, so Task 6 renamed the Swift CALLER `RusttyAddTabbedWindowSafely` (NSWindow+Extension.swift) but left the ObjC definition `GhosttyAddTabbedWindowSafely` — a dangling symbol until fixed here.
+
+**Additional files (ObjC content — no file rename needed, names are Ghostty-neutral):**
+- Modify: `macos/Sources/Helpers/ObjCExceptionCatcher.h` + `.m` (`GhosttyAddTabbedWindowSafely` → `RusttyAddTabbedWindowSafely`; error domain `@"Ghostty.ObjCException"` → `@"Rustty.ObjCException"`)
+
 **Interfaces:**
-- Produces: filesystem names matching the Task 6 symbol names. (The `.pbxproj` file references are fixed in Task 8.)
+- Produces: filesystem names matching the Task 6 symbol names + the ObjC symbol matching its now-renamed Swift caller. (The `.pbxproj` file references are fixed in Task 8.)
+
+- [ ] **Step 0: Fix the ObjC `.m`/`.h` symbol coupling** (Task 6 renamed the Swift caller; align the definition):
+```bash
+cd /Users/gael/projects/rustty
+sed -i '' -e 's/GhosttyAddTabbedWindowSafely/RusttyAddTabbedWindowSafely/g' -e 's/@"Ghostty\.ObjCException"/@"Rustty.ObjCException"/g' \
+  macos/Sources/Helpers/ObjCExceptionCatcher.h macos/Sources/Helpers/ObjCExceptionCatcher.m
+grep -rn 'Ghostty' macos/Sources/Helpers/ObjCExceptionCatcher.h macos/Sources/Helpers/ObjCExceptionCatcher.m
+```
+Expected: the grep is empty (both the function symbol and error domain now Rustty, matching the Swift caller `RusttyAddTabbedWindowSafely`).
 
 - [ ] **Step 1: Rename directories.**
 ```bash
@@ -529,9 +590,13 @@ git commit -m "swift: rename source files/dirs Ghostty -> Rustty (Task 7)"
 - `macos/Ghostty.sdef` → `macos/Rustty.sdef`
 - `macos/Ghostty.xctestplan` → `macos/Rustty.xctestplan`
 - Modify: `macos/Rustty.xcodeproj/project.pbxproj` (all path/target/product/module references)
+- Modify (content, no file rename): the 10 `.xib` files under `macos/Sources` (`customModule="Ghostty"` → `"Rustty"`, and the `GhosttyFullScreen`/`Ghostty.*` custom-class refs → `Rustty*`)
+- Modify: `macos/Ghostty.sdef` → `macos/Rustty.sdef` CONTENT (the `cocoa class="GhosttyScript*"` names → `RusttyScript*`) AND the coupled Swift `@objc(GhosttyScript*)` overrides in `macos/Sources/Features/AppleScript/*.swift` (rename together — these were deliberately left by Task 6 to keep Swift↔sdef matching)
+- Modify: `macos/Rustty-Info.plist` keys `GhosttyBuild`/`GhosttyCommit` → `RusttyBuild`/`RusttyCommit`, the `Ghostty.sdef` value → `Rustty.sdef`, the `Ghostty Surface Identifier` string → `Rustty Surface Identifier` (+ the Swift readers of `GhosttyBuild`/`GhosttyCommit`, if any survived Task 6b)
+- Modify: `macos/build.nu`, `macos/AGENTS.md` (Ghostty → Rustty product/build references)
 
 **Interfaces:**
-- Produces: an Xcode project that builds a `Rustty.app` product with module name `RusttyKit`, referencing the renamed files.
+- Produces: an Xcode project that builds a `Rustty.app` product with module name `RusttyKit`, referencing the renamed files, with `.xib` customModule + AppleScript cocoa classes + Info.plist keys all consistent.
 
 - [ ] **Step 1: Rename the container files/dirs.**
 ```bash
@@ -583,23 +648,65 @@ sed -i '' -e 's/GhosttyUITests/RusttyUITests/g' -e 's/\bGhostty\b/Rustty/g' \
   Rustty.xcodeproj/xcshareddata/xcschemes/Rustty.xcscheme Rustty.xctestplan
 ```
 
-- [ ] **Step 4: Set the product/display identity in `Rustty-Info.plist`.** Confirm `CFBundleName`=`Rustty` (already set), and set `CFBundleExecutable`/`CFBundleIdentifier` build-var-driven values to Rustty where literal. Verify:
+- [ ] **Step 4: Rename the `.xib` module + custom-class references** (customModule couples to the now-`Rustty` module/target):
+```bash
+cd /Users/gael/projects/rustty
+for f in $(git grep -l 'Ghostty' -- 'macos/**/*.xib'); do
+  sed -i '' -e 's/customModule="Ghostty"/customModule="Rustty"/g' -e 's/customClass="Ghostty/customClass="Rustty/g' -e 's/\bGhostty/Rustty/g' "$f"
+done
+git grep -n 'Ghostty' -- 'macos/**/*.xib'
+```
+Expected: empty. (Every `.xib` customModule/customClass now Rustty.)
+
+- [ ] **Step 5: Rename the AppleScript cocoa classes in the `.sdef` + the coupled Swift `@objc` overrides together.** These were left by Task 6 precisely because the `@objc(GhosttyScript…)` runtime name must byte-match the `.sdef` `cocoa class`:
+```bash
+cd /Users/gael/projects/rustty
+sed -i '' 's/GhosttyScript/RusttyScript/g' macos/Rustty.sdef
+for f in $(git grep -l 'GhosttyScript' -- 'macos/Sources/Features/AppleScript'); do
+  sed -i '' 's/GhosttyScript/RusttyScript/g' "$f"
+done
+echo "sdef cocoa classes vs swift @objc — must be identical sets:"
+grep -oE 'RusttyScript[A-Za-z]+' macos/Rustty.sdef | sort -u > /tmp/sdef.txt
+git grep -hoE '@objc\(RusttyScript[A-Za-z]+\)' -- 'macos/Sources/Features/AppleScript' | sed -E 's/@objc\((.*)\)/\1/' | sort -u > /tmp/objc.txt
+diff /tmp/sdef.txt /tmp/objc.txt && echo "MATCH"
+git grep -n 'GhosttyScript' -- macos
+```
+Expected: `MATCH` (the `.sdef` classes and Swift `@objc` names are the identical renamed set); final grep empty.
+
+- [ ] **Step 6: Rename the Info.plist keys + the sdef reference + surface-identifier string.**
+```bash
+cd /Users/gael/projects/rustty
+sed -i '' -e 's/GhosttyBuild/RusttyBuild/g' -e 's/GhosttyCommit/RusttyCommit/g' -e 's/Ghostty\.sdef/Rustty.sdef/g' -e 's/Ghostty Surface Identifier/Rustty Surface Identifier/g' macos/Rustty-Info.plist
+# any Swift reader of the renamed plist keys (should be caught by 6b, but confirm the pair matches)
+git grep -n 'GhosttyBuild\|GhosttyCommit' -- macos
+```
+Expected: empty (plist keys renamed; Swift readers already `RusttyBuild`/`RusttyCommit` from Task 6b — if a Swift reader still says `GhosttyCommit`, rename it to match).
+
+- [ ] **Step 7: Set the product/display identity in `Rustty-Info.plist`.** Confirm `CFBundleName`=`Rustty` (already set), and set `CFBundleExecutable`/`CFBundleIdentifier` build-var-driven values to Rustty where literal. Verify:
 ```bash
 plutil -p macos/Rustty-Info.plist | grep -iE 'bundlename|executable|identifier'
 ```
 Expected: no literal `Ghostty`.
 
-- [ ] **Step 5: Resolve + list the scheme to prove the project parses.**
+- [ ] **Step 8: Update `build.nu` + `AGENTS.md`.**
+```bash
+cd /Users/gael/projects/rustty
+sed -i '' -e 's/GhosttyKit/RusttyKit/g' -e 's/Ghostty\.xcodeproj/Rustty.xcodeproj/g' -e 's/Ghostty\.app/Rustty.app/g' -e 's/\bGhostty\b/Rustty/g' macos/build.nu macos/AGENTS.md
+git grep -n 'Ghostty' -- macos/build.nu macos/AGENTS.md
+```
+Expected: empty (or only genuine upstream references — review any hit).
+
+- [ ] **Step 9: Resolve + list the scheme to prove the project parses.**
 ```bash
 cd /Users/gael/projects/rustty/macos
 xcodebuild -project Rustty.xcodeproj -list
 ```
 Expected: lists targets `Rustty`, `RusttyUITests`, (Tests) and scheme `Rustty` with no parse error.
 
-- [ ] **Step 6: Commit.**
+- [ ] **Step 10: Commit.**
 ```bash
 git add -A macos
-git commit -m "xcode: rename project/targets/scheme/plist/entitlements/sdef Ghostty -> Rustty (Task 8)"
+git commit -m "xcode: rename project/targets/scheme/plist/entitlements/sdef + xib customModule + AppleScript cocoa classes + plist keys Ghostty -> Rustty (Task 8)"
 ```
 
 ### Task 9: Rename the app icon asset and wire the reproducible build to RusttyKit; full app build
