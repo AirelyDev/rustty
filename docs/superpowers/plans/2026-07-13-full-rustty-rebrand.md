@@ -41,58 +41,123 @@ Phases run top-to-bottom; within the C-ABI and Swift phases the order is load-be
 
 ### Task 0: Make the parity/differential machinery name-aware before any rename
 
+Context: the differential/gap infrastructure already treats **the external `/Users/gael/projects/ghostty` checkout + the frozen `.port/phase-0/**` corpora** as the read-only ORACLE (these stay ghostty), the **rustty port** as the SUBJECT, and `.port/audits/CABI_SYMBOLS.tsv` (columns `ghostty_name<TAB>rustty_name<TAB>signature<TAB>source_file<TAB>darwin_only`) as the canonical symbol bridge that `check_symbol_manifest.sh` reads. The rebrand must **preserve** that port↔oracle mapping so a future "compare gaps against ghostty" run (symbols, config constants, terminfo caps, differential VT) does not see the two as artificially divergent just because the port renamed itself. This task makes the name correspondence an explicit, sourced map — not an assumption baked into each script.
+
 **Files:**
-- Read: `.port/tools/gates/check_ghostty_h_abi.sh`
-- Read: `crates/rustty-terminfo/src/lib.rs` (the `identity-ghostty emits ghostty/xterm-ghostty` note at line 9)
+- Read: `.port/tools/gates/check_symbol_manifest.sh`, `.port/tools/gates/run_differential.sh`, `.port/tools/gates/check_parity_surface.py`, `.port/tools/gates/check_constants_parity.py`, `.port/tools/ci.sh`
+- Read: `.port/audits/CABI_SYMBOLS.tsv` (the ghostty↔rustty symbol map — the model for name-awareness)
 - Read: `crates/rustty-identity/src/lib.rs:72-127` (the `#[cfg(feature = "identity-ghostty")] mod values` block)
-- Create: `.port/tools/PARITY_NAMING.md`
+- Create: `.port/tools/parity_names.env` (the single sourced port↔oracle name map)
+- Create: `.port/tools/PARITY_NAMING.md` (the invariant + carve-out + how the map is used)
 
 **Interfaces:**
-- Produces: the documented invariant that later tasks rely on — "port artifacts are `rustty`-named; the differential harness reproduces the ghostty oracle **only** under `--features identity-ghostty`, which flips identity strings, not filenames."
+- Produces: `.port/tools/parity_names.env` defining `PORT_NAME=rustty` / `ORACLE_NAME=ghostty`, `PORT_TERM=xterm-rustty` / `ORACLE_TERM=xterm-ghostty`, `PORT_ENV_PREFIX=RUSTTY` / `ORACLE_ENV_PREFIX=GHOSTTY`, `PORT_KIT=RusttyKit` / `ORACLE_KIT=GhosttyKit`, `PORT_HEADER=rustty.h` / `ORACLE_HEADER=ghostty.h`, `ORACLE_TREE=/Users/gael/projects/ghostty`, `CABI_MAP=.port/audits/CABI_SYMBOLS.tsv`. Later gap-comparison tooling sources this instead of hardcoding either name.
 
-- [ ] **Step 1: Inventory every place the differential harness compares a rustty artifact to a ghostty-named oracle.**
-
-Run:
+- [ ] **Step 1: Inventory every parity/gap script that keys on a rustty-or-ghostty name.**
 ```bash
 cd /Users/gael/projects/rustty
-grep -rn 'identity-ghostty\|xterm-ghostty\|phase-0/corpora\|GHOSTTY_LIFETIMES' .port/tools crates/rustty-terminfo/src 2>/dev/null
+grep -rn 'ghostty\|rustty\|identity-ghostty\|xterm-\|GHOSTTY_\|/projects/ghostty\|CABI_SYMBOLS' \
+  .port/tools/gates/*.sh .port/tools/gates/*.py .port/tools/ci.sh 2>/dev/null \
+  | grep -viE '^\s*#' | head -60
 ```
-Expected: a finite list — the `identity-ghostty` feature gate, the terminfo parity emit path, and the phase-0 corpora references. Record each in the doc below.
+Expected: a finite list — `check_symbol_manifest.sh` (reads CABI_SYMBOLS.tsv + oracle header), `run_differential.sh` (`RUSTTY_VT_DRIVER` + phase-0 corpora), `check_parity_surface.py` (`infocmp rustty`), `check_constants_parity.py` (`ORACLE=/Users/gael/projects/ghostty`), `ci.sh` (oracle path). Note which side each keys on.
 
-- [ ] **Step 2: Write `.port/tools/PARITY_NAMING.md`** capturing the mapping and the carve-out:
+- [ ] **Step 2: Create `.port/tools/parity_names.env`** — the single source of truth:
+```bash
+cat > .port/tools/parity_names.env <<'EOF'
+# Port <-> oracle name map. SOURCE this from any parity/gap-comparison script
+# so the ghostty->rustty rebrand never makes the port look divergent from the
+# ghostty oracle. The oracle side stays "ghostty" forever (it names the
+# external reference); the port side is "rustty".
+PORT_NAME=rustty
+ORACLE_NAME=ghostty
+PORT_TERM=xterm-rustty
+ORACLE_TERM=xterm-ghostty
+PORT_ENV_PREFIX=RUSTTY
+ORACLE_ENV_PREFIX=GHOSTTY
+PORT_KIT=RusttyKit
+ORACLE_KIT=GhosttyKit
+PORT_HEADER=rustty.h
+ORACLE_HEADER=ghostty.h
+# External read-only oracle checkout (R3) + captured golden corpora — stay ghostty.
+ORACLE_TREE=/Users/gael/projects/ghostty
+ORACLE_HEADER_PATH=/Users/gael/projects/ghostty/include/ghostty.h
+CABI_MAP=.port/audits/CABI_SYMBOLS.tsv
+EOF
+```
 
+- [ ] **Step 3: Make the parity scripts source the map instead of hardcoding a single name.** For each script from Step 1, add near the top (bash) / import (python) a load of `parity_names.env` and replace the inline literal with the variable, WITHOUT changing behaviour:
+  - `check_symbol_manifest.sh`: source the env; keep `GHOSTTY_H="${GHOSTTY_H:-$ORACLE_HEADER_PATH}"` (already the external oracle) and `CABI_SYMBOLS="${CABI_MAP}"`. The gate keeps reading the `ghostty_name→rustty_name` TSV as the bridge. (Its A2 "alias forwarder" section is removed by Task 1, not here — leave a `# NOTE: A2 alias section removed by rebrand Task 1` marker where that block is so Task 1's implementer finds it.)
+  - `run_differential.sh`: source the env; the port driver var stays `RUSTTY_VT_DRIVER` (already rustty). Add a comment that the corpora under `phase-0` are the ORACLE golden (carve-out, stays ghostty).
+  - `check_parity_surface.py` / `check_constants_parity.py`: read the two env values they need (the terminfo entry name → `PORT_NAME`, the oracle path → `ORACLE_TREE`) rather than the string literals `"rustty"` / `"/Users/gael/projects/ghostty"`. A tiny loader is fine:
+    ```python
+    def _parity_names(root):
+        d = {}
+        with open(os.path.join(root, ".port/tools/parity_names.env")) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1); d[k] = v
+        return d
+    ```
+    Then `infocmp` uses `names["PORT_NAME"]`, oracle path uses `names["ORACLE_TREE"]`.
+
+- [ ] **Step 4: Write `.port/tools/PARITY_NAMING.md`** capturing the invariant, the carve-out, and how the map is used:
 ```markdown
 # Parity naming (port ↔ oracle)
 
-The rustty port is the SUBJECT; ghostty is the ORACLE. The differential harness
-proves byte-equivalence by building rustty **with `--features identity-ghostty`**,
-which flips every `rustty-identity` string constant to its ghostty value. It does
-NOT rename any file or symbol.
+The rustty port is the SUBJECT; ghostty is the ORACLE. Gap-comparison tooling
+sources `.port/tools/parity_names.env` for the port↔oracle name pairs so the
+rebrand never makes the port look divergent from the oracle.
 
-## Stays ghostty (the oracle — do not rename)
-- `/Users/gael/projects/ghostty`               — external read-only oracle tree
-- `.port/phase-0/corpora/**`                   — captured ghostty output bytes
-- `.port/phase-0/baseline/**`, `examples-out/**` — ghostty's own build outputs
-- `.port/audits/GHOSTTY_LIFETIMES.tsv`         — lifetime audit OF ghostty source
+## Two ways parity is proven (both name-aware)
+1. **String/behaviour parity** — build rustty **with `--features identity-ghostty`**,
+   which flips every `rustty-identity` string constant (APP_NAME, TERM, ENV_PREFIX,
+   terminfo names, config dir) to its ghostty value. Byte output then matches the
+   oracle. This flips STRINGS, never filenames or symbols.
+2. **Symbol parity** — `.port/audits/CABI_SYMBOLS.tsv` maps every
+   `ghostty_name` (oracle header) to its live `rustty_name` export.
+   `check_symbol_manifest.sh` uses this bridge; the alias forwarders are gone
+   (rebrand Task 1) — the Swift app links `rustty_*` directly.
+
+## Stays ghostty (the oracle — never renamed)
+- `/Users/gael/projects/ghostty`                 — external read-only oracle tree
+- `/Users/gael/projects/ghostty/include/ghostty.h` — oracle C-ABI header
+- `.port/phase-0/corpora/**`, `baseline/**`, `examples-out/**` — captured oracle golden bytes
+- `.port/audits/GHOSTTY_LIFETIMES.tsv`           — lifetime audit OF ghostty source
+- the `ghostty_name` column of `CABI_SYMBOLS.tsv` — the oracle symbol names
+- every `#[cfg(feature = "identity-ghostty")]` string block — the oracle-string profile
 
 ## Becomes rustty (the port — renamed by this plan)
-- all C symbols: ghostty_* -> rustty_* (alias deleted)
-- macos/ Swift app files, dirs, targets, module
+- all C exports: ghostty_* -> rustty_* (alias deleted, Task 1)
+- macos/ Swift app files/dirs/targets/module (GhosttyKit -> RusttyKit)
 - runtime identity strings (routed through rustty-identity)
 - shell-integration scripts + GHOSTTY_* env vars -> RUSTTY_*
 - trace files: main_ghostty.rs -> main_rustty.rs, cli/ghostty.rs -> cli/rustty.rs
 
-## The invariant
-Under the DEFAULT profile everything reports `rustty`. Under `identity-ghostty`
-the identity STRINGS report `ghostty` for the oracle diff. A residual-grep gate
-that fails on stray `ghostty` MUST exclude the oracle carve-out paths above and
-MUST allow the `#[cfg(feature = "identity-ghostty")]` string blocks.
+## Residual-grep rule
+A gate that fails on a stray `ghostty` MUST exclude the carve-out paths above
+and MUST allow `#[cfg(feature = "identity-ghostty")]` blocks and the `ghostty_name`
+TSV column.
 ```
 
-- [ ] **Step 3: Commit.**
+- [ ] **Step 5: Verify the map is 1:1 and every parity script still runs (progress-mode is fine).**
 ```bash
-git add .port/tools/PARITY_NAMING.md
-git commit -m "parity: document port<->oracle naming invariant before rebrand (Task 0)"
+cd /Users/gael/projects/rustty
+# map sanity: every PORT_ has an ORACLE_ pair and they differ
+grep -E '^(PORT|ORACLE)_' .port/tools/parity_names.env
+# the touched scripts still parse/execute (progress or green, not crash)
+bash -n .port/tools/gates/check_symbol_manifest.sh && echo "symbol_manifest: parses"
+bash -n .port/tools/gates/run_differential.sh && echo "run_differential: parses"
+python3 -c "import ast; ast.parse(open('.port/tools/gates/check_parity_surface.py').read()); print('parity_surface: parses')"
+python3 -c "import ast; ast.parse(open('.port/tools/gates/check_constants_parity.py').read()); print('constants_parity: parses')"
+```
+Expected: pairs present and differing; all four scripts parse.
+
+- [ ] **Step 6: Commit.**
+```bash
+git add .port/tools/parity_names.env .port/tools/PARITY_NAMING.md .port/tools/gates .port/tools/ci.sh
+git commit -m "parity: sourced port<->oracle name map + name-aware gap scripts + invariant doc (Task 0)"
 ```
 
 ---
@@ -108,6 +173,7 @@ git commit -m "parity: document port<->oracle naming invariant before rebrand (T
 - Modify: `crates/rustty-apprt-c/src/lib.rs` (remove the `mod ghostty_alias;` + any force-link ref)
 - Modify: `crates/rustty-config/src/lib.rs`, `crates/rustty-bench/src/lib.rs` (same)
 - Modify: `crates/rustty-apprt-c/Cargo.toml`, `crates/rustty-config/Cargo.toml`, `crates/rustty-bench/Cargo.toml` (the `identity-ghostty` feature keeps flipping `rustty-identity` strings but no longer references the alias module)
+- Modify: `.port/tools/gates/check_symbol_manifest.sh` (remove the A2 "alias forwarder" verification section — the forwarders are gone; keep the A1 `CABI_SYMBOLS.tsv` bridge + live-`rustty_*`-export check; find the `# NOTE: A2 alias section removed by rebrand Task 1` marker left by Task 0)
 
 **Interfaces:**
 - Consumes: the canonical `rustty_*` exports (unchanged).
@@ -149,10 +215,16 @@ nm -gU target/release/librustty_apprt_c.a 2>/dev/null | grep -c ' _ghostty_' || 
 ```
 Expected: `0`.
 
-- [ ] **Step 7: Commit.**
+- [ ] **Step 7: Remove the A2 alias-forwarder section from the symbol-manifest gate.** In `.port/tools/gates/check_symbol_manifest.sh`, find the `# NOTE: A2 alias section removed by rebrand Task 1` marker (left by Task 0) and delete the alias-forwarder verification block it marks — the `ghostty_*` forwarders no longer exist. Keep the A1 checks: (a) every `CABI_SYMBOLS.tsv` `rustty_name` has a live `extern "C" fn` export, and (the header-count check against the external oracle header). Run it:
 ```bash
-git add -A crates/rustty-apprt-c crates/rustty-config crates/rustty-bench
-git commit -m "abi: delete ghostty_* alias layer; identity-ghostty now flips strings only (Task 1)"
+bash .port/tools/gates/check_symbol_manifest.sh 2>&1 | tail -8
+```
+Expected: passes (or progress-mode if the oracle header is absent) — NOT red on missing `ghostty_*` aliases.
+
+- [ ] **Step 8: Commit.**
+```bash
+git add -A crates/rustty-apprt-c crates/rustty-config crates/rustty-bench .port/tools/gates/check_symbol_manifest.sh
+git commit -m "abi: delete ghostty_* alias layer; identity-ghostty flips strings only; drop A2 gate section (Task 1)"
 ```
 
 ### Task 2: Regenerate the canonical apprt header and confirm it covers every symbol the Swift app needs
