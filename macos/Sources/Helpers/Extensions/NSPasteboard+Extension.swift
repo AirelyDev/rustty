@@ -29,7 +29,7 @@ extension NSPasteboard.PasteboardType {
 extension NSPasteboard {
     /// The pasteboard to used for Rustty selection.
     static var rusttySelection: NSPasteboard = {
-        NSPasteboard(name: .init("com.mitchellh.ghostty.selection"))
+        NSPasteboard(name: .init("io.airely.rustty.selection"))
     }()
 
     /// Gets the contents of the pasteboard as a string following a specific set of semantics.

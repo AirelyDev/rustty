@@ -47,7 +47,7 @@ extension Rustty.SurfaceView: Transferable {
 extension UTType {
     /// A format that encodes the bare UUID only for the surface. This can be used if you have
     /// a way to look up a surface by ID.
-    static let rusttySurfaceId = UTType(exportedAs: "com.mitchellh.ghosttySurfaceId")
+    static let rusttySurfaceId = UTType(exportedAs: "io.airely.rusttySurfaceId")
 }
 
 #if canImport(AppKit)

@@ -44,7 +44,7 @@ func requestIntentPermission() async -> Bool {
             }
 
             PermissionRequest.show(
-                "com.mitchellh.ghostty.shortcutsPermission",
+                "io.airely.rustty.shortcutsPermission",
                 message: "Allow Shortcuts to interact with Rustty?",
                 allowDuration: .forever,
                 rememberDuration: nil,

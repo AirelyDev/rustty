@@ -13,10 +13,10 @@ extension rustty_surface_t: @unchecked @retroactive Sendable {}
 
 extension Rustty {
     // The user notification category identifier
-    static let userNotificationCategory = "com.mitchellh.ghostty.userNotification"
+    static let userNotificationCategory = "io.airely.rustty.userNotification"
 
     // The user notification "Show" action
-    static let userNotificationActionShow = "com.mitchellh.ghostty.userNotification.Show"
+    static let userNotificationActionShow = "io.airely.rustty.userNotification.Show"
 }
 
 // MARK: Build Info
@@ -331,124 +331,124 @@ extension Rustty {
 
 extension Notification.Name {
     /// Configuration change. If the object is nil then it is app-wide. Otherwise its surface-specific.
-    static let rusttyConfigDidChange = Notification.Name("com.mitchellh.ghostty.configDidChange")
+    static let rusttyConfigDidChange = Notification.Name("io.airely.rustty.configDidChange")
     static let RusttyConfigChangeKey = rusttyConfigDidChange.rawValue
 
     /// Color change. Object is the surface changing.
-    static let rusttyColorDidChange = Notification.Name("com.mitchellh.ghostty.rusttyColorDidChange")
+    static let rusttyColorDidChange = Notification.Name("io.airely.rustty.rusttyColorDidChange")
     static let RusttyColorChangeKey = rusttyColorDidChange.rawValue
 
     /// Goto tab. Has tab index in the userinfo.
-    static let rusttyMoveTab = Notification.Name("com.mitchellh.ghostty.moveTab")
+    static let rusttyMoveTab = Notification.Name("io.airely.rustty.moveTab")
     static let RusttyMoveTabKey = rusttyMoveTab.rawValue
 
     /// Close tab
-    static let rusttyCloseTab = Notification.Name("com.mitchellh.ghostty.closeTab")
+    static let rusttyCloseTab = Notification.Name("io.airely.rustty.closeTab")
 
     /// Close other tabs
-    static let rusttyCloseOtherTabs = Notification.Name("com.mitchellh.ghostty.closeOtherTabs")
+    static let rusttyCloseOtherTabs = Notification.Name("io.airely.rustty.closeOtherTabs")
 
     /// Close tabs to the right of the focused tab
-    static let rusttyCloseTabsOnTheRight = Notification.Name("com.mitchellh.ghostty.closeTabsOnTheRight")
+    static let rusttyCloseTabsOnTheRight = Notification.Name("io.airely.rustty.closeTabsOnTheRight")
 
     /// Close window
-    static let rusttyCloseWindow = Notification.Name("com.mitchellh.ghostty.closeWindow")
+    static let rusttyCloseWindow = Notification.Name("io.airely.rustty.closeWindow")
 
     /// Resize the window to a default size.
-    static let rusttyResetWindowSize = Notification.Name("com.mitchellh.ghostty.resetWindowSize")
+    static let rusttyResetWindowSize = Notification.Name("io.airely.rustty.resetWindowSize")
 
     /// Ring the bell
-    static let rusttyBellDidRing = Notification.Name("com.mitchellh.ghostty.rusttyBellDidRing")
+    static let rusttyBellDidRing = Notification.Name("io.airely.rustty.rusttyBellDidRing")
 
     /// The active selection changed
-    static let rusttySelectionDidChange = Notification.Name("com.mitchellh.ghostty.rusttySelectionDidChange")
+    static let rusttySelectionDidChange = Notification.Name("io.airely.rustty.rusttySelectionDidChange")
 
     /// Readonly mode changed
-    static let rusttyDidChangeReadonly = Notification.Name("com.mitchellh.ghostty.didChangeReadonly")
+    static let rusttyDidChangeReadonly = Notification.Name("io.airely.rustty.didChangeReadonly")
     static let ReadonlyKey = rusttyDidChangeReadonly.rawValue + ".readonly"
-    static let rusttyCommandPaletteDidToggle = Notification.Name("com.mitchellh.ghostty.commandPaletteDidToggle")
+    static let rusttyCommandPaletteDidToggle = Notification.Name("io.airely.rustty.commandPaletteDidToggle")
 
     /// Toggle maximize of current window
-    static let rusttyMaximizeDidToggle = Notification.Name("com.mitchellh.ghostty.maximizeDidToggle")
+    static let rusttyMaximizeDidToggle = Notification.Name("io.airely.rustty.maximizeDidToggle")
 
     /// Notification sent when scrollbar updates
-    static let rusttyDidUpdateScrollbar = Notification.Name("com.mitchellh.ghostty.didUpdateScrollbar")
+    static let rusttyDidUpdateScrollbar = Notification.Name("io.airely.rustty.didUpdateScrollbar")
     static let ScrollbarKey = rusttyDidUpdateScrollbar.rawValue + ".scrollbar"
 
     /// Focus the search field
-    static let rusttySearchFocus = Notification.Name("com.mitchellh.ghostty.searchFocus")
+    static let rusttySearchFocus = Notification.Name("io.airely.rustty.searchFocus")
 }
 
 // NOTE: I am moving all of these to Notification.Name extensions over time. This
 // namespace was the old namespace.
 extension Rustty.Notification {
     /// Used to pass a configuration along when creating a new tab/window/split.
-    static let NewSurfaceConfigKey = "com.mitchellh.ghostty.newSurfaceConfig"
+    static let NewSurfaceConfigKey = "io.airely.rustty.newSurfaceConfig"
 
     /// Posted when a new split is requested. The sending object will be the surface that had focus. The
     /// userdata has one key "direction" with the direction to split to.
-    static let rusttyNewSplit = Notification.Name("com.mitchellh.ghostty.newSplit")
+    static let rusttyNewSplit = Notification.Name("io.airely.rustty.newSplit")
 
     /// Close the calling surface.
-    static let rusttyCloseSurface = Notification.Name("com.mitchellh.ghostty.closeSurface")
+    static let rusttyCloseSurface = Notification.Name("io.airely.rustty.closeSurface")
 
     /// Focus previous/next split. Has a SplitFocusDirection in the userinfo.
-    static let rusttyFocusSplit = Notification.Name("com.mitchellh.ghostty.focusSplit")
+    static let rusttyFocusSplit = Notification.Name("io.airely.rustty.focusSplit")
     static let SplitDirectionKey = rusttyFocusSplit.rawValue
 
     /// Goto tab. Has tab index in the userinfo.
-    static let rusttyGotoTab = Notification.Name("com.mitchellh.ghostty.gotoTab")
+    static let rusttyGotoTab = Notification.Name("io.airely.rustty.gotoTab")
     static let GotoTabKey = rusttyGotoTab.rawValue
 
     /// New tab. Has base surface config requested in userinfo.
-    static let rusttyNewTab = Notification.Name("com.mitchellh.ghostty.newTab")
+    static let rusttyNewTab = Notification.Name("io.airely.rustty.newTab")
 
     /// New window. Has base surface config requested in userinfo.
-    static let rusttyNewWindow = Notification.Name("com.mitchellh.ghostty.newWindow")
+    static let rusttyNewWindow = Notification.Name("io.airely.rustty.newWindow")
 
     /// Present terminal. Bring the surface's window to focus without activating the app.
-    static let rusttyPresentTerminal = Notification.Name("com.mitchellh.ghostty.presentTerminal")
+    static let rusttyPresentTerminal = Notification.Name("io.airely.rustty.presentTerminal")
 
     /// Toggle fullscreen of current window
-    static let rusttyToggleFullscreen = Notification.Name("com.mitchellh.ghostty.toggleFullscreen")
+    static let rusttyToggleFullscreen = Notification.Name("io.airely.rustty.toggleFullscreen")
     static let FullscreenModeKey = rusttyToggleFullscreen.rawValue
 
     /// Notification sent to toggle split maximize/unmaximize.
-    static let didToggleSplitZoom = Notification.Name("com.mitchellh.ghostty.didToggleSplitZoom")
+    static let didToggleSplitZoom = Notification.Name("io.airely.rustty.didToggleSplitZoom")
 
     /// Notification
-    static let didReceiveInitialWindowFrame = Notification.Name("com.mitchellh.ghostty.didReceiveInitialWindowFrame")
-    static let FrameKey = "com.mitchellh.ghostty.frame"
+    static let didReceiveInitialWindowFrame = Notification.Name("io.airely.rustty.didReceiveInitialWindowFrame")
+    static let FrameKey = "io.airely.rustty.frame"
 
     /// Notification to render the inspector for a surface
-    static let inspectorNeedsDisplay = Notification.Name("com.mitchellh.ghostty.inspectorNeedsDisplay")
+    static let inspectorNeedsDisplay = Notification.Name("io.airely.rustty.inspectorNeedsDisplay")
 
     /// Notification to show/hide the inspector
-    static let didControlInspector = Notification.Name("com.mitchellh.ghostty.didControlInspector")
+    static let didControlInspector = Notification.Name("io.airely.rustty.didControlInspector")
 
-    static let confirmClipboard = Notification.Name("com.mitchellh.ghostty.confirmClipboard")
+    static let confirmClipboard = Notification.Name("io.airely.rustty.confirmClipboard")
     static let ConfirmClipboardStrKey = confirmClipboard.rawValue + ".str"
     static let ConfirmClipboardStateKey = confirmClipboard.rawValue + ".state"
     static let ConfirmClipboardRequestKey = confirmClipboard.rawValue + ".request"
 
     /// Notification sent to the active split view to resize the split.
-    static let didResizeSplit = Notification.Name("com.mitchellh.ghostty.didResizeSplit")
+    static let didResizeSplit = Notification.Name("io.airely.rustty.didResizeSplit")
     static let ResizeSplitDirectionKey = didResizeSplit.rawValue + ".direction"
     static let ResizeSplitAmountKey = didResizeSplit.rawValue + ".amount"
 
     /// Notification sent to the split root to equalize split sizes
-    static let didEqualizeSplits = Notification.Name("com.mitchellh.ghostty.didEqualizeSplits")
+    static let didEqualizeSplits = Notification.Name("io.airely.rustty.didEqualizeSplits")
 
     /// Notification that renderer health changed
-    static let didUpdateRendererHealth = Notification.Name("com.mitchellh.ghostty.didUpdateRendererHealth")
+    static let didUpdateRendererHealth = Notification.Name("io.airely.rustty.didUpdateRendererHealth")
 
     /// Notifications related to key sequences
-    static let didContinueKeySequence = Notification.Name("com.mitchellh.ghostty.didContinueKeySequence")
-    static let didEndKeySequence = Notification.Name("com.mitchellh.ghostty.didEndKeySequence")
+    static let didContinueKeySequence = Notification.Name("io.airely.rustty.didContinueKeySequence")
+    static let didEndKeySequence = Notification.Name("io.airely.rustty.didEndKeySequence")
     static let KeySequenceKey = didContinueKeySequence.rawValue + ".key"
 
     /// Notifications related to key tables
-    static let didChangeKeyTable = Notification.Name("com.mitchellh.ghostty.didChangeKeyTable")
+    static let didChangeKeyTable = Notification.Name("io.airely.rustty.didChangeKeyTable")
     static let KeyTableKey = didChangeKeyTable.rawValue + ".action"
 }
 
