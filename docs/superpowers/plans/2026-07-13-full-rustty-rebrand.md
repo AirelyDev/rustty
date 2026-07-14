@@ -678,8 +678,16 @@ sed -i '' \
   -e 's/"Ghostty"/"Rustty"/g' \
   -e 's/= Ghostty;/= Rustty;/g' \
   -e 's/Ghostty\.xcscheme/Rustty.xcscheme/g' \
+  -e 's/EXECUTABLE_NAME = ghostty;/EXECUTABLE_NAME = rustty;/g' \
+  -e 's/ASSETCATALOG_COMPILER_APPICON_NAME = Ghostty;/ASSETCATALOG_COMPILER_APPICON_NAME = Rustty;/g' \
+  -e 's/com\.mitchellh\.ghostty-dock-tile/io.airely.rustty-dock-tile/g' \
+  -e 's/com\.mitchellh\.ghostty-ios/io.airely.rustty-ios/g' \
+  -e 's/com\.mitchellh\.GhosttyTests/io.airely.RusttyTests/g' \
+  -e 's/com\.mitchellh\.GhosttyUITests/io.airely.RusttyUITests/g' \
   Rustty.xcodeproj/project.pbxproj
 ```
+Notes: `PRODUCT_NAME = "$(TARGET_NAME)"` (unchanged) means renaming the `Ghostty` target → `Rustty` (via `= Ghostty;`→`= Rustty;`) makes the built product **`Rustty.app`** automatically; `EXECUTABLE_NAME = rustty` makes the executable `rustty` (the rationale for keeping it `ghostty` — the Branch-A `ghostty_*` link — is gone, we're on `rustty_*`/RusttyKit). `ASSETCATALOG_COMPILER_APPICON_NAME = Rustty` couples to the icon asset rename in Task 9. The main app bundle id is already `io.airely.rustty[.debug]` (prior R2); the secondary component bundle ids are now rebranded too.
+
 Then hand-audit remaining `Ghostty` tokens in the pbxproj (individual `Ghostty*.swift` file entries the loop in Task 7 renamed on disk):
 ```bash
 grep -oE '[A-Za-z.+ -]*Ghostty[A-Za-z.+ -]*' Rustty.xcodeproj/project.pbxproj | sort -u
@@ -732,25 +740,26 @@ plutil -p macos/Rustty-Info.plist | grep -iE 'bundlename|executable|identifier'
 ```
 Expected: no literal `Ghostty`.
 
-- [ ] **Step 8: Update `build.nu` + `AGENTS.md`.**
+- [ ] **Step 8: Update `build.nu` + `AGENTS.md`, and replace the now-superseded `REBRAND.md`.**
 ```bash
 cd /Users/gael/projects/rustty
 sed -i '' -e 's/GhosttyKit/RusttyKit/g' -e 's/Ghostty\.xcodeproj/Rustty.xcodeproj/g' -e 's/Ghostty\.app/Rustty.app/g' -e 's/\bGhostty\b/Rustty/g' macos/build.nu macos/AGENTS.md
 git grep -n 'Ghostty' -- macos/build.nu macos/AGENTS.md
 ```
-Expected: empty (or only genuine upstream references — review any hit).
+Expected: empty (or only genuine upstream references — review any hit). Then **rewrite `macos/REBRAND.md`**: it documented the PRIOR *partial* R2 rebrand (which kept `Ghostty.app`/`ghostty` exe, the `GhosttyKit` link, secondary bundle ids, appicon name — all justified solely by preserving the `ghostty_*` link that no longer exists). Replace its body with a short note that the full rebrand (this plan) supersedes it: the app is now `Rustty.app` / `rustty` executable, module `RusttyKit`, symbols `rustty_*`, all bundle ids `io.airely.rustty*`, appicon `Rustty` — i.e. there is no longer a "deliberately left as Ghostty" list on the macOS side (the oracle carve-out lives in `.port/tools/PARITY_NAMING.md`). Keep it factual and short; do not delete the file (it is a referenced landmark).
 
-- [ ] **Step 9: Resolve + list the scheme to prove the project parses.**
+- [ ] **Step 9: Resolve + list the scheme to prove the project parses AND the product is `Rustty.app`.**
 ```bash
 cd /Users/gael/projects/rustty/macos
 xcodebuild -project Rustty.xcodeproj -list
+xcodebuild -project Rustty.xcodeproj -target Rustty -showBuildSettings 2>/dev/null | grep -E 'FULL_PRODUCT_NAME|EXECUTABLE_NAME|PRODUCT_BUNDLE_IDENTIFIER|ASSETCATALOG_COMPILER_APPICON_NAME' | head
 ```
-Expected: lists targets `Rustty`, `RusttyUITests`, (Tests) and scheme `Rustty` with no parse error.
+Expected: lists targets `Rustty`, `RusttyUITests`, `RusttyTests` and scheme `Rustty` with no parse error; build settings show `FULL_PRODUCT_NAME = Rustty.app`, `EXECUTABLE_NAME = rustty`, `PRODUCT_BUNDLE_IDENTIFIER = io.airely.rustty*`, `ASSETCATALOG_COMPILER_APPICON_NAME = Rustty`.
 
 - [ ] **Step 10: Commit.**
 ```bash
 git add -A macos
-git commit -m "xcode: rename project/targets/scheme/plist/entitlements/sdef + xib customModule + AppleScript cocoa classes + plist keys Ghostty -> Rustty (Task 8)"
+git commit -m "xcode: full product rebrand — Rustty.app/rustty exe, RusttyKit, all bundle ids io.airely.rustty*, appicon Rustty, xib/sdef/plist/scheme; supersede REBRAND.md (Task 8)"
 ```
 
 ### Task 9: Rename the app icon asset and wire the reproducible build to RusttyKit; full app build
@@ -764,14 +773,18 @@ git commit -m "xcode: rename project/targets/scheme/plist/entitlements/sdef + xi
 **Interfaces:**
 - Produces: a building, launchable `Rustty.app`.
 
-- [ ] **Step 1: Rename the icon asset.**
+- [ ] **Step 1: Rename the icon asset + its pbxproj reference.** The app icon is the Icon Composer `images/Ghostty.icon` bundle, referenced in the pbxproj as `Ghostty.icon` (`path = ../images/Ghostty.icon`), resolved by `ASSETCATALOG_COMPILER_APPICON_NAME = Rustty` (set in Task 8). Rename the dir, the inner asset, and the pbxproj reference together so the icon resolves:
 ```bash
 cd /Users/gael/projects/rustty
 git mv images/Ghostty.icon images/Rustty.icon
 git mv images/Rustty.icon/Assets/Ghostty.png images/Rustty.icon/Assets/Rustty.png
 sed -i '' 's/Ghostty/Rustty/g' images/Rustty.icon/icon.json
 grep -rln 'Ghostty' macos/Assets.xcassets 2>/dev/null | xargs -r sed -i '' 's/Ghostty/Rustty/g'
+# pbxproj icon reference (project is now Rustty.xcodeproj after Task 8):
+sed -i '' -e 's/Ghostty\.icon/Rustty.icon/g' -e 's#\.\./images/Ghostty\.icon#../images/Rustty.icon#g' macos/Rustty.xcodeproj/project.pbxproj
+grep -n 'Ghostty.icon\|images/Ghostty' macos/Rustty.xcodeproj/project.pbxproj
 ```
+Expected: the final grep is empty (all icon references now `Rustty.icon` / `../images/Rustty.icon`, matching `ASSETCATALOG_COMPILER_APPICON_NAME = Rustty`).
 
 - [ ] **Step 2: Rewrite `macos/build-rustty.sh`** — `GhosttyKit.xcframework`→`RusttyKit.xcframework`, `libGhosttyKit.a`→`libRusttyKit.a`, `-project Ghostty.xcodeproj`→`-project Rustty.xcodeproj`, `-scheme Ghostty`→`-scheme Rustty`, and the `cp -R dist/RusttyKit.xcframework macos/RusttyKit.xcframework` staging line. Update the header comments that name `Ghostty.app`.
 
