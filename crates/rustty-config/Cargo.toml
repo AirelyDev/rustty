@@ -34,12 +34,13 @@ oniguruma = ["dep:rustty-oniguruma"]
 # compiled in the desktop config cluster; the gate flips on with the wasm
 # app-runtime (see src/wasm.rs and .port/phase-2/DEFERRALS.md).
 wasm = []
-# Branch A `ghostty_config_*` symbol identity (PREPORT_SWIFT_APP §3). OFF by default so
-# the canonical product exports only `rustty_config_*` (R2); enabling `identity-ghostty`
-# compiles `src/ghostty_alias.rs`, adding a `ghostty_config_<name>` thin forwarder per
-# `Config` C-ABI export. apprt-c enables this feature from its own `identity-ghostty` so
-# these aliases land in the linked staticlib alongside the app-C-ABI ones.
-identity-ghostty = []
+# `identity-ghostty` no longer compiles any `ghostty_config_*` C-ABI alias layer (that
+# forwarder layer was deleted by the rebrand — rebrand Task 1); the canonical product
+# exports only `rustty_config_*` (R2), always. Enabling `identity-ghostty` now only
+# flips the `rustty-identity` string identity this crate reads (e.g. default `TERM`,
+# config subdir); apprt-c enables this feature from its own `identity-ghostty` so the
+# flip is consistent across the linked staticlib.
+identity-ghostty = ["rustty-identity/identity-ghostty"]
 
 [dependencies]
 rustty-build-config = { workspace = true }

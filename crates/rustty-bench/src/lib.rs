@@ -26,16 +26,6 @@ pub mod benchmark;
 // pub const CApi = @import("CApi.zig");
 pub mod capi;
 
-// The `ghostty_benchmark_cli` C-ABI alias layer (Branch A) — the thin
-// `#[no_mangle]` forwarder emitting the upstream `ghostty_benchmark_cli` spelling
-// over the canonical `rustty_benchmark_cli` body (`capi.rs`). Compiled only under
-// the `identity-ghostty` feature so the default rustty-native product exports only
-// `rustty_benchmark_cli` (R2); apprt-c (the `main_c.zig` hub analog, which
-// `_ = @import("benchmark/main.zig").CApi`-references this crate) enables the feature
-// from its own so the alias lands in the linked staticlib. PREPORT_SWIFT_APP §3
-// Branch A; the per-crate-alias precedent set by `rustty-config`.
-#[cfg(feature = "identity-ghostty")]
-mod ghostty_alias;
 // pub const TerminalStream = @import("TerminalStream.zig");
 pub mod terminal_stream;
 // pub const CodepointWidth = @import("CodepointWidth.zig");

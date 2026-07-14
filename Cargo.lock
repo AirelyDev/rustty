@@ -576,6 +576,7 @@ dependencies = [
  "rustty-core",
  "rustty-datastruct",
  "rustty-font-shaper",
+ "rustty-identity",
  "rustty-input",
  "rustty-renderer",
  "rustty-vt",
@@ -597,6 +598,7 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "rustty-args",
+ "rustty-identity",
  "rustty-lib",
  "rustty-simd",
  "rustty-unicode",

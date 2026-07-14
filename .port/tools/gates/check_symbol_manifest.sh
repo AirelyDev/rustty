@@ -13,8 +13,13 @@
 #
 # The macOS app C-ABI is APPEND-ONLY (PREPORT §2 I9 / risk R-H): a symbol may never be
 # renamed or dropped once shipped, so this gate is the machine-checkable ABI ledger that
-# A2 (ghostty_* alias forwarders) and the A3 header-diff gate build on.
-# NOTE: A2 alias section removed by rebrand Task 1
+# the A3 header-diff gate builds on.
+#
+# A2 (the `ghostty_*` alias-forwarder layer, previously verified by a section here) was
+# DELETED by rebrand Task 1: the reused Ghostty Swift app now links against `rustty_*`
+# directly, so there is no alias code left to verify. This gate now checks only A1: (a)
+# header <-> TSV coverage/count, and (b) every TSV `rustty_name` has a live
+# `extern "C" fn` export under crates/.
 #
 # Registered PROGRESS (R5): it reports honest drift without blocking CI. At the time of
 # authoring, 3 main_c-tier exports (rustty_translate / rustty_info / rustty_cli_try_action)
