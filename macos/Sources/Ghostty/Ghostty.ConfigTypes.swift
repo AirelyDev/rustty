@@ -1,5 +1,5 @@
 // This file contains the configuration types for Ghostty so that alternate targets
-// can get typed information without depending on all the dependencies of GhosttyKit.
+// can get typed information without depending on all the dependencies of RusttyKit.
 
 extension Ghostty {
     /// A configuration path value that may be optional or required.

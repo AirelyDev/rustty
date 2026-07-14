@@ -1,5 +1,5 @@
 import SwiftUI
-import GhosttyKit
+import RusttyKit
 import Combine
 
 /// A view that cycles through Ghostty's official icon variants.

@@ -1,5 +1,5 @@
 import SwiftUI
-import GhosttyKit
+import RusttyKit
 
 struct TerminalCommandPaletteView: View {
     /// The surface that this command palette represents.

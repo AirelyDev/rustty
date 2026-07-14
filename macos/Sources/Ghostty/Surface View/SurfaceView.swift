@@ -1,6 +1,6 @@
 import SwiftUI
 import UserNotifications
-import GhosttyKit
+import RusttyKit
 import System
 
 extension Ghostty {
@@ -23,7 +23,7 @@ extension Ghostty {
 
         @StateObject private var surfaceView: SurfaceView
 
-        init(_ app: ghostty_app_t, @ViewBuilder content: @escaping ((SurfaceView) -> Content)) {
+        init(_ app: rustty_app_t, @ViewBuilder content: @escaping ((SurfaceView) -> Content)) {
             _surfaceView = StateObject(wrappedValue: SurfaceView(app))
             self.content = content
         }
@@ -259,7 +259,7 @@ extension Ghostty {
     // size during a resize operation.
     struct SurfaceResizeOverlay: View {
         let geoSize: CGSize
-        let size: ghostty_surface_size_s
+        let size: rustty_surface_size_s
         let overlay: Ghostty.Config.ResizeOverlay
         let position: Ghostty.Config.ResizeOverlayPosition
         let duration: UInt
@@ -447,7 +447,7 @@ extension Ghostty {
                     Button(action: {
                         guard let surface = surfaceView.surface else { return }
                         let action = "navigate_search:previous"
-                        ghostty_surface_binding_action(surface, action, UInt(action.lengthOfBytes(using: .utf8)))
+                        rustty_surface_binding_action(surface, action, UInt(action.lengthOfBytes(using: .utf8)))
                     }, label: {
                         Image(systemName: "chevron.down")
                     })
@@ -651,11 +651,11 @@ extension Ghostty {
         var waitAfterCommand: Bool = false
 
         /// Context for surface creation
-        var context: ghostty_surface_context_e = GHOSTTY_SURFACE_CONTEXT_WINDOW
+        var context: rustty_surface_context_e = RUSTTY_SURFACE_CONTEXT_WINDOW
 
         init() {}
 
-        init(from config: ghostty_surface_config_s) {
+        init(from config: rustty_surface_config_s) {
             self.fontSize = config.font_size
             if let workingDirectory = config.working_directory {
                 self.workingDirectory = String.init(cString: workingDirectory, encoding: .utf8)
@@ -679,18 +679,18 @@ extension Ghostty {
 
         /// Provides a C-compatible ghostty configuration within a closure. The configuration
         /// and all its string pointers are only valid within the closure.
-        func withCValue<T>(view: SurfaceView, _ body: (inout ghostty_surface_config_s) throws -> T) rethrows -> T {
-            var config = ghostty_surface_config_new()
+        func withCValue<T>(view: SurfaceView, _ body: (inout rustty_surface_config_s) throws -> T) rethrows -> T {
+            var config = rustty_surface_config_new()
             config.userdata = Unmanaged.passUnretained(view).toOpaque()
 #if os(macOS)
-            config.platform_tag = GHOSTTY_PLATFORM_MACOS
-            config.platform = ghostty_platform_u(macos: ghostty_platform_macos_s(
+            config.platform_tag = RUSTTY_PLATFORM_MACOS
+            config.platform = rustty_platform_u(macos: rustty_platform_macos_s(
                 nsview: Unmanaged.passUnretained(view).toOpaque()
             ))
             config.scale_factor = NSScreen.main!.backingScaleFactor
 #elseif os(iOS)
-            config.platform_tag = GHOSTTY_PLATFORM_IOS
-            config.platform = ghostty_platform_u(ios: ghostty_platform_ios_s(
+            config.platform_tag = RUSTTY_PLATFORM_IOS
+            config.platform = rustty_platform_u(ios: rustty_platform_ios_s(
                 uiview: Unmanaged.passUnretained(view).toOpaque()
             ))
             // Note that UIScreen.main is deprecated and we're supposed to get the
@@ -728,11 +728,11 @@ extension Ghostty {
                         // Create C strings for all keys and values
                         return try keys.withCStrings { keyCStrings in
                             return try values.withCStrings { valueCStrings in
-                                // Create array of ghostty_env_var_s
-                                var envVars = [ghostty_env_var_s]()
+                                // Create array of rustty_env_var_s
+                                var envVars = [rustty_env_var_s]()
                                 envVars.reserveCapacity(environmentVariables.count)
                                 for i in 0..<environmentVariables.count {
-                                    envVars.append(ghostty_env_var_s(
+                                    envVars.append(rustty_env_var_s(
                                         key: keyCStrings[i],
                                         value: valueCStrings[i]
                                     ))

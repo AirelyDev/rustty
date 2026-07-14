@@ -1,7 +1,7 @@
-import GhosttyKit
+import RusttyKit
 
 extension Ghostty {
-    /// `ghostty_command_s`
+    /// `rustty_command_s`
     struct Command: Sendable {
         /// The title of the command.
         let title: String
@@ -29,7 +29,7 @@ extension Ghostty {
             "show_gtk_inspector",
         ]
 
-        init(cValue: ghostty_command_s) {
+        init(cValue: rustty_command_s) {
             self.title = String(cString: cValue.title)
             self.description = String(cString: cValue.description)
             self.action = String(cString: cValue.action)

@@ -1,6 +1,6 @@
 import AppKit
 import AppIntents
-import GhosttyKit
+import RusttyKit
 
 /// App intent that allows creating a new terminal window or tab.
 ///

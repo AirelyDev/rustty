@@ -1,12 +1,12 @@
 import AppKit
 import Cocoa
-import GhosttyKit
+import RusttyKit
 
 // Initialize Ghostty global state. We do this once right away because the
 // CLI APIs require it and it lets us ensure it is done immediately for the
 // rest of the app.
-if ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) != GHOSTTY_SUCCESS {
-    Ghostty.logger.critical("ghostty_init failed")
+if rustty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) != RUSTTY_SUCCESS {
+    Ghostty.logger.critical("rustty_init failed")
 
     // We also write to stderr if this is executed from the CLI or zig run
     switch Ghostty.launchSource {
@@ -28,6 +28,6 @@ if ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) != GHOSTTY_SUCCE
 
 // This will run the CLI action and exit if one was specified. A CLI
 // action is a command starting with a `+`, such as `ghostty +boo`.
-ghostty_cli_try_action()
+rustty_cli_try_action()
 
 _ = NSApplicationMain(CommandLine.argc, CommandLine.unsafeArgv)

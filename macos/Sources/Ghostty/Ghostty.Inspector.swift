@@ -1,79 +1,79 @@
-import GhosttyKit
+import RusttyKit
 import Metal
 
 extension Ghostty {
     /// Represents the inspector for a surface within Ghostty.
     ///
-    /// Wraps a `ghostty_inspector_t`
+    /// Wraps a `rustty_inspector_t`
     final class Inspector: Sendable {
-        private let inspector: ghostty_inspector_t
+        private let inspector: rustty_inspector_t
 
         /// Read the underlying C value for this inspector. This is unsafe because the value will be
         /// freed when the Inspector class is deinitialized.
-        var unsafeCValue: ghostty_inspector_t {
+        var unsafeCValue: rustty_inspector_t {
             inspector
         }
 
         /// Initialize from the C structure.
-        init(cInspector: ghostty_inspector_t) {
+        init(cInspector: rustty_inspector_t) {
             self.inspector = cInspector
         }
 
         /// Set the focus state of the inspector.
         @MainActor
         func setFocus(_ focused: Bool) {
-            ghostty_inspector_set_focus(inspector, focused)
+            rustty_inspector_set_focus(inspector, focused)
         }
 
         /// Set the content scale of the inspector.
         @MainActor
         func setContentScale(x: Double, y: Double) {
-            ghostty_inspector_set_content_scale(inspector, x, y)
+            rustty_inspector_set_content_scale(inspector, x, y)
         }
 
         /// Set the size of the inspector.
         @MainActor
         func setSize(width: UInt32, height: UInt32) {
-            ghostty_inspector_set_size(inspector, width, height)
+            rustty_inspector_set_size(inspector, width, height)
         }
 
         /// Send a mouse button event to the inspector.
         @MainActor
         func mouseButton(
-            _ state: ghostty_input_mouse_state_e,
-            button: ghostty_input_mouse_button_e,
-            mods: ghostty_input_mods_e
+            _ state: rustty_input_mouse_state_e,
+            button: rustty_input_mouse_button_e,
+            mods: rustty_input_mods_e
         ) {
-            ghostty_inspector_mouse_button(inspector, state, button, mods)
+            rustty_inspector_mouse_button(inspector, state, button, mods)
         }
 
         /// Send a mouse position event to the inspector.
         @MainActor
         func mousePos(x: Double, y: Double) {
-            ghostty_inspector_mouse_pos(inspector, x, y)
+            rustty_inspector_mouse_pos(inspector, x, y)
         }
 
         /// Send a mouse scroll event to the inspector.
         @MainActor
-        func mouseScroll(x: Double, y: Double, mods: ghostty_input_scroll_mods_t) {
-            ghostty_inspector_mouse_scroll(inspector, x, y, mods)
+        func mouseScroll(x: Double, y: Double, mods: rustty_input_scroll_mods_t) {
+            rustty_inspector_mouse_scroll(inspector, x, y, mods)
         }
 
         /// Send a key event to the inspector.
         @MainActor
         func key(
-            _ action: ghostty_input_action_e,
-            key: ghostty_input_key_e,
-            mods: ghostty_input_mods_e
+            _ action: rustty_input_action_e,
+            key: rustty_input_key_e,
+            mods: rustty_input_mods_e
         ) {
-            ghostty_inspector_key(inspector, action, key, mods)
+            rustty_inspector_key(inspector, action, key, mods)
         }
 
         /// Send text to the inspector.
         @MainActor
         func text(_ text: String) {
             text.withCString { ptr in
-                ghostty_inspector_text(inspector, ptr)
+                rustty_inspector_text(inspector, ptr)
             }
         }
 
@@ -81,7 +81,7 @@ extension Ghostty {
         @MainActor
         func metalInit(device: MTLDevice) -> Bool {
             let devicePtr = Unmanaged.passRetained(device).toOpaque()
-            return ghostty_inspector_metal_init(inspector, devicePtr)
+            return rustty_inspector_metal_init(inspector, devicePtr)
         }
 
         /// Render the inspector using Metal.
@@ -90,7 +90,7 @@ extension Ghostty {
             commandBuffer: MTLCommandBuffer,
             descriptor: MTLRenderPassDescriptor
         ) {
-            ghostty_inspector_metal_render(
+            rustty_inspector_metal_render(
                 inspector,
                 Unmanaged.passRetained(commandBuffer).toOpaque(),
                 Unmanaged.passRetained(descriptor).toOpaque()

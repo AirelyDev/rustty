@@ -1,7 +1,7 @@
 import Foundation
 import Cocoa
 import SwiftUI
-import GhosttyKit
+import RusttyKit
 
 /// Controller for the "quick" terminal.
 class QuickTerminalController: BaseTerminalController {
@@ -321,7 +321,7 @@ class QuickTerminalController: BaseTerminalController {
         baseConfig config: Ghostty.SurfaceConfiguration? = nil
     ) -> Ghostty.SurfaceView? {
         var config = config ?? Ghostty.SurfaceConfiguration()
-        config.environmentVariables["GHOSTTY_QUICK_TERMINAL"] = "1"
+        config.environmentVariables["RUSTTY_QUICK_TERMINAL"] = "1"
         return super.newSplit(at: oldView, direction: direction, baseConfig: config)
     }
 
@@ -364,7 +364,7 @@ class QuickTerminalController: BaseTerminalController {
         // tree can be empty if for example we run "exit" in the terminal and force
         // animate out.
         if surfaceTree.isEmpty,
-           let ghostty_app = ghostty.app {
+           let rustty_app = ghostty.app {
             if let tree = restorationState?.surfaceTree, !tree.isEmpty {
                 surfaceTree = tree
                 let view = tree.first(where: { $0.id.uuidString == restorationState?.focusedSurface }) ?? tree.first!
@@ -380,9 +380,9 @@ class QuickTerminalController: BaseTerminalController {
                 }
             } else {
                 var config = Ghostty.SurfaceConfiguration()
-                config.environmentVariables["GHOSTTY_QUICK_TERMINAL"] = "1"
+                config.environmentVariables["RUSTTY_QUICK_TERMINAL"] = "1"
 
-                let view = Ghostty.SurfaceView(ghostty_app, baseConfig: config)
+                let view = Ghostty.SurfaceView(rustty_app, baseConfig: config)
                 surfaceTree = SplitTree(view: view)
                 focusedSurface = view
             }
@@ -629,7 +629,7 @@ class QuickTerminalController: BaseTerminalController {
             window.backgroundColor = .white.withAlphaComponent(0.001)
 
             if !derivedConfig.backgroundBlur.isGlassStyle {
-                ghostty_set_window_background_blur(ghostty.app, Unmanaged.passUnretained(window).toOpaque())
+                rustty_set_window_background_blur(ghostty.app, Unmanaged.passUnretained(window).toOpaque())
             }
         } else {
             window.isOpaque = true

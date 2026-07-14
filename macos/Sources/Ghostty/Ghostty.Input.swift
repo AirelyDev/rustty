@@ -1,7 +1,7 @@
 import AppIntents
 import Cocoa
 import SwiftUI
-import GhosttyKit
+import RusttyKit
 
 extension Ghostty {
     struct Input {}
@@ -16,10 +16,10 @@ extension Ghostty {
     /// (F1, F2, ...) with a KeyboardShortcut. This doesn't represent a practical issue because input
     /// handling for Ghostty is handled at a lower level (usually). This function should generally only
     /// be used for things like NSMenu that only support keyboard shortcuts anyways.
-    static func keyboardShortcut(for trigger: ghostty_input_trigger_s) -> KeyboardShortcut? {
+    static func keyboardShortcut(for trigger: rustty_input_trigger_s) -> KeyboardShortcut? {
         let key: KeyEquivalent
         switch trigger.tag {
-        case GHOSTTY_TRIGGER_PHYSICAL:
+        case RUSTTY_TRIGGER_PHYSICAL:
             // Only functional keys can be converted to a KeyboardShortcut. Other physical
             // mappings cannot because KeyboardShortcut in Swift is inherently layout-dependent.
             if let equiv = Self.keyToEquivalent[trigger.key.physical] {
@@ -28,14 +28,14 @@ extension Ghostty {
                 return nil
             }
 
-        case GHOSTTY_TRIGGER_UNICODE:
+        case RUSTTY_TRIGGER_UNICODE:
             guard
                 let scalar = UnicodeScalar(trigger.key.unicode),
                 let normalized = Character(scalar).lowercased().first
             else { return nil }
             key = KeyEquivalent(normalized)
 
-        case GHOSTTY_TRIGGER_CATCH_ALL:
+        case RUSTTY_TRIGGER_CATCH_ALL:
             // catch_all matches any key, so it can't be represented as a KeyboardShortcut
             return nil
 
@@ -51,80 +51,80 @@ extension Ghostty {
     // MARK: Mods
 
     /// Returns the event modifier flags set for the Ghostty mods enum.
-    static func eventModifierFlags(mods: ghostty_input_mods_e) -> NSEvent.ModifierFlags {
+    static func eventModifierFlags(mods: rustty_input_mods_e) -> NSEvent.ModifierFlags {
         var flags = NSEvent.ModifierFlags(rawValue: 0)
-        if mods.rawValue & GHOSTTY_MODS_SHIFT.rawValue != 0 { flags.insert(.shift) }
-        if mods.rawValue & GHOSTTY_MODS_CTRL.rawValue != 0 { flags.insert(.control) }
-        if mods.rawValue & GHOSTTY_MODS_ALT.rawValue != 0 { flags.insert(.option) }
-        if mods.rawValue & GHOSTTY_MODS_SUPER.rawValue != 0 { flags.insert(.command) }
+        if mods.rawValue & RUSTTY_MODS_SHIFT.rawValue != 0 { flags.insert(.shift) }
+        if mods.rawValue & RUSTTY_MODS_CTRL.rawValue != 0 { flags.insert(.control) }
+        if mods.rawValue & RUSTTY_MODS_ALT.rawValue != 0 { flags.insert(.option) }
+        if mods.rawValue & RUSTTY_MODS_SUPER.rawValue != 0 { flags.insert(.command) }
         return flags
     }
 
     /// Translate event modifier flags to a ghostty mods enum.
-    static func ghosttyMods(_ flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
-        var mods: UInt32 = GHOSTTY_MODS_NONE.rawValue
+    static func ghosttyMods(_ flags: NSEvent.ModifierFlags) -> rustty_input_mods_e {
+        var mods: UInt32 = RUSTTY_MODS_NONE.rawValue
 
-        if flags.contains(.shift) { mods |= GHOSTTY_MODS_SHIFT.rawValue }
-        if flags.contains(.control) { mods |= GHOSTTY_MODS_CTRL.rawValue }
-        if flags.contains(.option) { mods |= GHOSTTY_MODS_ALT.rawValue }
-        if flags.contains(.command) { mods |= GHOSTTY_MODS_SUPER.rawValue }
-        if flags.contains(.capsLock) { mods |= GHOSTTY_MODS_CAPS.rawValue }
+        if flags.contains(.shift) { mods |= RUSTTY_MODS_SHIFT.rawValue }
+        if flags.contains(.control) { mods |= RUSTTY_MODS_CTRL.rawValue }
+        if flags.contains(.option) { mods |= RUSTTY_MODS_ALT.rawValue }
+        if flags.contains(.command) { mods |= RUSTTY_MODS_SUPER.rawValue }
+        if flags.contains(.capsLock) { mods |= RUSTTY_MODS_CAPS.rawValue }
 
         // Handle sided input. We can't tell that both are pressed in the
         // Ghostty structure but that's okay -- we don't use that information.
         let rawFlags = flags.rawValue
-        if rawFlags & UInt(NX_DEVICERSHIFTKEYMASK) != 0 { mods |= GHOSTTY_MODS_SHIFT_RIGHT.rawValue }
-        if rawFlags & UInt(NX_DEVICERCTLKEYMASK) != 0 { mods |= GHOSTTY_MODS_CTRL_RIGHT.rawValue }
-        if rawFlags & UInt(NX_DEVICERALTKEYMASK) != 0 { mods |= GHOSTTY_MODS_ALT_RIGHT.rawValue }
-        if rawFlags & UInt(NX_DEVICERCMDKEYMASK) != 0 { mods |= GHOSTTY_MODS_SUPER_RIGHT.rawValue }
+        if rawFlags & UInt(NX_DEVICERSHIFTKEYMASK) != 0 { mods |= RUSTTY_MODS_SHIFT_RIGHT.rawValue }
+        if rawFlags & UInt(NX_DEVICERCTLKEYMASK) != 0 { mods |= RUSTTY_MODS_CTRL_RIGHT.rawValue }
+        if rawFlags & UInt(NX_DEVICERALTKEYMASK) != 0 { mods |= RUSTTY_MODS_ALT_RIGHT.rawValue }
+        if rawFlags & UInt(NX_DEVICERCMDKEYMASK) != 0 { mods |= RUSTTY_MODS_SUPER_RIGHT.rawValue }
 
-        return ghostty_input_mods_e(mods)
+        return rustty_input_mods_e(mods)
     }
 
     /// A map from the Ghostty key enum to the keyEquivalent string for shortcuts. Note that
     /// not all ghostty key enum values are represented here because not all of them can be
     /// mapped to a KeyEquivalent.
-    static let keyToEquivalent: [ghostty_input_key_e: KeyEquivalent] = [
+    static let keyToEquivalent: [rustty_input_key_e: KeyEquivalent] = [
         // Function keys
-        GHOSTTY_KEY_ARROW_UP: .upArrow,
-        GHOSTTY_KEY_ARROW_DOWN: .downArrow,
-        GHOSTTY_KEY_ARROW_LEFT: .leftArrow,
-        GHOSTTY_KEY_ARROW_RIGHT: .rightArrow,
-        GHOSTTY_KEY_HOME: .home,
-        GHOSTTY_KEY_END: .end,
-        GHOSTTY_KEY_DELETE: .deleteForward,
-        GHOSTTY_KEY_PAGE_UP: .pageUp,
-        GHOSTTY_KEY_PAGE_DOWN: .pageDown,
-        GHOSTTY_KEY_ESCAPE: .escape,
-        GHOSTTY_KEY_ENTER: .return,
-        GHOSTTY_KEY_TAB: .tab,
-        GHOSTTY_KEY_BACKSPACE: .delete,
-        GHOSTTY_KEY_SPACE: .space,
+        RUSTTY_KEY_ARROW_UP: .upArrow,
+        RUSTTY_KEY_ARROW_DOWN: .downArrow,
+        RUSTTY_KEY_ARROW_LEFT: .leftArrow,
+        RUSTTY_KEY_ARROW_RIGHT: .rightArrow,
+        RUSTTY_KEY_HOME: .home,
+        RUSTTY_KEY_END: .end,
+        RUSTTY_KEY_DELETE: .deleteForward,
+        RUSTTY_KEY_PAGE_UP: .pageUp,
+        RUSTTY_KEY_PAGE_DOWN: .pageDown,
+        RUSTTY_KEY_ESCAPE: .escape,
+        RUSTTY_KEY_ENTER: .return,
+        RUSTTY_KEY_TAB: .tab,
+        RUSTTY_KEY_BACKSPACE: .delete,
+        RUSTTY_KEY_SPACE: .space,
     ]
 }
 
 // MARK: Ghostty.Input.BindingFlags
 
 extension Ghostty.Input {
-    /// `ghostty_binding_flags_e`
+    /// `rustty_binding_flags_e`
     struct BindingFlags: OptionSet, Sendable {
         let rawValue: UInt32
 
-        static let consumed = BindingFlags(rawValue: GHOSTTY_BINDING_FLAGS_CONSUMED.rawValue)
-        static let all = BindingFlags(rawValue: GHOSTTY_BINDING_FLAGS_ALL.rawValue)
-        static let global = BindingFlags(rawValue: GHOSTTY_BINDING_FLAGS_GLOBAL.rawValue)
-        static let performable = BindingFlags(rawValue: GHOSTTY_BINDING_FLAGS_PERFORMABLE.rawValue)
+        static let consumed = BindingFlags(rawValue: RUSTTY_BINDING_FLAGS_CONSUMED.rawValue)
+        static let all = BindingFlags(rawValue: RUSTTY_BINDING_FLAGS_ALL.rawValue)
+        static let global = BindingFlags(rawValue: RUSTTY_BINDING_FLAGS_GLOBAL.rawValue)
+        static let performable = BindingFlags(rawValue: RUSTTY_BINDING_FLAGS_PERFORMABLE.rawValue)
 
         init(rawValue: UInt32) {
             self.rawValue = rawValue
         }
 
-        init(cFlags: ghostty_binding_flags_e) {
+        init(cFlags: rustty_binding_flags_e) {
             self.rawValue = cFlags.rawValue
         }
 
-        var cFlags: ghostty_binding_flags_e {
-            ghostty_binding_flags_e(rawValue)
+        var cFlags: rustty_binding_flags_e {
+            rustty_binding_flags_e(rawValue)
         }
     }
 }
@@ -132,7 +132,7 @@ extension Ghostty.Input {
 // MARK: Ghostty.Input.KeyEvent
 
 extension Ghostty.Input {
-    /// `ghostty_input_key_s`
+    /// `rustty_input_key_s`
     struct KeyEvent {
         let action: Action
         let key: Key
@@ -160,12 +160,12 @@ extension Ghostty.Input {
             self.unshiftedCodepoint = unshiftedCodepoint
         }
 
-        init?(cValue: ghostty_input_key_s) {
+        init?(cValue: rustty_input_key_s) {
             // Convert action
             switch cValue.action {
-            case GHOSTTY_ACTION_PRESS: self.action = .press
-            case GHOSTTY_ACTION_RELEASE: self.action = .release
-            case GHOSTTY_ACTION_REPEAT: self.action = .repeat
+            case RUSTTY_ACTION_PRESS: self.action = .press
+            case RUSTTY_ACTION_RELEASE: self.action = .release
+            case RUSTTY_ACTION_REPEAT: self.action = .repeat
             default: self.action = .press
             }
 
@@ -193,7 +193,7 @@ extension Ghostty.Input {
 
         /// Executes a closure with a temporary C representation of this KeyEvent.
         ///
-        /// This method safely converts the Swift KeyEntity to a C `ghostty_input_key_s` struct
+        /// This method safely converts the Swift KeyEntity to a C `rustty_input_key_s` struct
         /// and passes it to the provided closure. The C struct is only valid within the closure's
         /// execution scope. The text field's C string pointer is managed automatically and will
         /// be invalid after the closure returns.
@@ -201,8 +201,8 @@ extension Ghostty.Input {
         /// - Parameter execute: A closure that receives the C struct and returns a value
         /// - Returns: The value returned by the closure
         @discardableResult
-        func withCValue<T>(execute: (ghostty_input_key_s) -> T) -> T {
-            var keyEvent = ghostty_input_key_s()
+        func withCValue<T>(execute: (rustty_input_key_s) -> T) -> T {
+            var keyEvent = rustty_input_key_s()
             keyEvent.action = action.cAction
             keyEvent.keycode = UInt32(key.keyCode ?? 0)
             keyEvent.composing = composing
@@ -227,17 +227,17 @@ extension Ghostty.Input {
 // MARK: Ghostty.Input.Action
 
 extension Ghostty.Input {
-    /// `ghostty_input_action_e`
+    /// `rustty_input_action_e`
     enum Action: String, CaseIterable {
         case release
         case press
         case `repeat`
 
-        var cAction: ghostty_input_action_e {
+        var cAction: rustty_input_action_e {
             switch self {
-            case .release: GHOSTTY_ACTION_RELEASE
-            case .press: GHOSTTY_ACTION_PRESS
-            case .repeat: GHOSTTY_ACTION_REPEAT
+            case .release: RUSTTY_ACTION_RELEASE
+            case .press: RUSTTY_ACTION_PRESS
+            case .repeat: RUSTTY_ACTION_REPEAT
             }
         }
     }
@@ -281,20 +281,20 @@ extension Ghostty.Input {
         ///   - state: The mouse button state (press/release)
         ///   - button: The mouse button that was pressed/released
         ///   - mods: The modifier keys held during the mouse event
-        init?(state: ghostty_input_mouse_state_e, button: ghostty_input_mouse_button_e, mods: ghostty_input_mods_e) {
+        init?(state: rustty_input_mouse_state_e, button: rustty_input_mouse_button_e, mods: rustty_input_mods_e) {
             // Convert state
             switch state {
-            case GHOSTTY_MOUSE_RELEASE: self.action = .release
-            case GHOSTTY_MOUSE_PRESS: self.action = .press
+            case RUSTTY_MOUSE_RELEASE: self.action = .release
+            case RUSTTY_MOUSE_PRESS: self.action = .press
             default: return nil
             }
 
             // Convert button
             switch button {
-            case GHOSTTY_MOUSE_UNKNOWN: self.button = .unknown
-            case GHOSTTY_MOUSE_LEFT: self.button = .left
-            case GHOSTTY_MOUSE_RIGHT: self.button = .right
-            case GHOSTTY_MOUSE_MIDDLE: self.button = .middle
+            case RUSTTY_MOUSE_UNKNOWN: self.button = .unknown
+            case RUSTTY_MOUSE_LEFT: self.button = .left
+            case RUSTTY_MOUSE_RIGHT: self.button = .right
+            case RUSTTY_MOUSE_MIDDLE: self.button = .middle
             default: return nil
             }
 
@@ -341,15 +341,15 @@ extension Ghostty.Input {
 // MARK: Ghostty.Input.MouseState
 
 extension Ghostty.Input {
-    /// `ghostty_input_mouse_state_e`
+    /// `rustty_input_mouse_state_e`
     enum MouseState: String, CaseIterable {
         case release
         case press
 
-        var cMouseState: ghostty_input_mouse_state_e {
+        var cMouseState: rustty_input_mouse_state_e {
             switch self {
-            case .release: GHOSTTY_MOUSE_RELEASE
-            case .press: GHOSTTY_MOUSE_PRESS
+            case .release: RUSTTY_MOUSE_RELEASE
+            case .press: RUSTTY_MOUSE_PRESS
             }
         }
     }
@@ -367,7 +367,7 @@ extension Ghostty.Input.MouseState: AppEnum {
 // MARK: Ghostty.Input.MouseButton
 
 extension Ghostty.Input {
-    /// `ghostty_input_mouse_button_e`
+    /// `rustty_input_mouse_button_e`
     enum MouseButton: String, CaseIterable {
         case unknown
         case left
@@ -382,20 +382,20 @@ extension Ghostty.Input {
         case ten
         case eleven
 
-        var cMouseButton: ghostty_input_mouse_button_e {
+        var cMouseButton: rustty_input_mouse_button_e {
             switch self {
-            case .unknown: GHOSTTY_MOUSE_UNKNOWN
-            case .left: GHOSTTY_MOUSE_LEFT
-            case .right: GHOSTTY_MOUSE_RIGHT
-            case .middle: GHOSTTY_MOUSE_MIDDLE
-            case .four: GHOSTTY_MOUSE_FOUR
-            case .five: GHOSTTY_MOUSE_FIVE
-            case .six: GHOSTTY_MOUSE_SIX
-            case .seven: GHOSTTY_MOUSE_SEVEN
-            case .eight: GHOSTTY_MOUSE_EIGHT
-            case .nine: GHOSTTY_MOUSE_NINE
-            case .ten: GHOSTTY_MOUSE_TEN
-            case .eleven: GHOSTTY_MOUSE_ELEVEN
+            case .unknown: RUSTTY_MOUSE_UNKNOWN
+            case .left: RUSTTY_MOUSE_LEFT
+            case .right: RUSTTY_MOUSE_RIGHT
+            case .middle: RUSTTY_MOUSE_MIDDLE
+            case .four: RUSTTY_MOUSE_FOUR
+            case .five: RUSTTY_MOUSE_FIVE
+            case .six: RUSTTY_MOUSE_SIX
+            case .seven: RUSTTY_MOUSE_SEVEN
+            case .eight: RUSTTY_MOUSE_EIGHT
+            case .nine: RUSTTY_MOUSE_NINE
+            case .ten: RUSTTY_MOUSE_TEN
+            case .eleven: RUSTTY_MOUSE_ELEVEN
             }
         }
 
@@ -440,7 +440,7 @@ extension Ghostty.Input.MouseButton: AppEnum {
 // MARK: Ghostty.Input.ScrollMods
 
 extension Ghostty.Input {
-    /// `ghostty_input_scroll_mods_t` - Scroll event modifiers
+    /// `rustty_input_scroll_mods_t` - Scroll event modifiers
     ///
     /// This is a packed bitmask that contains precision and momentum information
     /// for scroll events, matching the Zig `ScrollMods` packed struct.
@@ -471,7 +471,7 @@ extension Ghostty.Input {
             self.rawValue = rawValue
         }
 
-        var cScrollMods: ghostty_input_scroll_mods_t {
+        var cScrollMods: rustty_input_scroll_mods_t {
             rawValue
         }
     }
@@ -480,7 +480,7 @@ extension Ghostty.Input {
 // MARK: Ghostty.Input.Momentum
 
 extension Ghostty.Input {
-    /// `ghostty_input_mouse_momentum_e` - Momentum phase for scroll events
+    /// `rustty_input_mouse_momentum_e` - Momentum phase for scroll events
     enum Momentum: UInt8, CaseIterable {
         case none = 0
         case began = 1
@@ -490,15 +490,15 @@ extension Ghostty.Input {
         case cancelled = 5
         case mayBegin = 6
 
-        var cMomentum: ghostty_input_mouse_momentum_e {
+        var cMomentum: rustty_input_mouse_momentum_e {
             switch self {
-            case .none: GHOSTTY_MOUSE_MOMENTUM_NONE
-            case .began: GHOSTTY_MOUSE_MOMENTUM_BEGAN
-            case .stationary: GHOSTTY_MOUSE_MOMENTUM_STATIONARY
-            case .changed: GHOSTTY_MOUSE_MOMENTUM_CHANGED
-            case .ended: GHOSTTY_MOUSE_MOMENTUM_ENDED
-            case .cancelled: GHOSTTY_MOUSE_MOMENTUM_CANCELLED
-            case .mayBegin: GHOSTTY_MOUSE_MOMENTUM_MAY_BEGIN
+            case .none: RUSTTY_MOUSE_MOMENTUM_NONE
+            case .began: RUSTTY_MOUSE_MOMENTUM_BEGAN
+            case .stationary: RUSTTY_MOUSE_MOMENTUM_STATIONARY
+            case .changed: RUSTTY_MOUSE_MOMENTUM_CHANGED
+            case .ended: RUSTTY_MOUSE_MOMENTUM_ENDED
+            case .cancelled: RUSTTY_MOUSE_MOMENTUM_CANCELLED
+            case .mayBegin: RUSTTY_MOUSE_MOMENTUM_MAY_BEGIN
             }
         }
     }
@@ -540,30 +540,30 @@ extension Ghostty.Input.Momentum {
 // MARK: Ghostty.Input.Mods
 
 extension Ghostty.Input {
-    /// `ghostty_input_mods_e`
+    /// `rustty_input_mods_e`
     struct Mods: OptionSet {
         let rawValue: UInt32
 
-        static let none = Mods(rawValue: GHOSTTY_MODS_NONE.rawValue)
-        static let shift = Mods(rawValue: GHOSTTY_MODS_SHIFT.rawValue)
-        static let ctrl = Mods(rawValue: GHOSTTY_MODS_CTRL.rawValue)
-        static let alt = Mods(rawValue: GHOSTTY_MODS_ALT.rawValue)
-        static let `super` = Mods(rawValue: GHOSTTY_MODS_SUPER.rawValue)
-        static let caps = Mods(rawValue: GHOSTTY_MODS_CAPS.rawValue)
-        static let shiftRight = Mods(rawValue: GHOSTTY_MODS_SHIFT_RIGHT.rawValue)
-        static let ctrlRight = Mods(rawValue: GHOSTTY_MODS_CTRL_RIGHT.rawValue)
-        static let altRight = Mods(rawValue: GHOSTTY_MODS_ALT_RIGHT.rawValue)
-        static let superRight = Mods(rawValue: GHOSTTY_MODS_SUPER_RIGHT.rawValue)
+        static let none = Mods(rawValue: RUSTTY_MODS_NONE.rawValue)
+        static let shift = Mods(rawValue: RUSTTY_MODS_SHIFT.rawValue)
+        static let ctrl = Mods(rawValue: RUSTTY_MODS_CTRL.rawValue)
+        static let alt = Mods(rawValue: RUSTTY_MODS_ALT.rawValue)
+        static let `super` = Mods(rawValue: RUSTTY_MODS_SUPER.rawValue)
+        static let caps = Mods(rawValue: RUSTTY_MODS_CAPS.rawValue)
+        static let shiftRight = Mods(rawValue: RUSTTY_MODS_SHIFT_RIGHT.rawValue)
+        static let ctrlRight = Mods(rawValue: RUSTTY_MODS_CTRL_RIGHT.rawValue)
+        static let altRight = Mods(rawValue: RUSTTY_MODS_ALT_RIGHT.rawValue)
+        static let superRight = Mods(rawValue: RUSTTY_MODS_SUPER_RIGHT.rawValue)
 
-        var cMods: ghostty_input_mods_e {
-            ghostty_input_mods_e(rawValue)
+        var cMods: rustty_input_mods_e {
+            rustty_input_mods_e(rawValue)
         }
 
         init(rawValue: UInt32) {
             self.rawValue = rawValue
         }
 
-        init(cMods: ghostty_input_mods_e) {
+        init(cMods: rustty_input_mods_e) {
             self.rawValue = cMods.rawValue
         }
 
@@ -580,7 +580,7 @@ extension Ghostty.Input {
 // MARK: Ghostty.Input.Key
 
 extension Ghostty.Input {
-    /// `ghostty_input_key_e`
+    /// `rustty_input_key_e`
     enum Key: String {
         // Writing System Keys
         case backquote
@@ -783,198 +783,198 @@ extension Ghostty.Input {
             return nil
         }
 
-        var cKey: ghostty_input_key_e {
+        var cKey: rustty_input_key_e {
             switch self {
             // Writing System Keys
-            case .backquote: GHOSTTY_KEY_BACKQUOTE
-            case .backslash: GHOSTTY_KEY_BACKSLASH
-            case .bracketLeft: GHOSTTY_KEY_BRACKET_LEFT
-            case .bracketRight: GHOSTTY_KEY_BRACKET_RIGHT
-            case .comma: GHOSTTY_KEY_COMMA
-            case .digit0: GHOSTTY_KEY_DIGIT_0
-            case .digit1: GHOSTTY_KEY_DIGIT_1
-            case .digit2: GHOSTTY_KEY_DIGIT_2
-            case .digit3: GHOSTTY_KEY_DIGIT_3
-            case .digit4: GHOSTTY_KEY_DIGIT_4
-            case .digit5: GHOSTTY_KEY_DIGIT_5
-            case .digit6: GHOSTTY_KEY_DIGIT_6
-            case .digit7: GHOSTTY_KEY_DIGIT_7
-            case .digit8: GHOSTTY_KEY_DIGIT_8
-            case .digit9: GHOSTTY_KEY_DIGIT_9
-            case .equal: GHOSTTY_KEY_EQUAL
-            case .intlBackslash: GHOSTTY_KEY_INTL_BACKSLASH
-            case .intlRo: GHOSTTY_KEY_INTL_RO
-            case .intlYen: GHOSTTY_KEY_INTL_YEN
-            case .a: GHOSTTY_KEY_A
-            case .b: GHOSTTY_KEY_B
-            case .c: GHOSTTY_KEY_C
-            case .d: GHOSTTY_KEY_D
-            case .e: GHOSTTY_KEY_E
-            case .f: GHOSTTY_KEY_F
-            case .g: GHOSTTY_KEY_G
-            case .h: GHOSTTY_KEY_H
-            case .i: GHOSTTY_KEY_I
-            case .j: GHOSTTY_KEY_J
-            case .k: GHOSTTY_KEY_K
-            case .l: GHOSTTY_KEY_L
-            case .m: GHOSTTY_KEY_M
-            case .n: GHOSTTY_KEY_N
-            case .o: GHOSTTY_KEY_O
-            case .p: GHOSTTY_KEY_P
-            case .q: GHOSTTY_KEY_Q
-            case .r: GHOSTTY_KEY_R
-            case .s: GHOSTTY_KEY_S
-            case .t: GHOSTTY_KEY_T
-            case .u: GHOSTTY_KEY_U
-            case .v: GHOSTTY_KEY_V
-            case .w: GHOSTTY_KEY_W
-            case .x: GHOSTTY_KEY_X
-            case .y: GHOSTTY_KEY_Y
-            case .z: GHOSTTY_KEY_Z
-            case .minus: GHOSTTY_KEY_MINUS
-            case .period: GHOSTTY_KEY_PERIOD
-            case .quote: GHOSTTY_KEY_QUOTE
-            case .semicolon: GHOSTTY_KEY_SEMICOLON
-            case .slash: GHOSTTY_KEY_SLASH
+            case .backquote: RUSTTY_KEY_BACKQUOTE
+            case .backslash: RUSTTY_KEY_BACKSLASH
+            case .bracketLeft: RUSTTY_KEY_BRACKET_LEFT
+            case .bracketRight: RUSTTY_KEY_BRACKET_RIGHT
+            case .comma: RUSTTY_KEY_COMMA
+            case .digit0: RUSTTY_KEY_DIGIT_0
+            case .digit1: RUSTTY_KEY_DIGIT_1
+            case .digit2: RUSTTY_KEY_DIGIT_2
+            case .digit3: RUSTTY_KEY_DIGIT_3
+            case .digit4: RUSTTY_KEY_DIGIT_4
+            case .digit5: RUSTTY_KEY_DIGIT_5
+            case .digit6: RUSTTY_KEY_DIGIT_6
+            case .digit7: RUSTTY_KEY_DIGIT_7
+            case .digit8: RUSTTY_KEY_DIGIT_8
+            case .digit9: RUSTTY_KEY_DIGIT_9
+            case .equal: RUSTTY_KEY_EQUAL
+            case .intlBackslash: RUSTTY_KEY_INTL_BACKSLASH
+            case .intlRo: RUSTTY_KEY_INTL_RO
+            case .intlYen: RUSTTY_KEY_INTL_YEN
+            case .a: RUSTTY_KEY_A
+            case .b: RUSTTY_KEY_B
+            case .c: RUSTTY_KEY_C
+            case .d: RUSTTY_KEY_D
+            case .e: RUSTTY_KEY_E
+            case .f: RUSTTY_KEY_F
+            case .g: RUSTTY_KEY_G
+            case .h: RUSTTY_KEY_H
+            case .i: RUSTTY_KEY_I
+            case .j: RUSTTY_KEY_J
+            case .k: RUSTTY_KEY_K
+            case .l: RUSTTY_KEY_L
+            case .m: RUSTTY_KEY_M
+            case .n: RUSTTY_KEY_N
+            case .o: RUSTTY_KEY_O
+            case .p: RUSTTY_KEY_P
+            case .q: RUSTTY_KEY_Q
+            case .r: RUSTTY_KEY_R
+            case .s: RUSTTY_KEY_S
+            case .t: RUSTTY_KEY_T
+            case .u: RUSTTY_KEY_U
+            case .v: RUSTTY_KEY_V
+            case .w: RUSTTY_KEY_W
+            case .x: RUSTTY_KEY_X
+            case .y: RUSTTY_KEY_Y
+            case .z: RUSTTY_KEY_Z
+            case .minus: RUSTTY_KEY_MINUS
+            case .period: RUSTTY_KEY_PERIOD
+            case .quote: RUSTTY_KEY_QUOTE
+            case .semicolon: RUSTTY_KEY_SEMICOLON
+            case .slash: RUSTTY_KEY_SLASH
 
             // Functional Keys
-            case .altLeft: GHOSTTY_KEY_ALT_LEFT
-            case .altRight: GHOSTTY_KEY_ALT_RIGHT
-            case .backspace: GHOSTTY_KEY_BACKSPACE
-            case .capsLock: GHOSTTY_KEY_CAPS_LOCK
-            case .contextMenu: GHOSTTY_KEY_CONTEXT_MENU
-            case .controlLeft: GHOSTTY_KEY_CONTROL_LEFT
-            case .controlRight: GHOSTTY_KEY_CONTROL_RIGHT
-            case .enter: GHOSTTY_KEY_ENTER
-            case .metaLeft: GHOSTTY_KEY_META_LEFT
-            case .metaRight: GHOSTTY_KEY_META_RIGHT
-            case .shiftLeft: GHOSTTY_KEY_SHIFT_LEFT
-            case .shiftRight: GHOSTTY_KEY_SHIFT_RIGHT
-            case .space: GHOSTTY_KEY_SPACE
-            case .tab: GHOSTTY_KEY_TAB
-            case .convert: GHOSTTY_KEY_CONVERT
-            case .kanaMode: GHOSTTY_KEY_KANA_MODE
-            case .nonConvert: GHOSTTY_KEY_NON_CONVERT
+            case .altLeft: RUSTTY_KEY_ALT_LEFT
+            case .altRight: RUSTTY_KEY_ALT_RIGHT
+            case .backspace: RUSTTY_KEY_BACKSPACE
+            case .capsLock: RUSTTY_KEY_CAPS_LOCK
+            case .contextMenu: RUSTTY_KEY_CONTEXT_MENU
+            case .controlLeft: RUSTTY_KEY_CONTROL_LEFT
+            case .controlRight: RUSTTY_KEY_CONTROL_RIGHT
+            case .enter: RUSTTY_KEY_ENTER
+            case .metaLeft: RUSTTY_KEY_META_LEFT
+            case .metaRight: RUSTTY_KEY_META_RIGHT
+            case .shiftLeft: RUSTTY_KEY_SHIFT_LEFT
+            case .shiftRight: RUSTTY_KEY_SHIFT_RIGHT
+            case .space: RUSTTY_KEY_SPACE
+            case .tab: RUSTTY_KEY_TAB
+            case .convert: RUSTTY_KEY_CONVERT
+            case .kanaMode: RUSTTY_KEY_KANA_MODE
+            case .nonConvert: RUSTTY_KEY_NON_CONVERT
 
             // Control Pad Section
-            case .delete: GHOSTTY_KEY_DELETE
-            case .end: GHOSTTY_KEY_END
-            case .help: GHOSTTY_KEY_HELP
-            case .home: GHOSTTY_KEY_HOME
-            case .insert: GHOSTTY_KEY_INSERT
-            case .pageDown: GHOSTTY_KEY_PAGE_DOWN
-            case .pageUp: GHOSTTY_KEY_PAGE_UP
+            case .delete: RUSTTY_KEY_DELETE
+            case .end: RUSTTY_KEY_END
+            case .help: RUSTTY_KEY_HELP
+            case .home: RUSTTY_KEY_HOME
+            case .insert: RUSTTY_KEY_INSERT
+            case .pageDown: RUSTTY_KEY_PAGE_DOWN
+            case .pageUp: RUSTTY_KEY_PAGE_UP
 
             // Arrow Pad Section
-            case .arrowDown: GHOSTTY_KEY_ARROW_DOWN
-            case .arrowLeft: GHOSTTY_KEY_ARROW_LEFT
-            case .arrowRight: GHOSTTY_KEY_ARROW_RIGHT
-            case .arrowUp: GHOSTTY_KEY_ARROW_UP
+            case .arrowDown: RUSTTY_KEY_ARROW_DOWN
+            case .arrowLeft: RUSTTY_KEY_ARROW_LEFT
+            case .arrowRight: RUSTTY_KEY_ARROW_RIGHT
+            case .arrowUp: RUSTTY_KEY_ARROW_UP
 
             // Numpad Section
-            case .numLock: GHOSTTY_KEY_NUM_LOCK
-            case .numpad0: GHOSTTY_KEY_NUMPAD_0
-            case .numpad1: GHOSTTY_KEY_NUMPAD_1
-            case .numpad2: GHOSTTY_KEY_NUMPAD_2
-            case .numpad3: GHOSTTY_KEY_NUMPAD_3
-            case .numpad4: GHOSTTY_KEY_NUMPAD_4
-            case .numpad5: GHOSTTY_KEY_NUMPAD_5
-            case .numpad6: GHOSTTY_KEY_NUMPAD_6
-            case .numpad7: GHOSTTY_KEY_NUMPAD_7
-            case .numpad8: GHOSTTY_KEY_NUMPAD_8
-            case .numpad9: GHOSTTY_KEY_NUMPAD_9
-            case .numpadAdd: GHOSTTY_KEY_NUMPAD_ADD
-            case .numpadBackspace: GHOSTTY_KEY_NUMPAD_BACKSPACE
-            case .numpadClear: GHOSTTY_KEY_NUMPAD_CLEAR
-            case .numpadClearEntry: GHOSTTY_KEY_NUMPAD_CLEAR_ENTRY
-            case .numpadComma: GHOSTTY_KEY_NUMPAD_COMMA
-            case .numpadDecimal: GHOSTTY_KEY_NUMPAD_DECIMAL
-            case .numpadDivide: GHOSTTY_KEY_NUMPAD_DIVIDE
-            case .numpadEnter: GHOSTTY_KEY_NUMPAD_ENTER
-            case .numpadEqual: GHOSTTY_KEY_NUMPAD_EQUAL
-            case .numpadMemoryAdd: GHOSTTY_KEY_NUMPAD_MEMORY_ADD
-            case .numpadMemoryClear: GHOSTTY_KEY_NUMPAD_MEMORY_CLEAR
-            case .numpadMemoryRecall: GHOSTTY_KEY_NUMPAD_MEMORY_RECALL
-            case .numpadMemoryStore: GHOSTTY_KEY_NUMPAD_MEMORY_STORE
-            case .numpadMemorySubtract: GHOSTTY_KEY_NUMPAD_MEMORY_SUBTRACT
-            case .numpadMultiply: GHOSTTY_KEY_NUMPAD_MULTIPLY
-            case .numpadParenLeft: GHOSTTY_KEY_NUMPAD_PAREN_LEFT
-            case .numpadParenRight: GHOSTTY_KEY_NUMPAD_PAREN_RIGHT
-            case .numpadSubtract: GHOSTTY_KEY_NUMPAD_SUBTRACT
-            case .numpadSeparator: GHOSTTY_KEY_NUMPAD_SEPARATOR
-            case .numpadUp: GHOSTTY_KEY_NUMPAD_UP
-            case .numpadDown: GHOSTTY_KEY_NUMPAD_DOWN
-            case .numpadRight: GHOSTTY_KEY_NUMPAD_RIGHT
-            case .numpadLeft: GHOSTTY_KEY_NUMPAD_LEFT
-            case .numpadBegin: GHOSTTY_KEY_NUMPAD_BEGIN
-            case .numpadHome: GHOSTTY_KEY_NUMPAD_HOME
-            case .numpadEnd: GHOSTTY_KEY_NUMPAD_END
-            case .numpadInsert: GHOSTTY_KEY_NUMPAD_INSERT
-            case .numpadDelete: GHOSTTY_KEY_NUMPAD_DELETE
-            case .numpadPageUp: GHOSTTY_KEY_NUMPAD_PAGE_UP
-            case .numpadPageDown: GHOSTTY_KEY_NUMPAD_PAGE_DOWN
+            case .numLock: RUSTTY_KEY_NUM_LOCK
+            case .numpad0: RUSTTY_KEY_NUMPAD_0
+            case .numpad1: RUSTTY_KEY_NUMPAD_1
+            case .numpad2: RUSTTY_KEY_NUMPAD_2
+            case .numpad3: RUSTTY_KEY_NUMPAD_3
+            case .numpad4: RUSTTY_KEY_NUMPAD_4
+            case .numpad5: RUSTTY_KEY_NUMPAD_5
+            case .numpad6: RUSTTY_KEY_NUMPAD_6
+            case .numpad7: RUSTTY_KEY_NUMPAD_7
+            case .numpad8: RUSTTY_KEY_NUMPAD_8
+            case .numpad9: RUSTTY_KEY_NUMPAD_9
+            case .numpadAdd: RUSTTY_KEY_NUMPAD_ADD
+            case .numpadBackspace: RUSTTY_KEY_NUMPAD_BACKSPACE
+            case .numpadClear: RUSTTY_KEY_NUMPAD_CLEAR
+            case .numpadClearEntry: RUSTTY_KEY_NUMPAD_CLEAR_ENTRY
+            case .numpadComma: RUSTTY_KEY_NUMPAD_COMMA
+            case .numpadDecimal: RUSTTY_KEY_NUMPAD_DECIMAL
+            case .numpadDivide: RUSTTY_KEY_NUMPAD_DIVIDE
+            case .numpadEnter: RUSTTY_KEY_NUMPAD_ENTER
+            case .numpadEqual: RUSTTY_KEY_NUMPAD_EQUAL
+            case .numpadMemoryAdd: RUSTTY_KEY_NUMPAD_MEMORY_ADD
+            case .numpadMemoryClear: RUSTTY_KEY_NUMPAD_MEMORY_CLEAR
+            case .numpadMemoryRecall: RUSTTY_KEY_NUMPAD_MEMORY_RECALL
+            case .numpadMemoryStore: RUSTTY_KEY_NUMPAD_MEMORY_STORE
+            case .numpadMemorySubtract: RUSTTY_KEY_NUMPAD_MEMORY_SUBTRACT
+            case .numpadMultiply: RUSTTY_KEY_NUMPAD_MULTIPLY
+            case .numpadParenLeft: RUSTTY_KEY_NUMPAD_PAREN_LEFT
+            case .numpadParenRight: RUSTTY_KEY_NUMPAD_PAREN_RIGHT
+            case .numpadSubtract: RUSTTY_KEY_NUMPAD_SUBTRACT
+            case .numpadSeparator: RUSTTY_KEY_NUMPAD_SEPARATOR
+            case .numpadUp: RUSTTY_KEY_NUMPAD_UP
+            case .numpadDown: RUSTTY_KEY_NUMPAD_DOWN
+            case .numpadRight: RUSTTY_KEY_NUMPAD_RIGHT
+            case .numpadLeft: RUSTTY_KEY_NUMPAD_LEFT
+            case .numpadBegin: RUSTTY_KEY_NUMPAD_BEGIN
+            case .numpadHome: RUSTTY_KEY_NUMPAD_HOME
+            case .numpadEnd: RUSTTY_KEY_NUMPAD_END
+            case .numpadInsert: RUSTTY_KEY_NUMPAD_INSERT
+            case .numpadDelete: RUSTTY_KEY_NUMPAD_DELETE
+            case .numpadPageUp: RUSTTY_KEY_NUMPAD_PAGE_UP
+            case .numpadPageDown: RUSTTY_KEY_NUMPAD_PAGE_DOWN
 
             // Function Section
-            case .escape: GHOSTTY_KEY_ESCAPE
-            case .f1: GHOSTTY_KEY_F1
-            case .f2: GHOSTTY_KEY_F2
-            case .f3: GHOSTTY_KEY_F3
-            case .f4: GHOSTTY_KEY_F4
-            case .f5: GHOSTTY_KEY_F5
-            case .f6: GHOSTTY_KEY_F6
-            case .f7: GHOSTTY_KEY_F7
-            case .f8: GHOSTTY_KEY_F8
-            case .f9: GHOSTTY_KEY_F9
-            case .f10: GHOSTTY_KEY_F10
-            case .f11: GHOSTTY_KEY_F11
-            case .f12: GHOSTTY_KEY_F12
-            case .f13: GHOSTTY_KEY_F13
-            case .f14: GHOSTTY_KEY_F14
-            case .f15: GHOSTTY_KEY_F15
-            case .f16: GHOSTTY_KEY_F16
-            case .f17: GHOSTTY_KEY_F17
-            case .f18: GHOSTTY_KEY_F18
-            case .f19: GHOSTTY_KEY_F19
-            case .f20: GHOSTTY_KEY_F20
-            case .f21: GHOSTTY_KEY_F21
-            case .f22: GHOSTTY_KEY_F22
-            case .f23: GHOSTTY_KEY_F23
-            case .f24: GHOSTTY_KEY_F24
-            case .f25: GHOSTTY_KEY_F25
-            case .fn: GHOSTTY_KEY_FN
-            case .fnLock: GHOSTTY_KEY_FN_LOCK
-            case .printScreen: GHOSTTY_KEY_PRINT_SCREEN
-            case .scrollLock: GHOSTTY_KEY_SCROLL_LOCK
-            case .pause: GHOSTTY_KEY_PAUSE
+            case .escape: RUSTTY_KEY_ESCAPE
+            case .f1: RUSTTY_KEY_F1
+            case .f2: RUSTTY_KEY_F2
+            case .f3: RUSTTY_KEY_F3
+            case .f4: RUSTTY_KEY_F4
+            case .f5: RUSTTY_KEY_F5
+            case .f6: RUSTTY_KEY_F6
+            case .f7: RUSTTY_KEY_F7
+            case .f8: RUSTTY_KEY_F8
+            case .f9: RUSTTY_KEY_F9
+            case .f10: RUSTTY_KEY_F10
+            case .f11: RUSTTY_KEY_F11
+            case .f12: RUSTTY_KEY_F12
+            case .f13: RUSTTY_KEY_F13
+            case .f14: RUSTTY_KEY_F14
+            case .f15: RUSTTY_KEY_F15
+            case .f16: RUSTTY_KEY_F16
+            case .f17: RUSTTY_KEY_F17
+            case .f18: RUSTTY_KEY_F18
+            case .f19: RUSTTY_KEY_F19
+            case .f20: RUSTTY_KEY_F20
+            case .f21: RUSTTY_KEY_F21
+            case .f22: RUSTTY_KEY_F22
+            case .f23: RUSTTY_KEY_F23
+            case .f24: RUSTTY_KEY_F24
+            case .f25: RUSTTY_KEY_F25
+            case .fn: RUSTTY_KEY_FN
+            case .fnLock: RUSTTY_KEY_FN_LOCK
+            case .printScreen: RUSTTY_KEY_PRINT_SCREEN
+            case .scrollLock: RUSTTY_KEY_SCROLL_LOCK
+            case .pause: RUSTTY_KEY_PAUSE
 
             // Media Keys
-            case .browserBack: GHOSTTY_KEY_BROWSER_BACK
-            case .browserFavorites: GHOSTTY_KEY_BROWSER_FAVORITES
-            case .browserForward: GHOSTTY_KEY_BROWSER_FORWARD
-            case .browserHome: GHOSTTY_KEY_BROWSER_HOME
-            case .browserRefresh: GHOSTTY_KEY_BROWSER_REFRESH
-            case .browserSearch: GHOSTTY_KEY_BROWSER_SEARCH
-            case .browserStop: GHOSTTY_KEY_BROWSER_STOP
-            case .eject: GHOSTTY_KEY_EJECT
-            case .launchApp1: GHOSTTY_KEY_LAUNCH_APP_1
-            case .launchApp2: GHOSTTY_KEY_LAUNCH_APP_2
-            case .launchMail: GHOSTTY_KEY_LAUNCH_MAIL
-            case .mediaPlayPause: GHOSTTY_KEY_MEDIA_PLAY_PAUSE
-            case .mediaSelect: GHOSTTY_KEY_MEDIA_SELECT
-            case .mediaStop: GHOSTTY_KEY_MEDIA_STOP
-            case .mediaTrackNext: GHOSTTY_KEY_MEDIA_TRACK_NEXT
-            case .mediaTrackPrevious: GHOSTTY_KEY_MEDIA_TRACK_PREVIOUS
-            case .power: GHOSTTY_KEY_POWER
-            case .sleep: GHOSTTY_KEY_SLEEP
-            case .audioVolumeDown: GHOSTTY_KEY_AUDIO_VOLUME_DOWN
-            case .audioVolumeMute: GHOSTTY_KEY_AUDIO_VOLUME_MUTE
-            case .audioVolumeUp: GHOSTTY_KEY_AUDIO_VOLUME_UP
-            case .wakeUp: GHOSTTY_KEY_WAKE_UP
+            case .browserBack: RUSTTY_KEY_BROWSER_BACK
+            case .browserFavorites: RUSTTY_KEY_BROWSER_FAVORITES
+            case .browserForward: RUSTTY_KEY_BROWSER_FORWARD
+            case .browserHome: RUSTTY_KEY_BROWSER_HOME
+            case .browserRefresh: RUSTTY_KEY_BROWSER_REFRESH
+            case .browserSearch: RUSTTY_KEY_BROWSER_SEARCH
+            case .browserStop: RUSTTY_KEY_BROWSER_STOP
+            case .eject: RUSTTY_KEY_EJECT
+            case .launchApp1: RUSTTY_KEY_LAUNCH_APP_1
+            case .launchApp2: RUSTTY_KEY_LAUNCH_APP_2
+            case .launchMail: RUSTTY_KEY_LAUNCH_MAIL
+            case .mediaPlayPause: RUSTTY_KEY_MEDIA_PLAY_PAUSE
+            case .mediaSelect: RUSTTY_KEY_MEDIA_SELECT
+            case .mediaStop: RUSTTY_KEY_MEDIA_STOP
+            case .mediaTrackNext: RUSTTY_KEY_MEDIA_TRACK_NEXT
+            case .mediaTrackPrevious: RUSTTY_KEY_MEDIA_TRACK_PREVIOUS
+            case .power: RUSTTY_KEY_POWER
+            case .sleep: RUSTTY_KEY_SLEEP
+            case .audioVolumeDown: RUSTTY_KEY_AUDIO_VOLUME_DOWN
+            case .audioVolumeMute: RUSTTY_KEY_AUDIO_VOLUME_MUTE
+            case .audioVolumeUp: RUSTTY_KEY_AUDIO_VOLUME_UP
+            case .wakeUp: RUSTTY_KEY_WAKE_UP
 
             // Legacy, Non-standard, and Special Keys
-            case .copy: GHOSTTY_KEY_COPY
-            case .cut: GHOSTTY_KEY_CUT
-            case .paste: GHOSTTY_KEY_PASTE
+            case .copy: RUSTTY_KEY_COPY
+            case .cut: RUSTTY_KEY_CUT
+            case .paste: RUSTTY_KEY_PASTE
             }
         }
 

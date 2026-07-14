@@ -2455,7 +2455,7 @@ impl ApprtSurface for Surface {
             }
 
             // Remove this so that running `rustty` within Rustty works.
-            // env.remove("GHOSTTY_MAC_LAUNCH_SOURCE");
+            // env.remove("RUSTTY_MAC_LAUNCH_SOURCE");
             //
             // PORT NOTE (R2 identity): the launch-source env var is `RUSTTY_MAC_LAUNCH_SOURCE`
             // (the rustty-os `desktop.rs` `launchedFromDesktop` precedent).

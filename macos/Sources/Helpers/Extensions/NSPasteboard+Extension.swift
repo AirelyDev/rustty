@@ -1,5 +1,5 @@
 import AppKit
-import GhosttyKit
+import RusttyKit
 import UniformTypeIdentifiers
 
 extension NSPasteboard.PasteboardType {
@@ -49,12 +49,12 @@ extension NSPasteboard {
     }
 
     /// The pasteboard for the Ghostty enum type.
-    static func ghostty(_ clipboard: ghostty_clipboard_e) -> NSPasteboard? {
+    static func ghostty(_ clipboard: rustty_clipboard_e) -> NSPasteboard? {
         switch clipboard {
-        case GHOSTTY_CLIPBOARD_STANDARD:
+        case RUSTTY_CLIPBOARD_STANDARD:
             return Self.general
 
-        case GHOSTTY_CLIPBOARD_SELECTION:
+        case RUSTTY_CLIPBOARD_SELECTION:
             return Self.ghosttySelection
 
         default:

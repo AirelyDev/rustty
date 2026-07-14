@@ -1,6 +1,6 @@
 import Foundation
 #if !DOCK_TILE_PLUGIN
-import GhosttyKit
+import RusttyKit
 #endif
 
 extension OSColor {
@@ -97,7 +97,7 @@ extension OSColor {
 #if !DOCK_TILE_PLUGIN
 extension OSColor {
     /// Create a color from a Ghostty color.
-    convenience init(ghostty: ghostty_config_color_s) {
+    convenience init(ghostty: rustty_config_color_s) {
         let red = Double(ghostty.r) / 255
         let green = Double(ghostty.g) / 255
         let blue = Double(ghostty.b) / 255

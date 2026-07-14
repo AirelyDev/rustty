@@ -2,7 +2,7 @@ import Cocoa
 import CoreGraphics
 import Carbon
 import OSLog
-import GhosttyKit
+import RusttyKit
 
 // Manages the event tap to monitor global events, currently only used for
 // global keybindings.
@@ -152,8 +152,8 @@ private func cgEventFlagsChangedHandler(
     guard let event: NSEvent = .init(cgEvent: cgEvent) else { return result }
 
     // Build our event input and call ghostty
-    let key_ev = event.ghosttyKeyEvent(GHOSTTY_ACTION_PRESS)
-    if ghostty_app_key(ghostty, key_ev) {
+    let key_ev = event.ghosttyKeyEvent(RUSTTY_ACTION_PRESS)
+    if rustty_app_key(ghostty, key_ev) {
         GlobalEventTap.logger.info("global key event handled event=\(event, privacy: .public)")
         return nil
     }

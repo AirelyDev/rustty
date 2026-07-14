@@ -3,7 +3,7 @@ import SwiftUI
 import UserNotifications
 import OSLog
 import Sparkle
-import GhosttyKit
+import RusttyKit
 
 class AppDelegate: NSObject,
                     ObservableObject,
@@ -165,7 +165,7 @@ class AppDelegate: NSObject,
 
     override init() {
 #if DEBUG
-        ghostty = Ghostty.App(configPath: ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"])
+        ghostty = Ghostty.App(configPath: ProcessInfo.processInfo.environment["RUSTTY_CONFIG_PATH"])
 #else
         ghostty = Ghostty.App()
 #endif
@@ -180,7 +180,7 @@ class AppDelegate: NSObject,
         #if DEBUG
         if
             let suite = UserDefaults.ghosttySuite,
-            let clear = ProcessInfo.processInfo.environment["GHOSTTY_CLEAR_USER_DEFAULTS"],
+            let clear = ProcessInfo.processInfo.environment["RUSTTY_CLEAR_USER_DEFAULTS"],
             (clear as NSString).boolValue {
             UserDefaults.ghostty.removePersistentDomain(forName: suite)
         }
@@ -301,14 +301,14 @@ class AppDelegate: NSObject,
         ) { _, change in
             guard let appearance = change.newValue else { return }
             guard let app = self.ghostty.app else { return }
-            let scheme: ghostty_color_scheme_e
+            let scheme: rustty_color_scheme_e
             if appearance.isDark {
-                scheme = GHOSTTY_COLOR_SCHEME_DARK
+                scheme = RUSTTY_COLOR_SCHEME_DARK
             } else {
-                scheme = GHOSTTY_COLOR_SCHEME_LIGHT
+                scheme = RUSTTY_COLOR_SCHEME_LIGHT
             }
 
-            ghostty_app_set_color_scheme(app, scheme)
+            rustty_app_set_color_scheme(app, scheme)
         }
 
         // Setup our menu
@@ -581,14 +581,14 @@ class AppDelegate: NSObject,
 
         // If this event as-is would result in a key binding then we send it.
         if let app = ghostty.app, let config = ghostty.config.config {
-            var ghosttyEvent = event.ghosttyKeyEvent(GHOSTTY_ACTION_PRESS)
+            var ghosttyEvent = event.ghosttyKeyEvent(RUSTTY_ACTION_PRESS)
             let match = (event.characters ?? "").withCString { ptr in
                 ghosttyEvent.text = ptr
-                if !ghostty_config_key_is_binding(config, ghosttyEvent) {
+                if !rustty_config_key_is_binding(config, ghosttyEvent) {
                     return false
                 }
 
-                return ghostty_app_key(app, ghosttyEvent)
+                return rustty_app_key(app, ghosttyEvent)
             }
 
             // If the key was handled by Ghostty we stop the event chain. If
@@ -613,7 +613,7 @@ class AppDelegate: NSObject,
         guard let ghostty = self.ghostty.app else { return event }
 
         // Build our event input and call ghostty
-        if ghostty_app_key(ghostty, event.ghosttyKeyEvent(GHOSTTY_ACTION_PRESS)) {
+        if rustty_app_key(ghostty, event.ghosttyKeyEvent(RUSTTY_ACTION_PRESS)) {
             // The key was used so we want to stop it from going to our Mac app
             Ghostty.logger.debug("local key event handled event=\(event, privacy: .public)")
             return nil
@@ -815,7 +815,7 @@ class AppDelegate: NSObject,
 
         // We need to handle our global event tap depending on if there are global
         // events that we care about in Ghostty.
-        if ghostty_app_has_global_keybinds(ghostty.app!) {
+        if rustty_app_has_global_keybinds(ghostty.app!) {
             if timeSinceLaunch > 5 {
                 // If the process has been running for awhile we enable right away
                 // because no windows are likely to pop up.

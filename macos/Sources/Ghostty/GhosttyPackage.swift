@@ -1,15 +1,15 @@
 import os
 import SwiftUI
-import GhosttyKit
+import RusttyKit
 
 // MARK: C Extensions
 
 /// A command is fully self-contained so it is Sendable.
-extension ghostty_command_s: @unchecked @retroactive Sendable {}
+extension rustty_command_s: @unchecked @retroactive Sendable {}
 
 /// A surface is sendable because it is just a reference type. Using the surface in parameters
 /// may be unsafe but the value itself is safe to send across threads.
-extension ghostty_surface_t: @unchecked @retroactive Sendable {}
+extension rustty_surface_t: @unchecked @retroactive Sendable {}
 
 extension Ghostty {
     // The user notification category identifier
@@ -23,12 +23,12 @@ extension Ghostty {
 
 extension Ghostty {
     struct Info {
-        var mode: ghostty_build_mode_e
+        var mode: rustty_build_mode_e
         var version: String
     }
 
     static var info: Info {
-        let raw = ghostty_info()
+        let raw = rustty_info()
         let version = NSString(
             bytes: raw.version,
             length: Int(raw.version_len),
@@ -51,7 +51,7 @@ extension Ghostty {
     /// Returns the mechanism that launched the app. This is based on an env var so
     /// its up to the env var being set in the correct circumstance.
     static var launchSource: LaunchSource {
-        guard let envValue = ProcessInfo.processInfo.environment["GHOSTTY_MAC_LAUNCH_SOURCE"] else {
+        guard let envValue = ProcessInfo.processInfo.environment["RUSTTY_MAC_LAUNCH_SOURCE"] else {
             // We default to the CLI because the app bundle always sets the
             // source. If its unset we assume we're in a CLI environment.
             return .cli
@@ -66,9 +66,9 @@ extension Ghostty {
 
 extension Ghostty {
     class AllocatedString {
-        private let cString: ghostty_string_s
+        private let cString: rustty_string_s
 
-        init(_ c: ghostty_string_s) {
+        init(_ c: rustty_string_s) {
             self.cString = c
         }
 
@@ -79,7 +79,7 @@ extension Ghostty {
         }
 
         deinit {
-            ghostty_string_free(cString)
+            rustty_string_free(cString)
         }
     }
 }
@@ -90,15 +90,15 @@ extension Ghostty {
         case off
         case toggle
 
-        static func from(_ c: ghostty_action_float_window_e) -> Self? {
+        static func from(_ c: rustty_action_float_window_e) -> Self? {
             switch c {
-            case GHOSTTY_FLOAT_WINDOW_ON:
+            case RUSTTY_FLOAT_WINDOW_ON:
                 return .on
 
-            case GHOSTTY_FLOAT_WINDOW_OFF:
+            case RUSTTY_FLOAT_WINDOW_OFF:
                 return .off
 
-            case GHOSTTY_FLOAT_WINDOW_TOGGLE:
+            case RUSTTY_FLOAT_WINDOW_TOGGLE:
                 return .toggle
 
             default:
@@ -112,15 +112,15 @@ extension Ghostty {
         case off
         case toggle
 
-        static func from(_ c: ghostty_action_secure_input_e) -> Self? {
+        static func from(_ c: rustty_action_secure_input_e) -> Self? {
             switch c {
-            case GHOSTTY_SECURE_INPUT_ON:
+            case RUSTTY_SECURE_INPUT_ON:
                 return .on
 
-            case GHOSTTY_SECURE_INPUT_OFF:
+            case RUSTTY_SECURE_INPUT_OFF:
                 return .off
 
-            case GHOSTTY_SECURE_INPUT_TOGGLE:
+            case RUSTTY_SECURE_INPUT_TOGGLE:
                 return .toggle
 
             default:
@@ -134,24 +134,24 @@ extension Ghostty {
         case previous, next, up, down, left, right
 
         /// Initialize from a Ghostty API enum.
-        static func from(direction: ghostty_action_goto_split_e) -> Self? {
+        static func from(direction: rustty_action_goto_split_e) -> Self? {
             switch direction {
-            case GHOSTTY_GOTO_SPLIT_PREVIOUS:
+            case RUSTTY_GOTO_SPLIT_PREVIOUS:
                 return .previous
 
-            case GHOSTTY_GOTO_SPLIT_NEXT:
+            case RUSTTY_GOTO_SPLIT_NEXT:
                 return .next
 
-            case GHOSTTY_GOTO_SPLIT_UP:
+            case RUSTTY_GOTO_SPLIT_UP:
                 return .up
 
-            case GHOSTTY_GOTO_SPLIT_DOWN:
+            case RUSTTY_GOTO_SPLIT_DOWN:
                 return .down
 
-            case GHOSTTY_GOTO_SPLIT_LEFT:
+            case RUSTTY_GOTO_SPLIT_LEFT:
                 return .left
 
-            case GHOSTTY_GOTO_SPLIT_RIGHT:
+            case RUSTTY_GOTO_SPLIT_RIGHT:
                 return .right
 
             default:
@@ -159,25 +159,25 @@ extension Ghostty {
             }
         }
 
-        func toNative() -> ghostty_action_goto_split_e {
+        func toNative() -> rustty_action_goto_split_e {
             switch self {
             case .previous:
-                return GHOSTTY_GOTO_SPLIT_PREVIOUS
+                return RUSTTY_GOTO_SPLIT_PREVIOUS
 
             case .next:
-                return GHOSTTY_GOTO_SPLIT_NEXT
+                return RUSTTY_GOTO_SPLIT_NEXT
 
             case .up:
-                return GHOSTTY_GOTO_SPLIT_UP
+                return RUSTTY_GOTO_SPLIT_UP
 
             case .down:
-                return GHOSTTY_GOTO_SPLIT_DOWN
+                return RUSTTY_GOTO_SPLIT_DOWN
 
             case .left:
-                return GHOSTTY_GOTO_SPLIT_LEFT
+                return RUSTTY_GOTO_SPLIT_LEFT
 
             case .right:
-                return GHOSTTY_GOTO_SPLIT_RIGHT
+                return RUSTTY_GOTO_SPLIT_RIGHT
             }
         }
     }
@@ -186,31 +186,31 @@ extension Ghostty {
     enum SplitResizeDirection {
         case up, down, left, right
 
-        static func from(direction: ghostty_action_resize_split_direction_e) -> Self? {
+        static func from(direction: rustty_action_resize_split_direction_e) -> Self? {
             switch direction {
-            case GHOSTTY_RESIZE_SPLIT_UP:
+            case RUSTTY_RESIZE_SPLIT_UP:
                 return .up
-            case GHOSTTY_RESIZE_SPLIT_DOWN:
+            case RUSTTY_RESIZE_SPLIT_DOWN:
                 return .down
-            case GHOSTTY_RESIZE_SPLIT_LEFT:
+            case RUSTTY_RESIZE_SPLIT_LEFT:
                 return .left
-            case GHOSTTY_RESIZE_SPLIT_RIGHT:
+            case RUSTTY_RESIZE_SPLIT_RIGHT:
                 return .right
             default:
                 return nil
             }
         }
 
-        func toNative() -> ghostty_action_resize_split_direction_e {
+        func toNative() -> rustty_action_resize_split_direction_e {
             switch self {
             case .up:
-                return GHOSTTY_RESIZE_SPLIT_UP
+                return RUSTTY_RESIZE_SPLIT_UP
             case .down:
-                return GHOSTTY_RESIZE_SPLIT_DOWN
+                return RUSTTY_RESIZE_SPLIT_DOWN
             case .left:
-                return GHOSTTY_RESIZE_SPLIT_LEFT
+                return RUSTTY_RESIZE_SPLIT_LEFT
             case .right:
-                return GHOSTTY_RESIZE_SPLIT_RIGHT
+                return RUSTTY_RESIZE_SPLIT_RIGHT
             }
         }
     }
@@ -277,13 +277,13 @@ extension Ghostty {
             }
         }
 
-        static func from(request: ghostty_clipboard_request_e) -> ClipboardRequest? {
+        static func from(request: rustty_clipboard_request_e) -> ClipboardRequest? {
             switch request {
-            case GHOSTTY_CLIPBOARD_REQUEST_PASTE:
+            case RUSTTY_CLIPBOARD_REQUEST_PASTE:
                 return .paste
-            case GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ:
+            case RUSTTY_CLIPBOARD_REQUEST_OSC_52_READ:
                 return .osc_52_read
-            case GHOSTTY_CLIPBOARD_REQUEST_OSC_52_WRITE:
+            case RUSTTY_CLIPBOARD_REQUEST_OSC_52_WRITE:
                 return .osc_52_write(nil)
             default:
                 return nil
@@ -295,7 +295,7 @@ extension Ghostty {
         let mime: String
         let data: String
 
-        static func from(content: ghostty_clipboard_content_s) -> ClipboardContent? {
+        static func from(content: rustty_clipboard_content_s) -> ClipboardContent? {
             guard let mimePtr = content.mime,
                   let dataPtr = content.data else {
                 return nil
@@ -453,4 +453,4 @@ extension Ghostty.Notification {
 }
 
 // Make the input enum hashable.
-extension ghostty_input_key_e: @retroactive Hashable {}
+extension rustty_input_key_e: @retroactive Hashable {}

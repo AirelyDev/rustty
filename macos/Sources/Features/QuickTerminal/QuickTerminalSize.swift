@@ -1,4 +1,4 @@
-import GhosttyKit
+import RusttyKit
 
 /// Represents the Ghostty `quick-terminal-size` configuration. See the documentation for
 /// that for more details on exactly how it works. Some of those docs will be reproduced in various comments
@@ -15,7 +15,7 @@ struct QuickTerminalSize {
         self.secondary = secondary
     }
 
-    init(from cStruct: ghostty_config_quick_terminal_size_s) {
+    init(from cStruct: rustty_config_quick_terminal_size_s) {
         self.primary = Size(from: cStruct.primary)
         self.secondary = Size(from: cStruct.secondary)
     }
@@ -24,13 +24,13 @@ struct QuickTerminalSize {
         case percentage(Float)
         case pixels(UInt32)
 
-        init?(from cStruct: ghostty_quick_terminal_size_s) {
+        init?(from cStruct: rustty_quick_terminal_size_s) {
             switch cStruct.tag {
-            case GHOSTTY_QUICK_TERMINAL_SIZE_NONE:
+            case RUSTTY_QUICK_TERMINAL_SIZE_NONE:
                 return nil
-            case GHOSTTY_QUICK_TERMINAL_SIZE_PERCENTAGE:
+            case RUSTTY_QUICK_TERMINAL_SIZE_PERCENTAGE:
                 self = .percentage(cStruct.value.percentage)
-            case GHOSTTY_QUICK_TERMINAL_SIZE_PIXELS:
+            case RUSTTY_QUICK_TERMINAL_SIZE_PIXELS:
                 self = .pixels(cStruct.value.pixels)
             default:
                 assertionFailure()
