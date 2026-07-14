@@ -72,8 +72,14 @@ CABI_MAP=.port/audits/CABI_SYMBOLS.tsv
   override (that would reopen the vacuous-green spoof hole its header warns
   about) — it is read from this checked-in, repo-committed file, which is the
   same trust boundary as the script's own source.
-- `ci.sh`'s `run_test_counts()` and `check_ghostty_h_abi.sh` intentionally keep
-  their own literal `/Users/gael/projects/ghostty` (mirroring
-  `check_test_counts.py`'s hardcode, per that function's own "must stay
-  identical" comment) — they are out of scope for this task and are left
-  untouched.
+- `ci.sh`'s `run_test_counts()` intentionally keeps its own literal
+  `/Users/gael/projects/ghostty` (mirroring `check_test_counts.py`'s hardcode,
+  per that function's own "must stay identical" comment) — it is out of scope
+  for this task and is left untouched.
+- `check_ghostty_h_abi.sh` (the old external-oracle byte-freeze gate, which
+  used to keep the same literal) was renamed `check_rustty_h_abi.sh` and
+  rewritten by rebrand Task 4: it now `source`s this file for `$PORT_UMBRELLA`
+  / `$ORACLE_UMBRELLA` / `$CABI_MAP` and validates the PRODUCT umbrella
+  (`include/rustty-embed.h`) against the LOCAL frozen oracle carve-out
+  (`include/ghostty.h`) via `CABI_SYMBOLS.tsv`'s name-map — it no longer
+  touches the external `/Users/gael/projects/ghostty` checkout at all.

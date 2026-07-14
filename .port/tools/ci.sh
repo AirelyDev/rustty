@@ -172,14 +172,14 @@ GATE_REGISTRY=(
   "D6|PROGRESS|bash $GATES/check_sanitizer_canary.sh"
   "D8|PROGRESS|bash $GATES/check_clone_injection.sh"
   "D9|PROGRESS|bash $GATES/check_stale_comments.sh"
-  # A3 — the macos-swift-app ABI freeze (PREPORT_SWIFT_APP §1/§6, I9). Diffs the
-  # shipped include/ghostty.h against the pinned upstream oracle (byte-identical,
-  # preserving the R-A/R-B/R-C typos) + runs the const size/align/ordinal asserts
-  # in rustty-apprt-c's abi_layout test. PROGRESS not HARD (R5): the pin tracks a
-  # moving upstream oracle, so a deliberate re-sync should surface RED to be
-  # reconciled, not wedge CI; a genuine drift/layout RED is still escalated to a
-  # HARD failure by run_gate's PROGRESS-went-RED branch.
-  "A3|PROGRESS|bash $GATES/check_ghostty_h_abi.sh"
+  # A3 — the rustty-embed.h product-umbrella ABI gate (rebrand Task 4; formerly
+  # the ghostty.h byte-freeze). Asserts include/rustty-embed.h is EXACTLY
+  # include/ghostty.h (the kept oracle carve-out) with every ghostty_* token
+  # renamed to rustty_* per CABI_SYMBOLS.tsv's proven name-map — nothing
+  # added, dropped, or left un-renamed. PROGRESS not HARD (R5): a genuine
+  # mismatch/leftover RED is still escalated to a HARD failure by run_gate's
+  # PROGRESS-went-RED branch.
+  "A3|PROGRESS|bash $GATES/check_rustty_h_abi.sh"
 )
 
 HARD_FAILURES=()   # hard-fail checks that failed, or a claimed-done regression
