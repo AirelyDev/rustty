@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Canonical C symbols are `rustty_*`** — they already exist in `crates/rustty-apprt-c/src/lib.rs` (e.g. `rustty_app_new`, `rustty_surface_new`). The `ghostty_*` names are alias forwarders and are **deleted** by this plan.
-- **Shipped Swift module = `RusttyKit`**; xcframework = `RusttyKit.xcframework`; combined static lib = `libRusttyKit.a`; umbrella header staged as `rustty.h` (from cbindgen `include/rustty-apprt.h`).
+- **Shipped Swift module = `RusttyKit`**; xcframework = `RusttyKit.xcframework`; combined static lib = `libRusttyKit.a`; umbrella header staged as `rustty.h` (from `include/rustty-embed.h` — the validated frozen `include/ghostty.h` umbrella token-renamed, NOT the cbindgen headers, which use a bare-name convention and miss config/benchmark). The frozen `include/ghostty.h` is KEPT as a local oracle carve-out (`ORACLE_UMBRELLA`) for name-mapped gap comparison.
 - **Swift namespace enum `Ghostty` → `Rustty`** (the `enum Ghostty { … }` / `extension Ghostty` namespace used throughout `macos/Sources`).
 - **TERM = `xterm-rustty`**, terminfo entry `rustty|xterm-rustty|Rustty`, env-var prefix `RUSTTY_`, config dir `rustty` — all sourced from `rustty-identity` consts (never hardcoded).
 - **Preserve ghostty's TERM-downgrade ssh fallback** (converts TERM → `xterm-256color` on remote hosts lacking the entry). It is not identity-specific; do not remove it.
@@ -227,35 +227,74 @@ git add -A crates/rustty-apprt-c crates/rustty-config crates/rustty-bench .port/
 git commit -m "abi: delete ghostty_* alias layer; identity-ghostty flips strings only; drop A2 gate section (Task 1)"
 ```
 
-### Task 2: Regenerate the canonical apprt header and confirm it covers every symbol the Swift app needs
+### Task 2: Produce the canonical `include/rustty-embed.h` umbrella by renaming the validated frozen `ghostty.h`
+
+Context (why this shape): the frozen `include/ghostty.h` is NOT a cbindgen output — it is the hand-vendored, pinned-upstream **Ghostty embedding-API umbrella** (1209 lines: all 90 functions, 97 `_t/_s/_e` types, 28 config + 1 benchmark symbol), and `check_symbol_manifest.sh` already validates it 90/90 against the live `rustty_*` exports through `CABI_SYMBOLS.tsv` (columns `ghostty_name → rustty_name`). The cbindgen headers (`include/rustty.h` = vt-c; `include/rustty-apprt.h` = apprt-c) use a *bare-name* convention (`App`, not `ghostty_app_t`) and do NOT cover config/benchmark — they are the wrong artifact for the Swift app. Because `CABI_SYMBOLS.tsv` proves `ghostty_X ↔ rustty_X` is a 1:1 correspondence, a **token-rename** of the frozen umbrella (`ghostty_`→`rustty_`, `GHOSTTY_`→`RUSTTY_`) yields an ABI-faithful `rustty_*`-prefixed umbrella with the identical `_t/_s/_e` convention, covering every symbol the Swift app calls. This also makes the Swift repoint (Task 5) a genuine lockstep token-swap. The original frozen `include/ghostty.h` is **kept** as a local frozen ORACLE header (a carve-out, exactly like the phase-0 corpora) so future gap-comparison can diff the product umbrella against the oracle by the `CABI_SYMBOLS.tsv` name-map — serving the "compare gaps later" goal.
 
 **Files:**
-- Modify (regenerate): `include/rustty-apprt.h` via `cargo run -p xtask -- header-gen-apprt`
-- Read: `include/ghostty.h` (the frozen alias header — the symbol set the Swift app currently consumes)
+- Read: `include/ghostty.h` (the frozen oracle umbrella — the source of the rename)
+- Read: `.port/audits/CABI_SYMBOLS.tsv` (the `ghostty_name → rustty_name` map — the correctness oracle)
+- Create: `include/rustty-embed.h` (the product umbrella — `ghostty.h` token-renamed)
+- Modify: `.port/tools/parity_names.env` (add `PORT_UMBRELLA=include/rustty-embed.h`, `ORACLE_UMBRELLA=include/ghostty.h`)
+- Modify: `.port/tools/PARITY_NAMING.md` (add `include/ghostty.h` to the "stays ghostty" carve-out list as the local frozen oracle header)
 
 **Interfaces:**
-- Produces: `include/rustty-apprt.h` declaring all `rustty_*` entry points the Swift app calls (staged as `rustty.h` in Task 3).
+- Produces: `include/rustty-embed.h` — the `rustty_*`-prefixed embedding-API umbrella (staged as `rustty.h` in the xcframework by Task 3). Keeps `include/ghostty.h` as the frozen oracle.
 
-- [ ] **Step 1: Regenerate the header.**
+- [ ] **Step 1: Create the product umbrella by token-renaming the frozen umbrella.** The rename is purely lexical — symbols, the include guard, and the module comment:
 ```bash
 cd /Users/gael/projects/rustty
-cargo run -p xtask -- header-gen-apprt
+sed -e 's/ghostty_/rustty_/g' -e 's/GHOSTTY_/RUSTTY_/g' -e 's/Ghostty/Rustty/g' \
+    include/ghostty.h > include/rustty-embed.h
 ```
-Expected: `include/rustty-apprt.h` rewritten, exit 0.
+Then eyeball the head of `include/rustty-embed.h`: the guard must read `#ifndef RUSTTY_H` / `#define RUSTTY_H`, and the leading comment should describe the Rustty embedding API. (Keep a one-line provenance note, e.g. `// Rustty embedding API — token-renamed from the Ghostty embedding-API umbrella (oracle: include/ghostty.h).`)
 
-- [ ] **Step 2: Confirm every symbol the Swift app uses has a `rustty_*` declaration.** Build the exact set the Swift sources reference and diff against the header:
+- [ ] **Step 2: Prove the umbrella is ABI-faithful — every `rustty_*` function in it maps 1:1 to the frozen oracle via `CABI_SYMBOLS.tsv` AND has a live export.** Three checks:
 ```bash
+cd /Users/gael/projects/rustty
+# (a) function count preserved vs oracle (both should be 90)
+echo "oracle fns: $(grep -cE 'ghostty_[a-z_]+\(' include/ghostty.h)  product fns: $(grep -cE 'rustty_[a-z_]+\(' include/rustty-embed.h)"
+# (b) every rustty_* function name in the product umbrella appears as a rustty_name in CABI_SYMBOLS.tsv
+comm -23 \
+  <(grep -oE 'rustty_[a-z_]+\(' include/rustty-embed.h | sed 's/($//;s/(//' | sort -u) \
+  <(cut -f2 .port/audits/CABI_SYMBOLS.tsv | sort -u) > /tmp/unmapped.txt
+echo "unmapped product fns (want empty):"; cat /tmp/unmapped.txt
+# (c) every mapped rustty_* has a live extern "C" export somewhere under crates/
+bash .port/tools/gates/check_symbol_manifest.sh 2>&1 | tail -6
+```
+Expected: (a) both 90; (b) `/tmp/unmapped.txt` empty; (c) gate GREEN (90/90). If (b) is non-empty, a symbol in the umbrella has no TSV mapping — investigate (do NOT hand-edit the umbrella to hide it).
+
+- [ ] **Step 3: Prove the umbrella covers every symbol the Swift app calls** (the Task-5 prerequisite). The Swift sources still say `ghostty_*`; prefix-swap and confirm each is declared in the product umbrella (functions) or defined as a typedef (types):
+```bash
+cd /Users/gael/projects/rustty
+cd /Users/gael/projects/rustty
+# lowercase functions + _t/_s/_e types
 grep -rhoE 'ghostty_[a-z_]+' macos/Sources macos/GhosttyUITests macos/Tests \
   | sort -u | sed 's/^ghostty_/rustty_/' > /tmp/needed_syms.txt
-grep -oE 'rustty_[a-z_]+' include/rustty-apprt.h | sort -u > /tmp/have_syms.txt
-comm -23 /tmp/needed_syms.txt /tmp/have_syms.txt
+grep -oE 'rustty_[a-z_]+' include/rustty-embed.h | sort -u > /tmp/have_syms.txt
+echo "missing lowercase syms (want empty):"; comm -23 /tmp/needed_syms.txt /tmp/have_syms.txt
+# UPPERCASE enum/macro constants
+grep -rhoE 'GHOSTTY_[A-Z0-9_]+' macos/Sources macos/GhosttyUITests macos/Tests \
+  | sort -u | sed 's/^GHOSTTY_/RUSTTY_/' > /tmp/needed_consts.txt
+grep -oE 'RUSTTY_[A-Z0-9_]+' include/rustty-embed.h | sort -u > /tmp/have_consts.txt
+echo "missing enum consts (want empty):"; comm -23 /tmp/needed_consts.txt /tmp/have_consts.txt
 ```
-Expected: **empty** (every needed `rustty_*` symbol is declared). If any print, they are `_t`/`_s`/`_e` **type** names, not functions — verify each is a typedef in the header (`grep '<name>' include/rustty-apprt.h`); a genuinely missing *function* is a blocker → report it, do not fabricate.
+Expected: **both empty** — every symbol the Swift app references (lowercase function/`_t`/`_s`/`_e` type AND UPPERCASE enum/macro constant) is present in `include/rustty-embed.h`. (The lowercase check was RED against `rustty-apprt.h`; both must be GREEN against `rustty-embed.h`. Coverage is guaranteed by construction since the umbrella is a verbatim rename of the oracle — but assert it, don't assume. If anything prints, report it precisely, do not fabricate.)
 
-- [ ] **Step 3: Commit.**
+- [ ] **Step 4: Record the umbrella in the parity map + carve-out.** Add to `.port/tools/parity_names.env`:
+```
+PORT_UMBRELLA=include/rustty-embed.h
+ORACLE_UMBRELLA=include/ghostty.h
+```
+and add a line to the "Stays ghostty (the oracle — never renamed)" list in `.port/tools/PARITY_NAMING.md`:
+```
+- `include/ghostty.h`                            — LOCAL frozen oracle umbrella (product = include/rustty-embed.h)
+```
+
+- [ ] **Step 5: Commit.**
 ```bash
-git add include/rustty-apprt.h
-git commit -m "abi: regenerate include/rustty-apprt.h (canonical rustty_* surface) (Task 2)"
+git add include/rustty-embed.h .port/tools/parity_names.env .port/tools/PARITY_NAMING.md
+git commit -m "abi: canonical rustty embedding umbrella include/rustty-embed.h (renamed from validated oracle ghostty.h); keep ghostty.h as frozen oracle (Task 2)"
 ```
 
 ### Task 3: Repackage the xcframework as `RusttyKit` (`xtask::xcframework`)
@@ -264,7 +303,7 @@ git commit -m "abi: regenerate include/rustty-apprt.h (canonical rustty_* surfac
 - Modify: `xtask/src/main.rs` — the `xcframework()` fn and its doc comments (lines ~30, ~193-321)
 
 **Interfaces:**
-- Consumes: `include/rustty-apprt.h` (Task 2), the `rustty_*` staticlib.
+- Consumes: `include/rustty-embed.h` (Task 2), the `rustty_*` staticlib.
 - Produces: `dist/RusttyKit.xcframework` containing `libRusttyKit.a` + `Headers/rustty.h` + a `module RusttyKit` modulemap.
 
 - [ ] **Step 1: Rewrite the staging block.** In `xcframework()` change the combined-lib path, the header staging, the modulemap, and the `-create-xcframework` output:
@@ -272,8 +311,8 @@ git commit -m "abi: regenerate include/rustty-apprt.h (canonical rustty_* surfac
 // combined self-contained lib
 let lib = root.join(format!("target/{target}/xcframework/libRusttyKit.a"));
 // ...
-// 2. Stage the headers dir: canonical rustty-apprt.h staged as rustty.h + the RusttyKit module map.
-let src_h = root.join("include/rustty-apprt.h");
+// 2. Stage the headers dir: the rustty embedding umbrella staged as rustty.h + the RusttyKit module map.
+let src_h = root.join("include/rustty-embed.h");
 std::fs::copy(&src_h, headers.join("rustty.h"))
     .map_err(|e| format!("copy rustty.h: {e}"))?;
 std::fs::write(
@@ -285,7 +324,7 @@ std::fs::write(
 // 3. xcodebuild -create-xcframework
 let out = dist.join("RusttyKit.xcframework");
 ```
-Update the `libtool -o` / `CombineArchivesStep` target name to `libRusttyKit.a`, and update the two doc comments that say `dist/GhosttyKit.xcframework` / "frozen `include/ghostty.h` + a `GhosttyKit` module map" to the Rustty equivalents. The abort-profile staticlib is still built with `--features identity-ghostty`? **No** — for the shipped product it must be the **default** profile now (the alias is gone; the Swift app links `rustty_*`). Change the staticlib build args to drop `--features identity-ghostty` (leave the `[profile.xcframework]` panic=abort profile).
+Update the `libtool -o` / `CombineArchivesStep` target name to `libRusttyKit.a`, and update the doc comments that say `dist/GhosttyKit.xcframework` / "frozen `include/ghostty.h` + a `GhosttyKit` module map" / the stale `identity-ghostty`-emits-aliases note (xtask ~line 201, flagged in Task 1) to the Rustty equivalents. The abort-profile staticlib is still built with `--features identity-ghostty`? **No** — for the shipped product it must be the **default** profile now (the alias is gone; the Swift app links `rustty_*`). Change the staticlib build args to drop `--features identity-ghostty` (leave the `[profile.xcframework]` panic=abort profile).
 
 - [ ] **Step 2: Update the usage string** at line ~30: `Package rustty-apprt-c into dist/RusttyKit.xcframework (macOS Swift-app tier)`.
 
@@ -308,40 +347,42 @@ git add xtask/src/main.rs
 git commit -m "xtask: package RusttyKit.xcframework (rustty.h + module RusttyKit, default profile) (Task 3)"
 ```
 
-### Task 4: Delete the frozen `include/ghostty.h` and retire its ABI gate
+### Task 4: Repoint the ABI gate to the product umbrella (oracle `ghostty.h` stays as carve-out)
+
+Revised from the original "delete ghostty.h": Task 2 established that `include/ghostty.h` is the validated frozen ORACLE umbrella and `CABI_SYMBOLS.tsv` is the name-map bridging it to the product `include/rustty-embed.h`. Keeping the oracle header locally is what lets a future gap-comparison diff product↔oracle by name WITHOUT the external checkout — the user's explicit "compare gaps later" goal. So this task does NOT delete `ghostty.h`; it repoints the ABI gate to validate the PRODUCT umbrella (`rustty-embed.h`) against the oracle (`ghostty.h`) through the name-map, and renames the gate to reflect that it now guards the rustty product.
 
 **Files:**
-- Delete: `include/ghostty.h`
 - Rename: `.port/tools/gates/check_ghostty_h_abi.sh` → `.port/tools/gates/check_rustty_h_abi.sh`
-- Modify: the renamed gate script + any CI workflow that calls it
+- Modify: the renamed gate script (validate `include/rustty-embed.h` ↔ `include/ghostty.h` via `CABI_SYMBOLS.tsv`, sourced from `parity_names.env`)
+- Modify: any CI workflow (`.github/workflows/*.yml`) or `.port/tools/ci.sh` that invoked the old gate name
 
 **Interfaces:**
-- Produces: a tree with a single canonical apprt header (`include/rustty-apprt.h`).
+- Produces: a name-aware ABI gate proving the product umbrella stays ABI-equivalent to the frozen oracle by the token-map.
 
-- [ ] **Step 1: Confirm nothing but the (now-updated) xtask referenced the frozen header.**
+- [ ] **Step 1: See what the old gate did + who calls it.**
 ```bash
-grep -rn 'include/ghostty.h\|ghostty\.h' xtask .github .port crates --include='*.rs' --include='*.sh' --include='*.yml' | grep -v rustty-apprt.h
+cd /Users/gael/projects/rustty
+sed -n '1,60p' .port/tools/gates/check_ghostty_h_abi.sh
+grep -rn 'check_ghostty_h_abi' .github .port/tools/ci.sh 2>/dev/null
 ```
-Expected: only the gate script (handled next) and possibly comments. If a build path still copies `include/ghostty.h`, fix it to `include/rustty-apprt.h` first.
 
-- [ ] **Step 2: Delete the frozen header + rename the gate.**
+- [ ] **Step 2: Rename the gate.**
 ```bash
-git rm include/ghostty.h
 git mv .port/tools/gates/check_ghostty_h_abi.sh .port/tools/gates/check_rustty_h_abi.sh
 ```
 
-- [ ] **Step 3: Rewrite the gate** to assert the canonical header exposes `rustty_*` (and zero `ghostty_*`) instead of ABI-equivalence to a frozen ghostty.h. Point it at `include/rustty-apprt.h`. Update any `.github/workflows/*.yml` that invoked the old path.
+- [ ] **Step 3: Rewrite the gate** to: source `.port/tools/parity_names.env`; take the product umbrella `$PORT_UMBRELLA` (`include/rustty-embed.h`) and the oracle `$ORACLE_UMBRELLA` (`include/ghostty.h`); assert that applying the `CABI_SYMBOLS.tsv` `ghostty_name→rustty_name` map to the oracle's function set yields exactly the product's function set (i.e. the product umbrella is the oracle token-renamed, nothing added or dropped). It must also assert the product umbrella contains **zero** `ghostty_` function tokens. Keep it BLOCKED-tolerant if `CABI_SYMBOLS.tsv` is somehow absent (mirror the existing gates' oracle-absent handling). Update the caller name in any workflow / `ci.sh`.
 
 - [ ] **Step 4: Run the gate.**
 ```bash
-bash .port/tools/gates/check_rustty_h_abi.sh
+bash .port/tools/gates/check_rustty_h_abi.sh 2>&1 | tail -8
 ```
-Expected: passes (exit 0).
+Expected: passes (exit 0) — product umbrella == oracle-renamed, zero `ghostty_` functions in the product.
 
 - [ ] **Step 5: Commit.**
 ```bash
-git add -A include .port/tools/gates .github
-git commit -m "abi: drop frozen include/ghostty.h; rename gate -> check_rustty_h_abi.sh (Task 4)"
+git add -A .port/tools/gates .port/tools/ci.sh .github
+git commit -m "abi: repoint ABI gate to product umbrella rustty-embed.h vs oracle ghostty.h via name-map; rename -> check_rustty_h_abi.sh (Task 4)"
 ```
 
 ---
@@ -358,27 +399,28 @@ git commit -m "abi: drop frozen include/ghostty.h; rename gate -> check_rustty_h
 - Consumes: `RusttyKit` module (Task 3), `rustty_*` symbols.
 - Produces: a Swift tree that references only `rustty_*` and `import RusttyKit`.
 
-- [ ] **Step 1: Confirm the mapping is a clean 1:1 prefix swap** (no `ghostty_` symbol whose `rustty_` twin is missing — already proven in Task 2 Step 2). Snapshot the before-count:
+- [ ] **Step 1: Confirm the mapping is a clean 1:1 prefix swap** (no `ghostty_` symbol whose `rustty_` twin is missing — proven in Task 2 Step 3 against `include/rustty-embed.h`). The Swift app references two lexical families the renamed umbrella covers: lowercase `ghostty_*` functions/types (→ `rustty_*`) and UPPERCASE `GHOSTTY_*` enum/macro constants (→ `RUSTTY_*`, ~377 in use). Snapshot the before-count:
 ```bash
-grep -rc 'ghostty_\|GhosttyKit' macos/Sources macos/GhosttyUITests macos/Tests | awk -F: '{s+=$2} END {print "refs:",s}'
+grep -rhcE 'ghostty_|GHOSTTY_|GhosttyKit' macos/Sources macos/GhosttyUITests macos/Tests | awk -F: '{s+=$1} END {print "refs:",s}'
 ```
 
-- [ ] **Step 2: Repoint C-symbol references and the module import.** Apply across all Swift + the bridging header:
+- [ ] **Step 2: Repoint C-symbol references, enum constants, and the module import.** Apply across all Swift + the bridging header:
 ```bash
 cd /Users/gael/projects/rustty
-grep -rlZ --include='*.swift' --include='*.h' 'ghostty_\|import GhosttyKit\|#import "ghostty' macos/Sources macos/GhosttyUITests macos/Tests \
+grep -rlZ --include='*.swift' --include='*.h' -e 'ghostty_' -e 'GHOSTTY_' -e 'import GhosttyKit' -e '#import "ghostty' macos/Sources macos/GhosttyUITests macos/Tests \
   | xargs -0 sed -i '' \
       -e 's/\bghostty_/rustty_/g' \
+      -e 's/\bGHOSTTY_/RUSTTY_/g' \
       -e 's/import GhosttyKit/import RusttyKit/g' \
       -e 's/GhosttyKit\./RusttyKit./g'
 ```
-(The `\b` keeps `ghostty_` C symbols targeted; the Swift `Ghostty` namespace enum is handled in Task 6, not here.)
+(The `\b` keeps the C-symbol and enum-constant families targeted; the Swift `Ghostty` *namespace enum* — CamelCase whole-word `Ghostty` — is deliberately NOT touched here, it is Task 6.)
 
-- [ ] **Step 3: Fix the bridging header include** if it pulls the umbrella by path: in `macos/Sources/App/macOS/ghostty-bridging-header.h` change any `#import "ghostty.h"` / `<GhosttyKit/ghostty.h>` to the `RusttyKit`/`rustty.h` form.
+- [ ] **Step 3: Fix the bridging header include** if it pulls the umbrella by path: in `macos/Sources/App/macOS/ghostty-bridging-header.h` change any `#import "ghostty.h"` / `<GhosttyKit/ghostty.h>` to the `RusttyKit`/`rustty.h` form. (The file itself is renamed to `rustty-bridging-header.h` in Task 7.)
 
-- [ ] **Step 4: Verify no `ghostty_` C reference or `GhosttyKit` import remains** (the `Ghostty` *namespace* enum still exists — that is expected until Task 6):
+- [ ] **Step 4: Verify no `ghostty_`/`GHOSTTY_` C reference or `GhosttyKit` import remains** (the CamelCase `Ghostty` *namespace* enum still exists — expected until Task 6):
 ```bash
-grep -rn 'ghostty_\|GhosttyKit' macos/Sources macos/GhosttyUITests macos/Tests
+grep -rnE 'ghostty_|GHOSTTY_|GhosttyKit' macos/Sources macos/GhosttyUITests macos/Tests
 ```
 Expected: empty.
 
