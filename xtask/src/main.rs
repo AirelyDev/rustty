@@ -27,7 +27,7 @@ USAGE:
 SUBCOMMANDS:
     header-gen         Generate include/rustty.h from rustty-vt-c via cbindgen (R2)
     header-gen-apprt   Generate include/rustty-apprt.h from rustty-apprt-c via cbindgen (R2)
-    xcframework        Package rustty-apprt-c into dist/GhosttyKit.xcframework (macOS Swift-app tier)
+    xcframework        Package rustty-apprt-c into dist/RusttyKit.xcframework (macOS Swift-app tier)
     resources          Generate zig-out/share/{terminfo,ghostty,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase
     help               Show this help
 ";
@@ -190,22 +190,24 @@ fn header_gen_apprt() -> Result<PathBuf, String> {
     Ok(output)
 }
 
-/// Package `rustty-apprt-c` into `dist/GhosttyKit.xcframework` for the macOS
+/// Package `rustty-apprt-c` into `dist/RusttyKit.xcframework` for the macOS
 /// Swift-app tier (plan `2026-07-12-macos-swift-app-milestone` Task B1).
 ///
 /// Mirrors ghostty's `src/build/GhosttyXCFramework.zig` recipe: build the
-/// per-arch static lib, stage a headers dir (rustty's frozen `include/ghostty.h`
-/// + a `GhosttyKit` module map — Branch A, so the reused Swift app links
-/// unchanged), then `xcodebuild -create-xcframework`. The staticlib is built
-/// under the `xcframework` profile (`panic = "abort"`, PREPORT_SWIFT_APP §4) with
-/// the `identity-ghostty` feature (emits the `ghostty_*` alias symbols).
+/// per-arch static lib, stage a headers dir (rustty's validated embedding
+/// umbrella `include/rustty-embed.h`, staged as `rustty.h`, + a `RusttyKit`
+/// module map — the Swift app links the canonical `rustty_*` ABI directly),
+/// then `xcodebuild -create-xcframework`. The staticlib is built under the
+/// `xcframework` profile (`panic = "abort"`, PREPORT_SWIFT_APP §4) using the
+/// DEFAULT feature set — the `identity-ghostty` alias layer was deleted
+/// (rebrand Task 1), so only `rustty_*` symbols are exported.
 ///
 /// macOS-arm64 slice only (the host target). A universal slice would add
 /// `x86_64-apple-darwin` via `lipo`; deferred until that target is installed.
 ///
-/// R3: uses rustty's OWN vendored `include/ghostty.h` (byte-identical to the
-/// pinned upstream, frozen by `check_ghostty_h_abi.sh`), never the ghostty
-/// checkout.
+/// R3: uses rustty's OWN validated `include/rustty-embed.h` (the frozen
+/// ghostty.h token-renamed and checked against the pinned upstream, per
+/// `check_ghostty_h_abi.sh`), never the ghostty checkout.
 /// The minimum macOS version the shipped staticlib targets. Matches the floor
 /// of the reused Swift app's `MACOSX_DEPLOYMENT_TARGET` in
 /// `macos/Ghostty.xcodeproj` (the main app + most configs are 13.0; a few
@@ -219,7 +221,11 @@ fn xcframework() -> Result<PathBuf, String> {
     let root = workspace_root();
     let target = "aarch64-apple-darwin";
 
-    // 1. Build the identity-ghostty staticlib under the abort profile.
+    // 1. Build the DEFAULT-profile staticlib under the abort profile.
+    //
+    // The shipped lib exports ONLY the canonical `rustty_*` ABI — the
+    // `identity-ghostty` alias feature was deleted (rebrand Task 1), so it is
+    // deliberately NOT passed here; the Swift app links `rustty_*` directly.
     //
     // MACOSX_DEPLOYMENT_TARGET pins the minimum-OS the compiler stamps into
     // every object: rustc passes it to LLVM's target triple and the `cc`-driven
@@ -235,8 +241,6 @@ fn xcframework() -> Result<PathBuf, String> {
             "rustty-apprt-c",
             "--profile",
             "xcframework",
-            "--features",
-            "identity-ghostty",
             "--target",
             target,
         ])
@@ -274,7 +278,7 @@ fn xcframework() -> Result<PathBuf, String> {
             }
         }
     }
-    let lib = root.join(format!("target/{target}/xcframework/libGhosttyKit.a"));
+    let lib = root.join(format!("target/{target}/xcframework/libRusttyKit.a"));
     let _ = std::fs::remove_file(&lib);
     let mut lt = Command::new("libtool");
     lt.arg("-static").arg("-o").arg(&lib);
@@ -295,27 +299,28 @@ fn xcframework() -> Result<PathBuf, String> {
         return Err(format!("combined lib not found at {}", lib.display()));
     }
 
-    // 2. Stage the headers dir: rustty's frozen ghostty.h + the GhosttyKit module map.
+    // 2. Stage the headers dir: the rustty embedding umbrella staged as
+    // rustty.h + the RusttyKit module map.
     let dist = root.join("dist");
     let headers = dist.join("xcframework-headers");
     let _ = std::fs::remove_dir_all(&headers);
     std::fs::create_dir_all(&headers).map_err(|e| format!("mkdir headers: {e}"))?;
-    let src_h = root.join("include/ghostty.h");
+    let src_h = root.join("include/rustty-embed.h");
     if !src_h.exists() {
-        return Err(format!("vendored header missing: {}", src_h.display()));
+        return Err(format!("embedding umbrella header missing: {}", src_h.display()));
     }
-    std::fs::copy(&src_h, headers.join("ghostty.h"))
-        .map_err(|e| format!("copy ghostty.h: {e}"))?;
+    std::fs::copy(&src_h, headers.join("rustty.h"))
+        .map_err(|e| format!("copy rustty.h: {e}"))?;
     // Umbrella module map — same shape as upstream GhosttyKit.xcframework.
     std::fs::write(
         headers.join("module.modulemap"),
-        "// GhosttyKit module for the rustty macOS Swift app (Branch A: ghostty_* ABI).\n\
-         module GhosttyKit {\n    umbrella header \"ghostty.h\"\n    export *\n}\n",
+        "// RusttyKit module for the rustty macOS Swift app (canonical rustty_* ABI).\n\
+         module RusttyKit {\n    umbrella header \"rustty.h\"\n    export *\n}\n",
     )
     .map_err(|e| format!("write modulemap: {e}"))?;
 
     // 3. xcodebuild -create-xcframework.
-    let out = dist.join("GhosttyKit.xcframework");
+    let out = dist.join("RusttyKit.xcframework");
     let _ = std::fs::remove_dir_all(&out);
     let status = Command::new("xcodebuild")
         .args(["-create-xcframework", "-library"])
