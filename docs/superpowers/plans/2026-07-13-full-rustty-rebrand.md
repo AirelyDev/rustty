@@ -520,6 +520,50 @@ git add -A macos
 git commit -m "swift: rename lowercase ghostty identifiers + config paths -> rustty (config.rustty, ~/.config/rustty); keep upstream URLs (Task 6b)"
 ```
 
+### Task 6c: Rename the app's reverse-DNS namespace `com.mitchellh.ghostty` → `io.airely.rustty`
+
+Context: discovered in Task 6b — the app uses ~48 `com.mitchellh.ghostty.*` reverse-DNS strings as internal identifiers: mostly `Notification.Name` (the in-process event bus: `.configDidChange`, `.newTab`, `.quickTerminal`, …), one drag/drop UTI (`com.mitchellh.ghosttySurfaceId`, declared in both Swift and Info.plist), and Pasteboard types. Task 6b deliberately preserved them (its brief protected the bundle-id namespace). The product bundle id is already `io.airely.rustty`, and verification confirmed these strings have **no** entitlement / app-group / keychain coupling (only one Info.plist UTI). They are purely-internal app namespaces — some already half-branded (`com.mitchellh.ghostty.rusttySelectionDidChange`). For the full rebrand they become `io.airely.rustty.*`. This is safe (fresh product, no external interop that should masquerade as ghostty).
+
+**Files:**
+- Modify: all `.swift` under `macos/Sources`, `macos/Tests`, `macos/GhosttyUITests` (the `com.mitchellh.ghostty*` Notification.Name / UTI / Pasteboard strings)
+- Modify: `macos/Ghostty-Info.plist` (the `com.mitchellh.ghosttySurfaceId` UTI value at line ~117 — renamed WITH its Swift counterpart so the exported UTI stays matched; the file itself is renamed to Rustty-Info.plist in Task 8, this only touches the UTI string)
+
+**Interfaces:**
+- Produces: the app's reverse-DNS namespace is `io.airely.rustty.*`, matching the bundle id, consistent across Swift + Info.plist.
+
+- [ ] **Step 1: Confirm the scope + no entitlement coupling** (guard against renaming a provisioning-coupled identifier):
+```bash
+cd /Users/gael/projects/rustty
+echo "reverse-DNS refs in swift: $(git grep -c 'com.mitchellh.ghostty' -- 'macos/**/*.swift' | awk -F: '{s+=$2} END{print s}')"
+echo "entitlement/app-group/keychain coupling (want empty):"; git grep -n 'com.mitchellh.ghostty' -- 'macos/*.entitlements'
+echo "Info.plist UTI:"; git grep -n 'com.mitchellh.ghostty' -- 'macos/Ghostty-Info.plist'
+```
+Expected: entitlements empty; the Info.plist has the one `ghosttySurfaceId` UTI.
+
+- [ ] **Step 2: Rename the reverse-DNS namespace across Swift + Info.plist.**
+```bash
+cd /Users/gael/projects/rustty
+for f in $(git grep -l 'com.mitchellh.ghostty' -- 'macos/**/*.swift' 'macos/Ghostty-Info.plist'); do
+  sed -i '' 's/com\.mitchellh\.ghostty/io.airely.rustty/g' "$f"
+done
+```
+(This turns `com.mitchellh.ghostty.newTab`→`io.airely.rustty.newTab` and `com.mitchellh.ghosttySurfaceId`→`io.airely.rusttySurfaceId`, matching the bundle id `io.airely.rustty`.)
+
+- [ ] **Step 3: Verify the Swift UTI and the Info.plist UTI still MATCH** (a drag/drop UTI must be byte-identical on both sides) and nothing `com.mitchellh.ghostty` remains:
+```bash
+cd /Users/gael/projects/rustty
+echo "swift UTI:"; git grep -hoE 'io\.airely\.rustty[A-Za-z]*SurfaceId' -- 'macos/**/*.swift' | sort -u
+echo "plist UTI:"; git grep -hoE 'io\.airely\.rustty[A-Za-z]*SurfaceId' -- 'macos/Ghostty-Info.plist' | sort -u
+git grep -n 'com.mitchellh.ghostty' -- macos
+```
+Expected: the two UTI values are identical; final grep empty. (Genuine `Mitchell Hashimoto`/`NOTE(mitchellh)` author credits in comments are NOT reverse-DNS strings and stay.)
+
+- [ ] **Step 4: Commit.**
+```bash
+git add -A macos
+git commit -m "swift: rebrand app reverse-DNS namespace com.mitchellh.ghostty -> io.airely.rustty (Notification.Name/UTI/Pasteboard) (Task 6c)"
+```
+
 ### Task 7: Rename the Swift source files and directories
 
 **Files (git mv — exact inventory):**
