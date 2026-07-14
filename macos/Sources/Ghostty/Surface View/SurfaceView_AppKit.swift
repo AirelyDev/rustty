@@ -224,7 +224,7 @@ extension Rustty {
 
             // Our initial config always is our application wide config.
             if let appDelegate = NSApplication.shared.delegate as? AppDelegate {
-                self.derivedConfig = DerivedConfig(appDelegate.ghostty.config)
+                self.derivedConfig = DerivedConfig(appDelegate.rustty.config)
             } else {
                 self.derivedConfig = DerivedConfig()
             }
@@ -292,7 +292,7 @@ extension Rustty {
             // A drag can emit multiple selection changes. Debounce so screen
             // readers hear one announcement once the selection settles.
             accessibilitySelectionCancellable = NotificationCenter.default
-                .publisher(for: .ghosttySelectionDidChange, object: self)
+                .publisher(for: .rusttySelectionDidChange, object: self)
                 .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
                 .sink { [weak self] _ in
                     guard let self else { return }
@@ -309,33 +309,33 @@ extension Rustty {
                 object: self)
             center.addObserver(
                 self,
-                selector: #selector(ghosttyDidContinueKeySequence),
+                selector: #selector(rusttyDidContinueKeySequence),
                 name: Rustty.Notification.didContinueKeySequence,
                 object: self)
             center.addObserver(
                 self,
-                selector: #selector(ghosttyDidEndKeySequence),
+                selector: #selector(rusttyDidEndKeySequence),
                 name: Rustty.Notification.didEndKeySequence,
                 object: self)
             center.addObserver(
                 self,
-                selector: #selector(ghosttyDidChangeKeyTable),
+                selector: #selector(rusttyDidChangeKeyTable),
                 name: Rustty.Notification.didChangeKeyTable,
                 object: self)
             center.addObserver(
                 self,
-                selector: #selector(ghosttyConfigDidChange(_:)),
-                name: .ghosttyConfigDidChange,
+                selector: #selector(rusttyConfigDidChange(_:)),
+                name: .rusttyConfigDidChange,
                 object: self)
             center.addObserver(
                 self,
-                selector: #selector(ghosttyColorDidChange(_:)),
-                name: .ghosttyColorDidChange,
+                selector: #selector(rusttyColorDidChange(_:)),
+                name: .rusttyColorDidChange,
                 object: self)
             center.addObserver(
                 self,
-                selector: #selector(ghosttyBellDidRing(_:)),
-                name: .ghosttyBellDidRing,
+                selector: #selector(rusttyBellDidRing(_:)),
+                name: .rusttyBellDidRing,
                 object: self)
             center.addObserver(
                 self,
@@ -425,7 +425,7 @@ extension Rustty {
                 suppressNextLeftMouseUp = false
             }
 
-            // Notify libghostty
+            // Notify librustty
             rustty_surface_set_focus(surface, focused)
 
             // Update our secure input state if we are a password input
@@ -700,7 +700,7 @@ extension Rustty {
             }
         }
 
-        @objc private func ghosttyDidContinueKeySequence(notification: SwiftUI.Notification) {
+        @objc private func rusttyDidContinueKeySequence(notification: SwiftUI.Notification) {
             guard let keyAny = notification.userInfo?[Rustty.Notification.KeySequenceKey] else { return }
             guard let key = keyAny as? KeyboardShortcut else { return }
             DispatchQueue.main.async { [weak self] in
@@ -708,13 +708,13 @@ extension Rustty {
             }
         }
 
-        @objc private func ghosttyDidEndKeySequence(notification: SwiftUI.Notification) {
+        @objc private func rusttyDidEndKeySequence(notification: SwiftUI.Notification) {
             DispatchQueue.main.async { [weak self] in
                 self?.keySequence = []
             }
         }
 
-        @objc private func ghosttyDidChangeKeyTable(notification: SwiftUI.Notification) {
+        @objc private func rusttyDidChangeKeyTable(notification: SwiftUI.Notification) {
             guard let action = notification.userInfo?[Rustty.Notification.KeyTableKey] as? Rustty.Action.KeyTable else { return }
 
             DispatchQueue.main.async { [weak self] in
@@ -730,7 +730,7 @@ extension Rustty {
             }
         }
 
-        @objc private func ghosttyConfigDidChange(_ notification: SwiftUI.Notification) {
+        @objc private func rusttyConfigDidChange(_ notification: SwiftUI.Notification) {
             // Get our managed configuration object out
             guard let config = notification.userInfo?[
                 SwiftUI.Notification.Name.RusttyConfigChangeKey
@@ -753,7 +753,7 @@ extension Rustty {
             }
         }
 
-        @objc private func ghosttyColorDidChange(_ notification: SwiftUI.Notification) {
+        @objc private func rusttyColorDidChange(_ notification: SwiftUI.Notification) {
             guard let change = notification.userInfo?[
                 SwiftUI.Notification.Name.RusttyColorChangeKey
             ] as? Rustty.Action.ColorChange else { return }
@@ -770,7 +770,7 @@ extension Rustty {
             }
         }
 
-        @objc private func ghosttyBellDidRing(_ notification: SwiftUI.Notification) {
+        @objc private func rusttyBellDidRing(_ notification: SwiftUI.Notification) {
             // Bell state goes to true
             bell = true
         }
@@ -781,7 +781,7 @@ extension Rustty {
             guard let screen = window.screen else { return }
             guard let surface = self.surface else { return }
 
-            // When the window changes screens, we need to update libghostty with the screen
+            // When the window changes screens, we need to update librustty with the screen
             // ID. If vsync is enabled, this will be used with the CVDisplayLink to ensure
             // the proper refresh rate is going.
             rustty_surface_set_display_id(surface, screen.displayID ?? 0)
@@ -873,7 +873,7 @@ extension Rustty {
 
         override func mouseDown(with event: NSEvent) {
             guard let surface = self.surface else { return }
-            let mods = Rustty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.rusttyMods(event.modifierFlags)
             rustty_surface_mouse_button(surface, RUSTTY_MOUSE_PRESS, RUSTTY_MOUSE_LEFT, mods)
         }
 
@@ -890,7 +890,7 @@ extension Rustty {
 
             // If we have an active surface, report the event
             guard let surface = self.surface else { return }
-            let mods = Rustty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.rusttyMods(event.modifierFlags)
             rustty_surface_mouse_button(surface, RUSTTY_MOUSE_RELEASE, RUSTTY_MOUSE_LEFT, mods)
 
             // Release pressure
@@ -899,14 +899,14 @@ extension Rustty {
 
         override func otherMouseDown(with event: NSEvent) {
             guard let surface = self.surface else { return }
-            let mods = Rustty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.rusttyMods(event.modifierFlags)
             let button = Rustty.Input.MouseButton(fromNSEventButtonNumber: event.buttonNumber)
             rustty_surface_mouse_button(surface, RUSTTY_MOUSE_PRESS, button.cMouseButton, mods)
         }
 
         override func otherMouseUp(with event: NSEvent) {
             guard let surface = self.surface else { return }
-            let mods = Rustty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.rusttyMods(event.modifierFlags)
             let button = Rustty.Input.MouseButton(fromNSEventButtonNumber: event.buttonNumber)
             rustty_surface_mouse_button(surface, RUSTTY_MOUSE_RELEASE, button.cMouseButton, mods)
         }
@@ -914,7 +914,7 @@ extension Rustty {
         override func rightMouseDown(with event: NSEvent) {
             guard let surface = self.surface else { return super.rightMouseDown(with: event) }
 
-            let mods = Rustty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.rusttyMods(event.modifierFlags)
             if rustty_surface_mouse_button(
                 surface,
                 RUSTTY_MOUSE_PRESS,
@@ -932,7 +932,7 @@ extension Rustty {
         override func rightMouseUp(with event: NSEvent) {
             guard let surface = self.surface else { return super.rightMouseUp(with: event) }
 
-            let mods = Rustty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.rusttyMods(event.modifierFlags)
             if rustty_surface_mouse_button(
                 surface,
                 RUSTTY_MOUSE_RELEASE,
@@ -1065,7 +1065,7 @@ extension Rustty {
 
             // If the user has force click enabled then we do a quick look. There
             // is no public API for this as far as I can tell.
-            guard UserDefaults.ghostty.bool(forKey: "com.apple.trackpad.forceClick") else { return }
+            guard UserDefaults.rustty.bool(forKey: "com.apple.trackpad.forceClick") else { return }
             quickLook(with: event)
         }
 
@@ -1082,7 +1082,7 @@ extension Rustty {
             let translationModsRustty = Rustty.eventModifierFlags(
                 mods: rustty_surface_key_translation_mods(
                     surface,
-                    Rustty.ghosttyMods(event.modifierFlags)
+                    Rustty.rusttyMods(event.modifierFlags)
                 )
             )
 
@@ -1234,7 +1234,7 @@ extension Rustty {
                     action,
                     event: event,
                     translationEvent: translationEvent,
-                    text: translationEvent.ghosttyCharacters,
+                    text: translationEvent.rusttyCharacters,
                     composing: composing
                 )
             }
@@ -1290,10 +1290,10 @@ extension Rustty {
 
             // Get information about if this is a binding.
             let bindingFlags = surfaceModel.flatMap { surface in
-                var ghosttyEvent = event.ghosttyKeyEvent(RUSTTY_ACTION_PRESS)
+                var rusttyEvent = event.rusttyKeyEvent(RUSTTY_ACTION_PRESS)
                 return (event.characters ?? "").withCString { ptr in
-                    ghosttyEvent.text = ptr
-                    return surface.keyIsBinding(ghosttyEvent)
+                    rusttyEvent.text = ptr
+                    return surface.keyIsBinding(rusttyEvent)
                 }
             }
 
@@ -1412,7 +1412,7 @@ extension Rustty {
 
             // The keyAction function will do this AGAIN below which sucks to repeat
             // but this is super cheap and flagsChanged isn't that common.
-            let mods = Rustty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.rusttyMods(event.modifierFlags)
 
             // If the key that pressed this is active, its a press, else release.
             var action = RUSTTY_ACTION_RELEASE
@@ -1452,7 +1452,7 @@ extension Rustty {
         ) -> Bool {
             guard let surface = self.surface else { return false }
 
-            var key_ev = event.ghosttyKeyEvent(action, translationMods: translationEvent?.modifierFlags)
+            var key_ev = event.rusttyKeyEvent(action, translationMods: translationEvent?.modifierFlags)
             key_ev.composing = composing
 
             // For text, we only encode UTF8 if we don't have a single control
@@ -1817,7 +1817,7 @@ extension Rustty {
                 self.backgroundBlur = config.backgroundBlur
                 self.macosWindowShadow = config.macosWindowShadow
                 self.windowTitleFontFamily = config.windowTitleFontFamily
-                self.windowAppearance = .init(ghosttyConfig: config)
+                self.windowAppearance = .init(rusttyConfig: config)
                 self.scrollbar = config.scrollbar
             }
         }
@@ -1835,7 +1835,7 @@ extension Rustty {
             // Decoding uses the global Rustty app
             guard let del = NSApplication.shared.delegate,
                   let appDel = del as? AppDelegate,
-                  let app = appDel.ghostty.app else {
+                  let app = appDel.rustty.app else {
                 throw TerminalRestoreError.delegateInvalid
             }
 
@@ -2063,7 +2063,7 @@ extension Rustty.SurfaceView: NSTextInputClient {
         }
     }
 
-    /// Sync the preedit state based on the markedText value to libghostty
+    /// Sync the preedit state based on the markedText value to librustty
     private func syncPreedit(clearIfNeeded: Bool = true) {
         guard let surface else { return }
 
@@ -2183,7 +2183,7 @@ extension Rustty.SurfaceView: NSMenuItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
         case #selector(pasteSelection):
-            let pb = NSPasteboard.ghosttySelection
+            let pb = NSPasteboard.rusttySelection
             guard let str = pb.getOpinionatedStringContents() else { return false }
             return !str.isEmpty
 

@@ -8,7 +8,7 @@ enum Rustty {
     // The primary logger used by the RusttyKit libraries.
     static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier!,
-        category: "ghostty"
+        category: "rustty"
     )
 
     // All the notifications that will be emitted will be put here.

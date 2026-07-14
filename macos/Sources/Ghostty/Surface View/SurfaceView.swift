@@ -6,10 +6,10 @@ import System
 extension Rustty {
     /// Render a terminal for the active app in the environment.
     struct Terminal: View {
-        @EnvironmentObject private var ghostty: Rustty.App
+        @EnvironmentObject private var rustty: Rustty.App
 
         var body: some View {
-            if let app = self.ghostty.app {
+            if let app = self.rustty.app {
                 SurfaceForApp(app) { surfaceView in
                     SurfaceWrapper(surfaceView: surfaceView)
                 }
@@ -17,7 +17,7 @@ extension Rustty {
         }
     }
 
-    /// Yields a SurfaceView for a ghostty app that can then be used however you want.
+    /// Yields a SurfaceView for a rustty app that can then be used however you want.
     struct SurfaceForApp<Content: View>: View {
         let content: ((SurfaceView) -> Content)
 
@@ -53,8 +53,8 @@ extension Rustty {
         @ObservedObject private var secureInput = SecureInput.shared
         #endif
 
-        @EnvironmentObject private var ghostty: Rustty.App
-        @Environment(\.ghosttyLastFocusedSurface) private var lastFocusedSurface
+        @EnvironmentObject private var rustty: Rustty.App
+        @Environment(\.rusttyLastFocusedSurface) private var lastFocusedSurface
 
         private var isFocusedSurface: Bool {
             surfaceFocus || lastFocusedSurface?.value === surfaceView
@@ -75,9 +75,9 @@ extension Rustty {
 
                     SurfaceRepresentable(view: surfaceView, size: geo.size)
                         .focused($surfaceFocus)
-                        .focusedValue(\.ghosttySurfacePwd, surfaceView.pwd)
-                        .focusedValue(\.ghosttySurfaceView, surfaceView)
-                        .focusedValue(\.ghosttySurfaceCellSize, surfaceView.cellSize)
+                        .focusedValue(\.rusttySurfacePwd, surfaceView.pwd)
+                        .focusedValue(\.rusttySurfaceView, surfaceView)
+                        .focusedValue(\.rusttySurfaceCellSize, surfaceView.cellSize)
                     #if canImport(AppKit)
                         .onReceive(pubBecomeKey) { notification in
                             guard let window = notification.object as? NSWindow else { return }
@@ -98,14 +98,14 @@ extension Rustty {
                         SurfaceResizeOverlay(
                             geoSize: geo.size,
                             size: surfaceSize,
-                            overlay: ghostty.config.resizeOverlay,
-                            position: ghostty.config.resizeOverlayPosition,
-                            duration: ghostty.config.resizeOverlayDuration,
+                            overlay: rustty.config.resizeOverlay,
+                            position: rustty.config.resizeOverlayPosition,
+                            duration: rustty.config.resizeOverlayDuration,
                             focusInstant: surfaceView.focusInstant)
 
                     }
                 }
-                .ghosttySurfaceView(surfaceView)
+                .rusttySurfaceView(surfaceView)
 
                 // Progress report
                 if let progressReport = surfaceView.progressReport, progressReport.state != .remove {
@@ -151,7 +151,7 @@ extension Rustty {
                 #if canImport(AppKit)
                 // If we have secure input enabled and we're the focused surface and window
                 // then we want to show the secure input overlay.
-                if ghostty.config.secureInputIndication &&
+                if rustty.config.secureInputIndication &&
                     secureInput.enabled &&
                     surfaceFocus &&
                     windowFocus {
@@ -171,7 +171,7 @@ extension Rustty {
                 }
 
                 // Show bell border if enabled
-                if ghostty.config.bellFeatures.contains(.border) {
+                if rustty.config.bellFeatures.contains(.border) {
                     BellBorderOverlay(bell: surfaceView.bell)
                 }
 
@@ -180,10 +180,10 @@ extension Rustty {
 
                 // If our surface is not healthy, then we render an error view over it.
                 if !surfaceView.healthy {
-                    Rectangle().fill(ghostty.config.backgroundColor)
+                    Rectangle().fill(rustty.config.backgroundColor)
                     SurfaceRendererUnhealthyView()
                 } else if surfaceView.error != nil {
-                    Rectangle().fill(ghostty.config.backgroundColor)
+                    Rectangle().fill(rustty.config.backgroundColor)
                     SurfaceErrorView()
                 }
 
@@ -191,10 +191,10 @@ extension Rustty {
                 // rectangle above our view to make it look unfocused. We include the last
                 // focused surface so this still works while SwiftUI focus is temporarily nil.
                 if isSplit && !isFocusedSurface {
-                    let overlayOpacity = ghostty.config.unfocusedSplitOpacity
+                    let overlayOpacity = rustty.config.unfocusedSplitOpacity
                     if overlayOpacity > 0 {
                         Rectangle()
-                            .fill(ghostty.config.unfocusedSplitFill)
+                            .fill(rustty.config.unfocusedSplitFill)
                             .allowsHitTesting(false)
                             .opacity(overlayOpacity)
                     }
@@ -465,7 +465,7 @@ extension Rustty {
                 .onAppear {
                     isSearchFieldFocused = true
                 }
-                .onReceive(NotificationCenter.default.publisher(for: .ghosttySearchFocus)) { notification in
+                .onReceive(NotificationCenter.default.publisher(for: .rusttySearchFocus)) { notification in
                     guard notification.object as? SurfaceView === surfaceView else { return }
                     DispatchQueue.main.async {
                         isSearchFieldFocused = true
@@ -625,7 +625,7 @@ extension Rustty {
     }
 
     /// The configuration for a surface. For any configuration not set, defaults will be chosen from
-    /// libghostty, usually from the Rustty configuration.
+    /// librustty, usually from the Rustty configuration.
     struct SurfaceConfiguration {
         /// Explicit font size to use in points
         var fontSize: Float32?
@@ -677,7 +677,7 @@ extension Rustty {
             self.context = config.context
         }
 
-        /// Provides a C-compatible ghostty configuration within a closure. The configuration
+        /// Provides a C-compatible rustty configuration within a closure. The configuration
         /// and all its string pointers are only valid within the closure.
         func withCValue<T>(view: SurfaceView, _ body: (inout rustty_surface_config_s) throws -> T) rethrows -> T {
             var config = rustty_surface_config_new()
@@ -696,7 +696,7 @@ extension Rustty {
             // Note that UIScreen.main is deprecated and we're supposed to get the
             // screen through the view hierarchy instead. This means that we should
             // probably set this to some default, then modify the scale factor through
-            // libghostty APIs when a UIView is attached to a window/scene. TODO.
+            // librustty APIs when a UIView is attached to a window/scene. TODO.
             config.scale_factor = UIScreen.main.scale
 #else
 #error("unsupported target")
@@ -1203,32 +1203,32 @@ private struct RusttyLastFocusedSurfaceKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
-    var ghosttySurfaceView: Rustty.SurfaceView? {
+    var rusttySurfaceView: Rustty.SurfaceView? {
         get { self[RusttySurfaceViewKey.self] }
         set { self[RusttySurfaceViewKey.self] = newValue }
     }
 
-    var ghosttyLastFocusedSurface: Weak<Rustty.SurfaceView>? {
+    var rusttyLastFocusedSurface: Weak<Rustty.SurfaceView>? {
         get { self[RusttyLastFocusedSurfaceKey.self] }
         set { self[RusttyLastFocusedSurfaceKey.self] = newValue }
     }
 }
 
 extension View {
-    func ghosttySurfaceView(_ surfaceView: Rustty.SurfaceView?) -> some View {
-        environment(\.ghosttySurfaceView, surfaceView)
+    func rusttySurfaceView(_ surfaceView: Rustty.SurfaceView?) -> some View {
+        environment(\.rusttySurfaceView, surfaceView)
     }
 
     /// The most recently focused surface (can be currently focused if the surface is currently focused).
-    func ghosttyLastFocusedSurface(_ surfaceView: Weak<Rustty.SurfaceView>?) -> some View {
-        environment(\.ghosttyLastFocusedSurface, surfaceView)
+    func rusttyLastFocusedSurface(_ surfaceView: Weak<Rustty.SurfaceView>?) -> some View {
+        environment(\.rusttyLastFocusedSurface, surfaceView)
     }
 }
 
 // MARK: Surface Focus Keys
 
 extension FocusedValues {
-    var ghosttySurfaceView: Rustty.SurfaceView? {
+    var rusttySurfaceView: Rustty.SurfaceView? {
         get { self[FocusedRusttySurface.self] }
         set { self[FocusedRusttySurface.self] = newValue }
     }
@@ -1237,7 +1237,7 @@ extension FocusedValues {
         typealias Value = Rustty.SurfaceView
     }
 
-    var ghosttySurfacePwd: String? {
+    var rusttySurfacePwd: String? {
         get { self[FocusedRusttySurfacePwd.self] }
         set { self[FocusedRusttySurfacePwd.self] = newValue }
     }
@@ -1246,7 +1246,7 @@ extension FocusedValues {
         typealias Value = String
     }
 
-    var ghosttySurfaceCellSize: OSSize? {
+    var rusttySurfaceCellSize: OSSize? {
         get { self[FocusedRusttySurfaceCellSize.self] }
         set { self[FocusedRusttySurfaceCellSize.self] = newValue }
     }

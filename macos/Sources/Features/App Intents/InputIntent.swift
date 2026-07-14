@@ -92,14 +92,14 @@ struct KeyEventIntent: AppIntent {
         }
 
         // Convert KeyEventMods array to Rustty.Input.Mods
-        let ghosttyMods = mods.reduce(Rustty.Input.Mods()) { result, mod in
-            result.union(mod.ghosttyMod)
+        let rusttyMods = mods.reduce(Rustty.Input.Mods()) { result, mod in
+            result.union(mod.rusttyMod)
         }
 
         let keyEvent = Rustty.Input.KeyEvent(
             key: key,
             action: action,
-            mods: ghosttyMods
+            mods: rusttyMods
         )
         surface.sendKeyEvent(keyEvent)
 
@@ -156,14 +156,14 @@ struct MouseButtonIntent: AppIntent {
         }
 
         // Convert KeyEventMods array to Rustty.Input.Mods
-        let ghosttyMods = mods.reduce(Rustty.Input.Mods()) { result, mod in
-            result.union(mod.ghosttyMod)
+        let rusttyMods = mods.reduce(Rustty.Input.Mods()) { result, mod in
+            result.union(mod.rusttyMod)
         }
 
         let mouseEvent = Rustty.Input.MouseButtonEvent(
             action: action,
             button: button,
-            mods: ghosttyMods
+            mods: rusttyMods
         )
         surface.sendMouseButton(mouseEvent)
 
@@ -219,14 +219,14 @@ struct MousePosIntent: AppIntent {
         }
 
         // Convert KeyEventMods array to Rustty.Input.Mods
-        let ghosttyMods = mods.reduce(Rustty.Input.Mods()) { result, mod in
-            result.union(mod.ghosttyMod)
+        let rusttyMods = mods.reduce(Rustty.Input.Mods()) { result, mod in
+            result.union(mod.rusttyMod)
         }
 
         let mousePosEvent = Rustty.Input.MousePosEvent(
             x: x,
             y: y,
-            mods: ghosttyMods
+            mods: rusttyMods
         )
         surface.sendMousePos(mousePosEvent)
 
@@ -316,7 +316,7 @@ enum KeyEventMods: String, AppEnum, CaseIterable {
         .command: "Command"
     ]
 
-    var ghosttyMod: Rustty.Input.Mods {
+    var rusttyMod: Rustty.Input.Mods {
         switch self {
         case .shift: .shift
         case .control: .ctrl

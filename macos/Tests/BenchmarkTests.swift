@@ -27,6 +27,6 @@ struct BenchmarkTests {
     @Test func example() async throws {
         rustty_benchmark_cli(
             "terminal-stream",
-            "--data=/Users/mitchellh/Documents/ghostty/bug.osc.txt")
+            "--data=/Users/mitchellh/Documents/rustty/bug.osc.txt")
     }
 }

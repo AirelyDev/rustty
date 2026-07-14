@@ -61,7 +61,7 @@ final class ScriptMouseButtonCommand: NSScriptCommand {
 
         let mouseEvent = Rustty.Input.MouseButtonEvent(
             action: action,
-            button: button.ghosttyButton,
+            button: button.rusttyButton,
             mods: mods
         )
         surface.sendMouseButton(mouseEvent)
@@ -85,7 +85,7 @@ private enum ScriptMouseButtonValue {
         }
     }
 
-    var ghosttyButton: Rustty.Input.MouseButton {
+    var rusttyButton: Rustty.Input.MouseButton {
         switch self {
         case .left: .left
         case .right: .right

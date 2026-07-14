@@ -28,7 +28,7 @@ extension NSPasteboard.PasteboardType {
 
 extension NSPasteboard {
     /// The pasteboard to used for Rustty selection.
-    static var ghosttySelection: NSPasteboard = {
+    static var rusttySelection: NSPasteboard = {
         NSPasteboard(name: .init("com.mitchellh.ghostty.selection"))
     }()
 
@@ -49,13 +49,13 @@ extension NSPasteboard {
     }
 
     /// The pasteboard for the Rustty enum type.
-    static func ghostty(_ clipboard: rustty_clipboard_e) -> NSPasteboard? {
+    static func rustty(_ clipboard: rustty_clipboard_e) -> NSPasteboard? {
         switch clipboard {
         case RUSTTY_CLIPBOARD_STANDARD:
             return Self.general
 
         case RUSTTY_CLIPBOARD_SELECTION:
-            return Self.ghosttySelection
+            return Self.rusttySelection
 
         default:
             return nil

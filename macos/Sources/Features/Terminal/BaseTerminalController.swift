@@ -33,7 +33,7 @@ class BaseTerminalController: NSWindowController,
                               ClipboardConfirmationViewDelegate,
                               FullscreenDelegate {
     /// The app instance that this terminal view will represent.
-    let ghostty: Rustty.App
+    let rustty: Rustty.App
 
     /// The currently focused surface.
     var focusedSurface: Rustty.SurfaceView? {
@@ -100,7 +100,7 @@ class BaseTerminalController: NSWindowController,
 
     /// The time that undo/redo operations that contain running ptys are valid for.
     var undoExpiration: Duration {
-        ghostty.config.undoTimeout
+        rustty.config.undoTimeout
     }
 
     /// The undo manager for this controller is the undo manager of the window,
@@ -128,17 +128,17 @@ class BaseTerminalController: NSWindowController,
         fatalError("init(coder:) is not supported for this view")
     }
 
-    init(_ ghostty: Rustty.App,
+    init(_ rustty: Rustty.App,
          baseConfig base: Rustty.SurfaceConfiguration? = nil,
          surfaceTree tree: SplitTree<Rustty.SurfaceView>? = nil
     ) {
-        self.ghostty = ghostty
-        self.derivedConfig = DerivedConfig(ghostty.config)
+        self.rustty = rustty
+        self.derivedConfig = DerivedConfig(rustty.config)
 
         super.init(window: nil)
 
         // Initialize our initial surface.
-        guard let rustty_app = ghostty.app else { preconditionFailure("app must be loaded") }
+        guard let rustty_app = rustty.app else { preconditionFailure("app must be loaded") }
         self.surfaceTree = tree ?? .init(view: Rustty.SurfaceView(rustty_app, baseConfig: base))
 
         // Setup our bell state for the window
@@ -158,60 +158,60 @@ class BaseTerminalController: NSWindowController,
             object: nil)
         center.addObserver(
             self,
-            selector: #selector(ghosttyConfigDidChangeBase(_:)),
-            name: .ghosttyConfigDidChange,
+            selector: #selector(rusttyConfigDidChangeBase(_:)),
+            name: .rusttyConfigDidChange,
             object: nil)
         center.addObserver(
             self,
-            selector: #selector(ghosttyCommandPaletteDidToggle(_:)),
-            name: .ghosttyCommandPaletteDidToggle,
+            selector: #selector(rusttyCommandPaletteDidToggle(_:)),
+            name: .rusttyCommandPaletteDidToggle,
             object: nil)
         center.addObserver(
             self,
-            selector: #selector(ghosttyMaximizeDidToggle(_:)),
-            name: .ghosttyMaximizeDidToggle,
+            selector: #selector(rusttyMaximizeDidToggle(_:)),
+            name: .rusttyMaximizeDidToggle,
             object: nil)
 
         // Splits
         center.addObserver(
             self,
-            selector: #selector(ghosttyDidCloseSurface(_:)),
-            name: Rustty.Notification.ghosttyCloseSurface,
+            selector: #selector(rusttyDidCloseSurface(_:)),
+            name: Rustty.Notification.rusttyCloseSurface,
             object: nil)
         center.addObserver(
             self,
-            selector: #selector(ghosttyDidNewSplit(_:)),
-            name: Rustty.Notification.ghosttyNewSplit,
+            selector: #selector(rusttyDidNewSplit(_:)),
+            name: Rustty.Notification.rusttyNewSplit,
             object: nil)
         center.addObserver(
             self,
-            selector: #selector(ghosttyDidEqualizeSplits(_:)),
+            selector: #selector(rusttyDidEqualizeSplits(_:)),
             name: Rustty.Notification.didEqualizeSplits,
             object: nil)
         center.addObserver(
             self,
-            selector: #selector(ghosttyDidFocusSplit(_:)),
-            name: Rustty.Notification.ghosttyFocusSplit,
+            selector: #selector(rusttyDidFocusSplit(_:)),
+            name: Rustty.Notification.rusttyFocusSplit,
             object: nil)
         center.addObserver(
             self,
-            selector: #selector(ghosttyDidToggleSplitZoom(_:)),
+            selector: #selector(rusttyDidToggleSplitZoom(_:)),
             name: Rustty.Notification.didToggleSplitZoom,
             object: nil)
         center.addObserver(
             self,
-            selector: #selector(ghosttyDidResizeSplit(_:)),
+            selector: #selector(rusttyDidResizeSplit(_:)),
             name: Rustty.Notification.didResizeSplit,
             object: nil)
         center.addObserver(
             self,
-            selector: #selector(ghosttyDidPresentTerminal(_:)),
-            name: Rustty.Notification.ghosttyPresentTerminal,
+            selector: #selector(rusttyDidPresentTerminal(_:)),
+            name: Rustty.Notification.rusttyPresentTerminal,
             object: nil)
         center.addObserver(
             self,
-            selector: #selector(ghosttySurfaceDragEndedNoTarget(_:)),
-            name: .ghosttySurfaceDragEndedNoTarget,
+            selector: #selector(rusttySurfaceDragEndedNoTarget(_:)),
+            name: .rusttySurfaceDragEndedNoTarget,
             object: nil)
 
         // Listen for local events that we need to know of outside of
@@ -242,7 +242,7 @@ class BaseTerminalController: NSWindowController,
         guard surfaceTree.root?.node(view: oldView) != nil else { return nil }
 
         // Create a new surface view
-        guard let rustty_app = ghostty.app else { return nil }
+        guard let rustty_app = rustty.app else { return nil }
         let newView = Rustty.SurfaceView(rustty_app, baseConfig: config)
 
         // Do the split
@@ -295,7 +295,7 @@ class BaseTerminalController: NSWindowController,
         syncSurfaceTreeOcclusionState()
     }
 
-    /// Update all surfaces with the focus state. This ensures that libghostty has an accurate view about
+    /// Update all surfaces with the focus state. This ensures that librustty has an accurate view about
     /// what surface is focused. This must be called whenever a surface OR window changes focus.
     func syncFocusToSurfaceTree() {
         for surfaceView in surfaceTree {
@@ -572,7 +572,7 @@ class BaseTerminalController: NSWindowController,
         window.setFrame(newFrame, display: true)
     }
 
-    @objc private func ghosttyConfigDidChangeBase(_ notification: Notification) {
+    @objc private func rusttyConfigDidChangeBase(_ notification: Notification) {
         // We only care if the configuration is a global configuration, not a
         // surface-specific one.
         guard notification.object == nil else { return }
@@ -586,20 +586,20 @@ class BaseTerminalController: NSWindowController,
         self.derivedConfig = DerivedConfig(config)
     }
 
-    @objc private func ghosttyCommandPaletteDidToggle(_ notification: Notification) {
+    @objc private func rusttyCommandPaletteDidToggle(_ notification: Notification) {
         guard let surfaceView = notification.object as? Rustty.SurfaceView else { return }
         guard surfaceTree.contains(surfaceView) else { return }
         toggleCommandPalette(nil)
     }
 
-    @objc private func ghosttyMaximizeDidToggle(_ notification: Notification) {
+    @objc private func rusttyMaximizeDidToggle(_ notification: Notification) {
         guard let window else { return }
         guard let surfaceView = notification.object as? Rustty.SurfaceView else { return }
         guard surfaceTree.contains(surfaceView) else { return }
         window.zoom(nil)
     }
 
-    @objc private func ghosttyDidCloseSurface(_ notification: Notification) {
+    @objc private func rusttyDidCloseSurface(_ notification: Notification) {
         guard let target = notification.object as? Rustty.SurfaceView else { return }
         guard let node = surfaceTree.root?.node(view: target) else { return }
         closeSurface(
@@ -607,7 +607,7 @@ class BaseTerminalController: NSWindowController,
             withConfirmation: (notification.userInfo?["process_alive"] as? Bool) ?? false)
     }
 
-    @objc private func ghosttyDidNewSplit(_ notification: Notification) {
+    @objc private func rusttyDidNewSplit(_ notification: Notification) {
         // The target must be within our tree
         guard let oldView = notification.object as? Rustty.SurfaceView else { return }
         guard surfaceTree.root?.node(view: oldView) != nil else { return }
@@ -631,7 +631,7 @@ class BaseTerminalController: NSWindowController,
         newSplit(at: oldView, direction: splitDirection, baseConfig: config)
     }
 
-    @objc private func ghosttyDidEqualizeSplits(_ notification: Notification) {
+    @objc private func rusttyDidEqualizeSplits(_ notification: Notification) {
         guard let target = notification.object as? Rustty.SurfaceView else { return }
 
         // Check if target surface is in current controller's tree
@@ -641,7 +641,7 @@ class BaseTerminalController: NSWindowController,
         surfaceTree = surfaceTree.equalized()
     }
 
-    @objc private func ghosttyDidFocusSplit(_ notification: Notification) {
+    @objc private func rusttyDidFocusSplit(_ notification: Notification) {
         // The target must be within our tree
         guard let target = notification.object as? Rustty.SurfaceView else { return }
         guard surfaceTree.root?.node(view: target) != nil else { return }
@@ -674,7 +674,7 @@ class BaseTerminalController: NSWindowController,
         }
     }
 
-    @objc private func ghosttyDidToggleSplitZoom(_ notification: Notification) {
+    @objc private func rusttyDidToggleSplitZoom(_ notification: Notification) {
         // The target must be within our tree
         guard let target = notification.object as? Rustty.SurfaceView else { return }
         guard let targetNode = surfaceTree.root?.node(view: target) else { return }
@@ -702,7 +702,7 @@ class BaseTerminalController: NSWindowController,
         }
     }
 
-    @objc private func ghosttyDidResizeSplit(_ notification: Notification) {
+    @objc private func rusttyDidResizeSplit(_ notification: Notification) {
         // The target must be within our tree
         guard let target = notification.object as? Rustty.SurfaceView else { return }
         guard let targetNode = surfaceTree.root?.node(view: target) else { return }
@@ -734,7 +734,7 @@ class BaseTerminalController: NSWindowController,
         }
     }
 
-    @objc private func ghosttyDidPresentTerminal(_ notification: Notification) {
+    @objc private func rusttyDidPresentTerminal(_ notification: Notification) {
         guard let target = notification.object as? Rustty.SurfaceView else { return }
         guard surfaceTree.contains(target) else { return }
 
@@ -750,7 +750,7 @@ class BaseTerminalController: NSWindowController,
         target.highlight()
     }
 
-    @objc private func ghosttySurfaceDragEndedNoTarget(_ notification: Notification) {
+    @objc private func rusttySurfaceDragEndedNoTarget(_ notification: Notification) {
         guard let target = notification.object as? Rustty.SurfaceView else { return }
         guard let targetNode = surfaceTree.root?.node(view: target) else { return }
 
@@ -780,9 +780,9 @@ class BaseTerminalController: NSWindowController,
 
         replaceSurfaceTree(removedTree, moveFocusFrom: oldFocusedSurface)
         _ = TerminalController.newWindow(
-            ghostty,
+            rustty,
             tree: newTree,
-            position: notification.userInfo?[Notification.Name.ghosttySurfaceDragEndedNoTargetPointKey] as? NSPoint,
+            position: notification.userInfo?[Notification.Name.rusttySurfaceDragEndedNoTargetPointKey] as? NSPoint,
             confirmUndo: false,
             inheritBackgroundOpacity: isBackgroundOpaque)
     }
@@ -845,7 +845,7 @@ class BaseTerminalController: NSWindowController,
 
     private func computeTitle(title: String, bell: Bool) -> String {
         var result = title
-        if bell && ghostty.config.bellFeatures.contains(.title) {
+        if bell && rustty.config.bellFeatures.contains(.title) {
             result = "🔔 \(result)"
         }
 
@@ -1003,7 +1003,7 @@ class BaseTerminalController: NSWindowController,
     /// Subclasses should override this to add platform-specific checks and sync appearance.
     func toggleBackgroundOpacity() {
         // Do nothing if config is already fully opaque
-        guard ghostty.config.backgroundOpacity < 1 else { return }
+        guard rustty.config.backgroundOpacity < 1 else { return }
 
         // Do nothing if in fullscreen (transparency doesn't apply in fullscreen)
         guard let window, !window.styleMask.contains(.fullScreen) else { return }
@@ -1312,7 +1312,7 @@ class BaseTerminalController: NSWindowController,
 
     @IBAction func close(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.requestClose(surface: surface)
+        rustty.requestClose(surface: surface)
     }
 
     @IBAction func closeWindow(_ sender: Any) {
@@ -1337,27 +1337,27 @@ class BaseTerminalController: NSWindowController,
 
     @IBAction func splitRight(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.split(surface: surface, direction: RUSTTY_SPLIT_DIRECTION_RIGHT)
+        rustty.split(surface: surface, direction: RUSTTY_SPLIT_DIRECTION_RIGHT)
     }
 
     @IBAction func splitLeft(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.split(surface: surface, direction: RUSTTY_SPLIT_DIRECTION_LEFT)
+        rustty.split(surface: surface, direction: RUSTTY_SPLIT_DIRECTION_LEFT)
     }
 
     @IBAction func splitDown(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.split(surface: surface, direction: RUSTTY_SPLIT_DIRECTION_DOWN)
+        rustty.split(surface: surface, direction: RUSTTY_SPLIT_DIRECTION_DOWN)
     }
 
     @IBAction func splitUp(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.split(surface: surface, direction: RUSTTY_SPLIT_DIRECTION_UP)
+        rustty.split(surface: surface, direction: RUSTTY_SPLIT_DIRECTION_UP)
     }
 
     @IBAction func splitZoom(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.splitToggleZoom(surface: surface)
+        rustty.splitToggleZoom(surface: surface)
     }
 
     @IBAction func splitMoveFocusPrevious(_ sender: Any) {
@@ -1386,47 +1386,47 @@ class BaseTerminalController: NSWindowController,
 
     @IBAction func equalizeSplits(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.splitEqualize(surface: surface)
+        rustty.splitEqualize(surface: surface)
     }
 
     @IBAction func moveSplitDividerUp(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.splitResize(surface: surface, direction: .up, amount: 10)
+        rustty.splitResize(surface: surface, direction: .up, amount: 10)
     }
 
     @IBAction func moveSplitDividerDown(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.splitResize(surface: surface, direction: .down, amount: 10)
+        rustty.splitResize(surface: surface, direction: .down, amount: 10)
     }
 
     @IBAction func moveSplitDividerLeft(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.splitResize(surface: surface, direction: .left, amount: 10)
+        rustty.splitResize(surface: surface, direction: .left, amount: 10)
     }
 
     @IBAction func moveSplitDividerRight(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.splitResize(surface: surface, direction: .right, amount: 10)
+        rustty.splitResize(surface: surface, direction: .right, amount: 10)
     }
 
     private func splitMoveFocus(direction: Rustty.SplitFocusDirection) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.splitMoveFocus(surface: surface, direction: direction)
+        rustty.splitMoveFocus(surface: surface, direction: direction)
     }
 
     @IBAction func increaseFontSize(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.changeFontSize(surface: surface, .increase(1))
+        rustty.changeFontSize(surface: surface, .increase(1))
     }
 
     @IBAction func decreaseFontSize(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.changeFontSize(surface: surface, .decrease(1))
+        rustty.changeFontSize(surface: surface, .decrease(1))
     }
 
     @IBAction func resetFontSize(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.changeFontSize(surface: surface, .reset)
+        rustty.changeFontSize(surface: surface, .reset)
     }
 
     @IBAction func toggleCommandPalette(_ sender: Any?) {
@@ -1474,7 +1474,7 @@ class BaseTerminalController: NSWindowController,
 
     @objc func resetTerminal(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.resetTerminal(surface: surface)
+        rustty.resetTerminal(surface: surface)
     }
 
     private struct DerivedConfig {

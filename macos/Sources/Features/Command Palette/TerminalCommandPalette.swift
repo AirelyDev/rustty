@@ -10,7 +10,7 @@ struct TerminalCommandPaletteView: View {
     @Binding var isPresented: Bool
 
     /// The configuration so we can lookup keyboard shortcuts.
-    @ObservedObject var ghosttyConfig: Rustty.Config
+    @ObservedObject var rusttyConfig: Rustty.Config
 
     /// The update view model for showing update commands.
     var updateViewModel: UpdateViewModel?
@@ -30,7 +30,7 @@ struct TerminalCommandPaletteView: View {
 
                         CommandPaletteView(
                             isPresented: $isPresented,
-                            backgroundColor: ghosttyConfig.backgroundColor,
+                            backgroundColor: rusttyConfig.backgroundColor,
                             options: commandOptions
                         )
                         .zIndex(1) // Ensure it's on top
@@ -120,10 +120,10 @@ struct TerminalCommandPaletteView: View {
     /// Custom commands from the command-palette-entry configuration.
     private var terminalOptions: [CommandOption] {
         guard let appDelegate = NSApp.delegate as? AppDelegate else { return [] }
-        return appDelegate.ghostty.config.commandPaletteEntries
+        return appDelegate.rustty.config.commandPaletteEntries
             .filter(\.isSupported)
             .map { c in
-                let symbols = appDelegate.ghostty.config.keyboardShortcut(for: c.action)?.keyList
+                let symbols = appDelegate.rustty.config.keyboardShortcut(for: c.action)?.keyList
                 return CommandOption(
                     title: c.title,
                     description: c.description,
@@ -167,7 +167,7 @@ struct TerminalCommandPaletteView: View {
                     sortKey: AnySortKey(ObjectIdentifier(surface))
                 ) {
                     NotificationCenter.default.post(
-                        name: Rustty.Notification.ghosttyPresentTerminal,
+                        name: Rustty.Notification.rusttyPresentTerminal,
                         object: surface
                     )
                 }

@@ -7,7 +7,7 @@ extension NSAppearance {
     }
 
     /// Initialize a desired NSAppearance for the Rustty configuration.
-    convenience init?(ghosttyConfig config: Rustty.Config) {
+    convenience init?(rusttyConfig config: Rustty.Config) {
         guard let theme = config.windowTheme else { return nil }
         switch theme {
         case "dark":

@@ -2,8 +2,8 @@ import RusttyKit
 
 extension FullscreenMode {
     /// Initialize from a Rustty fullscreen action.
-    static func from(ghostty: rustty_action_fullscreen_e) -> Self? {
-        return switch ghostty {
+    static func from(rustty: rustty_action_fullscreen_e) -> Self? {
+        return switch rustty {
         case RUSTTY_FULLSCREEN_NATIVE:
                 .native
 

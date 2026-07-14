@@ -5,6 +5,6 @@ extension Rustty {
     /// to perform app-global operations.
     protocol Delegate {
         /// Look up a surface within the application by ID.
-        func ghosttySurface(id: UUID) -> SurfaceView?
+        func rusttySurface(id: UUID) -> SurfaceView?
     }
 }

@@ -60,8 +60,8 @@ extension Rustty {
         return flags
     }
 
-    /// Translate event modifier flags to a ghostty mods enum.
-    static func ghosttyMods(_ flags: NSEvent.ModifierFlags) -> rustty_input_mods_e {
+    /// Translate event modifier flags to a rustty mods enum.
+    static func rusttyMods(_ flags: NSEvent.ModifierFlags) -> rustty_input_mods_e {
         var mods: UInt32 = RUSTTY_MODS_NONE.rawValue
 
         if flags.contains(.shift) { mods |= RUSTTY_MODS_SHIFT.rawValue }
@@ -82,7 +82,7 @@ extension Rustty {
     }
 
     /// A map from the Rustty key enum to the keyEquivalent string for shortcuts. Note that
-    /// not all ghostty key enum values are represented here because not all of them can be
+    /// not all rustty key enum values are represented here because not all of them can be
     /// mapped to a KeyEquivalent.
     static let keyToEquivalent: [rustty_input_key_e: KeyEquivalent] = [
         // Function keys
@@ -568,7 +568,7 @@ extension Rustty.Input {
         }
 
         init(nsFlags: NSEvent.ModifierFlags) {
-            self.init(cMods: Rustty.ghosttyMods(nsFlags))
+            self.init(cMods: Rustty.rusttyMods(nsFlags))
         }
 
         var nsFlags: NSEvent.ModifierFlags {

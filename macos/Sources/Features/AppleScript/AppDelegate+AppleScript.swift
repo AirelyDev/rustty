@@ -192,7 +192,7 @@ extension NSApplication {
         }
 
         let controller = TerminalController.newWindow(
-            appDelegate.ghostty,
+            appDelegate.rustty,
             withBaseConfig: baseConfig
         )
         let createdWindowID = ScriptWindow.stableID(primaryController: controller)
@@ -264,7 +264,7 @@ extension NSApplication {
         }
 
         guard let createdController = TerminalController.newTab(
-            appDelegate.ghostty,
+            appDelegate.rustty,
             from: parentWindow,
             withBaseConfig: baseConfig
         ) else {
@@ -300,7 +300,7 @@ extension NSApplication {
     /// Whether Rustty should currently accept AppleScript interactions.
     var isAppleScriptEnabled: Bool {
         guard let appDelegate = delegate as? AppDelegate else { return true }
-        return appDelegate.ghostty.config.macosAppleScript
+        return appDelegate.rustty.config.macosAppleScript
     }
 
     /// Applies a consistent error when scripting is disabled by configuration.

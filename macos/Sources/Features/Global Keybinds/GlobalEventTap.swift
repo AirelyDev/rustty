@@ -146,14 +146,14 @@ private func cgEventFlagsChangedHandler(
 
     // We need an app delegate to get the Rustty app instance
     guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else { return result }
-    guard let ghostty = appDelegate.ghostty.app else { return result }
+    guard let rustty = appDelegate.rustty.app else { return result }
 
     // We need an NSEvent for our logic below
     guard let event: NSEvent = .init(cgEvent: cgEvent) else { return result }
 
-    // Build our event input and call ghostty
-    let key_ev = event.ghosttyKeyEvent(RUSTTY_ACTION_PRESS)
-    if rustty_app_key(ghostty, key_ev) {
+    // Build our event input and call rustty
+    let key_ev = event.rusttyKeyEvent(RUSTTY_ACTION_PRESS)
+    if rustty_app_key(rustty, key_ev) {
         GlobalEventTap.logger.info("global key event handled event=\(event, privacy: .public)")
         return nil
     }

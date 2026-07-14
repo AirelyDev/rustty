@@ -440,7 +440,7 @@ extension Rustty {
             var v: rustty_config_color_s = .init()
             let key = "macos-icon-ghost-color"
             guard rustty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return nil }
-            return .init(ghostty: v)
+            return .init(rustty: v)
         }
 
         var macosIconScreenColor: [OSColor]? {
@@ -450,7 +450,7 @@ extension Rustty {
             guard rustty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return nil }
             guard v.len > 0 else { return nil }
             let buffer = UnsafeBufferPointer(start: v.colors, count: v.len)
-            return buffer.map { .init(ghostty: $0) }
+            return buffer.map { .init(rustty: $0) }
         }
 
         var macosHidden: MacHidden {

@@ -45,7 +45,7 @@ struct TerminalSplitTreeView: View {
 }
 
 private struct TerminalSplitSubtreeView: View {
-    @EnvironmentObject var ghostty: Rustty.App
+    @EnvironmentObject var rustty: Rustty.App
 
     let node: SplitTree<Rustty.SurfaceView>.Node
     var isRoot: Bool = false
@@ -69,7 +69,7 @@ private struct TerminalSplitSubtreeView: View {
                 }, set: {
                     action(.resize(.init(node: node, ratio: $0)))
                 }),
-                dividerColor: ghostty.config.splitDividerColor,
+                dividerColor: rustty.config.splitDividerColor,
                 resizeIncrements: .init(width: 1, height: 1),
                 left: {
                     TerminalSplitSubtreeView(node: split.left, action: action)
@@ -79,7 +79,7 @@ private struct TerminalSplitSubtreeView: View {
                 },
                 onEqualize: {
                     guard let surface = node.leftmostLeaf().surface else { return }
-                    ghostty.splitEqualize(surface: surface)
+                    rustty.splitEqualize(surface: surface)
                 }
             )
         }
@@ -105,7 +105,7 @@ private struct TerminalSplitLeaf: View {
                 // so it is a proper invalid drop zone.
                 if !isSelfDragging {
                     Color.clear
-                        .onDrop(of: [.ghosttySurfaceId], delegate: SplitDropDelegate(
+                        .onDrop(of: [.rusttySurfaceId], delegate: SplitDropDelegate(
                             dropState: $dropState,
                             viewSize: geometry.size,
                             destinationSurface: surfaceView,
@@ -142,7 +142,7 @@ private struct TerminalSplitLeaf: View {
         let action: (TerminalSplitOperation) -> Void
 
         func validateDrop(info: DropInfo) -> Bool {
-            info.hasItemsConforming(to: [.ghosttySurfaceId])
+            info.hasItemsConforming(to: [.rusttySurfaceId])
         }
 
         func dropEntered(info: DropInfo) {
@@ -167,7 +167,7 @@ private struct TerminalSplitLeaf: View {
             dropState = .idle
 
             // Load the dropped surface asynchronously using Transferable
-            let providers = info.itemProviders(for: [.ghosttySurfaceId])
+            let providers = info.itemProviders(for: [.rusttySurfaceId])
             guard let provider = providers.first else { return false }
 
             // Capture action before the async closure

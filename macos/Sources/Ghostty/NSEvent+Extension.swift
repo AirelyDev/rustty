@@ -9,7 +9,7 @@ extension NSEvent {
     ///
     /// The translationMods should be set to the modifiers used for actual character
     /// translation if available.
-    func ghosttyKeyEvent(
+    func rusttyKeyEvent(
         _ action: rustty_input_action_e,
         translationMods: NSEvent.ModifierFlags? = nil
     ) -> rustty_input_key_s {
@@ -27,8 +27,8 @@ extension NSEvent {
         // producing text. We apply a simple heuristic here that has worked for years
         // so far: control and command never contribute to the translation of text,
         // assume everything else did.
-        key_ev.mods = Rustty.ghosttyMods(modifierFlags)
-        key_ev.consumed_mods = Rustty.ghosttyMods(
+        key_ev.mods = Rustty.rusttyMods(modifierFlags)
+        key_ev.consumed_mods = Rustty.rusttyMods(
             (translationMods ?? modifierFlags)
                 .subtracting([.control, .command]))
 
@@ -51,7 +51,7 @@ extension NSEvent {
     ///
     /// This namely contains logic to avoid control characters, since we handle control character
     /// mapping manually within Rustty.
-    var ghosttyCharacters: String? {
+    var rusttyCharacters: String? {
         // If we have no characters associated with this event we do nothing.
         guard let characters else { return nil }
 

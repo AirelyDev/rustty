@@ -10,7 +10,7 @@ struct ColorizedRusttyIcon {
     /// The frame type to use
     let frame: Rustty.MacOSIconFrame
 
-    /// Make a custom colorized ghostty icon.
+    /// Make a custom colorized rustty icon.
     func makeImage(in bundle: Bundle) -> NSImage? {
         // All of our layers (not in order)
         guard let screen = bundle.image(forResource: "CustomIconScreen") else { return nil }

@@ -19,7 +19,7 @@ final class RusttyWindowPositionUITests: RusttyCustomConfigCase {
             """
         )
 
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         // Suppress Restoration
         app.launchArguments += ["-NSQuitAlwaysKeepsWindows", "NO"]
         // Clean run
@@ -81,7 +81,7 @@ final class RusttyWindowPositionUITests: RusttyCustomConfigCase {
             """
         )
 
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         // Suppress Restoration
         app.launchArguments += ["-NSQuitAlwaysKeepsWindows", "NO"]
         // Clean run
@@ -136,7 +136,7 @@ final class RusttyWindowPositionUITests: RusttyCustomConfigCase {
             """
         )
 
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         // Suppress Restoration
         app.launchArguments += ["-NSQuitAlwaysKeepsWindows", "NO"]
         // Clean run
@@ -193,7 +193,7 @@ final class RusttyWindowPositionUITests: RusttyCustomConfigCase {
             """
         )
 
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         app.launch()
 
         let window = app.windows.firstMatch
@@ -241,7 +241,7 @@ final class RusttyWindowPositionUITests: RusttyCustomConfigCase {
             """
         )
 
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         app.launch()
 
         let window = app.windows.firstMatch
@@ -291,7 +291,7 @@ final class RusttyWindowPositionUITests: RusttyCustomConfigCase {
             """
         )
 
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         // Suppress Restoration
         app.launchArguments += ["-NSQuitAlwaysKeepsWindows", "NO"]
         // Clean run

@@ -95,8 +95,8 @@ class AppDelegate: NSObject,
     /// This is the current configuration from the Rustty configuration that we need.
     private var derivedConfig: DerivedConfig = DerivedConfig()
 
-    /// The ghostty global state. Only one per process.
-    let ghostty: Rustty.App
+    /// The rustty global state. Only one per process.
+    let rustty: Rustty.App
 
     /// The global undo manager for app-level state such as window restoration.
     lazy var undoManager = ExpiringUndoManager()
@@ -120,7 +120,7 @@ class AppDelegate: NSObject,
 
         case .pendingRestore(let state):
             let controller = QuickTerminalController(
-                ghostty,
+                rustty,
                 position: derivedConfig.quickTerminalPosition,
                 baseConfig: state.baseConfig,
                 restorationState: state
@@ -130,7 +130,7 @@ class AppDelegate: NSObject,
 
         case .uninitialized:
             let controller = QuickTerminalController(
-                ghostty,
+                rustty,
                 position: derivedConfig.quickTerminalPosition,
                 restorationState: nil
             )
@@ -165,13 +165,13 @@ class AppDelegate: NSObject,
 
     override init() {
 #if DEBUG
-        ghostty = Rustty.App(configPath: ProcessInfo.processInfo.environment["RUSTTY_CONFIG_PATH"])
+        rustty = Rustty.App(configPath: ProcessInfo.processInfo.environment["RUSTTY_CONFIG_PATH"])
 #else
-        ghostty = Rustty.App()
+        rustty = Rustty.App()
 #endif
         super.init()
 
-        ghostty.delegate = self
+        rustty.delegate = self
     }
 
     // MARK: - NSApplicationDelegate
@@ -179,13 +179,13 @@ class AppDelegate: NSObject,
     func applicationWillFinishLaunching(_ notification: Notification) {
         #if DEBUG
         if
-            let suite = UserDefaults.ghosttySuite,
+            let suite = UserDefaults.rusttySuite,
             let clear = ProcessInfo.processInfo.environment["RUSTTY_CLEAR_USER_DEFAULTS"],
             (clear as NSString).boolValue {
-            UserDefaults.ghostty.removePersistentDomain(forName: suite)
+            UserDefaults.rustty.removePersistentDomain(forName: suite)
         }
         #endif
-        UserDefaults.ghostty.register(defaults: [
+        UserDefaults.rustty.register(defaults: [
             // Disable the automatic full screen menu item because we handle
             // it manually.
             "NSFullScreenMenuItemEverywhere": false,
@@ -204,7 +204,7 @@ class AppDelegate: NSObject,
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // System settings overrides
-        UserDefaults.ghostty.register(defaults: [
+        UserDefaults.rustty.register(defaults: [
             // Disable this so that repeated key events make it through to our terminal views.
             "ApplePressAndHoldEnabled": false,
         ])
@@ -213,12 +213,12 @@ class AppDelegate: NSObject,
         applicationLaunchTime = ProcessInfo.processInfo.systemUptime
 
         // Check if secure input was enabled when we last quit.
-        if UserDefaults.ghostty.bool(forKey: "SecureInput") != SecureInput.shared.enabled {
+        if UserDefaults.rustty.bool(forKey: "SecureInput") != SecureInput.shared.enabled {
             toggleSecureInput(self)
         }
 
         // Initial config loading
-        ghosttyConfigDidChange(config: ghostty.config)
+        rusttyConfigDidChange(config: rustty.config)
 
         // Start our update checker.
         updateController.startUpdater()
@@ -250,14 +250,14 @@ class AppDelegate: NSObject,
         )
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(ghosttyConfigDidChange(_:)),
-            name: .ghosttyConfigDidChange,
+            selector: #selector(rusttyConfigDidChange(_:)),
+            name: .rusttyConfigDidChange,
             object: nil
         )
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(ghosttyBellDidRing(_:)),
-            name: .ghosttyBellDidRing,
+            selector: #selector(rusttyBellDidRing(_:)),
+            name: .rusttyBellDidRing,
             object: nil
         )
         NotificationCenter.default.addObserver(
@@ -268,13 +268,13 @@ class AppDelegate: NSObject,
         )
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(ghosttyNewWindow(_:)),
-            name: Rustty.Notification.ghosttyNewWindow,
+            selector: #selector(rusttyNewWindow(_:)),
+            name: Rustty.Notification.rusttyNewWindow,
             object: nil)
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(ghosttyNewTab(_:)),
-            name: Rustty.Notification.ghosttyNewTab,
+            selector: #selector(rusttyNewTab(_:)),
+            name: Rustty.Notification.rusttyNewTab,
             object: nil)
 
         // Configure user notifications
@@ -294,13 +294,13 @@ class AppDelegate: NSObject,
         ])
         center.delegate = self
 
-        // Observe our appearance so we can report the correct value to libghostty.
+        // Observe our appearance so we can report the correct value to librustty.
         self.appearanceObserver = NSApplication.shared.observe(
             \.effectiveAppearance,
              options: [.new, .initial]
         ) { _, change in
             guard let appearance = change.newValue else { return }
-            guard let app = self.ghostty.app else { return }
+            guard let app = self.rustty.app else { return }
             let scheme: rustty_color_scheme_e
             if appearance.isDark {
                 scheme = RUSTTY_COLOR_SCHEME_DARK
@@ -360,7 +360,7 @@ class AppDelegate: NSObject,
             //   - if we're restoring from persisted state
             if TerminalController.all.isEmpty && derivedConfig.initialWindow {
                 undoManager.disableUndoRegistration()
-                _ = TerminalController.newWindow(ghostty)
+                _ = TerminalController.newWindow(rustty)
                 undoManager.enableUndoRegistration()
             }
         }
@@ -410,7 +410,7 @@ class AppDelegate: NSObject,
         }
 
         // If our app says we don't need to confirm, we can exit now.
-        if !ghostty.needsConfirmQuit { return .terminateNow }
+        if !rustty.needsConfirmQuit { return .terminateNow }
 
         return terminate()
     }
@@ -441,7 +441,7 @@ class AppDelegate: NSObject,
         guard applicationHasBecomeActive else { return true }
 
         // No visible windows, open a new one.
-        _ = TerminalController.newWindow(ghostty)
+        _ = TerminalController.newWindow(rustty)
         return false
     }
 
@@ -507,14 +507,14 @@ class AppDelegate: NSObject,
             }
         }
 
-        switch ghostty.config.macosDockDropBehavior {
+        switch rustty.config.macosDockDropBehavior {
         case .new_tab:
             _ = TerminalController.newTab(
-                ghostty,
+                rustty,
                 from: TerminalController.preferredParent?.window,
                 withBaseConfig: config
             )
-        case .new_window: _ = TerminalController.newWindow(ghostty, withBaseConfig: config)
+        case .new_window: _ = TerminalController.newWindow(rustty, withBaseConfig: config)
         }
 
         return true
@@ -537,7 +537,7 @@ class AppDelegate: NSObject,
         sigusr2.setEventHandler { [weak self] in
             guard let self else { return }
             Rustty.logger.info("reloading configuration in response to SIGUSR2")
-            self.ghostty.reloadConfig()
+            self.rustty.reloadConfig()
         }
 
         // The signal source starts unactivated, so we have to resume it once
@@ -580,15 +580,15 @@ class AppDelegate: NSObject,
         guard NSApp.mainWindow == nil else { return event }
 
         // If this event as-is would result in a key binding then we send it.
-        if let app = ghostty.app, let config = ghostty.config.config {
-            var ghosttyEvent = event.ghosttyKeyEvent(RUSTTY_ACTION_PRESS)
+        if let app = rustty.app, let config = rustty.config.config {
+            var rusttyEvent = event.rusttyKeyEvent(RUSTTY_ACTION_PRESS)
             let match = (event.characters ?? "").withCString { ptr in
-                ghosttyEvent.text = ptr
-                if !rustty_config_key_is_binding(config, ghosttyEvent) {
+                rusttyEvent.text = ptr
+                if !rustty_config_key_is_binding(config, rusttyEvent) {
                     return false
                 }
 
-                return rustty_app_key(app, ghosttyEvent)
+                return rustty_app_key(app, rusttyEvent)
             }
 
             // If the key was handled by Rustty we stop the event chain. If
@@ -610,10 +610,10 @@ class AppDelegate: NSObject,
         // through the Rustty key mechanism.
 
         // Rustty must be loaded
-        guard let ghostty = self.ghostty.app else { return event }
+        guard let rustty = self.rustty.app else { return event }
 
-        // Build our event input and call ghostty
-        if rustty_app_key(ghostty, event.ghosttyKeyEvent(RUSTTY_ACTION_PRESS)) {
+        // Build our event input and call rustty
+        if rustty_app_key(rustty, event.rusttyKeyEvent(RUSTTY_ACTION_PRESS)) {
             // The key was used so we want to stop it from going to our Mac app
             Rustty.logger.debug("local key event handled event=\(event, privacy: .public)")
             return nil
@@ -631,7 +631,7 @@ class AppDelegate: NSObject,
         self.menuQuickTerminal?.state = if quickController.visible { .on } else { .off }
     }
 
-    @objc private func ghosttyConfigDidChange(_ notification: Notification) {
+    @objc private func rusttyConfigDidChange(_ notification: Notification) {
         // We only care if the configuration is a global configuration, not a surface one.
         guard notification.object == nil else { return }
 
@@ -640,23 +640,23 @@ class AppDelegate: NSObject,
             Notification.Name.RusttyConfigChangeKey
         ] as? Rustty.Config else { return }
 
-        ghosttyConfigDidChange(config: config)
+        rusttyConfigDidChange(config: config)
     }
 
-    @objc private func ghosttyBellDidRing(_ notification: Notification) {
-        if ghostty.config.bellFeatures.contains(.system) {
+    @objc private func rusttyBellDidRing(_ notification: Notification) {
+        if rustty.config.bellFeatures.contains(.system) {
             NSSound.beep()
         }
 
-        if ghostty.config.bellFeatures.contains(.audio) {
-            if let configPath = ghostty.config.bellAudioPath,
+        if rustty.config.bellFeatures.contains(.audio) {
+            if let configPath = rustty.config.bellAudioPath,
                let sound = NSSound(contentsOfFile: configPath.path, byReference: false) {
-                sound.volume = ghostty.config.bellAudioVolume
+                sound.volume = rustty.config.bellAudioVolume
                 sound.play()
             }
         }
 
-        if ghostty.config.bellFeatures.contains(.attention) {
+        if rustty.config.bellFeatures.contains(.attention) {
             // Bounce the dock icon if we're not focused.
             NSApp.requestUserAttention(.informationalRequest)
         }
@@ -715,13 +715,13 @@ class AppDelegate: NSObject,
         }
     }
 
-    @objc private func ghosttyNewWindow(_ notification: Notification) {
+    @objc private func rusttyNewWindow(_ notification: Notification) {
         let configAny = notification.userInfo?[Rustty.Notification.NewSurfaceConfigKey]
         let config = configAny as? Rustty.SurfaceConfiguration
-        _ = TerminalController.newWindow(ghostty, withBaseConfig: config)
+        _ = TerminalController.newWindow(rustty, withBaseConfig: config)
     }
 
-    @objc private func ghosttyNewTab(_ notification: Notification) {
+    @objc private func rusttyNewTab(_ notification: Notification) {
         guard let surfaceView = notification.object as? Rustty.SurfaceView else { return }
         guard let window = surfaceView.window else { return }
 
@@ -732,20 +732,20 @@ class AppDelegate: NSObject,
         let configAny = notification.userInfo?[Rustty.Notification.NewSurfaceConfigKey]
         let config = configAny as? Rustty.SurfaceConfiguration
 
-        _ = TerminalController.newTab(ghostty, from: window, withBaseConfig: config)
+        _ = TerminalController.newTab(rustty, from: window, withBaseConfig: config)
     }
 
     private func setDockBadge() {
         let bellCount = NSApp.windows
             .compactMap { $0.windowController as? BaseTerminalController }
             .reduce(0) { $0 + ($1.bell ? 1 : 0) }
-        let wantsBadge = ghostty.config.bellFeatures.contains(.attention) && bellCount > 0
+        let wantsBadge = rustty.config.bellFeatures.contains(.attention) && bellCount > 0
         let label = wantsBadge ? (bellCount > 99 ? "99+" : String(bellCount)) : nil
         NSApp.dockTile.badgeLabel = label
         NSApp.dockTile.display()
     }
 
-    private func ghosttyConfigDidChange(config: Rustty.Config) {
+    private func rusttyConfigDidChange(config: Rustty.Config) {
         // Update the config we need to store
         self.derivedConfig = DerivedConfig(config)
 
@@ -753,10 +753,10 @@ class AppDelegate: NSObject,
         // configuration. This is the only way to carefully control whether macOS invokes the
         // state restoration system.
         switch config.windowSaveState {
-        case "never": UserDefaults.ghostty.setValue(false, forKey: "NSQuitAlwaysKeepsWindows")
-        case "always": UserDefaults.ghostty.setValue(true, forKey: "NSQuitAlwaysKeepsWindows")
+        case "never": UserDefaults.rustty.setValue(false, forKey: "NSQuitAlwaysKeepsWindows")
+        case "always": UserDefaults.rustty.setValue(true, forKey: "NSQuitAlwaysKeepsWindows")
         case "default": fallthrough
-        default: UserDefaults.ghostty.removeObject(forKey: "NSQuitAlwaysKeepsWindows")
+        default: UserDefaults.rustty.removeObject(forKey: "NSQuitAlwaysKeepsWindows")
         }
 
         // Sync our auto-update settings. If SUEnableAutomaticChecks (in our Info.plist) is
@@ -815,7 +815,7 @@ class AppDelegate: NSObject,
 
         // We need to handle our global event tap depending on if there are global
         // events that we care about in Rustty.
-        if rustty_app_has_global_keybinds(ghostty.app!) {
+        if rustty_app_has_global_keybinds(rustty.app!) {
             if timeSinceLaunch > 5 {
                 // If the process has been running for awhile we enable right away
                 // because no windows are likely to pop up.
@@ -837,7 +837,7 @@ class AppDelegate: NSObject,
 
     /// Sync the appearance of our app with the theme specified in the config.
     private func syncAppearance(config: Rustty.Config) {
-        NSApplication.shared.appearance = .init(ghosttyConfig: config)
+        NSApplication.shared.appearance = .init(rusttyConfig: config)
     }
 
     private func updateAppIcon(from config: Rustty.Config) {
@@ -854,7 +854,7 @@ class AppDelegate: NSObject,
     }
 
     func application(_ app: NSApplication, willEncodeRestorableState coder: NSCoder) {
-        guard ghostty.config.windowSaveState != "never" else { return }
+        guard rustty.config.windowSaveState != "never" else { return }
 
         // Encode our quick terminal state if we have it.
         switch quickTerminalControllerState {
@@ -874,7 +874,7 @@ class AppDelegate: NSObject,
         Self.logger.debug("application will restore window state")
 
         // Decode our quick terminal state.
-        if ghostty.config.windowSaveState != "never",
+        if rustty.config.windowSaveState != "never",
             let state = QuickTerminalRestorableState(coder: coder) {
             quickTerminalControllerState = .pendingRestore(state)
         }
@@ -887,7 +887,7 @@ class AppDelegate: NSObject,
         didReceive: UNNotificationResponse,
         withCompletionHandler: () -> Void
     ) {
-        ghostty.handleUserNotification(response: didReceive)
+        rustty.handleUserNotification(response: didReceive)
         withCompletionHandler()
     }
 
@@ -896,7 +896,7 @@ class AppDelegate: NSObject,
         willPresent: UNNotification,
         withCompletionHandler: (UNNotificationPresentationOptions) -> Void
     ) {
-        let shouldPresent = ghostty.shouldPresentNotification(notification: willPresent)
+        let shouldPresent = rustty.shouldPresentNotification(notification: willPresent)
         let options: UNNotificationPresentationOptions = shouldPresent ? [.banner, .sound] : []
         withCompletionHandler(options)
     }
@@ -928,17 +928,17 @@ class AppDelegate: NSObject,
             input.global.toggle()
         }
         self.menuSecureInput?.state = if input.global { .on } else { .off }
-        UserDefaults.ghostty.set(input.global, forKey: "SecureInput")
+        UserDefaults.rustty.set(input.global, forKey: "SecureInput")
     }
 
     // MARK: - IB Actions
 
     @IBAction func openConfig(_ sender: Any?) {
-        ghostty.openConfig()
+        rustty.openConfig()
     }
 
     @IBAction func reloadConfig(_ sender: Any?) {
-        ghostty.reloadConfig()
+        rustty.reloadConfig()
     }
 
     @IBAction func checkForUpdates(_ sender: Any?) {
@@ -947,12 +947,12 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func newWindow(_ sender: Any?) {
-        _ = TerminalController.newWindow(ghostty)
+        _ = TerminalController.newWindow(rustty)
     }
 
     @IBAction func newTab(_ sender: Any?) {
         _ = TerminalController.newTab(
-            ghostty,
+            rustty,
             from: TerminalController.preferredParent?.window
         )
     }
@@ -967,7 +967,7 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func showHelp(_ sender: Any) {
-        guard let url = URL(string: "https://ghostty.org/docs") else { return }
+        guard let url = URL(string: "https://rustty.org/docs") else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -1138,7 +1138,7 @@ extension AppDelegate {
 
     /// Sync all of our menu item keyboard shortcuts with the Rustty configuration.
     @MainActor private func syncMenuShortcuts(_ config: Rustty.Config) {
-        guard ghostty.readiness == .ready else { return }
+        guard rustty.readiness == .ready else { return }
 
         menuShortcutManager.reset()
 
@@ -1237,7 +1237,7 @@ extension AppDelegate {
     }
 
     @IBAction func useAsDefault(_ sender: NSMenuItem) {
-        let ud = UserDefaults.ghostty
+        let ud = UserDefaults.rustty
         let key = TerminalWindow.defaultLevelKey
         if menuFloatOnTop?.state == .on {
             ud.set(NSWindow.Level.floating, forKey: key)

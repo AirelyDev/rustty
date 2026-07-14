@@ -7,7 +7,7 @@ struct Rustty_iOSApp: App {
 
     init() {
         if rustty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) != RUSTTY_SUCCESS {
-            preconditionFailure("Initialize ghostty backend failed")
+            preconditionFailure("Initialize rustty backend failed")
         }
         _rustty_app = StateObject(wrappedValue: Rustty.App())
     }

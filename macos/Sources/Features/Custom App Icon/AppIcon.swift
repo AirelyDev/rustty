@@ -89,11 +89,11 @@ enum AppIcon: Equatable, Codable, Sendable {
 /// Making sure that `NSWorkspace.shared.setIcon` executes on only one thread at a time
 actor AppIconUpdater {
     func update(icon: AppIcon?) {
-        UserDefaults.ghostty.appIcon = icon
+        UserDefaults.rustty.appIcon = icon
         // Notify DockTilePlugin to update dock icon
         DistributedNotificationCenter.default()
             .postNotificationName(
-                .ghosttyIconDidChange,
+                .rusttyIconDidChange,
                 object: nil,
                 userInfo: nil,
                 deliverImmediately: true,

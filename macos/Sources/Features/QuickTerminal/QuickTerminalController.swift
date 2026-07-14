@@ -38,13 +38,13 @@ class QuickTerminalController: BaseTerminalController {
     let restorable: Bool
     private var restorationState: QuickTerminalRestorableState?
 
-    init(_ ghostty: Rustty.App,
+    init(_ rustty: Rustty.App,
          position: QuickTerminalPosition = .top,
          baseConfig base: Rustty.SurfaceConfiguration? = nil,
          restorationState: QuickTerminalRestorableState? = nil,
     ) {
         self.position = position
-        self.derivedConfig = DerivedConfig(ghostty.config)
+        self.derivedConfig = DerivedConfig(rustty.config)
         // The window we manage is not restorable if we've specified a command
         // to execute. We do this because the restored window is meaningless at the
         // time of writing this: it'd just restore to a shell in the same directory
@@ -56,7 +56,7 @@ class QuickTerminalController: BaseTerminalController {
         // Important detail here: we initialize with an empty surface tree so
         // that we don't start a terminal process. This gets started when the
         // first terminal is shown in `animateIn`.
-        super.init(ghostty, baseConfig: base, surfaceTree: .init())
+        super.init(rustty, baseConfig: base, surfaceTree: .init())
 
         // Setup our notifications for behaviors
         let center = NotificationCenter.default
@@ -68,23 +68,23 @@ class QuickTerminalController: BaseTerminalController {
         center.addObserver(
             self,
             selector: #selector(onToggleFullscreen(notification:)),
-            name: Rustty.Notification.ghosttyToggleFullscreen,
+            name: Rustty.Notification.rusttyToggleFullscreen,
             object: nil)
         center.addObserver(
             self,
-            selector: #selector(ghosttyConfigDidChange(_:)),
-            name: .ghosttyConfigDidChange,
+            selector: #selector(rusttyConfigDidChange(_:)),
+            name: .rusttyConfigDidChange,
             object: nil)
         center.addObserver(
             self,
             selector: #selector(closeWindow(_:)),
-            name: .ghosttyCloseWindow,
+            name: .rusttyCloseWindow,
             object: nil
         )
         center.addObserver(
             self,
             selector: #selector(onNewTab),
-            name: Rustty.Notification.ghosttyNewTab,
+            name: Rustty.Notification.rusttyNewTab,
             object: nil)
         center.addObserver(
             self,
@@ -138,7 +138,7 @@ class QuickTerminalController: BaseTerminalController {
 
         // Setup our content
         window.contentView = TerminalViewContainer {
-            TerminalView(ghostty: ghostty, viewModel: self, delegate: self)
+            TerminalView(rustty: rustty, viewModel: self, delegate: self)
         }
 
         // Clear out our frame at this point, the fixup from above is complete.
@@ -364,7 +364,7 @@ class QuickTerminalController: BaseTerminalController {
         // tree can be empty if for example we run "exit" in the terminal and force
         // animate out.
         if surfaceTree.isEmpty,
-           let rustty_app = ghostty.app {
+           let rustty_app = rustty.app {
             if let tree = restorationState?.surfaceTree, !tree.isEmpty {
                 surfaceTree = tree
                 let view = tree.first(where: { $0.id.uuidString == restorationState?.focusedSurface }) ?? tree.first!
@@ -629,14 +629,14 @@ class QuickTerminalController: BaseTerminalController {
             window.backgroundColor = .white.withAlphaComponent(0.001)
 
             if !derivedConfig.backgroundBlur.isGlassStyle {
-                rustty_set_window_background_blur(ghostty.app, Unmanaged.passUnretained(window).toOpaque())
+                rustty_set_window_background_blur(rustty.app, Unmanaged.passUnretained(window).toOpaque())
             }
         } else {
             window.isOpaque = true
             window.backgroundColor = .windowBackgroundColor
         }
 
-        terminalViewContainer?.ghosttyConfigDidChange(ghostty.config, preferredBackgroundColor: nil)
+        terminalViewContainer?.rusttyConfigDidChange(rustty.config, preferredBackgroundColor: nil)
     }
 
     private func showNoNewTabAlert() {
@@ -661,12 +661,12 @@ class QuickTerminalController: BaseTerminalController {
 
     @IBAction func toggleRusttyFullScreen(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.toggleFullscreen(surface: surface)
+        rustty.toggleFullscreen(surface: surface)
     }
 
     @IBAction func toggleTerminalInspector(_ sender: Any?) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.toggleTerminalInspector(surface: surface)
+        rustty.toggleTerminalInspector(surface: surface)
     }
 
     // MARK: Notifications
@@ -706,7 +706,7 @@ class QuickTerminalController: BaseTerminalController {
         toggleFullscreen(mode: mode)
     }
 
-    @objc private func ghosttyConfigDidChange(_ notification: Notification) {
+    @objc private func rusttyConfigDidChange(_ notification: Notification) {
         // We only care if the configuration is a global configuration, not a
         // surface-specific one.
         guard notification.object == nil else { return }
@@ -721,7 +721,7 @@ class QuickTerminalController: BaseTerminalController {
 
         syncAppearance()
 
-        terminalViewContainer?.ghosttyConfigDidChange(config, preferredBackgroundColor: nil)
+        terminalViewContainer?.rusttyConfigDidChange(config, preferredBackgroundColor: nil)
     }
 
     @objc private func onNewTab(notification: SwiftUI.Notification) {

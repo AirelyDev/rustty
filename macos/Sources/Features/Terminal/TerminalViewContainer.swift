@@ -74,7 +74,7 @@ class TerminalViewContainer: NSView {
         updateGlassEffectTopInsetIfNeeded()
     }
 
-    func ghosttyConfigDidChange(_ config: Rustty.Config, preferredBackgroundColor: NSColor?) {
+    func rusttyConfigDidChange(_ config: Rustty.Config, preferredBackgroundColor: NSColor?) {
         let newValue = DerivedConfig(config: config, preferredBackgroundColor: preferredBackgroundColor, cornerRadius: windowCornerRadius)
         guard newValue != derivedConfig else { return }
         derivedConfig = newValue

@@ -5,7 +5,7 @@ import AppKit
 /// This implements the Rustty app delegate protocol which is used by the Rustty
 /// APIs for app-global information.
 extension AppDelegate: Rustty.Delegate {
-    func ghosttySurface(id: UUID) -> Rustty.SurfaceView? {
+    func rusttySurface(id: UUID) -> Rustty.SurfaceView? {
         for window in NSApp.windows {
             guard let controller = window.windowController as? BaseTerminalController else {
                 continue

@@ -49,7 +49,7 @@ final class RusttyMouseStateTests: RusttyCustomConfigCase {
     }
 
     @MainActor func testSearchFocusState() async throws {
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 5), "New window should appear")
         app.typeKey("f", modifierFlags: .command)

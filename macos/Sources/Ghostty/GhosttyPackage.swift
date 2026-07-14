@@ -331,52 +331,52 @@ extension Rustty {
 
 extension Notification.Name {
     /// Configuration change. If the object is nil then it is app-wide. Otherwise its surface-specific.
-    static let ghosttyConfigDidChange = Notification.Name("com.mitchellh.ghostty.configDidChange")
-    static let RusttyConfigChangeKey = ghosttyConfigDidChange.rawValue
+    static let rusttyConfigDidChange = Notification.Name("com.mitchellh.ghostty.configDidChange")
+    static let RusttyConfigChangeKey = rusttyConfigDidChange.rawValue
 
     /// Color change. Object is the surface changing.
-    static let ghosttyColorDidChange = Notification.Name("com.mitchellh.ghostty.ghosttyColorDidChange")
-    static let RusttyColorChangeKey = ghosttyColorDidChange.rawValue
+    static let rusttyColorDidChange = Notification.Name("com.mitchellh.ghostty.rusttyColorDidChange")
+    static let RusttyColorChangeKey = rusttyColorDidChange.rawValue
 
     /// Goto tab. Has tab index in the userinfo.
-    static let ghosttyMoveTab = Notification.Name("com.mitchellh.ghostty.moveTab")
-    static let RusttyMoveTabKey = ghosttyMoveTab.rawValue
+    static let rusttyMoveTab = Notification.Name("com.mitchellh.ghostty.moveTab")
+    static let RusttyMoveTabKey = rusttyMoveTab.rawValue
 
     /// Close tab
-    static let ghosttyCloseTab = Notification.Name("com.mitchellh.ghostty.closeTab")
+    static let rusttyCloseTab = Notification.Name("com.mitchellh.ghostty.closeTab")
 
     /// Close other tabs
-    static let ghosttyCloseOtherTabs = Notification.Name("com.mitchellh.ghostty.closeOtherTabs")
+    static let rusttyCloseOtherTabs = Notification.Name("com.mitchellh.ghostty.closeOtherTabs")
 
     /// Close tabs to the right of the focused tab
-    static let ghosttyCloseTabsOnTheRight = Notification.Name("com.mitchellh.ghostty.closeTabsOnTheRight")
+    static let rusttyCloseTabsOnTheRight = Notification.Name("com.mitchellh.ghostty.closeTabsOnTheRight")
 
     /// Close window
-    static let ghosttyCloseWindow = Notification.Name("com.mitchellh.ghostty.closeWindow")
+    static let rusttyCloseWindow = Notification.Name("com.mitchellh.ghostty.closeWindow")
 
     /// Resize the window to a default size.
-    static let ghosttyResetWindowSize = Notification.Name("com.mitchellh.ghostty.resetWindowSize")
+    static let rusttyResetWindowSize = Notification.Name("com.mitchellh.ghostty.resetWindowSize")
 
     /// Ring the bell
-    static let ghosttyBellDidRing = Notification.Name("com.mitchellh.ghostty.ghosttyBellDidRing")
+    static let rusttyBellDidRing = Notification.Name("com.mitchellh.ghostty.rusttyBellDidRing")
 
     /// The active selection changed
-    static let ghosttySelectionDidChange = Notification.Name("com.mitchellh.ghostty.ghosttySelectionDidChange")
+    static let rusttySelectionDidChange = Notification.Name("com.mitchellh.ghostty.rusttySelectionDidChange")
 
     /// Readonly mode changed
-    static let ghosttyDidChangeReadonly = Notification.Name("com.mitchellh.ghostty.didChangeReadonly")
-    static let ReadonlyKey = ghosttyDidChangeReadonly.rawValue + ".readonly"
-    static let ghosttyCommandPaletteDidToggle = Notification.Name("com.mitchellh.ghostty.commandPaletteDidToggle")
+    static let rusttyDidChangeReadonly = Notification.Name("com.mitchellh.ghostty.didChangeReadonly")
+    static let ReadonlyKey = rusttyDidChangeReadonly.rawValue + ".readonly"
+    static let rusttyCommandPaletteDidToggle = Notification.Name("com.mitchellh.ghostty.commandPaletteDidToggle")
 
     /// Toggle maximize of current window
-    static let ghosttyMaximizeDidToggle = Notification.Name("com.mitchellh.ghostty.maximizeDidToggle")
+    static let rusttyMaximizeDidToggle = Notification.Name("com.mitchellh.ghostty.maximizeDidToggle")
 
     /// Notification sent when scrollbar updates
-    static let ghosttyDidUpdateScrollbar = Notification.Name("com.mitchellh.ghostty.didUpdateScrollbar")
-    static let ScrollbarKey = ghosttyDidUpdateScrollbar.rawValue + ".scrollbar"
+    static let rusttyDidUpdateScrollbar = Notification.Name("com.mitchellh.ghostty.didUpdateScrollbar")
+    static let ScrollbarKey = rusttyDidUpdateScrollbar.rawValue + ".scrollbar"
 
     /// Focus the search field
-    static let ghosttySearchFocus = Notification.Name("com.mitchellh.ghostty.searchFocus")
+    static let rusttySearchFocus = Notification.Name("com.mitchellh.ghostty.searchFocus")
 }
 
 // NOTE: I am moving all of these to Notification.Name extensions over time. This
@@ -387,31 +387,31 @@ extension Rustty.Notification {
 
     /// Posted when a new split is requested. The sending object will be the surface that had focus. The
     /// userdata has one key "direction" with the direction to split to.
-    static let ghosttyNewSplit = Notification.Name("com.mitchellh.ghostty.newSplit")
+    static let rusttyNewSplit = Notification.Name("com.mitchellh.ghostty.newSplit")
 
     /// Close the calling surface.
-    static let ghosttyCloseSurface = Notification.Name("com.mitchellh.ghostty.closeSurface")
+    static let rusttyCloseSurface = Notification.Name("com.mitchellh.ghostty.closeSurface")
 
     /// Focus previous/next split. Has a SplitFocusDirection in the userinfo.
-    static let ghosttyFocusSplit = Notification.Name("com.mitchellh.ghostty.focusSplit")
-    static let SplitDirectionKey = ghosttyFocusSplit.rawValue
+    static let rusttyFocusSplit = Notification.Name("com.mitchellh.ghostty.focusSplit")
+    static let SplitDirectionKey = rusttyFocusSplit.rawValue
 
     /// Goto tab. Has tab index in the userinfo.
-    static let ghosttyGotoTab = Notification.Name("com.mitchellh.ghostty.gotoTab")
-    static let GotoTabKey = ghosttyGotoTab.rawValue
+    static let rusttyGotoTab = Notification.Name("com.mitchellh.ghostty.gotoTab")
+    static let GotoTabKey = rusttyGotoTab.rawValue
 
     /// New tab. Has base surface config requested in userinfo.
-    static let ghosttyNewTab = Notification.Name("com.mitchellh.ghostty.newTab")
+    static let rusttyNewTab = Notification.Name("com.mitchellh.ghostty.newTab")
 
     /// New window. Has base surface config requested in userinfo.
-    static let ghosttyNewWindow = Notification.Name("com.mitchellh.ghostty.newWindow")
+    static let rusttyNewWindow = Notification.Name("com.mitchellh.ghostty.newWindow")
 
     /// Present terminal. Bring the surface's window to focus without activating the app.
-    static let ghosttyPresentTerminal = Notification.Name("com.mitchellh.ghostty.presentTerminal")
+    static let rusttyPresentTerminal = Notification.Name("com.mitchellh.ghostty.presentTerminal")
 
     /// Toggle fullscreen of current window
-    static let ghosttyToggleFullscreen = Notification.Name("com.mitchellh.ghostty.toggleFullscreen")
-    static let FullscreenModeKey = ghosttyToggleFullscreen.rawValue
+    static let rusttyToggleFullscreen = Notification.Name("com.mitchellh.ghostty.toggleFullscreen")
+    static let FullscreenModeKey = rusttyToggleFullscreen.rawValue
 
     /// Notification sent to toggle split maximize/unmaximize.
     static let didToggleSplitZoom = Notification.Name("com.mitchellh.ghostty.didToggleSplitZoom")

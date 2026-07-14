@@ -91,7 +91,7 @@ struct CommandQuery: EntityQuery {
     @MainActor
     func entities(for identifiers: [CommandEntity.ID]) async throws -> [CommandEntity] {
         guard let appDelegate = NSApp.delegate as? AppDelegate else { return [] }
-        let commands = appDelegate.ghostty.config.commandPaletteEntries
+        let commands = appDelegate.rustty.config.commandPaletteEntries
 
         // Extract unique terminal IDs to avoid fetching duplicates
         let terminalIds = Set(identifiers.map(\.terminalId))
@@ -119,6 +119,6 @@ struct CommandQuery: EntityQuery {
     func suggestedEntities() async throws -> [CommandEntity] {
         guard let appDelegate = NSApp.delegate as? AppDelegate,
               let terminal = commandPaletteIntent?.terminal else { return [] }
-        return appDelegate.ghostty.config.commandPaletteEntries.map { CommandEntity($0, for: terminal) }
+        return appDelegate.rustty.config.commandPaletteEntries.map { CommandEntity($0, for: terminal) }
     }
 }

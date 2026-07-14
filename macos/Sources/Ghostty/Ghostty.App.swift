@@ -31,7 +31,7 @@ extension Rustty {
 
         /// Preferred config file than the default ones
         private var configPath: String?
-        /// The ghostty app instance. We only have one of these for the entire app, although I guess
+        /// The rustty app instance. We only have one of these for the entire app, although I guess
         /// in theory you can have multiple... I don't know why you would...
         @Published var app: rustty_app_t? {
             didSet {
@@ -55,7 +55,7 @@ extension Rustty {
                 return
             }
 
-            // Create our "runtime" config. The "runtime" is the configuration that ghostty
+            // Create our "runtime" config. The "runtime" is the configuration that rustty
             // uses to interface with the application runtime environment.
             var runtime_cfg = rustty_runtime_config_s(
                 userdata: Unmanaged.passUnretained(self).toOpaque(),
@@ -69,7 +69,7 @@ extension Rustty {
                 close_surface_cb: { userdata, processAlive in App.closeSurface(userdata, processAlive: processAlive) }
             )
 
-            // Create the ghostty app.
+            // Create the rustty app.
             guard let app = rustty_app_new(&runtime_cfg, config.config) else {
                 logger.critical("rustty_app_new failed")
                 readiness = .error
@@ -324,7 +324,7 @@ extension Rustty {
 
         static func closeSurface(_ userdata: UnsafeMutableRawPointer?, processAlive: Bool) {
             let surface = self.surfaceUserdata(from: userdata)
-            NotificationCenter.default.post(name: Notification.ghosttyCloseSurface, object: surface, userInfo: [
+            NotificationCenter.default.post(name: Notification.rusttyCloseSurface, object: surface, userInfo: [
                 "process_alive": processAlive,
             ])
         }
@@ -338,7 +338,7 @@ extension Rustty {
             guard let surface = surfaceView.surface else { return false }
 
             // Get our pasteboard
-            guard let pasteboard = NSPasteboard.ghostty(location) else { return false }
+            guard let pasteboard = NSPasteboard.rustty(location) else { return false }
 
             // Return false if there is no text-like clipboard content so
             // performable paste bindings can pass through to the terminal.
@@ -387,7 +387,7 @@ extension Rustty {
             confirm: Bool
         ) {
             let surface = self.surfaceUserdata(from: userdata)
-            guard let pasteboard = NSPasteboard.ghostty(location) else { return }
+            guard let pasteboard = NSPasteboard.rustty(location) else { return }
             guard let content = content, len > 0 else { return }
 
             // Convert the C array to Swift array
@@ -728,7 +728,7 @@ extension Rustty {
 
             switch action.kind {
             case .text:
-                // Open with the default editor for `*.ghostty` file or just system text editor
+                // Open with the default editor for `*.rustty` file or just system text editor
                 let editor = NSWorkspace.shared.defaultApplicationURL(forExtension: url.pathExtension) ?? NSWorkspace.shared.defaultTextEditor
                 if let textEditor = editor {
                     NSWorkspace.shared.open([url], withApplicationAt: textEditor, configuration: NSWorkspace.OpenConfiguration())
@@ -794,7 +794,7 @@ extension Rustty {
             switch target.tag {
             case RUSTTY_TARGET_APP:
                 NotificationCenter.default.post(
-                    name: Notification.ghosttyNewWindow,
+                    name: Notification.rusttyNewWindow,
                     object: nil,
                     userInfo: [:]
                 )
@@ -803,7 +803,7 @@ extension Rustty {
                 guard let surface = target.target.surface else { return }
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
                 NotificationCenter.default.post(
-                    name: Notification.ghosttyNewWindow,
+                    name: Notification.rusttyNewWindow,
                     object: surfaceView,
                     userInfo: [
                         Notification.NewSurfaceConfigKey: SurfaceConfiguration(from: rustty_surface_inherited_config(surface, RUSTTY_SURFACE_CONTEXT_WINDOW)),
@@ -819,7 +819,7 @@ extension Rustty {
             switch target.tag {
             case RUSTTY_TARGET_APP:
                 NotificationCenter.default.post(
-                    name: Notification.ghosttyNewTab,
+                    name: Notification.rusttyNewTab,
                     object: nil,
                     userInfo: [:]
                 )
@@ -839,7 +839,7 @@ extension Rustty {
                 }
 
                 NotificationCenter.default.post(
-                    name: Notification.ghosttyNewTab,
+                    name: Notification.rusttyNewTab,
                     object: surfaceView,
                     userInfo: [
                         Notification.NewSurfaceConfigKey: SurfaceConfiguration(from: rustty_surface_inherited_config(surface, RUSTTY_SURFACE_CONTEXT_TAB)),
@@ -866,7 +866,7 @@ extension Rustty {
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
 
                 NotificationCenter.default.post(
-                    name: Notification.ghosttyNewSplit,
+                    name: Notification.rusttyNewSplit,
                     object: surfaceView,
                     userInfo: [
                         "direction": direction,
@@ -892,7 +892,7 @@ extension Rustty {
                 guard let surfaceView = self.surfaceView(from: surface) else { return false }
 
                 NotificationCenter.default.post(
-                    name: Notification.ghosttyPresentTerminal,
+                    name: Notification.rusttyPresentTerminal,
                     object: surfaceView
                 )
                 return true
@@ -916,21 +916,21 @@ extension Rustty {
                 switch mode {
                 case RUSTTY_ACTION_CLOSE_TAB_MODE_THIS:
                     NotificationCenter.default.post(
-                        name: .ghosttyCloseTab,
+                        name: .rusttyCloseTab,
                         object: surfaceView
                     )
                     return
 
                 case RUSTTY_ACTION_CLOSE_TAB_MODE_OTHER:
                     NotificationCenter.default.post(
-                        name: .ghosttyCloseOtherTabs,
+                        name: .rusttyCloseOtherTabs,
                         object: surfaceView
                     )
                     return
 
                 case RUSTTY_ACTION_CLOSE_TAB_MODE_RIGHT:
                     NotificationCenter.default.post(
-                        name: .ghosttyCloseTabsOnTheRight,
+                        name: .rusttyCloseTabsOnTheRight,
                         object: surfaceView
                     )
                     return
@@ -955,7 +955,7 @@ extension Rustty {
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
 
                 NotificationCenter.default.post(
-                    name: .ghosttyCloseWindow,
+                    name: .rusttyCloseWindow,
                     object: surfaceView
                 )
 
@@ -981,12 +981,12 @@ extension Rustty {
             case RUSTTY_TARGET_SURFACE:
                 guard let surface = target.target.surface else { return }
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
-                guard let mode = FullscreenMode.from(ghostty: raw) else {
+                guard let mode = FullscreenMode.from(rustty: raw) else {
                     Rustty.logger.warning("unknown fullscreen mode raw=\(raw.rawValue, privacy: .public)")
                     return
                 }
                 NotificationCenter.default.post(
-                    name: Notification.ghosttyToggleFullscreen,
+                    name: Notification.rusttyToggleFullscreen,
                     object: surfaceView,
                     userInfo: [
                         Notification.FullscreenModeKey: mode,
@@ -1010,7 +1010,7 @@ extension Rustty {
                 guard let surface = target.target.surface else { return }
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
                 NotificationCenter.default.post(
-                    name: .ghosttyCommandPaletteDidToggle,
+                    name: .rusttyCommandPaletteDidToggle,
                     object: surfaceView
                 )
 
@@ -1032,7 +1032,7 @@ extension Rustty {
                 guard let surface = target.target.surface else { return }
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
                 NotificationCenter.default.post(
-                    name: .ghosttyMaximizeDidToggle,
+                    name: .rusttyMaximizeDidToggle,
                     object: surfaceView
                 )
 
@@ -1064,7 +1064,7 @@ extension Rustty {
                 guard let surface = target.target.surface else { return }
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
                 NotificationCenter.default.post(
-                    name: .ghosttyBellDidRing,
+                    name: .rusttyBellDidRing,
                     object: surfaceView
                 )
 
@@ -1085,7 +1085,7 @@ extension Rustty {
                 guard let surface = target.target.surface else { return }
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
                 NotificationCenter.default.post(
-                    name: .ghosttySelectionDidChange,
+                    name: .rusttySelectionDidChange,
                     object: surfaceView
                 )
 
@@ -1107,7 +1107,7 @@ extension Rustty {
                 guard let surface = target.target.surface else { return }
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
                 NotificationCenter.default.post(
-                    name: .ghosttyDidChangeReadonly,
+                    name: .rusttyDidChangeReadonly,
                     object: surfaceView,
                     userInfo: [
                         SwiftUI.Notification.Name.ReadonlyKey: v == RUSTTY_READONLY_ON,
@@ -1136,7 +1136,7 @@ extension Rustty {
                     guard (surfaceView.window?.tabGroup?.windows.count ?? 0) > 1 else { return false }
 
                     NotificationCenter.default.post(
-                        name: .ghosttyMoveTab,
+                        name: .rusttyMoveTab,
                         object: surfaceView,
                         userInfo: [
                             SwiftUI.Notification.Name.RusttyMoveTabKey: Action.MoveTab(c: move),
@@ -1168,7 +1168,7 @@ extension Rustty {
                     guard (surfaceView.window?.tabGroup?.windows.count ?? 0) > 1 else { return false }
 
                     NotificationCenter.default.post(
-                        name: Notification.ghosttyGotoTab,
+                        name: Notification.rusttyGotoTab,
                         object: surfaceView,
                         userInfo: [
                             Notification.GotoTabKey: tab,
@@ -1215,7 +1215,7 @@ extension Rustty {
 
                     // We have a valid target, post the notification to perform the navigation
                     NotificationCenter.default.post(
-                        name: Notification.ghosttyFocusSplit,
+                        name: Notification.rusttyFocusSplit,
                         object: surfaceView,
                         userInfo: [
                             Notification.SplitDirectionKey: splitDirection as Any,
@@ -1452,7 +1452,7 @@ extension Rustty {
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
 
                 // Determine if we even care about command finish notifications
-                guard let config = (NSApplication.shared.delegate as? AppDelegate)?.ghostty.config else { return }
+                guard let config = (NSApplication.shared.delegate as? AppDelegate)?.rustty.config else { return }
                 switch config.notifyOnCommandFinish {
                 case .never:
                     return
@@ -1472,7 +1472,7 @@ extension Rustty {
 
                 if actions.contains(.bell) {
                     NotificationCenter.default.post(
-                        name: .ghosttyBellDidRing,
+                        name: .rusttyBellDidRing,
                         object: surfaceView
                     )
                 }
@@ -1673,7 +1673,7 @@ extension Rustty {
                 // We handle this when the window is visible and timetime_ms is greater than 0,
                 // which will rule out exit codes on launch
                 guard surfaceView.window != nil, v.timetime_ms > 0 else { return false }
-                guard let config = (NSApplication.shared.delegate as? AppDelegate)?.ghostty.config else { return false }
+                guard let config = (NSApplication.shared.delegate as? AppDelegate)?.rustty.config else { return false }
                 surfaceView.setChildExitedMessage(.init(v, threshold: config.abnormalCommandExitRuntime))
                 return true
             default:
@@ -1871,7 +1871,7 @@ extension Rustty {
                 guard let surface = target.target.surface else { return }
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
                 NotificationCenter.default.post(
-                    name: .ghosttyResetWindowSize,
+                    name: .rusttyResetWindowSize,
                     object: surfaceView
                 )
 
@@ -2018,7 +2018,7 @@ extension Rustty {
             case RUSTTY_TARGET_SURFACE:
                 guard let surface = target.target.surface else { return }
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
-                guard let config = (NSApplication.shared.delegate as? AppDelegate)?.ghostty.config else { return }
+                guard let config = (NSApplication.shared.delegate as? AppDelegate)?.rustty.config else { return }
 
                 guard config.progressStyle else {
                     Rustty.logger.debug("progress_report action blocked by config")
@@ -2057,7 +2057,7 @@ extension Rustty {
 
                 let scrollbar = Rustty.Action.Scrollbar(c: v)
                 NotificationCenter.default.post(
-                    name: .ghosttyDidUpdateScrollbar,
+                    name: .rusttyDidUpdateScrollbar,
                     object: surfaceView,
                     userInfo: [
                         SwiftUI.Notification.Name.ScrollbarKey: scrollbar
@@ -2092,7 +2092,7 @@ extension Rustty {
                         surfaceView.searchState = Rustty.SurfaceView.SearchState(from: startSearch)
                     }
 
-                    NotificationCenter.default.post(name: .ghosttySearchFocus, object: surfaceView)
+                    NotificationCenter.default.post(name: .rusttySearchFocus, object: surfaceView)
                 }
 
             default:
@@ -2175,16 +2175,16 @@ extension Rustty {
             logger.info("config reload notification")
 
             guard let app_ud = rustty_app_userdata(app) else { return }
-            let ghostty = Unmanaged<App>.fromOpaque(app_ud).takeUnretainedValue()
+            let rustty = Unmanaged<App>.fromOpaque(app_ud).takeUnretainedValue()
 
             switch target.tag {
             case RUSTTY_TARGET_APP:
-                ghostty.reloadConfig(soft: v.soft)
+                rustty.reloadConfig(soft: v.soft)
                 return
 
             case RUSTTY_TARGET_SURFACE:
                 guard let surface = target.target.surface else { return }
-                ghostty.reloadConfig(surface: surface, soft: v.soft)
+                rustty.reloadConfig(surface: surface, soft: v.soft)
 
             default:
                 assertionFailure()
@@ -2207,7 +2207,7 @@ extension Rustty {
                 case RUSTTY_TARGET_APP:
                     // Notify the world that the app config changed
                     NotificationCenter.default.post(
-                        name: .ghosttyConfigDidChange,
+                        name: .rusttyConfigDidChange,
                         object: nil,
                         userInfo: [
                             SwiftUI.Notification.Name.RusttyConfigChangeKey: config,
@@ -2218,8 +2218,8 @@ extension Rustty {
                     // all the various things that depend on this but are still theme specific
                     // such as split border color work.
                     guard let app_ud = rustty_app_userdata(app) else { return }
-                    let ghostty = Unmanaged<App>.fromOpaque(app_ud).takeUnretainedValue()
-                    ghostty.config = config
+                    let rustty = Unmanaged<App>.fromOpaque(app_ud).takeUnretainedValue()
+                    rustty.config = config
 
                     return
 
@@ -2227,7 +2227,7 @@ extension Rustty {
                     guard let surface = target.target.surface else { return }
                     guard let surfaceView = self.surfaceView(from: surface) else { return }
                     NotificationCenter.default.post(
-                        name: .ghosttyConfigDidChange,
+                        name: .rusttyConfigDidChange,
                         object: surfaceView,
                         userInfo: [
                             SwiftUI.Notification.Name.RusttyConfigChangeKey: config,
@@ -2252,7 +2252,7 @@ extension Rustty {
                     guard let surface = target.target.surface else { return }
                     guard let surfaceView = self.surfaceView(from: surface) else { return }
                     NotificationCenter.default.post(
-                        name: .ghosttyColorDidChange,
+                        name: .rusttyColorDidChange,
                         object: surfaceView,
                         userInfo: [
                             SwiftUI.Notification.Name.RusttyColorChangeKey: Action.ColorChange(c: change)

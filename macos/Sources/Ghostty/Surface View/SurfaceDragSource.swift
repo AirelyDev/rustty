@@ -244,9 +244,9 @@ extension Rustty {
                 }
                 if !endsInWindow {
                     NotificationCenter.default.post(
-                        name: .ghosttySurfaceDragEndedNoTarget,
+                        name: .rusttySurfaceDragEndedNoTarget,
                         object: surfaceView,
-                        userInfo: [Foundation.Notification.Name.ghosttySurfaceDragEndedNoTargetPointKey: screenPoint]
+                        userInfo: [Foundation.Notification.Name.rusttySurfaceDragEndedNoTargetPointKey: screenPoint]
                     )
                 }
             }
@@ -261,8 +261,8 @@ extension Notification.Name {
     /// Posted when a surface drag session ends with no operation (the drag was
     /// released outside a valid drop target) and was not cancelled by the user
     /// pressing escape. The notification's object is the SurfaceView that was dragged.
-    static let ghosttySurfaceDragEndedNoTarget = Notification.Name("ghosttySurfaceDragEndedNoTarget")
+    static let rusttySurfaceDragEndedNoTarget = Notification.Name("rusttySurfaceDragEndedNoTarget")
 
     /// Key for the screen point where the drag ended in the userInfo dictionary.
-    static let ghosttySurfaceDragEndedNoTargetPointKey = "endedAtPoint"
+    static let rusttySurfaceDragEndedNoTargetPointKey = "endedAtPoint"
 }

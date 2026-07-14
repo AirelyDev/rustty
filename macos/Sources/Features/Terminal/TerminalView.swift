@@ -39,7 +39,7 @@ protocol TerminalViewModel: ObservableObject {
 
 /// The main terminal view. This terminal view supports splits.
 struct TerminalView<ViewModel: TerminalViewModel>: View {
-    @ObservedObject var ghostty: Rustty.App
+    @ObservedObject var rustty: Rustty.App
 
     // The required view model
     @ObservedObject var viewModel: ViewModel
@@ -54,9 +54,9 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
     @FocusState private var focused: Bool
 
     // Various state values sent back up from the currently focused terminals.
-    @FocusedValue(\.ghosttySurfaceView) private var focusedSurface
-    @FocusedValue(\.ghosttySurfacePwd) private var surfacePwd
-    @FocusedValue(\.ghosttySurfaceCellSize) private var cellSize
+    @FocusedValue(\.rusttySurfaceView) private var focusedSurface
+    @FocusedValue(\.rusttySurfacePwd) private var surfacePwd
+    @FocusedValue(\.rusttySurfaceCellSize) private var cellSize
 
     // The pwd of the focused surface as a URL
     private var pwdURL: URL? {
@@ -65,7 +65,7 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
     }
 
     var body: some View {
-        switch ghostty.readiness {
+        switch rustty.readiness {
         case .loading:
             Text("Loading")
         case .error:
@@ -82,8 +82,8 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                     TerminalSplitTreeView(
                         tree: viewModel.surfaceTree,
                         action: { delegate?.performSplitAction($0) })
-                        .environmentObject(ghostty)
-                        .ghosttyLastFocusedSurface(lastFocusedSurface)
+                        .environmentObject(rustty)
+                        .rusttyLastFocusedSurface(lastFocusedSurface)
                         .focused($focused)
                         .onAppear { self.focused = true }
                         .onChange(of: focusedSurface) { newValue in
@@ -105,13 +105,13 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                                idealHeight: lastFocusedSurface?.value?.initialSize?.height)
                 }
                 // Ignore safe area to extend up in to the titlebar region if we have the "hidden" titlebar style
-                .ignoresSafeArea(.container, edges: ghostty.config.macosTitlebarStyle == .hidden ? .top : [])
+                .ignoresSafeArea(.container, edges: rustty.config.macosTitlebarStyle == .hidden ? .top : [])
 
                 if let surfaceView = lastFocusedSurface?.value {
                     TerminalCommandPaletteView(
                         surfaceView: surfaceView,
                         isPresented: $viewModel.commandPaletteIsShowing,
-                        ghosttyConfig: ghostty.config,
+                        rusttyConfig: rustty.config,
                         updateViewModel: (NSApp.delegate as? AppDelegate)?.updateViewModel) { action in
                         self.delegate?.performAction(action, on: surfaceView)
                     }

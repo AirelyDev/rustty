@@ -10,9 +10,9 @@ class DockTilePlugin: NSObject, NSDockTilePlugIn {
     // Separate defaults based on debug vs release builds so we can test icons
     // without messing up releases.
     #if DEBUG
-    private let ghosttyUserDefaults = UserDefaults(suiteName: "io.airely.rustty.debug")
+    private let rusttyUserDefaults = UserDefaults(suiteName: "io.airely.rustty.debug")
     #else
-    private let ghosttyUserDefaults = UserDefaults(suiteName: "io.airely.rustty")
+    private let rusttyUserDefaults = UserDefaults(suiteName: "io.airely.rustty")
     #endif
 
     private var iconChangeObserver: Any?
@@ -20,20 +20,20 @@ class DockTilePlugin: NSObject, NSDockTilePlugIn {
     /// The primary NSDockTilePlugin function.
     func setDockTile(_ dockTile: NSDockTile?) {
         // If no dock tile or no access to Rustty defaults, we can't do anything.
-        guard let dockTile, let ghosttyUserDefaults else {
+        guard let dockTile, let rusttyUserDefaults else {
             iconChangeObserver = nil
             return
         }
 
         // Try to restore the previous icon on launch.
-        iconDidChange(ghosttyUserDefaults.appIcon, dockTile: dockTile)
+        iconDidChange(rusttyUserDefaults.appIcon, dockTile: dockTile)
 
         // Setup a new observer for when the icon changes so we can update. This message
         // is sent by the primary Rustty app.
         iconChangeObserver = DistributedNotificationCenter
             .default()
-            .publisher(for: .ghosttyIconDidChange)
-            .map { [weak self] _ in self?.ghosttyUserDefaults?.appIcon }
+            .publisher(for: .rusttyIconDidChange)
+            .map { [weak self] _ in self?.rusttyUserDefaults?.appIcon }
             .receive(on: DispatchQueue.global())
             .sink { [weak self] newIcon in self?.iconDidChange(newIcon, dockTile: dockTile) }
     }

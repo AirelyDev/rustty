@@ -6,7 +6,7 @@ import RusttyKit
 extension Rustty {
     /// InspectableSurface is a type of Surface view that allows an inspector to be attached.
     struct InspectableSurface: View {
-        @EnvironmentObject var ghostty: Rustty.App
+        @EnvironmentObject var rustty: Rustty.App
 
         /// Same as SurfaceWrapper, see the doc comments there.
         @ObservedObject var surfaceView: SurfaceView
@@ -26,15 +26,15 @@ extension Rustty {
                 if !surfaceView.inspectorVisible {
                     SurfaceWrapper(surfaceView: surfaceView, isSplit: isSplit)
                 } else {
-                    SplitView(.vertical, $split, dividerColor: ghostty.config.splitDividerColor, left: {
+                    SplitView(.vertical, $split, dividerColor: rustty.config.splitDividerColor, left: {
                         SurfaceWrapper(surfaceView: surfaceView, isSplit: isSplit)
                     }, right: {
                         InspectorViewRepresentable(surfaceView: surfaceView)
                             .focused($inspectorFocus)
-                            .focusedValue(\.ghosttySurfaceView, surfaceView)
+                            .focusedValue(\.rusttySurfaceView, surfaceView)
                     }, onEqualize: {
                         guard let surface = surfaceView.surface else { return }
-                        ghostty.splitEqualize(surface: surface)
+                        rustty.splitEqualize(surface: surface)
                     })
                 }
             }
@@ -226,25 +226,25 @@ extension Rustty {
 
         override func mouseDown(with event: NSEvent) {
             guard let inspector = self.inspector else { return }
-            let mods = Rustty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.rusttyMods(event.modifierFlags)
             inspector.mouseButton(RUSTTY_MOUSE_PRESS, button: RUSTTY_MOUSE_LEFT, mods: mods)
         }
 
         override func mouseUp(with event: NSEvent) {
             guard let inspector = self.inspector else { return }
-            let mods = Rustty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.rusttyMods(event.modifierFlags)
             inspector.mouseButton(RUSTTY_MOUSE_RELEASE, button: RUSTTY_MOUSE_LEFT, mods: mods)
         }
 
         override func rightMouseDown(with event: NSEvent) {
             guard let inspector = self.inspector else { return }
-            let mods = Rustty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.rusttyMods(event.modifierFlags)
             inspector.mouseButton(RUSTTY_MOUSE_PRESS, button: RUSTTY_MOUSE_RIGHT, mods: mods)
         }
 
         override func rightMouseUp(with event: NSEvent) {
             guard let inspector = self.inspector else { return }
-            let mods = Rustty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.rusttyMods(event.modifierFlags)
             inspector.mouseButton(RUSTTY_MOUSE_RELEASE, button: RUSTTY_MOUSE_RIGHT, mods: mods)
         }
 
@@ -321,7 +321,7 @@ extension Rustty {
 
             // The keyAction function will do this AGAIN below which sucks to repeat
             // but this is super cheap and flagsChanged isn't that common.
-            let mods = Rustty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.rusttyMods(event.modifierFlags)
 
             // If the key that pressed this is active, its a press, else release
             var action = RUSTTY_ACTION_RELEASE
@@ -333,7 +333,7 @@ extension Rustty {
         private func keyAction(_ action: rustty_input_action_e, event: NSEvent) {
             guard let inspector = self.inspector else { return }
             guard let key = Rustty.Input.Key(keyCode: event.keyCode) else { return }
-            let mods = Rustty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.rusttyMods(event.modifierFlags)
             inspector.key(action, key: key.cKey, mods: mods)
         }
 

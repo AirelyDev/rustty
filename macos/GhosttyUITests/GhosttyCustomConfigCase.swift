@@ -26,7 +26,7 @@ class RusttyCustomConfigCase: XCTestCase {
     static let defaultsSuiteName: String = "RUSTTY_UI_TESTS"
 
     private let configFile: URL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        .appendingPathExtension("ghostty")
+        .appendingPathExtension("rustty")
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -40,7 +40,7 @@ class RusttyCustomConfigCase: XCTestCase {
         try newConfig.write(to: configFile, atomically: true, encoding: .utf8)
     }
 
-    func ghosttyApplication(defaultsSuite: String = RusttyCustomConfigCase.defaultsSuiteName) throws -> XCUIApplication {
+    func rusttyApplication(defaultsSuite: String = RusttyCustomConfigCase.defaultsSuiteName) throws -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments.append(contentsOf: ["-ApplePersistenceIgnoreState", "YES"])
         app.launchEnvironment["RUSTTY_CONFIG_PATH"] = configFile.path

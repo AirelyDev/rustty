@@ -61,7 +61,7 @@ struct NewTerminalIntent: AppIntent {
         guard let appDelegate = NSApp.delegate as? AppDelegate else {
             throw RusttyIntentError.appUnavailable
         }
-        let ghostty = appDelegate.ghostty
+        let rustty = appDelegate.rustty
 
         var config = Rustty.SurfaceConfiguration()
 
@@ -108,7 +108,7 @@ struct NewTerminalIntent: AppIntent {
         switch location {
         case .window:
             let newController = TerminalController.newWindow(
-                ghostty,
+                rustty,
                 withBaseConfig: config,
                 withParent: parent?.window)
             if let view = newController.surfaceTree.root?.leftmostLeaf() {
@@ -117,7 +117,7 @@ struct NewTerminalIntent: AppIntent {
 
         case .tab:
             let newController = TerminalController.newTab(
-                ghostty,
+                rustty,
                 from: parent?.window,
                 withBaseConfig: config)
             if let view = newController?.surfaceTree.root?.leftmostLeaf() {

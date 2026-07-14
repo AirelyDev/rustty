@@ -77,7 +77,7 @@ class SurfaceScrollView: NSView {
 
         // Listen for scrollbar updates from Rustty
         observers.append(NotificationCenter.default.addObserver(
-            forName: .ghosttyDidUpdateScrollbar,
+            forName: .rusttyDidUpdateScrollbar,
             object: surfaceView,
             queue: .main
         ) { [weak self] notification in

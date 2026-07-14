@@ -97,10 +97,10 @@ extension OSColor {
 #if !DOCK_TILE_PLUGIN
 extension OSColor {
     /// Create a color from a Rustty color.
-    convenience init(ghostty: rustty_config_color_s) {
-        let red = Double(ghostty.r) / 255
-        let green = Double(ghostty.g) / 255
-        let blue = Double(ghostty.b) / 255
+    convenience init(rustty: rustty_config_color_s) {
+        let red = Double(rustty.r) / 255
+        let green = Double(rustty.g) / 255
+        let blue = Double(rustty.b) / 255
         self.init(red: red, green: green, blue: blue, alpha: 1)
     }
 }

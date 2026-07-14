@@ -15,7 +15,7 @@ final class RusttyTitleUITests: RusttyCustomConfigCase {
 
     @MainActor
     func testTitle() throws {
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         app.launch()
 
         XCTAssertEqual(app.windows.firstMatch.title, "RusttyUITestsLaunchTests", "Oops, `title=` doesn't work!")

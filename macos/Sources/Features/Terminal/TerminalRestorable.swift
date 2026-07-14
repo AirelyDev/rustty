@@ -136,10 +136,10 @@ class TerminalWindowRestoration: NSObject, NSWindowRestoration {
         }
 
         // If our configuration is "never" then we never restore the state
-        // no matter what. Note its safe to use "ghostty.config" directly here
+        // no matter what. Note its safe to use "rustty.config" directly here
         // because window restoration is only ever invoked on app start so we
         // don't have to deal with config reloads.
-        if appDelegate.ghostty.config.windowSaveState == "never" {
+        if appDelegate.rustty.config.windowSaveState == "never" {
             AppDelegate.logger.warning("skip restoration: window-save-state=never")
             completionHandler(nil, nil)
             return
@@ -152,11 +152,11 @@ class TerminalWindowRestoration: NSObject, NSWindowRestoration {
         }
 
         // The window creation has to go through our terminalManager so that it
-        // can be found for events from libghostty. This uses the low-level
+        // can be found for events from librustty. This uses the low-level
         // createWindow so that AppKit can place the window wherever it should
         // be.
         let c = TerminalController.init(
-            appDelegate.ghostty,
+            appDelegate.rustty,
             withSurfaceTree: state.surfaceTree)
         guard let window = c.window else {
             completionHandler(nil, TerminalRestoreError.windowDidNotLoad)

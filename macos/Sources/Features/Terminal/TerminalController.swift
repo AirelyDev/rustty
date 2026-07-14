@@ -10,7 +10,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         let defaultValue = "Terminal"
 
         guard let appDelegate = NSApp.delegate as? AppDelegate else { return defaultValue }
-        let config = appDelegate.ghostty.config
+        let config = appDelegate.rustty.config
 
         // If we have no window decorations, there's no reason to do anything but
         // the default titlebar (because there will be no titlebar).
@@ -61,7 +61,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// The notification cancellable for focused surface property changes.
     private var surfaceAppearanceCancellables: Set<AnyCancellable> = []
 
-    init(_ ghostty: Rustty.App,
+    init(_ rustty: Rustty.App,
          withBaseConfig base: Rustty.SurfaceConfiguration? = nil,
          withSurfaceTree tree: SplitTree<Rustty.SurfaceView>? = nil,
          parent: NSWindow? = nil
@@ -74,52 +74,52 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         self.restorable = (base?.command ?? "") == ""
 
         // Setup our initial derived config based on the current app config
-        self.derivedConfig = DerivedConfig(ghostty.config)
+        self.derivedConfig = DerivedConfig(rustty.config)
 
-        super.init(ghostty, baseConfig: base, surfaceTree: tree)
+        super.init(rustty, baseConfig: base, surfaceTree: tree)
 
         // Setup our notifications for behaviors
         let center = NotificationCenter.default
         center.addObserver(
             self,
             selector: #selector(onToggleFullscreen),
-            name: Rustty.Notification.ghosttyToggleFullscreen,
+            name: Rustty.Notification.rusttyToggleFullscreen,
             object: nil)
         center.addObserver(
             self,
             selector: #selector(onMoveTab),
-            name: .ghosttyMoveTab,
+            name: .rusttyMoveTab,
             object: nil)
         center.addObserver(
             self,
             selector: #selector(onGotoTab),
-            name: Rustty.Notification.ghosttyGotoTab,
+            name: Rustty.Notification.rusttyGotoTab,
             object: nil)
         center.addObserver(
             self,
             selector: #selector(onCloseTab),
-            name: .ghosttyCloseTab,
+            name: .rusttyCloseTab,
             object: nil)
         center.addObserver(
             self,
             selector: #selector(onCloseOtherTabs),
-            name: .ghosttyCloseOtherTabs,
+            name: .rusttyCloseOtherTabs,
             object: nil)
         center.addObserver(
             self,
             selector: #selector(onCloseTabsOnTheRight),
-            name: .ghosttyCloseTabsOnTheRight,
+            name: .rusttyCloseTabsOnTheRight,
             object: nil)
         center.addObserver(
             self,
             selector: #selector(onResetWindowSize),
-            name: .ghosttyResetWindowSize,
+            name: .rusttyResetWindowSize,
             object: nil
         )
         center.addObserver(
             self,
-            selector: #selector(ghosttyConfigDidChange(_:)),
-            name: .ghosttyConfigDidChange,
+            selector: #selector(rusttyConfigDidChange(_:)),
+            name: .rusttyConfigDidChange,
             object: nil
         )
         center.addObserver(
@@ -130,7 +130,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         center.addObserver(
             self,
             selector: #selector(onCloseWindow),
-            name: .ghosttyCloseWindow,
+            name: .rusttyCloseWindow,
             object: nil
         )
     }
@@ -247,11 +247,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     /// The "new window" action.
     static func newWindow(
-        _ ghostty: Rustty.App,
+        _ rustty: Rustty.App,
         withBaseConfig baseConfig: Rustty.SurfaceConfiguration? = nil,
         withParent explicitParent: NSWindow? = nil
     ) -> TerminalController {
-        let c = TerminalController.init(ghostty, withBaseConfig: baseConfig)
+        let c = TerminalController.init(rustty, withBaseConfig: baseConfig)
 
         // Get our parent. Our parent is the one explicitly given to us,
         // otherwise the focused terminal, otherwise an arbitrary one.
@@ -267,7 +267,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             // fullscreen but this is how we've always done it. This matches iTerm2
             // behavior.
             c.toggleFullscreen(mode: .native)
-        } else if let fullscreenMode = ghostty.config.windowFullscreen {
+        } else if let fullscreenMode = rustty.config.windowFullscreen {
             switch fullscreenMode {
             case .native:
                 // Native has to be done immediately so that our stylemask contains
@@ -316,11 +316,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
                 // Register redo action
                 undoManager.registerUndo(
-                    withTarget: ghostty,
+                    withTarget: rustty,
                     expiresAfter: target.undoExpiration
-                ) { ghostty in
+                ) { rustty in
                     _ = TerminalController.newWindow(
-                        ghostty,
+                        rustty,
                         withBaseConfig: baseConfig,
                         withParent: explicitParent)
                 }
@@ -333,18 +333,18 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// Create a new window with an existing split tree.
     /// The window will be sized to match the tree's current view bounds if available.
     /// - Parameters:
-    ///   - ghostty: The Rustty app instance.
+    ///   - rustty: The Rustty app instance.
     ///   - tree: The split tree to use for the new window.
     ///   - position: Optional screen position (top-left corner) for the new window.
     ///               If nil, the window will cascade from the last cascade point.
     static func newWindow(
-        _ ghostty: Rustty.App,
+        _ rustty: Rustty.App,
         tree: SplitTree<Rustty.SurfaceView>,
         position: NSPoint? = nil,
         confirmUndo: Bool = true,
         inheritBackgroundOpacity: Bool? = nil
     ) -> TerminalController {
-        let c = TerminalController.init(ghostty, withSurfaceTree: tree)
+        let c = TerminalController.init(rustty, withSurfaceTree: tree)
         if let inheritBackgroundOpacity {
             c.isBackgroundOpaque = inheritBackgroundOpacity
         }
@@ -389,11 +389,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
                 }
 
                 undoManager.registerUndo(
-                    withTarget: ghostty,
+                    withTarget: rustty,
                     expiresAfter: target.undoExpiration
-                ) { ghostty in
+                ) { rustty in
                     _ = TerminalController.newWindow(
-                        ghostty,
+                        rustty,
                         tree: tree,
                         inheritBackgroundOpacity: inheritBackgroundOpacity
                     )
@@ -405,7 +405,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     }
 
     static func newTab(
-        _ ghostty: Rustty.App,
+        _ rustty: Rustty.App,
         from parent: NSWindow? = nil,
         withBaseConfig baseConfig: Rustty.SurfaceConfiguration? = nil
     ) -> TerminalController? {
@@ -413,7 +413,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // then we just create a new window.
         guard let parent,
               let parentController = parent.windowController as? TerminalController else {
-            return newWindow(ghostty, withBaseConfig: baseConfig, withParent: parent)
+            return newWindow(rustty, withBaseConfig: baseConfig, withParent: parent)
         }
 
         // If our parent is in non-native fullscreen, then new tabs do not work.
@@ -430,7 +430,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         }
 
         // Create a new window and add it to the parent
-        let controller = TerminalController.init(ghostty, withBaseConfig: baseConfig)
+        let controller = TerminalController.init(rustty, withBaseConfig: baseConfig)
         controller.isBackgroundOpaque = parentController.isBackgroundOpaque
         guard let window = controller.window else { return controller }
 
@@ -453,7 +453,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // If we don't allow tabs then we create a new window instead.
         if window.tabbingMode != .disallowed {
             // Add the window to the tab group and show it.
-            switch ghostty.config.windowNewTabPosition {
+            switch rustty.config.windowNewTabPosition {
             case "end":
                 // If we already have a tab group and we want the new tab to open at the end,
                 // then we use the last window in the tab group as the parent.
@@ -515,11 +515,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
                 // Register redo action
                 undoManager.registerUndo(
-                    withTarget: ghostty,
+                    withTarget: rustty,
                     expiresAfter: target.undoExpiration
-                ) { ghostty in
+                ) { rustty in
                     _ = TerminalController.newTab(
-                        ghostty,
+                        rustty,
                         from: parent,
                         withBaseConfig: baseConfig)
                 }
@@ -531,7 +531,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     // MARK: - Methods
 
-    @objc private func ghosttyConfigDidChange(_ notification: Notification) {
+    @objc private func rusttyConfigDidChange(_ notification: Notification) {
         // Get our managed configuration object out
         guard let config = notification.userInfo?[
             Notification.Name.RusttyConfigChangeKey
@@ -574,7 +574,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
                     continue
                 }
 
-                if let equiv = ghostty.config.keyboardShortcut(for: "goto_tab:\(tab)") {
+                if let equiv = rustty.config.keyboardShortcut(for: "goto_tab:\(tab)") {
                     window.keyEquivalent = "\(equiv)"
                 } else {
                     window.keyEquivalent = ""
@@ -633,7 +633,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         // Call this last in case it uses any of the properties above.
         window.syncAppearance(surfaceConfig)
-        terminalViewContainer?.ghosttyConfigDidChange(ghostty.config, preferredBackgroundColor: window.preferredBackgroundColor)
+        terminalViewContainer?.rusttyConfigDidChange(rustty.config, preferredBackgroundColor: window.preferredBackgroundColor)
     }
 
     /// Adjusts the given frame for the configured window position.
@@ -695,10 +695,10 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             // Register undo action to restore the tab
             undoManager.setActionName("Close Tab")
             undoManager.registerUndo(
-                withTarget: ghostty,
+                withTarget: rustty,
                 expiresAfter: undoExpiration
-            ) { ghostty in
-                let newController = TerminalController(ghostty, with: undoState)
+            ) { rustty in
+                let newController = TerminalController(rustty, with: undoState)
 
                 if registerRedo {
                     undoManager.registerUndo(
@@ -843,10 +843,10 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
                 // Register undo action to restore the window
                 undoManager.setActionName("Close Window")
                 undoManager.registerUndo(
-                    withTarget: ghostty,
-                    expiresAfter: undoExpiration) { ghostty in
+                    withTarget: rustty,
+                    expiresAfter: undoExpiration) { rustty in
                         // Restore the undo state
-                        let newController = TerminalController(ghostty, with: undoState)
+                        let newController = TerminalController(rustty, with: undoState)
 
                         // Register redo action
                         undoManager.registerUndo(
@@ -899,12 +899,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         undoManager.setActionName("Close Window")
         undoManager.registerUndo(
-            withTarget: ghostty,
+            withTarget: rustty,
             expiresAfter: undoExpiration
-        ) { ghostty in
+        ) { rustty in
             // Restore all windows in the tab group
             let controllers = undoStates.map { undoState in
-                TerminalController(ghostty, with: undoState)
+                TerminalController(rustty, with: undoState)
             }
 
             // The first controller becomes the parent window for all tabs.
@@ -989,8 +989,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         let tabColor: TerminalTabColor
     }
 
-    convenience init(_ ghostty: Rustty.App, with undoState: UndoState) {
-        self.init(ghostty, withSurfaceTree: undoState.surfaceTree)
+    convenience init(_ rustty: Rustty.App, with undoState: UndoState) {
+        self.init(rustty, withSurfaceTree: undoState.surfaceTree)
 
         // Show the window and restore its frame
         showWindow(nil)
@@ -1057,10 +1057,10 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         guard let window else { return }
 
         // I copy this because we may change the source in the future but also because
-        // I regularly audit our codebase for "ghostty.config" access because generally
+        // I regularly audit our codebase for "rustty.config" access because generally
         // you shouldn't use it. Its safe in this case because for a new window we should
         // use whatever the latest app-level config is.
-        let config = ghostty.config
+        let config = rustty.config
 
         // Setting all three of these is required for restoration to work.
         window.isRestorable = restorable
@@ -1079,7 +1079,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         // Initialize our content view to the SwiftUI root
         let container = TerminalViewContainer {
-            TerminalView(ghostty: ghostty, viewModel: self, delegate: self)
+            TerminalView(rustty: rustty, viewModel: self, delegate: self)
         }
 
         // Set the initial content size on the container so that
@@ -1158,9 +1158,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     // Shows the "+" button in the tab bar, responds to that click.
     override func newWindowForTab(_ sender: Any?) {
-        // Trigger the ghostty core event logic for a new tab.
+        // Trigger the rustty core event logic for a new tab.
         guard let surface = self.focusedSurface?.surface else { return }
-        ghostty.newTab(surface: surface)
+        rustty.newTab(surface: surface)
     }
 
     // MARK: NSWindowDelegate
@@ -1266,12 +1266,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     @IBAction func newWindow(_ sender: Any?) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.newWindow(surface: surface)
+        rustty.newWindow(surface: surface)
     }
 
     @IBAction func newTab(_ sender: Any?) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.newTab(surface: surface)
+        rustty.newTab(surface: surface)
     }
 
     @IBAction func closeTab(_ sender: Any?) {
@@ -1387,12 +1387,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     @IBAction func toggleRusttyFullScreen(_ sender: Any?) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.toggleFullscreen(surface: surface)
+        rustty.toggleFullscreen(surface: surface)
     }
 
     @IBAction func toggleTerminalInspector(_ sender: Any?) {
         guard let surface = focusedSurface?.surface else { return }
-        ghostty.toggleTerminalInspector(surface: surface)
+        rustty.toggleTerminalInspector(surface: surface)
     }
 
     // MARK: - TerminalViewDelegate

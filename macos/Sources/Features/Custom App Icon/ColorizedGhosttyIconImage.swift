@@ -1,8 +1,8 @@
 import SwiftUI
 
 extension View {
-    /// Returns the ghostty icon to use for views.
-    func ghosttyIconImage() -> Image {
+    /// Returns the rustty icon to use for views.
+    func rusttyIconImage() -> Image {
         #if os(macOS)
         // Grab the icon from the running application. This is the best way
         // I've found so far to get the proper icon for our current icon

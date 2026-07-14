@@ -104,7 +104,7 @@ class TerminalWindow: NSWindow {
 
         // All new windows are based on the app config at the time of creation.
         guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
-        let config = appDelegate.ghostty.config
+        let config = appDelegate.rustty.config
 
         // Setup our initial config
         derivedConfig = .init(config)
@@ -171,7 +171,7 @@ class TerminalWindow: NSWindow {
         tab.accessoryView = stackView
 
         // Get our saved level
-        level = UserDefaults.ghostty.value(forKey: Self.defaultLevelKey) as? NSWindow.Level ?? .normal
+        level = UserDefaults.rustty.value(forKey: Self.defaultLevelKey) as? NSWindow.Level ?? .normal
     }
 
     // Both of these must be true for windows without decorations to be able to
@@ -275,7 +275,7 @@ class TerminalWindow: NSWindow {
 
     /// This identifier is attached to the tab bar view controller when we detect it being
     /// added.
-    static let tabBarIdentifier: NSUserInterfaceItemIdentifier = .init("_ghosttyTabBar")
+    static let tabBarIdentifier: NSUserInterfaceItemIdentifier = .init("_rusttyTabBar")
 
     var hasMoreThanOneTabs: Bool {
         /// accessing ``tabGroup?.windows`` here
@@ -494,7 +494,7 @@ class TerminalWindow: NSWindow {
             // We don't need to set blur when using glass
             if !surfaceConfig.backgroundBlur.isGlassStyle, let appDelegate = NSApp.delegate as? AppDelegate {
                 rustty_set_window_background_blur(
-                    appDelegate.ghostty.app,
+                    appDelegate.rustty.app,
                     Unmanaged.passUnretained(self).toOpaque())
             }
         } else {

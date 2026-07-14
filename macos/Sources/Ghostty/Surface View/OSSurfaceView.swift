@@ -68,8 +68,8 @@ extension Rustty {
             let center = NotificationCenter.default
             center.addObserver(
                 self,
-                selector: #selector(ghosttyDidChangeReadonly(_:)),
-                name: .ghosttyDidChangeReadonly,
+                selector: #selector(rusttyDidChangeReadonly(_:)),
+                name: .rusttyDidChangeReadonly,
                 object: self,
             )
         }
@@ -83,7 +83,7 @@ extension Rustty {
                 .removeObserver(self)
         }
 
-        @objc private func ghosttyDidChangeReadonly(_ notification: Foundation.Notification) {
+        @objc private func rusttyDidChangeReadonly(_ notification: Foundation.Notification) {
             guard let value = notification.userInfo?[Foundation.Notification.Name.ReadonlyKey] as? Bool else { return }
             readonly = value
         }

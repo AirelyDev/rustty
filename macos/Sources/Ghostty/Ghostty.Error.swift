@@ -5,7 +5,7 @@ extension Rustty {
 
         var localizedStringResource: LocalizedStringResource {
             switch self {
-            case .apiFailed: return "libghostty API call failed"
+            case .apiFailed: return "librustty API call failed"
             }
         }
     }

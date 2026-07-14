@@ -45,7 +45,7 @@ final class RusttyThemeTests: RusttyCustomConfigCase {
         try updateConfig("title=\(windowTitle) \n theme=light:3024 Day,dark:3024 Night")
         XCUIDevice.shared.appearance = .dark
 
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         app.launch()
         try assertTitlebarAppearance(.dark, for: app)
         // create a split
@@ -61,7 +61,7 @@ final class RusttyThemeTests: RusttyCustomConfigCase {
     @MainActor
     func testLightTransparentWindowThemeWithDarkTerminal() async throws {
         try updateConfig("title=\(windowTitle) \n window-theme=light")
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         app.launch()
         try await Task.sleep(for: .seconds(0.5))
         try assertTitlebarAppearance(.dark, for: app)
@@ -70,7 +70,7 @@ final class RusttyThemeTests: RusttyCustomConfigCase {
     @MainActor
     func testLightNativeWindowThemeWithDarkTerminal() async throws {
         try updateConfig("title=\(windowTitle) \n window-theme = light \n macos-titlebar-style = native")
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         app.launch()
         try assertTitlebarAppearance(.light, for: app)
     }
@@ -78,7 +78,7 @@ final class RusttyThemeTests: RusttyCustomConfigCase {
     @MainActor
     func testReloadingLightTransparentWindowTheme() async throws {
         try updateConfig("title=\(windowTitle) \n ")
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         app.launch()
         // default dark theme
         try assertTitlebarAppearance(.dark, for: app)
@@ -93,7 +93,7 @@ final class RusttyThemeTests: RusttyCustomConfigCase {
     func testSwitchingSystemTheme() async throws {
         try updateConfig("title=\(windowTitle) \n theme=light:3024 Day,dark:3024 Night")
         XCUIDevice.shared.appearance = .dark
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         app.launch()
         try assertTitlebarAppearance(.dark, for: app)
         XCUIDevice.shared.appearance = .light
@@ -105,7 +105,7 @@ final class RusttyThemeTests: RusttyCustomConfigCase {
     func testReloadFromLightWindowThemeToDefaultTheme() async throws {
         try updateConfig("title=\(windowTitle) \n theme=light:3024 Day,dark:3024 Night")
         XCUIDevice.shared.appearance = .light
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         app.launch()
         try assertTitlebarAppearance(.light, for: app)
         try updateConfig("title=\(windowTitle) \n ")
@@ -119,7 +119,7 @@ final class RusttyThemeTests: RusttyCustomConfigCase {
     func testReloadFromDefaultThemeToDarkWindowTheme() async throws {
         try updateConfig("title=\(windowTitle) \n ")
         XCUIDevice.shared.appearance = .light
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         app.launch()
         try assertTitlebarAppearance(.dark, for: app)
         try updateConfig("title=\(windowTitle) \n theme=light:3024 Day,dark:3024 Night \n window-theme=dark")
@@ -133,7 +133,7 @@ final class RusttyThemeTests: RusttyCustomConfigCase {
     func testReloadingFromDarkThemeToSystemLightTheme() async throws {
         try updateConfig("title=\(windowTitle) \n theme=light:3024 Day,dark:3024 Night \n window-theme=dark")
         XCUIDevice.shared.appearance = .light
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         app.launch()
         try assertTitlebarAppearance(.dark, for: app)
         try updateConfig("title=\(windowTitle) \n theme=light:3024 Day,dark:3024 Night")
@@ -147,7 +147,7 @@ final class RusttyThemeTests: RusttyCustomConfigCase {
     func testQuickTerminalThemeChange() async throws {
         try updateConfig("title=\(windowTitle) \n theme=light:3024 Day,dark:3024 Night \n confirm-close-surface=false")
         XCUIDevice.shared.appearance = .light
-        let app = try ghosttyApplication()
+        let app = try rusttyApplication()
         app.launch()
         // close default window
         app.typeKey("w", modifierFlags: [.command])
