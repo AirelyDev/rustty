@@ -43,6 +43,29 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _gatelib as G  # noqa: E402
 
+
+def _parity_names(root):
+    """Load the port<->oracle name map (rebrand Task 0,
+    .port/tools/PARITY_NAMING.md) so this gate never hardcodes either side's
+    name literal — the terminfo entry probed via `infocmp` is the PORT name.
+    Falls back to the pre-Task-0 hardcoded defaults if the map is absent (e.g.
+    the G9 self-test's synthetic tmp tree, which has no .port/tools/ of its
+    own) so this loader can never turn a missing-map case into a crash."""
+    d = {"PORT_NAME": "rustty", "ORACLE_NAME": "ghostty"}
+    try:
+        with open(os.path.join(root, ".port/tools/parity_names.env")) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    d[k] = v
+    except OSError:
+        pass
+    return d
+
+
+PARITY_NAMES = _parity_names(G.RUSTTY_ROOT)
+
 # kind -> (owning crate keys, accessor that yields list of ids from surface json)
 OWNERS = {
     "config": ["config"],
@@ -176,16 +199,17 @@ def present(name, blob):
 
 
 def check_terminfo_infocmp(surface):
-    """If `infocmp rustty` is available, diff its cap set against the surface
-    (R2-terminfo-cap-parity). Returns (available, missing_caps_list, note)."""
+    """If `infocmp <PORT_NAME>` is available, diff its cap set against the
+    surface (R2-terminfo-cap-parity). Returns (available, missing_caps_list, note)."""
+    port_name = PARITY_NAMES.get("PORT_NAME", "rustty")
     if shutil.which("infocmp") is None:
         return False, [], "infocmp not on PATH"
     try:
-        r = subprocess.run(["infocmp", "-1", "rustty"], capture_output=True, text=True)
+        r = subprocess.run(["infocmp", "-1", port_name], capture_output=True, text=True)
     except Exception as e:  # noqa: BLE001
         return False, [], f"infocmp error: {e}"
     if r.returncode != 0:
-        return False, [], "rustty terminfo entry not compiled/installed yet"
+        return False, [], f"{port_name} terminfo entry not compiled/installed yet"
     compiled = set()
     for line in r.stdout.splitlines():
         line = line.strip().rstrip(",")

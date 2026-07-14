@@ -14,6 +14,7 @@
 # The macOS app C-ABI is APPEND-ONLY (PREPORT §2 I9 / risk R-H): a symbol may never be
 # renamed or dropped once shipped, so this gate is the machine-checkable ABI ledger that
 # A2 (ghostty_* alias forwarders) and the A3 header-diff gate build on.
+# NOTE: A2 alias section removed by rebrand Task 1
 #
 # Registered PROGRESS (R5): it reports honest drift without blocking CI. At the time of
 # authoring, 3 main_c-tier exports (rustty_translate / rustty_info / rustty_cli_try_action)
@@ -30,8 +31,16 @@ set -euo pipefail
 # ── locate repo + inputs ────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-TSV="${CABI_SYMBOLS_TSV:-$REPO_ROOT/.port/audits/CABI_SYMBOLS.tsv}"
-GHOSTTY_H="${GHOSTTY_H:-/Users/gael/projects/ghostty/include/ghostty.h}"
+
+# Port<->oracle name map (rebrand Task 0, .port/tools/PARITY_NAMING.md): the
+# single source of truth for which side is the ORACLE (stays ghostty) vs the
+# PORT (rustty). Sourcing it here means this gate never hardcodes either name
+# literal beyond what the map itself pins.
+# shellcheck source=/dev/null
+source "$REPO_ROOT/.port/tools/parity_names.env"
+
+TSV="${CABI_SYMBOLS_TSV:-$REPO_ROOT/$CABI_MAP}"
+GHOSTTY_H="${GHOSTTY_H:-$ORACLE_HEADER_PATH}"
 CRATES_DIR="$REPO_ROOT/crates"
 
 red()  { printf 'RED: %s\n'  "$*" >&2; }

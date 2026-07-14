@@ -42,7 +42,18 @@ set -euo pipefail
 
 GATES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT_DIR="$(cd "$GATES_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$PORT_DIR/.." && pwd)"
+
+# Port<->oracle name map (rebrand Task 0, .port/tools/PARITY_NAMING.md). The
+# port driver var below stays RUSTTY_VT_DRIVER (already the port name); this
+# source line is here so future edits to this runner never have to hardcode
+# either side's name again.
+# shellcheck source=/dev/null
+source "$REPO_ROOT/.port/tools/parity_names.env"
+
 HARNESS="$PORT_DIR/phase-0/harness"
+# .port/phase-0/corpora/cvt/*.golden — the ORACLE golden corpus (captured
+# ghostty output, carve-out: stays ghostty, never renamed by the rebrand).
 CORPUS="$PORT_DIR/phase-0/corpora/cvt"
 PY="${PYTHON:-python3}"
 

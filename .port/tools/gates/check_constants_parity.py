@@ -55,11 +55,36 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _gatelib as g  # noqa: E402  (shared gate helpers; read-only import)
 
+
+def _parity_names(root):
+    """Load the port<->oracle name map (rebrand Task 0,
+    .port/tools/PARITY_NAMING.md) — the single sourced port<->oracle map so a
+    rename never makes the port look artificially divergent from the oracle.
+    Falls back to the pre-Task-0 hardcoded default if the map is absent so
+    this loader can never turn a missing-map case into a crash."""
+    d = {"ORACLE_TREE": "/Users/gael/projects/ghostty"}
+    try:
+        with open(os.path.join(root, ".port/tools/parity_names.env")) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    d[k] = v
+    except OSError:
+        pass
+    return d
+
+
+PARITY_NAMES = _parity_names(g.RUSTTY_ROOT)
+
 # R3: the ghostty oracle is a read-only EXTERNAL reference, never shipped to CI.
-# Hard-coded to the one source of truth ci.sh/check_test_counts.py use — no env
-# override (an override that redirects the probe away from the greped path is a
-# vacuous-green spoof hole; see ci.sh header).
-ORACLE = "/Users/gael/projects/ghostty"
+# Read from the checked-in .port/tools/parity_names.env (ORACLE_TREE) — NOT an
+# environment variable: this is still the one committed source of truth
+# ci.sh/check_test_counts.py mirror (no runtime env override; an override that
+# redirects the probe away from the greped path is a vacuous-green spoof hole;
+# see ci.sh header). Changing the oracle path still requires a repo edit to the
+# sourced map, same trust boundary as editing the script itself.
+ORACLE = PARITY_NAMES["ORACLE_TREE"]
 ORACLE_SRC = os.path.join(ORACLE, "src")
 
 # ---------------------------------------------------------------------------
