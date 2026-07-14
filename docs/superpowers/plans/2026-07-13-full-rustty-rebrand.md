@@ -858,6 +858,55 @@ git add -A crates/rustty crates/rustty-cli
 git commit -m "trace: rename main_ghostty.rs->main_rustty.rs, cli/ghostty.rs->cli/rustty.rs (provenance kept in comments) (Task 15)"
 ```
 
+### Task 15b: Rename the vendored SIMD/highway `ghostty_*` C symbols → `rustty_*`
+
+Context: discovered during Task 1 — the vendored C/C++ in `rustty-simd` and `highway-sys` defines internal FFI symbols with a hardcoded `ghostty_` prefix (`ghostty_simd_*`, `ghostty_hwy_detect_targets`). These are **internal** helpers (NOT the Swift-app C-ABI), each defined in a `.cpp`/`.c` file and declared in a Rust `extern "C"` block + called within the same crate — so each is a self-contained rename across both sides. This closes the "no ghostty name anywhere in the port" gap.
+
+**Files (both the C definition and the Rust `extern` + call sites):**
+- `crates/rustty-simd/cbits/simd/base64.cpp` (`ghostty_simd_base64_max_length`, `ghostty_simd_base64_decode`)
+- `crates/rustty-simd/cbits/simd/codepoint_width.cpp` (`ghostty_simd_codepoint_width`)
+- `crates/rustty-simd/cbits/simd/index_of.cpp` (`ghostty_simd_index_of`)
+- `crates/rustty-simd/cbits/simd/vt.cpp` (`ghostty_simd_decode_utf8_until_control_seq`)
+- `crates/rustty-simd/src/*.rs` (the `extern "C"` decls + callers: `base64.rs`, `codepoint_width.rs`, `index_of.rs`, `vt.rs` — grep to confirm the set)
+- `crates-sys/highway-sys/cpp/detect.c`, `crates-sys/highway-sys/cpp/targets.cpp` (`ghostty_hwy_detect_targets`)
+- `crates-sys/highway-sys/src/lib.rs` (the `extern "C"` decl + link-test caller)
+
+**Interfaces:**
+- Produces: internal SIMD/highway symbols named `rustty_simd_*` / `rustty_hwy_detect_targets`; no behaviour change.
+
+- [ ] **Step 1: Enumerate every occurrence (definition, declaration, caller, comment).**
+```bash
+cd /Users/gael/projects/rustty
+grep -rn 'ghostty_simd_\|ghostty_hwy_' crates/rustty-simd crates-sys/highway-sys
+```
+Expected: the sites above (C defs, Rust `extern` decls, callers, and doc comments referencing the reference's Zig symbol).
+
+- [ ] **Step 2: Rename `ghostty_simd_`→`rustty_simd_` and `ghostty_hwy_`→`rustty_hwy_` across both crates.** Keep any comment that describes the *reference's* Zig symbol as provenance (e.g. "C port of the reference's Zig `ghostty_hwy_detect_targets`") — rewrite the *live* symbol but you may keep a `// (ref: ghostty …)` provenance note:
+```bash
+cd /Users/gael/projects/rustty
+grep -rlZ 'ghostty_simd_\|ghostty_hwy_' crates/rustty-simd crates-sys/highway-sys \
+  | xargs -0 sed -i '' -e 's/ghostty_simd_/rustty_simd_/g' -e 's/ghostty_hwy_/rustty_hwy_/g'
+```
+
+- [ ] **Step 3: Build both crates (forces the C recompile + the FFI link).**
+```bash
+cargo build -p rustty-simd -p highway-sys
+cargo test -p rustty-simd -p highway-sys 2>/dev/null | tail -8
+```
+Expected: builds + the link-test/SIMD tests pass (the rename is symmetric on both FFI sides, so any missed site is a link error).
+
+- [ ] **Step 4: Confirm zero `ghostty_simd_`/`ghostty_hwy_` live symbols remain** (provenance comments referencing the reference Zig symbol are allowed):
+```bash
+grep -rn 'ghostty_simd_\|ghostty_hwy_' crates/rustty-simd crates-sys/highway-sys | grep -viE 'ref:|reference|//.*ghostty'
+```
+Expected: empty.
+
+- [ ] **Step 5: Commit.**
+```bash
+git add -A crates/rustty-simd crates-sys/highway-sys
+git commit -m "simd: rename internal vendored ghostty_simd_*/ghostty_hwy_* FFI symbols -> rustty_* (Task 15b)"
+```
+
 ### Task 16: Final residual sweep + workspace gates + parity harness
 
 **Files:**
