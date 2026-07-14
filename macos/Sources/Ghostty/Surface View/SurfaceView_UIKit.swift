@@ -1,7 +1,7 @@
 import SwiftUI
 import RusttyKit
 
-extension Ghostty {
+extension Rustty {
     /// The UIView implementation for a terminal surface.
     class SurfaceView: OSSurfaceView {
         // The current title of the surface as defined by the pty. This can be
@@ -58,7 +58,7 @@ extension Ghostty {
         override func sizeDidChange(_ size: CGSize) {
             guard let surface = self.surface else { return }
 
-            // Ghostty wants to know the actual framebuffer size... It is very important
+            // Rustty wants to know the actual framebuffer size... It is very important
             // here that we use "size" and NOT the view frame. If we're in the middle of
             // an animation (i.e. a fullscreen animation), the frame will not yet be updated.
             // The size represents our final size we're going for.

@@ -1,16 +1,16 @@
 //
-//  GhosttyTitleUITests.swift
-//  GhosttyUITests
+//  RusttyTitleUITests.swift
+//  RusttyUITests
 //
 //  Created by luca on 13.10.2025.
 //
 
 import XCTest
 
-final class GhosttyTitleUITests: GhosttyCustomConfigCase {
+final class RusttyTitleUITests: RusttyCustomConfigCase {
     override func setUp() async throws {
         try await super.setUp()
-        try updateConfig(#"title = "GhosttyUITestsLaunchTests""#)
+        try updateConfig(#"title = "RusttyUITestsLaunchTests""#)
     }
 
     @MainActor
@@ -18,6 +18,6 @@ final class GhosttyTitleUITests: GhosttyCustomConfigCase {
         let app = try ghosttyApplication()
         app.launch()
 
-        XCTAssertEqual(app.windows.firstMatch.title, "GhosttyUITestsLaunchTests", "Oops, `title=` doesn't work!")
+        XCTAssertEqual(app.windows.firstMatch.title, "RusttyUITestsLaunchTests", "Oops, `title=` doesn't work!")
     }
 }

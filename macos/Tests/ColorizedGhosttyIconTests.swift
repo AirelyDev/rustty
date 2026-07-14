@@ -1,17 +1,17 @@
 import AppKit
 import Foundation
 import Testing
-@testable import Ghostty
+@testable import Rustty
 
-struct ColorizedGhosttyIconTests {
+struct ColorizedRusttyIconTests {
     private func makeIcon(
         screenColors: [NSColor] = [
             NSColor(hex: "#112233")!,
             NSColor(hex: "#AABBCC")!,
         ],
         ghostColor: NSColor = NSColor(hex: "#445566")!,
-        frame: Ghostty.MacOSIconFrame = .aluminum
-    ) -> ColorizedGhosttyIcon {
+        frame: Rustty.MacOSIconFrame = .aluminum
+    ) -> ColorizedRusttyIcon {
         .init(screenColors: screenColors, ghostColor: ghostColor, frame: frame)
     }
 
@@ -20,7 +20,7 @@ struct ColorizedGhosttyIconTests {
     @Test func codableRoundTripPreservesIcon() throws {
         let icon = makeIcon(frame: .chrome)
         let data = try JSONEncoder().encode(icon)
-        let decoded = try JSONDecoder().decode(ColorizedGhosttyIcon.self, from: data)
+        let decoded = try JSONDecoder().decode(ColorizedRusttyIcon.self, from: data)
 
         #expect(decoded == icon)
         #expect(decoded.screenColors.compactMap(\.hexString) == ["#112233", "#AABBCC"])
@@ -48,7 +48,7 @@ struct ColorizedGhosttyIconTests {
         }
         """.utf8)
 
-        let decoded = try JSONDecoder().decode(ColorizedGhosttyIcon.self, from: data)
+        let decoded = try JSONDecoder().decode(ColorizedRusttyIcon.self, from: data)
         #expect(decoded.screenColors.compactMap(\.hexString) == ["#112233", "#AABBCC"])
         #expect(decoded.ghostColor.hexString == "#445566")
         #expect(decoded.frame == .beige)
@@ -65,10 +65,10 @@ struct ColorizedGhosttyIconTests {
         """.utf8)
 
         do {
-            _ = try JSONDecoder().decode(ColorizedGhosttyIcon.self, from: data)
+            _ = try JSONDecoder().decode(ColorizedRusttyIcon.self, from: data)
             Issue.record("Expected decode to fail for unsupported version")
         } catch let DecodingError.dataCorrupted(context) {
-            #expect(context.debugDescription.contains("Unsupported ColorizedGhosttyIcon version"))
+            #expect(context.debugDescription.contains("Unsupported ColorizedRusttyIcon version"))
         } catch {
             Issue.record("Expected DecodingError.dataCorrupted, got: \(error)")
         }
@@ -85,7 +85,7 @@ struct ColorizedGhosttyIconTests {
         """.utf8)
 
         do {
-            _ = try JSONDecoder().decode(ColorizedGhosttyIcon.self, from: data)
+            _ = try JSONDecoder().decode(ColorizedRusttyIcon.self, from: data)
             Issue.record("Expected decode to fail for invalid ghost color")
         } catch let DecodingError.dataCorrupted(context) {
             #expect(context.debugDescription.contains("Failed to decode ghost color"))
@@ -104,7 +104,7 @@ struct ColorizedGhosttyIconTests {
         }
         """.utf8)
 
-        let decoded = try JSONDecoder().decode(ColorizedGhosttyIcon.self, from: data)
+        let decoded = try JSONDecoder().decode(ColorizedRusttyIcon.self, from: data)
         #expect(decoded.screenColors.compactMap(\.hexString) == ["#112233", "#AABBCC"])
     }
 

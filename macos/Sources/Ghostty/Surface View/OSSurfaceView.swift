@@ -2,7 +2,7 @@ import Foundation
 import RusttyKit
 import SwiftUI
 
-extension Ghostty {
+extension Rustty {
     class OSSurfaceView: OSView, ObservableObject {
         typealias ID = UUID
 
@@ -115,7 +115,7 @@ extension Ghostty {
 
 // MARK: Search State
 
-extension Ghostty.OSSurfaceView {
+extension Rustty.OSSurfaceView {
     @MainActor class SearchState: ObservableObject {
         /// The pasteboard used to persist the search needle.
         ///
@@ -130,7 +130,7 @@ extension Ghostty.OSSurfaceView {
         @Published var needleSelection: Range<String.Index>?
 
         init(
-            from startSearch: Ghostty.Action.StartSearch,
+            from startSearch: Rustty.Action.StartSearch,
             pasteboard: OSPasteboard = OSPasteboard.find
         ) {
             self.pasteboard = pasteboard

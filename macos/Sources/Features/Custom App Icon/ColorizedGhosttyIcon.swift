@@ -1,6 +1,6 @@
 import Cocoa
 
-struct ColorizedGhosttyIcon {
+struct ColorizedRusttyIcon {
     /// The colors that make up the gradient of the screen.
     let screenColors: [NSColor]
 
@@ -8,7 +8,7 @@ struct ColorizedGhosttyIcon {
     let ghostColor: NSColor
 
     /// The frame type to use
-    let frame: Ghostty.MacOSIconFrame
+    let frame: Rustty.MacOSIconFrame
 
     /// Make a custom colorized ghostty icon.
     func makeImage(in bundle: Bundle) -> NSImage? {
@@ -56,7 +56,7 @@ struct ColorizedGhosttyIcon {
 
 // MARK: Codable
 
-extension ColorizedGhosttyIcon: Codable {
+extension ColorizedRusttyIcon: Codable {
     private enum CodingKeys: String, CodingKey {
         case version
         case screenColors
@@ -75,7 +75,7 @@ extension ColorizedGhosttyIcon: Codable {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(
                     codingPath: decoder.codingPath,
-                    debugDescription: "Unsupported ColorizedGhosttyIcon version: \(version)"
+                    debugDescription: "Unsupported ColorizedRusttyIcon version: \(version)"
                 )
             )
         }
@@ -90,7 +90,7 @@ extension ColorizedGhosttyIcon: Codable {
                 debugDescription: "Failed to decode ghost color from \(ghostColorHex)"
             )
         }
-        let frame = try container.decode(Ghostty.MacOSIconFrame.self, forKey: .frame)
+        let frame = try container.decode(Rustty.MacOSIconFrame.self, forKey: .frame)
         self.init(screenColors: screenColors, ghostColor: ghostColor, frame: frame)
     }
 
@@ -106,7 +106,7 @@ extension ColorizedGhosttyIcon: Codable {
 
 // MARK: Equatable
 
-extension ColorizedGhosttyIcon: Equatable {
+extension ColorizedRusttyIcon: Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.frame == rhs.frame &&
             lhs.screenColors.compactMap(\.hexString) == rhs.screenColors.compactMap(\.hexString) &&

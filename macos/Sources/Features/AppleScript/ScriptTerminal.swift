@@ -1,12 +1,12 @@
 import AppKit
 
-/// AppleScript-facing wrapper around a live Ghostty terminal surface.
+/// AppleScript-facing wrapper around a live Rustty terminal surface.
 ///
 /// This class is intentionally ObjC-visible because Cocoa scripting resolves
 /// AppleScript objects through Objective-C runtime names/selectors, not Swift
 /// protocol conformance.
 ///
-/// Mapping from `Ghostty.sdef`:
+/// Mapping from `Rustty.sdef`:
 /// - `class terminal` -> this class (`@objc(GhosttyAppleScriptTerminal)`).
 /// - `property id` -> `@objc(id)` getter below.
 /// - `property title` -> `@objc(title)` getter below.
@@ -22,9 +22,9 @@ final class ScriptTerminal: NSObject {
     /// Weak reference to the underlying surface. Package-visible so that
     /// other AppleScript command handlers (e.g. `ScriptSplitCommand`) can
     /// access the live surface without exposing it to ObjC/AppleScript.
-    weak var surfaceView: Ghostty.SurfaceView?
+    weak var surfaceView: Rustty.SurfaceView?
 
-    init(surfaceView: Ghostty.SurfaceView) {
+    init(surfaceView: Rustty.SurfaceView) {
         self.surfaceView = surfaceView
     }
 
@@ -99,10 +99,10 @@ final class ScriptTerminal: NSObject {
             return nil
         }
 
-        let baseConfig: Ghostty.SurfaceConfiguration?
+        let baseConfig: Rustty.SurfaceConfiguration?
         if let scriptRecord = command.evaluatedArguments?["configuration"] as? NSDictionary {
             do {
-                baseConfig = try Ghostty.SurfaceConfiguration(scriptRecord: scriptRecord)
+                baseConfig = try Rustty.SurfaceConfiguration(scriptRecord: scriptRecord)
             } catch {
                 command.scriptErrorNumber = errAECoercionFail
                 command.scriptErrorString = error.localizedDescription
@@ -193,7 +193,7 @@ final class ScriptTerminal: NSObject {
     }
 }
 
-/// Converts four-character codes from the `split direction` enumeration in `Ghostty.sdef`
+/// Converts four-character codes from the `split direction` enumeration in `Rustty.sdef`
 /// to `SplitTree.NewDirection` values.
 enum ScriptSplitDirection {
     case right
@@ -211,7 +211,7 @@ enum ScriptSplitDirection {
         }
     }
 
-    var splitDirection: SplitTree<Ghostty.SurfaceView>.NewDirection {
+    var splitDirection: SplitTree<Rustty.SurfaceView>.NewDirection {
         switch self {
         case .right: .right
         case .left: .left

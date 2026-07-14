@@ -1,6 +1,6 @@
 import AppKit
 
-/// Handler for the `send key` AppleScript command defined in `Ghostty.sdef`.
+/// Handler for the `send key` AppleScript command defined in `Rustty.sdef`.
 ///
 /// Cocoa scripting instantiates this class because the command's `<cocoa>` element
 /// specifies `class="GhosttyScriptKeyEventCommand"`. The runtime calls
@@ -35,13 +35,13 @@ final class ScriptKeyEventCommand: NSScriptCommand {
             return nil
         }
 
-        guard let key = Ghostty.Input.Key(rawValue: keyName) else {
+        guard let key = Rustty.Input.Key(rawValue: keyName) else {
             scriptErrorNumber = errAECoercionFail
             scriptErrorString = "Unknown key name: \(keyName)"
             return nil
         }
 
-        let action: Ghostty.Input.Action
+        let action: Rustty.Input.Action
         if let actionCode = evaluatedArguments?["action"] as? UInt32 {
             switch actionCode {
             case "GIpr".fourCharCode: action = .press
@@ -52,9 +52,9 @@ final class ScriptKeyEventCommand: NSScriptCommand {
             action = .press
         }
 
-        let mods: Ghostty.Input.Mods
+        let mods: Rustty.Input.Mods
         if let modsString = evaluatedArguments?["modifiers"] as? String {
-            guard let parsed = Ghostty.Input.Mods(scriptModifiers: modsString) else {
+            guard let parsed = Rustty.Input.Mods(scriptModifiers: modsString) else {
                 scriptErrorNumber = errAECoercionFail
                 scriptErrorString = "Unknown modifier in: \(modsString)"
                 return nil
@@ -64,7 +64,7 @@ final class ScriptKeyEventCommand: NSScriptCommand {
             mods = []
         }
 
-        let keyEvent = Ghostty.Input.KeyEvent(
+        let keyEvent = Rustty.Input.KeyEvent(
             key: key,
             action: action,
             mods: mods

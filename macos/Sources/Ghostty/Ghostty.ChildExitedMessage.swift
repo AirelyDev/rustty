@@ -2,7 +2,7 @@ import Foundation
 import RusttyKit
 import SwiftUI
 
-extension Ghostty {
+extension Rustty {
     struct ChildExitedMessage {
         enum Level {
             case success, error

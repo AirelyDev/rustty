@@ -1,20 +1,20 @@
 //
-//  GhosttyTitlebarTabsUITests.swift
-//  Ghostty
+//  RusttyTitlebarTabsUITests.swift
+//  Rustty
 //
 //  Created by luca on 16.10.2025.
 //
 
 import XCTest
 
-final class GhosttyTitlebarTabsUITests: GhosttyCustomConfigCase {
+final class RusttyTitlebarTabsUITests: RusttyCustomConfigCase {
     override func setUp() async throws {
         try await super.setUp()
 
         try updateConfig(
             """
             macos-titlebar-style = tabs
-            title = "GhosttyTitlebarTabsUITests"
+            title = "RusttyTitlebarTabsUITests"
             """
         )
     }

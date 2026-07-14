@@ -1,5 +1,5 @@
 import Testing
-@testable import Ghostty
+@testable import Rustty
 import SwiftUI
 
 @Suite
@@ -96,12 +96,12 @@ struct ConfigTests {
     }
 
     @Test(arguments: [
-        ("native", Ghostty.Config.MacOSTitlebarStyle.native),
-        ("transparent", Ghostty.Config.MacOSTitlebarStyle.transparent),
-        ("tabs", Ghostty.Config.MacOSTitlebarStyle.tabs),
-        ("hidden", Ghostty.Config.MacOSTitlebarStyle.hidden),
+        ("native", Rustty.Config.MacOSTitlebarStyle.native),
+        ("transparent", Rustty.Config.MacOSTitlebarStyle.transparent),
+        ("tabs", Rustty.Config.MacOSTitlebarStyle.tabs),
+        ("hidden", Rustty.Config.MacOSTitlebarStyle.hidden),
     ])
-    func macosTitlebarStyleValues(raw: String, expected: Ghostty.Config.MacOSTitlebarStyle) throws {
+    func macosTitlebarStyleValues(raw: String, expected: Rustty.Config.MacOSTitlebarStyle) throws {
         let config = try TemporaryConfig("macos-titlebar-style = \(raw)")
         #expect(config.macosTitlebarStyle == expected)
     }
@@ -112,11 +112,11 @@ struct ConfigTests {
     }
 
     @Test(arguments: [
-        ("always", Ghostty.Config.ResizeOverlay.always),
-        ("never", Ghostty.Config.ResizeOverlay.never),
-        ("after-first", Ghostty.Config.ResizeOverlay.after_first),
+        ("always", Rustty.Config.ResizeOverlay.always),
+        ("never", Rustty.Config.ResizeOverlay.never),
+        ("after-first", Rustty.Config.ResizeOverlay.after_first),
     ])
-    func resizeOverlayValues(raw: String, expected: Ghostty.Config.ResizeOverlay) throws {
+    func resizeOverlayValues(raw: String, expected: Rustty.Config.ResizeOverlay) throws {
         let config = try TemporaryConfig("resize-overlay = \(raw)")
         #expect(config.resizeOverlay == expected)
     }

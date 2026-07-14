@@ -1,11 +1,11 @@
 import AppKit
 
-// MARK: Ghostty Delegate
+// MARK: Rustty Delegate
 
-/// This implements the Ghostty app delegate protocol which is used by the Ghostty
+/// This implements the Rustty app delegate protocol which is used by the Rustty
 /// APIs for app-global information.
-extension AppDelegate: Ghostty.Delegate {
-    func ghosttySurface(id: UUID) -> Ghostty.SurfaceView? {
+extension AppDelegate: Rustty.Delegate {
+    func ghosttySurface(id: UUID) -> Rustty.SurfaceView? {
         for window in NSApp.windows {
             guard let controller = window.windowController as? BaseTerminalController else {
                 continue

@@ -1,5 +1,5 @@
-extension Ghostty.Input.Mods {
-    /// Parses a comma-separated modifier string into `Ghostty.Input.Mods`.
+extension Rustty.Input.Mods {
+    /// Parses a comma-separated modifier string into `Rustty.Input.Mods`.
     ///
     /// Recognized names: `shift`, `control`, `option`, `command`.
     /// Returns `nil` if any unrecognized modifier name is encountered.

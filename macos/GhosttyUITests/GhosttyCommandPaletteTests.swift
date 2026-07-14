@@ -1,13 +1,13 @@
 //
-//  GhosttyCommandPaletteTests.swift
-//  Ghostty
+//  RusttyCommandPaletteTests.swift
+//  Rustty
 //
 //  Created by Lukas on 19.03.2026.
 //
 
 import XCTest
 
-final class GhosttyCommandPaletteTests: GhosttyCustomConfigCase {
+final class RusttyCommandPaletteTests: RusttyCustomConfigCase {
     @MainActor func testDismissingCommandPalette() async throws {
         let app = try ghosttyApplication()
         app.activate()

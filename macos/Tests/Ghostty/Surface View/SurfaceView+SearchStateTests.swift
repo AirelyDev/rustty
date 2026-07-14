@@ -1,11 +1,11 @@
 import AppKit
 import RusttyKit
 import Testing
-@testable import Ghostty
+@testable import Rustty
 
 @MainActor struct SurfaceView_SearchStateTests {
-    typealias SearchState = Ghostty.OSSurfaceView.SearchState
-    typealias StartSearch = Ghostty.Action.StartSearch
+    typealias SearchState = Rustty.OSSurfaceView.SearchState
+    typealias StartSearch = Rustty.Action.StartSearch
 
     /// A unique pasteboard for each test case prevents flakiness.
     let pasteboard = OSPasteboard.withUniqueName()

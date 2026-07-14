@@ -27,7 +27,7 @@ extension NSPasteboard.PasteboardType {
 }
 
 extension NSPasteboard {
-    /// The pasteboard to used for Ghostty selection.
+    /// The pasteboard to used for Rustty selection.
     static var ghosttySelection: NSPasteboard = {
         NSPasteboard(name: .init("com.mitchellh.ghostty.selection"))
     }()
@@ -41,14 +41,14 @@ extension NSPasteboard {
         if let urls = readObjects(forClasses: [NSURL.self]) as? [URL],
            urls.count > 0 {
             return urls
-                .map { $0.isFileURL ? Ghostty.Shell.escape($0.path) : $0.absoluteString }
+                .map { $0.isFileURL ? Rustty.Shell.escape($0.path) : $0.absoluteString }
                 .joined(separator: " ")
         }
 
         return self.string(forType: .string)
     }
 
-    /// The pasteboard for the Ghostty enum type.
+    /// The pasteboard for the Rustty enum type.
     static func ghostty(_ clipboard: rustty_clipboard_e) -> NSPasteboard? {
         switch clipboard {
         case RUSTTY_CLIPBOARD_STANDARD:

@@ -93,10 +93,10 @@ extension OSColor {
     }
 }
 
-// MARK: Ghostty Types
+// MARK: Rustty Types
 #if !DOCK_TILE_PLUGIN
 extension OSColor {
-    /// Create a color from a Ghostty color.
+    /// Create a color from a Rustty color.
     convenience init(ghostty: rustty_config_color_s) {
         let red = Double(ghostty.r) / 255
         let green = Double(ghostty.g) / 255

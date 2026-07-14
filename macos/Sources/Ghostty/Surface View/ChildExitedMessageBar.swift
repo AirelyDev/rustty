@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ChildExitedMessageBar: View {
-    let msg: Ghostty.ChildExitedMessage
+    let msg: Rustty.ChildExitedMessage
     @State private var isHovered: Bool = false
 
     var body: some View {
@@ -33,7 +33,7 @@ struct ChildExitedMessageBar: View {
     }
 }
 
-private extension Ghostty.ChildExitedMessage.Level {
+private extension Rustty.ChildExitedMessage.Level {
     var foregroundColor: Color {
         .primary
     }

@@ -20,11 +20,11 @@ struct CloseTerminalIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult {
         guard await requestIntentPermission() else {
-            throw GhosttyIntentError.permissionDenied
+            throw RusttyIntentError.permissionDenied
         }
 
         guard let surfaceView = terminal.surfaceView else {
-            throw GhosttyIntentError.surfaceNotFound
+            throw RusttyIntentError.surfaceNotFound
         }
 
         guard let controller = surfaceView.window?.windowController as? BaseTerminalController else {

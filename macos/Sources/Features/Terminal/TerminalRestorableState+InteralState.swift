@@ -18,7 +18,7 @@ extension TerminalRestorableState {
     }
 }
 
-extension TerminalRestorableState.InternalState where ViewType == Ghostty.SurfaceView {
+extension TerminalRestorableState.InternalState where ViewType == Rustty.SurfaceView {
     init(from controller: TerminalController) {
         self.init(
             focusedSurface: controller.focusedSurface?.id.uuidString,

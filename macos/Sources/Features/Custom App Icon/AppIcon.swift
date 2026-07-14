@@ -1,7 +1,7 @@
 import AppKit
 import System
 
-/// The icon style for the Ghostty App.
+/// The icon style for the Rustty App.
 enum AppIcon: Equatable, Codable, Sendable {
     case official
     case blueprint
@@ -14,10 +14,10 @@ enum AppIcon: Equatable, Codable, Sendable {
     case xray
     /// Save full image data to avoid sandboxing issues
     case custom(_ iconFile: Data)
-    case customStyle(_ icon: ColorizedGhosttyIcon)
+    case customStyle(_ icon: ColorizedRusttyIcon)
 
 #if !DOCK_TILE_PLUGIN
-    init?(config: Ghostty.Config) {
+    init?(config: Rustty.Config) {
         switch config.macosIcon {
         case .official:
             return nil
@@ -52,7 +52,7 @@ enum AppIcon: Equatable, Codable, Sendable {
             else {
                 return nil
             }
-            self = .customStyle(ColorizedGhosttyIcon(screenColors: screenColors, ghostColor: ghostColor, frame: config.macosIconFrame))
+            self = .customStyle(ColorizedRusttyIcon(screenColors: screenColors, ghostColor: ghostColor, frame: config.macosIconFrame))
         }
     }
 #endif

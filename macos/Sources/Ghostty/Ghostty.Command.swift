@@ -1,6 +1,6 @@
 import RusttyKit
 
-extension Ghostty {
+extension Rustty {
     /// `rustty_command_s`
     struct Command: Sendable {
         /// The title of the command.

@@ -1,6 +1,6 @@
 import Testing
 import AppKit
-@testable import Ghostty
+@testable import Rustty
 
 @Suite
 struct TerminalRestorableTests {

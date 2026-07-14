@@ -1,6 +1,6 @@
 import Foundation
 
-extension Ghostty {
+extension Rustty {
     /// This is a delegate that should be applied to your global app delegate for RusttyKit
     /// to perform app-global operations.
     protocol Delegate {

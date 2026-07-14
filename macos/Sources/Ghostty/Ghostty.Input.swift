@@ -3,7 +3,7 @@ import Cocoa
 import SwiftUI
 import RusttyKit
 
-extension Ghostty {
+extension Rustty {
     struct Input {}
 
     // MARK: Keyboard Shortcuts
@@ -11,10 +11,10 @@ extension Ghostty {
     /// Return the key equivalent for the given trigger.
     ///
     /// Returns nil if the trigger doesn't have an equivalent KeyboardShortcut. This is possible
-    /// because Ghostty input triggers are a superset of what can be represented by a macOS
+    /// because Rustty input triggers are a superset of what can be represented by a macOS
     /// KeyboardShortcut. For example, macOS doesn't have any way to represent function keys
     /// (F1, F2, ...) with a KeyboardShortcut. This doesn't represent a practical issue because input
-    /// handling for Ghostty is handled at a lower level (usually). This function should generally only
+    /// handling for Rustty is handled at a lower level (usually). This function should generally only
     /// be used for things like NSMenu that only support keyboard shortcuts anyways.
     static func keyboardShortcut(for trigger: rustty_input_trigger_s) -> KeyboardShortcut? {
         let key: KeyEquivalent
@@ -45,12 +45,12 @@ extension Ghostty {
 
         return KeyboardShortcut(
             key,
-            modifiers: EventModifiers(nsFlags: Ghostty.eventModifierFlags(mods: trigger.mods)))
+            modifiers: EventModifiers(nsFlags: Rustty.eventModifierFlags(mods: trigger.mods)))
     }
 
     // MARK: Mods
 
-    /// Returns the event modifier flags set for the Ghostty mods enum.
+    /// Returns the event modifier flags set for the Rustty mods enum.
     static func eventModifierFlags(mods: rustty_input_mods_e) -> NSEvent.ModifierFlags {
         var flags = NSEvent.ModifierFlags(rawValue: 0)
         if mods.rawValue & RUSTTY_MODS_SHIFT.rawValue != 0 { flags.insert(.shift) }
@@ -71,7 +71,7 @@ extension Ghostty {
         if flags.contains(.capsLock) { mods |= RUSTTY_MODS_CAPS.rawValue }
 
         // Handle sided input. We can't tell that both are pressed in the
-        // Ghostty structure but that's okay -- we don't use that information.
+        // Rustty structure but that's okay -- we don't use that information.
         let rawFlags = flags.rawValue
         if rawFlags & UInt(NX_DEVICERSHIFTKEYMASK) != 0 { mods |= RUSTTY_MODS_SHIFT_RIGHT.rawValue }
         if rawFlags & UInt(NX_DEVICERCTLKEYMASK) != 0 { mods |= RUSTTY_MODS_CTRL_RIGHT.rawValue }
@@ -81,7 +81,7 @@ extension Ghostty {
         return rustty_input_mods_e(mods)
     }
 
-    /// A map from the Ghostty key enum to the keyEquivalent string for shortcuts. Note that
+    /// A map from the Rustty key enum to the keyEquivalent string for shortcuts. Note that
     /// not all ghostty key enum values are represented here because not all of them can be
     /// mapped to a KeyEquivalent.
     static let keyToEquivalent: [rustty_input_key_e: KeyEquivalent] = [
@@ -103,9 +103,9 @@ extension Ghostty {
     ]
 }
 
-// MARK: Ghostty.Input.BindingFlags
+// MARK: Rustty.Input.BindingFlags
 
-extension Ghostty.Input {
+extension Rustty.Input {
     /// `rustty_binding_flags_e`
     struct BindingFlags: OptionSet, Sendable {
         let rawValue: UInt32
@@ -129,9 +129,9 @@ extension Ghostty.Input {
     }
 }
 
-// MARK: Ghostty.Input.KeyEvent
+// MARK: Rustty.Input.KeyEvent
 
-extension Ghostty.Input {
+extension Rustty.Input {
     /// `rustty_input_key_s`
     struct KeyEvent {
         let action: Action
@@ -224,9 +224,9 @@ extension Ghostty.Input {
     }
 }
 
-// MARK: Ghostty.Input.Action
+// MARK: Rustty.Input.Action
 
-extension Ghostty.Input {
+extension Rustty.Input {
     /// `rustty_input_action_e`
     enum Action: String, CaseIterable {
         case release
@@ -243,19 +243,19 @@ extension Ghostty.Input {
     }
 }
 
-extension Ghostty.Input.Action: AppEnum {
+extension Rustty.Input.Action: AppEnum {
     static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Key Action")
 
-    static var caseDisplayRepresentations: [Ghostty.Input.Action: DisplayRepresentation] = [
+    static var caseDisplayRepresentations: [Rustty.Input.Action: DisplayRepresentation] = [
         .release: "Release",
         .press: "Press",
         .repeat: "Repeat"
     ]
 }
 
-// MARK: Ghostty.Input.MouseEvent
+// MARK: Rustty.Input.MouseEvent
 
-extension Ghostty.Input {
+extension Rustty.Input {
     /// Represents a mouse input event with button state, button type, and modifier keys.
     struct MouseButtonEvent {
         let action: MouseState
@@ -338,9 +338,9 @@ extension Ghostty.Input {
     }
 }
 
-// MARK: Ghostty.Input.MouseState
+// MARK: Rustty.Input.MouseState
 
-extension Ghostty.Input {
+extension Rustty.Input {
     /// `rustty_input_mouse_state_e`
     enum MouseState: String, CaseIterable {
         case release
@@ -355,18 +355,18 @@ extension Ghostty.Input {
     }
 }
 
-extension Ghostty.Input.MouseState: AppEnum {
+extension Rustty.Input.MouseState: AppEnum {
     static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Mouse State")
 
-    static var caseDisplayRepresentations: [Ghostty.Input.MouseState: DisplayRepresentation] = [
+    static var caseDisplayRepresentations: [Rustty.Input.MouseState: DisplayRepresentation] = [
         .release: "Release",
         .press: "Press"
     ]
 }
 
-// MARK: Ghostty.Input.MouseButton
+// MARK: Rustty.Input.MouseButton
 
-extension Ghostty.Input {
+extension Rustty.Input {
     /// `rustty_input_mouse_button_e`
     enum MouseButton: String, CaseIterable {
         case unknown
@@ -420,26 +420,26 @@ extension Ghostty.Input {
     }
 }
 
-extension Ghostty.Input.MouseButton: AppEnum {
+extension Rustty.Input.MouseButton: AppEnum {
     static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Mouse Button")
 
-    static var caseDisplayRepresentations: [Ghostty.Input.MouseButton: DisplayRepresentation] = [
+    static var caseDisplayRepresentations: [Rustty.Input.MouseButton: DisplayRepresentation] = [
         .unknown: "Unknown",
         .left: "Left",
         .right: "Right",
         .middle: "Middle"
     ]
 
-    static var allCases: [Ghostty.Input.MouseButton] = [
+    static var allCases: [Rustty.Input.MouseButton] = [
         .left,
         .right,
         .middle,
     ]
 }
 
-// MARK: Ghostty.Input.ScrollMods
+// MARK: Rustty.Input.ScrollMods
 
-extension Ghostty.Input {
+extension Rustty.Input {
     /// `rustty_input_scroll_mods_t` - Scroll event modifiers
     ///
     /// This is a packed bitmask that contains precision and momentum information
@@ -477,9 +477,9 @@ extension Ghostty.Input {
     }
 }
 
-// MARK: Ghostty.Input.Momentum
+// MARK: Rustty.Input.Momentum
 
-extension Ghostty.Input {
+extension Rustty.Input {
     /// `rustty_input_mouse_momentum_e` - Momentum phase for scroll events
     enum Momentum: UInt8, CaseIterable {
         case none = 0
@@ -504,10 +504,10 @@ extension Ghostty.Input {
     }
 }
 
-extension Ghostty.Input.Momentum: AppEnum {
+extension Rustty.Input.Momentum: AppEnum {
     static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Scroll Momentum")
 
-    static var caseDisplayRepresentations: [Ghostty.Input.Momentum: DisplayRepresentation] = [
+    static var caseDisplayRepresentations: [Rustty.Input.Momentum: DisplayRepresentation] = [
         .none: "None",
         .began: "Began",
         .stationary: "Stationary",
@@ -521,7 +521,7 @@ extension Ghostty.Input.Momentum: AppEnum {
 #if canImport(AppKit)
 import AppKit
 
-extension Ghostty.Input.Momentum {
+extension Rustty.Input.Momentum {
     /// Create a Momentum from an NSEvent.Phase
     init(_ phase: NSEvent.Phase) {
         switch phase {
@@ -537,9 +537,9 @@ extension Ghostty.Input.Momentum {
 }
 #endif
 
-// MARK: Ghostty.Input.Mods
+// MARK: Rustty.Input.Mods
 
-extension Ghostty.Input {
+extension Rustty.Input {
     /// `rustty_input_mods_e`
     struct Mods: OptionSet {
         let rawValue: UInt32
@@ -568,18 +568,18 @@ extension Ghostty.Input {
         }
 
         init(nsFlags: NSEvent.ModifierFlags) {
-            self.init(cMods: Ghostty.ghosttyMods(nsFlags))
+            self.init(cMods: Rustty.ghosttyMods(nsFlags))
         }
 
         var nsFlags: NSEvent.ModifierFlags {
-            Ghostty.eventModifierFlags(mods: cMods)
+            Rustty.eventModifierFlags(mods: cMods)
         }
     }
 }
 
-// MARK: Ghostty.Input.Key
+// MARK: Rustty.Input.Key
 
-extension Ghostty.Input {
+extension Rustty.Input {
     /// `rustty_input_key_e`
     enum Key: String {
         // Writing System Keys
@@ -1176,11 +1176,11 @@ extension Ghostty.Input {
     }
 }
 
-extension Ghostty.Input.Key: AppEnum {
+extension Rustty.Input.Key: AppEnum {
     static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Key")
 
     // Only include keys that have Mac keycodes for App Intents
-    static var allCases: [Ghostty.Input.Key] {
+    static var allCases: [Rustty.Input.Key] {
         return [
             // Letters (A-Z)
             .a, .b, .c, .d, .e, .f, .g, .h, .i, .j, .k, .l, .m, .n, .o, .p, .q, .r, .s, .t, .u, .v, .w, .x, .y, .z,
@@ -1226,7 +1226,7 @@ extension Ghostty.Input.Key: AppEnum {
         ]
     }
 
-    static var caseDisplayRepresentations: [Ghostty.Input.Key: DisplayRepresentation] = [
+    static var caseDisplayRepresentations: [Rustty.Input.Key: DisplayRepresentation] = [
         // Letters (A-Z)
         .a: "A", .b: "B", .c: "C", .d: "D", .e: "E", .f: "F", .g: "G", .h: "H", .i: "I", .j: "J",
         .k: "K", .l: "L", .m: "M", .n: "N", .o: "O", .p: "P", .q: "Q", .r: "R", .s: "S", .t: "T",

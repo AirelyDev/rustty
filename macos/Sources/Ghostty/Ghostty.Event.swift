@@ -1,7 +1,7 @@
 import Cocoa
 import RusttyKit
 
-extension Ghostty {
+extension Rustty {
     /// A comparable event.
     struct ComparableKeyEvent: Equatable {
         let keyCode: UInt16

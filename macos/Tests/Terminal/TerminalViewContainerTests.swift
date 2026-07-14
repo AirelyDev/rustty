@@ -1,13 +1,13 @@
 //
 //  TerminalViewContainerTests.swift
-//  Ghostty
+//  Rustty
 //
 //  Created by Lukas on 26.02.2026.
 //
 
 import SwiftUI
 import Testing
-@testable import Ghostty
+@testable import Rustty
 
 class MockTerminalViewContainer: TerminalViewContainer {
     var _windowCornerRadius: CGFloat?
@@ -20,19 +20,19 @@ class MockTerminalViewContainer: TerminalViewContainer {
     }
 }
 
-class MockConfig: Ghostty.Config {
-    internal init(backgroundBlur: Ghostty.Config.BackgroundBlur, backgroundColor: Color, backgroundOpacity: Double) {
+class MockConfig: Rustty.Config {
+    internal init(backgroundBlur: Rustty.Config.BackgroundBlur, backgroundColor: Color, backgroundOpacity: Double) {
         self._backgroundBlur = backgroundBlur
         self._backgroundColor = backgroundColor
         self._backgroundOpacity = backgroundOpacity
         super.init(config: nil)
     }
 
-    var _backgroundBlur: Ghostty.Config.BackgroundBlur
+    var _backgroundBlur: Rustty.Config.BackgroundBlur
     var _backgroundColor: Color
     var _backgroundOpacity: Double
 
-    override var backgroundBlur: Ghostty.Config.BackgroundBlur {
+    override var backgroundBlur: Rustty.Config.BackgroundBlur {
         _backgroundBlur
     }
 

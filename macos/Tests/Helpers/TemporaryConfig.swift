@@ -1,9 +1,9 @@
 import Foundation
-@testable import Ghostty
+@testable import Rustty
 @testable import RusttyKit
 
 /// Create a temporary config file and delete it when this is deallocated
-class TemporaryConfig: Ghostty.Config {
+class TemporaryConfig: Rustty.Config {
     enum Error: Swift.Error {
         case failedToLoad
     }
@@ -29,14 +29,14 @@ class TemporaryConfig: Ghostty.Config {
         clone(config: cfg)
     }
 
-    var optionalAutoUpdateChannel: Ghostty.AutoUpdateChannel? {
+    var optionalAutoUpdateChannel: Rustty.AutoUpdateChannel? {
         guard let config = self.config else { return nil }
         var v: UnsafePointer<Int8>?
         let key = "auto-update-channel"
         guard rustty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return nil }
         guard let ptr = v else { return nil }
         let str = String(cString: ptr)
-        return Ghostty.AutoUpdateChannel(rawValue: str)
+        return Rustty.AutoUpdateChannel(rawValue: str)
     }
 
     deinit {

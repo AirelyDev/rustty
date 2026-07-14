@@ -46,19 +46,19 @@ struct TerminalEntity: AppEntity {
 
     /// Returns the view associated with this entity. This may no longer exist.
     @MainActor
-    var surfaceView: Ghostty.SurfaceView? {
+    var surfaceView: Rustty.SurfaceView? {
         Self.defaultQuery.all.first { $0.id == self.id }
     }
 
     @MainActor
-    var surfaceModel: Ghostty.Surface? {
+    var surfaceModel: Rustty.Surface? {
         surfaceView?.surfaceModel
     }
 
     static var defaultQuery = TerminalQuery()
 
     @MainActor
-    init(_ view: Ghostty.SurfaceView) {
+    init(_ view: Rustty.SurfaceView) {
         self.id = view.id
         self.title = view.title
         self.workingDirectory = view.pwd
@@ -88,7 +88,7 @@ struct TerminalEntity: AppEntity {
     /// Waiting for the title and pwd also gives the SurfaceView time to lay
     /// out, so the screenshot we capture afterwards reflects the rendered view.
     @MainActor
-    init(view: Ghostty.SurfaceView) async {
+    init(view: Rustty.SurfaceView) async {
         self.id = view.id
         self.tty = view.surfaceModel?.ttyName
 
@@ -179,7 +179,7 @@ struct TerminalQuery: EntityStringQuery, EnumerableEntityQuery {
     }
 
     @MainActor
-    var all: [Ghostty.SurfaceView] {
+    var all: [Rustty.SurfaceView] {
         // Find all of our terminal windows. This will include the quick terminal
         // but only if it was previously opened.
         let controllers = NSApp.windows.compactMap {

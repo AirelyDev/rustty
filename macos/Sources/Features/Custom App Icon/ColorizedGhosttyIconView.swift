@@ -2,9 +2,9 @@ import SwiftUI
 import Cocoa
 
 // For testing.
-struct ColorizedGhosttyIconView: View {
+struct ColorizedRusttyIconView: View {
     var body: some View {
-        Image(nsImage: ColorizedGhosttyIcon(
+        Image(nsImage: ColorizedRusttyIcon(
             screenColors: [.purple, .blue],
             ghostColor: .yellow,
             frame: .aluminum

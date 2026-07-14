@@ -1,4 +1,4 @@
-enum GhosttyIntentError: Error, CustomLocalizedStringResourceConvertible {
+enum RusttyIntentError: Error, CustomLocalizedStringResourceConvertible {
     case appUnavailable
     case surfaceNotFound
     case permissionDenied

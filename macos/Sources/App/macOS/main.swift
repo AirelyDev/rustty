@@ -2,14 +2,14 @@ import AppKit
 import Cocoa
 import RusttyKit
 
-// Initialize Ghostty global state. We do this once right away because the
+// Initialize Rustty global state. We do this once right away because the
 // CLI APIs require it and it lets us ensure it is done immediately for the
 // rest of the app.
 if rustty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) != RUSTTY_SUCCESS {
-    Ghostty.logger.critical("rustty_init failed")
+    Rustty.logger.critical("rustty_init failed")
 
     // We also write to stderr if this is executed from the CLI or zig run
-    switch Ghostty.launchSource {
+    switch Rustty.launchSource {
     case .cli, .zig_run:
         let stderrHandle = FileHandle.standardError
         stderrHandle.write(

@@ -5,7 +5,7 @@ enum QuickTerminalScreen {
     case mouse
     case menuBar
 
-    init?(fromGhosttyConfig string: String) {
+    init?(fromRusttyConfig string: String) {
         switch string {
         case "main":
             self = .main

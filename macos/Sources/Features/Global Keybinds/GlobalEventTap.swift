@@ -144,7 +144,7 @@ private func cgEventFlagsChangedHandler(
     // that processes all local events.
     guard !NSApp.isActive else { return result }
 
-    // We need an app delegate to get the Ghostty app instance
+    // We need an app delegate to get the Rustty app instance
     guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else { return result }
     guard let ghostty = appDelegate.ghostty.app else { return result }
 

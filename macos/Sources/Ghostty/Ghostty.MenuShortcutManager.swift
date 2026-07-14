@@ -1,12 +1,12 @@
 import AppKit
 import SwiftUI
 
-extension Ghostty {
-    /// The manager that's responsible for updating shortcuts of Ghostty's app menu
+extension Rustty {
+    /// The manager that's responsible for updating shortcuts of Rustty's app menu
     @MainActor
     class MenuShortcutManager {
 
-        /// Ghostty menu items indexed by their normalized shortcut. This avoids traversing
+        /// Rustty menu items indexed by their normalized shortcut. This avoids traversing
         /// the entire menu tree on every key equivalent event.
         ///
         /// We store a weak reference so this cache can never be the owner of menu items.
@@ -19,8 +19,8 @@ extension Ghostty {
         }
 
         /// Syncs a single menu shortcut for the given action. The action string is the same
-        /// action string used for the Ghostty configuration.
-        func syncMenuShortcut(_ config: Ghostty.Config, action: String?, menuItem: NSMenuItem?) {
+        /// action string used for the Rustty configuration.
+        func syncMenuShortcut(_ config: Rustty.Config, action: String?, menuItem: NSMenuItem?) {
             guard let menu = menuItem else { return }
 
             if !updateMenuShortcut(config, action: action, menuItem: menu) {
@@ -30,17 +30,17 @@ extension Ghostty {
         }
 
         /// Attempts to perform a menu key equivalent only for menu items that represent
-        /// Ghostty keybind actions. This is important because it lets our surface dispatch
+        /// Rustty keybind actions. This is important because it lets our surface dispatch
         /// bindings through the menu so they flash but also lets our surface override macOS built-ins
         /// like Cmd+H.
-        func performGhosttyBindingMenuKeyEquivalent(with event: NSEvent) -> Bool {
+        func performRusttyBindingMenuKeyEquivalent(with event: NSEvent) -> Bool {
             // Convert this event into the same normalized lookup key we use when
             // syncing menu shortcuts from configuration.
             guard let key = MenuShortcutKey(event: event) else {
                 return false
             }
 
-            // If we don't have an entry for this key combo, no Ghostty-owned
+            // If we don't have an entry for this key combo, no Rustty-owned
             // menu shortcut exists for this event.
             guard let weakItem = menuItemsByShortcut[key] else {
                 return false
@@ -73,12 +73,12 @@ extension Ghostty {
     }
 }
 
-private extension Ghostty.MenuShortcutManager {
+private extension Rustty.MenuShortcutManager {
     /// Syncs a single menu shortcut for the given action. The action string is the same
-    /// action string used for the Ghostty configuration.
+    /// action string used for the Rustty configuration.
     ///
     /// - Returns: Whether the menu item is updated and saved in ``menuItemsByShortcut``
-    func updateMenuShortcut(_ config: Ghostty.Config, action: String?, menuItem menu: NSMenuItem) -> Bool {
+    func updateMenuShortcut(_ config: Rustty.Config, action: String?, menuItem menu: NSMenuItem) -> Bool {
         guard
             let action,
             let shortcut = config.keyboardShortcut(for: action),
@@ -98,7 +98,7 @@ private extension Ghostty.MenuShortcutManager {
     }
 }
 
-extension Ghostty.MenuShortcutManager {
+extension Rustty.MenuShortcutManager {
     /// Hashable key for a menu shortcut match, normalized for quick lookup.
     struct MenuShortcutKey: Hashable {
         private static let shortcutModifiers: NSEvent.ModifierFlags = [.shift, .control, .option, .command]
@@ -143,8 +143,8 @@ extension Ghostty.MenuShortcutManager {
 
         /// Create from a swiftUI `KeyboardShortcut`
         init?(_ shortcut: KeyboardShortcut) {
-            // Ghostty configured shortcuts are already normalized
-            // in `Ghostty.keyboardShortcut(for:)`, see also gh-#12039
+            // Rustty configured shortcuts are already normalized
+            // in `Rustty.keyboardShortcut(for:)`, see also gh-#12039
             let keyEquivalent = shortcut.key.character.description
             let modifierMask = NSEvent.ModifierFlags(swiftUIFlags: shortcut.modifiers)
             self.init(keyEquivalent: keyEquivalent, modifiers: modifierMask)

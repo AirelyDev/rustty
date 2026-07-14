@@ -3,14 +3,14 @@ import RusttyKit
 
 struct TerminalCommandPaletteView: View {
     /// The surface that this command palette represents.
-    let surfaceView: Ghostty.SurfaceView
+    let surfaceView: Rustty.SurfaceView
 
     /// Set this to true to show the view, this will be set to false if any actions
     /// result in the view disappearing.
     @Binding var isPresented: Bool
 
     /// The configuration so we can lookup keyboard shortcuts.
-    @ObservedObject var ghosttyConfig: Ghostty.Config
+    @ObservedObject var ghosttyConfig: Rustty.Config
 
     /// The update view model for showing update commands.
     var updateViewModel: UpdateViewModel?
@@ -167,7 +167,7 @@ struct TerminalCommandPaletteView: View {
                     sortKey: AnySortKey(ObjectIdentifier(surface))
                 ) {
                     NotificationCenter.default.post(
-                        name: Ghostty.Notification.ghosttyPresentTerminal,
+                        name: Rustty.Notification.ghosttyPresentTerminal,
                         object: surface
                     )
                 }

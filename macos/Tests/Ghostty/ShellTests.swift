@@ -1,5 +1,5 @@
 import Testing
-@testable import Ghostty
+@testable import Rustty
 
 struct ShellTests {
     @Test(arguments: [
@@ -27,7 +27,7 @@ struct ShellTests {
         ("/tmp/my file (1).txt", "/tmp/my\\ file\\ \\(1\\).txt"),
     ])
     func escape(input: String, expected: String) {
-        #expect(Ghostty.Shell.escape(input) == expected)
+        #expect(Rustty.Shell.escape(input) == expected)
     }
 
     @Test(arguments: [
@@ -42,6 +42,6 @@ struct ShellTests {
         ("file$'name'", "'file$'\"'\"'name'\"'\"''"),
     ])
     func quote(input: String, expected: String) {
-        #expect(Ghostty.Shell.quote(input) == expected)
+        #expect(Rustty.Shell.quote(input) == expected)
     }
 }

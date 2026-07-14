@@ -1,10 +1,10 @@
 import SwiftUI
 import RusttyKit
 
-extension Ghostty {
+extension Rustty {
     /// Maps to a `rustty_config_t` and the various operations on that.
     class Config: ObservableObject {
-        // The underlying C pointer to the Ghostty config structure. This
+        // The underlying C pointer to the Rustty config structure. This
         // should never be accessed directly. Any operations on this should
         // be called from the functions on this or another class.
         private(set) var config: rustty_config_t? {
@@ -112,7 +112,7 @@ extension Ghostty {
         // MARK: - Keybindings
 
         /// Return the key equivalent for the given action. The action is the name of the action
-        /// in the Ghostty configuration. For example `keybind = cmd+q=quit` in Ghostty
+        /// in the Rustty configuration. For example `keybind = cmd+q=quit` in Rustty
         /// configuration would be "quit" action.
         ///
         /// Returns nil if there is no key equivalent for the given action.
@@ -120,13 +120,13 @@ extension Ghostty {
             guard let cfg = self.config else { return nil }
 
             let trigger = rustty_config_trigger(cfg, action, UInt(action.lengthOfBytes(using: .utf8)))
-            return Ghostty.keyboardShortcut(for: trigger)
+            return Rustty.keyboardShortcut(for: trigger)
         }
 #endif
 
         // MARK: - Configuration Values
 
-        /// For all of the configuration values below, see the associated Ghostty documentation for
+        /// For all of the configuration values below, see the associated Rustty documentation for
         /// details on what each means. We only add documentation if there is a strange conversion
         /// due to the embedded library and Swift.
 
@@ -411,7 +411,7 @@ extension Ghostty {
 
         var macosCustomIcon: String {
             #if os(macOS)
-            let defaultValue = NSString("~/.config/ghostty/Ghostty.icns").expandingTildeInPath
+            let defaultValue = NSString("~/.config/ghostty/Rustty.icns").expandingTildeInPath
             guard let config = self.config else { return defaultValue }
             var v: UnsafePointer<Int8>?
             let key = "macos-custom-icon"
@@ -570,7 +570,7 @@ extension Ghostty {
             guard rustty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return .main }
             guard let ptr = v else { return .main }
             let str = String(cString: ptr)
-            return QuickTerminalScreen(fromGhosttyConfig: str) ?? .main
+            return QuickTerminalScreen(fromRusttyConfig: str) ?? .main
         }
 
         var quickTerminalAnimationDuration: Double {
@@ -596,7 +596,7 @@ extension Ghostty {
             guard rustty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return .move }
             guard let ptr = v else { return .move }
             let str = String(cString: ptr)
-            return QuickTerminalSpaceBehavior(fromGhosttyConfig: str) ?? .move
+            return QuickTerminalSpaceBehavior(fromRusttyConfig: str) ?? .move
         }
 
         var quickTerminalSize: QuickTerminalSize {
@@ -730,14 +730,14 @@ extension Ghostty {
             return Scrollbar(rawValue: str) ?? defaultValue
         }
 
-        var commandPaletteEntries: [Ghostty.Command] {
+        var commandPaletteEntries: [Rustty.Command] {
             guard let config = self.config else { return [] }
             var v: rustty_config_command_list_s = .init()
             let key = "command-palette-entry"
             guard rustty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return [] }
             guard v.len > 0 else { return [] }
             let buffer = UnsafeBufferPointer(start: v.commands, count: v.len)
-            return buffer.map { Ghostty.Command(cValue: $0) }
+            return buffer.map { Rustty.Command(cValue: $0) }
         }
 
         var progressStyle: Bool {
@@ -752,7 +752,7 @@ extension Ghostty {
 
 // MARK: Configuration Enums
 
-extension Ghostty.Config {
+extension Rustty.Config {
     enum AutoUpdate: String {
         case off
         case check

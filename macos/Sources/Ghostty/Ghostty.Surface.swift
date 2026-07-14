@@ -1,10 +1,10 @@
 import RusttyKit
 
-extension Ghostty {
-    /// Represents a single surface within Ghostty.
+extension Rustty {
+    /// Represents a single surface within Rustty.
     ///
     /// NOTE(mitchellh): This is a work-in-progress class as part of a general refactor
-    /// of our Ghostty data model. At the time of writing there's still a ton of surface
+    /// of our Rustty data model. At the time of writing there's still a ton of surface
     /// functionality that is not encapsulated in this class. It is planned to migrate that
     /// all over.
     ///

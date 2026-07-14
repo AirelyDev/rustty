@@ -1,6 +1,6 @@
 import AppKit
 
-/// AppleScript-facing wrapper around a logical Ghostty window.
+/// AppleScript-facing wrapper around a logical Rustty window.
 ///
 /// In AppKit, each tab is often its own `NSWindow`. AppleScript users, however,
 /// expect a single window object containing a list of tabs.

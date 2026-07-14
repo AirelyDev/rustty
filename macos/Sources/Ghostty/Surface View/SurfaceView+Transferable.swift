@@ -5,7 +5,7 @@ import CoreTransferable
 import UniformTypeIdentifiers
 
 /// Conformance to `Transferable` enables drag-and-drop.
-extension Ghostty.SurfaceView: Transferable {
+extension Rustty.SurfaceView: Transferable {
     static var transferRepresentation: some TransferRepresentation {
         DataRepresentation(contentType: .ghosttySurfaceId) { surface in
             withUnsafeBytes(of: surface.id.uuid) { Data($0) }
@@ -33,7 +33,7 @@ extension Ghostty.SurfaceView: Transferable {
     @MainActor
     static func find(uuid: UUID) -> Self? {
         #if canImport(AppKit)
-        guard let del = NSApp.delegate as? Ghostty.Delegate else { return nil }
+        guard let del = NSApp.delegate as? Rustty.Delegate else { return nil }
         return del.ghosttySurface(id: uuid) as? Self
         #elseif canImport(UIKit)
         // We should be able to use UIApplication here.

@@ -1,4 +1,4 @@
-@testable import Ghostty
+@testable import Rustty
 import Testing
 
 struct SurfaceViewAppKitTests {
@@ -17,7 +17,7 @@ struct SurfaceViewAppKitTests {
         expected: Bool
     ) {
         #expect(
-            Ghostty.SurfaceView.shouldSuppressComposingControlInput(
+            Rustty.SurfaceView.shouldSuppressComposingControlInput(
                 text,
                 composing: true
             ) == expected
@@ -26,7 +26,7 @@ struct SurfaceViewAppKitTests {
 
     @Test func doesNotSuppressControlTextWhenNotComposing() {
         #expect(
-            Ghostty.SurfaceView.shouldSuppressComposingControlInput(
+            Rustty.SurfaceView.shouldSuppressComposingControlInput(
                 "\u{0008}",
                 composing: false
             ) == false
@@ -35,7 +35,7 @@ struct SurfaceViewAppKitTests {
 
     @Test func doesNotSuppressMissingText() {
         #expect(
-            Ghostty.SurfaceView.shouldSuppressComposingControlInput(
+            Rustty.SurfaceView.shouldSuppressComposingControlInput(
                 nil,
                 composing: true
             ) == false

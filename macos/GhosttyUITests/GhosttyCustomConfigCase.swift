@@ -1,13 +1,13 @@
 //
-//  GhosttyCustomConfigCase.swift
-//  Ghostty
+//  RusttyCustomConfigCase.swift
+//  Rustty
 //
 //  Created by luca on 16.10.2025.
 //
 
 import XCTest
 
-class GhosttyCustomConfigCase: XCTestCase {
+class RusttyCustomConfigCase: XCTestCase {
     /// We only want run these UI tests
     /// when testing manually with Xcode IDE
     ///
@@ -40,7 +40,7 @@ class GhosttyCustomConfigCase: XCTestCase {
         try newConfig.write(to: configFile, atomically: true, encoding: .utf8)
     }
 
-    func ghosttyApplication(defaultsSuite: String = GhosttyCustomConfigCase.defaultsSuiteName) throws -> XCUIApplication {
+    func ghosttyApplication(defaultsSuite: String = RusttyCustomConfigCase.defaultsSuiteName) throws -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments.append(contentsOf: ["-ApplePersistenceIgnoreState", "YES"])
         app.launchEnvironment["RUSTTY_CONFIG_PATH"] = configFile.path

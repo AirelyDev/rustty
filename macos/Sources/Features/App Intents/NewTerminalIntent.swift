@@ -56,14 +56,14 @@ struct NewTerminalIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ReturnsValue<TerminalEntity?> {
         guard await requestIntentPermission() else {
-            throw GhosttyIntentError.permissionDenied
+            throw RusttyIntentError.permissionDenied
         }
         guard let appDelegate = NSApp.delegate as? AppDelegate else {
-            throw GhosttyIntentError.appUnavailable
+            throw RusttyIntentError.appUnavailable
         }
         let ghostty = appDelegate.ghostty
 
-        var config = Ghostty.SurfaceConfiguration()
+        var config = Rustty.SurfaceConfiguration()
 
         // We don't run command as "command" and instead use "initialInput" so
         // that we can get all the login scripts to setup things like PATH.
@@ -87,10 +87,10 @@ struct NewTerminalIntent: AppIntent {
         }
 
         // Determine if we have a parent and get it
-        let parent: Ghostty.SurfaceView?
+        let parent: Rustty.SurfaceView?
         if let parentParam = self.parent {
             guard let view = parentParam.surfaceView else {
-                throw GhosttyIntentError.surfaceNotFound
+                throw RusttyIntentError.surfaceNotFound
             }
 
             parent = view
@@ -127,7 +127,7 @@ struct NewTerminalIntent: AppIntent {
         case .splitLeft, .splitRight, .splitUp, .splitDown:
             guard let parent,
                   let controller = parent.window?.windowController as? BaseTerminalController else {
-                throw GhosttyIntentError.surfaceNotFound
+                throw RusttyIntentError.surfaceNotFound
             }
 
             if let view = controller.newSplit(
@@ -153,7 +153,7 @@ enum NewTerminalLocation: String {
     case splitUp = "split:up"
     case splitDown = "split:down"
 
-    var splitDirection: SplitTree<Ghostty.SurfaceView>.NewDirection? {
+    var splitDirection: SplitTree<Rustty.SurfaceView>.NewDirection? {
         switch self {
         case .splitLeft: return .left
         case .splitRight: return .right

@@ -2,7 +2,7 @@ import SwiftUI
 import RusttyKit
 import Combine
 
-/// A view that cycles through Ghostty's official icon variants.
+/// A view that cycles through Rustty's official icon variants.
 struct CyclingIconView: View {
     @EnvironmentObject var viewModel: AboutViewModel
 
@@ -31,7 +31,7 @@ struct CyclingIconView: View {
     }
 
     @ViewBuilder
-    private func iconView(for icon: Ghostty.MacOSIcon?) -> some View {
+    private func iconView(for icon: Rustty.MacOSIcon?) -> some View {
         let iconImage: Image = switch icon?.assetName {
         case let assetName?: Image(assetName)
         case nil: ghosttyIconImage()

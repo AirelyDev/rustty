@@ -10,7 +10,7 @@ protocol TerminalRestorable: Codable {
 
     /// Returns a base configuration to use when restoring terminal surfaces.
     /// Override this to provide custom environment variables or other configuration.
-    var baseConfig: Ghostty.SurfaceConfiguration? { get }
+    var baseConfig: Rustty.SurfaceConfiguration? { get }
 }
 
 extension TerminalRestorable {
@@ -28,7 +28,7 @@ extension TerminalRestorable {
     }
 
     /// Default implementation returns nil (no custom base config).
-    var baseConfig: Ghostty.SurfaceConfiguration? { nil }
+    var baseConfig: Rustty.SurfaceConfiguration? { nil }
 
     init?(coder aDecoder: NSCoder) {
         // If the version doesn't match then we can't decode. In the future we can perform
@@ -64,7 +64,7 @@ final class TerminalRestorableState: TerminalRestorable {
     var focusedSurface: String? {
         internalState.focusedSurface
     }
-    var surfaceTree: SplitTree<Ghostty.SurfaceView> {
+    var surfaceTree: SplitTree<Rustty.SurfaceView> {
         internalState.surfaceTree
     }
     var effectiveFullscreenMode: FullscreenMode? {
@@ -82,7 +82,7 @@ final class TerminalRestorableState: TerminalRestorable {
     /// Since we can't really change the type of `TerminalRestorableState`
     /// due to `CodableBridge<TerminalRestorableState>` supporting secure coding,
     /// we use an internal type to perform migration and tests
-    private let internalState: InternalState<Ghostty.SurfaceView>
+    private let internalState: InternalState<Rustty.SurfaceView>
 
     init(from controller: TerminalController) {
         internalState = .init(from: controller)
@@ -96,7 +96,7 @@ final class TerminalRestorableState: TerminalRestorable {
     ///
     /// - Important: If you intend to add more things, go to `InternalState`.
     init(from decoder: any Decoder) throws {
-        self.internalState = try InternalState<Ghostty.SurfaceView>(from: decoder)
+        self.internalState = try InternalState<Rustty.SurfaceView>(from: decoder)
     }
 
     /// This is just wrapper around internalState
@@ -174,7 +174,7 @@ class TerminalWindowRestoration: NSObject, NSWindowRestoration {
         // Setup our restored state on the controller
         // Find the focused surface in surfaceTree
         if let focusedStr = state.focusedSurface {
-            var foundView: Ghostty.SurfaceView?
+            var foundView: Rustty.SurfaceView?
             for view in c.surfaceTree where view.id.uuidString == focusedStr {
                 foundView = view
                 break
@@ -199,7 +199,7 @@ class TerminalWindowRestoration: NSObject, NSWindowRestoration {
     /// This restores the focus state of the surfaceview within the given window. When restoring,
     /// the view isn't immediately attached to the window since we have to wait for SwiftUI to
     /// catch up. Therefore, we sit in an async loop waiting for the attachment to happen.
-    private static func restoreFocus(to: Ghostty.SurfaceView, inWindow: NSWindow, attempts: Int = 0) {
+    private static func restoreFocus(to: Rustty.SurfaceView, inWindow: NSWindow, attempts: Int = 0) {
         // For the first attempt, we schedule it immediately. Subsequent events wait a bit
         // so we don't just spin the CPU at 100%. Give up after some period of time.
         let after: DispatchTime

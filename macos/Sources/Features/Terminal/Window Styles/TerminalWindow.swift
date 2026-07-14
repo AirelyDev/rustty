@@ -31,7 +31,7 @@ class TerminalWindow: NSWindow {
         return view
     }()
 
-    /// The configuration derived from the Ghostty config so we don't need to rely on references.
+    /// The configuration derived from the Rustty config so we don't need to rely on references.
     private(set) var derivedConfig: DerivedConfig = .init()
 
     /// Sets up our tab context menu
@@ -464,7 +464,7 @@ class TerminalWindow: NSWindow {
     // MARK: Positioning And Styling
 
     /// This is called by the controller when there is a need to reset the window appearance.
-    func syncAppearance(_ surfaceConfig: Ghostty.SurfaceView.DerivedConfig) {
+    func syncAppearance(_ surfaceConfig: Rustty.SurfaceView.DerivedConfig) {
         // If our window is not visible, then we do nothing. Some things such as blurring
         // have no effect if the window is not visible. Ultimately, we'll have this called
         // at some point when a surface becomes focused.
@@ -512,7 +512,7 @@ class TerminalWindow: NSWindow {
     /// change the alpha channel again manually.
     var preferredBackgroundColor: NSColor? {
         if let terminalController, !terminalController.surfaceTree.isEmpty {
-            let surface: Ghostty.SurfaceView?
+            let surface: Rustty.SurfaceView?
 
             // If our focused surface borders the top then we prefer its background color
             if let focusedSurface = terminalController.focusedSurface,
@@ -583,11 +583,11 @@ class TerminalWindow: NSWindow {
 
     struct DerivedConfig {
         let title: String?
-        let backgroundBlur: Ghostty.Config.BackgroundBlur
+        let backgroundBlur: Rustty.Config.BackgroundBlur
         let backgroundColor: NSColor
         let backgroundOpacity: Double
-        let macosWindowButtons: Ghostty.MacOSWindowButtons
-        let macosTitlebarStyle: Ghostty.Config.MacOSTitlebarStyle
+        let macosWindowButtons: Rustty.MacOSWindowButtons
+        let macosTitlebarStyle: Rustty.Config.MacOSTitlebarStyle
         let windowCornerRadius: CGFloat
 
         init() {
@@ -600,7 +600,7 @@ class TerminalWindow: NSWindow {
             self.windowCornerRadius = 16
         }
 
-        init(_ config: Ghostty.Config) {
+        init(_ config: Rustty.Config) {
             self.title = config.title
             self.backgroundColor = NSColor(config.backgroundColor)
             self.backgroundOpacity = config.backgroundOpacity

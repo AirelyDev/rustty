@@ -1,8 +1,8 @@
 import RusttyKit
 import Metal
 
-extension Ghostty {
-    /// Represents the inspector for a surface within Ghostty.
+extension Rustty {
+    /// Represents the inspector for a surface within Rustty.
     ///
     /// Wraps a `rustty_inspector_t`
     final class Inspector: Sendable {

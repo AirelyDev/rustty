@@ -1,10 +1,10 @@
 import AppKit
 import Testing
-@testable import Ghostty
+@testable import Rustty
 
 @Suite
 struct NormalizedMenuShortcutKeyTests {
-    typealias Key = Ghostty.MenuShortcutManager.MenuShortcutKey
+    typealias Key = Rustty.MenuShortcutManager.MenuShortcutKey
 
     // MARK: - Init from keyEquivalent + modifiers
 

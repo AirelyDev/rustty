@@ -1,13 +1,13 @@
 //
-//  GhosttyWindowPositionUITests.swift
-//  GhosttyUITests
+//  RusttyWindowPositionUITests.swift
+//  RusttyUITests
 //
 //  Created by Claude on 2026-03-11.
 //
 
 import XCTest
 
-final class GhosttyWindowPositionUITests: GhosttyCustomConfigCase {
+final class RusttyWindowPositionUITests: RusttyCustomConfigCase {
     // MARK: - Cascading
 
     @MainActor func testWindowCascading() async throws {
@@ -15,7 +15,7 @@ final class GhosttyWindowPositionUITests: GhosttyCustomConfigCase {
             """
             window-width = 30
             window-height = 10
-            title = "GhosttyWindowPositionUITests"
+            title = "RusttyWindowPositionUITests"
             """
         )
 
@@ -76,7 +76,7 @@ final class GhosttyWindowPositionUITests: GhosttyCustomConfigCase {
             """
             window-width = 40
             window-height = 20
-            title = "GhosttyWindowPositionUITests"
+            title = "RusttyWindowPositionUITests"
             macos-titlebar-style = hidden
             """
         )
@@ -95,7 +95,7 @@ final class GhosttyWindowPositionUITests: GhosttyCustomConfigCase {
         // remove fixed size
         try updateConfig(
             """
-            title = "GhosttyWindowPositionUITests"
+            title = "RusttyWindowPositionUITests"
             macos-titlebar-style = hidden
             """
         )
@@ -131,7 +131,7 @@ final class GhosttyWindowPositionUITests: GhosttyCustomConfigCase {
             """
             window-width = 40
             window-height = 20
-            title = "GhosttyWindowPositionUITests"
+            title = "RusttyWindowPositionUITests"
             macos-titlebar-style = hidden
             """
         )
@@ -189,7 +189,7 @@ final class GhosttyWindowPositionUITests: GhosttyCustomConfigCase {
         try updateConfig(
             """
             maximize = true
-            title = "GhosttyWindowPositionUITests"
+            title = "RusttyWindowPositionUITests"
             """
         )
 
@@ -209,7 +209,7 @@ final class GhosttyWindowPositionUITests: GhosttyCustomConfigCase {
             window-position-y = 50
             window-width = 30
             window-height = 30
-            title = "GhosttyWindowPositionUITests"
+            title = "RusttyWindowPositionUITests"
             """
         )
         app.typeKey(",", modifierFlags: [.command, .shift])
@@ -237,7 +237,7 @@ final class GhosttyWindowPositionUITests: GhosttyCustomConfigCase {
         try updateConfig(
             """
             maximize = true
-            title = "GhosttyWindowPositionUITests"
+            title = "RusttyWindowPositionUITests"
             """
         )
 
@@ -255,7 +255,7 @@ final class GhosttyWindowPositionUITests: GhosttyCustomConfigCase {
             """
             window-width = 30
             window-height = 30
-            title = "GhosttyWindowPositionUITests"
+            title = "RusttyWindowPositionUITests"
             """
         )
         app.typeKey(",", modifierFlags: [.command, .shift])
@@ -287,7 +287,7 @@ final class GhosttyWindowPositionUITests: GhosttyCustomConfigCase {
         try updateConfig(
             """
             macos-titlebar-style = \(titlebarStyle)
-            title = "GhosttyWindowPositionUITests"
+            title = "RusttyWindowPositionUITests"
             """
         )
 

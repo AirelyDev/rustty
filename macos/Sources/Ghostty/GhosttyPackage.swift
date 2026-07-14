@@ -11,7 +11,7 @@ extension rustty_command_s: @unchecked @retroactive Sendable {}
 /// may be unsafe but the value itself is safe to send across threads.
 extension rustty_surface_t: @unchecked @retroactive Sendable {}
 
-extension Ghostty {
+extension Rustty {
     // The user notification category identifier
     static let userNotificationCategory = "com.mitchellh.ghostty.userNotification"
 
@@ -21,7 +21,7 @@ extension Ghostty {
 
 // MARK: Build Info
 
-extension Ghostty {
+extension Rustty {
     struct Info {
         var mode: rustty_build_mode_e
         var version: String
@@ -41,7 +41,7 @@ extension Ghostty {
 
 // MARK: General Helpers
 
-extension Ghostty {
+extension Rustty {
     enum LaunchSource: String {
         case cli
         case app
@@ -64,7 +64,7 @@ extension Ghostty {
 
 // MARK: Swift Types for C Types
 
-extension Ghostty {
+extension Rustty {
     class AllocatedString {
         private let cString: rustty_string_s
 
@@ -84,7 +84,7 @@ extension Ghostty {
     }
 }
 
-extension Ghostty {
+extension Rustty {
     enum SetFloatWIndow {
         case on
         case off
@@ -133,7 +133,7 @@ extension Ghostty {
     enum SplitFocusDirection {
         case previous, next, up, down, left, right
 
-        /// Initialize from a Ghostty API enum.
+        /// Initialize from a Rustty API enum.
         static func from(direction: rustty_action_goto_split_e) -> Self? {
             switch direction {
             case RUSTTY_GOTO_SPLIT_PREVIOUS:
@@ -219,7 +219,7 @@ extension Ghostty {
 #if canImport(AppKit)
 // MARK: SplitFocusDirection Extensions
 
-extension Ghostty.SplitFocusDirection {
+extension Rustty.SplitFocusDirection {
     /// Convert to a SplitTree.FocusDirection for the given ViewType.
     func toSplitTreeFocusDirection<ViewType>() -> SplitTree<ViewType>.FocusDirection {
         switch self {
@@ -245,7 +245,7 @@ extension Ghostty.SplitFocusDirection {
 }
 #endif
 
-extension Ghostty {
+extension Rustty {
     /// The type of a clipboard request
     enum ClipboardRequest {
         /// A direct paste of clipboard contents
@@ -332,15 +332,15 @@ extension Ghostty {
 extension Notification.Name {
     /// Configuration change. If the object is nil then it is app-wide. Otherwise its surface-specific.
     static let ghosttyConfigDidChange = Notification.Name("com.mitchellh.ghostty.configDidChange")
-    static let GhosttyConfigChangeKey = ghosttyConfigDidChange.rawValue
+    static let RusttyConfigChangeKey = ghosttyConfigDidChange.rawValue
 
     /// Color change. Object is the surface changing.
     static let ghosttyColorDidChange = Notification.Name("com.mitchellh.ghostty.ghosttyColorDidChange")
-    static let GhosttyColorChangeKey = ghosttyColorDidChange.rawValue
+    static let RusttyColorChangeKey = ghosttyColorDidChange.rawValue
 
     /// Goto tab. Has tab index in the userinfo.
     static let ghosttyMoveTab = Notification.Name("com.mitchellh.ghostty.moveTab")
-    static let GhosttyMoveTabKey = ghosttyMoveTab.rawValue
+    static let RusttyMoveTabKey = ghosttyMoveTab.rawValue
 
     /// Close tab
     static let ghosttyCloseTab = Notification.Name("com.mitchellh.ghostty.closeTab")
@@ -381,7 +381,7 @@ extension Notification.Name {
 
 // NOTE: I am moving all of these to Notification.Name extensions over time. This
 // namespace was the old namespace.
-extension Ghostty.Notification {
+extension Rustty.Notification {
     /// Used to pass a configuration along when creating a new tab/window/split.
     static let NewSurfaceConfigKey = "com.mitchellh.ghostty.newSurfaceConfig"
 

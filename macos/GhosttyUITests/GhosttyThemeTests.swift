@@ -1,6 +1,6 @@
 //
-//  GhosttyThemeTests.swift
-//  Ghostty
+//  RusttyThemeTests.swift
+//  Rustty
 //
 //  Created by luca on 27.10.2025.
 //
@@ -8,12 +8,12 @@
 import AppKit
 import XCTest
 
-final class GhosttyThemeTests: GhosttyCustomConfigCase {
+final class RusttyThemeTests: RusttyCustomConfigCase {
     override static var runsForEachTargetApplicationUIConfiguration: Bool {
         true
     }
 
-    let windowTitle = "GhosttyThemeTests"
+    let windowTitle = "RusttyThemeTests"
     private func assertTitlebarAppearance(
         _ appearance: XCUIDevice.Appearance,
         for app: XCUIApplication,
@@ -154,7 +154,7 @@ final class GhosttyThemeTests: GhosttyCustomConfigCase {
         // open quick terminal
         app.menuBarItems["View"].firstMatch.click()
         app.menuItems["Quick Terminal"].firstMatch.click()
-        let title = "Debug builds of Ghostty are very slow and you may experience performance problems. Debug builds are only recommended during development."
+        let title = "Debug builds of Rustty are very slow and you may experience performance problems. Debug builds are only recommended during development."
         try assertTitlebarAppearance(.light, for: app, title: title, colorLocation: CGPoint(x: 5, y: 5)) // to avoid dark edge
         XCUIDevice.shared.appearance = .dark
         try await Task.sleep(for: .seconds(0.5))

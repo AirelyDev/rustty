@@ -3,10 +3,10 @@ import UserNotifications
 import RusttyKit
 import System
 
-extension Ghostty {
+extension Rustty {
     /// Render a terminal for the active app in the environment.
     struct Terminal: View {
-        @EnvironmentObject private var ghostty: Ghostty.App
+        @EnvironmentObject private var ghostty: Rustty.App
 
         var body: some View {
             if let app = self.ghostty.app {
@@ -53,7 +53,7 @@ extension Ghostty {
         @ObservedObject private var secureInput = SecureInput.shared
         #endif
 
-        @EnvironmentObject private var ghostty: Ghostty.App
+        @EnvironmentObject private var ghostty: Rustty.App
         @Environment(\.ghosttyLastFocusedSurface) private var lastFocusedSurface
 
         private var isFocusedSurface: Bool {
@@ -260,8 +260,8 @@ extension Ghostty {
     struct SurfaceResizeOverlay: View {
         let geoSize: CGSize
         let size: rustty_surface_size_s
-        let overlay: Ghostty.Config.ResizeOverlay
-        let position: Ghostty.Config.ResizeOverlayPosition
+        let overlay: Rustty.Config.ResizeOverlay
+        let position: Rustty.Config.ResizeOverlayPosition
         let duration: UInt
         let focusInstant: ContinuousClock.Instant?
 
@@ -425,7 +425,7 @@ extension Ghostty {
                         if searchState.needle.isEmpty {
                             onClose()
                         } else {
-                            Ghostty.moveFocus(to: surfaceView)
+                            Rustty.moveFocus(to: surfaceView)
                         }
                     }
 #endif
@@ -580,7 +580,7 @@ extension Ghostty {
         }
     }
 
-    /// A surface is terminology in Ghostty for a terminal surface, or a place where a terminal is actually drawn
+    /// A surface is terminology in Rustty for a terminal surface, or a place where a terminal is actually drawn
     /// and interacted with. The word "surface" is used because a surface may represent a window, a tab,
     /// a split, a small preview pane, etc. It is ANYTHING that has a terminal drawn to it.
     struct SurfaceRepresentable: OSViewRepresentable {
@@ -625,7 +625,7 @@ extension Ghostty {
     }
 
     /// The configuration for a surface. For any configuration not set, defaults will be chosen from
-    /// libghostty, usually from the Ghostty configuration.
+    /// libghostty, usually from the Rustty configuration.
     struct SurfaceConfiguration {
         /// Explicit font size to use in points
         var fontSize: Float32?
@@ -1192,35 +1192,35 @@ extension Ghostty {
 
 // MARK: Surface Environment Keys
 
-private struct GhosttySurfaceViewKey: EnvironmentKey {
-    static let defaultValue: Ghostty.SurfaceView? = nil
+private struct RusttySurfaceViewKey: EnvironmentKey {
+    static let defaultValue: Rustty.SurfaceView? = nil
 }
 
-private struct GhosttyLastFocusedSurfaceKey: EnvironmentKey {
+private struct RusttyLastFocusedSurfaceKey: EnvironmentKey {
     /// Optional read-only last-focused surface reference. If a surface view is currently focused this
     /// is equal to the currently focused surface.
-    static let defaultValue: Weak<Ghostty.SurfaceView>? = nil
+    static let defaultValue: Weak<Rustty.SurfaceView>? = nil
 }
 
 extension EnvironmentValues {
-    var ghosttySurfaceView: Ghostty.SurfaceView? {
-        get { self[GhosttySurfaceViewKey.self] }
-        set { self[GhosttySurfaceViewKey.self] = newValue }
+    var ghosttySurfaceView: Rustty.SurfaceView? {
+        get { self[RusttySurfaceViewKey.self] }
+        set { self[RusttySurfaceViewKey.self] = newValue }
     }
 
-    var ghosttyLastFocusedSurface: Weak<Ghostty.SurfaceView>? {
-        get { self[GhosttyLastFocusedSurfaceKey.self] }
-        set { self[GhosttyLastFocusedSurfaceKey.self] = newValue }
+    var ghosttyLastFocusedSurface: Weak<Rustty.SurfaceView>? {
+        get { self[RusttyLastFocusedSurfaceKey.self] }
+        set { self[RusttyLastFocusedSurfaceKey.self] = newValue }
     }
 }
 
 extension View {
-    func ghosttySurfaceView(_ surfaceView: Ghostty.SurfaceView?) -> some View {
+    func ghosttySurfaceView(_ surfaceView: Rustty.SurfaceView?) -> some View {
         environment(\.ghosttySurfaceView, surfaceView)
     }
 
     /// The most recently focused surface (can be currently focused if the surface is currently focused).
-    func ghosttyLastFocusedSurface(_ surfaceView: Weak<Ghostty.SurfaceView>?) -> some View {
+    func ghosttyLastFocusedSurface(_ surfaceView: Weak<Rustty.SurfaceView>?) -> some View {
         environment(\.ghosttyLastFocusedSurface, surfaceView)
     }
 }
@@ -1228,30 +1228,30 @@ extension View {
 // MARK: Surface Focus Keys
 
 extension FocusedValues {
-    var ghosttySurfaceView: Ghostty.SurfaceView? {
-        get { self[FocusedGhosttySurface.self] }
-        set { self[FocusedGhosttySurface.self] = newValue }
+    var ghosttySurfaceView: Rustty.SurfaceView? {
+        get { self[FocusedRusttySurface.self] }
+        set { self[FocusedRusttySurface.self] = newValue }
     }
 
-    struct FocusedGhosttySurface: FocusedValueKey {
-        typealias Value = Ghostty.SurfaceView
+    struct FocusedRusttySurface: FocusedValueKey {
+        typealias Value = Rustty.SurfaceView
     }
 
     var ghosttySurfacePwd: String? {
-        get { self[FocusedGhosttySurfacePwd.self] }
-        set { self[FocusedGhosttySurfacePwd.self] = newValue }
+        get { self[FocusedRusttySurfacePwd.self] }
+        set { self[FocusedRusttySurfacePwd.self] = newValue }
     }
 
-    struct FocusedGhosttySurfacePwd: FocusedValueKey {
+    struct FocusedRusttySurfacePwd: FocusedValueKey {
         typealias Value = String
     }
 
     var ghosttySurfaceCellSize: OSSize? {
-        get { self[FocusedGhosttySurfaceCellSize.self] }
-        set { self[FocusedGhosttySurfaceCellSize.self] = newValue }
+        get { self[FocusedRusttySurfaceCellSize.self] }
+        set { self[FocusedRusttySurfaceCellSize.self] = newValue }
     }
 
-    struct FocusedGhosttySurfaceCellSize: FocusedValueKey {
+    struct FocusedRusttySurfaceCellSize: FocusedValueKey {
         typealias Value = OSSize
     }
 }

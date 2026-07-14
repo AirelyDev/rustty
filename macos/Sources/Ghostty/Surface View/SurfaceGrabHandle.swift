@@ -1,6 +1,6 @@
 import SwiftUI
 
-extension Ghostty {
+extension Rustty {
     /// A grab handle overlay at the top of the surface for dragging a surface.
     struct SurfaceGrabHandle: View {
         // Size of the actual drag handle; the hover reveal region is larger.

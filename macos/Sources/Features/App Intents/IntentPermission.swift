@@ -1,14 +1,14 @@
 import AppKit
 
-/// Requests permission for Shortcuts app to interact with Ghostty
+/// Requests permission for Shortcuts app to interact with Rustty
 ///
 /// This function displays a permission dialog asking the user to allow Shortcuts
-/// to interact with Ghostty. The permission is automatically cached for 10 minutes
+/// to interact with Rustty. The permission is automatically cached for 10 minutes
 /// if the user selects "Allow", meaning subsequent intent calls won't show the dialog
 /// again during that time period.
 /// 
 /// The permission uses a shared UserDefaults key across all intents, so granting
-/// permission for one intent allows all Ghostty intents to execute without additional
+/// permission for one intent allows all Rustty intents to execute without additional
 /// prompts for the duration of the cache period.
 /// 
 /// - Returns: `true` if permission is granted, `false` if denied
@@ -19,7 +19,7 @@ import AppKit
 /// @MainActor
 /// func perform() async throws -> some IntentResult {
 ///     guard await requestIntentPermission() else {
-///         throw GhosttyIntentError.permissionDenied
+///         throw RusttyIntentError.permissionDenied
 ///     }
 ///     // ... continue with intent implementation
 /// }

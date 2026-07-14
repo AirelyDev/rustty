@@ -1,6 +1,6 @@
 //
-//  GhosttyTests.swift
-//  GhosttyTests
+//  RusttyTests.swift
+//  RusttyTests
 //
 //  Created by Mitchell Hashimoto on 7/9/25.
 //

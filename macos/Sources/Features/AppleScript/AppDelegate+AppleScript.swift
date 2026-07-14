@@ -1,10 +1,10 @@
 import AppKit
 
-// Application-level Cocoa scripting hooks for the Ghostty AppleScript dictionary.
+// Application-level Cocoa scripting hooks for the Rustty AppleScript dictionary.
 //
 // Cocoa scripting is mostly convention-based: we do not register handlers in
 // code, we expose Objective-C selectors with names Cocoa derives from
-// `Ghostty.sdef`.
+// `Rustty.sdef`.
 //
 // In practical terms:
 // - An `<element>` in `sdef` maps to an ObjC collection accessor.
@@ -12,7 +12,7 @@ import AppKit
 // - Some `<command>` declarations map to `handle...ScriptCommand:`.
 //
 // This file implements the selectors Cocoa expects on `NSApplication`, which is
-// the runtime object behind the `application` class in `Ghostty.sdef`.
+// the runtime object behind the `application` class in `Rustty.sdef`.
 
 // MARK: - Windows
 
@@ -60,7 +60,7 @@ extension NSApplication {
     /// Exposed as the AppleScript `front window` property.
     ///
     /// `scriptWindows` is already ordered front-to-back, so the first item is
-    /// the frontmost logical Ghostty window.
+    /// the frontmost logical Rustty window.
     @objc(frontWindow)
     var frontWindow: ScriptWindow? {
         guard isAppleScriptEnabled else { return nil }
@@ -149,7 +149,7 @@ extension NSApplication {
         guard validateScript(command: command) else { return nil }
 
         do {
-            let configuration = try Ghostty.SurfaceConfiguration(
+            let configuration = try Rustty.SurfaceConfiguration(
                 scriptRecord: command.evaluatedArguments?["configuration"] as? NSDictionary
             )
             return configuration.dictionaryRepresentation
@@ -178,10 +178,10 @@ extension NSApplication {
             return nil
         }
 
-        let baseConfig: Ghostty.SurfaceConfiguration?
+        let baseConfig: Rustty.SurfaceConfiguration?
         if let scriptRecord = command.evaluatedArguments?["configuration"] as? NSDictionary {
             do {
-                baseConfig = try Ghostty.SurfaceConfiguration(scriptRecord: scriptRecord)
+                baseConfig = try Rustty.SurfaceConfiguration(scriptRecord: scriptRecord)
             } catch {
                 command.scriptErrorNumber = errAECoercionFail
                 command.scriptErrorString = error.localizedDescription
@@ -236,10 +236,10 @@ extension NSApplication {
             return nil
         }
 
-        let baseConfig: Ghostty.SurfaceConfiguration?
+        let baseConfig: Rustty.SurfaceConfiguration?
         if let scriptRecord = command.evaluatedArguments?["configuration"] as? NSDictionary {
             do {
-                baseConfig = try Ghostty.SurfaceConfiguration(scriptRecord: scriptRecord)
+                baseConfig = try Rustty.SurfaceConfiguration(scriptRecord: scriptRecord)
             } catch {
                 command.scriptErrorNumber = errAECoercionFail
                 command.scriptErrorString = error.localizedDescription
@@ -297,7 +297,7 @@ extension NSApplication {
 
 @MainActor
 extension NSApplication {
-    /// Whether Ghostty should currently accept AppleScript interactions.
+    /// Whether Rustty should currently accept AppleScript interactions.
     var isAppleScriptEnabled: Bool {
         guard let appDelegate = delegate as? AppDelegate else { return true }
         return appDelegate.ghostty.config.macosAppleScript
@@ -317,7 +317,7 @@ extension NSApplication {
 
     /// Discovers all currently alive terminal surfaces across normal and quick
     /// terminal windows. This powers both terminal enumeration and ID lookup.
-    fileprivate var allSurfaceViews: [Ghostty.SurfaceView] {
+    fileprivate var allSurfaceViews: [Rustty.SurfaceView] {
         allTerminalControllers
             .flatMap { $0.surfaceTree.root?.leaves() ?? [] }
     }

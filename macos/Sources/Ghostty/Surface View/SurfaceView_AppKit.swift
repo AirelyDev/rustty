@@ -5,7 +5,7 @@ import CoreText
 import UserNotifications
 import RusttyKit
 
-extension Ghostty {
+extension Rustty {
     /// The NSView implementation for a terminal surface.
     class SurfaceView: OSSurfaceView, Codable, Identifiable {
         // The current title of the surface as defined by the pty. This can be
@@ -98,7 +98,7 @@ extension Ghostty {
         /// after this surface is dragged to another window
         var isWindowVisible = false
 
-        /// The configuration derived from the Ghostty config so we don't need to rely on references.
+        /// The configuration derived from the Rustty config so we don't need to rely on references.
         @Published private(set) var derivedConfig: DerivedConfig
 
         /// The background color within the color palette of the surface. This is only set if it is
@@ -121,7 +121,7 @@ extension Ghostty {
         }
 
         // Set whether the surface is currently on a password input or not. This is
-        // detected with the set_password_input_cb on the Ghostty state.
+        // detected with the set_password_input_cb on the Rustty state.
         var passwordInput: Bool = false {
             didSet {
                 // We need to update our state within the SecureInput manager.
@@ -150,10 +150,10 @@ extension Ghostty {
 
         // Returns the inspector instance for this surface, or nil if the
         // surface has been closed or no inspector is active.
-        var inspector: Ghostty.Inspector? {
+        var inspector: Rustty.Inspector? {
             guard let surface = self.surface else { return nil }
             guard let cInspector = rustty_surface_inspector(surface) else { return nil }
-            return Ghostty.Inspector(cInspector: cInspector)
+            return Rustty.Inspector(cInspector: cInspector)
         }
 
         // True if the inspector should be visible
@@ -170,7 +170,7 @@ extension Ghostty {
         ///
         /// Note: eventually, all surface access will be through this, but presently its in a transition
         /// state so we're mixing this with direct surface access.
-        private(set) var surfaceModel: Ghostty.Surface?
+        private(set) var surfaceModel: Rustty.Surface?
 
         /// Returns the underlying C value for the surface. See "note" on surfaceModel.
         override var surface: rustty_surface_t? {
@@ -178,7 +178,7 @@ extension Ghostty {
         }
         /// Current scrollbar state, cached here for persistence across rebuilds
         /// of the SwiftUI view hierarchy, for example when changing splits
-        var scrollbar: Ghostty.Action.Scrollbar?
+        var scrollbar: Rustty.Action.Scrollbar?
 
         // Notification identifiers associated with this surface
         var notificationIdentifiers: Set<String> = []
@@ -305,22 +305,22 @@ extension Ghostty {
             center.addObserver(
                 self,
                 selector: #selector(onUpdateRendererHealth),
-                name: Ghostty.Notification.didUpdateRendererHealth,
+                name: Rustty.Notification.didUpdateRendererHealth,
                 object: self)
             center.addObserver(
                 self,
                 selector: #selector(ghosttyDidContinueKeySequence),
-                name: Ghostty.Notification.didContinueKeySequence,
+                name: Rustty.Notification.didContinueKeySequence,
                 object: self)
             center.addObserver(
                 self,
                 selector: #selector(ghosttyDidEndKeySequence),
-                name: Ghostty.Notification.didEndKeySequence,
+                name: Rustty.Notification.didEndKeySequence,
                 object: self)
             center.addObserver(
                 self,
                 selector: #selector(ghosttyDidChangeKeyTable),
-                name: Ghostty.Notification.didChangeKeyTable,
+                name: Rustty.Notification.didChangeKeyTable,
                 object: self)
             center.addObserver(
                 self,
@@ -365,10 +365,10 @@ extension Ghostty {
                 rustty_surface_new(app, &surface_cfg_c)
             }
             guard let surface = surface else {
-                self.error = Ghostty.Error.apiFailed
+                self.error = Rustty.Error.apiFailed
                 return
             }
-            self.surfaceModel = Ghostty.Surface(cSurface: surface)
+            self.surfaceModel = Rustty.Surface(cSurface: surface)
 
             // Setup our tracking area so we get mouse moved events
             updateTrackingAreas()
@@ -409,7 +409,7 @@ extension Ghostty {
         }
 
         override func endSearch() {
-            Ghostty.moveFocus(to: self)
+            Rustty.moveFocus(to: self)
             super.endSearch()
         }
 
@@ -451,7 +451,7 @@ extension Ghostty {
         }
 
         override func sizeDidChange(_ size: CGSize) {
-            // Ghostty wants to know the actual framebuffer size... It is very important
+            // Rustty wants to know the actual framebuffer size... It is very important
             // here that we use "size" and NOT the view frame. If we're in the middle of
             // an animation (i.e. a fullscreen animation), the frame will not yet be updated.
             // The size represents our final size we're going for.
@@ -701,7 +701,7 @@ extension Ghostty {
         }
 
         @objc private func ghosttyDidContinueKeySequence(notification: SwiftUI.Notification) {
-            guard let keyAny = notification.userInfo?[Ghostty.Notification.KeySequenceKey] else { return }
+            guard let keyAny = notification.userInfo?[Rustty.Notification.KeySequenceKey] else { return }
             guard let key = keyAny as? KeyboardShortcut else { return }
             DispatchQueue.main.async { [weak self] in
                 self?.keySequence.append(key)
@@ -715,7 +715,7 @@ extension Ghostty {
         }
 
         @objc private func ghosttyDidChangeKeyTable(notification: SwiftUI.Notification) {
-            guard let action = notification.userInfo?[Ghostty.Notification.KeyTableKey] as? Ghostty.Action.KeyTable else { return }
+            guard let action = notification.userInfo?[Rustty.Notification.KeyTableKey] as? Rustty.Action.KeyTable else { return }
 
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -733,8 +733,8 @@ extension Ghostty {
         @objc private func ghosttyConfigDidChange(_ notification: SwiftUI.Notification) {
             // Get our managed configuration object out
             guard let config = notification.userInfo?[
-                SwiftUI.Notification.Name.GhosttyConfigChangeKey
-            ] as? Ghostty.Config else { return }
+                SwiftUI.Notification.Name.RusttyConfigChangeKey
+            ] as? Rustty.Config else { return }
 
             // Update our derived config
             DispatchQueue.main.async { [weak self] in
@@ -755,8 +755,8 @@ extension Ghostty {
 
         @objc private func ghosttyColorDidChange(_ notification: SwiftUI.Notification) {
             guard let change = notification.userInfo?[
-                SwiftUI.Notification.Name.GhosttyColorChangeKey
-            ] as? Ghostty.Action.ColorChange else { return }
+                SwiftUI.Notification.Name.RusttyColorChangeKey
+            ] as? Rustty.Action.ColorChange else { return }
 
             switch change.kind {
             case .background:
@@ -873,7 +873,7 @@ extension Ghostty {
 
         override func mouseDown(with event: NSEvent) {
             guard let surface = self.surface else { return }
-            let mods = Ghostty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.ghosttyMods(event.modifierFlags)
             rustty_surface_mouse_button(surface, RUSTTY_MOUSE_PRESS, RUSTTY_MOUSE_LEFT, mods)
         }
 
@@ -890,7 +890,7 @@ extension Ghostty {
 
             // If we have an active surface, report the event
             guard let surface = self.surface else { return }
-            let mods = Ghostty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.ghosttyMods(event.modifierFlags)
             rustty_surface_mouse_button(surface, RUSTTY_MOUSE_RELEASE, RUSTTY_MOUSE_LEFT, mods)
 
             // Release pressure
@@ -899,22 +899,22 @@ extension Ghostty {
 
         override func otherMouseDown(with event: NSEvent) {
             guard let surface = self.surface else { return }
-            let mods = Ghostty.ghosttyMods(event.modifierFlags)
-            let button = Ghostty.Input.MouseButton(fromNSEventButtonNumber: event.buttonNumber)
+            let mods = Rustty.ghosttyMods(event.modifierFlags)
+            let button = Rustty.Input.MouseButton(fromNSEventButtonNumber: event.buttonNumber)
             rustty_surface_mouse_button(surface, RUSTTY_MOUSE_PRESS, button.cMouseButton, mods)
         }
 
         override func otherMouseUp(with event: NSEvent) {
             guard let surface = self.surface else { return }
-            let mods = Ghostty.ghosttyMods(event.modifierFlags)
-            let button = Ghostty.Input.MouseButton(fromNSEventButtonNumber: event.buttonNumber)
+            let mods = Rustty.ghosttyMods(event.modifierFlags)
+            let button = Rustty.Input.MouseButton(fromNSEventButtonNumber: event.buttonNumber)
             rustty_surface_mouse_button(surface, RUSTTY_MOUSE_RELEASE, button.cMouseButton, mods)
         }
 
         override func rightMouseDown(with event: NSEvent) {
             guard let surface = self.surface else { return super.rightMouseDown(with: event) }
 
-            let mods = Ghostty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.ghosttyMods(event.modifierFlags)
             if rustty_surface_mouse_button(
                 surface,
                 RUSTTY_MOUSE_PRESS,
@@ -932,7 +932,7 @@ extension Ghostty {
         override func rightMouseUp(with event: NSEvent) {
             guard let surface = self.surface else { return super.rightMouseUp(with: event) }
 
-            let mods = Ghostty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.ghosttyMods(event.modifierFlags)
             if rustty_surface_mouse_button(
                 surface,
                 RUSTTY_MOUSE_RELEASE,
@@ -960,7 +960,7 @@ extension Ghostty {
             // super important because we set it to -1/-1 on mouseExit and
             // lots of mouse logic (i.e. whether to send mouse reports) depend
             // on the position being in the viewport if it is.
-            let mouseEvent = Ghostty.Input.MousePosEvent(
+            let mouseEvent = Rustty.Input.MousePosEvent(
                 x: pos.x,
                 y: frame.height - pos.y,
                 mods: .init(nsFlags: event.modifierFlags)
@@ -981,7 +981,7 @@ extension Ghostty {
             }
 
             // Negative values indicate cursor has left the viewport
-            let mouseEvent = Ghostty.Input.MousePosEvent(
+            let mouseEvent = Rustty.Input.MousePosEvent(
                 x: -1,
                 y: -1,
                 mods: .init(nsFlags: event.modifierFlags)
@@ -996,7 +996,7 @@ extension Ghostty {
             guard let surfaceModel else { return }
 
             // Convert window position to view position. Note (0, 0) is bottom left.
-            let mouseEvent = Ghostty.Input.MousePosEvent(
+            let mouseEvent = Rustty.Input.MousePosEvent(
                 x: pos.x,
                 y: frame.height - pos.y,
                 mods: .init(nsFlags: event.modifierFlags)
@@ -1010,7 +1010,7 @@ extension Ghostty {
                window.isKeyWindow &&
                     !self.focused &&
                     controller.focusFollowsMouse {
-                Ghostty.moveFocus(to: self)
+                Rustty.moveFocus(to: self)
             }
         }
 
@@ -1041,7 +1041,7 @@ extension Ghostty {
                 // TODO(mitchellh): do we have to scale the x/y here by window scale factor?
             }
 
-            let scrollEvent = Ghostty.Input.MouseScrollEvent(
+            let scrollEvent = Rustty.Input.MouseScrollEvent(
                 x: x,
                 y: y,
                 mods: .init(precision: precision, momentum: .init(event.momentumPhase))
@@ -1052,7 +1052,7 @@ extension Ghostty {
         override func pressureChange(with event: NSEvent) {
             guard let surface = self.surface else { return }
 
-            // Notify Ghostty first. We do this because this will let Ghostty handle
+            // Notify Rustty first. We do this because this will let Rustty handle
             // state setup that we'll need for later pressure handling (such as
             // QuickLook)
             rustty_surface_mouse_pressure(surface, UInt32(event.stage), Double(event.pressure))
@@ -1079,19 +1079,19 @@ extension Ghostty {
             bell = false
 
             // We need to translate the mods (maybe) to handle configs such as option-as-alt
-            let translationModsGhostty = Ghostty.eventModifierFlags(
+            let translationModsRustty = Rustty.eventModifierFlags(
                 mods: rustty_surface_key_translation_mods(
                     surface,
-                    Ghostty.ghosttyMods(event.modifierFlags)
+                    Rustty.ghosttyMods(event.modifierFlags)
                 )
             )
 
             // There are hidden bits set in our event that matter for certain dead keys
-            // so we can't use translationModsGhostty directly. Instead, we just check
+            // so we can't use translationModsRustty directly. Instead, we just check
             // for exact states and set them.
             var translationMods = event.modifierFlags
             for flag in [NSEvent.ModifierFlags.shift, .control, .option, .command] {
-                if translationModsGhostty.contains(flag) {
+                if translationModsRustty.contains(flag) {
                     translationMods.insert(flag)
                 } else {
                     translationMods.remove(flag)
@@ -1176,7 +1176,7 @@ extension Ghostty {
                let list = keyTextAccumulator,
                list.count > 0 {
                 for text in list {
-                    if Ghostty.SurfaceView.shouldSuppressComposingControlInput(
+                    if Rustty.SurfaceView.shouldSuppressComposingControlInput(
                         text,
                         composing: composing
                     ) {
@@ -1202,7 +1202,7 @@ extension Ghostty {
                 for text in list {
                     // Drop bare control characters the IME accumulated while
                     // composing so they don't leak through to the terminal.
-                    if Ghostty.SurfaceView.shouldSuppressComposingControlInput(
+                    if Rustty.SurfaceView.shouldSuppressComposingControlInput(
                         text,
                         composing: composing
                     ) {
@@ -1222,7 +1222,7 @@ extension Ghostty {
             } else {
                 // Raw control characters (e.g. ctrl+h) arriving during
                 // composition belong to the IME, not the terminal.
-                if Ghostty.SurfaceView.shouldSuppressComposingControlInput(
+                if Rustty.SurfaceView.shouldSuppressComposingControlInput(
                     event.characters,
                     composing: composing
                 ) {
@@ -1310,7 +1310,7 @@ extension Ghostty {
                    bindingFlags.isDisjoint(with: [.all, .performable]),
                    bindingFlags.contains(.consumed) {
                     if let appDelegate = NSApp.delegate as? AppDelegate,
-                       appDelegate.performGhosttyBindingMenuKeyEquivalent(with: event) {
+                       appDelegate.performRusttyBindingMenuKeyEquivalent(with: event) {
                         return true
                     }
                 }
@@ -1412,7 +1412,7 @@ extension Ghostty {
 
             // The keyAction function will do this AGAIN below which sucks to repeat
             // but this is super cheap and flagsChanged isn't that common.
-            let mods = Ghostty.ghosttyMods(event.modifierFlags)
+            let mods = Rustty.ghosttyMods(event.modifierFlags)
 
             // If the key that pressed this is active, its a press, else release.
             var action = RUSTTY_ACTION_RELEASE
@@ -1456,7 +1456,7 @@ extension Ghostty {
             key_ev.composing = composing
 
             // For text, we only encode UTF8 if we don't have a single control
-            // character. Control characters are encoded by Ghostty itself.
+            // character. Control characters are encoded by Rustty itself.
             // Without this, `ctrl+enter` does the wrong thing.
             if let text, text.count > 0,
                let codepoint = text.utf8.first, codepoint >= 0x20 {
@@ -1470,7 +1470,7 @@ extension Ghostty {
         }
 
         private func shouldReplayCommittedPreeditKey(_ event: NSEvent) -> Bool {
-            guard let key = Ghostty.Input.Key(keyCode: event.keyCode) else { return false }
+            guard let key = Rustty.Input.Key(keyCode: event.keyCode) else { return false }
             switch key {
             case .arrowDown, .arrowRight, .arrowUp:
                 return true
@@ -1527,7 +1527,7 @@ extension Ghostty {
                 font.release()
             }
 
-            // Ghostty coordinate system is top-left, convert to bottom-left for AppKit
+            // Rustty coordinate system is top-left, convert to bottom-left for AppKit
             let pt = NSPoint(x: text.tl_px_x, y: frame.size.height - text.tl_px_y)
             let str = NSAttributedString.init(string: String(cString: text.text), attributes: attributes)
             self.showDefinition(for: str, at: pt)
@@ -1743,7 +1743,7 @@ extension Ghostty {
             content.subtitle = self.title
             content.body = body
             content.sound = UNNotificationSound.default
-            content.categoryIdentifier = Ghostty.userNotificationCategory
+            content.categoryIdentifier = Rustty.userNotificationCategory
             content.userInfo = [
                 "surface": self.id.uuidString,
                 "requireFocus": requireFocus,
@@ -1788,18 +1788,18 @@ extension Ghostty {
             guard self.notificationIdentifiers.remove(id) != nil else { return }
             if focus {
                 self.window?.makeKeyAndOrderFront(self)
-                Ghostty.moveFocus(to: self)
+                Rustty.moveFocus(to: self)
             }
         }
 
         struct DerivedConfig {
             let backgroundColor: Color
             let backgroundOpacity: Double
-            let backgroundBlur: Ghostty.Config.BackgroundBlur
+            let backgroundBlur: Rustty.Config.BackgroundBlur
             let macosWindowShadow: Bool
             let windowTitleFontFamily: String?
             let windowAppearance: NSAppearance?
-            let scrollbar: Ghostty.Config.Scrollbar
+            let scrollbar: Rustty.Config.Scrollbar
 
             init() {
                 self.backgroundColor = Color(NSColor.windowBackgroundColor)
@@ -1811,7 +1811,7 @@ extension Ghostty {
                 self.scrollbar = .system
             }
 
-            init(_ config: Ghostty.Config) {
+            init(_ config: Rustty.Config) {
                 self.backgroundColor = config.backgroundColor
                 self.backgroundOpacity = config.backgroundOpacity
                 self.backgroundBlur = config.backgroundBlur
@@ -1832,7 +1832,7 @@ extension Ghostty {
         }
 
         required convenience init(from decoder: Decoder) throws {
-            // Decoding uses the global Ghostty app
+            // Decoding uses the global Rustty app
             guard let del = NSApplication.shared.delegate,
                   let appDel = del as? AppDelegate,
                   let app = appDel.ghostty.app else {
@@ -1841,7 +1841,7 @@ extension Ghostty {
 
             let container = try decoder.container(keyedBy: CodingKeys.self)
             let uuid = UUID(uuidString: try container.decode(String.self, forKey: .uuid))
-            var config = Ghostty.SurfaceConfiguration()
+            var config = Rustty.SurfaceConfiguration()
             config.workingDirectory = try container.decode(String?.self, forKey: .pwd)
             let savedTitle = try container.decodeIfPresent(String.self, forKey: .title)
             let isUserSetTitle = try container.decodeIfPresent(Bool.self, forKey: .isUserSetTitle) ?? false
@@ -1870,7 +1870,7 @@ extension Ghostty {
 
 // MARK: - NSTextInputClient
 
-extension Ghostty.SurfaceView: NSTextInputClient {
+extension Rustty.SurfaceView: NSTextInputClient {
     func hasMarkedText() -> Bool {
         return markedText.length > 0
     }
@@ -1883,7 +1883,7 @@ extension Ghostty.SurfaceView: NSTextInputClient {
     func selectedRange() -> NSRange {
         guard let surface = self.surface else { return NSRange() }
 
-        // Get our range from the Ghostty API. There is a race condition between getting the
+        // Get our range from the Rustty API. There is a race condition between getting the
         // range and actually using it since our selection may change but there isn't a good
         // way I can think of to solve this for AppKit.
         var text = rustty_text_s()
@@ -1925,7 +1925,7 @@ extension Ghostty.SurfaceView: NSTextInputClient {
     }
 
     func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
-        // Ghostty.logger.warning("pressure substring range=\(range) selectedRange=\(self.selectedRange())")
+        // Rustty.logger.warning("pressure substring range=\(range) selectedRange=\(self.selectedRange())")
         guard let surface = self.surface else { return nil }
 
         // If the range is empty then we don't need to return anything
@@ -1967,7 +1967,7 @@ extension Ghostty.SurfaceView: NSTextInputClient {
             return NSRect(x: frame.origin.x, y: frame.origin.y, width: 0, height: 0)
         }
 
-        // Ghostty will tell us where it thinks an IME keyboard should render.
+        // Rustty will tell us where it thinks an IME keyboard should render.
         var x: Double = 0
         var y: Double = 0
         var width: Double = cellSize.width
@@ -2001,7 +2001,7 @@ extension Ghostty.SurfaceView: NSTextInputClient {
             width = 0
             x += cellSize.width * Double(range.location + range.length)
         }
-        // Ghostty coordinates are in top-left (0, 0) so we have to convert to
+        // Rustty coordinates are in top-left (0, 0) so we have to convert to
         // bottom-left since that is what UIKit expects
         // when there's is no characters selected,
         // width should be 0 so that dictation indicator
@@ -2103,7 +2103,7 @@ extension Ghostty.SurfaceView: NSTextInputClient {
 // MARK: Services
 
 // https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/SysServices/Articles/using.html
-extension Ghostty.SurfaceView: NSServicesMenuRequestor {
+extension Rustty.SurfaceView: NSServicesMenuRequestor {
     override func validRequestor(
         forSendType sendType: NSPasteboard.PasteboardType?,
         returnType: NSPasteboard.PasteboardType?
@@ -2179,7 +2179,7 @@ extension Ghostty.SurfaceView: NSServicesMenuRequestor {
 
 // MARK: NSMenuItemValidation
 
-extension Ghostty.SurfaceView: NSMenuItemValidation {
+extension Rustty.SurfaceView: NSMenuItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
         case #selector(pasteSelection):
@@ -2210,7 +2210,7 @@ extension Ghostty.SurfaceView: NSMenuItemValidation {
 
 // MARK: NSDraggingDestination
 
-extension Ghostty.SurfaceView {
+extension Rustty.SurfaceView {
     static let dropTypes: Set<NSPasteboard.PasteboardType> = [
         .string,
         .fileURL,
@@ -2237,13 +2237,13 @@ extension Ghostty.SurfaceView {
         let content: String?
         if let url = pb.string(forType: .URL) {
             // URLs first, they get escaped as-is.
-            content = Ghostty.Shell.escape(url)
+            content = Rustty.Shell.escape(url)
         } else if let urls = pb.readObjects(forClasses: [NSURL.self]) as? [URL],
            urls.count > 0 {
             // File URLs next. They get escaped individually and then joined by a
             // space if there are multiple.
             content = urls
-                .map { Ghostty.Shell.escape($0.path) }
+                .map { Rustty.Shell.escape($0.path) }
                 .joined(separator: " ")
         } else if let str = pb.string(forType: .string) {
             // Strings are not escaped because they may be copy/pasting a
@@ -2269,7 +2269,7 @@ extension Ghostty.SurfaceView {
 
 // MARK: Accessibility
 
-extension Ghostty.SurfaceView {
+extension Rustty.SurfaceView {
     /// Indicates that this view should be exposed to accessibility tools like VoiceOver.
     /// By returning true, we make the terminal surface accessible to screen readers
     /// and other assistive technologies.
@@ -2347,7 +2347,7 @@ extension Ghostty.SurfaceView {
     /// Returns an attributed string for the given range.
     ///
     /// Note: right now this only applies font information. One day it'd be nice to extend
-    /// this to copy styling information as well but we need to augment Ghostty core to
+    /// this to copy styling information as well but we need to augment Rustty core to
     /// expose that.
     ///
     /// This provides styling information to assistive technologies.
