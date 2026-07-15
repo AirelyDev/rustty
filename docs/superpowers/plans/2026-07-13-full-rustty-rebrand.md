@@ -988,9 +988,10 @@ git commit -m "shell-integration: rename scripts + route env vars via rustty_ide
 - `crates/rustty-extra/themes/Ghostty Default Style Dark` → `Rustty Default Style Dark`
 - Modify: `xtask/src/main.rs::resources()` + its `res_terminfo`/`res_shell`/`res_shell_integration`/`res_misc` modules (output filenames: `ghostty.1`/`ghostty.5` man pages, `_ghostty`/`ghostty.fish`/`ghostty.bash` completions, `share/ghostty/` tree, `ghostty.termcap`/`ghostty.terminfo`, the vim/nvim `ghostty.vim`)
 - Modify: any tracked default-config or docs that name the theme
+- Modify: `macos/Rustty.xcodeproj/project.pbxproj` — the bundled-resources fileRef `name = ghostty; path = "../zig-out/share/ghostty"` → `name = rustty; path = "../zig-out/share/rustty"` (the macOS app bundles the generated resources dir; when Task 14 renames the output `share/ghostty`→`share/rustty`, this pbxproj reference must follow or the app build can't find the resources). Left as `ghostty` by Task 8 precisely because the resource dir isn't renamed until here.
 
 **Interfaces:**
-- Produces: `zig-out/share/` regenerates under rustty names (`share/rustty/…`, `rustty.1`, `_rustty`, `rustty.terminfo`, `Rustty Default Style Dark`).
+- Produces: `zig-out/share/` regenerates under rustty names (`share/rustty/…`, `rustty.1`, `_rustty`, `rustty.terminfo`, `Rustty Default Style Dark`); the macOS app's bundled-resources reference points at `share/rustty`.
 
 - [ ] **Step 1: Rename the theme file + fix references.**
 ```bash
