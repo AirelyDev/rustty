@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn osc_52_get_set_clipboard_with_allocator() {
         // PORT NOTE: `var p: Parser = .init(testing.allocator)` — OSC 52 captures
-        // via the allocating backing when an allocator is present. The rustty
+        // via the allocating backing when an allocator is present. The Rustty
         // `Capture` allocating backing is a growable `Vec`; no Zig allocator is
         // threaded for the test (the captured bytes are identical either way).
         let mut p: Parser = Parser::init(None);

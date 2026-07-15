@@ -20,7 +20,7 @@
 // const Rect = @import("graphics_image.zig").Rect;
 // const Command = command.Command;
 //
-// PORT NOTE: the reference imports above map to the following rustty paths.
+// PORT NOTE: the reference imports above map to the following Rustty paths.
 // `terminal.Screen`/`terminal.Terminal` are `crate::screen::Screen` /
 // `crate::terminal::Terminal`; `PageList.Pin` is `crate::pagelist::Pin`; the
 // `command`/`Image`/`LoadingImage`/`Rect` come from the sibling kitty modules.

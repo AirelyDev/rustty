@@ -12,7 +12,7 @@
 use crate::osc::encoding;
 use crate::osc::{Command, Parser};
 
-// PORT NOTE: `const log = std.log.scoped(.kitty_text_sizing);` — rustty has no
+// PORT NOTE: `const log = std.log.scoped(.kitty_text_sizing);` — Rustty has no
 // logging facade wired into this crate (matching the convention used by the
 // `osc.zig` scoped logger), so the scoped logger and its calls are ported as
 // commented lines.

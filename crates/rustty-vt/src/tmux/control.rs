@@ -17,7 +17,7 @@
 //! the default build; with the feature off those arms fall through to the
 //! "unknown notification" path and the 8 tests are not compiled, faithful to the
 //! Zig pattern where regex support is a build option (the reference compiles
-//! `oni` unconditionally, but rustty mirrors the established `SkipZigTest`-style
+//! `oni` unconditionally, but Rustty mirrors the established `SkipZigTest`-style
 //! feature gate until the binding crate lands). The remaining 10 tests
 //! (begin/end blocks + `%sessions-changed`) build and run by default.
 
@@ -35,7 +35,7 @@ use crate::pagelist::OutOfMemory;
 
 // const log = std.log.scoped(.terminal_tmux);
 //
-// PORT NOTE: `const log = std.log.scoped(.terminal_tmux);` — rustty has no
+// PORT NOTE: `const log = std.log.scoped(.terminal_tmux);` — Rustty has no
 // logging facade wired into this crate (matching the other terminal modules), so
 // the scoped logger and its `log.warn` calls are ported as commented-out lines.
 

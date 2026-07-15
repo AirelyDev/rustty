@@ -57,7 +57,7 @@ use std::io::Write as _;
 
 // PORT NOTE (writer seam bridge): the reference passes a `*std.Io.Writer` and
 // uses Zig formatting (`writer.print("{f}", .{style.formatterVt()})`) to render
-// styles. In rustty, `style.rs`'s `VtFormatter`/`HtmlFormatter` already-ported
+// styles. In Rustty, `style.rs`'s `VtFormatter`/`HtmlFormatter` already-ported
 // `format` methods target `core::fmt::Write` (the idiomatic Rust `{}` sink),
 // while this formatter's public seam is `&mut dyn std::io::Write`. To delegate
 // style emission to `style.rs` without re-porting it, we wrap the `io::Write`

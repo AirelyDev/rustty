@@ -159,7 +159,7 @@ pub enum Action {
     /// List keybind actions
     ListActions,
 
-    /// Wrap `ssh` to configure rustty terminal integration on remote hosts
+    /// Wrap `ssh` to configure Rustty terminal integration on remote hosts
     Ssh,
 
     /// Manage SSH terminfo cache for automatic remote host setup
@@ -177,7 +177,7 @@ pub enum Action {
     // Validate passed config file
     ValidateConfig,
 
-    // Show which font face rustty loads a codepoint from.
+    // Show which font face Rustty loads a codepoint from.
     ShowFace,
 
     // List, (eventually) view, and (eventually) send crash reports.
@@ -186,10 +186,10 @@ pub enum Action {
     // Boo!
     Boo,
 
-    // Use IPC to tell the running rustty to open a new window.
+    // Use IPC to tell the running Rustty to open a new window.
     NewWindow,
 
-    // Use IPC to tell the running rustty to toggle the quick terminal.
+    // Use IPC to tell the running Rustty to toggle the quick terminal.
     ToggleQuickTerminal,
 }
 
@@ -197,7 +197,7 @@ pub enum Action {
 impl action::Action for Action {
     // std.meta.stringToEnum(Action, name) — the `+name` -> variant lookup. The
     // R2 rename keeps the same kebab tags: they are user-facing CLI verbs,
-    // unchanged by GHOSTTY->rustty.
+    // unchanged by GHOSTTY->Rustty.
     fn from_plus_name(name: &[u8]) -> Option<Self> {
         Some(match name {
             b"version" => Action::Version,

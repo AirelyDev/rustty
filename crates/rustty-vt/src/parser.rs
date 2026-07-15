@@ -24,7 +24,7 @@ use crate::osc;
 use crate::parse_table::TABLE as table;
 
 // const log = std.log.scoped(.parser);
-// PORT NOTE: rustty has no logging facade wired into this crate (matching the
+// PORT NOTE: Rustty has no logging facade wired into this crate (matching the
 // convention used by PageList / DCS / OSC et al.), so the scoped logger and its
 // `log.warn(...)` calls are ported as commented lines.
 

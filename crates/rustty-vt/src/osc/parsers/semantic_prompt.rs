@@ -12,7 +12,7 @@ use crate::osc::{Command as OSCCommand, Parser, State};
 // — retargeted to the ported `rustty-os` crate (R2).
 use rustty_os::string_encoding;
 
-// PORT NOTE: `const log = std.log.scoped(.osc_semantic_prompt);` — rustty has no
+// PORT NOTE: `const log = std.log.scoped(.osc_semantic_prompt);` — Rustty has no
 // logging facade wired into this crate, so the scoped logger is carried as a
 // comment (no call sites reference it in this module).
 
@@ -420,12 +420,12 @@ pub enum Redraw {
     /// unless it is to reset a prior other value.
     True,
 
-    /// The shell does NOT support redrawing. In this case, rustty will NOT
+    /// The shell does NOT support redrawing. In this case, Rustty will NOT
     /// clear any prompt lines on resize.
     False,
 
     /// The shell supports redrawing only the LAST line of the prompt.
-    /// rustty will only clear the last line of the prompt on resize.
+    /// Rustty will only clear the last line of the prompt on resize.
     ///
     /// This is specifically introduced because Bash only redraws the last
     /// line. It is literally the only shell that does this and it does this

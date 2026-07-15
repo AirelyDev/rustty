@@ -151,7 +151,7 @@ impl Command {
     }
 
     /// Implements a comparison function for std.mem.sortUnstable
-    /// and similar functions. The sorting is defined by rustty
+    /// and similar functions. The sorting is defined by Rustty
     /// to be what we prefer. If a caller wants some other sorting,
     /// they should do it themselves.
     //
@@ -836,8 +836,8 @@ fn action_commands(action: &str) -> Vec<Command> {
 
         "text" => vec![Command {
             action: Action::Text("👻".as_bytes().to_vec()),
-            title: b"rustty".to_vec(),
-            description: b"Put a little rustty in your terminal.".to_vec(),
+            title: b"Rustty".to_vec(),
+            description: b"Put a little Rustty in your terminal.".to_vec(),
         }],
 
         // No commands because they're parameterized and there

@@ -90,7 +90,7 @@ impl args::Target for Options {
 }
 
 /// The `list-colors` command is used to list all the named RGB colors in
-/// rustty.
+/// Rustty.
 ///
 /// Flags:
 ///

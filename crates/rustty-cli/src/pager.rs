@@ -10,7 +10,7 @@
 //! Setting either env var to an empty string disables paging.
 //! If stdout is not a TTY, writes go directly to stdout.
 //
-// R2: the reference resolves `$GHOSTTY_PAGER` first; retargeted to the rustty
+// R2: the reference resolves `$GHOSTTY_PAGER` first; retargeted to the Rustty
 // product env var `$RUSTTY_PAGER` (same precedent as `RUSTTY_RESOURCES_DIR` in
 // rustty-os). `$PAGER` and `less` are standard interop tokens, unchanged.
 

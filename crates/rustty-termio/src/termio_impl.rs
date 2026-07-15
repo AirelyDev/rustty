@@ -78,7 +78,7 @@ use crate::Error;
 /// PORT NOTE: the process-static Zig allocator that backs the terminal
 /// `Stream`'s OSC parser (`terminal_stream = .initAlloc(alloc, handler)`). The
 /// reference threads the same `std.mem.Allocator` it passes to `Termio.init`;
-/// rustty's `Stream::init_alloc` wants a `ZigAllocatorRef`, so we back the OSC
+/// Rustty's `Stream::init_alloc` wants a `ZigAllocatorRef`, so we back the OSC
 /// parser with the process-static global zig allocator — the identical choice
 /// `Terminal::vt_stream` and the vt-c `TerminalWrapper` make (supports dynamic
 /// OSC growth, e.g. large OSC 52 clipboard payloads). `GlobalZigAllocator` is a

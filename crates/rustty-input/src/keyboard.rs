@@ -14,13 +14,13 @@ use crate::config::OptionAsAlt;
 
 /// Keyboard layouts.
 ///
-/// These aren't heavily used in rustty and having a fully comprehensive
+/// These aren't heavily used in Rustty and having a fully comprehensive
 /// list is not important. We only need to distinguish between a few
 /// different layouts for some nice-to-have features, such as setting a default
 /// value for "macos-option-as-alt".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layout {
-    // Unknown, unmapped layout. rustty should not make any assumptions
+    // Unknown, unmapped layout. Rustty should not make any assumptions
     // about the layout of the keyboard.
     Unknown,
 

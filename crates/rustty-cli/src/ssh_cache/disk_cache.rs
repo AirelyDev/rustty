@@ -4,7 +4,7 @@
 //! entry cache. Byte-faithful (R1); paths are byte strings (`Vec<u8>`, R3). The
 //! program dir (`ghostty`) and the default terminfo token (`xterm-ghostty`) are
 //! routed through `rustty-identity` (R2 / ADV-FIX 5) so the on-disk path and the
-//! cached terminfo name track the rustty product identity.
+//! cached terminfo name track the Rustty product identity.
 //!
 //! PORT NOTE (memory model): the reference `std.StringHashMap(Entry)` stores the
 //! hostname exactly ONCE and uses that same allocation as both the map key AND
@@ -223,7 +223,7 @@ impl DiskCache {
         //         .terminfo_version = terminfo_copy,
         //     });
         // }
-        //   R2 / ADV-FIX 5: the cached terminfo token is the rustty identity's
+        //   R2 / ADV-FIX 5: the cached terminfo token is the Rustty identity's
         //   primary terminfo name (`xterm-rustty`). Ownership makes the dupe/
         //   errdefer bookkeeping implicit (the two `Vec<u8>` copies below).
         if let Some(existing) = entries.get_mut(key) {
@@ -908,7 +908,7 @@ mod tests {
     fn disk_cache_default_path() {
         // const path = try DiskCache.defaultPath(alloc, "ghostty");
         // defer alloc.free(path);
-        //   R2 / ADV-FIX 5: the program dir is the rustty app name via identity.
+        //   R2 / ADV-FIX 5: the program dir is the Rustty app name via identity.
         let path = DiskCache::default_path(rustty_identity::APP_NAME).unwrap();
         // try testing.expect(path.len > 0);
         assert!(!path.is_empty());
@@ -1088,7 +1088,7 @@ mod tests {
         // Exercise readEntries' found_existing branch: replace the existing
         // key with the updated entry and ensure (via testing.allocator) that
         // we don't double-free or leak.
-        //   R2 / ADV-FIX 5: the older entry's terminfo token is the rustty
+        //   R2 / ADV-FIX 5: the older entry's terminfo token is the Rustty
         //   primary terminfo name; the newer one ("xterm-newer") wins.
         let ti = rustty_identity::TERMINFO_PRIMARY_NAME;
         // try file_writer.interface.writeAll("example.com|100|xterm-ghostty\nexample.com|200|xterm-newer\n");

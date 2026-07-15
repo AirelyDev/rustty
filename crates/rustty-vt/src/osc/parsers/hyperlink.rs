@@ -4,7 +4,7 @@
 
 use crate::osc::{Command, Parser};
 
-// PORT NOTE: `const log = std.log.scoped(.osc_hyperlink);` — rustty has no
+// PORT NOTE: `const log = std.log.scoped(.osc_hyperlink);` — Rustty has no
 // logging facade wired into this crate (matching the convention used by the
 // `osc.zig` scoped logger), so the scoped logger and its calls are ported as
 // commented lines.

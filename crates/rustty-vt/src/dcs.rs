@@ -18,7 +18,7 @@
 // `std.mem.Allocator` is faithfully modeled by `allocator_api2::alloc::Allocator`
 // (the same map used by PageList/Tabstops); callers pass
 // `allocator_api2::alloc::Global` for the prior `std::alloc` behavior. `log` is a
-// scoped logger; rustty has no logging facade wired into this crate (matching the
+// scoped logger; Rustty has no logging facade wired into this crate (matching the
 // convention used by PageList et al.), so the `log.*` calls below are ported as
 // verbatim comments and are no-ops.
 use allocator_api2::alloc::{Allocator, Global};
@@ -711,7 +711,7 @@ mod tests {
     fn tmux_enter_and_implicit_exit() {
         // if (comptime !build_options.tmux_control_mode) return error.SkipZigTest;
         //
-        // PORT NOTE: under the default rustty build `tmux_control_mode` is
+        // PORT NOTE: under the default Rustty build `tmux_control_mode` is
         // false, so this test is skipped (returns early), faithfully mirroring
         // `error.SkipZigTest`; `--features oniguruma` enables it.
         if !build_options::TMUX_CONTROL_MODE {

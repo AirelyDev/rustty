@@ -10736,7 +10736,7 @@ fn pagelist_resize_reflow_less_cols_to_wrap_a_multi_codepoint_grapheme_with_a_sp
 
 // ref: test "PageList resize reflow less cols copy kitty placeholder"
 // PORT NOTE: reference gates on `comptime !build_options.kitty_graphics`
-// (SkipZigTest). rustty's `KITTY_GRAPHICS` const is always `true`, so the
+// (SkipZigTest). Rustty's `KITTY_GRAPHICS` const is always `true`, so the
 // test always runs. `kitty.graphics.unicode.placeholder` is U+10EEEE.
 #[test]
 fn pagelist_resize_reflow_less_cols_copy_kitty_placeholder() {

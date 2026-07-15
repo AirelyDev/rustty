@@ -104,7 +104,7 @@ impl args::Target for Options {
     }
 }
 
-/// The `show-config` command shows the current configuration in a valid rustty
+/// The `show-config` command shows the current configuration in a valid Rustty
 /// configuration file format.
 ///
 /// When executed without any arguments this will output the current

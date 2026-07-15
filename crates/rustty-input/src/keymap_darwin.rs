@@ -188,7 +188,7 @@ impl Keymap {
     ) -> Result<Translation, Error> {
         // On macOS we strip ctrl because UCKeyTranslate
         // converts to the masked values (i.e. ctrl+c becomes 3)
-        // and we don't want that behavior in rustty ever. This makes
+        // and we don't want that behavior in Rustty ever. This makes
         // this file not a general-purpose keymap implementation.
         let mods: Mods = {
             let mut v = input_mods;
@@ -461,7 +461,7 @@ const K_UC_KEY_TRANSLATE_NO_DEAD_KEYS_MASK: u32 = 1 << K_UC_KEY_TRANSLATE_NO_DEA
 
 // PORT NOTE: `std.unicode.utf16LeToUtf8(out, src)` decodes the little-endian
 // UTF-16 codeunits `src` into UTF-8 written to `out`, returning the byte length.
-// `char` is a native `[u16; 4]`; on a little-endian target (all rustty targets)
+// `char` is a native `[u16; 4]`; on a little-endian target (all Rustty targets)
 // the in-memory representation is already little-endian, matching the reference.
 #[cfg(target_os = "macos")]
 fn utf16_le_to_utf8(out: &mut [u8], src: &[u16]) -> Result<usize, ()> {

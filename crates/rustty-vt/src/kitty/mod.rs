@@ -6,7 +6,7 @@
 
 // const build_options = @import("terminal_options");
 // PORT NOTE: the reference reads the build-generated `terminal_options` module;
-// in rustty that is `crate::options` (see options.rs). The `kitty_graphics` gate
+// in Rustty that is `crate::options` (see options.rs). The `kitty_graphics` gate
 // is `crate::options::KITTY_GRAPHICS`.
 
 // const key = @import("kitty/key.zig");

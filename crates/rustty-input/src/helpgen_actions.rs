@@ -13,7 +13,7 @@
 // `KeybindAction` maps to the ported `crate::binding::Action`. `help_strings` is
 // a BUILD-GENERATED module (its `KeybindAction` namespace holds, per action
 // field, the action's doc-comment text harvested at build time). That build
-// artifact is not yet produced in rustty; following the established
+// artifact is not yet produced in Rustty; following the established
 // deferred-seam precedent, `help_strings.KeybindAction` is modeled by the
 // `HelpStrings` seam trait below. The reference's `inline for` over
 // `@typeInfo(KeybindAction).@"union".fields` maps to a loop over
@@ -73,11 +73,11 @@ impl Format {
             Format::Markdown => Some(
                 b"---\n\
                 title: Keybinding Action Reference\n\
-                description: Reference of all rustty keybinding actions.\n\
+                description: Reference of all Rustty keybinding actions.\n\
                 editOnGithubLink: https://github.com/AirelyDev/rustty/edit/main/crates/rustty-input/src/binding.rs\n\
                 ---\n\
                 \n\
-                This is a reference of all rustty keybinding actions.\n\
+                This is a reference of all Rustty keybinding actions.\n\
                 \n\
                 \n",
             ),

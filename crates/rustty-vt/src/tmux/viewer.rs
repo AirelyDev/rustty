@@ -26,7 +26,7 @@
 // `Global` seam, matching the rest of the crate.
 //
 // PORT NOTE (command queue): the reference `CommandQueue` is a `CircBuf(Command,
-// undefined)`. The rustty `CircBuf` requires `T: Copy`, and `Command` owns a
+// undefined)`. The Rustty `CircBuf` requires `T: Copy`, and `Command` owns a
 // `Vec<u8>` (the `.user` arm), so it cannot back the queue. A `VecDeque<Command>`
 // reproduces the EXACT behavior the viewer relies on — FIFO `append`
 // (`push_back`), `first` (`front`), `deleteOldest(1)` (`pop_front`), `len`,
@@ -342,7 +342,7 @@ pub enum Input {
 /// PORTS: ghostty `Viewer.Window`.
 //
 // PORT NOTE: the reference holds `layout_arena: ArenaAllocator.State` purely to
-// free the `Layout` tree in one shot; the rustty `Layout` owns its subtree
+// free the `Layout` tree in one shot; the Rustty `Layout` owns its subtree
 // (`Vec<Layout>`), so dropping `Window` frees the layout — the `layout_arena`
 // field and the explicit `deinit` are unnecessary and dropped (see the layout.rs
 // PORT NOTE).

@@ -6,7 +6,7 @@
 //! rustty-os (`getenv`, `ShellEscapeWriter`, the POSIX exec). Byte-faithful (R1);
 //! the editor / path bytes stay raw (R3). R2: the `ghostty +edit-config` binary
 //! name, the "Ghostty configuration" brand, and the illustrative config paths are
-//! retargeted to the rustty product identity via rustty-identity. 0 tests.
+//! retargeted to the Rustty product identity via rustty-identity. 0 tests.
 
 // const std = @import("std");
 // const builtin = @import("builtin");
@@ -65,13 +65,13 @@ impl args::Target for Options {
     }
 }
 
-/// The `edit-config` command opens the rustty configuration file in the
+/// The `edit-config` command opens the Rustty configuration file in the
 /// editor specified by the `$VISUAL` or `$EDITOR` environment variables.
 ///
 /// IMPORTANT: This command will not reload the configuration after
 /// editing. You will need to manually reload the configuration using the
-/// application menu, configured keybind, or by restarting rustty. We
-/// plan to auto-reload in the future, but rustty isn't capable of
+/// application menu, configured keybind, or by restarting Rustty. We
+/// plan to auto-reload in the future, but Rustty isn't capable of
 /// this yet.
 ///
 /// The filepath opened is the default user-specific configuration
@@ -131,7 +131,7 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
     // var config = try Config.load(alloc);
     // defer config.deinit();
     //   PORT NOTE: loaded only for its disk side-effect; `_config` drops at scope
-    //   end (the reference's `defer config.deinit()`), and rustty's
+    //   end (the reference's `defer config.deinit()`), and Rustty's
     //   `Config::deinit` resets the arena flag only.
     let _config = Config::load()?;
 
@@ -151,7 +151,7 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
         //     \\{s}
         //     \\
         // , .{path});
-        //   R2: the `ghostty` binary name -> the rustty product name.
+        //   R2: the `ghostty` binary name -> the Rustty product name.
         write!(
             stderr,
             "The `{app} +edit-config` command is not supported on Windows.\n\
@@ -210,7 +210,7 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
         //     \\via this CLI command.
         //     ...
         // , .{});
-        //   R2: "Ghostty configuration" -> the rustty product name.
+        //   R2: "Ghostty configuration" -> the Rustty product name.
         write!(
             stderr,
             "The $EDITOR or $VISUAL environment variable is not set or is empty.\n\

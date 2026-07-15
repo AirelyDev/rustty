@@ -1,4 +1,4 @@
-//! rustty — the binary entry point.
+//! Rustty — the binary entry point.
 //!
 //! PORTS: ghostty src/main.zig — the entrypoint SELECTOR. The reference switches
 //! `build_config.exe_entrypoint` to pick which module supplies `main`/`std_options`:

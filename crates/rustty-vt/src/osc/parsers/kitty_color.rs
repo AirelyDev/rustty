@@ -10,7 +10,7 @@ use crate::color::{InvalidFormat, RGB};
 use crate::kitty::color as kitty_color;
 use crate::osc::{Command, Parser};
 
-// PORT NOTE: `const log = std.log.scoped(.osc_kitty_color);` — rustty has no
+// PORT NOTE: `const log = std.log.scoped(.osc_kitty_color);` — Rustty has no
 // logging facade wired into this crate (matching the convention used by the
 // `osc.zig` scoped logger), so the scoped logger and its calls are ported as
 // commented lines.

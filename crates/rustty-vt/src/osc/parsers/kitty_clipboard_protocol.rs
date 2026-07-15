@@ -21,7 +21,7 @@ use crate::osc::{Command, Parser, State, Terminator};
 // PORT NOTE: `const encoding = @import("../encoding.zig");` — imported by the
 // reference but not referenced in this module's logic; ported as this note.
 
-// PORT NOTE: `const log = std.log.scoped(.kitty_clipboard_protocol);` — rustty
+// PORT NOTE: `const log = std.log.scoped(.kitty_clipboard_protocol);` — Rustty
 // has no logging facade wired into this crate (matching the convention used by
 // the `osc.zig` scoped logger), so the scoped logger is ported as a commented
 // line.

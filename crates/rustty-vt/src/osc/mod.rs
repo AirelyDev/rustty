@@ -721,7 +721,7 @@ impl<'a> Parser<'a> {
         if self.alloc.is_some() {
             return true;
         }
-        // PORT NOTE: `const log = std.log.scoped(.osc);` — rustty has no logging
+        // PORT NOTE: `const log = std.log.scoped(.osc);` — Rustty has no logging
         // facade wired into this crate (matching the convention used by PageList
         // / DCS et al.), so the scoped logger and its calls are ported as
         // commented lines.

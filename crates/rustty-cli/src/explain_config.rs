@@ -68,7 +68,7 @@ impl Options {
 }
 
 /// The `explain-config` command prints the documentation for a single
-/// rustty configuration option or keybind action.
+/// Rustty configuration option or keybind action.
 ///
 /// Examples:
 ///
@@ -151,7 +151,7 @@ pub fn run() -> Result<u8, Error> {
             //     try stderr_writer.interface.writeAll("       ghostty +explain-config --keybind=<action>\n");
             //     try stderr_writer.end();
             //     return 1;
-            //   R2: user-facing `ghostty` -> the rustty product name (APP_NAME).
+            //   R2: user-facing `ghostty` -> the Rustty product name (APP_NAME).
             let app = rustty_identity::APP_NAME;
             let mut stderr = std::io::stderr().lock();
             stderr.write_all(format!("Usage: {app} +explain-config <option>\n").as_bytes())?;

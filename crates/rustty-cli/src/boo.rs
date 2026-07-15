@@ -13,7 +13,7 @@
 
 use crate::rustty::Error;
 
-/// The `boo` command is used to display the animation from the rustty website in
+/// The `boo` command is used to display the animation from the Rustty website in
 /// the terminal.
 // pub fn run(gpa: Allocator) !u8 {
 //   VAXIS-DEFERRED: the reference body (platform gate, arg parse, frame
@@ -27,7 +27,7 @@ pub fn run() -> Result<u8, Error> {
 // preserved VERBATIM as a commented block. `vaxis`/`vxfw` + the `framedata`
 // compressed frame asset are unported Zig-source deps; when they land, this body
 // (Boo widget, frame span-parser, flate decompression) is ported in place. The
-// R2 product-name comments ("Ghostty website") retarget to rustty on porting.
+// R2 product-name comments ("Ghostty website") retarget to Rustty on porting.
 // ===========================================================================
 
 // const std = @import("std");

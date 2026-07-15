@@ -1,4 +1,4 @@
-//! App is the primary GUI application for rustty. This builds the window,
+//! App is the primary GUI application for Rustty. This builds the window,
 //! sets up the renderer, etc. The primary run loop is started by calling
 //! the "run" function.
 //!
@@ -107,7 +107,7 @@ impl core::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// App is the primary GUI application for rustty (see the module doc; the
+/// App is the primary GUI application for Rustty (see the module doc; the
 /// reference file IS this struct via `const App = @This()`).
 pub struct App<A: apprt::App + 'static> {
     /// General purpose allocator
@@ -116,7 +116,7 @@ pub struct App<A: apprt::App + 'static> {
     /// The list of surfaces that are currently active.
     pub surfaces: SurfaceList<A>,
 
-    /// This is true if the app that rustty is in is focused. This may
+    /// This is true if the app that Rustty is in is focused. This may
     /// mean that no surfaces (terminals) are focused but the app is still
     /// focused, i.e. may an about window. On macOS, this concept is known
     /// as the "active" app while focused windows are known as the
@@ -127,7 +127,7 @@ pub struct App<A: apprt::App + 'static> {
     /// to process keyboard shortcuts that are not global.
     ///
     /// This defaults to true since we assume that the app is focused when
-    /// rustty is initialized but a well behaved apprt should call
+    /// Rustty is initialized but a well behaved apprt should call
     /// focusEvent to set this to the correct value right away.
     // (reference field default: `= true`)
     pub focused: bool,
@@ -150,7 +150,7 @@ pub struct App<A: apprt::App + 'static> {
 
     // Used to rate limit desktop notifications. Some platforms (notably macOS) will
     // run out of resources if desktop notifications are sent too fast and the OS
-    // will kill rustty.
+    // will kill Rustty.
     // (reference field defaults: `= null`, `= 0`)
     pub last_notification_time: Option<std::time::Instant>,
     pub last_notification_digest: u64,
@@ -503,7 +503,7 @@ where
     }
 
     /// Handle an app-level focus event. This should be called whenever
-    /// the focus state of the entire app containing rustty changes.
+    /// the focus state of the entire app containing Rustty changes.
     /// This is separate from surface focus events. See the `focused`
     /// field for more information.
     pub fn focusEvent(&mut self, focused: bool) {
@@ -594,7 +594,7 @@ where
         true
     }
 
-    /// Call to notify rustty that the color scheme for the app has changed.
+    /// Call to notify Rustty that the color scheme for the app has changed.
     /// "Color scheme" in this case refers to system themes such as "light/dark".
     pub fn colorSchemeEvent(
         &mut self,
@@ -1000,7 +1000,7 @@ impl<A: apprt::App + 'static> Copy for Mailbox<A> {}
 // PORT NOTE (documented-deferred, config wasm.rs precedent): the reference is
 // gated on the wasm build target (`if (!builtin.target.isWasm()) struct {}
 // else struct { ... }`) and its entire body — beyond the two file-local
-// imports — is commented out in the reference itself. It joins the rustty
+// imports — is commented out in the reference itself. It joins the Rustty
 // wasm app-runtime (off-by-default `wasm` feature family) when that target
 // lands; the faithful body is preserved verbatim below (R1).
 //

@@ -39,7 +39,7 @@
 //
 // PORT NOTE: the reference imports the event-loop backend via
 // `@import("../../global.zig").xev` — a re-export of `@import("xev").Dynamic`.
-// In rustty that re-export is a DEFERRED SEAM (`rustty_global::seam::Xev = ()`):
+// In Rustty that re-export is a DEFERRED SEAM (`rustty_global::seam::Xev = ()`):
 // xev (libxev) is an upward dependency that is not yet ported, which is exactly
 // why the reference's `search.zig` gates `Thread` OUT of the `lib` artifact
 // ("The search thread is not available in libghostty due to the xev dep for
@@ -463,7 +463,7 @@ impl Thread {
     }
 
     // Run the event loop in the given mode and dispatch any completions that
-    // fired during the run. This is the rustty analogue of `self.loop.run(mode)`
+    // fired during the run. This is the Rustty analogue of `self.loop.run(mode)`
     // for the xev seam: xev would invoke the registered callbacks inline, but to
     // avoid aliasing `self`, the seam records which callbacks fired and we
     // dispatch them here against `&mut self`.

@@ -9,7 +9,7 @@
 //! is not supported on this platform." to stderr and exits 1 (CLI_BLUEPRINT.md §1
 //! / ADV-FIX 4 / Risk 4 — correct, NOT a stub). Byte-faithful (R1); the class /
 //! working-directory / command args stay raw bytes (R3). R2: the "Ghostty" brand
-//! in the doc comments is retargeted to the rustty product name. 0 tests.
+//! in the doc comments is retargeted to the Rustty product name. 0 tests.
 
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;
@@ -73,7 +73,7 @@ pub struct Options {
     //   PORT NOTE: no shared arena; each collected value owns its bytes. The struct
     //   still opts in via `arena_available` (the reference's `@hasField(T, "_arena")`).
 
-    /// If set, open up a new window in a custom instance of rustty.
+    /// If set, open up a new window in a custom instance of Rustty.
     // class: ?[:0]const u8 = null,
     pub class: Option<Vec<u8>>,
 
@@ -81,7 +81,7 @@ pub struct Options {
     // _working_directory_seen: bool = false,
     pub _working_directory_seen: bool,
 
-    /// All of the arguments after `+new-window`. They will be sent to rustty
+    /// All of the arguments after `+new-window`. They will be sent to Rustty
     /// for processing.
     // _arguments: std.ArrayList([:0]const u8) = .empty,
     pub _arguments: Vec<Vec<u8>>,
@@ -273,16 +273,16 @@ impl args::Target for Options {
 }
 
 /// The `new-window` will use native platform IPC to open up a new window in a
-/// running instance of rustty.
+/// running instance of Rustty.
 ///
 /// If the `--class` flag is not set, the `new-window` command will try and
-/// connect to a running instance of rustty based on what optimizations the
-/// rustty CLI was compiled with. Otherwise the `new-window` command will try
-/// and contact a running rustty instance that was configured with the same
+/// connect to a running instance of Rustty based on what optimizations the
+/// Rustty CLI was compiled with. Otherwise the `new-window` command will try
+/// and contact a running Rustty instance that was configured with the same
 /// `class` as was given on the command line.
 ///
 /// All of the arguments after the `+new-window` argument (except for the
-/// `--class` flag) will be sent to the remote rustty instance and will be
+/// `--class` flag) will be sent to the remote Rustty instance and will be
 /// parsed as command line flags. These flags will override certain settings
 /// when creating the first surface in the new window. Currently, only
 /// `--working-directory`, `--command`, and `--title` are supported. `-e` will
@@ -297,22 +297,22 @@ impl args::Target for Options {
 /// directory.
 ///
 /// If `--working-directory` is _not_ found on the command line, the working
-/// directory that `rustty +new-window` is run from will be passed to rustty.
+/// directory that `rustty +new-window` is run from will be passed to Rustty.
 ///
-/// GTK uses an application ID to identify instances of applications. If rustty
+/// GTK uses an application ID to identify instances of applications. If Rustty
 /// is compiled with release optimizations, the default application ID will be
-/// `io.airely.rustty`. If rustty is compiled with debug optimizations,
+/// `io.airely.rustty`. If Rustty is compiled with debug optimizations,
 /// the default application ID will be `io.airely.rustty-debug`.  The
 /// `class` configuration entry can be used to set up a custom application
 /// ID. The class name must follow the requirements defined [in the GTK
 /// documentation](https://docs.gtk.org/gio/type_func.Application.id_is_valid.html)
-/// or it will be ignored and rustty will use the default as defined above.
+/// or it will be ignored and Rustty will use the default as defined above.
 ///
-/// On GTK, D-Bus activation must be properly configured. rustty does not need
+/// On GTK, D-Bus activation must be properly configured. Rustty does not need
 /// to be running for this to open a new window, making it suitable for binding
 /// to keys in your window manager (if other methods for configuring global
 /// shortcuts are unavailable). D-Bus will handle launching a new instance
-/// of rustty if it is not already running. See the rustty website for
+/// of Rustty if it is not already running. See the Rustty website for
 /// information on properly configuring D-Bus activation.
 ///
 /// Only supported on GTK.
@@ -320,11 +320,11 @@ impl args::Target for Options {
 /// Flags:
 ///
 ///   * `--class=<class>`: If set, open up a new window in a custom instance of
-///     rustty. The class must be a valid GTK application ID.
+///     Rustty. The class must be a valid GTK application ID.
 ///
 ///   * `--command`: The command to be executed in the first surface of the new window.
 ///
-///   * `--working-directory=<directory>`: The working directory to pass to rustty.
+///   * `--working-directory=<directory>`: The working directory to pass to Rustty.
 ///
 ///   * `--title`: A title that will override the title of the first surface in
 ///     the new window. The title override may be edited or removed later.

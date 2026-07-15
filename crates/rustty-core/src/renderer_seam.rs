@@ -1448,7 +1448,7 @@ where
         //     else => { log.warn(...); unreachable; },
         // };
         //
-        // (PORT NOTE: rustty's `CancelError` set is `error{Canceled}` — its sole
+        // (PORT NOTE: Rustty's `CancelError` set is `error{Canceled}` — its sole
         // variant is the success case; the NotFound/unreachable arms above have
         // no counterpart yet and are preserved verbatim in the comment.)
         if let Err(_err) = r {
@@ -1492,7 +1492,7 @@ fn cursorBlinkInterval() -> u64 {
     //     return CURSOR_BLINK_INTERVAL * 5;
     // }
     //
-    // PORT NOTE: rustty has no `std.valgrind.runningOnValgrind` shim, so the
+    // PORT NOTE: Rustty has no `std.valgrind.runningOnValgrind` shim, so the
     // valgrind `* 5` branch above is inert (never taken) and kept as a verbatim
     // comment; the fn returns the plain constant. Re-arm the branch if a
     // `rustty_os` valgrind probe is added.

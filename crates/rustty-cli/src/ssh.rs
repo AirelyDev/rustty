@@ -1,7 +1,7 @@
 //! rustty-cli::ssh
 //!
 //! PORTS: ghostty src/cli/ssh.zig — the `+ssh` wrapper action (wrap `ssh` to
-//! configure rustty terminal integration on remote hosts). Byte-faithful (R1);
+//! configure Rustty terminal integration on remote hosts). Byte-faithful (R1);
 //! ssh args and destinations are byte strings (R3). The `TERM=xterm-rustty`
 //! wire token (the reference's `xterm-ghostty`), the `infocmp <name>`/`tic`
 //! remote install script, and the `{APP_NAME}-ssh-` control-path prefix are
@@ -34,7 +34,7 @@ const LOG_SCOPE: &str = "ssh";
 // const usage =
 //     \\Usage: ghostty +ssh [flags] [--] <ssh args...>
 //     ...
-//   R2: the `ghostty` binary name and `Ghostty terminfo` -> the rustty product
+//   R2: the `ghostty` binary name and `Ghostty terminfo` -> the Rustty product
 //   name/terminfo. Built at runtime from `rustty-identity::APP_NAME`.
 fn usage() -> String {
     let app = rustty_identity::APP_NAME;
@@ -232,7 +232,7 @@ impl cli_args::Target for Options {
     }
 }
 
-/// Wrap `ssh` to automatically configure rustty terminal integration on
+/// Wrap `ssh` to automatically configure Rustty terminal integration on
 /// remote hosts.
 ///
 /// Any arguments that aren't recognized as `+ssh` flags are passed to
@@ -241,7 +241,7 @@ impl cli_args::Target for Options {
 /// has no long flags, and `+ssh` defines no short flags, so there's
 /// nothing to collide.
 ///
-/// This is typically called via rustty's shell integration. When
+/// This is typically called via Rustty's shell integration. When
 /// `shell-integration-features` includes `ssh-env` or `ssh-terminfo`,
 /// each shell defines an `ssh` function that runs:
 ///
@@ -258,12 +258,12 @@ impl cli_args::Target for Options {
 ///   1. **Environment forwarding** (`--forward-env`). Sets `TERM` to
 ///      `xterm-256color` and requests `SendEnv` forwarding of
 ///      `COLORTERM`, `TERM_PROGRAM`, and `TERM_PROGRAM_VERSION` so the
-///      remote shell can still detect that it's running inside rustty.
+///      remote shell can still detect that it's running inside Rustty.
 ///      The remote `sshd_config` must list these in `AcceptEnv` for
 ///      forwarding to succeed.
 ///
 ///   2. **Terminfo install** (`--terminfo`). On the first connection to a
-///      given destination, installs rustty's terminfo entry on the remote
+///      given destination, installs Rustty's terminfo entry on the remote
 ///      host using `infocmp -x xterm-rustty | ssh tic -x -` over a
 ///      shared `ControlMaster` connection. Successful installs are cached
 ///      (see `rustty +ssh-cache`) so subsequent connections skip this
@@ -300,7 +300,7 @@ impl cli_args::Target for Options {
 ///   # Basic invocation using defaults:
 ///   rustty +ssh user@example.com
 ///
-///   # Forward rustty env vars but skip the terminfo install:
+///   # Forward Rustty env vars but skip the terminfo install:
 ///   rustty +ssh --terminfo=false user@example.com
 ///
 ///   # `ssh` flags (short-form `-p`, etc.) pass through unchanged:
@@ -431,7 +431,7 @@ fn run_inner<We: Write>(opts: &Options, stderr: &mut We) -> Result<u8, std::io::
         //     };
         //     break :cache .{ .path = path };
         // } else null;
-        //   R2 / ADV-FIX 5: the program dir is the rustty app name via identity.
+        //   R2 / ADV-FIX 5: the program dir is the Rustty app name via identity.
         let cache: Option<DiskCache> = if opts.cache {
             match DiskCache::default_path(rustty_identity::APP_NAME) {
                 Ok(path) => Some(DiskCache { path }),
@@ -747,7 +747,7 @@ fn parse_destination(stdout: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Install rustty's terminfo on the remote host over a short-lived SSH
+/// Install Rustty's terminfo on the remote host over a short-lived SSH
 /// ControlMaster connection. The master tears down with the client
 /// (`ControlPersist=no`) so no socket lingers.
 // fn installRemoteTerminfo(alloc, opts, stderr) !void {
@@ -767,7 +767,7 @@ fn install_remote_terminfo<We: Write>(
     // limits sockaddr_un.sun_path to ~104 bytes, so keeping the path
     // short leaves margin.
     // const control_path = try internal_os.randomTmpPath(alloc, "ghostty-ssh-");
-    //   R2: the temp-socket prefix carries the rustty app name.
+    //   R2: the temp-socket prefix carries the Rustty app name.
     let control_path = internal_os::randomTmpPath(&format!("{}-ssh-", rustty_identity::APP_NAME));
     // const control_path_opt = try std.fmt.allocPrint(alloc, "ControlPath={s}", .{control_path});
     let control_path_opt = format!("ControlPath={control_path}");

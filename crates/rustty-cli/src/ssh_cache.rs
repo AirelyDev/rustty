@@ -113,7 +113,7 @@ impl args::Target for Options {
 
 /// Manage the SSH terminfo cache for automatic remote host setup.
 ///
-/// The `+ssh` action installs rustty's terminfo on remote hosts and records
+/// The `+ssh` action installs Rustty's terminfo on remote hosts and records
 /// each success in this cache so it doesn't re-upload on later connections.
 /// (`+ssh` runs automatically from the shell integration when
 /// `shell-integration-features` includes `ssh-terminfo`.) This command
@@ -184,7 +184,7 @@ pub fn run() -> Result<u8, Error> {
                 //         "directly, e.g. `ghostty +ssh-cache {s}`.\n",
                 //     .{arg["--host=".len..]},
                 // );
-                //   R2: the `ghostty` binary name -> the rustty product name.
+                //   R2: the `ghostty` binary name -> the Rustty product name.
                 let _ = writeln!(
                     stderr,
                     "Warning: --host is deprecated; pass the destination directly, e.g. `{} +ssh-cache {}`.",
@@ -301,7 +301,7 @@ fn run_inner<Wo: Write, We: Write>(
 
     // Setup our disk cache to the standard location
     // const cache_path = try DiskCache.defaultPath(alloc, "ghostty");
-    //   R2 / ADV-FIX 5: the program dir is the rustty app name via identity.
+    //   R2 / ADV-FIX 5: the program dir is the Rustty app name via identity.
     let cache_path = DiskCache::default_path(rustty_identity::APP_NAME)?;
     // const cache: DiskCache = .{ .path = cache_path };
     let cache = DiskCache { path: cache_path };

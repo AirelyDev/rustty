@@ -140,7 +140,7 @@ pub struct Flags {
     pub all: bool,
 
     /// True if this binding is global. Global bindings should work system-wide
-    /// and not just while rustty is focused. This may not work on all platforms.
+    /// and not just while Rustty is focused. This may not work on all platforms.
     /// See the keybind config documentation for more information.
     pub global: bool,
 
@@ -665,14 +665,14 @@ impl CloseTabMode {
 pub enum Action {
     /// Ignore this key combination.
     ///
-    /// rustty will not process this combination nor forward it to the child
+    /// Rustty will not process this combination nor forward it to the child
     /// process within the terminal, but it may still be processed by the OS or
     /// other applications.
     Ignore,
 
     /// Unbind a previously bound key binding.
     ///
-    /// This cannot unbind bindings that were not bound by rustty or the user
+    /// This cannot unbind bindings that were not bound by Rustty or the user
     /// (e.g. bindings set by the OS or some other application).
     Unbind,
 
@@ -1129,7 +1129,7 @@ pub enum Action {
     /// when entering passwords or other sensitive information.
     ///
     /// This applies to the entire application, not just the focused terminal.
-    /// You must manually untoggle it or quit rustty entirely to disable it.
+    /// You must manually untoggle it or quit Rustty entirely to disable it.
     ///
     /// Only implemented on macOS, as this uses a built-in system API.
     ToggleSecureInput,
@@ -1193,7 +1193,7 @@ pub enum Action {
     ///
     ///     If you do not have this plugin enabled, open System Settings > Apps
     ///     & Windows > Window Management > Desktop Effects, and enable the
-    ///     plugin in the plugin list. rustty would then need to be restarted
+    ///     plugin in the plugin list. Rustty would then need to be restarted
     ///     fully for this to take effect.
     ///
     ///   - Quick terminal tabs are only supported on Linux and not on macOS.
@@ -1208,7 +1208,7 @@ pub enum Action {
     ToggleQuickTerminal,
 
     /// Show or hide all windows. If all windows become shown, we also ensure
-    /// rustty becomes focused. When hiding all windows, focus is yielded
+    /// Rustty becomes focused. When hiding all windows, focus is yielded
     /// to the next application as determined by the OS.
     ///
     /// Note: When the focused surface is fullscreen, this method does nothing.
@@ -1235,7 +1235,7 @@ pub enum Action {
     /// if possible. This can undo actions such as closing tabs or
     /// windows.
     ///
-    /// Not every action in rustty can be undone or redone. The list
+    /// Not every action in Rustty can be undone or redone. The list
     /// of actions support undo/redo is currently limited to:
     ///
     ///   - New window, close window
@@ -1305,10 +1305,10 @@ pub enum Action {
     /// this will report performable as false.
     DeactivateAllKeyTables,
 
-    /// Quit rustty.
+    /// Quit Rustty.
     Quit,
 
-    /// Crash rustty in the desired thread for the focused surface.
+    /// Crash Rustty in the desired thread for the focused surface.
     ///
     /// WARNING: This is a hard crash (panic) and data can be lost.
     ///
@@ -3010,7 +3010,7 @@ pub enum TriggerKey {
 
     /// This is used for binding to keys that produce a certain unicode
     /// codepoint. This is useful for binding to keys that don't have a
-    /// registered keycode with rustty.
+    /// registered keycode with Rustty.
     Unicode(u21),
 
     /// A catch-all key that matches any key press that is otherwise
@@ -3154,7 +3154,7 @@ impl Trigger {
             }
 
             // If we're still unset then we look for backwards compatible
-            // keys with rustty 1.1.x. We do this last so its least likely
+            // keys with Rustty 1.1.x. We do this last so its least likely
             // to impact performance for modern users.
             if let Some(old_key) = backwards_compatible_keys_get(part) {
                 result.key = old_key;
@@ -3334,8 +3334,8 @@ fn ascii_to_lower(c: u21) -> u21 {
     c | ((is_upper as u21) << 5)
 }
 
-/// The values that are backwards compatible with rustty 1.1.x.
-/// rustty 1.2+ doesn't support these anymore since we moved to
+/// The values that are backwards compatible with Rustty 1.1.x.
+/// Rustty 1.2+ doesn't support these anymore since we moved to
 /// W3C key codes.
 //
 // PORT NOTE: the reference `backwards_compatible_keys` is a
@@ -5581,7 +5581,7 @@ mod tests {
         }
     }
 
-    // For rustty 1.2+ we changed our key names to match the W3C and removed
+    // For Rustty 1.2+ we changed our key names to match the W3C and removed
     // `physical:`. This tests the backwards compatibility with the old format.
     // Note that our backwards compatibility isn't 100% perfect since triggers
     // like `a` now map to unicode instead of "translated" (which was also

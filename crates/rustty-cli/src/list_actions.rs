@@ -73,7 +73,7 @@ impl args::Target for Options {
 }
 
 /// The `list-actions` command is used to list all the available keybind
-/// actions for rustty. These are distinct from the CLI Actions which can
+/// actions for Rustty. These are distinct from the CLI Actions which can
 /// be listed via `+help`
 ///
 /// Flags:

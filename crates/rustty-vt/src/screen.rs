@@ -368,7 +368,7 @@ pub struct Options {
     /// The limits for what medium types are allowed for Kitty image loading.
     // PORT NOTE: the reference type is
     //   `if (build_options.kitty_graphics) kitty.graphics.LoadingImage.Limits else void`.
-    // The reference nests `Limits` under `LoadingImage`; the rustty port carves
+    // The reference nests `Limits` under `LoadingImage`; the Rustty port carves
     // it as a sibling in `graphics_image`, so this is `graphics_image::Limits`.
     // The conditional `void` (kitty graphics disabled) is the empty/no-limit case.
     pub kitty_image_loading_limits: kitty::graphics_image::Limits,

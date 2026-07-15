@@ -203,7 +203,7 @@ impl ThemeListElement {
 }
 
 /// The `list-themes` command is used to preview or list all the available
-/// themes for rustty.
+/// themes for Rustty.
 ///
 /// If this command is run from a TTY, a TUI preview of the themes will be
 /// shown. While in the preview, `F1` will bring up a help screen and `ESC` will
@@ -216,16 +216,16 @@ impl ThemeListElement {
 ///
 /// Two different directories will be searched for themes.
 ///
-/// The first directory is the `themes` subdirectory of your rustty
+/// The first directory is the `themes` subdirectory of your Rustty
 /// configuration directory. This is `$XDG_CONFIG_HOME/rustty/themes` or
 /// `~/.config/rustty/themes`.
 ///
-/// The second directory is the `themes` subdirectory of the rustty resources
-/// directory. rustty ships with a multitude of themes that will be installed
+/// The second directory is the `themes` subdirectory of the Rustty resources
+/// directory. Rustty ships with a multitude of themes that will be installed
 /// into this directory. On macOS, this directory is the
 /// `Rustty.app/Contents/Resources/rustty/themes`. On Linux, this directory
-/// is the `share/rustty/themes` (wherever you installed the rustty "share"
-/// directory). If you're running rustty from the source, this is the
+/// is the `share/rustty/themes` (wherever you installed the Rustty "share"
+/// directory). If you're running Rustty from the source, this is the
 /// `zig-out/share/rustty/themes` directory.
 ///
 /// You can also set the `RUSTTY_RESOURCES_DIR` environment variable to point
@@ -288,8 +288,8 @@ pub fn run() -> Result<u8, Error> {
     if resources_dir.is_none() {
         writeln!(
             stderr,
-            "Could not find the rustty resources directory. Please ensure \
-             that rustty is installed correctly."
+            "Could not find the Rustty resources directory. Please ensure \
+             that Rustty is installed correctly."
         )?;
     }
 
@@ -780,7 +780,7 @@ fn run_preview<'a>(
     // try self.vx.enterAltScreen(writer);
     unsafe { (*vx_ptr).enter_alt_screen((*tty_ptr).writer()) }?;
     // try self.vx.setTitle(writer, "👻 Ghostty Theme Preview 👻");
-    // R2 IDENTITY NOTE (Task 16): window title carries the rustty product
+    // R2 IDENTITY NOTE (Task 16): window title carries the Rustty product
     // identity (user-visible terminal-window title, not oracle data).
     unsafe {
         (*vx_ptr).set_title(

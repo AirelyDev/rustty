@@ -26,7 +26,7 @@ use std::io::Write;
 // pub const Options = struct {
 #[derive(Default)]
 pub struct Options {
-    /// If set, connect to a custom instance of rustty.
+    /// If set, connect to a custom instance of Rustty.
     // class: ?[:0]const u8 = null,
     //   R3: `[:0]const u8` -> owned raw bytes; R2: the "Ghostty" brand in the doc.
     pub class: Option<Vec<u8>>,
@@ -74,13 +74,13 @@ impl rustty_args::args::Target for Options {
 }
 
 /// The `+toggle-quick-terminal` command will use native platform IPC to toggle
-/// the quick terminal in a running instance of rustty.
+/// the quick terminal in a running instance of Rustty.
 ///
 /// If the `--class` flag is not set, the command will try and connect to the
-/// default running rustty instance. Otherwise it will contact a rustty
+/// default running Rustty instance. Otherwise it will contact a Rustty
 /// instance configured with the given `class`.
 ///
-/// On GTK, D-Bus activation must be properly configured. rustty does not need
+/// On GTK, D-Bus activation must be properly configured. Rustty does not need
 /// to be running, as D-Bus will handle launching a new instance if it is not
 /// already running.
 ///
@@ -88,7 +88,7 @@ impl rustty_args::args::Target for Options {
 ///
 /// Flags:
 ///
-///   * `--class=<class>`: If set, connect to a custom instance of rustty.
+///   * `--class=<class>`: If set, connect to a custom instance of Rustty.
 ///     The class must be a valid GTK application ID.
 ///
 /// Available since: 1.4.0

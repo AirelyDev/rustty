@@ -45,7 +45,7 @@ impl Entry {
         // const timestamp_str = iter.next() orelse return null;
         let timestamp_str = iter.next()?;
         // const terminfo_version = iter.next() orelse "xterm-ghostty";
-        //   R2 / ADV-FIX 5: the default terminfo token is the rustty product
+        //   R2 / ADV-FIX 5: the default terminfo token is the Rustty product
         //   identity's primary terminfo name (`xterm-rustty`), routed through
         //   rustty-identity so it matches the actual rustty-terminfo entry name.
         let terminfo_version = iter
@@ -174,7 +174,7 @@ mod tests {
     // test "cache entry parsing valid formats"
     #[test]
     fn cache_entry_parsing_valid_formats() {
-        // The terminfo token is the rustty product identity's primary terminfo
+        // The terminfo token is the Rustty product identity's primary terminfo
         // name (ADV-FIX 5); building the fixtures from it keeps the parse
         // round-trip self-consistent under both the default and `identity-oracle`
         // profiles.

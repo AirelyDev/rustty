@@ -1052,7 +1052,7 @@ mod tests {
     fn osc_9_6_conemu_guimacro_1() {
         // PORT NOTE: `var p: Parser = .init(testing.allocator); defer p.deinit();`
         // — these ConEmu string-payload OSCs init the parser with an allocator in
-        // the Zig tests. The rustty `Parser::init(None)` still routes through the
+        // the Zig tests. The Rustty `Parser::init(None)` still routes through the
         // fixed-buffer capture (sufficient for these small inputs), matching the
         // allocator-absent fallback in `capture_trailing`.
         let mut p: Parser = Parser::init(None);

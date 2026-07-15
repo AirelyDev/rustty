@@ -47,7 +47,7 @@ impl args::Target for Options {
     }
 }
 
-/// The `help` command shows general help about rustty. Recognized as either
+/// The `help` command shows general help about Rustty. Recognized as either
 /// `-h`, `--help`, or like other actions `+help`.
 ///
 /// You can also specify `--help` or `-h` along with any action such as
@@ -81,7 +81,7 @@ pub fn run() -> Result<u8, Error> {
     //     \\
     //     \\
     // );
-    //   R2: user-facing `ghostty`/`Ghostty`/`Ghostty.app` -> the rustty product
+    //   R2: user-facing `ghostty`/`Ghostty`/`Ghostty.app` -> the Rustty product
     //   name (rustty-identity APP_NAME). These are user-facing product strings.
     //   The Zig multiline literal joins its `\\` lines with `\n` and has no
     //   trailing newline, so this block ends with `Available actions:\n\n`.

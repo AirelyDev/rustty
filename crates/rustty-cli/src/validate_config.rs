@@ -72,7 +72,7 @@ impl args::Target for Options {
     }
 }
 
-/// The `validate-config` command is used to validate a rustty config file.
+/// The `validate-config` command is used to validate a Rustty config file.
 ///
 /// When executed without any arguments, this will load the config from the default
 /// location.

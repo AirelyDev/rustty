@@ -406,7 +406,7 @@ pub struct Surface<A: apprt::App + 'static> {
 
     /// The conditional state of the configuration. This can affect
     /// how certain configurations take effect such as light/dark mode.
-    /// This is managed completely by rustty core but an apprt action
+    /// This is managed completely by Rustty core but an apprt action
     /// is sent whenever this changes.
     // config_conditional_state: configpkg.ConditionalState,
     pub config_conditional_state: configpkg::conditional::State,
@@ -456,17 +456,17 @@ pub struct Surface<A: apprt::App + 'static> {
 /// The effect of an input event. This can be used by callers to take
 /// the appropriate action after an input event. For example, key
 /// input can be forwarded to the OS for further processing if it
-/// wasn't handled in any way by rustty.
+/// wasn't handled in any way by Rustty.
 // pub const InputEffect = enum { ... };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputEffect {
-    /// The input was not handled in any way by rustty and should be
+    /// The input was not handled in any way by Rustty and should be
     /// forwarded to other subsystems (i.e. the OS) for further
     /// processing.
     // ignored,
     Ignored,
 
-    /// The input was handled and consumed by rustty.
+    /// The input was handled and consumed by Rustty.
     // consumed,
     Consumed,
 
@@ -1008,7 +1008,7 @@ impl DerivedConfig {
             // .arena = arena,
             //
             // PORT NOTE: collapsed (see the struct's arena note); the
-            // ordering constraint it documents is moot in rustty.
+            // ordering constraint it documents is moot in Rustty.
         })
     }
 
@@ -1655,7 +1655,7 @@ where
                 // c.@"working-directory" = config_original.@"working-directory";
                 //
                 // PORT NOTE: the reference is a shallow slice copy into the
-                // original config's memory; the owned rustty value clones the
+                // original config's memory; the owned Rustty value clones the
                 // same bytes.
                 c.working_directory = config_original.working_directory.clone();
                 // break :config c;
@@ -2033,7 +2033,7 @@ where
         // };
         //
         // PORT NOTE: the Zig union copy is shallow (slices into config
-        // memory); the owned rustty `Command` clones the bytes (the config
+        // memory); the owned Rustty `Command` clones the bytes (the config
         // command.rs `Clone` PORT NOTE).
         let command: Option<configpkg::command::Command> = 'command: {
             if unsafe { (*app).first } {
@@ -2542,7 +2542,7 @@ where
             let mut derived_config = std::ptr::read(&raw const (*self_).config);
             derived_config.deinit();
             drop(derived_config);
-            // PORT NOTE (Rust-only ownership): the rustty `SharedGridSet.ref`
+            // PORT NOTE (Rust-only ownership): the Rustty `SharedGridSet.ref`
             // Key is OWNED (the reference key's memory belongs to the set's
             // map — the shared_grid_set PORT NOTE), so the moved-in copy is
             // dropped to avoid a Rust-side leak the reference doesn't have.
@@ -2667,7 +2667,7 @@ where
         // Clean up our keyboard state
         // for (self.keyboard.sequence_queued.items) |req| req.deinit();
         //
-        // (`WriteReq.deinit` — the alloc-variant free — is Drop in rustty;
+        // (`WriteReq.deinit` — the alloc-variant free — is Drop in Rustty;
         // the datastruct MessageData precedent.)
         for req in self.keyboard.sequence_queued.drain(..) {
             drop(req);
@@ -3128,7 +3128,7 @@ where
             Message::PwdChange(w) => {
                 // defer w.deinit();
                 // (`WriteReq.deinit` — the alloc-variant free — is Drop in
-                // rustty; runs at arm scope end, the datastruct precedent.)
+                // Rustty; runs at arm scope end, the datastruct precedent.)
 
                 // We always allocate for this because we need to null-terminate.
                 // const str = try self.alloc.dupeZ(u8, w.slice());
@@ -4484,7 +4484,7 @@ where
             // If we haven't, then we update to the configured font size.
             // This allows config changes to update the font size. We used to
             // never do this but it was a common source of confusion and people
-            // assumed that rustty was broken! This logic makes more sense.
+            // assumed that Rustty was broken! This logic makes more sense.
             // var size = self.font_size;
             let mut size = self.font_size;
             // size.points = std.math.clamp(config.@"font-size", 1.0, 255.0);
@@ -5686,7 +5686,7 @@ where
         //
         // PORT NOTE (Rust ownership): the reference key copies are SHALLOW
         // (Zig value-copies; the key memory belongs to the set's map). The
-        // rustty `Key` is OWNED (the shared_grid_set PORT NOTE), so the
+        // Rustty `Key` is OWNED (the shared_grid_set PORT NOTE), so the
         // message's copies are `Clone`s (the Key `Clone` PORT NOTE) and the
         // surface's old key value is dropped at the replacement below (a
         // plain free the reference doesn't need).
@@ -5772,7 +5772,7 @@ where
         // self.balancePaddingIfNeeded();
         self.balancePaddingIfNeeded();
 
-        // Recalculate our grid size. Because rustty supports fluid resizing,
+        // Recalculate our grid size. Because Rustty supports fluid resizing,
         // its possible the grid doesn't change at all even if the screen size changes.
         // We have to update the IO thread no matter what because we send
         // pixel-level sizing to the subprocess.
@@ -6931,7 +6931,7 @@ where
             // .drop => for (self.keyboard.sequence_queued.items) |req| req.deinit(),
             //
             // (`WriteReq.deinit` — the alloc-variant free — is Drop in
-            // rustty; the deinit precedent.)
+            // Rustty; the deinit precedent.)
             KeySequenceQueued::Drop => {
                 for req in queued.drain(..) {
                     drop(req);
@@ -10072,7 +10072,7 @@ where
         Ok(())
     }
 
-    /// Call to notify rustty that the color scheme for the terminal has
+    /// Call to notify Rustty that the color scheme for the terminal has
     /// changed.
     // pub fn colorSchemeCallback(self: *Surface, scheme: apprt.ColorScheme) !void {
     //
@@ -12332,7 +12332,7 @@ where
                 // const pathZ = try self.alloc.dupeZ(u8, path);
                 // defer self.alloc.free(pathZ);
                 //
-                // PORT NOTE: `dupeZ` NUL-terminates for the C-ABI; rustty
+                // PORT NOTE: `dupeZ` NUL-terminates for the C-ABI; Rustty
                 // `ClipboardContent` borrows `&[u8]` and `setClipboard` copies
                 // synchronously ("The data is immediately copied"), so `path` is
                 // passed directly (the `PwdC` deferred-pinning precedent).
@@ -12608,7 +12608,7 @@ where
         //
         // PORT NOTE: the reference `encode` is comptime-dispatched on slice
         // mutability — const `data` may return `error.MutableRequired`; the
-        // mutable retry over the duped `buf` cannot. rustty splits this into
+        // mutable retry over the duped `buf` cannot. Rustty splits this into
         // `paste::encode` (const, may err) and `paste::encode_mut` (mutable,
         // infallible), exactly the two `@TypeOf(data)` branches (the paste.rs
         // split note). `data_duped` is declared BEFORE `vecs` so it outlives the
@@ -12742,7 +12742,7 @@ where
         // how fast identical notifications can be sent sequentially.
         // const hash_algorithm = std.hash.Wyhash;
         //
-        // PORT NOTE: rustty uses the stdlib `DefaultHasher` (the font-shaper
+        // PORT NOTE: Rustty uses the stdlib `DefaultHasher` (the font-shaper
         // `shared_grid_set::Key::hashcode` precedent). The digest is an internal
         // de-dup key compared only against the previous notification within the
         // same process (never serialized/observed cross-implementation), so the
@@ -13274,7 +13274,7 @@ fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
 }
 
 /// Raw bytes of a `Path` (the inverse of [`os_str_from_bytes`]): the reference
-/// `std.fs.Dir.realpath` returns a `[]const u8` path slice; the rustty port
+/// `std.fs.Dir.realpath` returns a `[]const u8` path slice; the Rustty port
 /// returns an owning `PathBuf` and `writeScreenFile` recovers its bytes here
 /// (POSIX paths are bytes directly — R3/fidelity, never a lossy round-trip).
 #[cfg(unix)]

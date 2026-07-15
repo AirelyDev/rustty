@@ -133,7 +133,7 @@ fn build_color_map() -> ColorMap {
 /// This data is licensed under the MIT/X11 license while this Zig file is
 /// licensed under the same license as Ghostty.
 // PORT NOTE: `const data = @embedFile("res/rgb.txt");` — the file is copied into
-// the rustty tree (R3) at `src/res/rgb.txt` and embedded with `include_str!`.
+// the Rustty tree (R3) at `src/res/rgb.txt` and embedded with `include_str!`.
 const DATA: &str = include_str!("res/rgb.txt");
 
 #[cfg(test)]

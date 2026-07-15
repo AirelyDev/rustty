@@ -47,7 +47,7 @@ const TOOLCHAIN_VERSION_STUB: &str = "(rust toolchain)";
 
 /// Reference: `build_config.version.build` — the `+BUILD` metadata (commit hash)
 /// of the SemanticVersion. The Rust runtime SemanticVersion view drops `+BUILD`
-/// (like it drops `-PRE`), so rustty's "0.1.0" carries no commit hash; this is
+/// (like it drops `-PRE`), so Rustty's "0.1.0" carries no commit hash; this is
 /// always `None` and the OSC-8 hyperlink branch below never emits.
 fn commit_hash() -> Option<&'static str> {
     None
@@ -62,7 +62,7 @@ fn release_channel_tag(channel: build_config::ReleaseChannel) -> &'static str {
     }
 }
 
-/// The `version` command is used to display information about rustty. Recognized
+/// The `version` command is used to display information about Rustty. Recognized
 /// as either `+version` or `--version`.
 // pub fn run(alloc: Allocator) !u8 {
 pub fn run() -> Result<u8, Error> {
@@ -82,15 +82,15 @@ pub fn run() -> Result<u8, Error> {
     if tty {
         if let Some(commit_hash) = commit_hash() {
             // Reference host: https://github.com/ghostty-org/ghostty/commit/<hash>
-            // (R2: the rustty repo commit-URL is a deferred product-identity value
+            // (R2: the Rustty repo commit-URL is a deferred product-identity value
             // — no repo-URL constant in rustty-identity yet, DEFERRALS.md. This
-            // branch never runs since `commit_hash()` is always None for rustty,
+            // branch never runs since `commit_hash()` is always None for Rustty,
             // so nothing is emitted.)
             write!(stdout, "\x1b]8;;{commit_hash}\x1b\\")?;
         }
     }
     // try stdout.print("Ghostty {s}\n\n", .{build_config.version_string});
-    //   R2: "Ghostty" -> the rustty product name (rustty-identity APP_NAME).
+    //   R2: "Ghostty" -> the Rustty product name (rustty-identity APP_NAME).
     write!(
         stdout,
         "{} {}",
@@ -170,7 +170,7 @@ pub fn run() -> Result<u8, Error> {
     //             try stdout.print("  - libX11        : disabled\n", .{});
     //         }
     //
-    //         // We say `libwayland` since it is possible to build rustty without
+    //         // We say `libwayland` since it is possible to build Rustty without
     //         // Wayland integration but with Wayland-enabled GTK
     //         if (comptime build_options.wayland) {
     //             try stdout.print("  - libwayland    : enabled\n", .{});

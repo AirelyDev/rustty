@@ -94,7 +94,7 @@ use rustty_unicode as unicode;
 use allocator_api2::alloc::Global as Allocator;
 
 // PORT NOTE: `vtStream` threads `self.gpa()` (a `std.mem.Allocator`) into the
-// OSC parser via `Stream.initAlloc`, which in rustty wants a
+// OSC parser via `Stream.initAlloc`, which in Rustty wants a
 // `ZigAllocatorRef<'static>`. The reference `gpa()` returns the screen's
 // general-purpose allocator (the global allocator). We back the OSC parser with
 // a process-static `GlobalZigAllocator` (a stateless ZST) so the returned
@@ -627,7 +627,7 @@ impl Terminal {
     pub fn vt_stream(&mut self) -> Stream<'_> {
         // return .initAlloc(self.gpa(), self.vtHandler());
         // PORT NOTE: the reference threads `self.gpa()` (a `std.mem.Allocator`)
-        // into the OSC parser. rustty's `Stream::init_alloc` wants a
+        // into the OSC parser. Rustty's `Stream::init_alloc` wants a
         // `ZigAllocatorRef`; `gpa()` is the global allocator, so we back the OSC
         // parser with the process-static `GLOBAL_ZIG_ALLOCATOR` (see its note).
         let _gpa = self.gpa();
@@ -4586,7 +4586,7 @@ impl Terminal {
                         // `ImageStorage` is deferred (build_options.kitty_graphics
                         // is the disabled case), so these take the disabled-branch
                         // values: `0` and the empty/void limits. The reference's
-                        // `else {}` is the `void` field; the rustty `Options` field
+                        // `else {}` is the `void` field; the Rustty `Options` field
                         // is always `Limits`, so we use `DIRECT` (all-false, the
                         // empty representation) to stand in for the unused `void`.
                         kitty_image_storage_limit: 0,

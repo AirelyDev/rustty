@@ -170,7 +170,7 @@ pub enum SpecialCase<E> {
 
     /// If there is no pending action (we haven't seen an action yet)
     /// then we should return no action. This is kind of weird but is
-    /// a special case to allow "-e" in rustty.
+    /// a special case to allow "-e" in Rustty.
     AbortIfNoAction,
 }
 

@@ -12,7 +12,7 @@
 //
 // This module is the ported equivalent of that generated module: it exposes the
 // exact option keys `Options.add` writes (see `build_options.rs` `Resolved`),
-// resolved for the rustty build. Downstream ported `terminal` code reads these as
+// resolved for the Rustty build. Downstream ported `terminal` code reads these as
 // `crate::options::<KEY>` (mirroring `build_options.<key>` in the reference), and
 // uses them in `if`/`#[cfg(...)]` gates exactly where the reference uses
 // `if (comptime build_options.<key>)`.
@@ -21,12 +21,12 @@
 //   - `kitty_graphics`     = !(arch == .wasm32 and os == .freestanding)
 //   - `tmux_control_mode`  = oniguruma
 // resolved against the current build target (`cfg!(target_arch/target_os)`) and
-// the rustty feature flags below.
+// the Rustty feature flags below.
 
 use crate::build_options::{Artifact, SemanticVersion};
 
 /// The target artifact to build. This will gate some functionality.
-// PORT NOTE: `opts.addOption(Artifact, "artifact", self.artifact)`. rustty builds
+// PORT NOTE: `opts.addOption(Artifact, "artifact", self.artifact)`. Rustty builds
 // the application artifact (the reference `.ghostty`); the `lib` (libghostty-vt)
 // artifact is selected by a later build seam.
 pub const ARTIFACT: Artifact = Artifact::Ghostty;
@@ -52,7 +52,7 @@ pub const SIMD: bool = cfg!(feature = "simd");
 /// safety checks that are slower than typical and should generally be disabled in
 /// production builds.
 // PORT NOTE: `opts.addOption(bool, "slow_runtime_safety", self.slow_runtime_safety)`.
-// rustty ties this to `debug_assertions` (the convention used across this crate,
+// Rustty ties this to `debug_assertions` (the convention used across this crate,
 // e.g. `page.rs`), so the slow checks are present in debug builds and stripped in
 // release — the same lifecycle as the reference build knob.
 pub const SLOW_RUNTIME_SAFETY: bool = cfg!(debug_assertions);
@@ -77,7 +77,7 @@ pub const TMUX_CONTROL_MODE: bool = ONIGURUMA;
 // `std.SemanticVersion.parse` (src/build/Config.zig:307). This crate IS the vt
 // library, so its version is the vt LIB version from `rustty-identity` (the R2
 // identity source of truth) — NOT `CARGO_PKG_VERSION` (the workspace/app
-// version, which only coincidentally matched): `0.1.0` under the rustty
+// version, which only coincidentally matched): `0.1.0` under the Rustty
 // profile, the reference's exact `0.1.0-dev` under `identity-oracle`.
 const VERSION: SemanticVersion = SemanticVersion::parse(rustty_identity::VT_LIB_VERSION);
 
@@ -153,7 +153,7 @@ mod tests {
         assert_eq!(VERSION_STRING, formatted);
     }
 
-    /// Under the default (rustty) profile the vt lib version is `0.1.0`.
+    /// Under the default (Rustty) profile the vt lib version is `0.1.0`.
     #[cfg(not(feature = "identity-oracle"))]
     #[test]
     fn version_is_rustty_vt_lib_version() {

@@ -16,7 +16,7 @@
 // const Allocator = std.mem.Allocator;
 // const ArenaAllocator = std.heap.ArenaAllocator;
 //   PORT NOTE: the reference threads an arena for all the per-run allocations.
-//   rustty uses owned `Vec`/`HashMap` values on the global allocator (RAII), so
+//   Rustty uses owned `Vec`/`HashMap` values on the global allocator (RAII), so
 //   there is no arena to create; the `_arena` bookkeeping is dropped tree-wide.
 // const Action = @import("ghostty.zig").Action;
 use crate::rustty::{Action, Error};
@@ -134,13 +134,13 @@ impl args::Target for Options {
 }
 
 /// The `list-fonts` command is used to list all the available fonts for
-/// rustty. This uses the exact same font discovery mechanism rustty uses to
+/// Rustty. This uses the exact same font discovery mechanism Rustty uses to
 /// find fonts to use.
 ///
 /// When executed with no arguments, this will list all available fonts, sorted
 /// by family name, then font name. If a family name is given with `--family`,
 /// the sorting will be disabled and the results instead will be shown in the
-/// same priority order rustty would use to pick a font.
+/// same priority order Rustty would use to pick a font.
 ///
 /// Flags:
 ///
@@ -155,7 +155,7 @@ impl args::Target for Options {
 ///     prioritized.
 ///
 ///   * `--family`: Filter results to a specific font family. The family handling
-///     is identical to the `font-family` set of rustty configuration values, so
+///     is identical to the `font-family` set of Rustty configuration values, so
 ///     this can be used to debug why your desired font may not be loading.
 // pub fn run(alloc: Allocator) !u8 {
 pub fn run() -> Result<u8, Error> {

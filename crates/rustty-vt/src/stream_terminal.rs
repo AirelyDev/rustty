@@ -862,7 +862,7 @@ impl<'a> Handler<'a> {
     //     self.writePty(resp);
     // }
     //
-    // PORT NOTE (R2 ghostty->rustty): the reference's fallback version string is
+    // PORT NOTE (R2 ghostty->Rustty): the reference's fallback version string is
     // "libghostty"; retargeted to "librustty" per the rename rule. The DCS
     // wrapping (`ESC P > | <version> ESC \`) is unchanged.
     fn report_xtversion(&mut self) {
@@ -1826,7 +1826,7 @@ mod tests {
     use allocator_api2::alloc::Global;
 
     // PORT NOTE: the reference tests construct `Terminal: try .init(testing.allocator,
-    // .{ .cols, .rows })` and drive bytes through a `Stream`. rustty's `Options`
+    // .{ .cols, .rows })` and drive bytes through a `Stream`. Rustty's `Options`
     // has no field defaults, so we supply them via this helper (matching
     // `terminal.rs`'s test `opts`). `max_scrollback` defaults to 10_000 except
     // where a test overrides it.
@@ -2899,7 +2899,7 @@ mod tests {
 
     // test "xtversion default"
     //
-    // PORT NOTE (R2 ghostty->rustty): the reference asserts the fallback version
+    // PORT NOTE (R2 ghostty->Rustty): the reference asserts the fallback version
     // "libghostty"; the retargeted fallback emits "librustty".
     #[test]
     fn xtversion_default() {
@@ -2946,7 +2946,7 @@ mod tests {
 
     // test "xtversion with empty string effect"
     //
-    // PORT NOTE (R2 ghostty->rustty): the empty-string effect falls back to the
+    // PORT NOTE (R2 ghostty->Rustty): the empty-string effect falls back to the
     // retargeted "librustty".
     #[test]
     fn xtversion_with_empty_string_effect() {

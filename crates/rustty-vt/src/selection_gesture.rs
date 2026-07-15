@@ -100,7 +100,7 @@ use crate::terminal::{ScrollViewport, Terminal};
 /// Instant type depends on POSIX timespec for that target, so represent the C
 /// API nanosecond timestamp directly as a u64 there.
 // PORT NOTE: `Time = if (freestanding_wasm) u64 else std.time.Instant`. The
-// rustty target is never freestanding wasm, so `Time` is the Rust monotonic
+// Rustty target is never freestanding wasm, so `Time` is the Rust monotonic
 // clock `std::time::Instant`, the faithful analogue of `std.time.Instant`.
 pub type Time = std::time::Instant;
 

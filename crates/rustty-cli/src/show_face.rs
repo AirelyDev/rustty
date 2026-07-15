@@ -16,7 +16,7 @@
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;
 // const ArenaAllocator = std.heap.ArenaAllocator;
-//   PORT NOTE: the reference threads an arena; rustty uses owned values on the
+//   PORT NOTE: the reference threads an arena; Rustty uses owned values on the
 //   global allocator (RAII), so no arena is created.
 // const Action = @import("ghostty.zig").Action;
 use crate::rustty::{Action, Error};
@@ -190,11 +190,11 @@ impl args::Target for Options {
     }
 }
 
-/// The `show-face` command shows what font face rustty will use to render a
+/// The `show-face` command shows what font face Rustty will use to render a
 /// specific codepoint. Note that this command does not take into consideration
 /// grapheme clustering or any other Unicode features that might modify the
 /// presentation of a codepoint, so this may show a different font face than
-/// rustty uses to render a codepoint in a terminal session.
+/// Rustty uses to render a codepoint in a terminal session.
 ///
 /// Flags:
 ///

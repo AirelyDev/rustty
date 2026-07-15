@@ -3,14 +3,14 @@
 //!
 //! PORTS: ghostty src/main_ghostty.zig — the `main()` dispatch (action → GUI),
 //! `logFn`, and `std_options`. Byte-faithful (R1); the `Ghostty`/`libghostty`
-//! product-identity strings are retargeted to the rustty product name (R2 —
+//! product-identity strings are retargeted to the Rustty product name (R2 —
 //! routed through rustty-identity).
 //!
 //! # ADV-FIX 2 — action DETECTION lives in the BIN
 //!
 //! The reference `main()` calls `state.init()` (global.zig), which detects the
 //! action via `cli.action.detectArgs(cli.ghostty.Action, alloc)` and stores it in
-//! the process-global `GlobalState.action`. In rustty that detection CANNOT live
+//! the process-global `GlobalState.action`. In Rustty that detection CANNOT live
 //! in `rustty_apprt::init` (apprt sits below cli in the port order, so calling cli
 //! there cycles `apprt→cli`), and `rustty_core::STATE` is bound `Action=()` and
 //! cannot hold a cli action. So the `rustty` BIN — which legitimately deps cli —
@@ -155,7 +155,7 @@ pub fn main() {
                 //     "Error: unknown CLI action specified. CLI actions are specified with\n" ++
                 //         "the '+' character.\n\n" ++
                 //         "All valid CLI actions can be listed with `ghostty +help`\n", .{}),
-                //   R2: "ghostty" -> the rustty product name (rustty-identity APP_NAME).
+                //   R2: "ghostty" -> the Rustty product name (rustty-identity APP_NAME).
                 InitError::Detect(DetectError::InvalidAction) => {
                     let msg = format!(
                         "Error: unknown CLI action specified. CLI actions are specified with\n\
@@ -191,7 +191,7 @@ pub fn main() {
     //     std.log.warn("You should only use a debug build for developing Ghostty.", .{});
     //     std.log.warn("Otherwise, please rebuild in a release mode.", .{});
     // }
-    //   R2: "developing Ghostty" -> "developing rustty".
+    //   R2: "developing Ghostty" -> "developing Rustty".
     if cfg!(debug_assertions) {
         log_fn(
             LogLevel::Warn,
@@ -200,7 +200,7 @@ pub fn main() {
         );
         log_fn(
             LogLevel::Warn,
-            "You should only use a debug build for developing rustty.",
+            "You should only use a debug build for developing Rustty.",
             &state.logging,
         );
         log_fn(
@@ -241,7 +241,7 @@ pub fn main() {
         let mut stdout = std::io::stdout().lock();
         // try stdout.print("Usage: ghostty +<action> [flags]\n\n", .{});
         // try stdout.print(\\This is the Ghostty helper CLI ... \\, .{});
-        //   R2: "ghostty" / "Ghostty" / "Ghostty.app" -> the rustty product name.
+        //   R2: "ghostty" / "Ghostty" / "Ghostty.app" -> the Rustty product name.
         let app = rustty_identity::APP_NAME;
         let banner = format!(
             "Usage: {app} +<action> [flags]\n\n\
@@ -444,7 +444,7 @@ mod tests {
     //
     // PORT NOTE: the reference's anonymous `test {}` `refAllDecls`-style block
     // reifies the whole ghostty module graph so `zig build test` compiles every
-    // subsystem. In rustty those subsystems are SEPARATE crates, each with its own
+    // subsystem. In Rustty those subsystems are SEPARATE crates, each with its own
     // `cargo test` (the workspace test graph), so a bin test cannot (and need not)
     // re-`_ =` them. The Rust analogue touches the `rustty` exe's own real dispatch
     // surface — the cli action dispatcher (the entrypoint the bin actually drives)
