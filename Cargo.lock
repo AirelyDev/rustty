@@ -792,6 +792,7 @@ dependencies = [
  "rustty-renderer",
  "rustty-util",
  "rustty-vt",
+ "rustty-xev",
 ]
 
 [[package]]

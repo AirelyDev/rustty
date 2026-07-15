@@ -2911,7 +2911,7 @@ where
             // instantaneously (immediately decayed to raw + stored); core never holds
             // a protected `&mut Inspector` spanning the renderer's raw reads.
             let info_ref: &mut dyn rendererpkg::state::InspectorOverlay =
-                unsafe { &mut (*ptr).renderer_info };
+                unsafe { &mut (*ptr).gui.renderer_info };
             let info_ptr: *mut rendererpkg::state::Inspector = info_ref;
             self.renderer_state.inspector = Some(info_ptr);
             unsafe { (*self.renderer_state.mutex).unlock() };
@@ -13829,7 +13829,7 @@ mod inspector_lifecycle_tests {
         let mut insp = inspectorpkg::Inspector::init(Allocator);
 
         // Exactly the coercion `activateInspector` stores onto renderer_state.inspector.
-        let info_ref: &mut dyn rendererpkg::state::InspectorOverlay = &mut insp.renderer_info;
+        let info_ref: &mut dyn rendererpkg::state::InspectorOverlay = &mut insp.gui.renderer_info;
         let info_ptr: *mut rendererpkg::state::Inspector = info_ref;
 
         // The renderer reads overlay features through the fat pointer.

@@ -44,13 +44,15 @@
 // module's Task 7/9 helpers; `units.toKibiBytes` is the crate leaf.
 use core::ffi::{c_char, c_int, CStr};
 
-use rustty_vt::color::Palette;
+use rustty_vt::color::{DynamicPalette, Palette};
 use rustty_vt::kitty::graphics::ImageStorage;
 use rustty_vt::osc::semantic_prompt::{Click, ClickEvents};
 use rustty_vt::pagelist::Viewport;
 use rustty_vt::screen::{Cursor, Screen, SemanticClick, SemanticPrompt};
+use rustty_vt::screen_set::Key;
 
 use super::helpMarker;
+use super::pagelist;
 use crate::units;
 
 /// Minimal `defer`-style scope guard — runs `f` on drop (mirrors the private
@@ -67,171 +69,320 @@ impl<F: FnMut()> Drop for Defer<F> {
 }
 
 // ============================================================================
-// PORT NOTE (Task 11 — DEFERRED aggregate, pagelist Task 13):
+// PORT STATUS (Task 11 fold): `widgets::pagelist` (Task 13) landed, so the
+// `Info` aggregate + `draw`/`createDockSpace` below are now INHABITED (R1
+// verbatim-body fidelity; the original commented-out reference stays attached
+// to each translated line, matching the rest of this file).
 //
-// `/// Window names for the screen dockspace.`
+/// Window names for the screen dockspace.
 // const window_info = "Info";
+const WINDOW_INFO: &CStr = c"Info";
 // const window_cell = "Cell";
+const WINDOW_CELL: &CStr = c"Cell";
 // const window_pagelist = "PageList";
-//
-// The `Info` aggregate + its `draw`/`createDockSpace` embed
-// `widgets.pagelist.Inspector` and `widgets.pagelist.CellChooser`, which are
-// the Phase-3 `pagelist.rs` port (Task 13, not yet landed). They are carried
-// here as the preserved verbatim reference body (R1 comment fidelity) and
-// inhabit in place once `widgets::pagelist` exists — exactly the
-// placeholder-leaf grows-in-place doctrine used by renderer.rs (draw half) and
-// lib.rs (the `gui` aggregate). The six free-function tables it calls into
-// (`cursorTable`/`cursorStyle`/`keyboardTable`/`semanticPromptTable`/
-// `kittyGraphicsTable`/`internalStateTable`) ARE ported LIVE below.
-//
+const WINDOW_PAGELIST: &CStr = c"PageList";
+
 // The reference draw obtains its `screen: *terminal.Screen`,
 // `color_palette: *const terminal.color.DynamicPalette`, `key`/`active_key:
 // terminal.ScreenSet.Key`, and `modify_other_keys_2: bool` as an anonymous
 // `data` params struct — all BORROW_PARAM, call-scoped under the surface mutex
 // (INV-1); the `*Screen`/`*DynamicPalette` are never cached (INV-6 re-fetch).
-// When inhabited, that anonymous `data` struct becomes a named `DrawData`
-// params struct (the S6 note).
-//
-// /// Screen information inspector widget.
+// PORT NOTE (S6 note): the anonymous `data` struct is this named `DrawData`
+// params struct.
+pub struct DrawData<'a> {
+    /// The screen that we're inspecting.
+    pub screen: &'a mut Screen,
+    /// Which screen key we're viewing.
+    pub key: Key,
+    /// Which screen is active (primary or alternate).
+    pub active_key: Key,
+    /// Whether xterm modify other keys mode 2 is enabled.
+    pub modify_other_keys_2: bool,
+    /// Color palette for cursor color resolution.
+    pub color_palette: &'a DynamicPalette,
+}
+
+/// Screen information inspector widget.
 // pub const Info = struct {
-//     pagelist: widgets.pagelist.Inspector,
-//     cell_chooser: widgets.pagelist.CellChooser,
-//
-//     pub const empty: Info = .{
-//         .pagelist = .empty,
-//         .cell_chooser = .empty,
-//     };
-//
-//     /// Draw the screen info contents.
-//     pub fn draw(self: *Info, open: bool, data: struct {
-//         /// The screen that we're inspecting.
-//         screen: *terminal.Screen,
-//         /// Which screen key we're viewing.
-//         key: terminal.ScreenSet.Key,
-//         /// Which screen is active (primary or alternate).
-//         active_key: terminal.ScreenSet.Key,
-//         /// Whether xterm modify other keys mode 2 is enabled.
-//         modify_other_keys_2: bool,
-//         /// Color palette for cursor color resolution.
-//         color_palette: *const terminal.color.DynamicPalette,
-//     }) void {
-//         // Create the dockspace for this screen
-//         const dockspace_id = cimgui.c.ImGui_GetID("Screen Dockspace");
-//         _ = createDockSpace(dockspace_id);
-//
-//         const screen = data.screen;
-//
-//         // Info window
-//         info: {
-//             defer cimgui.c.ImGui_End();
-//             if (!cimgui.c.ImGui_Begin(
-//                 window_info,
-//                 null,
-//                 cimgui.c.ImGuiWindowFlags_NoFocusOnAppearing,
-//             )) break :info;
-//
-//             if (cimgui.c.ImGui_CollapsingHeader(
-//                 "Cursor",
-//                 cimgui.c.ImGuiTreeNodeFlags_DefaultOpen,
-//             )) {
-//                 cursorTable(&screen.cursor);
-//                 cimgui.c.ImGui_Separator();
-//                 cursorStyle(
-//                     &screen.cursor,
-//                     &data.color_palette.current,
-//                 );
-//             }
-//
-//             if (cimgui.c.ImGui_CollapsingHeader(
-//                 "Keyboard",
-//                 cimgui.c.ImGuiTreeNodeFlags_DefaultOpen,
-//             )) keyboardTable(
-//                 screen,
-//                 data.modify_other_keys_2,
-//             );
-//
-//             if (cimgui.c.ImGui_CollapsingHeader(
-//                 "Semantic Prompt",
-//                 cimgui.c.ImGuiTreeNodeFlags_DefaultOpen,
-//             )) semanticPromptTable(&screen.semantic_prompt);
-//
-//             if (cimgui.c.ImGui_CollapsingHeader(
-//                 "Kitty Graphics",
-//                 cimgui.c.ImGuiTreeNodeFlags_DefaultOpen,
-//             )) kittyGraphicsTable(&screen.kitty_images);
-//
-//             if (cimgui.c.ImGui_CollapsingHeader(
-//                 "Other Screen State",
-//                 cimgui.c.ImGuiTreeNodeFlags_DefaultOpen,
-//             )) internalStateTable(screen);
-//         }
-//
-//         // Cell window
-//         cell: {
-//             defer cimgui.c.ImGui_End();
-//             if (!cimgui.c.ImGui_Begin(
-//                 window_cell,
-//                 null,
-//                 cimgui.c.ImGuiWindowFlags_NoFocusOnAppearing,
-//             )) break :cell;
-//             self.cell_chooser.draw(&screen.pages);
-//         }
-//
-//         // PageList window
-//         pagelist: {
-//             defer cimgui.c.ImGui_End();
-//             if (!cimgui.c.ImGui_Begin(
-//                 window_pagelist,
-//                 null,
-//                 cimgui.c.ImGuiWindowFlags_NoFocusOnAppearing,
-//             )) break :pagelist;
-//             self.pagelist.draw(&screen.pages);
-//         }
-//
-//         // The remainder is the open state
-//         if (!open) return;
-//
-//         // Show warning if viewing an inactive screen
-//         if (data.key != data.active_key) {
-//             cimgui.c.ImGui_TextColored(
-//                 .{ .x = 1.0, .y = 0.8, .z = 0.0, .w = 1.0 },
-//                 "⚠ Viewing inactive screen",
-//             );
-//             cimgui.c.ImGui_Separator();
-//         }
-//     }
-//
-//     /// Create the dock space for the screen inspector. This creates
-//     /// a dedicated dock space for the screen inspector windows. But they
-//     /// can of course be undocked and moved around as desired.
-//     fn createDockSpace(dockspace_id: cimgui.c.ImGuiID) bool {
-//         // Check if we need to set up the dockspace
-//         const setup = cimgui.ImGui_DockBuilderGetNode(dockspace_id) == null;
-//
-//         if (setup) {
-//             // Register our dockspace node
-//             assert(cimgui.ImGui_DockBuilderAddNodeEx(
-//                 dockspace_id,
-//                 cimgui.ImGuiDockNodeFlagsPrivate.DockSpace,
-//             ) == dockspace_id);
-//
-//             // Dock windows into the space
-//             cimgui.ImGui_DockBuilderDockWindow(window_info, dockspace_id);
-//             cimgui.ImGui_DockBuilderDockWindow(window_cell, dockspace_id);
-//             cimgui.ImGui_DockBuilderDockWindow(window_pagelist, dockspace_id);
-//             cimgui.ImGui_DockBuilderFinish(dockspace_id);
-//         }
-//
-//         // Create the dockspace
-//         assert(cimgui.c.ImGui_DockSpaceEx(
-//             dockspace_id,
-//             .{ .x = 0, .y = 0 },
-//             cimgui.c.ImGuiDockNodeFlags_None,
-//             null,
-//         ) == dockspace_id);
-//         return setup;
-//     }
-// };
+pub struct Info {
+    // pagelist: widgets.pagelist.Inspector,
+    pagelist: pagelist::Inspector,
+    // cell_chooser: widgets.pagelist.CellChooser,
+    cell_chooser: pagelist::CellChooser,
+}
+
+impl Info {
+    // pub const empty: Info = .{
+    //     .pagelist = .empty,
+    //     .cell_chooser = .empty,
+    // };
+    pub const fn empty() -> Info {
+        Info {
+            pagelist: pagelist::Inspector::EMPTY,
+            cell_chooser: pagelist::CellChooser::EMPTY,
+        }
+    }
+
+    /// Draw the screen info contents.
+    // pub fn draw(self: *Info, open: bool, data: struct {...}) void {
+    #[allow(non_snake_case)] // faithful Zig name (R1)
+    pub fn draw(&mut self, open: bool, data: DrawData<'_>) {
+        // Create the dockspace for this screen
+        // const dockspace_id = cimgui.c.ImGui_GetID("Screen Dockspace");
+        let dockspace_id = unsafe { dcimgui_sys::ImGui_GetID(c"Screen Dockspace".as_ptr()) };
+        // _ = createDockSpace(dockspace_id);
+        let _ = Self::createDockSpace(dockspace_id);
+
+        // const screen = data.screen;
+        let screen = data.screen;
+
+        // Info window
+        // info: {
+        'info: {
+            // defer cimgui.c.ImGui_End();
+            let _end = Defer(|| unsafe { dcimgui_sys::ImGui_End() });
+            // if (!cimgui.c.ImGui_Begin(
+            //     window_info,
+            //     null,
+            //     cimgui.c.ImGuiWindowFlags_NoFocusOnAppearing,
+            // )) break :info;
+            if !unsafe {
+                dcimgui_sys::ImGui_Begin(
+                    WINDOW_INFO.as_ptr(),
+                    core::ptr::null_mut(),
+                    dcimgui_sys::ImGuiWindowFlags__ImGuiWindowFlags_NoFocusOnAppearing
+                        as dcimgui_sys::ImGuiWindowFlags,
+                )
+            } {
+                break 'info;
+            }
+
+            // if (cimgui.c.ImGui_CollapsingHeader(
+            //     "Cursor",
+            //     cimgui.c.ImGuiTreeNodeFlags_DefaultOpen,
+            // )) {
+            if unsafe {
+                dcimgui_sys::ImGui_CollapsingHeader(
+                    c"Cursor".as_ptr(),
+                    dcimgui_sys::ImGuiTreeNodeFlags__ImGuiTreeNodeFlags_DefaultOpen
+                        as dcimgui_sys::ImGuiTreeNodeFlags,
+                )
+            } {
+                // cursorTable(&screen.cursor);
+                cursorTable(&screen.cursor);
+                // cimgui.c.ImGui_Separator();
+                unsafe { dcimgui_sys::ImGui_Separator() };
+                // cursorStyle(
+                //     &screen.cursor,
+                //     &data.color_palette.current,
+                // );
+                cursorStyle(&screen.cursor, Some(&data.color_palette.current));
+            }
+
+            // if (cimgui.c.ImGui_CollapsingHeader(
+            //     "Keyboard",
+            //     cimgui.c.ImGuiTreeNodeFlags_DefaultOpen,
+            // )) keyboardTable(
+            //     screen,
+            //     data.modify_other_keys_2,
+            // );
+            if unsafe {
+                dcimgui_sys::ImGui_CollapsingHeader(
+                    c"Keyboard".as_ptr(),
+                    dcimgui_sys::ImGuiTreeNodeFlags__ImGuiTreeNodeFlags_DefaultOpen
+                        as dcimgui_sys::ImGuiTreeNodeFlags,
+                )
+            } {
+                keyboardTable(screen, data.modify_other_keys_2);
+            }
+
+            // if (cimgui.c.ImGui_CollapsingHeader(
+            //     "Semantic Prompt",
+            //     cimgui.c.ImGuiTreeNodeFlags_DefaultOpen,
+            // )) semanticPromptTable(&screen.semantic_prompt);
+            if unsafe {
+                dcimgui_sys::ImGui_CollapsingHeader(
+                    c"Semantic Prompt".as_ptr(),
+                    dcimgui_sys::ImGuiTreeNodeFlags__ImGuiTreeNodeFlags_DefaultOpen
+                        as dcimgui_sys::ImGuiTreeNodeFlags,
+                )
+            } {
+                semanticPromptTable(&screen.semantic_prompt);
+            }
+
+            // if (cimgui.c.ImGui_CollapsingHeader(
+            //     "Kitty Graphics",
+            //     cimgui.c.ImGuiTreeNodeFlags_DefaultOpen,
+            // )) kittyGraphicsTable(&screen.kitty_images);
+            if unsafe {
+                dcimgui_sys::ImGui_CollapsingHeader(
+                    c"Kitty Graphics".as_ptr(),
+                    dcimgui_sys::ImGuiTreeNodeFlags__ImGuiTreeNodeFlags_DefaultOpen
+                        as dcimgui_sys::ImGuiTreeNodeFlags,
+                )
+            } {
+                kittyGraphicsTable(&screen.kitty_images);
+            }
+
+            // if (cimgui.c.ImGui_CollapsingHeader(
+            //     "Other Screen State",
+            //     cimgui.c.ImGuiTreeNodeFlags_DefaultOpen,
+            // )) internalStateTable(screen);
+            if unsafe {
+                dcimgui_sys::ImGui_CollapsingHeader(
+                    c"Other Screen State".as_ptr(),
+                    dcimgui_sys::ImGuiTreeNodeFlags__ImGuiTreeNodeFlags_DefaultOpen
+                        as dcimgui_sys::ImGuiTreeNodeFlags,
+                )
+            } {
+                internalStateTable(screen);
+            }
+        }
+
+        // Cell window
+        // cell: {
+        'cell: {
+            // defer cimgui.c.ImGui_End();
+            let _end = Defer(|| unsafe { dcimgui_sys::ImGui_End() });
+            // if (!cimgui.c.ImGui_Begin(
+            //     window_cell,
+            //     null,
+            //     cimgui.c.ImGuiWindowFlags_NoFocusOnAppearing,
+            // )) break :cell;
+            if !unsafe {
+                dcimgui_sys::ImGui_Begin(
+                    WINDOW_CELL.as_ptr(),
+                    core::ptr::null_mut(),
+                    dcimgui_sys::ImGuiWindowFlags__ImGuiWindowFlags_NoFocusOnAppearing
+                        as dcimgui_sys::ImGuiWindowFlags,
+                )
+            } {
+                break 'cell;
+            }
+            // self.cell_chooser.draw(&screen.pages);
+            self.cell_chooser.draw(&screen.pages);
+        }
+
+        // PageList window
+        // pagelist: {
+        'pagelist: {
+            // defer cimgui.c.ImGui_End();
+            let _end = Defer(|| unsafe { dcimgui_sys::ImGui_End() });
+            // if (!cimgui.c.ImGui_Begin(
+            //     window_pagelist,
+            //     null,
+            //     cimgui.c.ImGuiWindowFlags_NoFocusOnAppearing,
+            // )) break :pagelist;
+            if !unsafe {
+                dcimgui_sys::ImGui_Begin(
+                    WINDOW_PAGELIST.as_ptr(),
+                    core::ptr::null_mut(),
+                    dcimgui_sys::ImGuiWindowFlags__ImGuiWindowFlags_NoFocusOnAppearing
+                        as dcimgui_sys::ImGuiWindowFlags,
+                )
+            } {
+                break 'pagelist;
+            }
+            // self.pagelist.draw(&screen.pages);
+            self.pagelist.draw(&mut screen.pages);
+        }
+
+        // The remainder is the open state
+        // if (!open) return;
+        if !open {
+            return;
+        }
+
+        // Show warning if viewing an inactive screen
+        // if (data.key != data.active_key) {
+        if data.key != data.active_key {
+            // cimgui.c.ImGui_TextColored(
+            //     .{ .x = 1.0, .y = 0.8, .z = 0.0, .w = 1.0 },
+            //     "⚠ Viewing inactive screen",
+            // );
+            unsafe {
+                dcimgui_sys::ImGui_TextColored(
+                    dcimgui_sys::ImVec4 {
+                        x: 1.0,
+                        y: 0.8,
+                        z: 0.0,
+                        w: 1.0,
+                    },
+                    c"\u{26a0} Viewing inactive screen".as_ptr(),
+                )
+            };
+            // cimgui.c.ImGui_Separator();
+            unsafe { dcimgui_sys::ImGui_Separator() };
+        }
+    }
+
+    /// Create the dock space for the screen inspector. This creates
+    /// a dedicated dock space for the screen inspector windows. But they
+    /// can of course be undocked and moved around as desired.
+    // fn createDockSpace(dockspace_id: cimgui.c.ImGuiID) bool {
+    #[allow(non_snake_case)] // faithful Zig name (R1)
+    fn createDockSpace(dockspace_id: dcimgui_sys::ImGuiID) -> bool {
+        // Check if we need to set up the dockspace
+        // const setup = cimgui.ImGui_DockBuilderGetNode(dockspace_id) == null;
+        let setup = unsafe { dcimgui_sys::ImGui_DockBuilderGetNode(dockspace_id) }.is_null();
+
+        // if (setup) {
+        if setup {
+            // Register our dockspace node
+            // assert(cimgui.ImGui_DockBuilderAddNodeEx(
+            //     dockspace_id,
+            //     cimgui.ImGuiDockNodeFlagsPrivate.DockSpace,
+            // ) == dockspace_id);
+            assert_eq!(
+                unsafe {
+                    dcimgui_sys::ImGui_DockBuilderAddNodeEx(
+                        dockspace_id,
+                        dcimgui_sys::IM_GUI_DOCK_NODE_FLAGS_PRIVATE_DOCK_SPACE,
+                    )
+                },
+                dockspace_id
+            );
+
+            // Dock windows into the space
+            // cimgui.ImGui_DockBuilderDockWindow(window_info, dockspace_id);
+            unsafe {
+                dcimgui_sys::ImGui_DockBuilderDockWindow(WINDOW_INFO.as_ptr(), dockspace_id)
+            };
+            // cimgui.ImGui_DockBuilderDockWindow(window_cell, dockspace_id);
+            unsafe {
+                dcimgui_sys::ImGui_DockBuilderDockWindow(WINDOW_CELL.as_ptr(), dockspace_id)
+            };
+            // cimgui.ImGui_DockBuilderDockWindow(window_pagelist, dockspace_id);
+            unsafe {
+                dcimgui_sys::ImGui_DockBuilderDockWindow(WINDOW_PAGELIST.as_ptr(), dockspace_id)
+            };
+            // cimgui.ImGui_DockBuilderFinish(dockspace_id);
+            unsafe { dcimgui_sys::ImGui_DockBuilderFinish(dockspace_id) };
+        }
+
+        // Create the dockspace
+        // assert(cimgui.c.ImGui_DockSpaceEx(
+        //     dockspace_id,
+        //     .{ .x = 0, .y = 0 },
+        //     cimgui.c.ImGuiDockNodeFlags_None,
+        //     null,
+        // ) == dockspace_id);
+        assert_eq!(
+            unsafe {
+                dcimgui_sys::ImGui_DockSpaceEx(
+                    dockspace_id,
+                    dcimgui_sys::ImVec2 { x: 0.0, y: 0.0 },
+                    dcimgui_sys::ImGuiDockNodeFlags__ImGuiDockNodeFlags_None
+                        as dcimgui_sys::ImGuiDockNodeFlags,
+                    core::ptr::null(),
+                )
+            },
+            dockspace_id
+        );
+        // return setup;
+        setup
+    }
+}
 // ============================================================================
 
 /// Render cursor state with a table of cursor-specific fields.
@@ -377,9 +528,9 @@ pub fn cursorStyle(cursor: &Cursor, palette: Option<&Palette>) {
 //     modify_other_keys_2: bool,
 // ) void {
 //
-// PORT NOTE: `pub` (not the reference's file-private `fn`) so the DEFERRED
-// `Info.draw` (which calls it) still reaches it once inhabited; `*const Screen`
-// is a call-scoped borrow (INV-1).
+// PORT NOTE: `pub` (not the reference's file-private `fn`) so `Info.draw`
+// (which calls it, now inhabited above) can reach it; `*const Screen` is a
+// call-scoped borrow (INV-1).
 #[allow(non_snake_case)] // faithful Zig name (R1)
 pub fn keyboardTable(screen: &Screen, modify_other_keys_2: bool) {
     // if (!cimgui.c.ImGui_BeginTable(

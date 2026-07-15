@@ -19,17 +19,13 @@
 //!     below (INV-4: `t.modes.get(mode)` is display-only).
 //!
 //! The `Info` aggregate struct + `ScreenMap = EnumMap(ScreenSet.Key,
-//! screen.Info)` + its `draw`/`drawOpen`/`screensTable` are carried as the
-//! preserved-verbatim reference body (R1) in the DEFERRED block below. Their
-//! sole missing dependency is `widgets.screen.Info` — the Task-11 screen
-//! aggregate, which is itself gated on three unbound dcimgui-sys DockBuilder
-//! symbols (`ImGui_DockBuilderGetNode`, `ImGui_DockBuilderAddNodeEx`,
-//! `ImGuiDockNodeFlagsPrivate::DockSpace`, used by `screen.Info.createDockSpace`
-//! / `.draw`). Per the placeholder-leaf grows-in-place doctrine (the exact shape
-//! `screen.rs` uses to carry ITS deferred `Info`), the `Info`/`ScreenMap`/screen
-//! -window trio inhabits in place once `screen::Info` lands. The INV-6 per-frame
-//! re-fetch/removal (`t.screens.get(entry.key) orelse remove`, `!screen_open =>
-//! remove`) lives inside that deferred `draw` and is preserved verbatim.
+//! screen.Info)` + its `draw`/`drawOpen`/`screensTable` are now INHABITED below
+//! (R1 verbatim-body fidelity) — their sole dependency, `widgets.screen.Info`
+//! (the Task-11 screen aggregate, itself gated on the `ImGui_DockBuilderGetNode`
+//! / `ImGui_DockBuilderAddNodeEx` / `ImGuiDockNodeFlagsPrivate::DockSpace`
+//! DockBuilder set used by `screen.Info.createDockSpace`/`.draw`), has landed.
+//! The INV-6 per-frame re-fetch/removal (`t.screens.get(entry.key) orelse
+//! remove`, `!screen_open => remove`) lives inside `draw`, preserved verbatim.
 //!
 //! All bodies run on the main thread with the surface's ImGui context current
 //! (INV-11).
@@ -51,13 +47,17 @@
 // color.DynamicRGB`/`.Palette`/`.RGB` in `color`, and `mouse.Event`/`.Format`/
 // `.Shape` in `mouse`. `widgets.helpMarker` is the parent module's Task 7 helper.
 use core::ffi::{c_char, c_int, c_uint, c_void, CStr};
+use core::fmt::Write as _;
 
 use rustty_vt::color::{DynamicRGB, Palette};
 use rustty_vt::modes::{Mode, ModeTag};
 use rustty_vt::mouse::{Event as MouseEvent, Format as MouseFormat, Shape as MouseShape};
+use rustty_vt::screen_set::Key;
 use rustty_vt::terminal::{MouseShiftCapture, ScrollingRegion, Terminal};
 
 use super::helpMarker;
+use super::screen;
+use crate::widgets::DetachableHeader;
 
 /// Minimal `defer`-style scope guard — runs `f` on drop (mirrors the private
 /// `Defer` in `widgets.rs`/`screen.rs`). Backs the ImGui `BeginTable`/`EndTable`,
@@ -74,250 +74,557 @@ impl<F: FnMut()> Drop for Defer<F> {
 }
 
 // ============================================================================
-// PORT NOTE (Task 14 — DEFERRED aggregate, gated on `widgets::screen::Info`):
+// PORT STATUS (Task 14 fold): `widgets::screen::Info` (Task 11) landed, so the
+// `Info` aggregate + `ScreenMap` + `draw`/`drawOpen`/`screensTable` below are
+// now INHABITED (R1 verbatim-body fidelity). The INV-6 per-frame re-fetch/
+// removal lives inside `draw`, preserved verbatim below.
 //
-// The `Info` aggregate + `ScreenMap = std.EnumMap(terminal.ScreenSet.Key,
-// widgets.screen.Info)` + its `draw`/`drawOpen` + the `screensTable` free
-// function all name `widgets.screen.Info` (the ScreenMap VALUE type, and
-// `entry.value.draw(...)`). `screen::Info` is the deferred Task-11 aggregate —
-// NOT yet inhabited because its `createDockSpace`/`draw` require three
-// dcimgui-sys DockBuilder symbols that are NOT bound today:
-// `ImGui_DockBuilderGetNode`, `ImGui_DockBuilderAddNodeEx`, and the private
-// `ImGuiDockNodeFlagsPrivate.DockSpace` flag (only `SplitNode`/`DockWindow`/
-// `Finish` are wired in `crates-sys/dcimgui-sys/src/lib.rs`). So per the
-// placeholder-leaf grows-in-place doctrine (the exact shape `screen.rs` uses to
-// carry its own deferred `Info`), the `Info`/`ScreenMap`/`screensTable` trio is
-// carried here as the verbatim reference body (R1) and inhabits in place once
-// `screen::Info` lands. The INV-6 per-frame re-fetch/removal is inside `draw`.
-//
-// pub const Info = struct {
-//     /// True if we're showing the 256-color palette window.
-//     show_palette: bool,
-//
-//     /// The various detachable headers.
-//     misc_header: widgets.DetachableHeader,
-//     layout_header: widgets.DetachableHeader,
-//     mouse_header: widgets.DetachableHeader,
-//     color_header: widgets.DetachableHeader,
-//     modes_header: widgets.DetachableHeader,
-//
-//     /// Screen detail windows for each screen key.
-//     screens: ScreenMap,
-//
-//     pub const empty: Info = .{
-//         .show_palette = false,
-//         .misc_header = .{},
-//         .layout_header = .{},
-//         .mouse_header = .{},
-//         .color_header = .{},
-//         .modes_header = .{},
-//         .screens = .{},
-//     };
-//
-//     /// Draw the terminal info window.
-//     pub fn draw(
-//         self: *Info,
-//         open: bool,
-//         t: *Terminal,
-//     ) void {
-//         // Draw our open state if we're open.
-//         if (open) self.drawOpen(t);
-//
-//         // Draw our detached state that draws regardless of if
-//         // we're open or not.
-//         if (self.misc_header.window("Terminal Misc")) |visible| {
-//             defer self.misc_header.windowEnd();
-//             if (visible) miscTable(t);
-//         }
-//         if (self.layout_header.window("Terminal Layout")) |visible| {
-//             defer self.layout_header.windowEnd();
-//             if (visible) layoutTable(t);
-//         }
-//         if (self.mouse_header.window("Terminal Mouse")) |visible| {
-//             defer self.mouse_header.windowEnd();
-//             if (visible) mouseTable(t);
-//         }
-//         if (self.color_header.window("Terminal Color")) |visible| {
-//             defer self.color_header.windowEnd();
-//             if (visible) colorTable(t, &self.show_palette);
-//         }
-//         if (self.modes_header.window("Terminal Modes")) |visible| {
-//             defer self.modes_header.windowEnd();
-//             if (visible) modesTable(t);
-//         }
-//
-//         // Palette pop-out window
-//         if (self.show_palette) {
-//             defer cimgui.c.ImGui_End();
-//             if (cimgui.c.ImGui_Begin(
-//                 "256-Color Palette",
-//                 &self.show_palette,
-//                 cimgui.c.ImGuiWindowFlags_NoFocusOnAppearing,
-//             )) {
-//                 palette("palette", &t.colors.palette.current);
-//             }
-//         }
-//
-//         // Screen pop-out windows
-//         var it = self.screens.iterator();
-//         while (it.next()) |entry| {
-//             const screen = t.screens.get(entry.key) orelse {
-//                 // Could happen if we opened up a window for a screen
-//                 // and that screen was subsequently deinitialized. In
-//                 // this case, hide the window.
-//                 self.screens.remove(entry.key);
-//                 continue;
-//             };
-//
-//             var title_buf: [128]u8 = undefined;
-//             const title = std.fmt.bufPrintZ(
-//                 &title_buf,
-//                 "Screen: {t}",
-//                 .{entry.key},
-//             ) catch "Screen";
-//
-//             // Setup our next window so it has some size to it.
-//             const viewport = cimgui.c.ImGui_GetMainViewport();
-//             cimgui.c.ImGui_SetNextWindowSize(
-//                 .{
-//                     .x = @min(400, viewport.*.Size.x),
-//                     .y = @min(300, viewport.*.Size.y),
-//                 },
-//                 cimgui.c.ImGuiCond_FirstUseEver,
-//             );
-//
-//             var screen_open: bool = true;
-//             defer cimgui.c.ImGui_End();
-//             const screen_draw = cimgui.c.ImGui_Begin(
-//                 title,
-//                 &screen_open,
-//                 cimgui.c.ImGuiWindowFlags_NoFocusOnAppearing,
-//             );
-//             entry.value.draw(screen_draw, .{
-//                 .screen = screen,
-//                 .key = entry.key,
-//                 .active_key = t.screens.active_key,
-//                 .modify_other_keys_2 = t.flags.modify_other_keys_2,
-//                 .color_palette = &t.colors.palette,
-//             });
-//
-//             // If the window was closed, remove it from our map so future
-//             // renders don't draw it.
-//             if (!screen_open) self.screens.remove(entry.key);
-//         }
-//     }
-//
-//     fn drawOpen(self: *Info, t: *Terminal) void {
-//         // Show our screens up top.
-//         screensTable(t, &self.screens);
-//
-//         if (self.misc_header.header("Misc")) miscTable(t);
-//         if (self.layout_header.header("Layout")) layoutTable(t);
-//         if (self.mouse_header.header("Mouse")) mouseTable(t);
-//         if (self.color_header.header("Color")) colorTable(t, &self.show_palette);
-//         if (self.modes_header.header("Modes")) modesTable(t);
-//     }
-// };
-//
+// The known `terminal.ScreenSet.Key` set (`std.meta.tags`, §3 hand-expansion —
+// `Key::COUNT == 2`, `screen_set.rs`).
+const SCREEN_KEYS: &[Key] = &[Key::Primary, Key::Alternate];
+
+/// `@tagName(key)` hand-expansion (§3) for the `ScreenSet.Key` enum.
+fn screen_key_name(key: Key) -> &'static str {
+    match key {
+        Key::Primary => "primary",
+        Key::Alternate => "alternate",
+    }
+}
+
 // pub const ScreenMap = std.EnumMap(
 //     terminal.ScreenSet.Key,
 //     widgets.screen.Info,
 // );
 //
-// /// Render the table of possible screens with various actions.
+// PORT NOTE: `std.EnumMap(Key, screen.Info)` ports to a per-key fixed array of
+// optional owned values (the `ScreenSet.all`/`apc.max_bytes` EnumMap precedent),
+// indexed by `Key as usize`, with the small map surface (`contains`/`put`/
+// `remove`/`get_mut`) this file's `draw`/`drawOpen`/`screensTable` actually use.
+pub struct ScreenMap {
+    entries: [Option<screen::Info>; Key::COUNT],
+}
+
+impl ScreenMap {
+    pub fn new() -> ScreenMap {
+        // `screen::Info` is not `Copy` (it owns `pagelist::{Inspector,
+        // CellChooser}` state), so the 2-element all-`None` literal is spelled
+        // out rather than `[None; Key::COUNT]`.
+        ScreenMap {
+            entries: [None, None],
+        }
+    }
+
+    pub fn contains(&self, key: Key) -> bool {
+        self.entries[key as usize].is_some()
+    }
+
+    pub fn put(&mut self, key: Key, value: screen::Info) {
+        self.entries[key as usize] = Some(value);
+    }
+
+    pub fn remove(&mut self, key: Key) {
+        self.entries[key as usize] = None;
+    }
+
+    pub fn get_mut(&mut self, key: Key) -> Option<&mut screen::Info> {
+        self.entries[key as usize].as_mut()
+    }
+}
+
+impl Default for ScreenMap {
+    fn default() -> ScreenMap {
+        ScreenMap::new()
+    }
+}
+
+// pub const Info = struct {
+pub struct Info {
+    /// True if we're showing the 256-color palette window.
+    // show_palette: bool,
+    show_palette: bool,
+
+    /// The various detachable headers.
+    // misc_header: widgets.DetachableHeader,
+    // layout_header: widgets.DetachableHeader,
+    // mouse_header: widgets.DetachableHeader,
+    // color_header: widgets.DetachableHeader,
+    // modes_header: widgets.DetachableHeader,
+    misc_header: DetachableHeader,
+    layout_header: DetachableHeader,
+    mouse_header: DetachableHeader,
+    color_header: DetachableHeader,
+    modes_header: DetachableHeader,
+
+    /// Screen detail windows for each screen key.
+    // screens: ScreenMap,
+    screens: ScreenMap,
+}
+
+impl Info {
+    // pub const empty: Info = .{
+    //     .show_palette = false,
+    //     .misc_header = .{},
+    //     .layout_header = .{},
+    //     .mouse_header = .{},
+    //     .color_header = .{},
+    //     .modes_header = .{},
+    //     .screens = .{},
+    // };
+    pub fn empty() -> Info {
+        Info {
+            show_palette: false,
+            misc_header: DetachableHeader::default(),
+            layout_header: DetachableHeader::default(),
+            mouse_header: DetachableHeader::default(),
+            color_header: DetachableHeader::default(),
+            modes_header: DetachableHeader::default(),
+            screens: ScreenMap::new(),
+        }
+    }
+
+    /// Draw the terminal info window.
+    // pub fn draw(
+    //     self: *Info,
+    //     open: bool,
+    //     t: *Terminal,
+    // ) void {
+    #[allow(non_snake_case)] // faithful Zig name (R1)
+    pub fn draw(&mut self, open: bool, t: &mut Terminal) {
+        // Draw our open state if we're open.
+        // if (open) self.drawOpen(t);
+        if open {
+            self.drawOpen(t);
+        }
+
+        // Draw our detached state that draws regardless of if
+        // we're open or not.
+        // if (self.misc_header.window("Terminal Misc")) |visible| {
+        //     defer self.misc_header.windowEnd();
+        //     if (visible) miscTable(t);
+        // }
+        if let Some(visible) = self.misc_header.window(c"Terminal Misc") {
+            if visible {
+                miscTable(t);
+            }
+            self.misc_header.windowEnd();
+        }
+        // if (self.layout_header.window("Terminal Layout")) |visible| {
+        //     defer self.layout_header.windowEnd();
+        //     if (visible) layoutTable(t);
+        // }
+        if let Some(visible) = self.layout_header.window(c"Terminal Layout") {
+            if visible {
+                layoutTable(t);
+            }
+            self.layout_header.windowEnd();
+        }
+        // if (self.mouse_header.window("Terminal Mouse")) |visible| {
+        //     defer self.mouse_header.windowEnd();
+        //     if (visible) mouseTable(t);
+        // }
+        if let Some(visible) = self.mouse_header.window(c"Terminal Mouse") {
+            if visible {
+                mouseTable(t);
+            }
+            self.mouse_header.windowEnd();
+        }
+        // if (self.color_header.window("Terminal Color")) |visible| {
+        //     defer self.color_header.windowEnd();
+        //     if (visible) colorTable(t, &self.show_palette);
+        // }
+        if let Some(visible) = self.color_header.window(c"Terminal Color") {
+            if visible {
+                colorTable(t, &mut self.show_palette);
+            }
+            self.color_header.windowEnd();
+        }
+        // if (self.modes_header.window("Terminal Modes")) |visible| {
+        //     defer self.modes_header.windowEnd();
+        //     if (visible) modesTable(t);
+        // }
+        if let Some(visible) = self.modes_header.window(c"Terminal Modes") {
+            if visible {
+                modesTable(t);
+            }
+            self.modes_header.windowEnd();
+        }
+
+        // Palette pop-out window
+        // if (self.show_palette) {
+        if self.show_palette {
+            //     defer cimgui.c.ImGui_End();
+            let _end = Defer(|| unsafe { dcimgui_sys::ImGui_End() });
+            //     if (cimgui.c.ImGui_Begin(
+            //         "256-Color Palette",
+            //         &self.show_palette,
+            //         cimgui.c.ImGuiWindowFlags_NoFocusOnAppearing,
+            //     )) {
+            if unsafe {
+                dcimgui_sys::ImGui_Begin(
+                    c"256-Color Palette".as_ptr(),
+                    &mut self.show_palette,
+                    dcimgui_sys::ImGuiWindowFlags__ImGuiWindowFlags_NoFocusOnAppearing
+                        as dcimgui_sys::ImGuiWindowFlags,
+                )
+            } {
+                //         palette("palette", &t.colors.palette.current);
+                palette(c"palette", &t.colors.palette.current);
+            }
+        }
+
+        // Screen pop-out windows
+        // var it = self.screens.iterator();
+        // while (it.next()) |entry| { ... }
+        //
+        // PORT NOTE: Rust's `ScreenMap` has no live "iterator that tolerates
+        // `remove` mid-iteration"; ported as a fixed loop over the two known
+        // `ScreenSet` keys (`SCREEN_KEYS`), re-checking `self.screens` fresh
+        // each iteration — no iterator borrow ever spans the `remove` calls
+        // below (INV-6).
+        for &key in SCREEN_KEYS {
+            if !self.screens.contains(key) {
+                continue;
+            }
+
+            // const screen = t.screens.get(entry.key) orelse {
+            //     // Could happen if we opened up a window for a screen
+            //     // and that screen was subsequently deinitialized. In
+            //     // this case, hide the window.
+            //     self.screens.remove(entry.key);
+            //     continue;
+            // };
+            let screen_ptr = match t.screens.get(key) {
+                Some(s) => s,
+                None => {
+                    self.screens.remove(key);
+                    continue;
+                }
+            };
+
+            // var title_buf: [128]u8 = undefined;
+            // const title = std.fmt.bufPrintZ(
+            //     &title_buf,
+            //     "Screen: {t}",
+            //     .{entry.key},
+            // ) catch "Screen";
+            //
+            // PORT NOTE: the reference formats into a fixed 128-byte stack
+            // buffer with a `"Screen"` fallback on overflow; the port grows a
+            // small heap `String` (the title is always short: "Screen: " +
+            // "primary"/"alternate") and falls back to the plain "Screen"
+            // `CString` only if the formatted text somehow contained an
+            // interior NUL (never happens for these key names).
+            let mut title_string = String::new();
+            let _ = write!(title_string, "Screen: {}", screen_key_name(key));
+            let title = std::ffi::CString::new(title_string)
+                .unwrap_or_else(|_| std::ffi::CString::new("Screen").unwrap());
+
+            // // Setup our next window so it has some size to it.
+            // const viewport = cimgui.c.ImGui_GetMainViewport();
+            let viewport = unsafe { dcimgui_sys::ImGui_GetMainViewport() };
+            // cimgui.c.ImGui_SetNextWindowSize(
+            //     .{
+            //         .x = @min(400, viewport.*.Size.x),
+            //         .y = @min(300, viewport.*.Size.y),
+            //     },
+            //     cimgui.c.ImGuiCond_FirstUseEver,
+            // );
+            unsafe {
+                dcimgui_sys::ImGui_SetNextWindowSize(
+                    dcimgui_sys::ImVec2 {
+                        x: f32::min(400.0, (*viewport).Size.x),
+                        y: f32::min(300.0, (*viewport).Size.y),
+                    },
+                    dcimgui_sys::ImGuiCond__ImGuiCond_FirstUseEver as dcimgui_sys::ImGuiCond,
+                )
+            };
+
+            // var screen_open: bool = true;
+            let mut screen_open: bool = true;
+            // defer cimgui.c.ImGui_End();
+            let _end = Defer(|| unsafe { dcimgui_sys::ImGui_End() });
+            // const screen_draw = cimgui.c.ImGui_Begin(
+            //     title,
+            //     &screen_open,
+            //     cimgui.c.ImGuiWindowFlags_NoFocusOnAppearing,
+            // );
+            let screen_draw = unsafe {
+                dcimgui_sys::ImGui_Begin(
+                    title.as_ptr(),
+                    &mut screen_open,
+                    dcimgui_sys::ImGuiWindowFlags__ImGuiWindowFlags_NoFocusOnAppearing
+                        as dcimgui_sys::ImGuiWindowFlags,
+                )
+            };
+            // entry.value.draw(screen_draw, .{
+            //     .screen = screen,
+            //     .key = entry.key,
+            //     .active_key = t.screens.active_key,
+            //     .modify_other_keys_2 = t.flags.modify_other_keys_2,
+            //     .color_palette = &t.colors.palette,
+            // });
+            //
+            // PORT NOTE (INV-1/INV-6): `screen_ptr` is the raw `*mut Screen`
+            // fetched above under the caller's terminal-mutex lock — deref'd
+            // into a call-scoped `&mut Screen` right here, never cached
+            // (`screen::DrawData` is the S6 named params struct).
+            if let Some(info) = self.screens.get_mut(key) {
+                info.draw(
+                    screen_draw,
+                    screen::DrawData {
+                        screen: unsafe { &mut *screen_ptr },
+                        key,
+                        active_key: t.screens.active_key,
+                        modify_other_keys_2: t.flags.modify_other_keys_2,
+                        color_palette: &t.colors.palette,
+                    },
+                );
+            }
+
+            // // If the window was closed, remove it from our map so future
+            // // renders don't draw it.
+            // if (!screen_open) self.screens.remove(entry.key);
+            if !screen_open {
+                self.screens.remove(key);
+            }
+        }
+    }
+
+    // fn drawOpen(self: *Info, t: *Terminal) void {
+    #[allow(non_snake_case)] // faithful Zig name (R1)
+    fn drawOpen(&mut self, t: &mut Terminal) {
+        // Show our screens up top.
+        // screensTable(t, &self.screens);
+        screensTable(t, &mut self.screens);
+
+        // if (self.misc_header.header("Misc")) miscTable(t);
+        if self.misc_header.header(c"Misc") {
+            miscTable(t);
+        }
+        // if (self.layout_header.header("Layout")) layoutTable(t);
+        if self.layout_header.header(c"Layout") {
+            layoutTable(t);
+        }
+        // if (self.mouse_header.header("Mouse")) mouseTable(t);
+        if self.mouse_header.header(c"Mouse") {
+            mouseTable(t);
+        }
+        // if (self.color_header.header("Color")) colorTable(t, &self.show_palette);
+        if self.color_header.header(c"Color") {
+            colorTable(t, &mut self.show_palette);
+        }
+        // if (self.modes_header.header("Modes")) modesTable(t);
+        if self.modes_header.header(c"Modes") {
+            modesTable(t);
+        }
+    }
+}
+
+/// Render the table of possible screens with various actions.
 // fn screensTable(
 //     t: *Terminal,
 //     map: *ScreenMap,
 // ) void {
-//     if (!cimgui.c.ImGui_BeginTable(
-//         "screens",
-//         3,
-//         cimgui.c.ImGuiTableFlags_Borders |
-//             cimgui.c.ImGuiTableFlags_RowBg |
-//             cimgui.c.ImGuiTableFlags_SizingFixedFit,
-//     )) return;
-//     defer cimgui.c.ImGui_EndTable();
-//
-//     cimgui.c.ImGui_TableSetupColumn("Screen", cimgui.c.ImGuiTableColumnFlags_WidthFixed);
-//     cimgui.c.ImGui_TableSetupColumn("Status", cimgui.c.ImGuiTableColumnFlags_WidthFixed);
-//     cimgui.c.ImGui_TableSetupColumn("", cimgui.c.ImGuiTableColumnFlags_WidthFixed);
-//
-//     // Custom header row to include help marker before "Screen"
-//     {
-//         cimgui.c.ImGui_TableNextRowEx(cimgui.c.ImGuiTableRowFlags_Headers, 0.0);
-//         {
-//             _ = cimgui.c.ImGui_TableSetColumnIndex(0);
-//             cimgui.c.ImGui_PushStyleVarImVec2(cimgui.c.ImGuiStyleVar_FramePadding, .{ .x = 0, .y = 0 });
-//             widgets.helpMarker(
-//                 "A terminal can have multiple screens, only one of which is active at " ++
-//                     "a time. Each screen has its own grid, contents, and other state. " ++
-//                     "This section allows you to inspect the different screens managed by " ++
-//                     "the terminal.",
-//             );
-//             cimgui.c.ImGui_PopStyleVar();
-//             cimgui.c.ImGui_SameLineEx(0.0, cimgui.c.ImGui_GetStyle().*.ItemInnerSpacing.x);
-//             cimgui.c.ImGui_TableHeader("Screen");
-//         }
-//         {
-//             _ = cimgui.c.ImGui_TableSetColumnIndex(1);
-//             cimgui.c.ImGui_TableHeader("Status");
-//         }
-//         {
-//             _ = cimgui.c.ImGui_TableSetColumnIndex(2);
-//             cimgui.c.ImGui_TableHeader("");
-//         }
-//     }
-//
-//     for (std.meta.tags(terminal.ScreenSet.Key)) |key| {
-//         const is_initialized = t.screens.get(key) != null;
-//         const is_active = t.screens.active_key == key;
-//
-//         cimgui.c.ImGui_TableNextRow();
-//         {
-//             _ = cimgui.c.ImGui_TableSetColumnIndex(0);
-//             cimgui.c.ImGui_Text("%s", @tagName(key).ptr);
-//         }
-//         {
-//             _ = cimgui.c.ImGui_TableSetColumnIndex(1);
-//             if (is_active) {
-//                 cimgui.c.ImGui_TextColored(
-//                     .{ .x = 0.4, .y = 1.0, .z = 0.4, .w = 1.0 },
-//                     "active",
-//                 );
-//             } else if (is_initialized) {
-//                 cimgui.c.ImGui_TextColored(
-//                     .{ .x = 0.6, .y = 0.6, .z = 0.6, .w = 1.0 },
-//                     "initialized",
-//                 );
-//             } else {
-//                 cimgui.c.ImGui_TextColored(
-//                     .{ .x = 0.4, .y = 0.4, .z = 0.4, .w = 1.0 },
-//                     "(not initialized)",
-//                 );
-//             }
-//         }
-//         {
-//             _ = cimgui.c.ImGui_TableSetColumnIndex(2);
-//             cimgui.c.ImGui_PushIDInt(@intFromEnum(key));
-//             defer cimgui.c.ImGui_PopID();
-//             cimgui.c.ImGui_BeginDisabled(!is_initialized);
-//             defer cimgui.c.ImGui_EndDisabled();
-//             if (cimgui.c.ImGui_Button("View")) {
-//                 if (!map.contains(key)) {
-//                     map.put(key, .empty);
-//                 }
-//             }
-//         }
-//     }
-// }
+#[allow(non_snake_case)] // faithful Zig name (R1)
+fn screensTable(t: &mut Terminal, map: &mut ScreenMap) {
+    // if (!cimgui.c.ImGui_BeginTable(
+    //     "screens",
+    //     3,
+    //     cimgui.c.ImGuiTableFlags_Borders |
+    //         cimgui.c.ImGuiTableFlags_RowBg |
+    //         cimgui.c.ImGuiTableFlags_SizingFixedFit,
+    // )) return;
+    if !unsafe {
+        dcimgui_sys::ImGui_BeginTable(
+            c"screens".as_ptr(),
+            3,
+            (dcimgui_sys::ImGuiTableFlags__ImGuiTableFlags_Borders
+                | dcimgui_sys::ImGuiTableFlags__ImGuiTableFlags_RowBg
+                | dcimgui_sys::ImGuiTableFlags__ImGuiTableFlags_SizingFixedFit)
+                as dcimgui_sys::ImGuiTableFlags,
+        )
+    } {
+        return;
+    }
+    // defer cimgui.c.ImGui_EndTable();
+    let _end_table = Defer(|| unsafe { dcimgui_sys::ImGui_EndTable() });
+
+    // cimgui.c.ImGui_TableSetupColumn("Screen", cimgui.c.ImGuiTableColumnFlags_WidthFixed);
+    unsafe {
+        dcimgui_sys::ImGui_TableSetupColumn(
+            c"Screen".as_ptr(),
+            dcimgui_sys::ImGuiTableColumnFlags__ImGuiTableColumnFlags_WidthFixed
+                as dcimgui_sys::ImGuiTableColumnFlags,
+        )
+    };
+    // cimgui.c.ImGui_TableSetupColumn("Status", cimgui.c.ImGuiTableColumnFlags_WidthFixed);
+    unsafe {
+        dcimgui_sys::ImGui_TableSetupColumn(
+            c"Status".as_ptr(),
+            dcimgui_sys::ImGuiTableColumnFlags__ImGuiTableColumnFlags_WidthFixed
+                as dcimgui_sys::ImGuiTableColumnFlags,
+        )
+    };
+    // cimgui.c.ImGui_TableSetupColumn("", cimgui.c.ImGuiTableColumnFlags_WidthFixed);
+    unsafe {
+        dcimgui_sys::ImGui_TableSetupColumn(
+            c"".as_ptr(),
+            dcimgui_sys::ImGuiTableColumnFlags__ImGuiTableColumnFlags_WidthFixed
+                as dcimgui_sys::ImGuiTableColumnFlags,
+        )
+    };
+
+    // Custom header row to include help marker before "Screen"
+    {
+        // cimgui.c.ImGui_TableNextRowEx(cimgui.c.ImGuiTableRowFlags_Headers, 0.0);
+        unsafe {
+            dcimgui_sys::ImGui_TableNextRowEx(
+                dcimgui_sys::ImGuiTableRowFlags__ImGuiTableRowFlags_Headers
+                    as dcimgui_sys::ImGuiTableRowFlags,
+                0.0,
+            )
+        };
+        {
+            // _ = cimgui.c.ImGui_TableSetColumnIndex(0);
+            let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(0) };
+            // cimgui.c.ImGui_PushStyleVarImVec2(cimgui.c.ImGuiStyleVar_FramePadding, .{ .x = 0, .y = 0 });
+            unsafe {
+                dcimgui_sys::ImGui_PushStyleVarImVec2(
+                    dcimgui_sys::ImGuiStyleVar__ImGuiStyleVar_FramePadding
+                        as dcimgui_sys::ImGuiStyleVar,
+                    dcimgui_sys::ImVec2 { x: 0.0, y: 0.0 },
+                )
+            };
+            // widgets.helpMarker(
+            //     "A terminal can have multiple screens, only one of which is active at " ++
+            //         "a time. Each screen has its own grid, contents, and other state. " ++
+            //         "This section allows you to inspect the different screens managed by " ++
+            //         "the terminal.",
+            // );
+            helpMarker(
+                c"A terminal can have multiple screens, only one of which is active at a time. Each screen has its own grid, contents, and other state. This section allows you to inspect the different screens managed by the terminal.",
+            );
+            // cimgui.c.ImGui_PopStyleVar();
+            unsafe { dcimgui_sys::ImGui_PopStyleVar() };
+            // cimgui.c.ImGui_SameLineEx(0.0, cimgui.c.ImGui_GetStyle().*.ItemInnerSpacing.x);
+            unsafe {
+                dcimgui_sys::ImGui_SameLineEx(0.0, (*dcimgui_sys::ImGui_GetStyle()).ItemInnerSpacing.x)
+            };
+            // cimgui.c.ImGui_TableHeader("Screen");
+            unsafe { dcimgui_sys::ImGui_TableHeader(c"Screen".as_ptr()) };
+        }
+        {
+            // _ = cimgui.c.ImGui_TableSetColumnIndex(1);
+            let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
+            // cimgui.c.ImGui_TableHeader("Status");
+            unsafe { dcimgui_sys::ImGui_TableHeader(c"Status".as_ptr()) };
+        }
+        {
+            // _ = cimgui.c.ImGui_TableSetColumnIndex(2);
+            let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(2) };
+            // cimgui.c.ImGui_TableHeader("");
+            unsafe { dcimgui_sys::ImGui_TableHeader(c"".as_ptr()) };
+        }
+    }
+
+    // for (std.meta.tags(terminal.ScreenSet.Key)) |key| {
+    for &key in SCREEN_KEYS {
+        // const is_initialized = t.screens.get(key) != null;
+        let is_initialized = t.screens.get(key).is_some();
+        // const is_active = t.screens.active_key == key;
+        let is_active = t.screens.active_key == key;
+
+        // cimgui.c.ImGui_TableNextRow();
+        unsafe { dcimgui_sys::ImGui_TableNextRow() };
+        {
+            // _ = cimgui.c.ImGui_TableSetColumnIndex(0);
+            let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(0) };
+            // cimgui.c.ImGui_Text("%s", @tagName(key).ptr);
+            unsafe {
+                dcimgui_sys::ImGui_Text(c"%s".as_ptr(), screen_key_name_c(key).as_ptr())
+            };
+        }
+        {
+            // _ = cimgui.c.ImGui_TableSetColumnIndex(1);
+            let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
+            // if (is_active) {
+            if is_active {
+                //     cimgui.c.ImGui_TextColored(
+                //         .{ .x = 0.4, .y = 1.0, .z = 0.4, .w = 1.0 },
+                //         "active",
+                //     );
+                unsafe {
+                    dcimgui_sys::ImGui_TextColored(
+                        dcimgui_sys::ImVec4 { x: 0.4, y: 1.0, z: 0.4, w: 1.0 },
+                        c"active".as_ptr(),
+                    )
+                };
+            } else if is_initialized {
+                // } else if (is_initialized) {
+                //     cimgui.c.ImGui_TextColored(
+                //         .{ .x = 0.6, .y = 0.6, .z = 0.6, .w = 1.0 },
+                //         "initialized",
+                //     );
+                unsafe {
+                    dcimgui_sys::ImGui_TextColored(
+                        dcimgui_sys::ImVec4 { x: 0.6, y: 0.6, z: 0.6, w: 1.0 },
+                        c"initialized".as_ptr(),
+                    )
+                };
+            } else {
+                // } else {
+                //     cimgui.c.ImGui_TextColored(
+                //         .{ .x = 0.4, .y = 0.4, .z = 0.4, .w = 1.0 },
+                //         "(not initialized)",
+                //     );
+                unsafe {
+                    dcimgui_sys::ImGui_TextColored(
+                        dcimgui_sys::ImVec4 { x: 0.4, y: 0.4, z: 0.4, w: 1.0 },
+                        c"(not initialized)".as_ptr(),
+                    )
+                };
+            }
+        }
+        {
+            // _ = cimgui.c.ImGui_TableSetColumnIndex(2);
+            let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(2) };
+            // cimgui.c.ImGui_PushIDInt(@intFromEnum(key));
+            unsafe { dcimgui_sys::ImGui_PushIDInt(key as c_int) };
+            // defer cimgui.c.ImGui_PopID();
+            let _pop_id = Defer(|| unsafe { dcimgui_sys::ImGui_PopID() });
+            // cimgui.c.ImGui_BeginDisabled(!is_initialized);
+            unsafe { dcimgui_sys::ImGui_BeginDisabled(!is_initialized) };
+            // defer cimgui.c.ImGui_EndDisabled();
+            let _end_disabled = Defer(|| unsafe { dcimgui_sys::ImGui_EndDisabled() });
+            // if (cimgui.c.ImGui_Button("View")) {
+            if unsafe { dcimgui_sys::ImGui_Button(c"View".as_ptr()) } {
+                // if (!map.contains(key)) {
+                //     map.put(key, .empty);
+                // }
+                if !map.contains(key) {
+                    map.put(key, screen::Info::empty());
+                }
+            }
+        }
+    }
+}
+
+/// `@tagName(key)` as a NUL-terminated `%s` argument (the `ImGui_Text`/
+/// `ImGui_PushIDInt` call sites need a `*const c_char`, not a `&str`).
+fn screen_key_name_c(key: Key) -> &'static CStr {
+    match key {
+        Key::Primary => c"primary",
+        Key::Alternate => c"alternate",
+    }
+}
 // ============================================================================
 
 /// Table of miscellaneous terminal information.
 // fn miscTable(t: *Terminal) void {
 //
-// PORT NOTE: `pub` (not the reference's file-private `fn`) so the DEFERRED
-// `Info.draw`/`drawOpen` still reach it once inhabited (the screen.rs
-// precedent). `*Terminal` is display-only here → `&Terminal` (INV-1).
+// PORT NOTE: `pub` (not the reference's file-private `fn`) so `Info.draw`/
+// `drawOpen` (now inhabited above) can reach it (the screen.rs precedent).
+// `*Terminal` is display-only here → `&Terminal` (INV-1).
 #[allow(non_snake_case)] // faithful Zig name (R1)
 pub fn miscTable(t: &Terminal) {
     // _ = cimgui.c.ImGui_BeginTable("table_misc", 2, cimgui.c.ImGuiTableFlags_None);

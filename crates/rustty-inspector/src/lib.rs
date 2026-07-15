@@ -3,16 +3,16 @@
 //! PORTS: ghostty src/inspector/ (Inspector, main, units, widgets, widgets/*); links dcimgui-sys;
 //! core via refs/trait (breaks #11, #12). Fallback A6: may merge with renderer+termio.
 //!
-//! PORT STATUS: partial — Task 17 landed the top-level aggregate. The `Inspector`
-//! struct (Inspector.zig) now lives in its own `Inspector.rs` (this file ports
-//! `main.zig`, which re-exports it), carrying `mouse` (LIVE) + the two core-
-//! reachable sub-objects (`renderer_info` / `key_stream_events`) as direct fields
-//! under the grows-in-place doctrine, with `setup` / `init` / `deinit` /
-//! `rendererInfo` / `recordKeyEvent` ported LIVE and `recordPtyRead` / `render`
-//! carried as preserved-verbatim reference bodies (blocked on the still-DEFERRED
-//! `widgets::surface::Inspector` gui aggregate + the cyclic core `Surface`
-//! accessor-trait seam). See `Inspector.rs`'s module doc for the full blocker
-//! chain. All widget sub-modules are wired below.
+//! PORT STATUS: complete — the deferred aggregation chain (`screen::Info` ->
+//! `terminal::Info` -> `widgets::surface::Inspector` -> the top-level
+//! `Inspector`) is fully inhabited. The `Inspector` struct (Inspector.zig) lives
+//! in its own `Inspector.rs` (this file ports `main.zig`, which re-exports it),
+//! carrying `mouse` (LIVE) + the whole `gui: widgets::surface::Inspector` widget
+//! tree, with every method (`setup` / `init` / `deinit` / `rendererInfo` /
+//! `recordKeyEvent` / `recordPtyRead` / `render`) ported LIVE. See
+//! `Inspector.rs`'s module doc for the R4 acyclic Surface seam
+//! (`widgets::surface::SurfaceData` / `&rustty_xev::Async`) that replaces the
+//! reference's `*Surface` parameters. All widget sub-modules are wired below.
 
 // This file ports ghostty src/inspector/main.zig:
 
@@ -59,10 +59,14 @@ mod tests {
         let _ = std::any::type_name::<crate::widgets::key::ImguiState>();
         let _ = std::any::type_name::<crate::widgets::key::Error>();
         let _ = std::any::type_name::<crate::widgets::renderer::Info>();
-        // Task 17 aggregate surface: the LIVE `Mouse` field type + the LIVE
-        // `termio::Stream` the deferred `render`/`recordPtyRead` will drive via
-        // `gui` (the `surface::Inspector` aggregate itself is still DEFERRED).
+        // The aggregation chain surface: `gui`'s field type and the three
+        // widget aggregates it owns/draws (screen/terminal Info + the
+        // surface::Inspector/SurfaceData R4 seam itself).
         let _ = std::any::type_name::<crate::widgets::surface::Mouse>();
+        let _ = std::any::type_name::<crate::widgets::surface::Inspector>();
+        let _ = std::any::type_name::<crate::widgets::surface::SurfaceData>();
+        let _ = std::any::type_name::<crate::widgets::terminal::Info>();
+        let _ = std::any::type_name::<crate::widgets::screen::Info>();
         let _ = std::any::type_name::<crate::widgets::termio::Stream>();
     }
 }

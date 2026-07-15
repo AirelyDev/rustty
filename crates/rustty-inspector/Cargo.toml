@@ -42,3 +42,10 @@ rustty-input = { workspace = true }
 rustty-datastruct = { workspace = true }
 # `Allocator` parameter parity (allocator_api2 Global — termio precedent).
 allocator-api2 = { workspace = true }
+# R4 acyclic Surface seam (Inspector.rs `render`): `surface.renderer_thread.
+# wakeup.notify()` crosses as a bare `&rustty_xev::Async` parameter rather than
+# the core-local `renderer_thread: Thread<A>` (which names the cyclic
+# `rustty_core::Surface`). `rustty-xev` is a self-contained low leaf (deps =
+# {rustty-global, libc} only, per its own Cargo.toml) with no edge back to
+# rustty-inspector — acyclic, `check_acyclic.sh` stays green.
+rustty-xev = { workspace = true }

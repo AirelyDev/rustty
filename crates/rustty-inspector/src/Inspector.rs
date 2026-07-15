@@ -5,7 +5,8 @@
 //! PORTS: ghostty src/inspector/Inspector.zig (the top-level inspector
 //! aggregate + its `render`).
 //!
-//! PORT STATUS (Task 17 — the aggregate + top-level render):
+//! PORT STATUS: all blockers landed, so the whole aggregate — including
+//! `render`/`recordPtyRead` — is now INHABITED.
 //!
 //! `Inspector.zig`'s value aggregate is
 //!
@@ -16,40 +17,31 @@
 //!
 //! whose `gui` owns `surface_info` / `key_stream` / `terminal_info` /
 //! `vt_stream` / `renderer_info` / `show_demo_window` (surface.zig:21-28). The
-//! `gui` aggregate type (`widgets::surface::Inspector`) is STILL the DEFERRED
-//! (preserved-verbatim) body in `widgets/surface.rs` — it is transitively
-//! blocked on:
+//! `gui: widgets::surface::Inspector` field below IS that aggregate (Task 15's
+//! `surface::Inspector`, now inhabited) — folding `renderer_info` /
+//! `key_stream_events` back under it, exactly as the module doc's grows-in-place
+//! plan anticipated (`rendererInfo`/`recordKeyEvent` below update their field
+//! path from the direct fields to `self.gui.renderer_info` /
+//! `self.gui.key_stream.events` in lock-step with this fold).
 //!
-//!   1. the cyclic core `Surface` accessor-trait seam (R4 — `Surface` lives in
-//!      rustty-core, which already holds `Option<*mut inspectorpkg::Inspector>`,
-//!      so a direct `rustty_core::Surface` name here would CYCLE; the edge needs
-//!      a renderer/core-defined Surface accessor trait, the `InspectorOverlay`
-//!      precedent),
-//!   2. `widgets::terminal::Info` (the `terminal_info` field — still its own
-//!      DEFERRED aggregate, gated on `widgets::screen::Info`, itself gated on the
-//!      DockBuilder FFI below), and
-//!   3. three unbound dcimgui-sys DockBuilder symbols that `surface::Inspector.
-//!      createDockSpace` needs (`ImGui_DockBuilderGetNode`,
-//!      `ImGui_DockBuilderAddNodeEx`, and the private
-//!      `ImGuiDockNodeFlagsPrivate.DockSpace` flag).
-//!
-//! So per the placeholder-leaf **grows-in-place** doctrine, the aggregate is
-//! carried WITHOUT a `gui` field: its two sub-objects that the core lifecycle
-//! seam (Task 6) needs TODAY — `renderer_info` (INV-7 overlay coercion) and
-//! `key_stream_events` (`recordKeyEvent`, Inspector.zig:82) — are carried as
-//! direct fields (the reference reaches them as `self.gui.renderer_info` /
-//! `self.gui.key_stream.events`). The `mouse` field IS ported LIVE (its type
-//! `widgets::surface::Mouse` is the R3-proven live half of surface.rs). When
-//! `surface::Inspector` inhabits (a later fold), `renderer_info` /
-//! `key_stream_events` migrate under `gui` and the two accessors + core's
-//! coercion path update in lock-step (`cargo build --workspace` is the backstop).
+//! **R4 acyclic Surface seam.** `render`'s reference signature is `fn render(
+//! self: *Inspector, surface: *Surface) void`, which both hands the whole
+//! `Surface` to `self.gui.draw` (now `SurfaceData`, `widgets/surface.rs`'s own
+//! R4 seam) and calls `surface.renderer_thread.wakeup.notify()` (INV-12). The
+//! `renderer_thread: Thread<A>` field is a core-local generic type (over the
+//! `apprt::App` trait) that cannot be named here without an inspector -> core
+//! dependency cycle (core already depends on inspector). Since the ONLY thing
+//! `render` does with it is call `.wakeup.notify()`, the port takes that
+//! wakeup handle directly as a `&rustty_xev::Async` parameter (a leaf below
+//! core `render_thread.wakeup`'s own field type) instead of the whole
+//! `Thread<A>` — no new rustty-inspector -> core/apprt edge; `check_acyclic.sh`
+//! stays green. `recordPtyRead` needs no such seam (it already took a raw
+//! `*mut Terminal`, not `*Surface`).
 //!
 //! Ported LIVE here: `setup` (static ImGui-IO mutation, INV-11), `init` /
-//! `deinit`, `rendererInfo` (grows-in-place accessor), and `recordKeyEvent`
-//! (INV-9 grow-then-evict). `recordPtyRead` and `render` touch `self.gui`
-//! (`vt_stream` / `draw`) and the cyclic core `Surface` edge, so they are the
-//! preserved-verbatim reference bodies in the DEFERRED block at the foot of this
-//! file; they inhabit once `surface::Inspector` + the Surface accessor trait land.
+//! `deinit`, `rendererInfo` (accessor into `self.gui.renderer_info`),
+//! `recordKeyEvent` (INV-9 grow-then-evict), `recordPtyRead`, and `render`
+//! (INV-11/INV-12).
 
 // const Inspector = @This();
 //
@@ -69,8 +61,9 @@
 // global allocator collapses Zig's `!`/OOM). `cimgui` is the vendored Dear ImGui
 // C API reached through `dcimgui-sys`. `font.embedded` is `rustty_font::embedded`.
 // `inspector` (main.zig) is this crate's root — `inspector.KeyEvent` is
-// `crate::KeyEvent`. `Surface` / `terminal.Terminal` are the DEFERRED-block core
-// edges. `widgets` is `crate::widgets`.
+// `crate::KeyEvent`. `terminal.Terminal` is `rustty_vt::terminal::Terminal`
+// (recordPtyRead's raw-pointer param); `Surface` has no direct port (the R4
+// acyclic seam — see the module doc). `widgets` is `crate::widgets`.
 use crate::widgets;
 
 /// Extra mouse state the inspector tracks per-surface (`widgets.surface.Mouse`).
@@ -91,25 +84,13 @@ pub struct Inspector {
     //
     // gui: widgets.surface.Inspector,
     //
-    // PORT NOTE (grows-in-place, Task 17): `widgets::surface::Inspector` is still
-    // DEFERRED (see the module doc's blocker list), so the aggregate carries its
-    // two core-reachable sub-objects as direct fields until the fold. Everything
-    // else the reference reaches via `self.gui.*` (`surface_info`, `key_stream`
-    // sans-events, `terminal_info`, `vt_stream`, `show_demo_window`) is display-
-    // only inside the deferred `draw`, so it is not needed here yet.
-
-    /// Renderer-info panel state (INV-7). Core's `activateInspector` (Task 6)
-    /// unsize-coerces `&raw mut self.renderer_info` into `renderer_state.inspector`
-    /// (`*mut dyn InspectorOverlay`) — the acyclic overlay edge (renderer `state.rs`
-    /// Task-5 PORT NOTE; the renderer reads overlay features back through the
-    /// trait). Reference field: `self.gui.renderer_info`.
-    pub renderer_info: widgets::renderer::Info,
-
-    /// Keyboard-event ring (reference `self.gui.key_stream.events`). `recordKeyEvent`
-    /// appends into it with the `max_capacity = 50` grow-then-evict policy
-    /// (Inspector.zig:80-97, INV-9). Each stored `Event` owns its utf8/binding/pty
-    /// Vecs and drops with the ring.
-    pub key_stream_events: widgets::key::EventRing,
+    // PORT NOTE (fold complete): `widgets::surface::Inspector` (Task 15) is now
+    // inhabited, so the whole widget tree lives under this one field — exactly
+    // the reference shape. `rendererInfo`/`recordKeyEvent` below reach into it
+    // (`self.gui.renderer_info` / `self.gui.key_stream.events`); core's
+    // `activateInspector`/the KAT test updated their field path in lock-step
+    // (`&mut (*ptr).gui.renderer_info`, `&mut insp.gui.renderer_info`).
+    pub gui: widgets::surface::Inspector,
 }
 
 impl Inspector {
@@ -202,25 +183,20 @@ impl Inspector {
     //     return .{ .gui = gui };
     // }
     //
-    // PORT NOTE (grows-in-place, Task 6/17): the reference builds the whole `gui`
-    // aggregate and returns `.{ .gui = gui }` (with `mouse` defaulting via `.{}`).
-    // Until `surface::Inspector` inhabits, we build the carried fields directly:
-    // `mouse` = `Mouse::default()` (the `.{}` default, LIVE); `renderer_info` =
-    // `renderer.Info.empty` (renderer.zig `empty`); `key_stream_events` =
-    // `EventRing.init(alloc, 2)` (key.zig `Stream.init`'s `.init(alloc, 2)`). The
-    // reference `!Inspector` is Zig's `alloc.dupe`/CircBuf alloc error; under
-    // Rust's infallible global allocator the `!` collapses (a real OOM aborts —
-    // panic=abort parity), so `init` is infallible. The ring's grow-then-evict
-    // OutOfMemory *signal* is still surfaced by `recordKeyEvent`. `alloc` retained
-    // for reference call-shape parity.
-    pub fn init(_alloc: allocator_api2::alloc::Global) -> Inspector {
+    // PORT NOTE (fold complete): the reference builds the whole `gui` aggregate
+    // and returns `.{ .gui = gui }` (with `mouse` defaulting via `.{}`).
+    // `surface::Inspector::init` is fallible (`key::Stream::init`'s CircBuf
+    // alloc-error signal); the reference's own `!Inspector` collapses under
+    // Rust's infallible global allocator everywhere ELSE in this crate (a real
+    // OOM aborts — panic=abort parity), so this top-level `init` stays
+    // infallible and `.expect()`s the inner `Result` (matching the reference's
+    // own "OOM never actually happens under the global allocator" stance).
+    // `alloc` retained for reference call-shape parity.
+    pub fn init(alloc: allocator_api2::alloc::Global) -> Inspector {
         Inspector {
             mouse: widgets::surface::Mouse::default(),
-            renderer_info: widgets::renderer::Info::empty(),
-            // EventRing(Event) filled with `Event::default()` (the CircBuf
-            // `undefined`-fill; see key.rs EventRing PORT NOTE).
-            key_stream_events: widgets::key::EventRing::init(2, widgets::key::Event::default())
-                .expect("EventRing.init(2) is infallible under the global allocator"),
+            gui: widgets::surface::Inspector::init(alloc)
+                .expect("surface::Inspector::init is infallible under the global allocator"),
         }
     }
 
@@ -230,16 +206,8 @@ impl Inspector {
     // pub fn deinit(self: *Inspector, alloc: Allocator) void {
     //     self.gui.deinit(alloc);
     // }
-    //
-    // PORT NOTE: the reference `gui.deinit` iterates+deinits every stored Event
-    // (freeing utf8/binding/pty) then frees the ring/map. Here the carried
-    // sub-fields free themselves on `Drop` — the `EventRing`'s Events (and their
-    // owned Vecs) drop with the ring, and `renderer_info`'s owned `Vec<Feature>`
-    // drops with it; `mouse` is `Copy` (no owned memory) — so `deinit` is a no-op
-    // retained for the reference call-shape (`insp.deinit(self.alloc)` before
-    // `destroy`). `alloc` retained for parity.
-    pub fn deinit(&mut self, _alloc: allocator_api2::alloc::Global) {
-        // mouse/renderer_info/key_stream_events drop with `self`; nothing to free.
+    pub fn deinit(&mut self, alloc: allocator_api2::alloc::Global) {
+        self.gui.deinit(alloc);
     }
 
     /// Returns the renderer info panel. This is a convenience function
@@ -248,16 +216,10 @@ impl Inspector {
     // pub fn rendererInfo(self: *Inspector) *widgets.renderer.Info {
     //     return &self.gui.renderer_info;
     // }
-    //
-    // PORT NOTE (grows-in-place, Task 17): the reference returns
-    // `&self.gui.renderer_info`; the carried direct field is `self.renderer_info`,
-    // so the accessor returns `&mut self.renderer_info`. LIVE (`renderer.Info` is
-    // the Task-5 live half). When `surface::Inspector` inhabits, the field path
-    // becomes `self.gui.renderer_info` and this body updates in lock-step.
     #[allow(non_snake_case)] // faithful Zig name (R1)
     pub fn rendererInfo(&mut self) -> &mut widgets::renderer::Info {
         // return &self.gui.renderer_info;
-        &mut self.renderer_info
+        &mut self.gui.renderer_info
     }
 
     /// Record a keyboard event.
@@ -280,7 +242,7 @@ impl Inspector {
         let max_capacity: usize = 50;
 
         // const events: *widgets.key.EventRing = &self.gui.key_stream.events;
-        let events = &mut self.key_stream_events;
+        let events = &mut self.gui.key_stream.events;
 
         // events.append(ev) catch |err| switch (err) {
         //
@@ -329,19 +291,7 @@ impl Inspector {
         }
     }
 
-    // =======================================================================
-    // DEFERRED (Task 17 blockers — preserved-verbatim reference body, R1).
-    // `recordPtyRead` and `render` both dereference `self.gui` (the still-
-    // DEFERRED `widgets::surface::Inspector`); `render` additionally names the
-    // cyclic core `Surface` type (`surface.renderer_state.mutex` /
-    // `surface.renderer_thread.wakeup` — the R4 accessor-trait seam). They
-    // inhabit in place once `surface::Inspector` + the core `Surface` accessor
-    // trait land (grows-in-place doctrine; the exact shape `surface.rs` /
-    // `terminal.rs` use for their own deferred aggregates). The bodies below are
-    // the faithful `Inspector.zig` source (lines 100-131).
-    // =======================================================================
-    //
-    // /// Record data read from the pty.
+    /// Record data read from the pty.
     // pub fn recordPtyRead(
     //     self: *Inspector,
     //     alloc: Allocator,
@@ -355,12 +305,20 @@ impl Inspector {
     //     );
     // }
     //
-    // PORT NOTE: `self.gui.vt_stream` is the `widgets::termio::Stream` field of
-    // the DEFERRED `surface::Inspector`. `termio::Stream::recordPtyRead` is itself
-    // already LIVE (Task 16), so this method unblocks the moment the `gui`
-    // aggregate inhabits — no further termio work is needed here.
-    //
-    // /// Render the frame.
+    // PORT NOTE: `termio::Stream::recordPtyRead` is infallible in the port
+    // (Task 16 design decision), unlike the reference's `try`.
+    #[allow(non_snake_case)] // faithful Zig name (R1)
+    pub fn recordPtyRead(
+        &mut self,
+        alloc: allocator_api2::alloc::Global,
+        t: *mut rustty_vt::terminal::Terminal,
+        data: &[u8],
+    ) {
+        // self.gui.vt_stream.recordPtyRead(alloc, t, data);
+        self.gui.vt_stream.recordPtyRead(alloc, t, data);
+    }
+
+    /// Render the frame.
     // pub fn render(
     //     self: *Inspector,
     //     surface: *Surface,
@@ -379,16 +337,35 @@ impl Inspector {
     //     surface.renderer_thread.wakeup.notify() catch {};   // INV-12
     // }
     //
-    // PORT NOTE (INV-11/INV-12): `render` is the top-level draw — it hands the
-    // whole widget tree to `self.gui.draw(surface, self.mouse)` (which takes the
-    // single `surface.renderer_state.mutex` lock across every sub-window, INV-1),
-    // then notifies the renderer thread to force a rebuild (INV-12; the `catch {}`
-    // swallows the wakeup error — panic=abort parity, a lost wakeup is non-fatal).
-    // The `surface: *Surface` param is the cyclic core edge (R4): it must arrive
-    // through a renderer/core-defined Surface accessor trait (the
-    // `InspectorOverlay` precedent), NOT a direct `rustty_core::Surface` name.
+    // PORT NOTE (INV-11/INV-12, R4 acyclic Surface seam — module doc): `render`
+    // is the top-level draw — it hands the whole widget tree to `self.gui.draw`
+    // (which takes the single `renderer_state.mutex` lock across every
+    // sub-window, INV-1), then notifies the renderer thread to force a rebuild
+    // (INV-12; `let _ =` swallows the wakeup error — panic=abort parity, a lost
+    // wakeup is non-fatal, matching the reference's `catch {}`). `data:
+    // widgets::surface::SurfaceData` replaces the reference's `surface: *Surface`
+    // (surface.rs's own R4 seam); `wakeup: &rustty_xev::Async` replaces
+    // `surface.renderer_thread` (this file's module-doc R4 seam) — neither adds
+    // a rustty-inspector -> core/apprt dependency edge.
     // NOTE: the ImGui `SetCurrentContext` (INV-11) is NOT here — it is the apprt
     // embedded `Inspector.render` wrapper's job (it sets the per-surface ig
     // context current, then calls THIS `render`); this crate stays main-thread-
     // affine but context-agnostic.
+    #[allow(non_snake_case)] // faithful Zig name (R1)
+    pub fn render(&mut self, data: widgets::surface::SurfaceData, wakeup: &rustty_xev::Async) {
+        // Draw the UI
+        // self.gui.draw(
+        //     surface,
+        //     self.mouse,
+        // );
+        self.gui.draw(data, self.mouse);
+
+        // We always trigger a rebuild of the surface when the inspector
+        // is focused because modifying the inspector can change the terminal
+        // state. This is KIND OF expensive (wasted CPU if nothing was done)
+        // but the inspector is a development tool and it expressly costs
+        // more resources while open so its okay.
+        // surface.renderer_thread.wakeup.notify() catch {};   // INV-12
+        let _ = wakeup.notify();
+    }
 }

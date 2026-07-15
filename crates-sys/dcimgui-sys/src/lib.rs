@@ -98,6 +98,14 @@ extern "C" {
 // Dear Bindings typedef, `dcimgui.h:298`) — bindgen already emits it as
 // `pub type ImGuiDockNodeFlags = ::std::os::raw::c_int;`, so it is reused
 // as-is (no local redeclaration needed).
+//
+// `surface::Inspector.createDockSpace` (widgets/surface.rs) additionally needs
+// `ImGui_DockBuilderSetNodeSize` to size the root dockspace node to the main
+// viewport before docking windows into it (ghostty pkg/dcimgui/main.zig does
+// not need this one directly, but the vendored `dcimgui_internal.h` compiles
+// and exports it exactly like the other five, so it is added here the same
+// way — the "wider DockBuilder set... added as later widget tasks need it"
+// extension the comment above already anticipated).
 extern "C" {
     /// Split a dock node into two, returning the new node id and writing the
     /// two halves into the out-params. `split_dir` is an `ImGuiDir`,
@@ -132,6 +140,12 @@ extern "C" {
     /// as a dockspace root. Returns the node's id.
     /// (ghostty pkg/dcimgui/main.zig:56 — `ImGui_DockBuilderAddNodeEx`.)
     pub fn ImGui_DockBuilderAddNodeEx(node_id: ImGuiID, flags: ImGuiDockNodeFlags) -> ImGuiID;
+
+    /// Resize the dock node `node_id` to `size` (`dcimgui_internal.h:3653`).
+    /// `surface::Inspector.createDockSpace` calls this once, on first setup, to
+    /// size the root dockspace node to the main viewport's `Size` before
+    /// docking the fixed window set into it.
+    pub fn ImGui_DockBuilderSetNodeSize(node_id: ImGuiID, size: ImVec2);
 }
 
 /// Opaque handle for Dear ImGui's internal `ImGuiDockNode` (docking-branch,
@@ -323,19 +337,45 @@ mod tests {
     /// above: references each entry point so a missing export from the
     /// compiled `dcimgui` archive (docking build) is a *link* error, not a
     /// silent runtime failure. Includes `ImGui_DockBuilderGetNode` /
-    /// `ImGui_DockBuilderAddNodeEx` — the two symbols this change adds for
-    /// `screen::Info.createDockSpace` — alongside the three already wired.
+    /// `ImGui_DockBuilderAddNodeEx` (added for `screen::Info.createDockSpace`)
+    /// and `ImGui_DockBuilderSetNodeSize` (added for
+    /// `surface::Inspector.createDockSpace`) alongside the three already wired.
     #[test]
     fn link_imgui_dock_builder_ffi() {
-        let symbols: [*const (); 5] = [
+        let symbols: [*const (); 6] = [
             ImGui_DockBuilderSplitNode as *const (),
             ImGui_DockBuilderDockWindow as *const (),
             ImGui_DockBuilderFinish as *const (),
             ImGui_DockBuilderGetNode as *const (),
             ImGui_DockBuilderAddNodeEx as *const (),
+            ImGui_DockBuilderSetNodeSize as *const (),
         ];
         for sym in symbols {
             assert!(!std::hint::black_box(sym).is_null());
+        }
+    }
+
+    /// Smoke test for `ImGui_DockBuilderSetNodeSize`: calls it on a node
+    /// created by `AddNodeEx` and just confirms it doesn't crash/abort.
+    /// `ImGuiDockNode` is opaque (no accessor exposes the size back out), so
+    /// this cannot be a value round-trip KAT like the GetNode/AddNodeEx one
+    /// above — it only proves the binding calls into the real symbol with the
+    /// right ABI (an `ImVec2`-by-value struct arg is the one part of this
+    /// binding shape not already exercised elsewhere).
+    #[test]
+    fn kat_dock_builder_set_node_size_smoke() {
+        let _guard = IMGUI_CONTEXT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            let ctx = ImGui_CreateContext(ptr::null_mut());
+            assert!(!ctx.is_null(), "ImGui_CreateContext(NULL) returned null");
+
+            let node_id: ImGuiID = 0xD0C5_0001;
+            let created = ImGui_DockBuilderAddNodeEx(node_id, 0);
+            assert_ne!(created, 0, "ImGui_DockBuilderAddNodeEx returned id 0");
+
+            ImGui_DockBuilderSetNodeSize(created, ImVec2 { x: 800.0, y: 600.0 });
+
+            ImGui_DestroyContext(ctx);
         }
     }
 
