@@ -22,6 +22,11 @@ rustty-vt = { workspace = true }
 rustty-font = { workspace = true }
 rustty-renderer = { workspace = true }
 rustty-inspector = { workspace = true }
+# The inspector's ImGui context lifecycle (`apprt.embedded.Inspector`
+# init/deinit — ImGui_CreateContext/DestroyContext, SetCurrentContext, GetIO,
+# ImGui_ImplMetal_Shutdown). Vendored Dear ImGui + Dear Bindings C API leaf
+# (`links = "dcimgui"`); a lower-tier -sys crate (acyclic).
+dcimgui-sys = { workspace = true }
 rustty-config = { workspace = true }
 rustty-input = { workspace = true }
 rustty-os = { workspace = true }

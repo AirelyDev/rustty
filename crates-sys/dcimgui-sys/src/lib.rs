@@ -44,6 +44,39 @@ mod bindings {
 pub use bindings::*;
 
 // ---------------------------------------------------------------------------
+// Dear Bindings extension shim FFI (`ext.cpp`).
+//
+// The reference (ghostty pkg/dcimgui/ext.cpp) ships a small C shim for
+// functionality Dear Bindings does not yet expose — chiefly the default
+// *constructors* for the value-type structs `ImFontConfig` and `ImGuiStyle`
+// (dear_bindings issue #55). Dear ImGui's `ImFontConfig::ImFontConfig()` /
+// `ImGuiStyle::ImGuiStyle()` set non-zero defaults (e.g. `OversampleH/V`,
+// `RasterizerMultiply = 1.0`, `RasterizerDensity = 1.0`, `EllipsisChar`), so a
+// zero-initialized struct is NOT a faithful substitute — the inspector's
+// `Inspector.setup()` (Inspector.zig:44-45) and `updateContentScale`
+// (embedded.zig:1121-1122) call these to obtain proper defaults before mutating
+// a couple of fields.
+//
+// bindgen does not emit these: `wrapper.h` includes only the plain-C Dear
+// Bindings surface (`dcimgui.h`), not `ext.cpp`'s C-ABI functions. But `ext.cpp`
+// IS compiled into the `dcimgui` archive (build.rs) and exports both symbols
+// with C linkage (`CIMGUI_API` == `extern "C"`), so — exactly as with the Metal
+// backend block below — we declare them here directly. The `self` argument is a
+// pointer to the corresponding bindgen value struct (ABI-identical to the C++
+// type; ext.cpp `static_assert`s the size/alignment match).
+extern "C" {
+    /// Default-construct an `ImFontConfig` in place (Dear ImGui's
+    /// `ImFontConfig::ImFontConfig()`), writing the proper non-zero defaults.
+    /// (ext.cpp — `ImFontConfig_ImFontConfig(cimgui::ImFontConfig* self)`.)
+    pub fn ImFontConfig_ImFontConfig(self_: *mut ImFontConfig);
+
+    /// Default-construct an `ImGuiStyle` in place (Dear ImGui's
+    /// `ImGuiStyle::ImGuiStyle()`), writing the proper non-zero defaults.
+    /// (ext.cpp — `ImGuiStyle_ImGuiStyle(cimgui::ImGuiStyle* self)`.)
+    pub fn ImGuiStyle_ImGuiStyle(self_: *mut ImGuiStyle);
+}
+
+// ---------------------------------------------------------------------------
 // Dear ImGui Metal rendering backend FFI (macOS).
 //
 // The inspector's `apprt.embedded.Inspector` drives Dear ImGui through the

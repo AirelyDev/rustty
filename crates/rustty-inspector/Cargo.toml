@@ -19,6 +19,11 @@ workspace = true
 rustty-vt = { workspace = true }
 rustty-font = { workspace = true }
 rustty-util = { workspace = true }
+# The inspector UI toolkit — vendored Dear ImGui 1.92.5 (docking) + Dear
+# Bindings 0.17 C API (`links = "dcimgui"`). `Inspector.setup()` drives the
+# shared ImGui IO (docking/sRGB flags, embedded font atlas) through it. A
+# lower-tier -sys leaf (acyclic; the inspector is upper-tier).
+dcimgui-sys = { workspace = true }
 # C1 (CORE_BLUEPRINT §4): widgets/key.zig's `input.Binding.Action` lives in
 # rustty-input (binding.rs); `CircBuf` (EventRing) in rustty-datastruct.
 # Both edges point downward (inspector is upper-tier) — acyclic.

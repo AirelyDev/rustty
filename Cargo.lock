@@ -528,6 +528,7 @@ name = "rustty-apprt"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "dcimgui-sys",
  "rustty-apprt-api",
  "rustty-args",
  "rustty-config",
@@ -783,6 +784,7 @@ name = "rustty-inspector"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "dcimgui-sys",
  "rustty-datastruct",
  "rustty-font",
  "rustty-input",

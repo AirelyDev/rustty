@@ -73,6 +73,11 @@ use std::mem::{ManuallyDrop, MaybeUninit};
 
 use allocator_api2::alloc::{Allocator, Global};
 
+// The Dear ImGui context handle type (`*cimgui.c.ImGuiContext`) backing the
+// inspector's per-Surface ImGui context (INV-11). dcimgui-sys is the vendored
+// Dear ImGui + Dear Bindings C API leaf.
+use dcimgui_sys::ImGuiContext;
+
 use rustty_apprt_api::action::{Action, ActionC, Target, TargetC};
 use rustty_apprt_api::ipc;
 use rustty_apprt_api::structs::{
@@ -1772,32 +1777,33 @@ impl Surface {
 //
 // pub const Inspector = struct { ... }   (embedded.zig:994)
 //
-// [CHUNK E4 — Phase-3 INHABITED PLACEHOLDER] The inspector is the dcimgui (Dear
+// [CHUNK E4 / Task 4 — INHABITED PLACEHOLDER] The inspector is the dcimgui (Dear
 // ImGui) + Metal debug UI. Per the placeholder-leaf doctrine (blueprint row E4)
-// the struct is INHABITED with its real fields, and the two NON-GPU state methods
-// [`Inspector::updateContentScale`]/[`Inspector::updateSize`] are REAL; every
-// method that drives dcimgui or Metal (`init`/`deinit`/`initMetal`/`renderMetal`/
-// `newFrame`/the mouse/scroll/cursor/focus/text/key callbacks + `Backend::deinit`)
-// is a documented `unimplemented!()` leaf. dcimgui-sys is NOT wired here — the
-// `cimgui.*`/`ImGui_ImplMetal_*`/objc bodies are preserved verbatim as comments and
-// land when the GPU/dcimgui render path is filled (Phase-3, R-d). `queueRender`
-// forwards LIVE to [`Surface::queueInspectorRender`] (itself a Phase-3 leaf — the
-// draw/refresh delegation precedent).
+// the struct is INHABITED with its real fields. Task 4 wires dcimgui-sys and ports
+// the ImGui *context* lifecycle LIVE: `init` (`ImGui_CreateContext` +
+// `CoreInspector.setup()` the shared IO once, INV-11), `deinit`
+// (`ImGui_ImplMetal_Shutdown` if a backend + `ImGui_DestroyContext`), and
+// `Backend::deinit`, plus the REAL non-GPU `updateContentScale`/`updateSize`. The
+// methods that drive the Metal *render* path (`initMetal`/`renderMetal`/`newFrame`)
+// and the objc/imgui input callbacks (mouse/scroll/cursor/focus/text/key) remain
+// documented `unimplemented!()` leaves that land with the Metal exports (Task 3)
+// and the input wiring (Task 6/9). `queueRender` forwards LIVE to
+// [`Surface::queueInspectorRender`] (itself a Phase-3 leaf).
 pub struct Inspector {
     // const cimgui = @import("dcimgui");
     //
     // PORT NOTE: the reference imports the `dcimgui` binding package for the whole
-    // struct. dcimgui-sys is NOT wired this milestone (blueprint E4), so the import
-    // has no Rust analogue — every `cimgui.*` reference below is a documented leaf.
+    // struct. In Rust that is the `dcimgui_sys` crate, referenced fully-qualified
+    // at each call site below (plus the `ImGuiContext` import for `ig_ctx`).
 
     // surface: *Surface,
     pub surface: *mut Surface,
     // ig_ctx: *cimgui.c.ImGuiContext,
     //
-    // PORT NOTE: the Dear ImGui context handle. dcimgui-sys is not wired, so its
-    // `*ImGuiContext` type has no binding here — stored as an opaque `*mut c_void`
-    // (a raw C handle; only ever produced/consumed by the dcimgui leaves).
-    pub ig_ctx: *mut c_void,
+    // PORT NOTE (LIFETIMES §1, GHOSTTY_C): the Dear ImGui context handle, OWNED
+    // via `ImGui_CreateContext` -> `ImGui_DestroyContext`. Task 4 wired dcimgui-sys,
+    // so it is now the real `*mut ImGuiContext`, no longer an opaque `*mut c_void`.
+    pub ig_ctx: *mut ImGuiContext,
     // backend: ?Backend = null,
     pub backend: Option<Backend>,
     // content_scale: f64 = 1,
@@ -1823,17 +1829,20 @@ pub enum Backend {
 impl Backend {
     // pub fn deinit(self: Backend) void { ... }
     //
-    // PORT NOTE: dcimgui+Metal Phase-3 leaf — `ImGui_ImplMetal_Shutdown()` (Darwin).
+    // PORT NOTE (Task 4): tears down the imgui_impl_metal global state. The
+    // reference gates the `ImGui_ImplMetal_Shutdown()` call on `isDarwin()`; the
+    // dcimgui-sys binding is itself `#[cfg(target_os = "macos")]`, so the `.metal`
+    // arm is a no-op off macOS (matching the guard).
     pub fn deinit(self) {
         // switch (self) {
         //     .metal => if (builtin.target.os.tag.isDarwin()) cimgui.ImGui_ImplMetal_Shutdown(),
         // }
         match self {
             Backend::Metal => {
-                unimplemented!(
-                    "embedded::Inspector::Backend::deinit (metal) — dcimgui \
-                     ImGui_ImplMetal_Shutdown (Phase-3 leaf, embedded.zig:1008-1012)"
-                )
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    dcimgui_sys::ImGui_ImplMetal_Shutdown()
+                };
             }
         }
     }
@@ -1842,65 +1851,77 @@ impl Backend {
 impl Inspector {
     // pub fn init(surface: *Surface) !Inspector { ... }
     //
-    // PORT NOTE: constructs the Dear ImGui context + activates the core inspector —
-    // a dcimgui + `CoreInspector.setup()` Phase-3 leaf. The reference body is
-    // preserved verbatim below; `!Inspector` (its only error is `error.OutOfMemory`
-    // from `ImGui_CreateContext`) maps to `Result<Inspector, ApprtError>`.
+    // PORT NOTE (Task 4): constructs the per-Surface Dear ImGui context, sets up the
+    // shared IO once (`CoreInspector.setup()`), and activates the core inspector.
+    // `!Inspector` (its only error is `error.OutOfMemory` from `ImGui_CreateContext`)
+    // maps to `Result<Inspector, ApprtError>`. `CoreInspector` is
+    // `rustty_inspector::Inspector`; `activateInspector` is a core `Surface` method
+    // (still a Phase-3 leaf — Task 6 — so opening the inspector aborts THERE for now,
+    // one step deeper than the previous init-sentinel guard; the reference catches
+    // its error and continues, which Task 6 restores).
     pub fn init(surface: *mut Surface) -> Result<Inspector, ApprtError> {
         // const ig_ctx = cimgui.c.ImGui_CreateContext(null) orelse return error.OutOfMemory;
+        let ig_ctx = unsafe { dcimgui_sys::ImGui_CreateContext(core::ptr::null_mut()) };
+        if ig_ctx.is_null() {
+            return Err(ApprtError);
+        }
         // errdefer cimgui.c.ImGui_DestroyContext(ig_ctx);
-        // cimgui.c.ImGui_SetCurrentContext(ig_ctx);
-        // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
-        // io.BackendPlatformName = "rustty_embedded";
         //
+        // PORT NOTE: no fallible op follows `ImGui_CreateContext` (the struct
+        // construction is infallible and `activateInspector`'s error is swallowed
+        // below), so the errdefer never actually fires — elided.
+
+        // cimgui.c.ImGui_SetCurrentContext(ig_ctx);
+        unsafe { dcimgui_sys::ImGui_SetCurrentContext(ig_ctx) };
+        // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
+        let io = unsafe { dcimgui_sys::ImGui_GetIO() };
+        // io.BackendPlatformName = "rustty_embedded";
+        unsafe { (*io).BackendPlatformName = c"rustty_embedded".as_ptr() };
+
         // // Setup our core inspector
         // CoreInspector.setup();
+        rustty_inspector::Inspector::setup();
         // surface.core_surface.activateInspector() catch |err| {
         //     log.err("failed to activate inspector err={}", .{err});
         // };
-        //
+        if let Err(_err) = unsafe { (*surface).core_surface.activateInspector() } {
+            // log.err("failed to activate inspector err={}", .{err});
+        }
+
         // return .{
         //     .surface = surface,
         //     .ig_ctx = ig_ctx,
         // };
         //
-        // TODO(port): dcimgui ImGui_CreateContext + core activateInspector (Phase-3
-        // leaf, embedded.zig:1015-1032). The verbatim body above is the not-yet-
-        // ported leaf. See DEFERRALS.md "P2 crash-guard: on-feature quicklook/
-        // inspector leaves".
-        //
-        // P2 INTERIM crash-guard (PREPORT_SWIFT_APP §4 abort policy): under
-        // panic=abort an `unimplemented!()` here ABORTS the whole app the moment the
-        // user OPENS the inspector — this is the FIRST reachable leaf on that feature
-        // (surface_inspector → initInspector → here), aborting before any of the
-        // downstream leaves (core `activateInspector`, `initMetal`/`renderMetal`) can
-        // run. Return the export's own init-failure sentinel `error`: the reference
-        // `rustty_surface_inspector` catches it (`initInspector() catch return null`)
-        // and the macOS app null-guards it (SurfaceView_AppKit.swift:155 `guard let
-        // cInspector … else { return nil }`), so the inspector simply does not open.
-        // Because no live `Inspector` can then exist, the whole downstream metal +
-        // `activateInspector` chain stays UNREACHABLE on-feature (nothing to guard
-        // there). Recoverable feature-unavailable, no abort. R1: faithful to the
-        // reference's own init-failure null path.
-        let _ = surface;
-        eprintln!("inspector not yet ported");
-        Err(ApprtError)
+        // PORT NOTE: the reference relies on the struct field defaults for the
+        // fields it does not set (`backend = null`, `content_scale = 1`,
+        // `instant = null`); Rust has no field defaults, so they are spelled out.
+        Ok(Inspector {
+            surface,
+            ig_ctx,
+            backend: None,
+            content_scale: 1.0,
+            instant: None,
+        })
     }
 
     // pub fn deinit(self: *Inspector) void { ... }
     //
-    // PORT NOTE: core `deactivateInspector` + dcimgui context teardown — Phase-3
-    // leaf. Reached by [`Surface::freeInspector`] (never this milestone: no live
-    // inspector can be constructed, since `init` above is a leaf).
+    // PORT NOTE (Task 4): core `deactivateInspector` + the ImGui context teardown
+    // (shut down the Metal backend if one was initialized, then destroy the
+    // context). Reached by [`Surface::freeInspector`]. `deactivateInspector` is a
+    // core `Surface` method (still a Phase-3 leaf — Task 6).
     pub fn deinit(&mut self) {
         // self.surface.core_surface.deactivateInspector();
+        unsafe { (*self.surface).core_surface.deactivateInspector() };
         // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        unsafe { dcimgui_sys::ImGui_SetCurrentContext(self.ig_ctx) };
         // if (self.backend) |v| v.deinit();
+        if let Some(v) = self.backend {
+            v.deinit();
+        }
         // cimgui.c.ImGui_DestroyContext(self.ig_ctx);
-        unimplemented!(
-            "embedded::Inspector::deinit — core deactivateInspector + dcimgui \
-             DestroyContext (Phase-3 leaf, embedded.zig:1034-1039)"
-        )
+        unsafe { dcimgui_sys::ImGui_DestroyContext(self.ig_ctx) };
     }
 
     /// Queue a render for the next frame.
