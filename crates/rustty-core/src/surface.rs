@@ -3694,11 +3694,12 @@ where
                 // try t.printString("Ghostty failed to launch the requested command:");
                 //
                 // PORT NOTE (R2 identity): the product name in the user-facing
-                // message — `rustty_identity::APP_NAME`.
+                // message — `rustty_identity::APP_NAME_TITLECASE` (the oracle
+                // prints the capitalized product name here).
                 (*t).print_string(
                     format!(
                         "{} failed to launch the requested command:",
-                        rustty_identity::APP_NAME
+                        rustty_identity::APP_NAME_TITLECASE
                     )
                     .as_bytes(),
                 )?;

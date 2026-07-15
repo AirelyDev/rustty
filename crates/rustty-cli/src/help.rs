@@ -82,16 +82,24 @@ pub fn run() -> Result<u8, Error> {
     //     \\
     // );
     //   R2: user-facing `ghostty`/`Ghostty`/`Ghostty.app` -> the Rustty product
-    //   name (rustty-identity APP_NAME). These are user-facing product strings.
+    //   name. These are user-facing product strings; `app` (APP_NAME, lowercase)
+    //   is kept for command/executable positions (`Usage:`, the `-e top`
+    //   example) and `app_name` (APP_NAME_TITLECASE) is used for product-name
+    //   positions, per the oracle. NOTE: the oracle itself is inconsistent
+    //   between its two `open -na Ghostty.app` / `open -na ghostty.app`
+    //   mentions (src/cli/help.zig:56-57) — first capitalized, second not —
+    //   so that inconsistency is faithfully reproduced here for byte-for-byte
+    //   oracle parity, not "fixed".
     //   The Zig multiline literal joins its `\\` lines with `\n` and has no
     //   trailing newline, so this block ends with `Available actions:\n\n`.
     let app = rustty_identity::APP_NAME;
+    let app_name = rustty_identity::APP_NAME_TITLECASE;
     let head = format!(
         "Usage: {app} [+action] [options]\n\
          \n\
-         Run the {app} terminal emulator or a specific helper action.\n\
+         Run the {app_name} terminal emulator or a specific helper action.\n\
          \n\
-         If no `+action` is specified, run the {app} terminal emulator.\n\
+         If no `+action` is specified, run the {app_name} terminal emulator.\n\
          All configuration keys are available as command line options.\n\
          To specify a configuration key, use the `--<key>=<value>` syntax\n\
          where key and value are the same format you'd put into a configuration\n\
@@ -106,7 +114,7 @@ pub fn run() -> Result<u8, Error> {
          `{app} -e top` will run the `top` command inside the terminal.\n\
          \n\
          On macOS, launching the terminal emulator from the CLI is not\n\
-         supported and only actions are supported. Use `open -na {app}.app`\n\
+         supported and only actions are supported. Use `open -na {app_name}.app`\n\
          instead, or `open -na {app}.app --args --foo=bar --baz=quz` to pass\n\
          arguments.\n\
          \n\

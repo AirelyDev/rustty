@@ -90,11 +90,12 @@ pub fn run() -> Result<u8, Error> {
         }
     }
     // try stdout.print("Ghostty {s}\n\n", .{build_config.version_string});
-    //   R2: "Ghostty" -> the Rustty product name (rustty-identity APP_NAME).
+    //   R2: "Ghostty" -> the Rustty product name (rustty-identity
+    //   APP_NAME_TITLECASE; the oracle prints the capitalized product name here).
     write!(
         stdout,
         "{} {}",
-        rustty_identity::APP_NAME,
+        rustty_identity::APP_NAME_TITLECASE,
         build_config::VERSION_STRING
     )?;
     writeln!(stdout)?;

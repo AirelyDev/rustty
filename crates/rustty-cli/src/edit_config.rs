@@ -210,7 +210,8 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
         //     \\via this CLI command.
         //     ...
         // , .{});
-        //   R2: "Ghostty configuration" -> the Rustty product name.
+        //   R2: "Ghostty configuration" -> the Rustty product name
+        //   (APP_NAME_TITLECASE; the oracle prints the capitalized product name).
         write!(
             stderr,
             "The $EDITOR or $VISUAL environment variable is not set or is empty.\n\
@@ -224,7 +225,7 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
              you can find the configuration file at the following path:\n\
              \n\
              \n",
-            app = rustty_identity::APP_NAME,
+            app = rustty_identity::APP_NAME_TITLECASE,
         )?;
 
         // Output the path using the OSC8 sequence so that it is linked.

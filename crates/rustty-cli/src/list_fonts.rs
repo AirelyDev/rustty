@@ -202,13 +202,14 @@ where
         // try stderr.print(
         //     \\Ghostty was built without a font discovery mechanism. ...
         // , .{});
-        //   R2: the product name routes through rustty-identity.
+        //   R2: the product name routes through rustty-identity. Oracle prints
+        //   the capitalized product name at both positions here.
         write!(
             stderr,
             "{app} was built without a font discovery mechanism. This is a compile-time\n\
              option. Please review how {app} was built from source, contact the\n\
              maintainer to enable a font discovery mechanism, and try again.",
-            app = rustty_identity::APP_NAME,
+            app = rustty_identity::APP_NAME_TITLECASE,
         )?;
         // try stderr.flush();
         stderr.flush()?;

@@ -259,12 +259,13 @@ where
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (&args_iter, &stdout);
+        // R2: oracle prints the capitalized product name at both positions here.
         write!(
             stderr,
             "{app} was built without a font discovery mechanism. This is a compile-time\n\
              option. Please review how {app} was built from source, contact the\n\
              maintainer to enable a font discovery mechanism, and try again.",
-            app = rustty_identity::APP_NAME,
+            app = rustty_identity::APP_NAME_TITLECASE,
         )?;
         return Ok(1);
     }
@@ -530,13 +531,14 @@ fn lookup<SO: Write, SE: Write>(
     let face = match font_grid.resolver.collection.get_face(idx) {
         Ok(face) => face,
         Err(font::collection::Error::SpecialHasNoFace) => {
-            // R2: "Ghostty's internal sprites" → the product name via rustty-identity.
+            // R2: "Ghostty's internal sprites" → the product name via rustty-identity
+            // (APP_NAME_TITLECASE; the oracle prints the capitalized product name).
             write!(stdout, "U+{cp:0>2X} « ")?;
             write_codepoint(stdout, cp)?;
             writeln!(
                 stdout,
                 " » is handled by {}'s internal sprites.",
-                rustty_identity::APP_NAME
+                rustty_identity::APP_NAME_TITLECASE
             )?;
             return Ok(None);
         }

@@ -241,17 +241,20 @@ pub fn main() {
         let mut stdout = std::io::stdout().lock();
         // try stdout.print("Usage: ghostty +<action> [flags]\n\n", .{});
         // try stdout.print(\\This is the Ghostty helper CLI ... \\, .{});
-        //   R2: "ghostty" / "Ghostty" / "Ghostty.app" -> the Rustty product name.
+        //   R2: the `Usage:` command position keeps the lowercase command name
+        //   (`app` = APP_NAME); every other position here is the capitalized
+        //   product name per the oracle (`app_name` = APP_NAME_TITLECASE).
         let app = rustty_identity::APP_NAME;
+        let app_name = rustty_identity::APP_NAME_TITLECASE;
         let banner = format!(
             "Usage: {app} +<action> [flags]\n\n\
-             This is the {app} helper CLI that accompanies the graphical {app} app.\n\
+             This is the {app_name} helper CLI that accompanies the graphical {app_name} app.\n\
              To launch the terminal directly, please launch the graphical app\n\
-             (i.e. {app}.app on macOS). This CLI can be used to perform various\n\
+             (i.e. {app_name}.app on macOS). This CLI can be used to perform various\n\
              actions such as inspecting the version, listing fonts, etc.\n\
              \n\
-             On macOS, the terminal can also be launched using `open -na {app}.app`,\n\
-             or `open -na {app}.app --args --foo=bar --baz=qux` to pass arguments.\n\
+             On macOS, the terminal can also be launched using `open -na {app_name}.app`,\n\
+             or `open -na {app_name}.app --args --foo=bar --baz=qux` to pass arguments.\n\
              \n\
              We don't have proper help output yet, sorry! Please refer to the\n\
              source code or Discord community for help for now. We'll fix this in time.\n",

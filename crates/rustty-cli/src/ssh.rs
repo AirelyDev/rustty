@@ -34,16 +34,18 @@ const LOG_SCOPE: &str = "ssh";
 // const usage =
 //     \\Usage: ghostty +ssh [flags] [--] <ssh args...>
 //     ...
-//   R2: the `ghostty` binary name and `Ghostty terminfo` -> the Rustty product
-//   name/terminfo. Built at runtime from `rustty-identity::APP_NAME`.
+//   R2: the `ghostty` binary name (command position, lowercase APP_NAME) and
+//   `Ghostty terminfo` (product-name position, APP_NAME_TITLECASE per the
+//   oracle at src/cli/ssh.zig:18) -> the Rustty product name/terminfo.
 fn usage() -> String {
     let app = rustty_identity::APP_NAME;
+    let app_name = rustty_identity::APP_NAME_TITLECASE;
     format!(
         "Usage: {app} +ssh [flags] [--] <ssh args...>\n\
          \n\
          Flags:\n\
          \x20 --forward-env[=bool]  Enable TERM / SendEnv forwarding. Default: true.\n\
-         \x20 --terminfo[=bool]     Install {app} terminfo on first connect. Default: true.\n\
+         \x20 --terminfo[=bool]     Install {app_name} terminfo on first connect. Default: true.\n\
          \x20 --cache[=bool]        Use the terminfo install cache. Default: true.\n\
          \x20 --ssh=<path>          Path to the ssh binary. Default: first `ssh` on PATH.\n\
          \x20 --verbose             Print +ssh status lines to stderr.\n\
