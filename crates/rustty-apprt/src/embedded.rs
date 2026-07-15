@@ -1783,11 +1783,17 @@ impl Surface {
 // the ImGui *context* lifecycle LIVE: `init` (`ImGui_CreateContext` +
 // `CoreInspector.setup()` the shared IO once, INV-11), `deinit`
 // (`ImGui_ImplMetal_Shutdown` if a backend + `ImGui_DestroyContext`), and
-// `Backend::deinit`, plus the REAL non-GPU `updateContentScale`/`updateSize`. The
-// methods that drive the Metal *render* path (`initMetal`/`renderMetal`/`newFrame`)
-// and the objc/imgui input callbacks (mouse/scroll/cursor/focus/text/key) remain
-// documented `unimplemented!()` leaves that land with the Metal exports (Task 3)
-// and the input wiring (Task 6/9). `queueRender` forwards LIVE to
+// `Backend::deinit`, plus the REAL non-GPU `updateContentScale`/`updateSize`. Task 3
+// (the Metal exports) additionally lands `initMetal` (the dcimgui
+// `ImGui_ImplMetal_Init` + backend management; the objc `device.release` msgSend is
+// deferred with the rest of the objc/Metal work) and `newFrame` (the pure
+// delta-time `io.DeltaTime` setup) LIVE. `renderMetal` remains a documented
+// `unimplemented!()` leaf: its `inspector.render(surface)` call needs
+// `rustty_inspector::Inspector::render` (Task 15/17 — the widget aggregate is still a
+// zero-field placeholder) and its `MTLRenderCommandEncoder` construction needs the
+// objc2 msgSend seam, neither available yet. The objc/imgui input callbacks
+// (mouse/scroll/cursor/focus/text/key) likewise remain leaves that land with the
+// input wiring (Task 6/9). `queueRender` forwards LIVE to
 // [`Surface::queueInspectorRender`] (itself a Phase-3 leaf).
 pub struct Inspector {
     // const cimgui = @import("dcimgui");
@@ -1940,40 +1946,84 @@ impl Inspector {
     //
     // pub fn initMetal(self: *Inspector, device: objc.Object) bool { ... }
     //
-    // PORT NOTE: objc/Metal + dcimgui `ImGui_ImplMetal_Init` — Phase-3 leaf. The
-    // objc `device: objc.Object` handle → an opaque `*mut c_void` (no objc dep this
-    // milestone, blueprint §5/§8.1). Target of the E10 Darwin CAPI
-    // `rustty_inspector_metal_init`.
+    // PORT NOTE (Task 3): dcimgui `ImGui_ImplMetal_Init` + the backend
+    // teardown/tag management. The objc `device: objc.Object` handle → an opaque
+    // `*mut c_void` (the objc id crosses the C ABI untyped). Target of the Darwin
+    // CAPI `rustty_inspector_metal_init`.
     pub fn initMetal(&mut self, device: *mut c_void) -> bool {
         // defer device.msgSend(void, objc.sel("release"), .{});
-        // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
         //
+        // PORT NOTE (objc leaf — deferred): the reference balances the +1 retain the
+        // host handed us by releasing `device` on scope exit (INV-11 / I16 objc-id
+        // balance). That `release` msgSend needs an objc runtime binding (objc2),
+        // which rustty-apprt does not yet pull in — it lands together with
+        // `renderMetal`'s `MTLRenderCommandEncoder` msgSends (both objc, same
+        // milestone). Omitting the balancing release over-RETAINS the host-owned
+        // `device` by one ref (a leak — never an over-release, the safe direction the
+        // task's "do NOT over-release" contract mandates). This path is inert until
+        // `renderMetal` goes live, so in practice no device is initialized here yet.
+
+        // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        unsafe { dcimgui_sys::ImGui_SetCurrentContext(self.ig_ctx) };
+
         // if (self.backend) |v| {
         //     v.deinit();
         //     self.backend = null;
         // }
-        //
+        if let Some(v) = self.backend {
+            v.deinit();
+            self.backend = None;
+        }
+
         // if (!cimgui.ImGui_ImplMetal_Init(device.value)) {
         //     log.warn("failed to initialize metal backend", .{});
         //     return false;
         // }
-        // self.backend = .metal;
         //
+        // PORT NOTE: `ImGui_ImplMetal_Init` is `#[cfg(target_os = "macos")]` in
+        // dcimgui-sys (the imgui_impl_metal.mm backend is macOS-only), mirroring the
+        // reference `Backend.deinit`'s `isDarwin()` guard. This method is only ever
+        // reached through the `#[cfg(target_os = "macos")]` `rustty_inspector_metal_init`
+        // export, so off macOS the call is elided and the arm is unreachable in
+        // practice.
+        #[cfg(target_os = "macos")]
+        {
+            // SAFETY: `device` is the host-owned `id<MTLDevice>` the caller passed;
+            // the current ImGui context was set above.
+            if !unsafe { dcimgui_sys::ImGui_ImplMetal_Init(device) } {
+                // log.warn — no scoped-log sink in this leaf (vt-c precedent): stderr.
+                eprintln!("failed to initialize metal backend");
+                return false;
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = device;
+        }
+
+        // self.backend = .metal;
+        self.backend = Some(Backend::Metal);
+
         // log.debug("initialized metal backend", .{});
+        // (no scoped-log sink in this leaf — vt-c precedent — and a debug line;
+        // elided rather than emitted to stderr.)
+
         // return true;
-        let _ = device;
-        unimplemented!(
-            "embedded::Inspector::initMetal — objc/Metal + dcimgui ImGui_ImplMetal_Init \
-             (Phase-3 leaf, embedded.zig:1047-1064)"
-        )
+        true
     }
 
     // pub fn renderMetal(self: *Inspector, command_buffer: objc.Object, desc: objc.Object) !void { ... }
     //
-    // PORT NOTE: the objc/Metal render pass (dcimgui `ImGui_ImplMetal_NewFrame`/
-    // `RenderDrawData` + `MTLRenderCommandEncoder` msgSends) — Phase-3 leaf. The two
-    // objc `objc.Object` handles → opaque `*mut c_void`. Target of the E10 Darwin
-    // CAPI `rustty_inspector_metal_render`.
+    // PORT NOTE (Task 3 — still a leaf, two live blockers): the double-frame loop's
+    // dcimgui half (`ImGui_ImplMetal_NewFrame`/`ImGui_NewFrame`/`ImGui_Render`/
+    // `ImGui_GetDrawData`/`ImGui_ImplMetal_RenderDrawData`) and `self.newFrame()` ARE
+    // available now, but the body cannot yet compile: (1) `inspector.render(surface)`
+    // needs `rustty_inspector::Inspector::render`, which does not exist — the widget
+    // aggregate is a zero-field placeholder until Task 15/17; and (2) building the
+    // `MTLRenderCommandEncoder` (`command_buffer.msgSend(renderCommandEncoderWithDescriptor:)`)
+    // + the `release`/`endEncoding` msgSends need the objc2 seam rustty-apprt does not
+    // yet pull in. The two objc `objc.Object` handles → opaque `*mut c_void`. Target
+    // of the Darwin CAPI `rustty_inspector_metal_render`.
     pub fn renderMetal(
         &mut self,
         command_buffer: *mut c_void,
@@ -2019,8 +2069,9 @@ impl Inspector {
         // );
         let _ = (command_buffer, desc);
         unimplemented!(
-            "embedded::Inspector::renderMetal — objc/Metal render + dcimgui \
-             ImplMetal_NewFrame/RenderDrawData (Phase-3 leaf, embedded.zig:1066-1109)"
+            "embedded::Inspector::renderMetal — blocked on rustty_inspector::Inspector::render \
+             (Task 15/17, widget aggregate) + the objc2 MTLRenderCommandEncoder msgSend seam \
+             (embedded.zig:1066-1109)"
         )
     }
 
@@ -2215,26 +2266,50 @@ impl Inspector {
 
     // fn newFrame(self: *Inspector) !void { ... }
     //
-    // PORT NOTE: the imgui frame delta-time setup (`io.DeltaTime`) — Phase-3 leaf. A
-    // private helper called ONLY by the deferred [`Inspector::renderMetal`], so it is
-    // `#[allow(dead_code)]` until that render path goes live (E10 / Phase-3).
+    // PORT NOTE (Task 3): the imgui frame delta-time setup (`io.DeltaTime`), ported
+    // LIVE — pure dcimgui + `std::time` (no objc). A private helper called ONLY by
+    // [`Inspector::renderMetal`], which is itself still a leaf (see its note), so this
+    // stays `#[allow(dead_code)]` until that render path compiles.
     #[allow(dead_code)]
     fn newFrame(&mut self) -> Result<(), ApprtError> {
         // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
-        //
+        let io = unsafe { dcimgui_sys::ImGui_GetIO() };
+
         // // Determine our delta time
         // const now = try std.time.Instant.now();
+        //
+        // PORT NOTE: the reference `std.time.Instant.now()` is `try` (it can error on
+        // platforms lacking a monotonic clock); Rust's `std::time::Instant::now()` is
+        // infallible, so the `try`/error path collapses and this fn only ever returns
+        // `Ok`. The `Result` signature is kept to mirror the reference's `!void` (its
+        // sole caller `renderMetal` does `try self.newFrame()`).
+        let now = std::time::Instant::now();
+
         // io.DeltaTime = if (self.instant) |prev| delta: {
         //     const since_ns: f64 = @floatFromInt(now.since(prev));
         //     const ns_per_s: f64 = @floatFromInt(std.time.ns_per_s);
         //     const since_s: f32 = @floatCast(since_ns / ns_per_s);
         //     break :delta @max(0.00001, since_s);
         // } else (1.0 / 60.0);
+        //
+        // PORT NOTE: `now.since(prev)` yields nanoseconds elapsed since `prev`;
+        // `saturating_duration_since` gives the same non-negative delta (0 if the
+        // monotonic clock ever reports `prev` as later, matching the reference's
+        // now>=prev assumption). `std.time.ns_per_s` == 1e9.
+        let delta_time: f32 = if let Some(prev) = self.instant {
+            let since_ns: f64 = now.saturating_duration_since(prev).as_nanos() as f64;
+            let ns_per_s: f64 = 1_000_000_000.0;
+            let since_s: f32 = (since_ns / ns_per_s) as f32;
+            since_s.max(0.00001)
+        } else {
+            1.0 / 60.0
+        };
+        unsafe { (*io).DeltaTime = delta_time };
+
         // self.instant = now;
-        unimplemented!(
-            "embedded::Inspector::newFrame — dcimgui io.DeltaTime delta-time setup \
-             (Phase-3 leaf, embedded.zig:1228-1240)"
-        )
+        self.instant = Some(now);
+
+        Ok(())
     }
 }
 
