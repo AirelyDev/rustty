@@ -87,11 +87,17 @@ extern "C" {
 // exactly mirroring the reference's own binding surface (ghostty
 // pkg/dcimgui/main.zig:52-73, a manual `pub extern fn` block for the same
 // reason). The inspector's `DetachableHeader`/`detachableHeader` (widgets.zig)
-// drive window docking through these three; the wider DockBuilder set the
-// reference declares can be added as later widget tasks need it.
+// drive window docking through the first three; `screen::Info.createDockSpace`
+// (Inspector.rs) additionally needs `ImGui_DockBuilderGetNode` /
+// `ImGui_DockBuilderAddNodeEx` to find-or-build the dockspace's root node. The
+// wider DockBuilder set the reference declares can be added as later widget
+// tasks need it.
 //
 // `ImGuiID` is a `c_uint` and `ImGuiDir` a `c_int` (bindgen type aliases); the
-// out-params cross as `*mut ImGuiID`.
+// out-params cross as `*mut ImGuiID`. `ImGuiDockNodeFlags` is `c_int` (a public
+// Dear Bindings typedef, `dcimgui.h:298`) — bindgen already emits it as
+// `pub type ImGuiDockNodeFlags = ::std::os::raw::c_int;`, so it is reused
+// as-is (no local redeclaration needed).
 extern "C" {
     /// Split a dock node into two, returning the new node id and writing the
     /// two halves into the out-params. `split_dir` is an `ImGuiDir`,
@@ -112,7 +118,44 @@ extern "C" {
     /// Finalize the dock layout built under `node_id`.
     /// (ghostty pkg/dcimgui/main.zig:73 — `ImGui_DockBuilderFinish`.)
     pub fn ImGui_DockBuilderFinish(node_id: ImGuiID);
+
+    /// Look up the dock node with id `node_id`, or return null if it does not
+    /// exist yet. `screen::Info.createDockSpace` uses the null-ness to decide
+    /// whether the dockspace still needs to be built this run.
+    /// (ghostty pkg/dcimgui/main.zig:53 — `ImGui_DockBuilderGetNode`, which
+    /// the reference itself types as `?*anyopaque`; we return the opaque
+    /// `ImGuiDockNode` pointer directly.)
+    pub fn ImGui_DockBuilderGetNode(node_id: ImGuiID) -> *mut ImGuiDockNode;
+
+    /// Create (or recreate) a dock node with the given id and flags, e.g. the
+    /// private `ImGuiDockNodeFlagsPrivate::DockSpace` flag used to mark a node
+    /// as a dockspace root. Returns the node's id.
+    /// (ghostty pkg/dcimgui/main.zig:56 — `ImGui_DockBuilderAddNodeEx`.)
+    pub fn ImGui_DockBuilderAddNodeEx(node_id: ImGuiID, flags: ImGuiDockNodeFlags) -> ImGuiID;
 }
+
+/// Opaque handle for Dear ImGui's internal `ImGuiDockNode` (docking-branch,
+/// `dcimgui_internal.h`). bindgen never sees its definition (it parses only
+/// the public `dcimgui.h`, and `ImGuiDockNode` is internal-only with
+/// bitfields Dear Bindings cannot translate), so — mirroring the reference's
+/// own `?*anyopaque` typing (ghostty pkg/dcimgui/main.zig:53) — we model it as
+/// a zero-sized opaque struct. It only ever crosses the FFI boundary as a raw
+/// pointer (returned by `ImGui_DockBuilderGetNode`, null-checked, never
+/// dereferenced on the Rust side).
+#[repr(C)]
+pub struct ImGuiDockNode {
+    _unused: [u8; 0],
+}
+
+/// Private docking flag `ImGuiDockNodeFlagsPrivate_DockSpace` (Dear ImGui
+/// `imgui_internal.h`'s `ImGuiDockNodeFlagsPrivate_` enum; not part of the
+/// public Dear Bindings `dcimgui.h` surface, hence not bindgen-generated).
+/// Marks a dock node as a dockspace root. Value mirrors the reference's own
+/// manual redeclaration (ghostty pkg/dcimgui/main.zig:38 —
+/// `ImGuiDockNodeFlagsPrivate.DockSpace = 1 << 10`), which in turn matches
+/// Dear ImGui's `ImGuiDockNodeFlagsPrivate_DockSpace = 1 << 10` in
+/// `dcimgui_internal.h`.
+pub const IM_GUI_DOCK_NODE_FLAGS_PRIVATE_DOCK_SPACE: ImGuiDockNodeFlags = 1 << 10;
 
 // ---------------------------------------------------------------------------
 // Dear ImGui Metal rendering backend FFI (macOS).
@@ -187,6 +230,18 @@ extern "C" {
 mod tests {
     use super::*;
     use std::ptr;
+    use std::sync::Mutex;
+
+    /// Dear ImGui keeps its "current context" in a plain (non-thread-local,
+    /// non-atomic) global (`GImGui`). `cargo test`'s default parallel harness
+    /// runs each `#[test]` fn on its own thread, so two tests concurrently
+    /// calling `ImGui_CreateContext`/`ImGui_DestroyContext` race that global
+    /// and corrupt its internal tables (observed: a `AddSettingsHandler`
+    /// double-registration assert / abort). Every test below that touches a
+    /// context takes this lock first, serializing them — same fix shape as
+    /// e.g. `rustty-vt-c`'s `TEST_LOCK` / `rustty-os`'s `ENV_TEST_LOCK` for
+    /// other non-thread-safe global C state.
+    static IMGUI_CONTEXT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// R3 known-answer test: prove the vendored Dear ImGui 1.92.5 + Dear
     /// Bindings 0.17 C API links and runs.
@@ -206,6 +261,7 @@ mod tests {
     ///   * tears the context down (`ImGui_DestroyContext`).
     #[test]
     fn kat_dcimgui_1_92_5_context_lifecycle() {
+        let _guard = IMGUI_CONTEXT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             // Create a context (NULL => Dear ImGui builds a default shared font
             // atlas). Becomes the current context.
@@ -259,6 +315,72 @@ mod tests {
             // black_box keeps the reference (and thus the link dependency)
             // from being elided; a resolved symbol is never null.
             assert!(!std::hint::black_box(sym).is_null());
+        }
+    }
+
+    /// Link test for the Dear ImGui internal DockBuilder FFI surface
+    /// (`ImGui_DockBuilder*`), the same shape as `link_imgui_impl_metal_ffi`
+    /// above: references each entry point so a missing export from the
+    /// compiled `dcimgui` archive (docking build) is a *link* error, not a
+    /// silent runtime failure. Includes `ImGui_DockBuilderGetNode` /
+    /// `ImGui_DockBuilderAddNodeEx` — the two symbols this change adds for
+    /// `screen::Info.createDockSpace` — alongside the three already wired.
+    #[test]
+    fn link_imgui_dock_builder_ffi() {
+        let symbols: [*const (); 5] = [
+            ImGui_DockBuilderSplitNode as *const (),
+            ImGui_DockBuilderDockWindow as *const (),
+            ImGui_DockBuilderFinish as *const (),
+            ImGui_DockBuilderGetNode as *const (),
+            ImGui_DockBuilderAddNodeEx as *const (),
+        ];
+        for sym in symbols {
+            assert!(!std::hint::black_box(sym).is_null());
+        }
+    }
+
+    /// Known-answer test for `ImGui_DockBuilderAddNodeEx` /
+    /// `ImGui_DockBuilderGetNode`: proves a node created with `AddNodeEx`
+    /// round-trips through `GetNode` as non-null (the null-check
+    /// `screen::Info.createDockSpace` performs to decide whether the
+    /// dockspace still needs to be built), and separately known-answers the
+    /// private `DockSpace` flag's bit value.
+    ///
+    /// Deliberately passes `flags = 0` (a plain floating node), NOT the
+    /// `DockSpace` flag: per Dear ImGui's own `DockBuilderAddNode` (imgui.cpp)
+    /// the `ImGuiDockNodeFlags_DockSpace` bit routes through `ImGui::DockSpace()`
+    /// — the widget call — which requires an active `NewFrame`/window scope.
+    /// Every real call site (`screen::Info.createDockSpace`, widgets.rs'
+    /// `DetachableHeader::window`) makes these calls from inside such a scope;
+    /// a headless unit test has none, so exercising the flag here would
+    /// segfault on a precondition the binding correctly forwards rather than
+    /// violates.
+    #[test]
+    fn kat_dock_builder_add_node_ex_get_node_round_trip() {
+        let _guard = IMGUI_CONTEXT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(IM_GUI_DOCK_NODE_FLAGS_PRIVATE_DOCK_SPACE, 1 << 10);
+        unsafe {
+            let ctx = ImGui_CreateContext(ptr::null_mut());
+            assert!(!ctx.is_null(), "ImGui_CreateContext(NULL) returned null");
+
+            let node_id: ImGuiID = 0xD0C5_0000;
+            let created = ImGui_DockBuilderAddNodeEx(node_id, 0);
+            assert_ne!(created, 0, "ImGui_DockBuilderAddNodeEx returned id 0");
+
+            let node = ImGui_DockBuilderGetNode(created);
+            assert!(
+                !node.is_null(),
+                "ImGui_DockBuilderGetNode(created) returned null after AddNodeEx"
+            );
+
+            // A node id that was never added must look up as null.
+            let missing = ImGui_DockBuilderGetNode(node_id.wrapping_add(0x1234));
+            assert!(
+                missing.is_null(),
+                "ImGui_DockBuilderGetNode(<unknown id>) should return null"
+            );
+
+            ImGui_DestroyContext(ctx);
         }
     }
 }
