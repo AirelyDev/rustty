@@ -17,6 +17,10 @@ workspace = true
 
 [dependencies]
 rustty-vt = { workspace = true }
+# termio.rs: names `rustty_lib::allocator::{GlobalZigAllocator, ZigAllocatorRef}`
+# for the inspector parser `Stream::init_alloc` (the VT-events widget backing
+# allocator).
+rustty-lib = { workspace = true }
 rustty-font = { workspace = true }
 rustty-util = { workspace = true }
 # R2 acyclic overlay edge (INV-7, Task 5): the inspector's

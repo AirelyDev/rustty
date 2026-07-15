@@ -67,7 +67,14 @@ pub mod surface;
 // reference body; they inhabit in place once `screen::Info` lands
 // (grows-in-place, the screen.rs precedent).
 pub mod terminal;
-// pub const termio = @import("widgets/termio.zig");        (Phase 3)
+// pub const termio = @import("widgets/termio.zig");
+//
+// PORT NOTE (Task 16): the VT-event stream inspector — `Stream` (draw + keyboard
+// nav, R4 mutable reverse-iterator selection sync), `VTEvent` (arena-backed
+// snapshot + the `@typeInfo` metadata-encoder hand-expansion, §3/S10), and
+// `VTHandler`/`State` (the R1 `*VTEvent.Ring` self-alias, proven SB/TB-clean on
+// `.port/phase-2/mirihar-inspector-vthandler`). LIVE.
+pub mod termio;
 
 /// Minimal `defer`-style scope guard — runs `f` on drop. Mirrors Zig's `defer`
 /// for the ImGui `PushID`/`PopID`, `Begin`/`End`, and `PushStyleVar`/`PopStyleVar`
