@@ -645,6 +645,7 @@ dependencies = [
  "rustty-vaxis",
  "rustty-vt",
  "rustty-zf",
+ "zlib-sys",
 ]
 
 [[package]]

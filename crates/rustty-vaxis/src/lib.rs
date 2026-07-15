@@ -87,6 +87,12 @@ pub mod tty;
 pub mod unicode;
 pub mod uucode;
 pub mod vaxis;
+// CHUNK 5 adds the vxfw (vaxis widget framework) SUBSET that `cli +boo` consumes:
+// `vxfw/vxfw.zig` core (Widget/EventContext/DrawContext/Surface/SubSurface/Event/
+// Command/Tick + value types + the VxfwArena) plus the three widgets boo uses:
+// `vxfw::App`, `vxfw::Text`, `vxfw::Center`. The other 13 vxfw widgets are unused by
+// ghostty (YAGNI) and out of scope.
+pub mod vxfw;
 pub mod widgets;
 pub mod window;
 

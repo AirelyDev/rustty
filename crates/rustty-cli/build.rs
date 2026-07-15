@@ -1,17 +1,34 @@
-//! build.rs — generates `help_strings.Action` (`action_help`) by scanning each
-//! CLI action module's `pub fn run` doc block.
+//! build.rs — two build-time generators.
 //!
-//! PORTS: `helpgen.genActions` — the reference iterates `@typeInfo(Action)
-//! .@"enum".fields`, opens each `action.file()` (`cli/<name>.zig`), and extracts
-//! the `///` doc immediately above `pub fn run`, requiring it to be present
-//! (`std.process.exit(1)` otherwise). Here the action set + `Action -> module`
-//! mapping come from `rustty.rs`'s `tag_name` (the kebab `+<verb>`; the module
-//! file is the tag with `-` → `_`). Keyed by the `Action` variant.
+//! 1. `help_strings.Action` (`action_help`) by scanning each CLI action module's
+//!    `pub fn run` doc block.
+//!
+//!    PORTS: `helpgen.genActions` — the reference iterates `@typeInfo(Action)
+//!    .@"enum".fields`, opens each `action.file()` (`cli/<name>.zig`), and extracts
+//!    the `///` doc immediately above `pub fn run`, requiring it to be present
+//!    (`std.process.exit(1)` otherwise). Here the action set + `Action -> module`
+//!    mapping come from `rustty.rs`'s `tag_name` (the kebab `+<verb>`; the module
+//!    file is the tag with `-` → `_`). Keyed by the `Action` variant.
+//!
+//! 2. `framedata.compressed` — the `+boo` animation asset.
+//!
+//!    PORTS: `build/GhosttyFrameData.zig` + `build/framegen/main.c` — reads the
+//!    vendored `assets/framegen/frames/*.txt`, sorts them by name (byte order, C
+//!    `strcmp`), joins their contents with the `\x01` separator, and raw-DEFLATE
+//!    compresses the result via `zlib-sys::deflate_raw` (same zlib 1.3.1 + params
+//!    as framegen: level=-1, method=Z_DEFLATED, windowBits=-15, memLevel=8,
+//!    strategy=0). The output is written to `$OUT_DIR/framedata.compressed`, which
+//!    `boo` `include_bytes!`s (the reference's `@embedFile`).
 
 use rustty_helpgen::{doc_above, escape_rust_string};
 use std::path::Path;
 
 fn main() {
+    gen_action_help();
+    gen_framedata();
+}
+
+fn gen_action_help() {
     let rustty = std::fs::read_to_string("src/rustty.rs").expect("read rustty.rs");
     println!("cargo:rerun-if-changed=src/rustty.rs");
 
@@ -54,6 +71,51 @@ fn main() {
 
     let dst = Path::new(&std::env::var("OUT_DIR").unwrap()).join("action_help.rs");
     std::fs::write(dst, out).expect("write action_help.rs");
+}
+
+/// Generate `$OUT_DIR/framedata.compressed` — the R1 port of
+/// `GhosttyFrameData.zig` + `framegen/main.c` (see the module header).
+fn gen_framedata() {
+    let frames_dir = Path::new("assets/framegen/frames");
+    println!("cargo:rerun-if-changed=assets/framegen/frames");
+
+    // Collect the `.txt` frame files. `main.c`'s `is_frame_file`: name longer
+    // than 4 with a `.txt` suffix.
+    let mut names: Vec<String> = std::fs::read_dir(frames_dir)
+        .unwrap_or_else(|e| panic!("scan {}: {e}", frames_dir.display()))
+        .filter_map(|entry| {
+            let name = entry.ok()?.file_name().into_string().ok()?;
+            (name.len() > 4 && name.ends_with(".txt")).then_some(name)
+        })
+        .collect();
+    assert!(
+        !names.is_empty(),
+        "no frame files found in {}",
+        frames_dir.display()
+    );
+
+    // `qsort(names, ..., compare_names)` — compare_names is `strcmp`, i.e. a
+    // byte-lexicographic ordering of the file names. Rust `str::cmp`/`Ord` on
+    // ASCII file names is the same byte order.
+    names.sort();
+
+    // Join the frame contents with the `\x01` SEPARATOR (no trailing separator).
+    let mut joined: Vec<u8> = Vec::new();
+    for (i, name) in names.iter().enumerate() {
+        let path = frames_dir.join(name);
+        let content =
+            std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        joined.extend_from_slice(&content);
+        if i < names.len() - 1 {
+            joined.push(0x01);
+        }
+    }
+
+    // Raw-DEFLATE compress (framegen's `deflateInit2(.., -MAX_WBITS, 8, ..)`).
+    let compressed = zlib_sys::deflate_raw(&joined).expect("deflate_raw framedata");
+
+    let dst = Path::new(&std::env::var("OUT_DIR").unwrap()).join("framedata.compressed");
+    std::fs::write(&dst, &compressed).expect("write framedata.compressed");
 }
 
 /// Parse the `tag_name` match arms (`Action::Version => "version",`) into ordered

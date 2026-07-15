@@ -73,9 +73,20 @@ rustty-vaxis = { workspace = true }
 # crate with NO edge back to cli/config/apprt, so `cli -> zf` is a downward edge —
 # acyclic (G7/R4).
 rustty-zf = { workspace = true }
+# C5 (boo, DEFERRALS cli C5 finale): the `+boo` animation decompresses the
+# `framedata` asset at runtime with RAW DEFLATE (`inflate_raw`, windowBits=-15) —
+# the exact counterpart of the reference's `std.compress.flate .raw` decompress.
+# zlib-sys wraps the SAME vendored zlib 1.3.1 the reference uses (R3); a low
+# vendored-C -sys crate with no edge back to cli — acyclic (G7/R4).
+zlib-sys = { workspace = true }
 
-# Build-time codegen of the `help_strings.Action` table (R1 port of
-# helpgen.genActions): build.rs scans each cli action module's `pub fn run` doc.
-# std-only leaf, acyclic build-dep edge (G7).
+# Build-time codegen. Two generators:
+#  * `help_strings.Action` (R1 port of helpgen.genActions): scans each cli action
+#    module's `pub fn run` doc.  (std-only leaf, acyclic build-dep edge, G7.)
+#  * `framedata.compressed` (R1 port of GhosttyFrameData.zig + framegen/main.c):
+#    reads `assets/framegen/frames/*.txt`, sorts, joins with `\x01`, and raw-DEFLATE
+#    compresses via `zlib-sys::deflate_raw` (the same zlib 1.3.1 + params as the
+#    reference framegen). `boo` `include_bytes!`s the result from `$OUT_DIR`.
 [build-dependencies]
 rustty-helpgen = { workspace = true }
+zlib-sys = { workspace = true }

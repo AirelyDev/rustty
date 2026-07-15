@@ -51,6 +51,14 @@ const SOURCES: &[&str] = &[
     "vendor/trees.c",
     "vendor/compress.c",
     "vendor/zutil.c",
+    // The DEFLATE (compression) translation units, needed by the framegen asset
+    // step (`cli +boo`): `deflate` is the compressor core, `trees` builds the
+    // Huffman trees it emits, and `compress` provides the `compressBound` size
+    // helper framegen's `main.c` uses. These are the verbatim upstream zlib
+    // 1.3.1 sources (byte-identical to the reference's vendored zlib).
+    "vendor/deflate.c",
+    "vendor/trees.c",
+    "vendor/compress.c",
 ];
 
 fn main() {

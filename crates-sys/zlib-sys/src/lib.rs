@@ -83,8 +83,25 @@ pub const Z_OK: c_int = 0;
 pub const Z_STREAM_END: c_int = 1;
 /// `Z_NO_FLUSH` — the normal inflate flush mode.
 pub const Z_NO_FLUSH: c_int = 0;
+/// `Z_FINISH` — the deflate flush mode used for a single-shot compress: all
+/// input is provided up front and all output is produced before returning
+/// `Z_STREAM_END` (framegen's `deflate(&stream, Z_FINISH)`).
+pub const Z_FINISH: c_int = 4;
+/// `Z_DEFLATED` — the only supported compression method (`deflateInit2`'s
+/// `method` arg).
+pub const Z_DEFLATED: c_int = 8;
+/// `Z_DEFAULT_COMPRESSION` — level `-1`, zlib's default (6). framegen passes
+/// this as `deflateInit2`'s `level`.
+pub const Z_DEFAULT_COMPRESSION: c_int = -1;
+/// `Z_DEFAULT_STRATEGY` — the general-purpose deflate strategy (0). framegen
+/// passes this as `deflateInit2`'s `strategy`.
+pub const Z_DEFAULT_STRATEGY: c_int = 0;
 /// Default window bits for a zlib-wrapped stream (`MAX_WBITS` = 15).
 pub const MAX_WBITS: c_int = 15;
+/// Raw DEFLATE window bits: a negative `windowBits` selects the raw stream
+/// format (no zlib/gzip header or trailer). framegen uses `-MAX_WBITS`; the
+/// reference `boo` decompresses with `.raw` — both are `-15`.
+pub const RAW_WBITS: c_int = -MAX_WBITS;
 
 extern "C" {
     /// `inflateInit2_`: initialize `strm` for decompression with `window_bits`
@@ -115,6 +132,125 @@ extern "C" {
     pub fn inflateEnd(strm: *mut z_stream) -> c_int;
 }
 
+// ---------------------------------------------------------------------------
+// Streaming deflate (DEFLATE compression) FFI surface.
+//
+// The C-side primitive framegen's `main.c` uses to build the `framedata` asset:
+// `deflateInit2_`/`deflate`/`deflateEnd` over the same ABI-stable `z_stream`,
+// plus `compressBound` to size the output buffer. framegen selects RAW DEFLATE
+// via `-MAX_WBITS`, level `Z_DEFAULT_COMPRESSION`, `memLevel = 8`, and
+// `Z_DEFAULT_STRATEGY`.
+// ---------------------------------------------------------------------------
+
+extern "C" {
+    /// `deflateInit2_`: initialize `strm` for compression (the public
+    /// `deflateInit2` macro forwards version/size here).
+    ///
+    /// # Safety
+    /// `strm` must point to a zeroed `z_stream`; `version`/`stream_size` must
+    /// describe this crate's compiled zlib.
+    pub fn deflateInit2_(
+        strm: *mut z_stream,
+        level: c_int,
+        method: c_int,
+        window_bits: c_int,
+        mem_level: c_int,
+        strategy: c_int,
+        version: *const c_char,
+        stream_size: c_int,
+    ) -> c_int;
+
+    /// `deflate`: compress as much as possible, updating the `next_*`/`avail_*`
+    /// fields. With `Z_FINISH` and enough output space it returns
+    /// `Z_STREAM_END`.
+    ///
+    /// # Safety
+    /// `strm` must be a stream previously initialized by `deflateInit2_` with
+    /// valid input/output buffers described by its fields.
+    pub fn deflate(strm: *mut z_stream, flush: c_int) -> c_int;
+
+    /// `deflateEnd`: release all dynamically allocated state for `strm`.
+    ///
+    /// # Safety
+    /// `strm` must be a stream previously initialized by `deflateInit2_`.
+    pub fn deflateEnd(strm: *mut z_stream) -> c_int;
+
+    /// `compressBound`: an upper bound on the compressed size for `source_len`
+    /// input bytes (used to size the single-shot output buffer).
+    pub fn compressBound(source_len: c_ulong) -> c_ulong;
+}
+
+/// Error returned by [`deflate_raw`] when compression fails (a malformed init
+/// or an unexpected non-`Z_STREAM_END` result — neither is reachable for the
+/// framegen inputs, but we surface it rather than panic).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeflateError;
+
+/// Compress `data` as a **raw** DEFLATE stream (no zlib/gzip wrapper), byte-for-byte
+/// matching framegen's `main.c`:
+///
+/// ```text
+/// deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY);
+/// deflate(&stream, Z_FINISH);   // one shot: all input, all output
+/// ```
+///
+/// The output buffer is sized with [`compressBound`] up front so a single
+/// `Z_FINISH` produces the whole stream. Round-trips with [`inflate_raw`].
+pub fn deflate_raw(data: &[u8]) -> Result<Vec<u8>, DeflateError> {
+    // SAFETY: a fully zeroed z_stream is the documented pre-init state.
+    let mut strm: z_stream = unsafe { std::mem::zeroed() };
+
+    // SAFETY: valid zeroed stream; params mirror framegen exactly (raw DEFLATE,
+    // default level, method Z_DEFLATED, memLevel 8, default strategy).
+    let rc = unsafe {
+        deflateInit2_(
+            &mut strm,
+            Z_DEFAULT_COMPRESSION,
+            Z_DEFLATED,
+            RAW_WBITS,
+            8,
+            Z_DEFAULT_STRATEGY,
+            ZLIB_VERSION.as_ptr() as *const c_char,
+            std::mem::size_of::<z_stream>() as c_int,
+        )
+    };
+    if rc != Z_OK {
+        return Err(DeflateError);
+    }
+
+    // Guard so `deflateEnd` always runs, even on the error paths below.
+    struct Guard(*mut z_stream);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            // SAFETY: the stream was successfully initialized above.
+            unsafe {
+                deflateEnd(self.0);
+            }
+        }
+    }
+    let _guard = Guard(&mut strm);
+
+    // SAFETY: compressBound is a pure size computation.
+    let bound = unsafe { compressBound(data.len() as c_ulong) } as usize;
+    let mut out: Vec<u8> = vec![0u8; bound];
+
+    strm.next_in = data.as_ptr();
+    strm.avail_in = data.len() as c_uint;
+    strm.next_out = out.as_mut_ptr();
+    strm.avail_out = out.len() as c_uint;
+
+    // SAFETY: strm is initialized; in/out buffers are valid and bound-sized so a
+    // single Z_FINISH suffices.
+    let rc = unsafe { deflate(&mut strm, Z_FINISH) };
+    if rc != Z_STREAM_END {
+        return Err(DeflateError);
+    }
+
+    let produced = strm.total_out as usize;
+    out.truncate(produced);
+    Ok(out)
+}
+
 /// Error returned by [`inflate_zlib`] when the input is not a valid
 /// zlib-wrapped DEFLATE stream or decompression otherwise fails.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,16 +264,33 @@ pub struct InflateError;
 /// bytes with a size limit) and returns [`InflateError`] on any malformed input
 /// or if the decompressed size would exceed `max_size`.
 pub fn inflate_zlib(data: &[u8], max_size: usize) -> Result<Vec<u8>, InflateError> {
+    inflate_impl(data, max_size, MAX_WBITS)
+}
+
+/// Decompress a **raw** DEFLATE stream (no zlib/gzip wrapper) into a freshly
+/// allocated `Vec<u8>`, refusing to produce more than `max_size` output bytes.
+///
+/// This is the exact counterpart of the reference `boo`'s
+/// `std.compress.flate.Decompress.init(&src, .raw, &.{})`: raw DEFLATE selected
+/// by the negative window bits [`RAW_WBITS`] (`-15`). Used to decompress the
+/// `framedata` asset produced by the framegen raw-DEFLATE step.
+pub fn inflate_raw(data: &[u8], max_size: usize) -> Result<Vec<u8>, InflateError> {
+    inflate_impl(data, max_size, RAW_WBITS)
+}
+
+/// Shared streaming-inflate core, parameterized by `window_bits`
+/// ([`MAX_WBITS`] = zlib-wrapped, [`RAW_WBITS`] = raw DEFLATE).
+fn inflate_impl(data: &[u8], max_size: usize, window_bits: c_int) -> Result<Vec<u8>, InflateError> {
     // SAFETY: a fully zeroed z_stream is the documented pre-init state; all
     // pointer fields are NULL so zlib installs its own allocator.
     let mut strm: z_stream = unsafe { std::mem::zeroed() };
 
     // SAFETY: `strm` is a valid zeroed stream; ZLIB_VERSION/size describe our
-    // compiled zlib. MAX_WBITS selects the zlib (Adler-32 wrapped) format.
+    // compiled zlib. `window_bits` selects zlib-wrapped (+15) or raw (-15).
     let rc = unsafe {
         inflateInit2_(
             &mut strm,
-            MAX_WBITS,
+            window_bits,
             ZLIB_VERSION.as_ptr() as *const c_char,
             std::mem::size_of::<z_stream>() as c_int,
         )
@@ -282,5 +435,33 @@ mod tests {
         ];
         // The decompressed output is 27 bytes; a cap of 10 must fail.
         assert_eq!(inflate_zlib(compressed, 10), Err(InflateError));
+    }
+
+    /// Round-trip known-answer test for the raw DEFLATE surface: `deflate_raw`
+    /// (framegen's compressor) → `inflate_raw` (boo's decompressor) must recover
+    /// the original bytes exactly, and the raw stream must NOT carry a zlib
+    /// header (first byte is not `0x78`). Proves the vendored deflate/trees
+    /// translation units link and run, and that framegen⇄boo agree on the raw
+    /// format.
+    #[test]
+    fn deflate_raw_inflate_raw_round_trip() {
+        // A payload with the boo separator + newlines, exercising real content.
+        let original: &[u8] =
+            b"frame one line1\nline2\x01frame two line1\nline2\x01frame three \xE2\x80\xA6 done";
+        let compressed = deflate_raw(original).unwrap();
+        // Raw DEFLATE has no zlib wrapper: a zlib stream would start 0x78.
+        assert!(!compressed.is_empty());
+        assert_ne!(compressed[0], 0x78);
+        let out = inflate_raw(&compressed, 4 * 1024 * 1024).unwrap();
+        assert_eq!(out.as_slice(), original);
+    }
+
+    /// The empty input round-trips through the raw surface (framegen never
+    /// emits empty, but the primitive must be total).
+    #[test]
+    fn deflate_raw_empty_round_trip() {
+        let compressed = deflate_raw(b"").unwrap();
+        let out = inflate_raw(&compressed, 1024).unwrap();
+        assert_eq!(out.as_slice(), b"");
     }
 }

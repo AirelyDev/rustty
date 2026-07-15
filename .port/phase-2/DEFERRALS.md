@@ -2699,6 +2699,58 @@ detection lives in the bin, ADV-FIX 2). New cli Cargo deps: `rustty-build-config
     loading draw smokes are `#[ignore]`/`#[cfg_attr(miri, ignore)]`-on-device.
     test-count/scoped-G3b (missing=0)/acyclic/clippy-D/fmt/Miri all GREEN. **`boo`
     remains the last cli vaxis-deferred leaf.**
+  - **`boo` — the `+boo` ghost animation. ✅ RESOLVED (cli C5 finale; the crate's
+    LAST vaxis-deferred leaf).** Un-deferred by porting the vxfw widget-framework
+    SUBSET that boo consumes + reproducing the `framedata` compressed frame asset:
+    * **vxfw subset** — `rustty-vaxis/src/vxfw/` (NEW `pub mod vxfw`): `mod.rs`
+      ports `vxfw.zig` core (value types + `Event`/`Command`/`Tick`/`EventContext`/
+      `DrawContext`/type-erased `Widget`/`Surface`/`SubSurface` + the `VxfwArena`
+      bump-allocator-with-`reset`), `app.rs` ports `App.zig` (the run loop +
+      `MouseHandler`/`FocusHandler`), `text.rs` ports `Text.zig` (Text + Line/
+      Softwrap iterators + all 10 tests), `center.rs` ports `Center.zig` (+ doctest).
+      YAGNI: the other 13 vxfw widgets are unused by ghostty → OUT of scope. 12
+      ported vxfw tests GREEN (≥ reference: 10 Text + 1 Center + 2 vxfw.zig). Two
+      signed-off divergences: **(a)** `Surface.buffer`/`.children` are RAW slices
+      (`*mut [T]`), forced by `App` storing `mouse_handler.last_frame` across
+      `arena.reset(.free_all)`; **(b)** `DrawContext.arena` is a NEW vxfw-local
+      `VxfwArena` (Rust std has no resettable arena) — the faithful image of
+      `std.heap.ArenaAllocator`.
+    * **framedata asset** — `crates/rustty-cli/assets/framegen/frames/*.txt` (235
+      files, 1,390,810 B, vendored byte-faithfully). `build.rs` EXTENDED with a
+      second generator porting `GhosttyFrameData.zig` + `framegen/main.c`: sort
+      (strcmp/byte order) → join with `\x01` → raw-DEFLATE (`zlib_sys::deflate_raw`,
+      windowBits=-15/level=-1/memLevel=8/strategy=0, exactly framegen) →
+      `$OUT_DIR/framedata.compressed` (`boo` `include_bytes!`s it). `zlib-sys`
+      EXTENDED with the DEFLATE FFI (`deflateInit2_`/`deflate`/`deflateEnd`/
+      `compressBound` + `deflate_raw()`) and `inflate_raw()` (windowBits=-15), over
+      the verbatim vendored zlib 1.3.1 `deflate.c`/`trees.c`/`compress.c` (byte-
+      identical to the reference's zlib); round-trip KAT GREEN.
+    * **`boo.rs`** — rewritten LIVE from the preserved verbatim Zig body: `Boo`
+      struct, `widget()`/`typeErasedEventHandler` (init/tick→updateFrame+redraw+
+      tick; Ctrl-C/Esc→quit)/`typeErasedDrawFn` (size-warn Text+Center path, else
+      centered child Surface aliasing `self.buffer` + arena SubSurface), the 4-state
+      span-parser `updateFrame` (assert cell_idx==4100), `run` (platform gate,
+      Options/help, decompressFrames, App init/run), `decompressFrames`
+      (`include_bytes!` FRAMEDATA → `inflate_raw` → split on `\x01` → 235 frames).
+      R2 product-name comments retargeted Ghostty→Rustty.
+    * **Aliasing (H1/H2/H3):** the type-erased `*mut Boo` re-entry (buffer alias vs
+      `updateFrame` raw writes), `last_frame`-across-`arena.reset`, and the raw
+      Surface slices are PROVEN on the fresh `.port/phase-2/mirihar-vxfw` harness
+      (GREEN under Stacked AND Tree Borrows; `run` + `#[test]`s). `updateFrame` takes
+      a `*mut Boo` and writes through the buffer's own data pointer
+      (`Vec::as_mut_ptr` — narrow `&mut Vec` retag, never a `&mut [Cell]` over the
+      aliased heap), so no whole-`&mut Boo` ever spans the buffer alias
+      (rust-mut-args-strongly-protected + shaper-hook-sb-clean-interleave). The
+      App.run FFI+thread tty/vx/Loop shape rides the existing mirihar-wire2 proof
+      (SB+TB); the new zlib deflate/inflate C calls are ASan-clean
+      (`RUSTFLAGS=-Zsanitizer=address cargo +nightly test`). One new cli dep:
+      **`zlib-sys`** ([dependencies] runtime inflate + [build-dependencies]
+      build-time deflate; a leaf -sys crate, acyclic G7). New tests: `boo`
+      decompressFrames round-trip (235 frames, every frame's span-parse == 4100
+      cells), zlib `deflate_raw`⇄`inflate_raw` round-trip KAT. Interactive
+      animation is not headlessly verifiable (like the other TUI paths).
+      test-count/scoped-G3b/acyclic/clippy-D/fmt/Miri/ASan all GREEN. **The
+      rustty-cli crate now has ZERO live vaxis-deferred leaves.**
 
 ## rustty-cli C2 (Phase-2 CLI milestone) — pure config/introspection actions + Pager
 
