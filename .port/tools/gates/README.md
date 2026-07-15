@@ -109,3 +109,5 @@ surface a precise blocker. If `cargo miri` is ever missing, the G6 Miri lane
 reports that loudly and exits non-zero — BLOCKED, never waived. Tests Miri
 cannot execute (live-syscall binaries) are ROUTED to ASan per the 4-criterion
 rule in `.port/phase-2/MIRI_EXCEPTIONS.md`, never skipped.
+
+- `check_rustty_vt_headers.sh` — ABI-fidelity gate for the curated public C header family `include/rustty/vt.h` + `vt/*.h`: (a) compiles clean, (b) declared symbols are real exports (native ∪ wasm) cross-checked vs the cbindgen `rustty.h` ground-truth, (c) struct sizes/offsets match `rustty_type_json()`. Run after any C-ABI or header change.

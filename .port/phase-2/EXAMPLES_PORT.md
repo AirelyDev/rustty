@@ -53,3 +53,12 @@ respective toolchains allow (Swift reuses the RusttyKit xcframework path).
 
 ## Status ledger
 (append per example as landed: `wasm-vt: DONE — parity vs ghostty confirmed (input X → output Y identical)`)
+
+### Phase B foundation — DONE (2026-07-15)
+Curated public C header family `include/rustty/vt.h` + `vt/*.h` (30 headers,
+token-renamed from ghostty's, `rustty.sh` branding) + the `check_rustty_vt_headers.sh`
+ABI-fidelity gate (GREEN, zero rustty changes — the C-ABI already matches ghostty).
+Spec/plan: `docs/superpowers/specs|plans/2026-07-15-rustty-c-header-family*`. The
+c-vt example ports are now unblocked — each `.c` symbol-swaps onto `<rustty/vt.h>`
+and links `clang src/*.c -Iinclude -Ltarget/release -lrustty_vt_c` (native), parity =
+identical stdout vs ghostty's `zig build run`.

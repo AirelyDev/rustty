@@ -257,7 +257,14 @@ git commit -m "vt-headers: register gate + mark Phase-B foundation complete"
 ```
 
 ## Status ledger (intentional divergences)
-_(append here as Task 4 Step 4 finds them; empty = full fidelity)_
+
+**NONE — full fidelity.** The gate reached GREEN with zero rustty code changes: all
+168 declared symbols are real exports and all 115 struct field offsets + sizes match
+`rustty_type_json()`. Every gate iteration corrected the checker itself (wasm-only
+symbols behind `#ifdef __wasm__`; native-vs-native word size; type_json opaque-blob
+modeling of tagged-unions), not rustty. rustty's C-ABI already matches ghostty's
+hand-written header. (The one real prior mismatch, `type_json` `usize`->`u32` on
+wasm32, was fixed during the wasm-examples work.)
 
 ---
 
