@@ -3,10 +3,10 @@ import AppKit
 /// Handler for the `input text` AppleScript command defined in `Rustty.sdef`.
 ///
 /// Cocoa scripting instantiates this class because the command's `<cocoa>` element
-/// specifies `class="GhosttyScriptInputTextCommand"`. The runtime calls
+/// specifies `class="RusttyScriptInputTextCommand"`. The runtime calls
 /// `performDefaultImplementation()` to execute the command.
 @MainActor
-@objc(GhosttyScriptInputTextCommand)
+@objc(RusttyScriptInputTextCommand)
 final class ScriptInputTextCommand: NSScriptCommand {
     override func performDefaultImplementation() -> Any? {
         guard NSApp.validateScript(command: self) else { return nil }

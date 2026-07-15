@@ -17,31 +17,31 @@
     "environmentVariableEntries" : [
       {
         "key" : "GHOSTTY_CONFIG_PATH",
-        "value" : "\/tmp\/Ghostty\/testing_config.ghostty"
+        "value" : "\/tmp\/Rustty\/testing_config.ghostty"
       }
     ],
     "performanceAntipatternCheckerEnabled" : true,
     "targetForVariableExpansion" : {
-      "containerPath" : "container:Ghostty.xcodeproj",
+      "containerPath" : "container:Rustty.xcodeproj",
       "identifier" : "A5B30530299BEAAA0047F10C",
-      "name" : "Ghostty"
+      "name" : "Rustty"
     }
   },
   "testTargets" : [
     {
       "parallelizable" : true,
       "target" : {
-        "containerPath" : "container:Ghostty.xcodeproj",
+        "containerPath" : "container:Rustty.xcodeproj",
         "identifier" : "A54F45F22E1F047A0046BD5C",
-        "name" : "GhosttyTests"
+        "name" : "RusttyTests"
       }
     },
     {
       "parallelizable" : true,
       "target" : {
-        "containerPath" : "container:Ghostty.xcodeproj",
+        "containerPath" : "container:Rustty.xcodeproj",
         "identifier" : "810ACC9E2E9D3301004F8F92",
-        "name" : "GhosttyUITests"
+        "name" : "RusttyUITests"
       }
     }
   ],

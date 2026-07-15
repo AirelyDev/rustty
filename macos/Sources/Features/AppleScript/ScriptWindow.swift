@@ -10,7 +10,7 @@ import AppKit
 /// - It translates tab-group state into `tabs` and `selected tab`.
 /// - It exposes stable IDs that Cocoa scripting can resolve later.
 @MainActor
-@objc(GhosttyScriptWindow)
+@objc(RusttyScriptWindow)
 final class ScriptWindow: NSObject {
     /// Stable identifier used by AppleScript `window id "..."` references.
     ///

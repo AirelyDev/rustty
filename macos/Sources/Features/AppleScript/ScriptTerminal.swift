@@ -7,7 +7,7 @@ import AppKit
 /// protocol conformance.
 ///
 /// Mapping from `Rustty.sdef`:
-/// - `class terminal` -> this class (`@objc(GhosttyAppleScriptTerminal)`).
+/// - `class terminal` -> this class (`@objc(RusttyScriptTerminal)`).
 /// - `property id` -> `@objc(id)` getter below.
 /// - `property title` -> `@objc(title)` getter below.
 /// - `property working directory` -> `@objc(workingDirectory)` getter below.
@@ -17,7 +17,7 @@ import AppKit
 /// We keep only a weak reference to the underlying `SurfaceView` so this
 /// wrapper never extends the terminal's lifetime.
 @MainActor
-@objc(GhosttyScriptTerminal)
+@objc(RusttyScriptTerminal)
 final class ScriptTerminal: NSObject {
     /// Weak reference to the underlying surface. Package-visible so that
     /// other AppleScript command handlers (e.g. `ScriptSplitCommand`) can

@@ -48,9 +48,9 @@
 			</array>
 		</dict>
 	</array>
-	<key>GhosttyBuild</key>
+	<key>RusttyBuild</key>
 	<string></string>
-	<key>GhosttyCommit</key>
+	<key>RusttyCommit</key>
 	<string></string>
 	<key>LSEnvironment</key>
 	<dict>
@@ -64,7 +64,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>OSAScriptingDefinition</key>
-	<string>Ghostty.sdef</string>
+	<string>Rustty.sdef</string>
 	<key>NSServices</key>
 	<array>
 		<dict>
@@ -116,7 +116,7 @@
 			<key>UTTypeIdentifier</key>
 			<string>io.airely.rusttySurfaceId</string>
 			<key>UTTypeDescription</key>
-			<string>Ghostty Surface Identifier</string>
+			<string>Rustty Surface Identifier</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>

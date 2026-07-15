@@ -3,10 +3,10 @@ import AppKit
 /// Handler for the `send mouse position` AppleScript command defined in `Rustty.sdef`.
 ///
 /// Cocoa scripting instantiates this class because the command's `<cocoa>` element
-/// specifies `class="GhosttyScriptMousePosCommand"`. The runtime calls
+/// specifies `class="RusttyScriptMousePosCommand"`. The runtime calls
 /// `performDefaultImplementation()` to execute the command.
 @MainActor
-@objc(GhosttyScriptMousePosCommand)
+@objc(RusttyScriptMousePosCommand)
 final class ScriptMousePosCommand: NSScriptCommand {
     override func performDefaultImplementation() -> Any? {
         guard NSApp.validateScript(command: self) else { return nil }
