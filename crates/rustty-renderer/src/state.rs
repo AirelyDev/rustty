@@ -18,13 +18,49 @@ use rustty_vt::point;
 use rustty_vt::size::CellCountInt;
 use rustty_vt::terminal::Terminal;
 
-// PORT NOTE (DEFERRED SEAM): the reference `inspector` field points at
-// `inspector/main.zig`'s `Inspector`, which is not yet ported (rustty-inspector
-// is a stub). Following the established deferred-seam precedent (e.g. the
-// oniguruma `OniRegex` placeholder), the pointee type is represented by this
-// opaque, uninhabited placeholder until the inspector port lands. The field's
-// optionality and pointer-ness are preserved.
-pub enum Inspector {}
+/// The RENDERER-owned accessor trait for the inspector→renderer overlay edge
+/// (INV-7 / hazard R2), mirroring the [`crate::config::RendererConfig`]
+/// precedent (memory: `renderer-config-accessor-trait-acyclic`).
+///
+/// THE ACYCLIC CRUX (R4/G7): the inspector↔renderer overlay coupling is a real
+/// bidirectional data edge — the inspector's checkboxes WRITE
+/// `inspector::widgets::renderer::Info.features` and the renderer READS them here
+/// (generic.rs, in `update_frame`'s critical section). To keep the renderer from
+/// naming any `rustty-inspector` type (which would add a `renderer -> inspector`
+/// edge and CYCLE — the inspector is the upper tier), the renderer DEFINES this
+/// trait and the inspector IMPLEMENTS it (the `rustty-inspector -> rustty-renderer`
+/// edge is the acyclic direction; `check_acyclic.sh` stays green). This is the
+/// exact shape `RendererConfig` uses for the config edge: the trait's only return
+/// type is renderer-nameable (the renderer-local [`crate::overlay::Feature`]).
+///
+/// PORT NOTE: this replaces the reference's direct
+/// `state.inspector.?.rendererInfo().overlayFeatures(alloc)` call chain
+/// (generic.zig:1266 / renderer.zig:25-41). The reference navigates the whole
+/// `Inspector` to its `renderer.Info` at CALL time; the port stores a fat pointer
+/// to the `Info` itself (see the `Inspector` alias below) and reads through this
+/// one-method trait. `overlayFeatures` dupes `Info.features`' values into a fresh
+/// owned slice the renderer owns/frees — here a plain owned `Vec` (Global alloc;
+/// the reference's `catch &.{}` OOM path is subsumed by panic=abort).
+pub trait InspectorOverlay {
+    /// Grab the enabled overlay features into a fresh owned `Vec` (INV-7). Faithful
+    /// to `renderer.zig`'s `overlayFeatures`: a plain value copy of `Info.features`'
+    /// values (the features carry no managed memory).
+    fn overlay_features(&self) -> Vec<crate::overlay::Feature>;
+}
+
+// PORT NOTE (R2 ACCESSOR-TRAIT SEAM — was DEFERRED): the reference `inspector`
+// field points at `inspector/main.zig`'s `Inspector`. The renderer may NEVER name
+// a `rustty-inspector` type (R4 acyclicity — a `renderer -> inspector` edge would
+// CYCLE), so the pointee type is the renderer-owned trait object
+// [`dyn InspectorOverlay`] (the acyclic accessor-trait, mirroring the
+// `RendererConfig` precedent). This SUPERSEDES the earlier uninhabited
+// `enum Inspector {}` placeholder: the field is now a live `*mut dyn` fat pointer,
+// through which `update_frame` reads overlay features (generic.rs). Core's
+// `activateInspector` (Task 6) will coerce the real
+// `rustty_inspector::widgets::renderer::Info` (which impls `InspectorOverlay`) into
+// this fat pointer — the `inspector -> renderer` edge, never the reverse. The
+// field's optionality and pointer-ness are preserved.
+pub type Inspector = dyn InspectorOverlay;
 
 /// The mutex that must be held while reading any of the data in the
 /// members of this state. Note that the state itself is NOT protected

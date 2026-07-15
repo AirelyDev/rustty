@@ -19,6 +19,13 @@ workspace = true
 rustty-vt = { workspace = true }
 rustty-font = { workspace = true }
 rustty-util = { workspace = true }
+# R2 acyclic overlay edge (INV-7, Task 5): the inspector's
+# `widgets::renderer::Info` impls the renderer-owned `InspectorOverlay` accessor
+# trait and names `rustty_renderer::overlay::Feature`. The edge points
+# inspector -> renderer (renderer is the lower tier; the renderer NEVER names an
+# inspector type) — acyclic, the `RendererConfig` precedent
+# (renderer-config-accessor-trait-acyclic). `check_acyclic.sh` stays green.
+rustty-renderer = { workspace = true }
 # The inspector UI toolkit — vendored Dear ImGui 1.92.5 (docking) + Dear
 # Bindings 0.17 C API (`links = "dcimgui"`). `Inspector.setup()` drives the
 # shared ImGui IO (docking/sRGB flags, embedded font atlas) through it. A

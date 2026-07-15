@@ -178,5 +178,6 @@ mod tests {
         let _ = std::any::type_name::<crate::widgets::key::EventRing>();
         let _ = std::any::type_name::<crate::widgets::key::ImguiState>();
         let _ = std::any::type_name::<crate::widgets::key::Error>();
+        let _ = std::any::type_name::<crate::widgets::renderer::Info>();
     }
 }

@@ -16,7 +16,12 @@
 // pub const pagelist = @import("widgets/pagelist.zig");    (Phase 3)
 // pub const key = @import("widgets/key.zig");
 pub mod key;
-// pub const renderer = @import("widgets/renderer.zig");    (Phase 3)
+// pub const renderer = @import("widgets/renderer.zig");
+//
+// PORT NOTE (Task 5): the R2 acyclic accessor-trait half of renderer.zig is
+// LIVE — `Info` + `overlayFeatures` (impl'd as the renderer-owned
+// `InspectorOverlay` trait, INV-7). The ImGui `draw` half is Task 10.
+pub mod renderer;
 // pub const screen = @import("widgets/screen.zig");        (Phase 3)
 // pub const style = @import("widgets/style.zig");          (Phase 3)
 // pub const surface = @import("widgets/surface.zig");      (Phase 3)

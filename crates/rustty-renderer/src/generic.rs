@@ -4598,17 +4598,22 @@ mod macos_impl {
                 };
 
                 let overlay_features: Vec<crate::overlay::Feature> = match state.inspector {
-                    None => Vec::new(),
-                    // DEFERRED R5 SEAM (§C.7): `state.inspector` is the uninhabited
-                    // `enum {}` placeholder (state.rs) ⇒ statically the `None` arm; the
-                    // reference logic is kept verbatim as the unreachable arm.
                     //   const insp = state.inspector orelse break :overlay &.{};
                     //   const renderer_info = insp.rendererInfo();
                     //   break :overlay renderer_info.overlayFeatures(arena_alloc) catch &.{};
-                    Some(_insp) => unimplemented!(
-                        "inspector.rendererInfo().overlayFeatures — deferred \
-                         (rustty-inspector stub); verbatim body above"
-                    ),
+                    //
+                    // R2 ACCESSOR-TRAIT SEAM (was DEFERRED, Task 5): `state.inspector`
+                    // is now the renderer-owned `*mut dyn InspectorOverlay` fat pointer
+                    // (state.rs) — the acyclic accessor-trait (INV-7), the exact shape
+                    // `RendererConfig` uses for the config edge. The renderer reads the
+                    // enabled overlay features THROUGH the trait, never naming a
+                    // `rustty-inspector` type. The reference's `insp.rendererInfo()`
+                    // navigation happens at STORE time (core coerces the `Info` into the
+                    // fat pointer), so here the one-method trait call subsumes the whole
+                    // chain. INV-1: this deref is inside the `state.mutex`-guarded
+                    // critical section; the raw pointer never escapes the guard.
+                    None => Vec::new(),
+                    Some(insp) => unsafe { (*insp).overlay_features() },
                 };
 
                 Critical {

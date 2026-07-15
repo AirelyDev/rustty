@@ -113,7 +113,11 @@ pub struct Overlay {
 
 /// The set of available features and their configuration.
 // pub const Feature = union(enum) { highlight_hyperlinks, semantic_prompts };
-#[derive(Clone, Copy)]
+//
+// PORT NOTE: `PartialEq, Eq` added so the inspector's `renderer::Info.features`
+// (the reference `AutoArrayHashMapUnmanaged(Tag(Feature), Feature)` insertion-
+// ordered set — INV-7) can be modelled as an ordered unique set of `Feature`.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Feature {
     HighlightHyperlinks,
     SemanticPrompts,

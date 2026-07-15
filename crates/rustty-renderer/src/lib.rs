@@ -45,9 +45,11 @@
 //!
 //! DEFERRED (the honest residual — see DEFERRALS.md "rustty-renderer R-d
 //! [RECONCILED]"):
-//!   - rustty-inspector: `overlayFeatures` (generic.rs — the statically
-//!     unreachable arm over the uninhabited inspector placeholder; the crate's
-//!     ONLY live `unimplemented!()`).
+//!   - rustty-inspector: `overlayFeatures` — RESOLVED (Task 5): the renderer now
+//!     reads overlay features through the renderer-owned `InspectorOverlay`
+//!     accessor trait (state.rs; the `RendererConfig`-precedent acyclic shape),
+//!     `state.inspector` being the `*mut dyn InspectorOverlay` fat pointer. No
+//!     `unimplemented!()` remains for this seam.
 //!   - OpenGL/WebGL backends (Linux/wasm) and GTK — out of the monomorphic Metal
 //!     scope (whole-backend follow-up ports).
 //!
