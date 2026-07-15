@@ -90,6 +90,35 @@ pub struct State {
     // (reference default: `= null`)
     pub inspector: Option<*mut Inspector>,
 
+    /// The SAME inspector as `inspector` above, but as an opaque untyped raw
+    /// pointer rather than the narrow `*mut dyn InspectorOverlay` fat pointer.
+    ///
+    /// PORT NOTE (R2/R4 acyclic seam, termio `recordPtyRead` — INV-8): the
+    /// reference's `renderer_state.inspector` is the WHOLE `*Inspector`
+    /// (Surface.zig `self.renderer_state.inspector = self.inspector`), read
+    /// both by the renderer (`rendererInfo().overlayFeatures()`) and by termio
+    /// (`insp.recordPtyRead(...)`, termio.zig). The port's `inspector` field
+    /// above is intentionally narrowed to `*mut dyn InspectorOverlay` — a fat
+    /// pointer to just the `Inspector.gui.renderer_info` sub-object — so the
+    /// renderer (a LOWER tier than rustty-inspector) never has to name a
+    /// `rustty-inspector` type (would cycle: inspector already deps renderer).
+    /// That narrowing, however, orphans the OTHER consumer of the same shared
+    /// field: termio needs the WHOLE `Inspector` (for its sibling `vt_stream`
+    /// field, unreachable through the `renderer_info` sub-object). Rather than
+    /// re-widen `inspector` above (which would force the renderer to name
+    /// `rustty_inspector::Inspector`, or move the `InspectorOverlay` impl off
+    /// `Info` and onto `Inspector`, both bigger changes than this seam needs),
+    /// this field carries the SAME `*mut Inspector` core already computed,
+    /// but type-erased to `*mut ()` — the renderer crate stores/moves it
+    /// without ever naming the pointee type (no new dependency, no cycle).
+    /// Only rustty-termio (which already, like rustty-inspector, sits ABOVE
+    /// rustty-renderer and now takes a direct `rustty-inspector` dependency —
+    /// acyclic: rustty-inspector does not depend on rustty-termio) casts it
+    /// back to `*mut rustty_inspector::Inspector` to call `recordPtyRead`.
+    /// Set/cleared in lock-step with `inspector` above by core's
+    /// `activateInspector`/`deactivateInspector`.
+    pub inspector_ptr: Option<*mut ()>,
+
     /// Dead key state. This will render the current dead key preedit text
     /// over the cursor. This currently only ever renders a single codepoint.
     /// Preedit can in theory be multiple codepoints long but that is left as

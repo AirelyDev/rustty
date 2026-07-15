@@ -1994,6 +1994,7 @@ where
                     mutex,
                     terminal: &raw mut (*self_).io.terminal,
                     inspector: None,
+                    inspector_ptr: None,
                     preedit: None,
                     mouse: rendererpkg::state::Mouse::default(),
                 },
@@ -2914,6 +2915,12 @@ where
                 unsafe { &mut (*ptr).gui.renderer_info };
             let info_ptr: *mut rendererpkg::state::Inspector = info_ref;
             self.renderer_state.inspector = Some(info_ptr);
+            // The SAME `ptr`, but type-erased (`rendererpkg::state::State::
+            // inspector_ptr` PORT NOTE): termio's `recordPtyRead` (INV-8)
+            // needs the WHOLE `Inspector`, unreachable through the narrow
+            // `renderer_info` sub-object fat pointer above.
+            assert!(self.renderer_state.inspector_ptr.is_none());
+            self.renderer_state.inspector_ptr = Some(ptr as *mut ());
             unsafe { (*self.renderer_state.mutex).unlock() };
         }
 
@@ -2973,6 +2980,10 @@ where
             assert!(self.renderer_state.inspector.is_some());
             // self.renderer_state.inspector = null;
             self.renderer_state.inspector = None;
+            // Clear the type-erased alias in lock-step (see activateInspector's
+            // `inspector_ptr` PORT NOTE).
+            assert!(self.renderer_state.inspector_ptr.is_some());
+            self.renderer_state.inspector_ptr = None;
             unsafe { (*self.renderer_state.mutex).unlock() };
         }
 
@@ -9918,12 +9929,48 @@ where
         //     try self.queueRender();
         // }
         //
-        // PORT NOTE (CORE_BLUEPRINT §4): the Some-arm writes the Phase-3
-        // `Inspector.mouse` state — the pointee is uninhabited, so the arm
-        // (preserved verbatim above) is unreachable-by-construction until the
-        // Phase-3 fill (the deinit teardown-arm precedent).
-        if self.inspector.is_some() {
-            unreachable!("inspector is unconstructible until Phase 3 (mouse position record)");
+        // PORT NOTE (Phase-3 fill): `inspectorpkg::Inspector` is now inhabited
+        // (its `mouse: widgets::surface::Mouse` sub-state carries
+        // `last_xpos`/`last_ypos`/`last_point`, the R3-proven Pin), so the
+        // Some-arm preserved verbatim above is reachable and is inhabited here.
+        // `insp` is a raw `*mut Inspector` (core's own field, `self.inspector:
+        // Option<*mut inspectorpkg::Inspector>`) — dereferenced directly, no
+        // new lock (this mirrors the reference, which takes no additional lock
+        // beyond the `renderer_state.mutex` already held above). `screen` is
+        // obtained the same raw-pointer way the rest of this function/file does
+        // (`(*(*self.renderer_state.terminal).screens.active)`), so it never
+        // escapes this still-locked scope (INV-1).
+        if let Some(insp) = self.inspector {
+            // insp.mouse.last_xpos = pos.x;
+            // insp.mouse.last_ypos = pos.y;
+            unsafe {
+                (*insp).mouse.last_xpos = f64::from(pos.x);
+                (*insp).mouse.last_ypos = f64::from(pos.y);
+            }
+
+            // const screen: *terminal.Screen = self.renderer_state.terminal.screens.active;
+            let screen = unsafe { (*self.renderer_state.terminal).screens.active };
+            // insp.mouse.last_point = screen.pages.pin(.{ .viewport = .{
+            //     .x = pos_vp.x,
+            //     .y = pos_vp.y,
+            // } });
+            unsafe {
+                (*insp).mouse.last_point = (*screen).pages.pin(terminal::point::Point::Viewport(
+                    terminal::point::Coordinate {
+                        x: pos_vp.x,
+                        y: pos_vp.y,
+                    },
+                ));
+            }
+
+            // try self.queueRender();
+            //
+            // (guard-less zigstd Mutex — every other exit in this function
+            // unlocks explicitly before returning; do the same here.)
+            if let Err(err) = self.queueRender() {
+                unsafe { (*self.renderer_state.mutex).unlock() };
+                return Err(err.into());
+            }
         }
 
         // Handle link hovering

@@ -4351,6 +4351,7 @@ mod tests {
                     mutex,
                     terminal: std::ptr::null_mut(),
                     inspector: None,
+                    inspector_ptr: None,
                     preedit: None,
                     mouse: rustty_renderer::state::Mouse::default(),
                 }));

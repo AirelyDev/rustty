@@ -6517,6 +6517,7 @@ mod macos_impl {
                 mutex: &mut mutex,
                 terminal: &mut t,
                 inspector: None,
+                inspector_ptr: None,
                 preedit: None,
                 mouse: state::Mouse::default(),
             };
@@ -6619,6 +6620,7 @@ mod macos_impl {
                 mutex: &mut mutex,
                 terminal: &mut t,
                 inspector: None,
+                inspector_ptr: None,
                 preedit: None,
                 mouse: state::Mouse::default(),
             };
@@ -6774,6 +6776,7 @@ mod macos_impl {
                 mutex: &mut mutex,
                 terminal: &mut t,
                 inspector: None,
+                inspector_ptr: None,
                 preedit: None,
                 mouse: state::Mouse::default(),
             };
@@ -6896,6 +6899,7 @@ mod macos_impl {
                     mutex: &mut mutex,
                     terminal: &mut t,
                     inspector: None,
+                    inspector_ptr: None,
                     preedit: None,
                     mouse: state::Mouse::default(),
                 };
@@ -7026,6 +7030,7 @@ mod macos_impl {
                 mutex: &mut mutex,
                 terminal: &mut t,
                 inspector: None,
+                inspector_ptr: None,
                 preedit: None,
                 mouse: state::Mouse::default(),
             };
@@ -7107,6 +7112,7 @@ mod macos_impl {
                 mutex: &mut mutex,
                 terminal: &mut t,
                 inspector: None,
+                inspector_ptr: None,
                 preedit: None,
                 mouse: state::Mouse::default(),
             };
@@ -7249,6 +7255,7 @@ mod macos_impl {
                 mutex: &mut mutex,
                 terminal: &mut t,
                 inspector: None,
+                inspector_ptr: None,
                 preedit: None,
                 mouse: state::Mouse::default(),
             };

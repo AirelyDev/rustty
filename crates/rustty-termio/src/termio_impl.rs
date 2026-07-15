@@ -1566,18 +1566,41 @@ impl<M: AppMailbox> Termio<M> {
         //     self.terminal_stream.nextSlice(buf);
         // }
         //
-        // PORT NOTE: renderer `Inspector` is an uninhabited seam (rustty-inspector
-        // unported — renderer `state.rs` `pub enum Inspector {}`) and its
-        // `recordPtyRead` is not yet ported. The slow-path branch is preserved for
-        // control-flow fidelity but is unreachable today (nothing constructs an
-        // inspector to store in `renderer_state.inspector`); when the inspector
-        // lands, the `insp.recordPtyRead(...)` call is added inside the loop below.
-        if let Some(_insp) = unsafe { (*(*io).renderer_state).inspector } {
+        // PORT NOTE (INV-8, `rustty_renderer::state::State::inspector_ptr` PORT
+        // NOTE): `renderer_state.inspector` is only the narrow `*mut dyn
+        // InspectorOverlay` fat pointer (the `Inspector.gui.renderer_info`
+        // sub-object) — it cannot reach the sibling `vt_stream` field
+        // `recordPtyRead` needs. `renderer_state.inspector_ptr` carries the SAME
+        // pointer core computed in `activateInspector`, but type-erased to
+        // `*mut ()` so rustty-renderer never has to name a rustty-inspector
+        // type; here (rustty-termio, which — like rustty-inspector — sits above
+        // rustty-renderer) it is cast back to the concrete `*mut
+        // rustty_inspector::Inspector` to call the now-live `recordPtyRead`.
+        if let Some(insp_ptr) = unsafe { (*(*io).renderer_state).inspector_ptr } {
+            // SAFETY: `inspector_ptr` is set/cleared in lock-step with
+            // `renderer_state.inspector` by core's activateInspector/
+            // deactivateInspector under `renderer_state.mutex` (already held by
+            // this function's caller, `processOutput`), and always holds a live
+            // `*mut rustty_inspector::Inspector` when `Some`.
+            let insp: *mut rustty_inspector::Inspector = insp_ptr as *mut rustty_inspector::Inspector;
             // for (buf, 0..) |byte, i| {
             for &byte in buf {
                 // insp.recordPtyRead(self.alloc, &self.terminal, buf[i .. i + 1]) catch |err| {
                 //     log.err("error recording pty read in inspector err={}", .{err});
                 // };
+                //
+                // PORT NOTE: `rustty_inspector::Inspector::recordPtyRead` is
+                // infallible in the port (Task 16 design decision — the OSC
+                // parser allocator collapses under Rust's infallible global
+                // allocator), unlike the reference's `catch |err| log.err`; the
+                // error-logging arm never fires so it has no Rust equivalent.
+                unsafe {
+                    (*insp).recordPtyRead(
+                        (*io).alloc,
+                        &raw mut (*io).terminal,
+                        std::slice::from_ref(&byte),
+                    )
+                };
                 // self.terminal_stream.next(byte);
                 unsafe { (*io).terminal_stream.next(byte) };
             }

@@ -908,6 +908,7 @@ dependencies = [
  "rustty-datastruct",
  "rustty-global",
  "rustty-identity",
+ "rustty-inspector",
  "rustty-lib",
  "rustty-os",
  "rustty-renderer",

@@ -47,6 +47,13 @@ rustty-xev = { workspace = true }
 #   `State.mutex` (`mailbox::send`'s caller-held-mutex parameter — the mutex
 #   model DECIDED by CORE_BLUEPRINT §3, landed in C0).
 rustty-zigstd = { workspace = true }
+# - rustty-inspector: `recordPtyRead` (INV-8) — the type-erased
+#   `rustty_renderer::state::State::inspector_ptr` (`Option<*mut ()>`) is cast
+#   back to `*mut rustty_inspector::Inspector` here (termio_impl.rs). Acyclic:
+#   rustty-inspector does not depend on rustty-termio (it depends on
+#   rustty-vt/rustty-renderer/rustty-font/rustty-input/rustty-datastruct/
+#   rustty-lib/dcimgui-sys, all below termio); `check_acyclic.sh` stays green.
+rustty-inspector = { workspace = true }
 # Integration-tier stage 4 dep wiring (both leaf crates, downward-safe):
 # - rustty-build-config: `build_config.version_string`/`build_config.flatpak`
 #   (reference `build_config = @import("../build_config.zig")` in Exec.zig /
