@@ -120,6 +120,9 @@ mod values {
     /// application-level version effect is installed.
     /// Reference: `libghostty` (`src/terminal/stream_terminal.zig:376`).
     pub const LIBVT_XTVERSION_FALLBACK: &str = "librustty";
+
+    /// Uppercase prefix for product environment variables (`{ENV_PREFIX}_RESOURCES_DIR`, …).
+    pub const ENV_PREFIX: &str = "RUSTTY";
 }
 
 // ---- ghostty reference values (parity harness only) -----------------------
@@ -172,6 +175,9 @@ mod values {
     /// Standalone VT library XTVERSION fallback token. Reference:
     /// `src/terminal/stream_terminal.zig:376` (the literal `"libghostty"`).
     pub const LIBVT_XTVERSION_FALLBACK: &str = "libghostty";
+
+    /// Uppercase prefix for product environment variables (`{ENV_PREFIX}_RESOURCES_DIR`, …).
+    pub const ENV_PREFIX: &str = "GHOSTTY";
 }
 
 // ---- public re-exports (the stable identity API) --------------------------
@@ -202,6 +208,8 @@ pub const CONFIG_FILE: &str = values::CONFIG_FILE;
 pub const XTVERSION_NAME: &str = values::XTVERSION_NAME;
 /// Standalone VT-library XTVERSION fallback token.
 pub const LIBVT_XTVERSION_FALLBACK: &str = values::LIBVT_XTVERSION_FALLBACK;
+/// Uppercase prefix for product environment variables.
+pub const ENV_PREFIX: &str = values::ENV_PREFIX;
 
 /// The full XTVERSION (`CSI > 0 q`) wire response an application-level handler
 /// reports: `ESC P > | {XTVERSION_NAME} {VERSION} ESC \`.
@@ -243,6 +251,7 @@ mod tests {
         assert_eq!(CONFIG_FILE, "config.rustty");
         assert_eq!(XTVERSION_NAME, "rustty");
         assert_eq!(LIBVT_XTVERSION_FALLBACK, "librustty");
+        assert_eq!(ENV_PREFIX, "RUSTTY");
         assert_eq!(BUNDLE_ID, "io.airely.rustty");
         // The vt library carries its OWN version (the reference's deliberate
         // app/lib split, build.zig:7-10); rustty's vt lib version has no
@@ -274,6 +283,7 @@ mod tests {
         assert_eq!(CONFIG_FILE, "config.ghostty");
         assert_eq!(XTVERSION_NAME, "ghostty");
         assert_eq!(LIBVT_XTVERSION_FALLBACK, "libghostty");
+        assert_eq!(ENV_PREFIX, "GHOSTTY");
         assert_eq!(BUNDLE_ID, "com.mitchellh.ghostty");
         // The reference's SEPARATE libghostty version (build.zig:10). This is
         // exactly what the c-vt-build-info golden records ("Version:
