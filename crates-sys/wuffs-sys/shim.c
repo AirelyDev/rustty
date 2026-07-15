@@ -39,3 +39,15 @@ wuffs_base__status rustty_wuffs_pixel_buffer__set_from_slice(
 const char* rustty_wuffs_status__message(const wuffs_base__status* z) {
   return wuffs_base__status__message(z);
 }
+
+uint32_t rustty_wuffs_pixel_format__bits_per_pixel(const wuffs_base__pixel_format* f) {
+  return wuffs_base__pixel_format__bits_per_pixel(f);
+}
+
+bool rustty_wuffs_pixel_format__is_direct(const wuffs_base__pixel_format* f) {
+  return wuffs_base__pixel_format__is_direct(f);
+}
+
+bool rustty_wuffs_pixel_format__is_interleaved(const wuffs_base__pixel_format* f) {
+  return wuffs_base__pixel_format__is_interleaved(f);
+}

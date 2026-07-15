@@ -45,4 +45,15 @@ wuffs_base__status rustty_wuffs_pixel_buffer__set_from_slice(
 /* wuffs_base__status__message — the human-readable status/error string. */
 const char* rustty_wuffs_status__message(const wuffs_base__status* z);
 
+/* wuffs_base__pixel_format__bits_per_pixel — bits per pixel for interleaved
+ * pixel formats (0 for planar); used by the swizzler to size src/dst buffers. */
+uint32_t rustty_wuffs_pixel_format__bits_per_pixel(const wuffs_base__pixel_format* f);
+
+/* wuffs_base__pixel_format__is_direct — true unless the format is indexed
+ * (palette-based). */
+bool rustty_wuffs_pixel_format__is_direct(const wuffs_base__pixel_format* f);
+
+/* wuffs_base__pixel_format__is_interleaved — true unless the format is planar. */
+bool rustty_wuffs_pixel_format__is_interleaved(const wuffs_base__pixel_format* f);
+
 #endif /* RUSTTY_WUFFS_SHIM_H */

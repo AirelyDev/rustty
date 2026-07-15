@@ -3,8 +3,8 @@
 //! PORTS: ghostty pkg/wuffs/src/main.zig (+ the `png`/`jpeg`/`error`/`swizzle`
 //! submodules). The SAFE `decode` API over the raw `wuffs-sys` FFI leaf.
 //!
-//! PORT STATUS: ported (main/error/png/jpeg every line/comment/test{}, R1;
-//! swizzle is an R5 seam — not on the bg-image decode path).
+//! PORT STATUS: ported (main/error/png/jpeg/swizzle every line/comment, R1;
+//! swizzle has no reference test{} blocks — new byte-exact KATs added instead).
 
 // const std = @import("std");
 use allocator_api2::alloc::Allocator;

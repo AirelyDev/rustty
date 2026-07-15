@@ -110,4 +110,32 @@ mod kat {
             unsafe { wuffs_crc32__ieee_hasher__update_u32(hasher_ptr, slice_u8(b"abc")) };
         assert_eq!(checksum, 0x3524_41C2, "CRC-32(\"abc\") mismatch");
     }
+
+    /// KAT — the 3 new `rustty_wuffs_pixel_format__*` shims (static-inline
+    /// forwards over `bits_per_pixel`/`is_direct`/`is_interleaved`) link and
+    /// return the correct values for `WUFFS_BASE__PIXEL_FORMAT__RGBA_PREMUL`: a
+    /// direct, interleaved, 32-bit-per-pixel format (4 8-bit channels).
+    #[test]
+    fn pixel_format_rgba_premul_shims() {
+        let fmt = wuffs_base__pixel_format {
+            repr: WUFFS_BASE__PIXEL_FORMAT__RGBA_PREMUL,
+        };
+
+        // SAFETY: `fmt` is a valid, initialized `wuffs_base__pixel_format`; the
+        // shims are pure accessors over `repr` (no allocation, no receiver
+        // beyond the borrowed pointer).
+        let bpp = unsafe { rustty_wuffs_pixel_format__bits_per_pixel(&fmt) };
+        assert_eq!(bpp, 32, "RGBA_PREMUL bits_per_pixel mismatch");
+
+        // SAFETY: see above.
+        let is_direct = unsafe { rustty_wuffs_pixel_format__is_direct(&fmt) };
+        assert!(is_direct, "RGBA_PREMUL should be direct (non-indexed)");
+
+        // SAFETY: see above.
+        let is_interleaved = unsafe { rustty_wuffs_pixel_format__is_interleaved(&fmt) };
+        assert!(
+            is_interleaved,
+            "RGBA_PREMUL should be interleaved (non-planar)"
+        );
+    }
 }
