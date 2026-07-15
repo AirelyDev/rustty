@@ -140,6 +140,15 @@ members = [
     "crates-sys/sentry-sys",
     "crates-sys/dcimgui-sys",
 
+    # ----- WASM/web target: headless VT+font+config C-ABI module -----
+    # Port of ghostty `src/main_wasm.zig` — the headless C-ABI wasm module entry.
+    # A cdylib+rlib TOP SINK that force-retains (`#[used]`) the config wasm C-ABI
+    # exports and installs the `os/wasm/log` freestanding sink, mirroring the
+    # reference's `comptime { _ = @import(...); }` retention block. Nothing depends
+    # on it (a sink). NOT in the 3234-test src/ contract (main_wasm.zig has 0
+    # tests). See .port/phase-2 WASM workstream report + B1/B2 deferral notes.
+    "crates/rustty-wasm",
+
     # ----- build orchestration (replaces src/build/) -----
     "xtask",
 ]
@@ -183,6 +192,7 @@ rustty-config = { path = "crates/rustty-config" }
 rustty-terminfo = { path = "crates/rustty-terminfo" }
 rustty-termio = { path = "crates/rustty-termio" }
 rustty-core = { path = "crates/rustty-core" }
+rustty-wasm = { path = "crates/rustty-wasm" }
 rustty-apprt = { path = "crates/rustty-apprt" }
 # The libghostty embedding C ABI top-sink (cbindgen -> include/rustty-apprt.h).
 rustty-apprt-c = { path = "crates/rustty-apprt-c" }

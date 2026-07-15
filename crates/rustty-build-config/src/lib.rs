@@ -237,6 +237,13 @@ pub const fn i18n() -> bool {
     CONFIG.i18n
 }
 
+/// Reference (`build_config.zig`): `pub const wasm_target: WasmTarget =
+/// options.wasm_target;`. Consumed by `os/wasm/target.zig` and the
+/// font/renderer wasm backend selectors.
+pub const fn wasm_target() -> WasmTarget {
+    CONFIG.wasm_target
+}
+
 /// The bundle ID for the app. This is used in many places and is currently
 /// hardcoded here. We could make this configurable in the future if there
 /// is a reason to do so.

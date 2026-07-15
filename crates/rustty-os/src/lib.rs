@@ -25,40 +25,68 @@
 // PORT NOTE: the reference imports `builtin` for the `test {}` os-tag switch below.
 // In Rust the os switch is `cfg!(...)`.
 
+// PORT NOTE (§3.4 wasm32 scoped-green): the reference is compiled with Zig's
+// LAZY per-declaration analysis, so a wasm build only ever analyzes the decls it
+// reaches; the POSIX-only modules are simply never touched. Rust compiles a
+// whole crate eagerly, so the 14 POSIX modules below (which reach `libc`, the
+// `std::os::unix` extension traits, or emit an `@compileError`-equivalent
+// `unsupported platform` on non-POSIX targets) are gated
+// `#[cfg(not(target_arch = "wasm32"))]`. This is the parity-preserving analog of
+// Zig's laziness: on wasm32 exactly the `os/wasm*` helper surface remains, which
+// is the whole point of a wasm build. Every other target compiles all modules
+// unchanged. See the workstream report (B2) for the full-workspace follow-up.
 pub mod args;
 pub mod cf_release_thread;
 pub mod cgroup;
 pub mod dbus;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod desktop;
 pub mod env;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod file;
 pub mod flatpak;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod homedir;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod hostname;
 pub mod i18n;
 pub mod i18n_locales;
 pub mod kernel_info;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod locale;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod mach;
 pub mod macos;
 pub mod mouse;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod open;
 // PORT NOTE: `PageList.pageAllocator()` (src/terminal/PageList.zig). The page
 // allocator is OS-specific (darwin tagged mmap vs generic posix page allocator),
 // so it is hosted in this `os` crate, mirroring the reference's reach into
 // `../os/mach.zig` for the darwin path.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod page_allocator;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod passwd;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod path;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod pipe;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod pty;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod resourcesdir;
 pub mod shell;
 pub mod string_encoding;
 pub mod systemd;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod tempdir;
 pub mod uri;
 pub mod windows;
+// PORT NOTE (§3.4 wasm32): `xdg` is not itself POSIX-bound, but it consumes
+// `homedir` (`homedir::home` for the `$HOME`-relative default dirs), which IS
+// gated above; so `xdg` carries the same `wasm32` gate transitively.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod xdg;
 
 // `os/wasm.zig` plus the `os/wasm/` subdirectory (log.zig, target.zig).
@@ -80,9 +108,15 @@ pub mod wasm;
 // `#![cfg(...)]` os gates verbatim in their own files).
 
 // Functions and types
+//
+// PORT NOTE (§3.4 wasm32): the re-exports drawn from the `#[cfg(not(target_arch
+// = "wasm32"))]`-gated POSIX modules above carry the SAME gate so the crate's
+// public surface stays consistent on wasm32 (nothing names a gated module).
 pub use crate::cf_release_thread as CFReleaseThread;
 pub use crate::dbus::launchedByDbusActivation;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::desktop::desktopEnvironment;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::desktop::launchedFromDesktop;
 pub use crate::env::appendEnv;
 pub use crate::env::appendEnvAlways;
@@ -92,29 +126,44 @@ pub use crate::env::prependEnv;
 pub use crate::env::setenv;
 pub use crate::env::unsetenv;
 pub use crate::env::GetEnvResult;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::file::allocTmpDir;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::file::fixMaxFiles;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::file::freeTmpDir;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::file::randomTmpPath;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::file::restoreMaxFiles;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::file::rlimit;
 pub use crate::flatpak::isFlatpak;
 #[cfg(feature = "flatpak")]
 pub use crate::flatpak::FlatpakHostCommand;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::homedir::expandHome;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::homedir::home;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::locale::ensureLocale;
 pub use crate::mouse::clickInterval;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::open::open;
 pub use crate::systemd::launchedBySystemd;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::tempdir as TempDir;
 // PORT NOTE: the reference's `pub const OpenType = openpkg.Type;`. The port renames
 // the type to `Kind` (the R4 parity image of `apprt.action.OpenUrl.Kind`); the
 // `OpenType` alias is preserved.
 pub use crate::kernel_info::getKernelInfo;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::open::Kind as OpenType;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::pipe::pipe;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::resourcesdir::resourcesDir;
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::resourcesdir::ResourcesDir;
 pub use crate::shell::ShellEscapeWriter;
 

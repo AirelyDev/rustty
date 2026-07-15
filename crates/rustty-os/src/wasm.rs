@@ -24,11 +24,17 @@ pub mod target;
 // `cfg(target_arch = "wasm32")`, which is the parity-preserving equivalent: the
 // declarations below are only compiled for wasm32 builds.
 #[cfg(target_arch = "wasm32")]
+// PORT: the reference consts are `shared_mem`/`alloc` (snake_case Zig names);
+// R1 preserves those identifiers verbatim, so allow the non-UPPER_CASE lint.
+#[allow(non_upper_case_globals)]
 mod wasm_impl {
     // wasm.zig should only be analyzed for wasm32 builds
 
     /// True if we're in shared memory mode. If true, then the memory buffer
     /// in JS will be backed by a SharedArrayBuffer and some behaviors change.
+    // PORT: `pub const shared_mem = options.wasm_shared;`. `rustty_build_config`
+    // exposes it via the `wasm_shared()` accessor (the `build_config.zig`
+    // re-export analog; see the sibling `font_backend()`/`renderer()` accessors).
     pub const shared_mem: bool = rustty_build_config::wasm_shared();
 
     /// The allocator to use in wasm environments.

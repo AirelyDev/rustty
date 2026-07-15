@@ -966,6 +966,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustty-wasm"
+version = "0.1.0"
+dependencies = [
+ "rustty-config",
+ "rustty-core",
+ "rustty-os",
+ "rustty-vt",
+]
+
+[[package]]
 name = "rustty-wuffs"
 version = "0.1.0"
 dependencies = [

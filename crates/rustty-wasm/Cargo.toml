@@ -1,0 +1,39 @@
+# rustty-wasm — WASM/web target module (port of ghostty src/main_wasm.zig)
+#
+# Crate IDENTITY is `rustty-wasm` (R4). This is the headless C-ABI wasm module
+# entry: a TOP SINK (nothing depends on it) that force-retains the config wasm
+# C-ABI exports and installs the `os/wasm/log` freestanding sink, mirroring the
+# reference `comptime { _ = @import(...); }` retention block. NO dependency on
+# the ghostty tree (R3) — reference is an external oracle only.
+[package]
+name = "rustty-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+# cdylib: emits the `.wasm` artifact bearing the unmangled `config_*` C-ABI
+# exports for the JS host. rlib: lets the retention/logging logic be built and
+# unit-checked on the host (`cargo build -p rustty-wasm`).
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# `_ = @import("os/wasm.zig");` — the wasm allocator/shared-mem helpers + the
+# `os/wasm/log.zig` freestanding log sink installed as `std_options.logFn`.
+rustty-os = { workspace = true }
+# `_ = @import("config.zig").Wasm;` — the `config_new`/`config_free`/
+# `config_load_string`/`config_finalize` C-ABI exports (behind the `wasm` feature).
+rustty-config = { workspace = true, features = ["wasm"] }
+# `_ = @import("terminal/main.zig");` — the VT core (the wasm module re-exports
+# the terminal C-ABI surface; retained by depending on the crate).
+rustty-vt = { workspace = true }
+# `_ = @import("App.zig").Wasm;` — the App wasm C-ABI block (currently a
+# documented-deferral; the crate is retained so the block joins when it lands).
+rustty-core = { workspace = true }

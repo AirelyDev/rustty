@@ -34,8 +34,14 @@ pub mod coretext;
 // pub const web_canvas = @import("shaper/web_canvas.zig");
 //
 // PORT NOTE: the CoreText shaper is CoreText-native (`.coretext` backend) and so
-// is gated to macOS. The wasm `web_canvas` shaper is NOT part of this tier; its
-// import is preserved above as a comment. The `Shaper` selector (below) models
+// is gated to macOS. The wasm `web_canvas` shaper is NOT part of this tier; it is
+// BLOCKED (B1) and recorded verbatim as a documented-deferral module
+// (`shaper/web_canvas.rs`) — a faithful live port cannot type-check against the
+// current font tree (deleted `faceFromIndex`/`TextRun.group` upstream API +
+// un-vendored `zig-js` face). See that file's header for the full B1 analysis.
+#[path = "shaper/web_canvas.rs"]
+pub mod web_canvas;
+// The `Shaper` selector (below) models
 // the `coretext_harfbuzz`/`fontconfig_freetype` configurations and points at
 // `harfbuzz::Shaper`; the CoreText shaper is exercised through its own
 // `coretext::Shaper` type + tests, exactly as the reference's coretext.zig tests

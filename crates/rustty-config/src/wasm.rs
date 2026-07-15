@@ -26,8 +26,13 @@
 //
 // const log = std.log.scoped(.config);
 
+// PORT NOTE: `pub` (not private) so the wasm module entry (`rustty-wasm`, the
+// port of `main_wasm.zig`) can name these C-ABI exports in its `#[used]`
+// fn-pointer retention array — the Rust analog of `comptime { _ =
+// @import("config.zig").Wasm; }` which force-retains the `export fn`s. The
+// symbols are still emitted unmangled (`config_new` etc.) for the JS host.
 #[cfg(feature = "wasm")]
-mod wasm_exports {
+pub mod wasm_exports {
     use crate::config_struct::Config;
 
     /// Create a new configuration filled with the initial default values.
@@ -73,7 +78,7 @@ mod wasm_exports {
         // var fbs = std.io.fixedBufferStream(str);
         // var iter = cli.args.lineIterator(fbs.reader());
         // try cli.args.parse(Config, alloc, self, &iter);
-        let mut iter = rustty_args::args::line_iterator(str_);
+        let mut iter = rustty_args::args::LineIterator::init(str_);
         self_.load_iter(&mut iter)
     }
 

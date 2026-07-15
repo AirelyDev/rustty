@@ -8,6 +8,8 @@
 //!
 //! Independent of the parity port order (R4). NO ghostty Cargo dep (R3).
 
+mod wasm_patch_growable_table;
+
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
@@ -57,6 +59,8 @@ SUBCOMMANDS:
     header-gen-apprt   Generate include/rustty-apprt.h from rustty-apprt-c via cbindgen (R2)
     xcframework        Package rustty-apprt-c into dist/RusttyKit.xcframework (macOS Swift-app tier)
     resources          Generate zig-out/share/{terminfo,<app>,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase (<app> = rustty by default, ghostty under identity-oracle)
+    wasm-patch-growable-table <in.wasm> <out.wasm>
+                       Patch a WASM binary's table section to be growable (R2)
     help               Show this help
 ";
 
@@ -100,6 +104,16 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("xtask: resources failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("wasm-patch-growable-table") => match wasm_patch_growable_table_cmd(&mut args) {
+            Ok(out) => {
+                println!("wrote {}", out.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("xtask: wasm-patch-growable-table failed: {e}");
                 ExitCode::FAILURE
             }
         },
@@ -398,4 +412,32 @@ fn resources() -> Result<PathBuf, String> {
         .map_err(|e| format!("gen_shell_integration: {e}"))?;
 
     Ok(share)
+}
+
+/// Port of ghostty `src/build/wasm_patch_growable_table.zig`'s `main()`: read
+/// `<input.wasm>`, patch its table section to be growable, write `<output.wasm>`.
+///
+/// The pure LEB128/section-rewrite logic lives in
+/// [`wasm_patch_growable_table::patch_table_growable`].
+fn wasm_patch_growable_table_cmd(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<PathBuf, String> {
+    // Parse args: input output
+    let input = args
+        .next()
+        .ok_or("usage: wasm-patch-growable-table <input.wasm> <output.wasm>")?;
+    let output = args
+        .next()
+        .ok_or("usage: wasm-patch-growable-table <input.wasm> <output.wasm>")?;
+
+    // Patch the file.
+    let bytes = std::fs::read(&input).map_err(|e| format!("read {input}: {e}"))?;
+    let patched = wasm_patch_growable_table::patch_table_growable(&bytes)
+        .map_err(|e| format!("patch failed: {e:?}"))?;
+
+    // Write our output
+    let output = PathBuf::from(output);
+    std::fs::write(&output, patched.as_ref())
+        .map_err(|e| format!("write {}: {e}", output.display()))?;
+    Ok(output)
 }
