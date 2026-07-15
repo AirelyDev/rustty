@@ -1845,7 +1845,7 @@ impl Subprocess {
 
         // Add our binary to the path if we can find it.
         // ghostty_path: {
-        'ghostty_path: {
+        'rustty_path: {
             // Skip this for flatpak since host cannot reach them
             // if ((comptime build_config.flatpak) and
             //     internal_os.isFlatpak())
@@ -1853,7 +1853,7 @@ impl Subprocess {
             //     break :ghostty_path;
             // }
             if rustty_build_config::flatpak() && rustty_os::flatpak::isFlatpak() {
-                break 'ghostty_path;
+                break 'rustty_path;
             }
 
             // var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -1865,13 +1865,13 @@ impl Subprocess {
                 Ok(p) => p,
                 Err(_err) => {
                     // log.warn("failed to get ghostty exe path err={}", .{err});
-                    break 'ghostty_path;
+                    break 'rustty_path;
                 }
             };
             // const exe_dir = std.fs.path.dirname(exe_bin_path) orelse break :ghostty_path;
             let exe_dir = match exe_bin_path.parent().and_then(|d| d.to_str()) {
                 Some(d) => d,
-                None => break 'ghostty_path,
+                None => break 'rustty_path,
             };
             // log.debug("appending ghostty bin to path dir={s}", .{exe_dir});
 
@@ -1894,7 +1894,7 @@ impl Subprocess {
                 let delimiter = if cfg!(windows) { ';' } else { ':' };
                 for entry in path.split(delimiter).filter(|s| !s.is_empty()) {
                     if entry == exe_dir {
-                        break 'ghostty_path;
+                        break 'rustty_path;
                     }
                 }
 

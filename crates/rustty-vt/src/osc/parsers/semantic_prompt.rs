@@ -420,12 +420,12 @@ pub enum Redraw {
     /// unless it is to reset a prior other value.
     True,
 
-    /// The shell does NOT support redrawing. In this case, Ghostty will NOT
+    /// The shell does NOT support redrawing. In this case, rustty will NOT
     /// clear any prompt lines on resize.
     False,
 
     /// The shell supports redrawing only the LAST line of the prompt.
-    /// Ghostty will only clear the last line of the prompt on resize.
+    /// rustty will only clear the last line of the prompt on resize.
     ///
     /// This is specifically introduced because Bash only redraws the last
     /// line. It is literally the only shell that does this and it does this

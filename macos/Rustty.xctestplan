@@ -16,8 +16,8 @@
     ],
     "environmentVariableEntries" : [
       {
-        "key" : "GHOSTTY_CONFIG_PATH",
-        "value" : "\/tmp\/Rustty\/testing_config.ghostty"
+        "key" : "RUSTTY_CONFIG_PATH",
+        "value" : "\/tmp\/Rustty\/testing_config.rustty"
       }
     ],
     "performanceAntipatternCheckerEnabled" : true,

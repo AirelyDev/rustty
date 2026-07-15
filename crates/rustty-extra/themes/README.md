@@ -1,4 +1,4 @@
-# Vendored ghostty themes corpus (data identity: `ghostty`)
+# Vendored ghostty themes corpus
 
 This directory holds the **iTerm2-Color-Schemes-derived color-theme `.conf` files**
 that ghostty ships under `share/ghostty/themes/`, vendored **verbatim** into
@@ -19,17 +19,18 @@ Vendored byte-for-byte from ghostty's `iterm2_themes` build dependency:
   the only non-theme file here and is **excluded on emit** — mirroring ghostty's
   `.md` exclusion, so the shipped count stays exactly 534).
 
-## R2 data-identity note — why `ghostty`, not `rustty`
+## R2 identity note — install path IS rebranded (Task 14 correction)
 
-The product is **Rustty**, but this corpus keeps ghostty's **data identity**:
+The theme file **contents** (each `.conf`'s color values) are vendored data,
+untouched either way. The **install path**, however, is fully identity-routed:
+`xtask/src/res_themes.rs` installs this corpus to `share/{APP}/themes/` —
+`share/rustty/themes/` by default, `share/ghostty/themes/` only under the
+`identity-oracle` parity harness — and `rustty-config`'s theme resolution
+(used by both the ported `list_themes` fuzzy-picker and the `theme =` config
+setting) looks up `share/{APP_NAME}/themes` dynamically via
+`rustty_identity::APP_NAME`. There is no hard-coded `ghostty` path on either
+side (an earlier version of this note claimed otherwise; that claim was
+verified false and corrected — see Task 14's report).
 
-- It installs to `share/ghostty/themes/` (not `share/rustty/…`).
-- The reused macOS Swift app and the ported `list_themes` fuzzy-picker / `theme`
-  config setting resolve theme names against the `share/ghostty/themes` path the
-  app hard-codes.
-
-Renaming the directory or the corpus would break the picker and the `theme =`
-setting lookup, so the ghostty name is retained deliberately (R2).
-
-Do not hand-edit these files — they are upstream data. To refresh, re-vendor
-verbatim from the pinned `iterm2_themes` tarball.
+Do not hand-edit these theme files — they are upstream data. To refresh,
+re-vendor verbatim from the pinned `iterm2_themes` tarball.

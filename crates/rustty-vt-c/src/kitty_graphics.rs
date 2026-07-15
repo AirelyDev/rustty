@@ -39,7 +39,7 @@ use std::collections::hash_map;
 use std::ffi::c_void;
 use std::os::raw::c_int;
 
-/// C: GhosttyKittyGraphics
+/// C: GhosttyKittyGraphics -> RusttyKittyGraphics (R2)
 // PORT NOTE: the reference is
 //   pub const KittyGraphics = if (build_options.kitty_graphics)
 //       *kitty_storage.ImageStorage
@@ -52,7 +52,7 @@ use std::os::raw::c_int;
 // the concrete `*mut ImageStorage` from this opaque pointer.
 pub type KittyGraphics = *mut c_void;
 
-/// C: GhosttyKittyGraphicsImage
+/// C: GhosttyKittyGraphicsImage -> RusttyKittyGraphicsImage (R2)
 // PORT NOTE: the reference is
 //   pub const ImageHandle = if (build_options.kitty_graphics)
 //       ?*const Image
@@ -62,7 +62,7 @@ pub type KittyGraphics = *mut c_void;
 // `*const Image` (null == none).
 pub type ImageHandle = *const Image;
 
-/// C: GhosttyKittyGraphicsPlacementIterator
+/// C: GhosttyKittyGraphicsPlacementIterator -> RusttyKittyGraphicsPlacementIterator (R2)
 // PORT NOTE: the reference is
 //   pub const PlacementIterator = if (build_options.kitty_graphics)
 //       ?*PlacementIteratorWrapper
@@ -113,7 +113,7 @@ pub struct PlacementIteratorWrapper {
     layer_filter: PlacementLayer,
 }
 
-/// C: GhosttyKittyGraphicsData
+/// C: GhosttyKittyGraphicsData -> RusttyKittyGraphicsData (R2)
 // pub const Data = enum(c_int) { invalid = 0, placement_iterator = 1, ... };
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -127,7 +127,7 @@ pub enum Data {
 // the tag and casts `out` to the matching type, so the comptime `OutType`
 // function is realized inline (no separate type-level function).
 
-/// C: GhosttyKittyGraphicsPlacementData
+/// C: GhosttyKittyGraphicsPlacementData -> RusttyKittyGraphicsPlacementData (R2)
 // pub const PlacementData = enum(c_int) { invalid=0, image_id=1, ..., z=12 };
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -225,7 +225,7 @@ unsafe fn get_typed(graphics_: KittyGraphics, data: Data, out: *mut c_void) -> R
     }
 }
 
-/// C: GhosttyKittyPlacementLayer
+/// C: GhosttyKittyPlacementLayer -> RusttyKittyPlacementLayer (R2)
 // pub const PlacementLayer = enum(c_int) { all=0, below_bg=1, below_text=2, above_text=3, ... };
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -260,7 +260,7 @@ impl PlacementLayer {
     }
 }
 
-/// C: GhosttyKittyGraphicsPlacementIteratorOption
+/// C: GhosttyKittyGraphicsPlacementIteratorOption -> RusttyKittyGraphicsPlacementIteratorOption (R2)
 // pub const PlacementIteratorOption = enum(c_int) { layer = 0, ... };
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -271,11 +271,11 @@ pub enum PlacementIteratorOption {
 // PORT NOTE: the reference `PlacementIteratorOption.InType` maps `.layer =>
 // PlacementLayer`. Realized inline in `placement_iterator_set_typed`.
 
-/// C: GhosttyKittyImageFormat
+/// C: GhosttyKittyImageFormat -> RusttyKittyImageFormat (R2)
 // pub const ImageFormat = kitty_cmd.Transmission.Format;
 pub type ImageFormat = rustty_vt::kitty::graphics_command::Format;
 
-/// C: GhosttyKittyImageCompression
+/// C: GhosttyKittyImageCompression -> RusttyKittyImageCompression (R2)
 // pub const ImageCompression = kitty_cmd.Transmission.Compression;
 pub type ImageCompression = rustty_vt::kitty::graphics_command::Compression;
 
@@ -287,7 +287,7 @@ const _: fn() = || {
     let _ = core::mem::size_of::<Transmission>;
 };
 
-/// C: GhosttyKittyGraphicsImageData
+/// C: GhosttyKittyGraphicsImageData -> RusttyKittyGraphicsImageData (R2)
 // pub const ImageData = enum(c_int) { invalid=0, id=1, ..., data_len=8 };
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1113,7 +1113,7 @@ pub unsafe fn placement_source_rect(
     Result::Success
 }
 
-/// C: GhosttyKittyGraphicsPlacementRenderInfo
+/// C: GhosttyKittyGraphicsPlacementRenderInfo -> RusttyKittyGraphicsPlacementRenderInfo (R2)
 // pub const PlacementRenderInfo = extern struct {
 //     size: usize = @sizeOf(PlacementRenderInfo),
 //     pixel_width: u32 = 0, ... source_height: u32 = 0,

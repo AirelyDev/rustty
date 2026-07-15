@@ -217,16 +217,16 @@ impl ThemeListElement {
 /// Two different directories will be searched for themes.
 ///
 /// The first directory is the `themes` subdirectory of your rustty
-/// configuration directory. This is `$XDG_CONFIG_HOME/ghostty/themes` or
-/// `~/.config/ghostty/themes`.
+/// configuration directory. This is `$XDG_CONFIG_HOME/rustty/themes` or
+/// `~/.config/rustty/themes`.
 ///
 /// The second directory is the `themes` subdirectory of the rustty resources
 /// directory. rustty ships with a multitude of themes that will be installed
 /// into this directory. On macOS, this directory is the
-/// `Ghostty.app/Contents/Resources/ghostty/themes`. On Linux, this directory
-/// is the `share/ghostty/themes` (wherever you installed the rustty "share"
+/// `Rustty.app/Contents/Resources/rustty/themes`. On Linux, this directory
+/// is the `share/rustty/themes` (wherever you installed the rustty "share"
 /// directory). If you're running rustty from the source, this is the
-/// `zig-out/share/ghostty/themes` directory.
+/// `zig-out/share/rustty/themes` directory.
 ///
 /// You can also set the `RUSTTY_RESOURCES_DIR` environment variable to point
 /// to the resources directory.
@@ -780,10 +780,12 @@ fn run_preview<'a>(
     // try self.vx.enterAltScreen(writer);
     unsafe { (*vx_ptr).enter_alt_screen((*tty_ptr).writer()) }?;
     // try self.vx.setTitle(writer, "👻 Ghostty Theme Preview 👻");
+    // R2 IDENTITY NOTE (Task 16): window title carries the rustty product
+    // identity (user-visible terminal-window title, not oracle data).
     unsafe {
         (*vx_ptr).set_title(
             (*tty_ptr).writer(),
-            "👻 Ghostty Theme Preview 👻".as_bytes(),
+            "👻 Rustty Theme Preview 👻".as_bytes(),
         )
     }?;
     // try self.vx.queryTerminal(writer, 1 * std.time.ns_per_s);
@@ -1404,7 +1406,7 @@ fn draw<'a>(vx: &mut Vaxis<'a>, st: &mut DrawState<'a>) {
                 b""
             };
             let save_instructions: [&[u8]; 14] = [
-                "To apply this theme, add the following line to your Ghostty configuration:"
+                "To apply this theme, add the following line to your Rustty configuration:"
                     .as_bytes(),
                 b"",
                 theme_line,
@@ -1413,14 +1415,14 @@ fn draw<'a>(vx: &mut Vaxis<'a>, st: &mut DrawState<'a>) {
                 b"",
                 "Or press 'w' to write an auto theme file to your system's preferred default config path."
                     .as_bytes(),
-                "Then add the following line to your Ghostty configuration and reload:".as_bytes(),
+                "Then add the following line to your Rustty configuration and reload:".as_bytes(),
                 b"",
-                "config-file = ?auto/theme.ghostty".as_bytes(),
+                "config-file = ?auto/theme.rustty".as_bytes(),
                 b"",
-                "For more details on configuration and themes, visit the Ghostty documentation:"
+                "For more details on configuration and themes, visit the config reference:"
                     .as_bytes(),
                 b"",
-                "https://ghostty.org/docs/config/reference".as_bytes(),
+                "https://rustty.org/docs/config/reference".as_bytes(),
             ];
             // for (save_instructions, 0..) |instruction, captured_i| { instruction@2 }
             for (captured_i, instruction) in save_instructions.iter().enumerate() {
@@ -2013,14 +2015,14 @@ fn draw_preview<'a>(st: &DrawState<'a>, win: Window<'a>, x_off_unconverted: i32)
             }
             let _ = child.print(
                 &[
-                    styled(b"ghostty ", color6),
+                    styled(b"rustty ", color6),
                     styled(b"on ", standard),
                     styled(" main ".as_bytes(), color4),
                     styled(b"[+] ", color1),
                     styled(b"via ", standard),
                     styled(" v0.13.0 ".as_bytes(), color3),
                     styled(b"via ", standard),
-                    styled("  impure (ghostty-env)".as_bytes(), color4),
+                    styled("  impure (rustty-env)".as_bytes(), color4),
                 ],
                 propt(22, 2),
             );
@@ -2152,8 +2154,12 @@ fn resolve_auto_theme_path() -> Result<Vec<u8>, Error> {
         .parent()
         .ok_or_else(|| std::io::Error::other("BadPathName"))?;
     // return try std.fs.path.join(alloc, &.{ base_dir, "auto", "theme.ghostty" });
+    // R2 IDENTITY NOTE (Task 16): `.rustty` matches `CONFIG_FILE`'s extension
+    // (`config.rustty`) and the `rustty.sublime-syntax`/`rustty.vim`
+    // `file_extensions:`/ftdetect glob (Task 16/18), so editor syntax
+    // highlighting picks up this auto-written include the same way.
     let base_bytes = path_bytes(base_dir);
-    Ok(join(&[&base_bytes, b"auto", b"theme.ghostty"]))
+    Ok(join(&[&base_bytes, b"auto", b"theme.rustty"]))
 }
 
 // fn writeAutoThemeFile(alloc, theme_name: []const u8) !void {
@@ -2588,7 +2594,7 @@ mod picker_tests {
         let mut out: Vec<u8> = Vec::new();
         vx.render(&mut out).unwrap();
         // No theme found in the preview pane; the save pane rendered its instructions.
-        assert!(find_bytes(&out, b"Ghostty configuration"));
+        assert!(find_bytes(&out, b"Rustty configuration"));
     }
 
     fn find_bytes(haystack: &[u8], needle: &[u8]) -> bool {

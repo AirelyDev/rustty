@@ -19,7 +19,7 @@ pub fn syntax() -> Vec<u8> {
 // pub const ftdetect = \\...;
 pub const FTDETECT: &[u8] = br#"" Vim filetype detect file
 " Language: Rustty config file
-" Maintainer: Rustty <https://github.com/airely/rustty>
+" Maintainer: Rustty <https://github.com/AirelyDev/rustty>
 "
 " THIS FILE IS AUTO-GENERATED
 
@@ -29,7 +29,7 @@ au BufRead,BufNewFile */rustty/config,*/*.rustty/config,*/rustty/themes/*,*.rust
 // pub const ftplugin = \\...;
 pub const FTPLUGIN: &[u8] = br#"" Vim filetype plugin file
 " Language: Rustty config file
-" Maintainer: Rustty <https://github.com/airely/rustty>
+" Maintainer: Rustty <https://github.com/AirelyDev/rustty>
 "
 " THIS FILE IS AUTO-GENERATED
 
@@ -58,7 +58,7 @@ endif
 // pub const compiler = \\...;
 pub const COMPILER: &[u8] = br#"" Vim compiler file
 " Language: Rustty config file
-" Maintainer: Rustty <https://github.com/airely/rustty>
+" Maintainer: Rustty <https://github.com/AirelyDev/rustty>
 "
 " THIS FILE IS AUTO-GENERATED
 
@@ -77,7 +77,7 @@ fn write_syntax(writer: &mut Vec<u8>) {
     writer.extend_from_slice(
         br#"" Vim syntax file
 " Language: Rustty config file
-" Maintainer: Rustty <https://github.com/airely/rustty>
+" Maintainer: Rustty <https://github.com/AirelyDev/rustty>
 "
 " THIS FILE IS AUTO-GENERATED
 

@@ -18,16 +18,16 @@ const EQUALS_REQUIRED: &[u8] = b"=-:::";
 // fn writeZshCompletions(writer: *std.Io.Writer) !void {
 fn write_zsh_completions(writer: &mut Vec<u8>) {
     writer.extend_from_slice(
-        br#"#compdef ghostty
+        br#"#compdef rustty
 
 _fonts () {
-  local font_list=$(ghostty +list-fonts | grep -Z '^[A-Z]')
+  local font_list=$(rustty +list-fonts | grep -Z '^[A-Z]')
   local fonts=(${(f)font_list})
   _describe -t fonts 'fonts' fonts
 }
 
 _themes() {
-  local theme_list=$(ghostty +list-themes | sed -E 's/^(.*) \(.*$/\1/')
+  local theme_list=$(rustty +list-themes | sed -E 's/^(.*) \(.*$/\1/')
   local themes=(${(f)theme_list})
   _describe -t themes 'themes' themes
 }
@@ -108,7 +108,7 @@ _themes() {
     writer.extend_from_slice(b"\n}\n\n");
 
     writer.extend_from_slice(
-        br#"_ghostty() {
+        br#"_rustty() {
   typeset -A opt_args
   local context state line
   local opt=('-e' '--help' '--version')
@@ -236,7 +236,7 @@ _themes() {
   esac
 }
 
-_ghostty "$@"
+_rustty "$@"
 "#,
     );
 }
@@ -245,12 +245,15 @@ _ghostty "$@"
 mod tests {
     use super::*;
 
-    // Byte-exact golden diff against ghostty's actually-generated file (R1 gate).
+    // Byte-exact golden diff against the committed rustty-branded fixture (R1
+    // gate; Task 16 rebranded the command name / function name — see the
+    // module's identity note — everything else stays byte-identical to
+    // ghostty's actually-generated file).
     #[test]
     fn completions_match_golden() {
         assert_eq!(
             completions(),
-            include_bytes!("../testdata/_ghostty").as_slice()
+            include_bytes!("../testdata/_rustty").as_slice()
         );
     }
 }

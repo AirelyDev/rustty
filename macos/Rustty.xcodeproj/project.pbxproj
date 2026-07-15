@@ -576,7 +576,7 @@
 				29C15B1D2CDC3B2900520DD4 /* bat in Resources */,
 				A586167C2B7703CC009BDB1D /* fish in Resources */,
 				8F3A9B4C2FA6B88000A18D13 /* Rustty.sdef in Resources */,
-				55154BE02B33911F001622DC /* ghostty in Resources */,
+				55154BE02B33911F001622DC /* rustty in Resources */,
 				A546F1142D7B68D7003B11A0 /* locale in Resources */,
 				A5985CE62C33060F00C57AD3 /* man in Resources */,
 				9351BE8E3D22937F003B3499 /* nvim in Resources */,

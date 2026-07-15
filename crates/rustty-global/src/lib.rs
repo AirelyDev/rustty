@@ -57,7 +57,7 @@ use rustty_build_config as build_config;
 pub use seam::Xev as xev;
 
 /// Global process state. This is initialized in main() for exe artifacts
-/// and by ghostty_init() for lib artifacts. This should ONLY be used by
+/// and by rustty_init() for lib artifacts. This should ONLY be used by
 /// the C API. The Zig API should NOT use any global state and should
 /// rely on allocators being passed in as parameters.
 // PARITY: reference `pub var state: GlobalState = undefined;`. Zig leaves the

@@ -31,16 +31,16 @@ fn write_completions(writer: &mut Vec<u8>) {
         writer.extend_from_slice(b"\"\n");
     }
 
-    writer.extend_from_slice(b"complete -c ghostty -f\n");
+    writer.extend_from_slice(b"complete -c rustty -f\n");
 
-    writer.extend_from_slice(b"complete -c ghostty -s e -l help -f\n");
+    writer.extend_from_slice(b"complete -c rustty -s e -l help -f\n");
     writer.extend_from_slice(
-        b"complete -c ghostty -n \"not __fish_seen_subcommand_from $commands\" -l version -f\n",
+        b"complete -c rustty -n \"not __fish_seen_subcommand_from $commands\" -l version -f\n",
     );
 
     for (name, key) in config_fields() {
         writer.extend_from_slice(
-            b"complete -c ghostty -n \"not __fish_seen_subcommand_from $commands\" -l ",
+            b"complete -c rustty -n \"not __fish_seen_subcommand_from $commands\" -l ",
         );
         writer.extend_from_slice(name);
         // if (field.type != bool) " -r" else " "
@@ -50,10 +50,10 @@ fn write_completions(writer: &mut Vec<u8>) {
             writer.extend_from_slice(b" ");
         }
         if name.starts_with(b"font-family") {
-            writer.extend_from_slice(b" -f  -a \"(ghostty +list-fonts | grep '^[A-Z]')\"");
+            writer.extend_from_slice(b" -f  -a \"(rustty +list-fonts | grep '^[A-Z]')\"");
         } else if *name == *b"theme" {
             writer.extend_from_slice(
-                b" -f -a \"(ghostty +list-themes | sed -E 's/^(.*) \\(.*\\$/\\1/')\"",
+                b" -f -a \"(rustty +list-themes | sed -E 's/^(.*) \\(.*\\$/\\1/')\"",
             );
         } else if *name == *b"working-directory" {
             writer.extend_from_slice(b" -f -k -a \"(__fish_complete_directories)\"");
@@ -108,7 +108,7 @@ fn write_completions(writer: &mut Vec<u8>) {
 
     {
         writer.extend_from_slice(
-            b"complete -c ghostty -n \"string match -q -- '+*' (commandline -pt)\" -f -a \"",
+            b"complete -c rustty -n \"string match -q -- '+*' (commandline -pt)\" -f -a \"",
         );
         for (count, action) in Action::ALL.iter().enumerate() {
             if count > 0 {
@@ -132,7 +132,7 @@ fn write_completions(writer: &mut Vec<u8>) {
 
         let tag = action.tag_name().as_bytes();
         for spec in action.option_specs() {
-            writer.extend_from_slice(b"complete -c ghostty -n \"__fish_seen_subcommand_from +");
+            writer.extend_from_slice(b"complete -c rustty -n \"__fish_seen_subcommand_from +");
             writer.extend_from_slice(tag);
             writer.extend_from_slice(b"\" -l ");
             writer.extend_from_slice(spec.name);
@@ -234,19 +234,20 @@ mod tests {
         assert_eq!(result.as_slice(), expected.as_slice());
     }
 
-    // Byte-exact golden diff against ghostty's actually-generated file. The R2
-    // brand rename (`Ghostty` -> `rustty` in the config docs `config_help` returns)
-    // is the ONLY intended divergence from ghostty's bytes, so the comparison
-    // canonicalizes the brand token (case-insensitively) on both sides; every other
-    // byte — field names, flags, enum values, ordering, description wording — must
-    // match exactly.
+    // Byte-exact golden diff against the committed rustty-branded fixture
+    // (derived from ghostty's actually-generated file). The brand rename
+    // (`Ghostty`/`ghostty` -> `Rustty`/`rustty`, including the `complete -c`
+    // command name — Task 16) is the ONLY intended divergence from ghostty's
+    // bytes, so the comparison canonicalizes the brand token
+    // (case-insensitively) on both sides; every other byte — field names,
+    // flags, enum values, ordering, description wording — must match exactly.
     #[test]
     fn completions_match_golden() {
         let got = brand_normalize(&completions());
-        let want = brand_normalize(include_bytes!("../testdata/ghostty.fish"));
+        let want = brand_normalize(include_bytes!("../testdata/rustty.fish"));
         assert_eq!(
             got, want,
-            "fish completions diverge from ghostty golden beyond the R2 brand rename"
+            "fish completions diverge from ghostty golden beyond the brand rename"
         );
     }
 

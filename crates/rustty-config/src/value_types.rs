@@ -233,7 +233,7 @@ pub enum ConfirmCloseSurface {
 
 /// Valid values for custom-shader-animation
 /// c_int because it needs to be extern compatible
-/// If this is changed, you must also update ghostty.h
+/// If this is changed, you must also update rustty-embed.h
 // pub const CustomShaderAnimation = enum(c_int) { false, true, always };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -245,7 +245,7 @@ pub enum CustomShaderAnimation {
 
 /// Valid values for macos-non-native-fullscreen
 /// c_int because it needs to be extern compatible
-/// If this is changed, you must also update ghostty.h
+/// If this is changed, you must also update rustty-embed.h
 // pub const NonNativeFullscreen = enum(c_int) { false, true, "visible-menu", "padded-notch" };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -258,7 +258,7 @@ pub enum NonNativeFullscreen {
 
 /// Valid values for fullscreen config option
 /// c_int because it needs to be extern compatible
-/// If this is changed, you must also update ghostty.h
+/// If this is changed, you must also update rustty-embed.h
 // pub const Fullscreen = enum(c_int) { false, true, "non-native", "non-native-visible-menu", "non-native-padded-notch" };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -1855,7 +1855,7 @@ pub struct Color {
     pub b: u8,
 }
 
-/// ghostty_config_color_s
+/// ghostty_config_color_s -> rustty_config_color_s (R2)
 // pub const C = extern struct { r: u8, g: u8, b: u8 };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -2529,7 +2529,7 @@ pub struct ColorList {
     pub colors_c: Vec<ColorC>,
 }
 
-/// ghostty_config_color_list_s
+/// ghostty_config_color_list_s -> rustty_config_color_list_s (R2)
 // pub const C = extern struct { colors: [*]Color.C, len: usize };
 #[repr(C)]
 pub struct ColorListC {
@@ -2688,7 +2688,7 @@ impl Default for Palette {
     }
 }
 
-/// ghostty_config_palette_s
+/// ghostty_config_palette_s -> rustty_config_palette_s (R2)
 // pub const C = extern struct { colors: [256]Color.C };
 #[repr(C)]
 pub struct PaletteC {
@@ -5675,7 +5675,7 @@ pub struct RepeatableCommand {
     pub value_c: Vec<rustty_input::command::C>,
 }
 
-/// ghostty_config_command_palette_entry_s (the extern C view).
+/// ghostty_config_command_palette_entry_s -> rustty_config_command_palette_entry_s (R2) (the extern C view).
 // pub const C = extern struct { ... };
 #[repr(C)]
 pub struct RepeatableCommandC {

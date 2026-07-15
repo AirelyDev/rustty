@@ -8,7 +8,7 @@
 //!                     install to `share/bat/syntaxes`).
 //!
 //! These three are NOT runtime-critical for a basic terminal window; the macOS
-//! `Ghostty.xcodeproj` Copy-Resources build phase references `../zig-out/share/
+//! `Rustty.xcodeproj` Copy-Resources build phase references `../zig-out/share/
 //! {man,locale,bat}` and only requires the folders to EXIST so the copy step
 //! succeeds. Each folder is emitted minimal-but-VALID (R5): never faked content.
 //!
@@ -59,26 +59,35 @@
 //!
 //!  3. **bat** — the sublime-syntax generator IS ported
 //!     (`rustty_extra::sublime::syntax() -> Vec<u8>`, golden-tested byte-exact
-//!     against ghostty's `ghostty.sublime-syntax`). We write REAL content:
-//!     the committed, golden byte-for-byte source of that generator, embedded
-//!     via `include_bytes!` from `crates/rustty-extra/testdata/`. This keeps
-//!     `gen_misc` self-contained (pure `std`, no xtask→rustty-extra Cargo dep)
-//!     so it compiles regardless of the concurrent Cargo.toml edits made by the
-//!     sibling resource-generator agents.
+//!     against the committed `rustty.sublime-syntax` fixture). We write REAL
+//!     content: the committed, golden byte-for-byte source of that generator,
+//!     embedded via `include_bytes!` from `crates/rustty-extra/testdata/`. This
+//!     keeps `gen_misc` self-contained (pure `std`, no xtask→rustty-extra Cargo
+//!     dep) so it compiles regardless of the concurrent Cargo.toml edits made
+//!     by the sibling resource-generator agents.
 //!     Optional follow-up (not a deferral of content — content is real & valid):
 //!     the land agent MAY switch this to a live `rustty_extra::sublime::syntax()`
 //!     call once `rustty-extra` is a wired xtask dependency; the emitted bytes
 //!     are identical either way (guaranteed by `sublime::syntax`'s golden test).
+//!     R2 IDENTITY NOTE (Task 16): the emitted syntax file + its install
+//!     filename now carry the rustty identity (`rustty.sublime-syntax`,
+//!     `file_extensions: - rustty`, `scope: source.rustty`) matching
+//!     `config.rustty` — previously this hardcoded `ghostty`, which meant
+//!     bat's `file_extensions:` match never fired for the actual shipped
+//!     config file (bat matches by the file's own YAML fields, not by the
+//!     syntax file's basename). No `identity-oracle` dual-profile exists for
+//!     this content (single rustty-branded generator output, matching
+//!     `rustty_extra::vim`'s Task 18 precedent).
 
 use std::fs;
 use std::path::Path;
 
-/// The real ghostty sublime-syntax bytes: byte-identical to what
+/// The real rustty sublime-syntax bytes: byte-identical to what
 /// `rustty_extra::sublime::syntax()` emits (that generator's `syntax_matches_golden`
 /// test pins it to exactly this file). Embedding the committed source keeps this
 /// generator self-contained (no Cargo dep) while shipping authentic content.
 const SUBLIME_SYNTAX: &[u8] =
-    include_bytes!("../../crates/rustty-extra/testdata/ghostty.sublime-syntax");
+    include_bytes!("../../crates/rustty-extra/testdata/rustty.sublime-syntax");
 
 /// `man(7)`-macro body of `share/man/man1/ghostty.1` (everything after the
 /// `.TH` title line, which [`gen_man`] prepends with the live version). A
@@ -338,14 +347,17 @@ fn gen_locale(share_dir: &Path) -> Result<(), String> {
     )
 }
 
-/// `share/bat/syntaxes/ghostty.sublime-syntax` — REAL content: the golden,
+/// `share/bat/syntaxes/rustty.sublime-syntax` — REAL content: the golden,
 /// byte-exact source of the ported `rustty_extra::sublime::syntax()` generator.
-/// Mirrors ghostty's install layout (`share/bat/syntaxes`, GhosttyResources.zig).
+/// Mirrors ghostty's install layout (`share/bat/syntaxes`, GhosttyResources.zig),
+/// but carries the rustty product identity (Task 16 — the config file is
+/// `config.rustty`, so both the filename and the YAML `file_extensions:`/
+/// `scope:` fields inside must say `rustty` for bat to actually highlight it).
 fn gen_bat(share_dir: &Path) -> Result<(), String> {
     let syntaxes_dir = share_dir.join("bat").join("syntaxes");
     mkdirp(&syntaxes_dir)?;
     write_file(
-        &syntaxes_dir.join("ghostty.sublime-syntax"),
+        &syntaxes_dir.join("rustty.sublime-syntax"),
         SUBLIME_SYNTAX,
     )
 }

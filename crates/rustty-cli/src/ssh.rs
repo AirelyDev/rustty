@@ -2,10 +2,12 @@
 //!
 //! PORTS: ghostty src/cli/ssh.zig — the `+ssh` wrapper action (wrap `ssh` to
 //! configure rustty terminal integration on remote hosts). Byte-faithful (R1);
-//! ssh args and destinations are byte strings (R3). The `TERM=xterm-ghostty`
-//! wire token, the `infocmp xterm-ghostty`/`tic` remote install script, and the
-//! `ghostty-ssh-` control-path prefix are routed through `rustty-identity`
-//! (R2 / ADV-FIX 5 / Risk 3) so they track the installed rustty-terminfo entry.
+//! ssh args and destinations are byte strings (R3). The `TERM=xterm-rustty`
+//! wire token (the reference's `xterm-ghostty`), the `infocmp <name>`/`tic`
+//! remote install script, and the `{APP_NAME}-ssh-` control-path prefix are
+//! routed through `rustty-identity` (R2 / ADV-FIX 5 / Risk 3) so they track
+//! the installed rustty-terminfo entry (`rustty-ssh-` by default,
+//! `ghostty-ssh-` under the `identity-oracle` parity harness).
 
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;
@@ -262,11 +264,11 @@ impl cli_args::Target for Options {
 ///
 ///   2. **Terminfo install** (`--terminfo`). On the first connection to a
 ///      given destination, installs rustty's terminfo entry on the remote
-///      host using `infocmp -x xterm-ghostty | ssh tic -x -` over a
+///      host using `infocmp -x xterm-rustty | ssh tic -x -` over a
 ///      shared `ControlMaster` connection. Successful installs are cached
 ///      (see `rustty +ssh-cache`) so subsequent connections skip this
 ///      step. When terminfo is successfully installed or already cached,
-///      `TERM` is set to `xterm-ghostty` instead of `xterm-256color`.
+///      `TERM` is set to `xterm-rustty` instead of `xterm-256color`.
 ///
 /// If `--terminfo` install fails (e.g. `tic` not available on the
 /// remote, filesystem permissions), a warning is logged and the

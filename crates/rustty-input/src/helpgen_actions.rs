@@ -74,7 +74,7 @@ impl Format {
                 b"---\n\
                 title: Keybinding Action Reference\n\
                 description: Reference of all rustty keybinding actions.\n\
-                editOnGithubLink: https://github.com/ghostty-org/ghostty/edit/main/src/input/Binding.zig\n\
+                editOnGithubLink: https://github.com/AirelyDev/rustty/edit/main/crates/rustty-input/src/binding.rs\n\
                 ---\n\
                 \n\
                 This is a reference of all rustty keybinding actions.\n\

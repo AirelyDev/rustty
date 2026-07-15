@@ -12,11 +12,11 @@ use std::ffi::c_void;
 // const Row = page.Row;
 use rustty_vt::page::Row;
 
-/// C: GhosttyRow
+/// C: GhosttyRow -> RusttyRow (R2)
 // pub const CRow = Row.C;  (Row.C = u64)
 pub type CRow = u64;
 
-/// C: GhosttyRowSemanticPrompt
+/// C: GhosttyRowSemanticPrompt -> RusttyRowSemanticPrompt (R2)
 // pub const SemanticPrompt = enum(c_int) { none = 0, prompt = 1, prompt_continuation = 2 };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,7 +26,7 @@ pub enum SemanticPrompt {
     PromptContinuation = 2,
 }
 
-/// C: GhosttyRowData
+/// C: GhosttyRowData -> RusttyRowData (R2)
 // pub const RowData = enum(c_int) { invalid = 0, ... };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

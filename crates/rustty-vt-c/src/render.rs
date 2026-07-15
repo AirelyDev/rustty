@@ -131,23 +131,23 @@ pub struct RowCellsWrapper {
     pub palette: *const Palette,
 }
 
-/// C: GhosttyRenderState
+/// C: GhosttyRenderState -> RusttyRenderState (R2)
 // pub const RenderState = ?*RenderStateWrapper;
 pub type RenderState = *mut RenderStateWrapper;
 
-/// C: GhosttyRenderStateRowIterator
+/// C: GhosttyRenderStateRowIterator -> RusttyRenderStateRowIterator (R2)
 // pub const RowIterator = ?*RowIteratorWrapper;
 pub type RowIterator = *mut RowIteratorWrapper;
 
-/// C: GhosttyRenderStateRowCells
+/// C: GhosttyRenderStateRowCells -> RusttyRenderStateRowCells (R2)
 // pub const RowCells = ?*RowCellsWrapper;
 pub type RowCells = *mut RowCellsWrapper;
 
-/// C: GhosttyRenderStateDirty
+/// C: GhosttyRenderStateDirty -> RusttyRenderStateDirty (R2)
 // pub const Dirty = renderpkg.RenderState.Dirty;
 pub type Dirty = RenderDirty;
 
-/// C: GhosttyRenderStateRowSelection
+/// C: GhosttyRenderStateRowSelection -> RusttyRenderStateRowSelection (R2)
 // pub const RowSelection = extern struct {
 //     size: usize = @sizeOf(RowSelection),
 //     start_x: u16 = 0,
@@ -171,7 +171,7 @@ impl Default for RowSelection {
     }
 }
 
-/// C: GhosttyRenderStateCursorVisualStyle
+/// C: GhosttyRenderStateCursorVisualStyle -> RusttyRenderStateCursorVisualStyle (R2)
 // pub const CursorVisualStyle = enum(c_int) { bar = 0, block = 1, underline = 2, block_hollow = 3 };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -201,7 +201,7 @@ impl CursorVisualStyle {
     }
 }
 
-/// C: GhosttyRenderStateData
+/// C: GhosttyRenderStateData -> RusttyRenderStateData (R2)
 // pub const Data = enum(c_int) { invalid = 0, ... };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -242,7 +242,7 @@ pub enum Data {
 // In Rust the OutType mapping is preserved as the per-arm pointer cast in
 // `get_typed`.
 
-/// C: GhosttyRenderStateOption
+/// C: GhosttyRenderStateOption -> RusttyRenderStateOption (R2)
 // pub const SetOption = enum(c_int) { dirty = 0 };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -253,7 +253,7 @@ pub enum SetOption {
 // Input type expected for setting the option.
 // PORT NOTE: `pub fn InType(comptime self: SetOption) type`: `.dirty => Dirty`.
 
-/// C: GhosttyRenderStateColors
+/// C: GhosttyRenderStateColors -> RusttyRenderStateColors (R2)
 // pub const Colors = extern struct {
 //     size: usize = @sizeOf(Colors),
 //     background: colorpkg.RGB.C,
@@ -975,7 +975,7 @@ pub unsafe fn row_cells_free(cells_: RowCells) {
     drop(unsafe { Box::from_raw(cells_) });
 }
 
-/// C: GhosttyRenderStateRowCellsData
+/// C: GhosttyRenderStateRowCellsData -> RusttyRenderStateRowCellsData (R2)
 // pub const RowCellsData = enum(c_int) { invalid = 0, ... };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1329,7 +1329,7 @@ unsafe fn row_cells_get_graphemes_utf8(
     Result::Success
 }
 
-/// C: GhosttyRenderStateRowData
+/// C: GhosttyRenderStateRowData -> RusttyRenderStateRowData (R2)
 // pub const RowData = enum(c_int) { invalid = 0, dirty = 1, raw = 2, cells = 3, selection = 4 };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1351,7 +1351,7 @@ pub enum RowData {
 // In Rust the OutType mapping is preserved as the per-arm pointer cast in
 // `row_get_typed`.
 
-/// C: GhosttyRenderStateRowOption
+/// C: GhosttyRenderStateRowOption -> RusttyRenderStateRowOption (R2)
 // pub const RowOption = enum(c_int) { dirty = 0 };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

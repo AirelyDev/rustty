@@ -166,7 +166,7 @@ pub enum Action<'a> {
     /// Toggle the command palette.
     ToggleCommandPalette,
 
-    /// Toggle the visibility of all Ghostty terminal windows.
+    /// Toggle the visibility of all rustty terminal windows.
     ToggleVisibility,
 
     /// Toggle the window background opacity. This only has an effect
@@ -273,7 +273,7 @@ pub enum Action<'a> {
     /// The health of the renderer has changed.
     RendererHealth(Health),
 
-    /// Open the Ghostty configuration. This is platform-specific about
+    /// Open the rustty configuration. This is platform-specific about
     /// what it means; it can mean opening a dedicated UI or just opening
     /// a file in a text editor.
     OpenConfig,
@@ -281,7 +281,7 @@ pub enum Action<'a> {
     /// Called when there are no more surfaces and the app should quit
     /// after the configured delay.
     ///
-    /// Despite the name, this is the notification that libghostty sends
+    /// Despite the name, this is the notification that librustty sends
     /// when there are no more surfaces regardless of if the configuration
     /// wants to quit after close, has any delay set, etc. It's up to the
     /// apprt to implement the proper logic based on the config.
@@ -1250,7 +1250,7 @@ impl ColorKind {
 #[repr(C)]
 pub struct ReloadConfig {
     /// A soft reload means that the configuration doesn't need to be
-    /// read off disk, but libghostty needs the full config again so call
+    /// read off disk, but librustty needs the full config again so call
     /// updateConfig with it.
     pub soft: bool,
 }

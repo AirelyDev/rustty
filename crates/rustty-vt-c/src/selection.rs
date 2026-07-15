@@ -41,7 +41,7 @@ use std::mem::{align_of, size_of};
 // recon, NOT a fabrication). The `to_zig`/`from_zig` bridges keep the
 // discriminants pinned to the pure-VT key order.
 
-/// C: GhosttySelectionAdjustment — the `enum(c_int)` projection of
+/// C: GhosttySelectionAdjustment -> RusttySelectionAdjustment (R2) — the `enum(c_int)` projection of
 /// `Selection.Adjustment`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,7 +78,7 @@ impl Adjustment {
     }
 }
 
-/// C: GhosttySelectionOrder — the `enum(c_int)` projection of `Selection.Order`.
+/// C: GhosttySelectionOrder -> RusttySelectionOrder (R2) — the `enum(c_int)` projection of `Selection.Order`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Order {
@@ -112,7 +112,7 @@ impl Order {
     }
 }
 
-/// C: GhosttySelectionFormat — the `enum(c_int)` projection of `formatter.Format`.
+/// C: GhosttySelectionFormat -> RusttySelectionFormat (R2) — the `enum(c_int)` projection of `formatter.Format`.
 // PORT NOTE: `formatter.Format = lib.Enum(lib.target, &.{ "plain", "vt", "html" })`;
 // for the `.c` target a fieldless `enum(c_int)` with the keys in order (pinned
 // here against `rustty_vt::formatter::Format`). The `to_zig` bridge keeps the
@@ -198,7 +198,7 @@ impl CSelection {
     }
 }
 
-/// C: GhosttyTerminalSelectWordOptions
+/// C: GhosttyTerminalSelectWordOptions -> RusttyTerminalSelectWordOptions (R2)
 // pub const SelectWordOptions = extern struct {
 //     size: usize = @sizeOf(SelectWordOptions),
 //     ref: grid_ref.CGridRef,
@@ -214,7 +214,7 @@ pub struct SelectWordOptions {
     pub boundary_codepoints_len: usize,
 }
 
-/// C: GhosttyTerminalSelectWordBetweenOptions
+/// C: GhosttyTerminalSelectWordBetweenOptions -> RusttyTerminalSelectWordBetweenOptions (R2)
 // pub const SelectWordBetweenOptions = extern struct {
 //     size: usize = @sizeOf(SelectWordBetweenOptions),
 //     start: grid_ref.CGridRef,
@@ -232,7 +232,7 @@ pub struct SelectWordBetweenOptions {
     pub boundary_codepoints_len: usize,
 }
 
-/// C: GhosttyTerminalSelectLineOptions
+/// C: GhosttyTerminalSelectLineOptions -> RusttyTerminalSelectLineOptions (R2)
 // pub const SelectLineOptions = extern struct {
 //     size: usize = @sizeOf(SelectLineOptions),
 //     ref: grid_ref.CGridRef,
@@ -250,7 +250,7 @@ pub struct SelectLineOptions {
     pub semantic_prompt_boundary: bool,
 }
 
-/// C: GhosttyTerminalSelectionFormatOptions
+/// C: GhosttyTerminalSelectionFormatOptions -> RusttyTerminalSelectionFormatOptions (R2)
 // pub const FormatOptions = extern struct {
 //     size: usize = @sizeOf(FormatOptions),
 //     emit: Format,

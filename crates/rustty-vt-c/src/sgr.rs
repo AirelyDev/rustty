@@ -164,7 +164,7 @@ pub union CValue {
     pub _padding: [u64; 8],
 }
 
-/// C: GhosttySgrAttribute — the hand-authored tagged union (`Attribute.C`).
+/// C: GhosttySgrAttribute -> RusttySgrAttribute (R2) — the hand-authored tagged union (`Attribute.C`).
 // pub const C = extern struct { tag: Tag, value: CValue };
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -362,7 +362,7 @@ pub struct ParserWrapper {
     alloc: Option<CAllocator>,
 }
 
-/// C: GhosttySgrParser
+/// C: GhosttySgrParser -> RusttySgrParser (R2)
 // pub const Parser = ?*ParserWrapper;
 pub type Parser = *mut ParserWrapper;
 

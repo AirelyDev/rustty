@@ -195,7 +195,7 @@ pub type SizeFn = extern "C" fn(Terminal, *mut c_void, *mut size_report::Size) -
 pub type DeviceAttributesFn = extern "C" fn(Terminal, *mut c_void, *mut CDeviceAttributes) -> bool;
 
 /// C-compatible device attributes struct.
-/// C: GhosttyDeviceAttributes
+/// C: GhosttyDeviceAttributes -> RusttyDeviceAttributes (R2)
 // pub const CDeviceAttributes = extern struct { primary, secondary, tertiary };
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -551,7 +551,7 @@ pub unsafe fn zig_terminal(terminal_: Terminal) -> *mut ZigTerminal {
     unsafe { (*terminal_).terminal }
 }
 
-/// C: GhosttyTerminalOptions
+/// C: GhosttyTerminalOptions -> RusttyTerminalOptions (R2)
 // pub const Options = extern struct { cols, rows, max_scrollback };
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -742,7 +742,7 @@ pub unsafe fn vt_write(terminal_: Terminal, ptr: *const u8, len: usize) {
     unsafe { (*terminal_).stream.next_slice(input) };
 }
 
-/// C: GhosttyTerminalOption
+/// C: GhosttyTerminalOption -> RusttyTerminalOption (R2)
 // pub const Option = enum(c_int) { ... };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1227,7 +1227,7 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
     Result::Success
 }
 
-/// C: GhosttyTerminalCursorStyle
+/// C: GhosttyTerminalCursorStyle -> RusttyTerminalCursorStyle (R2)
 // pub const TerminalCursorStyle = enum(c_int) { bar = 0, block = 1, underline = 2, block_hollow = 3, _ };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1267,11 +1267,11 @@ impl TerminalCursorStyle {
     }
 }
 
-/// C: GhosttyDeviceAttributes
+/// C: GhosttyDeviceAttributes -> RusttyDeviceAttributes (R2)
 // pub const DeviceAttributes = Effects.CDeviceAttributes;
 pub type DeviceAttributes = CDeviceAttributes;
 
-/// C: GhosttyTerminalScrollViewport
+/// C: GhosttyTerminalScrollViewport -> RusttyTerminalScrollViewport (R2)
 // pub const ScrollViewport = ZigTerminal.ScrollViewport.C;
 //
 // PORT NOTE: `ZigTerminal.ScrollViewport` is `union(Tag)` with the C-ABI
@@ -1309,7 +1309,7 @@ pub union ScrollViewportCValue {
     pub _padding: [u64; 2],
 }
 
-/// C: GhosttyTerminalScrollViewport — the hand-authored tagged union.
+/// C: GhosttyTerminalScrollViewport -> RusttyTerminalScrollViewport (R2) — the hand-authored tagged union.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ScrollViewportC {
@@ -1523,19 +1523,19 @@ pub unsafe fn mode_set(terminal_: Terminal, tag: modes::ModeTagBacking, value: b
     Result::Success
 }
 
-/// C: GhosttyKittyGraphics
+/// C: GhosttyKittyGraphics -> RusttyKittyGraphics (R2)
 // pub const KittyGraphics = kitty_gfx_c.KittyGraphics;
 pub type KittyGraphics = KittyGraphicsHandle;
 
-/// C: GhosttyTerminalScreen
+/// C: GhosttyTerminalScreen -> RusttyTerminalScreen (R2)
 // pub const TerminalScreen = ScreenSet.Key;
 pub type TerminalScreen = ScreenSetKey;
 
-/// C: GhosttyTerminalScrollbar
+/// C: GhosttyTerminalScrollbar -> RusttyTerminalScrollbar (R2)
 // pub const TerminalScrollbar = PageList.Scrollbar.C;
 pub type TerminalScrollbar = ScrollbarC;
 
-/// C: GhosttyTerminalData
+/// C: GhosttyTerminalData -> RusttyTerminalData (R2)
 // pub const TerminalData = enum(c_int) { ... };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -46,7 +46,7 @@ fn write_bash_completions(writer: &mut Vec<u8>) {
     let pad5: &[u8] = b"          ";
 
     writer.extend_from_slice(
-        br#"_ghostty() {
+        br#"_rustty() {
 
   # compat: mapfile -t COMPREPLY < <( "$@" )
   _compreply() {
@@ -65,13 +65,13 @@ fn write_bash_completions(writer: &mut Vec<u8>) {
   _fonts() {
     local IFS=$'\n'
     COMPREPLY=()
-    while read -r line; do COMPREPLY+=("$line"); done < <( compgen -P '"' -S '"' -W "$($ghostty +list-fonts | grep '^[A-Z]' )" -- "$cur")
+    while read -r line; do COMPREPLY+=("$line"); done < <( compgen -P '"' -S '"' -W "$($rustty +list-fonts | grep '^[A-Z]' )" -- "$cur")
   }
 
   _themes() {
     local IFS=$'\n'
     COMPREPLY=()
-    while read -r line; do COMPREPLY+=("$line"); done < <( compgen -P '"' -S '"' -W "$($ghostty +list-themes | sed -E 's/^(.*) \(.*$/\1/')" -- "$cur")
+    while read -r line; do COMPREPLY+=("$line"); done < <( compgen -P '"' -S '"' -W "$($rustty +list-themes | sed -E 's/^(.*) \(.*$/\1/')" -- "$cur")
   }
 
   _files() {
@@ -327,7 +327,7 @@ fn write_bash_completions(writer: &mut Vec<u8>) {
     writer.extend_from_slice(
         br#"
   local cur=""; local prev=""; local prevWasEq=false; COMPREPLY=()
-  local ghostty="$1"
+  local rustty="$1"
 
   # script assumes default COMP_WORDBREAKS of roughly $' \t\n"\'><=;|&(:'
   # if = is missing this script will degrade to matching on keys only.
@@ -378,7 +378,7 @@ fn write_bash_completions(writer: &mut Vec<u8>) {
   return 0
 }
 
-complete -o nospace -o bashdefault -F _ghostty ghostty
+complete -o nospace -o bashdefault -F _rustty rustty
 "#,
     );
 }
@@ -397,12 +397,15 @@ fn bash_name(action: Action) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    // Byte-exact golden diff against ghostty's actually-generated file (R1 gate).
+    // Byte-exact golden diff against the committed rustty-branded fixture (R1
+    // gate; Task 16 rebranded the command name / function name — see the
+    // module's identity note — everything else stays byte-identical to
+    // ghostty's actually-generated file).
     #[test]
     fn completions_match_golden() {
         assert_eq!(
             completions(),
-            include_bytes!("../testdata/ghostty.bash").as_slice()
+            include_bytes!("../testdata/rustty.bash").as_slice()
         );
     }
 }

@@ -545,7 +545,7 @@ impl WindowsPty {
         };
 
         let pipe_path = format!(
-            "\\\\.\\pipe\\LOCAL\\ghostty-pty-{}-{}",
+            "\\\\.\\pipe\\LOCAL\\rustty-pty-{}-{}",
             windows::GetCurrentProcessId(),
             pipe_name_counter.fetch_add(1, Ordering::Relaxed),
         );

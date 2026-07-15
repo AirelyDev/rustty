@@ -57,11 +57,11 @@ pub struct Codepoints {
     pub len: usize,
 }
 
-/// C: GhosttySelectionGesture
+/// C: GhosttySelectionGesture -> RusttySelectionGesture (R2)
 // pub const Gesture = ?*GestureWrapper;
 pub type Gesture = *mut GestureWrapper;
 
-/// C: GhosttySelectionGestureEvent
+/// C: GhosttySelectionGestureEvent -> RusttySelectionGestureEvent (R2)
 // pub const Event = ?*EventWrapper;
 pub type Event = *mut EventWrapper;
 
@@ -404,7 +404,7 @@ fn zeroed_geometry() -> sg::Geometry {
     }
 }
 
-/// C: GhosttySelectionGestureBehavior
+/// C: GhosttySelectionGestureBehavior -> RusttySelectionGestureBehavior (R2)
 // pub const Behavior = SelectionGesture.Behavior;
 //
 // PORT NOTE: rustty-vt's `SelectionGesture.Behavior` is a plain (non-`repr(C)`)
@@ -440,7 +440,7 @@ impl Behavior {
     }
 }
 
-/// C: GhosttySelectionGestureAutoscroll
+/// C: GhosttySelectionGestureAutoscroll -> RusttySelectionGestureAutoscroll (R2)
 // pub const Autoscroll = SelectionGesture.Autoscroll;
 //
 // PORT NOTE: as for `Behavior`, a `#[repr(C)]` projection of the non-`repr(C)`
@@ -463,7 +463,7 @@ impl Autoscroll {
     }
 }
 
-/// C: GhosttySelectionGestureBehaviors
+/// C: GhosttySelectionGestureBehaviors -> RusttySelectionGestureBehaviors (R2)
 // pub const Behaviors = extern struct {
 //     single_click: Behavior,
 //     double_click: Behavior,
@@ -477,7 +477,7 @@ pub struct Behaviors {
     pub triple_click: Behavior,
 }
 
-/// C: GhosttySelectionGestureData
+/// C: GhosttySelectionGestureData -> RusttySelectionGestureData (R2)
 // pub const Data = enum(c_int) { click_count = 0, dragged = 1, autoscroll = 2, behavior = 3, anchor = 4 };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -499,7 +499,7 @@ pub enum Data {
 // In Rust the OutType mapping is preserved as the per-arm pointer cast in
 // `get_typed`.
 
-/// C: GhosttySelectionGestureEventType
+/// C: GhosttySelectionGestureEventType -> RusttySelectionGestureEventType (R2)
 // pub const EventType = enum(c_int) { press = 0, release = 1, drag = 2, autoscroll_tick = 3, deep_press = 4 };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -511,7 +511,7 @@ pub enum EventType {
     DeepPress = 4,
 }
 
-/// C: GhosttySelectionGestureEventOption
+/// C: GhosttySelectionGestureEventOption -> RusttySelectionGestureEventOption (R2)
 // pub const EventOption = enum(c_int) { ref = 0, position = 1, repeat_distance = 2, time_ns = 3, repeat_interval_ns = 4, word_boundary_codepoints = 5, behaviors = 6, rectangle = 7, geometry = 8, viewport = 9 };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -543,7 +543,7 @@ pub enum EventOption {
 // In Rust the Type mapping is preserved as the per-arm pointer cast in the
 // per-payload setter helpers.
 
-/// C: GhosttySelectionGestureGeometry
+/// C: GhosttySelectionGestureGeometry -> RusttySelectionGestureGeometry (R2)
 // pub const Geometry = extern struct {
 //     columns: u32,
 //     cell_width: u32,

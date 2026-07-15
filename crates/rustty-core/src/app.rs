@@ -116,7 +116,7 @@ pub struct App<A: apprt::App + 'static> {
     /// The list of surfaces that are currently active.
     pub surfaces: SurfaceList<A>,
 
-    /// This is true if the app that Ghostty is in is focused. This may
+    /// This is true if the app that rustty is in is focused. This may
     /// mean that no surfaces (terminals) are focused but the app is still
     /// focused, i.e. may an about window. On macOS, this concept is known
     /// as the "active" app while focused windows are known as the
@@ -127,7 +127,7 @@ pub struct App<A: apprt::App + 'static> {
     /// to process keyboard shortcuts that are not global.
     ///
     /// This defaults to true since we assume that the app is focused when
-    /// Ghostty is initialized but a well behaved apprt should call
+    /// rustty is initialized but a well behaved apprt should call
     /// focusEvent to set this to the correct value right away.
     // (reference field default: `= true`)
     pub focused: bool,
@@ -150,7 +150,7 @@ pub struct App<A: apprt::App + 'static> {
 
     // Used to rate limit desktop notifications. Some platforms (notably macOS) will
     // run out of resources if desktop notifications are sent too fast and the OS
-    // will kill Ghostty.
+    // will kill rustty.
     // (reference field defaults: `= null`, `= 0`)
     pub last_notification_time: Option<std::time::Instant>,
     pub last_notification_digest: u64,
@@ -503,7 +503,7 @@ where
     }
 
     /// Handle an app-level focus event. This should be called whenever
-    /// the focus state of the entire app containing Ghostty changes.
+    /// the focus state of the entire app containing rustty changes.
     /// This is separate from surface focus events. See the `focused`
     /// field for more information.
     pub fn focusEvent(&mut self, focused: bool) {
@@ -594,7 +594,7 @@ where
         true
     }
 
-    /// Call to notify Ghostty that the color scheme for the app has changed.
+    /// Call to notify rustty that the color scheme for the app has changed.
     /// "Color scheme" in this case refers to system themes such as "light/dark".
     pub fn colorSchemeEvent(
         &mut self,

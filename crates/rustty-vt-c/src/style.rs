@@ -14,7 +14,7 @@ use std::mem::size_of;
 // const color = @import("../color.zig");
 // const sgr = @import("../sgr.zig");
 
-/// C: GhosttyStyleColorTag
+/// C: GhosttyStyleColorTag -> RusttyStyleColorTag (R2)
 // pub const ColorTag = enum(c_int) { none = 0, palette = 1, rgb = 2 };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,7 +24,7 @@ pub enum ColorTag {
     Rgb = 2,
 }
 
-/// C: GhosttyStyleColorValue
+/// C: GhosttyStyleColorValue -> RusttyStyleColorValue (R2)
 // pub const ColorValue = extern union { palette: u8, rgb: color.RGB.C, _padding: u64 };
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -34,7 +34,7 @@ pub union ColorValue {
     pub _padding: u64,
 }
 
-/// C: GhosttyStyleColor
+/// C: GhosttyStyleColor -> RusttyStyleColor (R2)
 // pub const Color = extern struct { tag: ColorTag, value: ColorValue };
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -71,7 +71,7 @@ impl Color {
     }
 }
 
-/// C: GhosttyStyle
+/// C: GhosttyStyle -> RusttyStyle (R2)
 // pub const Style = extern struct {
 //     size: usize = @sizeOf(Style),
 //     fg_color: Color, bg_color: Color, underline_color: Color,

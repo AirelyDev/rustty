@@ -1,4 +1,4 @@
-_ghostty() {
+_rustty() {
 
   # compat: mapfile -t COMPREPLY < <( "$@" )
   _compreply() {
@@ -17,13 +17,13 @@ _ghostty() {
   _fonts() {
     local IFS=$'\n'
     COMPREPLY=()
-    while read -r line; do COMPREPLY+=("$line"); done < <( compgen -P '"' -S '"' -W "$($ghostty +list-fonts | grep '^[A-Z]' )" -- "$cur")
+    while read -r line; do COMPREPLY+=("$line"); done < <( compgen -P '"' -S '"' -W "$($rustty +list-fonts | grep '^[A-Z]' )" -- "$cur")
   }
 
   _themes() {
     local IFS=$'\n'
     COMPREPLY=()
-    while read -r line; do COMPREPLY+=("$line"); done < <( compgen -P '"' -S '"' -W "$($ghostty +list-themes | sed -E 's/^(.*) \(.*$/\1/')" -- "$cur")
+    while read -r line; do COMPREPLY+=("$line"); done < <( compgen -P '"' -S '"' -W "$($rustty +list-themes | sed -E 's/^(.*) \(.*$/\1/')" -- "$cur")
   }
 
   _files() {
@@ -619,7 +619,7 @@ _ghostty() {
   topLevel+=" +toggle-quick-terminal"
 
   local cur=""; local prev=""; local prevWasEq=false; COMPREPLY=()
-  local ghostty="$1"
+  local rustty="$1"
 
   # script assumes default COMP_WORDBREAKS of roughly $' \t\n"\'><=;|&(:'
   # if = is missing this script will degrade to matching on keys only.
@@ -670,4 +670,4 @@ _ghostty() {
   return 0
 }
 
-complete -o nospace -o bashdefault -F _ghostty ghostty
+complete -o nospace -o bashdefault -F _rustty rustty

@@ -8,9 +8,9 @@
 #define GHOSTTY_SIMD_CPW_HELPERS_
 
 #ifdef NDEBUG
-#define GHOSTTY_SIMD_ASSERT(cond) ((void)0)
+#define RUSTTY_SIMD_ASSERT(cond) ((void)0)
 #else
-#define GHOSTTY_SIMD_ASSERT(cond) \
+#define RUSTTY_SIMD_ASSERT(cond) \
   do {                            \
     if (!(cond)) __builtin_trap();\
   } while (0)
@@ -40,7 +40,7 @@ constexpr T array_max(const T (&a)[N]) {
 #endif  // GHOSTTY_SIMD_CPW_HELPERS_
 
 HWY_BEFORE_NAMESPACE();
-namespace ghostty {
+namespace rustty {
 namespace HWY_NAMESPACE {
 
 namespace hn = hwy::HWY_NAMESPACE;
@@ -255,8 +255,8 @@ static_assert(array_size(nsm_gte16) == array_size(nsm_lte16));
 /// Handles 16-bit codepoints.
 template <class D, typename T = uint16_t>
 int8_t CodepointWidth16(D d, uint16_t input) {
-  GHOSTTY_SIMD_ASSERT(input > 0xFF);
-  GHOSTTY_SIMD_ASSERT(input <= 0xFFFF);
+  RUSTTY_SIMD_ASSERT(input > 0xFF);
+  RUSTTY_SIMD_ASSERT(input <= 0xFFFF);
 
   const size_t N = hn::Lanes(d);
   const hn::Vec<D> input_vec = Set(d, input);
@@ -293,7 +293,7 @@ int8_t CodepointWidth16(D d, uint16_t input) {
         return 2;
       }
     }
-    GHOSTTY_SIMD_ASSERT(i >= 7);  // We should have checked all the ranges.
+    RUSTTY_SIMD_ASSERT(i >= 7);  // We should have checked all the ranges.
   }
 
   {
@@ -359,7 +359,7 @@ int8_t CodepointWidth16(D d, uint16_t input) {
 /// Handles codepoints larger than 16-bit.
 template <class D, typename T = uint32_t>
 int8_t CodepointWidth32(D d, T input) {
-  GHOSTTY_SIMD_ASSERT(input > 0xFFFF);
+  RUSTTY_SIMD_ASSERT(input > 0xFFFF);
 
   const size_t N = hn::Lanes(d);
   const hn::Vec<D> input_vec = Set(d, input);
@@ -385,7 +385,7 @@ int8_t CodepointWidth32(D d, T input) {
         return 2;
       }
     }
-    GHOSTTY_SIMD_ASSERT(i >= 2);  // We should have checked all the ranges.
+    RUSTTY_SIMD_ASSERT(i >= 2);  // We should have checked all the ranges.
   }
 
   {
@@ -492,13 +492,13 @@ int8_t CodepointWidth(uint32_t input) {
 }
 
 }  // namespace HWY_NAMESPACE
-}  // namespace ghostty
+}  // namespace rustty
 HWY_AFTER_NAMESPACE();
 
 // HWY_ONCE is true for only one of the target passes
 #if HWY_ONCE
 
-namespace ghostty {
+namespace rustty {
 
 HWY_EXPORT(CodepointWidth);
 
@@ -506,12 +506,12 @@ int8_t CodepointWidth(uint32_t cp) {
   return HWY_DYNAMIC_DISPATCH(CodepointWidth)(cp);
 }
 
-}  // namespace ghostty
+}  // namespace rustty
 
 extern "C" {
 
 int8_t rustty_simd_codepoint_width(uint32_t cp) {
-  return ghostty::CodepointWidth(cp);
+  return rustty::CodepointWidth(cp);
 }
 
 }  // extern "C"

@@ -13,14 +13,22 @@
 //!   - zsh:  `share/zsh/site-functions/_{APP}`
 //!   - fish: `share/fish/vendor_completions.d/{APP}.fish`
 //!
-//! R2 identity note: the reused macOS Swift app invokes the binary as `ghostty`
+//! R2 identity note (Task 16 correction): an earlier version of this note
+//! claimed "the reused macOS Swift app invokes the binary as `ghostty`
 //! (its `Ghostty.app` bundle hard-codes `ghostty` / `xterm-ghostty`), so the
-//! completion **script CONTENT** must complete the `ghostty` command — which is
-//! exactly what `rustty-extra`'s generators emit (`complete -c ghostty`,
-//! `_ghostty()`, `#compdef ghostty`), byte-exact golden-tested against ghostty's
-//! own generated output (R1). No brand rename is applied to that content. Task
-//! 14 only renames the OUTPUT FILENAME each script is written to; the bytes
-//! written are unchanged.
+//! completion script CONTENT must complete the `ghostty` command" — this is
+//! the SAME obsolete "reused macOS app hardcodes ghostty" rationale that
+//! Tasks 14/18 found false and corrected for the theme-dir and vim/editor
+//! resources; it is false here too (verified: `EXECUTABLE_NAME = rustty` in
+//! `Rustty.xcodeproj`, no Swift source hardcodes `"ghostty"`). The shipped
+//! binary is `rustty`, so `rustty-extra`'s bash/zsh/fish generators now emit
+//! completions that register for the `rustty` command (`complete -c rustty`,
+//! `_rustty()`, `#compdef rustty`) — this was a real leak (tab-completion for
+//! the actual `rustty` binary silently did not work). Everything else in the
+//! generated scripts (flags, field names, enum values, ordering, wording)
+//! stays byte-exact against ghostty's own generated output (R1); only the
+//! command/function-name brand token changed. Task 14's OUTPUT FILENAME
+//! routing (below) is unaffected.
 //!
 //! R5: all three shell generators are ported and emit non-empty scripts, so no
 //! DEFERRALS entry is needed for this resource.
@@ -31,8 +39,8 @@ use std::path::Path;
 ///
 /// `share_dir` is the `share/` directory (e.g. `zig-out/share`). Each shell's
 /// script is produced by the corresponding `rustty-extra` generator (content
-/// unchanged — see the module R2 note) and written to a [`crate::APP`]-named
-/// path.
+/// rebranded to complete the `rustty` command — see the module R2 note) and
+/// written to a [`crate::APP`]-named path.
 pub fn gen_shell(share_dir: &Path) -> Result<(), String> {
     let app = crate::APP;
 

@@ -1028,7 +1028,7 @@ pub struct Config {
     ///
     /// You can generate the list of valid values using the CLI:
     ///
-    ///     ghostty +list-fonts
+    ///     rustty +list-fonts
     ///
     /// This configuration can be repeated multiple times to specify preferred
     /// fallback fonts when the requested codepoint is not available in the primary
@@ -1469,17 +1469,17 @@ pub struct Config {
     /// include path separators unless it is an absolute pathname.
     ///
     /// The first directory is the `themes` subdirectory of your rustty
-    /// configuration directory. This is `$XDG_CONFIG_HOME/ghostty/themes` or
-    /// `~/.config/ghostty/themes`.
+    /// configuration directory. This is `$XDG_CONFIG_HOME/rustty/themes` or
+    /// `~/.config/rustty/themes`.
     ///
     /// The second directory is the `themes` subdirectory of the rustty resources
     /// directory. rustty ships with a multitude of themes that will be installed
     /// into this directory. On macOS, this list is in the
-    /// `rustty.app/Contents/Resources/ghostty/themes` directory. On Linux, this
-    /// list is in the `share/ghostty/themes` directory (wherever you installed the
+    /// `Rustty.app/Contents/Resources/rustty/themes` directory. On Linux, this
+    /// list is in the `share/rustty/themes` directory (wherever you installed the
     /// rustty "share" directory.
     ///
-    /// To see a list of available themes, run `ghostty +list-themes`.
+    /// To see a list of available themes, run `rustty +list-themes`.
     ///
     /// A theme file is simply another rustty configuration file. They share
     /// the same syntax and same configuration options. A theme can set any valid
@@ -2224,7 +2224,7 @@ pub struct Config {
     /// will result in `foo=baz` being passed to the launched commands.
     ///
     /// These environment variables will override any existing environment
-    /// variables set by rustty. For example, if you set `GHOSTTY_RESOURCES_DIR`
+    /// variables set by rustty. For example, if you set `RUSTTY_RESOURCES_DIR`
     /// then the value you set here will override the value rustty typically
     /// automatically injects.
     ///
@@ -2549,9 +2549,9 @@ pub struct Config {
     /// is sometimes called a leader key, a key chord, a key table, etc. There
     /// is no hardcoded limit on the number of parts in a sequence.
     ///
-    /// Warning: If you define a sequence as a CLI argument to `ghostty`,
+    /// Warning: If you define a sequence as a CLI argument to `rustty`,
     /// you probably have to quote the keybind since `>` is a special character
-    /// in most shells. Example: ghostty --keybind='ctrl+a>n=new_window'
+    /// in most shells. Example: rustty --keybind='ctrl+a>n=new_window'
     ///
     /// A trigger sequence has some special handling:
     ///
@@ -3437,7 +3437,7 @@ pub struct Config {
     // @"config-default-files": bool = true,
     /// When this is true, the default configuration file paths will be loaded.
     /// The default configuration file paths are currently only the XDG
-    /// config path ($XDG_CONFIG_HOME/ghostty/config.ghostty).
+    /// config path ($XDG_CONFIG_HOME/rustty/config.rustty).
     ///
     /// If this is false, the default configuration paths will not be loaded.
     /// This is targeted directly at using rustty from the CLI in a way
@@ -4400,7 +4400,7 @@ pub struct Config {
     /// The absolute path to the custom icon file.
     /// Supported formats include PNG, JPEG, and ICNS.
     ///
-    /// Defaults to `~/.config/ghostty/rustty.icns`
+    /// Defaults to `~/.config/rustty/rustty.icns`
     pub macos_custom_icon: Option<Vec<u8>>,
     // @"macos-icon-frame": MacAppIconFrame = .aluminum,
     /// The material to use for the frame of the macOS app icon.
@@ -4541,10 +4541,10 @@ pub struct Config {
     pub gtk_opengl_debug: bool,
     // @"gtk-single-instance": GtkSingleInstance = .default,
     /// If `true`, the rustty GTK application will run in single-instance mode:
-    /// each new `ghostty` process launched will result in a new window if there is
+    /// each new `rustty` process launched will result in a new window if there is
     /// already a running process.
     ///
-    /// If `false`, each new ghostty process will launch a separate application.
+    /// If `false`, each new rustty process will launch a separate application.
     ///
     /// If `detect`, rustty will assume true (single instance) unless one of
     /// the following scenarios is found:
@@ -5016,7 +5016,11 @@ impl Default for Config {
             quick_terminal_position: QuickTerminalPosition::Top,
             quick_terminal_size: QuickTerminalSize::default(),
             gtk_quick_terminal_layer: QuickTerminalLayer::Top,
-            gtk_quick_terminal_namespace: b"ghostty-quick-terminal".to_vec(),
+            // R2 IDENTITY NOTE (Task 16): the reference default is
+            // "ghostty-quick-terminal" (see the Zig-source comment above);
+            // this is a live, user-visible Wayland layer-surface namespace
+            // default, so it is rebranded to "rustty-quick-terminal".
+            gtk_quick_terminal_namespace: b"rustty-quick-terminal".to_vec(),
             quick_terminal_screen: QuickTerminalScreen::Main,
             quick_terminal_animation_duration: 0.2,
             // switch (builtin.os.tag) { .linux => false, .macos => true, else => false }
@@ -5331,7 +5335,7 @@ fn render_config_template(path: &[u8]) -> Vec<u8> {
 }
 
 /// This runs a heuristic to determine if we are likely running
-/// Ghostty in a CLI environment. We need this to change some behaviors.
+/// rustty in a CLI environment. We need this to change some behaviors.
 /// We should keep the set of behaviors that depend on this as small
 /// as possible because magic sucks, but each place is well documented.
 // fn probableCliEnvironment() bool {
@@ -6923,7 +6927,7 @@ impl Config {
             // if (different) {
             if different {
                 // This setting doesn't make sense with different light/dark themes
-                // because it'll force the theme based on the Ghostty theme.
+                // because it'll force the theme based on the rustty theme.
                 // if (self.@"window-theme" == .auto) self.@"window-theme" = .system;
                 if self.window_theme == WindowTheme::Auto {
                     self.window_theme = WindowTheme::System;
@@ -7196,7 +7200,7 @@ impl Config {
         }
 
         // We warn when the quit-after-last-window-closed-delay is set to a very
-        // short value because it can cause Ghostty to quit before the first
+        // short value because it can cause rustty to quit before the first
         // window is even shown.
         // if (self.@"quit-after-last-window-closed-delay") |duration| {
         if let Some(duration) = &self.quit_after_last_window_closed_delay {

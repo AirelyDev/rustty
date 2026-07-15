@@ -1,6 +1,6 @@
 " Vim filetype detect file
 " Language: Rustty config file
-" Maintainer: Rustty <https://github.com/airely/rustty>
+" Maintainer: Rustty <https://github.com/AirelyDev/rustty>
 "
 " THIS FILE IS AUTO-GENERATED
 

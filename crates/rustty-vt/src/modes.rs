@@ -421,8 +421,13 @@ const fn e_default(mut entry: ModeEntry) -> ModeEntry {
 /// they're used within Ghostty or google their values. It is not
 /// valuable to redocument them all here.
 ///
-/// NOTE: When adding a new mode entry, also add a corresponding
-/// GHOSTTY_MODE_* macro in include/ghostty/vt/modes.h.
+/// NOTE: the reference (ghostty) keeps a parallel `GHOSTTY_MODE_*` macro per
+/// entry in its own `include/ghostty/vt/modes.h` embedding header. rustty's
+/// vt-c C API (`crates/rustty-vt-c/src/modes.rs`) does not yet surface a
+/// matching named-macro C enum for individual mode entries (`ReportState` is
+/// a bare `c_int` newtype) — when adding a new mode entry here, cross-check
+/// the reference header for the oracle's numbering, and if/when rustty grows
+/// its own named-macro surface, add the `RUSTTY_MODE_*` entry there too.
 const ENTRIES: &[ModeEntry] = &[
     // ANSI
     e_ansi("disable_keyboard", 2), // KAM

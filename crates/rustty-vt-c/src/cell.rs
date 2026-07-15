@@ -17,11 +17,11 @@ use std::ffi::c_void;
 use crate::color::RgbC;
 use rustty_vt::page::Cell;
 
-/// C: GhosttyCell
+/// C: GhosttyCell -> RusttyCell (R2)
 // pub const CCell = u64;
 pub type CCell = u64;
 
-/// C: GhosttyCellContentTag
+/// C: GhosttyCellContentTag -> RusttyCellContentTag (R2)
 // pub const ContentTag = enum(c_int) { codepoint = 0, ... };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,7 +32,7 @@ pub enum ContentTag {
     BgColorRgb = 3,
 }
 
-/// C: GhosttyCellWide
+/// C: GhosttyCellWide -> RusttyCellWide (R2)
 // pub const Wide = enum(c_int) { narrow = 0, ... };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,7 +43,7 @@ pub enum Wide {
     SpacerHead = 3,
 }
 
-/// C: GhosttyCellSemanticContent
+/// C: GhosttyCellSemanticContent -> RusttyCellSemanticContent (R2)
 // pub const SemanticContent = enum(c_int) { output = 0, input = 1, prompt = 2 };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,7 +53,7 @@ pub enum SemanticContent {
     Prompt = 2,
 }
 
-/// C: GhosttyCellData
+/// C: GhosttyCellData -> RusttyCellData (R2)
 // pub const CellData = enum(c_int) { invalid = 0, ... };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

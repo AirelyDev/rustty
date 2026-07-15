@@ -305,9 +305,9 @@ enum UpdateState: Equatable {
             }
 
             if let currentHash = currentCommit, !currentHash.isEmpty,
-               let url = URL(string: "https://github.com/ghostty-org/ghostty/compare/\(currentHash)...\(newHash)") {
+               let url = URL(string: "https://github.com/AirelyDev/rustty/compare/\(currentHash)...\(newHash)") {
                 self = .compareTip(url)
-            } else if let url = URL(string: "https://github.com/ghostty-org/ghostty/commit/\(newHash)") {
+            } else if let url = URL(string: "https://github.com/AirelyDev/rustty/commit/\(newHash)") {
                 self = .commit(url)
             } else {
                 return nil

@@ -50,7 +50,7 @@
 //! holds `core_surface: rustty_core::Surface<App>` BY VALUE, and core
 //! `Surface::init` writes `core_surface.rt_surface = &embedded_surface` (a pointer
 //! back to the container). The embedded `Surface` MUST therefore be heap-allocated
-//! (Box) and never moved after init — `ghostty_surface_new` returns a `*mut Surface`
+//! (Box) and never moved after init — `rustty_surface_new` returns a `*mut Surface`
 //! to a boxed, pinned backend; any move dangles `rt_surface`. [`App::newSurface`]
 //! already mirrors the reference `alloc.create(Surface)` + in-place `init(self, …)`.
 //!
@@ -151,7 +151,7 @@ pub struct App {
 /// environments, the options are extern so that we can expose it
 /// directly to a C callconv and not pay for any translation costs.
 ///
-/// C type: ghostty_runtime_config_s
+/// C type: rustty_runtime_config_s -> rustty_runtime_config_s (R2)
 //
 // PORT NOTE (ADV-FIX 9): the reference nests this as `App.Options` and accesses it
 // file-privately; the apprt-c C-ABI wrappers reach it, so it is a top-level `pub`
@@ -217,12 +217,12 @@ pub struct Options {
     pub close_surface: Option<extern "C" fn(*mut c_void, bool)>,
 }
 
-/// This is the key event sent for ghostty_surface_key and
-/// ghostty_app_key.
+/// This is the key event sent for rustty_surface_key and
+/// rustty_app_key.
 //
 // PORT NOTE: the reference nests this as `App.KeyEvent`; a top-level struct here.
 // The `?[:0]const u8` text is a borrowed, NUL-terminated C string (built by the
-// CAPI from `ghostty_input_key_s`); modeled as a borrowed byte slice
+// CAPI from `rustty_input_key_s`); modeled as a borrowed byte slice
 // `Option<&'a [u8]>` (R3 byte-slice convention), hence the `'a` lifetime.
 pub struct KeyEvent<'a> {
     pub action: key::Action,
@@ -235,10 +235,10 @@ pub struct KeyEvent<'a> {
 }
 
 impl KeyEvent<'_> {
-    /// Convert a libghostty key event into a core key event.
+    /// Convert a librustty key event into a core key event.
     //
     // PORT NOTE (ADV-FIX 9): the reference `core` is file-private; the apprt-c
-    // C-ABI wrapper `ghostty_config_key_is_binding` reaches it
+    // C-ABI wrapper `rustty_config_key_is_binding` reaches it
     // (`event.keyEvent().core()`, embedded.zig:1474), so it is `pub` here.
     pub fn core(&self) -> Option<CoreKeyEvent> {
         // const text: []const u8 = if (self.text) |v| v else "";
@@ -289,7 +289,7 @@ impl App {
         // PORT NOTE: rustty `clone_config` is infallible (no allocator param); the
         // reference placement-init `init(self: *App, …)` returns the value here
         // (Rust has no placement-init — cf. core `App::init`; the CAPI
-        // `ghostty_app_new` boxes it).
+        // `rustty_app_new` boxes it).
         let mut config_clone = config.clone_config();
 
         // var keymap = try input.Keymap.init();
@@ -673,7 +673,7 @@ impl ApprtApp for App {
 // embedded::Surface backend — chunk E2 (embedded.zig 343-609)
 // =====================================================================
 
-/// Platform-specific configuration for libghostty.
+/// Platform-specific configuration for librustty.
 //
 // PORT NOTE (blueprint §5/§8.1): the reference `MacOS`/`IOS` wrap the host view in
 // an `objc.Object` (`nsview: objc.Object`); rustty stores the RAW `*mut c_void`
@@ -692,7 +692,7 @@ pub enum Platform {
     IOS(IOS),
 }
 
-// If our build target for libghostty is not darwin then we do
+// If our build target for librustty is not darwin then we do
 // not include macos support at all.
 //
 // pub const MacOS = if (builtin.target.os.tag.isDarwin()) struct {
@@ -920,10 +920,10 @@ pub struct Surface {
 /// Surface initialization options.
 //
 // PORT NOTE: the reference nests this as `Surface.Options` (the
-// `ghostty_surface_config_s` extern struct, embedded.zig:425); a top-level
+// `rustty_surface_config_s` extern struct, embedded.zig:425); a top-level
 // `#[repr(C)] SurfaceOptions` here (ADV-FIX 9: reached by the apprt-c wrappers /
 // backend `App::newSurface`). Field defaults (Zig `= …`) are not expressible on a
-// Rust struct — the C host (or `ghostty_surface_config_new`, E6) supplies a
+// Rust struct — the C host (or `rustty_surface_config_new`, E6) supplies a
 // fully-zeroed/populated value. The `?[*:0]const u8` / `?[*]EnvVar` / `?*anyopaque`
 // nullable pointers map to nullable raw pointers; `callconv`-free, so no lint.
 #[repr(C)]
@@ -956,7 +956,7 @@ pub struct SurfaceOptions {
     /// since this is used for scripting.
     ///
     /// This command always run in a shell (e.g. via `/bin/sh -c`),
-    /// despite Ghostty allowing directly executed commands via config.
+    /// despite rustty allowing directly executed commands via config.
     /// This is a legacy thing and we should probably change it in the
     /// future once we have a concrete use case.
     // command: ?[*:0]const u8 = null,
@@ -1239,7 +1239,7 @@ impl Surface {
     // PORT NOTE: deferred FROM E3 (its reference range, embedded.zig:614) TO E4,
     // because it constructs the real [`Inspector`] (which E2 carried only as a
     // sequencing stub). Now that E4 provides the inhabited `Inspector`, it is ported
-    // LIVE. `pub` because the E9 CAPI `ghostty_surface_inspector` wrapper reaches it
+    // LIVE. `pub` because the E9 CAPI `rustty_surface_inspector` wrapper reaches it
     // across the crate boundary (ADV-FIX 9). Reaches the Phase-3 dcimgui leaf
     // `Inspector::init` at RUNTIME (the panic is in the leaf), so a live inspector
     // cannot yet exist — `self.inspector` stays `None` in practice this milestone.
@@ -1304,7 +1304,7 @@ impl Surface {
     // ) void { ... }
     //
     // PORT NOTE (ADV-FIX 9 pub-widening): the reference is a file-private `fn`, but
-    // the apprt-c `ghostty_surface_complete_clipboard_request` wrapper (E9) reaches
+    // the apprt-c `rustty_surface_complete_clipboard_request` wrapper (E9) reaches
     // it across the crate boundary, so it is `pub` here. `str: [:0]const u8` → a
     // borrowed `&CStr`: the NUL sentinel is LOAD-BEARING — `str.ptr` is handed to
     // the host `confirm_read_clipboard` callback as `[*:0]const u8`, while the `[]`
@@ -1662,10 +1662,10 @@ impl Surface {
     // pub fn newSurfaceOptions(self: *const Surface, context: apprt.surface.NewSurfaceContext) apprt.Surface.Options { ... }
     //
     // PORT NOTE: `apprt.Surface.Options` is the embedded backend's own
-    // [`SurfaceOptions`] (the `ghostty_surface_config_s`); the reference struct-literal
+    // [`SurfaceOptions`] (the `rustty_surface_config_s`); the reference struct-literal
     // relies on Zig field defaults for every field it does not set. Rust has no struct
     // field defaults, so the elided fields are spelled out below with those exact
-    // defaults. Reached only by the E7 CAPI `ghostty_surface_inherited_config`
+    // defaults. Reached only by the E7 CAPI `rustty_surface_inherited_config`
     // (returned BY VALUE to the C host).
     pub fn newSurfaceOptions(&self, context: NewSurfaceContext) -> SurfaceOptions {
         // PORT NOTE: `self.app.config` is read through the E1 `UnsafeCell` accessor.
@@ -1728,7 +1728,7 @@ impl Surface {
             // platform: Platform.C = undefined,
             //
             // PORT NOTE: Zig `undefined` is never read here (the C host overwrites
-            // `platform`/`platform_tag` before `ghostty_surface_new`); a zeroed union
+            // `platform`/`platform_tag` before `rustty_surface_new`); a zeroed union
             // is the faithful placeholder.
             platform: PlatformC {
                 macos: PlatformCMacOS {
@@ -1851,7 +1851,7 @@ impl Inspector {
         // errdefer cimgui.c.ImGui_DestroyContext(ig_ctx);
         // cimgui.c.ImGui_SetCurrentContext(ig_ctx);
         // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
-        // io.BackendPlatformName = "ghostty_embedded";
+        // io.BackendPlatformName = "rustty_embedded";
         //
         // // Setup our core inspector
         // CoreInspector.setup();
@@ -1922,7 +1922,7 @@ impl Inspector {
     // PORT NOTE: objc/Metal + dcimgui `ImGui_ImplMetal_Init` — Phase-3 leaf. The
     // objc `device: objc.Object` handle → an opaque `*mut c_void` (no objc dep this
     // milestone, blueprint §5/§8.1). Target of the E10 Darwin CAPI
-    // `ghostty_inspector_metal_init`.
+    // `rustty_inspector_metal_init`.
     pub fn initMetal(&mut self, device: *mut c_void) -> bool {
         // defer device.msgSend(void, objc.sel("release"), .{});
         // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
@@ -1952,7 +1952,7 @@ impl Inspector {
     // PORT NOTE: the objc/Metal render pass (dcimgui `ImGui_ImplMetal_NewFrame`/
     // `RenderDrawData` + `MTLRenderCommandEncoder` msgSends) — Phase-3 leaf. The two
     // objc `objc.Object` handles → opaque `*mut c_void`. Target of the E10 Darwin
-    // CAPI `ghostty_inspector_metal_render`.
+    // CAPI `rustty_inspector_metal_render`.
     pub fn renderMetal(
         &mut self,
         command_buffer: *mut c_void,
@@ -2050,7 +2050,7 @@ impl Inspector {
     // pub fn mouseButtonCallback(self, action, button, mods) void { ... }
     //
     // PORT NOTE: dcimgui `ImGuiIO_AddMouseButtonEvent` (imgui button mapping) —
-    // Phase-3 leaf. Target of the E9 CAPI `ghostty_inspector_mouse_button`.
+    // Phase-3 leaf. Target of the E9 CAPI `rustty_inspector_mouse_button`.
     pub fn mouseButtonCallback(
         &mut self,
         action: mouse::ButtonState,
@@ -2081,7 +2081,7 @@ impl Inspector {
     // pub fn scrollCallback(self, xoff, yoff, mods) void { ... }
     //
     // PORT NOTE: dcimgui `ImGuiIO_AddMouseWheelEvent` — Phase-3 leaf. Target of the
-    // E9 CAPI `ghostty_inspector_mouse_scroll`.
+    // E9 CAPI `rustty_inspector_mouse_scroll`.
     pub fn scrollCallback(&mut self, xoff: f64, yoff: f64, mods: mouse::ScrollMods) {
         // self.queueRender();
         // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
@@ -2106,7 +2106,7 @@ impl Inspector {
     // pub fn cursorPosCallback(self: *Inspector, x: f64, y: f64) void { ... }
     //
     // PORT NOTE: dcimgui `ImGuiIO_AddMousePosEvent` (scaled by `content_scale`) —
-    // Phase-3 leaf. Target of the E9 CAPI `ghostty_inspector_mouse_pos`.
+    // Phase-3 leaf. Target of the E9 CAPI `rustty_inspector_mouse_pos`.
     pub fn cursorPosCallback(&mut self, x: f64, y: f64) {
         // self.queueRender();
         // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
@@ -2126,7 +2126,7 @@ impl Inspector {
     // pub fn focusCallback(self: *Inspector, focused: bool) void { ... }
     //
     // PORT NOTE: dcimgui `ImGuiIO_AddFocusEvent` — Phase-3 leaf. Target of the E9
-    // CAPI `ghostty_inspector_set_focus`.
+    // CAPI `rustty_inspector_set_focus`.
     pub fn focusCallback(&mut self, focused: bool) {
         // self.queueRender();
         // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
@@ -2143,7 +2143,7 @@ impl Inspector {
     //
     // PORT NOTE: dcimgui `ImGuiIO_AddInputCharactersUTF8` — Phase-3 leaf. The
     // `[:0]const u8` NUL-terminated slice → `&CStr` (`text.ptr` is the load-bearing
-    // sentinel handed to imgui). Target of the E9 CAPI `ghostty_inspector_text`.
+    // sentinel handed to imgui). Target of the E9 CAPI `rustty_inspector_text`.
     pub fn textCallback(&mut self, text: &CStr) {
         // self.queueRender();
         // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
@@ -2160,7 +2160,7 @@ impl Inspector {
     //
     // PORT NOTE: dcimgui `ImGuiIO_AddKeyEvent` (modifiers + `key.imguiKey()` — the
     // `Key::imgui_key` dcimgui binding, itself a deferred leaf in rustty-vt) —
-    // Phase-3 leaf. Target of the E9 CAPI `ghostty_inspector_key`.
+    // Phase-3 leaf. Target of the E9 CAPI `rustty_inspector_key`.
     pub fn keyCallback(
         &mut self,
         action: key::Action,
@@ -2478,7 +2478,7 @@ impl ApprtSurface for Surface {
 }
 
 /// [E1 -> E2 SEQUENCING STUB] reference `CAPI.ClipboardContent` — the
-/// `ghostty_clipboard_content_s` extern struct (embedded.zig:1287). The reference
+/// `rustty_clipboard_content_s` extern struct (embedded.zig:1287). The reference
 /// nests it in the `CAPI` namespace (which the blueprint maps to the separate
 /// `rustty-apprt-c` crate, E5), but [`Options::write_clipboard`] — a BACKEND field
 /// — references it, so it must live in this crate (`rustty-apprt-c` deps

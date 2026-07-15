@@ -1,5 +1,17 @@
 //! Sublime Text syntax generation. Port of ghostty's `src/extra/sublime.zig`.
 //! `syntax()` = header ++ keywords (Config field NAMES joined by `|`) ++ footer.
+//!
+//! R2 IDENTITY NOTE (Task 16): the emitted syntax file now carries the rustty
+//! product identity (`Rustty Config`, `file_extensions: - rustty`,
+//! `scope: source.rustty`) matching `config.rustty`
+//! (`rustty_identity::CONFIG_FILE`). Previously this hardcoded `ghostty`/
+//! `source.ghostty`/`file_extensions: - ghostty`, which meant bat's
+//! `file_extensions:` match never fired for the actual shipped config file
+//! (bat matches by the file's own `file_extensions:`/`name:` YAML fields, not
+//! by the syntax file's basename) — a real leak, same class as the Task 18
+//! vim/nvim fix. No `identity-oracle` dual-profile exists for this content
+//! (matching `res_shell_integration.rs`'s / `rustty_extra::vim`'s precedent);
+//! there is exactly one rustty-branded generator output.
 
 use rustty_config::config_struct::config_fields;
 
@@ -11,23 +23,23 @@ impl Template {
     const HEADER: &'static [u8] = br#"%YAML 1.2
 ---
 # See http://www.sublimetext.com/docs/syntax.html
-name: Ghostty Config
+name: Rustty Config
 file_extensions:
-  - ghostty
-scope: source.ghostty
+  - rustty
+scope: source.rustty
 
 contexts:
   main:
     # Comments
     - match: '^\s*#.*$'
-      scope: comment.line.number-sign.ghostty
+      scope: comment.line.number-sign.rustty
 
     # Keywords
     - match: '\b("#;
 
     // const footer = \\...
     const FOOTER: &'static [u8] = br#")\b'
-      scope: keyword.other.ghostty
+      scope: keyword.other.rustty
 "#;
 }
 
@@ -74,12 +86,14 @@ pub fn syntax() -> Vec<u8> {
 mod tests {
     use super::*;
 
-    // Byte-exact golden diff against ghostty's actually-generated file (R1 gate).
+    // Byte-exact golden diff against the committed rustty-branded fixture
+    // (R1 gate; the fixture itself was derived from ghostty's actually-generated
+    // file with only the R2 brand tokens flipped — see the module doc comment).
     #[test]
     fn syntax_matches_golden() {
         assert_eq!(
             syntax(),
-            include_bytes!("../testdata/ghostty.sublime-syntax").as_slice()
+            include_bytes!("../testdata/rustty.sublime-syntax").as_slice()
         );
     }
 }
