@@ -2,7 +2,7 @@
 //!
 //! PORTS: ghostty src/font/opentype/ (the pure-parsing OpenType table parsers)
 //!
-//! PORT STATUS: in progress (sfnt, head, glyf, hhea, os2, post, svg)
+//! PORT STATUS: done (sfnt, head, glyf, hhea, os2, post, svg all filled)
 
 // PORT NOTE: the reference `opentype.zig` re-exports each parser under a
 // capitalized alias (`pub const Head = head.Head;` etc.). Rust reaches them as
