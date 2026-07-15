@@ -77,9 +77,11 @@ pub struct SharedGridSet<A: Allocator + Copy = Global> {
 // PORT NOTE: the backend `Library`'s init error. On the macOS coretext backend
 // `Library` is the `NoopLibrary` whose `InitError` is the uninhabited
 // `LibraryError` (init never fails); on the freetype backend it is `ft::FtError`.
-#[cfg(target_os = "macos")]
+// macOS coretext + wasm web_canvas → `NoopLibrary` whose `InitError` is the
+// uninhabited `LibraryError` (init never fails); the freetype backend → `ft::FtError`.
+#[cfg(any(target_os = "macos", target_arch = "wasm32"))]
 pub type InitError = crate::library::LibraryError;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
 pub type InitError = crate::ft::FtError;
 
 /// The combined error set for `ref`/`collection` (the reference's inferred error

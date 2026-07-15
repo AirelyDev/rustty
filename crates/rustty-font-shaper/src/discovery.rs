@@ -65,8 +65,96 @@ pub type Discover = Fontconfig;
 
 /// DEFERRED Fontconfig discoverer stub (Linux default). See the `Fontconfig`
 /// reference-comment block below.
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
 pub struct Fontconfig;
+
+// ---------------------------------------------------------------------------
+// WASM (web_canvas backend) discoverer — a functional NOOP.
+//
+// PORT NOTE: the reference `Discover` selector maps the `.web_canvas` backend to
+// `void` ("no discovery" — see the `switch` comment above): the browser has no
+// font-file discovery, fonts are named CSS strings resolved by the Canvas API.
+// Rust cannot alias `Discover` to `void`/`()` because `CodepointResolver` and
+// `SharedGridSet` name `Discover::init`/`.discover`/`.discover_fallback` and a
+// `DiscoverIterator{next,deinit}` unconditionally (they are comptime-elided in
+// the reference when `Discover == void`, but Rust type-checks them on every
+// target). So on wasm `Discover` is a concrete NOOP discoverer whose iterators
+// always yield `None` — behaviourally identical to the reference's "no discovery"
+// (`self.discover` is always `null` in practice, so the resolver's discovery
+// branch short-circuits before calling these). This is the faithful modelling of
+// the `.web_canvas => void` arm under Rust's non-lazy type system.
+#[cfg(target_arch = "wasm32")]
+pub use wasm_noop::{DiscoverIterator, Error, Fontconfig};
+
+#[cfg(target_arch = "wasm32")]
+mod wasm_noop {
+    use super::Descriptor;
+    use crate::collection::Collection;
+    use crate::deferred_face::DeferredFace;
+    use crate::face::FaceError;
+    use crate::library::Library;
+
+    /// NOOP discoverer for the wasm `web_canvas` backend (`.web_canvas => void`).
+    pub struct Fontconfig;
+
+    /// The (never-produced) discovery error set, mirroring the macOS `Error`
+    /// shape enough that `SharedGridSet`'s `From<discovery::Error>` composes. The
+    /// NOOP never errors, so no variant is ever constructed.
+    #[derive(Debug)]
+    pub enum Error {
+        Face(FaceError),
+        Collection(crate::collection::Error),
+    }
+
+    impl From<FaceError> for Error {
+        fn from(e: FaceError) -> Self {
+            Error::Face(e)
+        }
+    }
+    impl From<crate::collection::Error> for Error {
+        fn from(e: crate::collection::Error) -> Self {
+            Error::Collection(e)
+        }
+    }
+
+    impl Fontconfig {
+        // pub fn init(lib: Library) Fontconfig
+        pub fn init(_lib: Library) -> Fontconfig {
+            Fontconfig
+        }
+
+        // pub fn deinit(self: *Fontconfig) void
+        pub fn deinit(&mut self) {}
+
+        // pub fn discover(self, alloc, desc) !DiscoverIterator
+        pub fn discover(&self, _desc: Descriptor) -> Result<DiscoverIterator, Error> {
+            Ok(DiscoverIterator)
+        }
+
+        // pub fn discoverFallback(self, alloc, collection, desc) !DiscoverIterator
+        pub fn discover_fallback(
+            &self,
+            _collection: *mut Collection,
+            _desc: Descriptor,
+        ) -> Result<DiscoverIterator, Error> {
+            Ok(DiscoverIterator)
+        }
+    }
+
+    /// NOOP discovery iterator: the browser exposes no enumerable font list, so
+    /// this always yields `None` (no fallback faces).
+    pub struct DiscoverIterator;
+
+    impl DiscoverIterator {
+        // pub fn deinit(self: *DiscoverIterator) void
+        pub fn deinit(&mut self) {}
+
+        // pub fn next(self: *DiscoverIterator) !?DeferredFace
+        pub fn next(&mut self) -> Result<Option<DeferredFace>, Error> {
+            Ok(None)
+        }
+    }
+}
 
 /// Descriptor is used to search for fonts. The only required field
 /// is "family". The rest are ignored unless they're set to a non-zero

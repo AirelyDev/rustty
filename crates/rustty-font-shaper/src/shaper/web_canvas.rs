@@ -1,351 +1,389 @@
-//! PORTS: ghostty `src/font/shaper/web_canvas.zig` — the browser/wasm
-//! Canvas-backed font shaper (`.web_canvas` backend).
+//! rustty-font-shaper::shape::web_canvas
 //!
-//! PORT STATUS: deferred (BLOCKED — B1). This file records the reference
-//! `web_canvas.zig` VERBATIM as comments (R1: every line + comment preserved)
-//! but is NOT a live Rust port, because a faithful (R1) live port cannot
-//! type-check against the CURRENT ghostty font tree and making it compile would
-//! require fabricating deleted upstream APIs (an R5 violation). Precisely:
+//! PORTS: ghostty `src/font/shaper/web_canvas.zig` (305 loc) — the browser/wasm
+//! Canvas-backed font shaper (`.web_canvas` backend). LIVE port, cfg-gated to
+//! `wasm32` (the active `Shaper` on the web_canvas backend).
 //!
-//!   1. `run.group.group.faceFromIndex(run.font_index)` — `faceFromIndex` and
-//!      the `TextRun.group` field have been DELETED from the current ghostty
-//!      font tree. `grep -rn "fn faceFromIndex" src/font/` returns ONLY the
-//!      call site inside `web_canvas.zig` itself; the definition is gone. The
-//!      current `TextRun` (src/font/shaper/run.zig) carries `grid:
-//!      *font.SharedGrid`, not `group`. The reference `web_canvas.zig` is stale
-//!      dead code retained in-tree but only ever analyzed for the (equally
-//!      stale) wasm build.
+//! FAITHFUL MODERNIZATION (`faceFromIndex` → `Collection::get_face`): the
+//! reference `shape()` looks the face up with
+//! `run.group.group.faceFromIndex(run.font_index)` (line 188). `faceFromIndex`
+//! and the `TextRun.group` field were DELETED from ghostty in 2024 (the
+//! `Group` → `SharedGrid` refactor). The modern equivalent — already ported —
+//! is `Collection::get_face(index)` reached through the run's `grid`
+//! (`TextRun.grid: *SharedGrid`), exactly as the modern HarfBuzz/CoreText
+//! shapers do (`shaper/harfbuzz.rs`: `(*run.grid).resolver.collection.get_face
+//! (run.font_index)`). `Collection::get_face` performs the same deferred-load /
+//! entry lookup the deleted `Group.faceFromIndex` did. We wire the web_canvas
+//! shaper to that modern path; everything else (grapheme clustering, the private
+//! grapheme-glyph-index reservation on the face) is a line-for-line port.
 //!
-//!   2. `face.graphemeGlyphIndex(cluster)` requires `src/font/face/web_canvas.zig`
-//!      (561 LOC), which `@import`s the EXTERNAL, un-vendored `zig-js`
-//!      Canvas-FFI package. `zig-js` is not under `~/.cache/zig/p` and has no
-//!      Rust equivalent; a faithful port cannot resolve it.
-//!
-//!   3. The `Wasm.shaper_test_` fn calls `self.runIterator(group, row, null,
-//!      null)` — a 4-argument signature that no longer exists (the current
-//!      `runIterator(self, opts)` takes a single `RunOptions`). The reference
-//!      block is internally inconsistent with the current shaper framework.
-//!
-//! Faithful-but-safe resolution for the shaper SELECTOR: the reference maps the
-//! `.web_canvas` backend arm to `web_canvas.Shaper` (see shape.rs selector,
-//! preserved there as a comment). Because that type cannot be a live port here,
-//! the documented divergence is that wasm32 would resolve to `noop::Shaper`
-//! (the same faithful-but-safe fallback the reference uses for its
-//! `.coretext_noshape` arm) once/if the wasm32 font-shaper surface is built.
-//! Neither the shaper NOR its face is on the wasm32 build path for the shipped
-//! milestone (see B2 in the workstream report), so nothing selects this arm.
-//!
-//! The verbatim reference body follows. If upstream restores `faceFromIndex` +
-//! a `SharedGrid`-based face lookup AND `zig-js` is vendored (or replaced by an
-//! `extern "C"` browser-Canvas shim per the workstream spec), this file becomes
-//! a live `#[cfg(target_arch = "wasm32")]` port.
+//! The reference `Wasm.shaper_test` built a `terminal.Terminal`, printed the
+//! string, and drove the OLD `runIterator(group, row, null, null)` 4-arg API
+//! (also deleted; the modern `runIterator(self, opts)` takes a single
+//! `RunOptions` over render-state cells). Rather than reconstruct the full render
+//! pipeline in the wasm harness, the C-ABI below exposes `rustty_wc_shaper_shape`
+//! — the modern analog that shapes an explicit `(codepoint, cluster)` run through
+//! the SAME `shape()` the terminal path would reach. See the C-ABI notes.
 
-// const std = @import("std");
-// const assert = @import("../../quirks.zig").inlineAssert;
-// const Allocator = std.mem.Allocator;
-// const font = @import("../main.zig");
-// const terminal = @import("../../terminal/main.zig");
-// const unicode = @import("../../unicode/main.zig");
-// const uucode = @import("uucode");
-//
-// const log = std.log.scoped(.font_shaper);
-//
-// pub const Shaper = struct {
-//     const RunBuf = std.MultiArrayList(struct {
-//         /// The codepoint for this cell. This must be used in conjunction
-//         /// with cluster to find the total set of codepoints for a given
-//         /// cell. See cluster for more information.
-//         codepoint: u32,
-//
-//         /// Cluster is set to the X value of the cell that this codepoint
-//         /// is part of. Note that a cell can have multiple codepoints
-//         /// with zero-width joiners (ZWJ) and such. Note that terminals
-//         /// do NOT handle full extended grapheme clustering well so it
-//         /// is possible a single grapheme extends multiple clusters.
-//         /// For example, skin tone emoji thumbs up may show up as two
-//         /// clusters: one with thumbs up and the ZWJ, and a second
-//         /// cluster with the tone block. It is up to the shaper to handle
-//         /// shaping these together into a single glyph, if it wishes.
-//         cluster: u32,
-//     });
-//
-//     /// The allocator used for run_buf.
-//     alloc: Allocator,
-//
-//     /// The shared memory used for shaping results.
-//     cell_buf: []font.shape.Cell,
-//
-//     /// The shared memory used for storing information about a run.
-//     run_buf: RunBuf,
-//
-//     /// The cell_buf argument is the buffer to use for storing shaped results.
-//     /// This should be at least the number of columns in the terminal.
-//     pub fn init(alloc: Allocator, opts: font.shape.Options) !Shaper {
-//         // Note: we do not support opts.font_features
-//
-//         return Shaper{
-//             .alloc = alloc,
-//             .cell_buf = opts.cell_buf,
-//             .run_buf = .{},
-//         };
-//     }
-//
-//     pub fn deinit(self: *Shaper) void {
-//         self.run_buf.deinit(self.alloc);
-//         self.* = undefined;
-//     }
-//
-//     pub fn endFrame(self: *const Shaper) void {
-//         _ = self;
-//     }
-//
-//     /// Returns an iterator that returns one text run at a time for the
-//     /// given terminal row. Note that text runs are only valid one at a time
-//     /// for a Shaper struct since they share state.
-//     pub fn runIterator(
-//         self: *Shaper,
-//         opts: font.shape.RunOptions,
-//     ) font.shape.RunIterator {
-//         return .{
-//             .hooks = .{ .shaper = self },
-//             .opts = opts,
-//         };
-//     }
-//
-//     /// Shape the given text run. The text run must be the immediately
-//     /// previous text run that was iterated since the text run does share
-//     /// state with the Shaper struct.
-//     ///
-//     /// The return value is only valid until the next shape call is called.
-//     ///
-//     /// If there is not enough space in the cell buffer, an error is
-//     /// returned.
-//     pub fn shape(self: *Shaper, run: font.shape.TextRun) ![]font.shape.Cell {
-//         // TODO: memory check that cell_buf can fit results
-//
-//         const codepoints = self.run_buf.items(.codepoint);
-//         const clusters = self.run_buf.items(.cluster);
-//         assert(codepoints.len == clusters.len);
-//
-//         switch (codepoints.len) {
-//             // Special cases: if we have no codepoints (is this possible?)
-//             // then our result is also an empty cell run.
-//             0 => return self.cell_buf[0..0],
-//
-//             // If we have only 1 codepoint, then we assume that it is
-//             // a single grapheme and just let it through. At this point,
-//             // we can't have any more information to do anything else.
-//             1 => {
-//                 self.cell_buf[0] = .{
-//                     .x = @intCast(clusters[0]),
-//                     .glyph_index = codepoints[0],
-//                 };
-//
-//                 return self.cell_buf[0..1];
-//             },
-//
-//             else => {},
-//         }
-//
-//         // We know we have at least two codepoints, so we now go through
-//         // each and perform grapheme clustering.
-//         //
-//         // Note that due to limitations of canvas, we can NOT support
-//         // font ligatures. However, we do support grapheme clustering.
-//         // This means we can render things like skin tone emoji but
-//         // we can't render things like single glyph "=>".
-//         var break_state: uucode.grapheme.BreakState = .default;
-//         var cp1: u21 = @intCast(codepoints[0]);
-//
-//         var start: usize = 0;
-//         var i: usize = 1;
-//         var cur: usize = 0;
-//         while (i <= codepoints.len) : (i += 1) {
-//             // We loop to codepoints.len so that we can handle the end
-//             // case. In the end case, we always assume it is a grapheme
-//             // break. This isn't strictly true but its how terminals
-//             // work today.
-//             const grapheme_break = i == codepoints.len or blk: {
-//                 const cp2: u21 = @intCast(codepoints[i]);
-//                 defer cp1 = cp2;
-//
-//                 break :blk unicode.graphemeBreak(
-//                     cp1,
-//                     cp2,
-//                     &break_state,
-//                 );
-//             };
-//
-//             // If this is NOT a grapheme break, cp2 is part of a single
-//             // grapheme cluster and we expect there could be more. We
-//             // move on to the next codepoint to try again.
-//             if (!grapheme_break) continue;
-//
-//             // This IS a grapheme break, meaning that cp2 is NOT part
-//             // of cp1. So we need to render the prior grapheme.
-//             const len = i - start;
-//             assert(len > 0);
-//             switch (len) {
-//                 // If we have only a single codepoint then just render it
-//                 // as-is.
-//                 1 => self.cell_buf[cur] = .{
-//                     .x = @intCast(clusters[start]),
-//                     .glyph_index = codepoints[start],
-//                 },
-//
-//                 // We must have multiple codepoints (see assert above). In
-//                 // this case we UTF-8 encode the codepoints and send them
-//                 // to the face to reserve a private glyph index.
-//                 else => {
-//                     // UTF-8 encode the codepoints in this cluster.
-//                     const cluster = cluster: {
-//                         const cluster_points = codepoints[start..i];
-//                         assert(cluster_points.len == len);
-//
-//                         const buf_len = buf_len: {
-//                             var acc: usize = 0;
-//                             for (cluster_points) |cp| {
-//                                 acc += try std.unicode.utf8CodepointSequenceLength(
-//                                     @intCast(cp),
-//                                 );
-//                             }
-//
-//                             break :buf_len acc;
-//                         };
-//
-//                         var buf = try self.alloc.alloc(u8, buf_len);
-//                         errdefer self.alloc.free(buf);
-//                         var buf_i: usize = 0;
-//                         for (cluster_points) |cp| {
-//                             buf_i += try std.unicode.utf8Encode(
-//                                 @intCast(cp),
-//                                 buf[buf_i..],
-//                             );
-//                         }
-//
-//                         break :cluster buf;
-//                     };
-//                     defer self.alloc.free(cluster);
-//
-//                     // BLOCKED (B1): `run.group.group.faceFromIndex` — deleted
-//                     // upstream API; `run.group` no longer exists (now
-//                     // `run.grid: *SharedGrid`). `graphemeGlyphIndex` lives in
-//                     // face/web_canvas.zig which imports un-vendored `zig-js`.
-//                     var face = try run.group.group.faceFromIndex(run.font_index);
-//                     const index = try face.graphemeGlyphIndex(cluster);
-//
-//                     self.cell_buf[cur] = .{
-//                         .x = @intCast(clusters[start]),
-//                         .glyph_index = index,
-//                     };
-//                 },
-//             }
-//
-//             start = i;
-//             cur += 1;
-//         }
-//
-//         return self.cell_buf[0..cur];
-//     }
-//
-//     /// The hooks for RunIterator.
-//     pub const RunIteratorHook = struct {
-//         shaper: *Shaper,
-//
-//         pub fn prepare(self: RunIteratorHook) !void {
-//             // Reset the buffer for our current run
-//             self.shaper.run_buf.shrinkRetainingCapacity(0);
-//         }
-//
-//         pub fn addCodepoint(
-//             self: RunIteratorHook,
-//             cp: u32,
-//             cluster: u32,
-//         ) !void {
-//             try self.shaper.run_buf.append(self.shaper.alloc, .{
-//                 .codepoint = cp,
-//                 .cluster = cluster,
-//             });
-//         }
-//
-//         pub fn finalize(self: RunIteratorHook) !void {
-//             _ = self;
-//         }
-//     };
-// };
-//
-// /// The wasm-compatible API.
-// pub const Wasm = struct {
-//     const wasm = @import("../../os/wasm.zig");
-//     const alloc = wasm.alloc;
-//
-//     export fn shaper_new(cap: usize) ?*Shaper {
-//         return shaper_new_(cap) catch null;
-//     }
-//
-//     fn shaper_new_(cap: usize) !*Shaper {
-//         const cell_buf = try alloc.alloc(font.shape.Cell, cap);
-//         errdefer alloc.free(cell_buf);
-//
-//         var shaper = try Shaper.init(alloc, .{ .cell_buf = cell_buf });
-//         errdefer shaper.deinit();
-//
-//         const result = try alloc.create(Shaper);
-//         errdefer alloc.destroy(result);
-//         result.* = shaper;
-//         return result;
-//     }
-//
-//     export fn shaper_free(ptr: ?*Shaper) void {
-//         if (ptr) |v| {
-//             alloc.free(v.cell_buf);
-//             v.deinit();
-//             alloc.destroy(v);
-//         }
-//     }
-//
-//     /// Runs a test to verify shaping works properly.
-//     export fn shaper_test(
-//         self: *Shaper,
-//         group: *font.GroupCache,
-//         str: [*]const u8,
-//         len: usize,
-//     ) void {
-//         shaper_test_(self, group, str[0..len]) catch |err| {
-//             log.warn("error during shaper test err={}", .{err});
-//         };
-//     }
-//
-//     fn shaper_test_(self: *Shaper, group: *font.GroupCache, str: []const u8) !void {
-//         // Create a terminal and print all our characters into it.
-//         var term = try terminal.Terminal.init(alloc, self.cell_buf.len, 80);
-//         defer term.deinit(alloc);
-//
-//         // Iterate over unicode codepoints and add to terminal
-//         {
-//             const view = try std.unicode.Utf8View.init(str);
-//             var iter = view.iterator();
-//             while (iter.nextCodepoint()) |c| {
-//                 try term.print(c);
-//             }
-//         }
-//
-//         // Iterate over the rows and print out all the runs we get.
-//         var rowIter = term.screen.rowIterator(.viewport);
-//         var y: usize = 0;
-//         while (rowIter.next()) |row| {
-//             defer y += 1;
-//
-//             var iter = self.runIterator(group, row, null, null);
-//             while (try iter.next(alloc)) |run| {
-//                 const cells = try self.shape(run);
-//                 log.info("y={} run={d} shape={any} idx={}", .{
-//                     y,
-//                     run.cells,
-//                     cells,
-//                     run.font_index,
-//                 });
-//             }
-//         }
-//     }
-// };
+#[cfg(target_arch = "wasm32")]
+pub use wasm::Shaper;
+// Re-export the C-ABI exports by path so the browser cdylib deliverable can
+// force-retain them (`#[used]`), and so they participate in the public API.
+#[cfg(target_arch = "wasm32")]
+pub use wasm::{rustty_wc_shaper_free, rustty_wc_shaper_new, rustty_wc_shaper_shape};
+
+#[cfg(target_arch = "wasm32")]
+mod wasm {
+    // const std = @import("std");
+    // const assert = @import("../../quirks.zig").inlineAssert;
+    // const Allocator = std.mem.Allocator;
+    // const font = @import("../main.zig");
+    // const terminal = @import("../../terminal/main.zig");
+    // const unicode = @import("../../unicode/main.zig");
+    // const uucode = @import("uucode");
+    // const log = std.log.scoped(.font_shaper);
+    use rustty_unicode::grapheme::{grapheme_break, BreakState};
+    use rustty_util::quirks::inlineAssert as assert;
+
+    use crate::collection;
+    use crate::shape;
+    use crate::shape::run::{RunIterator, RunIteratorHook};
+
+    /// The error set of the web_canvas shaper.
+    // PORT NOTE: the reference `shape()` returns an inferred error union of
+    // `Allocator.Error`, the utf8-encode errors, and the face's
+    // `graphemeGlyphIndex`/`getFace` errors. Modeled as one enum with `From`
+    // conversions so `?` composes them.
+    #[derive(Debug)]
+    pub enum Error {
+        OutOfMemory,
+        CodepointTooLarge,
+        Collection(collection::Error),
+        Face(crate::face::FaceError),
+    }
+    impl From<collection::Error> for Error {
+        fn from(e: collection::Error) -> Self {
+            Error::Collection(e)
+        }
+    }
+    impl From<crate::face::FaceError> for Error {
+        fn from(e: crate::face::FaceError) -> Self {
+            Error::Face(e)
+        }
+    }
+
+    // pub const Shaper = struct {
+    //     const RunBuf = std.MultiArrayList(struct { codepoint: u32, cluster: u32 });
+    //     alloc: Allocator,
+    //     cell_buf: []font.shape.Cell,
+    //     run_buf: RunBuf,
+    // };
+    pub struct Shaper {
+        /// The shared memory used for shaping results.
+        // PORT NOTE: the reference `cell_buf` is a fixed `[]Cell` slice passed in
+        // via `Options.cell_buf`. The modern shaper framework (`harfbuzz.rs`) uses
+        // a growable `Vec<Cell>` instead; we match that so `shape()` can never
+        // overflow a caller buffer.
+        cell_buf: Vec<shape::Cell>,
+
+        /// The shared memory used for storing information about a run. Each entry
+        /// is `(codepoint, cluster)` — the reference `RunBuf` MultiArrayList.
+        run_buf: Vec<(u32, u32)>,
+    }
+
+    impl Shaper {
+        /// The cell_buf argument is the buffer to use for storing shaped results.
+        /// This should be at least the number of columns in the terminal.
+        // pub fn init(alloc: Allocator, opts: font.shape.Options) !Shaper {
+        pub fn init(_opts: shape::Options) -> Result<Shaper, Error> {
+            // Note: we do not support opts.font_features
+            Ok(Shaper {
+                cell_buf: Vec::new(),
+                run_buf: Vec::new(),
+            })
+        }
+
+        // pub fn deinit(self: *Shaper) void {
+        pub fn deinit(&mut self) {
+            self.run_buf.clear();
+            self.cell_buf.clear();
+        }
+
+        // pub fn endFrame(self: *const Shaper) void { _ = self; }
+        pub fn end_frame(&self) {}
+
+        /// Returns an iterator that returns one text run at a time for the given
+        /// terminal row. Note that text runs are only valid one at a time for a
+        /// Shaper struct since they share state.
+        // pub fn runIterator(self: *Shaper, opts: font.shape.RunOptions) font.shape.RunIterator {
+        pub fn run_iterator<'a>(
+            &mut self,
+            opts: shape::RunOptions<'a>,
+        ) -> RunIterator<'a, Hook> {
+            RunIterator {
+                hooks: Hook {
+                    shaper: self as *mut Shaper,
+                },
+                opts,
+                i: 0,
+            }
+        }
+
+        /// Shape the given text run. The text run must be the immediately previous
+        /// text run that was iterated since the text run does share state with the
+        /// Shaper struct.
+        ///
+        /// The return value is only valid until the next shape call is called.
+        // pub fn shape(self: *Shaper, run: font.shape.TextRun) ![]font.shape.Cell {
+        pub fn shape(&mut self, run: shape::TextRun) -> Result<&[shape::Cell], Error> {
+            // TODO: memory check that cell_buf can fit results
+
+            // const codepoints = self.run_buf.items(.codepoint);
+            // const clusters = self.run_buf.items(.cluster);
+            // assert(codepoints.len == clusters.len);
+            self.cell_buf.clear();
+            let n = self.run_buf.len();
+
+            match n {
+                // Special cases: if we have no codepoints (is this possible?) then
+                // our result is also an empty cell run.
+                // 0 => return self.cell_buf[0..0],
+                0 => return Ok(&self.cell_buf[0..0]),
+
+                // If we have only 1 codepoint, then we assume that it is a single
+                // grapheme and just let it through. At this point, we can't have
+                // any more information to do anything else.
+                1 => {
+                    let (cp, cluster) = self.run_buf[0];
+                    self.cell_buf.push(shape::Cell {
+                        x: cluster as u16,
+                        x_offset: 0,
+                        y_offset: 0,
+                        glyph_index: cp,
+                    });
+                    return Ok(&self.cell_buf);
+                }
+
+                _ => {}
+            }
+
+            // We know we have at least two codepoints, so we now go through each
+            // and perform grapheme clustering.
+            //
+            // Note that due to limitations of canvas, we can NOT support font
+            // ligatures. However, we do support grapheme clustering. This means we
+            // can render things like skin tone emoji but we can't render things
+            // like single glyph "=>".
+            // var break_state: uucode.grapheme.BreakState = .default;
+            // var cp1: u21 = @intCast(codepoints[0]);
+            let mut break_state: BreakState = BreakState::Default;
+            let mut cp1: u32 = self.run_buf[0].0;
+
+            let mut start: usize = 0;
+            let mut i: usize = 1;
+            // We loop to codepoints.len so that we can handle the end case. In the
+            // end case, we always assume it is a grapheme break. This isn't
+            // strictly true but its how terminals work today.
+            while i <= n {
+                let grapheme_break_here = if i == n {
+                    true
+                } else {
+                    // const cp2: u21 = @intCast(codepoints[i]); defer cp1 = cp2;
+                    let cp2: u32 = self.run_buf[i].0;
+                    let b = grapheme_break(cp1, cp2, &mut break_state);
+                    cp1 = cp2;
+                    b
+                };
+
+                // If this is NOT a grapheme break, cp2 is part of a single
+                // grapheme cluster and we expect there could be more. We move on
+                // to the next codepoint to try again.
+                if !grapheme_break_here {
+                    i += 1;
+                    continue;
+                }
+
+                // This IS a grapheme break, meaning that cp2 is NOT part of cp1.
+                // So we need to render the prior grapheme.
+                // const len = i - start; assert(len > 0);
+                let len = i - start;
+                assert(len > 0);
+                if len == 1 {
+                    // If we have only a single codepoint then just render it as-is.
+                    let (cp, cluster) = self.run_buf[start];
+                    self.cell_buf.push(shape::Cell {
+                        x: cluster as u16,
+                        x_offset: 0,
+                        y_offset: 0,
+                        glyph_index: cp,
+                    });
+                } else {
+                    // We must have multiple codepoints (see assert above). In this
+                    // case we UTF-8 encode the codepoints and send them to the face
+                    // to reserve a private glyph index.
+                    //
+                    // const cluster = cluster: { … utf8 encode codepoints[start..i] … };
+                    let mut cluster: Vec<u8> = Vec::new();
+                    for k in start..i {
+                        let cp = self.run_buf[k].0;
+                        let ch = char::from_u32(cp).ok_or(Error::CodepointTooLarge)?;
+                        let mut buf = [0u8; 4];
+                        cluster.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                    }
+
+                    // FAITHFUL MODERNIZATION (see file header): the reference is
+                    //   var face = try run.group.group.faceFromIndex(run.font_index);
+                    //   const index = try face.graphemeGlyphIndex(cluster);
+                    // `faceFromIndex`/`run.group` were deleted upstream; the modern
+                    // path reaches the same face via the run's shared grid.
+                    let face = unsafe {
+                        (*run.grid).resolver.collection.get_face(run.font_index)?
+                    };
+                    let index = unsafe { (*face).grapheme_glyph_index(&cluster)? };
+
+                    let cluster_x = self.run_buf[start].1;
+                    self.cell_buf.push(shape::Cell {
+                        x: cluster_x as u16,
+                        x_offset: 0,
+                        y_offset: 0,
+                        glyph_index: index,
+                    });
+                }
+
+                start = i;
+                i += 1;
+            }
+
+            // return self.cell_buf[0..cur];
+            Ok(&self.cell_buf)
+        }
+
+        // ---- helpers for the C-ABI (`prepare`/`addCodepoint` inlined) ----
+
+        /// Reset the run buffer (the reference `RunIteratorHook.prepare`).
+        pub(crate) fn reset_run(&mut self) {
+            self.run_buf.clear();
+        }
+
+        /// Append a `(codepoint, cluster)` to the run (the reference
+        /// `RunIteratorHook.addCodepoint`).
+        pub(crate) fn push_codepoint(&mut self, cp: u32, cluster: u32) {
+            self.run_buf.push((cp, cluster));
+        }
+    }
+
+    /// The hooks for RunIterator.
+    // pub const RunIteratorHook = struct { shaper: *Shaper, ... };
+    pub struct Hook {
+        shaper: *mut Shaper,
+    }
+
+    impl RunIteratorHook for Hook {
+        // pub fn prepare(self: RunIteratorHook) !void {
+        fn prepare(&mut self) {
+            // Reset the buffer for our current run
+            unsafe { (*self.shaper).run_buf.clear() };
+        }
+
+        // pub fn addCodepoint(self: RunIteratorHook, cp: u32, cluster: u32) !void {
+        fn add_codepoint(&mut self, cp: u32, cluster: u32) {
+            unsafe { (*self.shaper).run_buf.push((cp, cluster)) };
+        }
+
+        // pub fn finalize(self: RunIteratorHook) !void { _ = self; }
+        fn finalize(&mut self) {}
+    }
+
+    // -----------------------------------------------------------------------
+    // The wasm-compatible C-ABI (`pub const Wasm = struct { … }`). Exported as
+    // `rustty_wc_shaper_*` `#[no_mangle] extern "C"` so a JS host can create a
+    // shaper and shape a run.
+    // -----------------------------------------------------------------------
+
+    /// `export fn shaper_new(cap: usize) ?*Shaper`
+    #[no_mangle]
+    pub extern "C" fn rustty_wc_shaper_new(cap: usize) -> *mut Shaper {
+        match Shaper::init(shape::Options::default()) {
+            Ok(mut shaper) => {
+                // The reference allocates a `cell_buf` of `cap` cells; our cell_buf
+                // is growable, so `cap` is an advisory reservation.
+                shaper.cell_buf.reserve(cap);
+                shaper.run_buf.reserve(cap);
+                Box::into_raw(Box::new(shaper))
+            }
+            Err(_) => core::ptr::null_mut(),
+        }
+    }
+
+    /// `export fn shaper_free(ptr: ?*Shaper) void`
+    #[no_mangle]
+    pub extern "C" fn rustty_wc_shaper_free(ptr: *mut Shaper) {
+        if !ptr.is_null() {
+            let mut shaper = unsafe { Box::from_raw(ptr) };
+            shaper.deinit();
+        }
+    }
+
+    /// Modern analog of the reference `shaper_test`: shape an explicit run of
+    /// `(codepoint, cluster)` pairs and write the resulting cells into
+    /// `out_cells`. Returns the number of cells produced, or -1 on error.
+    ///
+    /// PORT NOTE: the reference `shaper_test(self, group, str, len)` built a
+    /// `terminal.Terminal`, printed the UTF-8 string into it, then drove the
+    /// (deleted) `runIterator(group, row, null, null)` and logged the shaped runs.
+    /// The modern render pipeline needed to reconstruct render-state cells is out
+    /// of scope for the wasm harness; this primitive instead feeds the codepoints
+    /// straight into the shaper's run buffer and calls the SAME `shape()` the
+    /// terminal path reaches (single-codepoint runs need no font grid; multi-
+    /// codepoint grapheme clusters use `grid.collection.get_face`). Pass a valid
+    /// `*SharedGrid` when the run contains grapheme clusters; `grid` may be null
+    /// for simple (single-codepoint-per-cell) strings.
+    ///
+    /// # Safety
+    /// `cps`/`clusters` point to `n` `u32`s; `out_cells` has room for `out_cap`
+    /// `Cell`s; `grid` is null or a valid `*SharedGrid`.
+    #[no_mangle]
+    pub extern "C" fn rustty_wc_shaper_shape(
+        shaper: *mut Shaper,
+        grid: *mut crate::shared_grid::SharedGrid,
+        cps: *const u32,
+        clusters: *const u32,
+        n: usize,
+        out_cells: *mut shape::Cell,
+        out_cap: usize,
+    ) -> isize {
+        if shaper.is_null() || (n > 0 && (cps.is_null() || clusters.is_null())) {
+            return -1;
+        }
+        let shaper = unsafe { &mut *shaper };
+
+        // prepare + addCodepoint for each pair.
+        shaper.reset_run();
+        for k in 0..n {
+            let cp = unsafe { *cps.add(k) };
+            let cluster = unsafe { *clusters.add(k) };
+            shaper.push_codepoint(cp, cluster);
+        }
+
+        // Build a TextRun and shape. font_index = regular[0]; unused for the
+        // single-codepoint path (only grapheme-cluster cells dereference the grid).
+        let run = shape::TextRun {
+            hash: 0,
+            offset: 0,
+            cells: n as u16,
+            grid,
+            font_index: collection::Index::new(crate::Style::Regular, 0),
+        };
+
+        let cells = match shaper.shape(run) {
+            Ok(c) => c,
+            Err(_) => return -1,
+        };
+
+        let count = cells.len().min(out_cap);
+        for (k, cell) in cells.iter().take(count).enumerate() {
+            unsafe { *out_cells.add(k) = *cell };
+        }
+        count as isize
+    }
+}

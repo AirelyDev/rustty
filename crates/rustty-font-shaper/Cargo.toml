@@ -43,6 +43,10 @@ rustty-font = { workspace = true }
 rustty-render-types = { workspace = true }
 # Base utilities leaf.
 rustty-util = { workspace = true }
+# Grapheme clustering (`unicode.graphemeBreak`/`uucode.grapheme.BreakState`): the
+# wasm `web_canvas` shaper performs grapheme clustering. Pure-Rust leaf (wasm-safe;
+# already a transitive dep via rustty-vt). Only referenced by the wasm shaper.
+rustty-unicode = { workspace = true }
 # Container/testing utilities leaf. Provides `comparison::expectApproxEqual`
 # (the Collection metrics tests) — the reference `datastruct/comparison.zig`.
 rustty-datastruct = { workspace = true }
@@ -54,6 +58,13 @@ allocator-api2 = { workspace = true }
 # FreeType 2.13.2 (glyph rasterization for the freetype backend) and HarfBuzz
 # 11.0.0 (text shaping; the `hb_ft` bridge works against freetype-sys). Referenced
 # by path (the `-sys` crates are not in `[workspace.dependencies]`).
+#
+# WASM DIVERGENCE (`cfg(not(target_arch = "wasm32"))`): the `wasm32` web_canvas
+# backend has no FreeType/HarfBuzz (freestanding wasm has no C deps); these are
+# excluded from the wasm dependency graph. The `Face`/`Shaper`/`Library`
+# selectors resolve to the browser Canvas backend on wasm (see `face`/`shape`/
+# `library`/`backend`). Native/other targets are untouched.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 freetype-sys = { path = "../../crates-sys/freetype-sys" }
 harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys" }
 

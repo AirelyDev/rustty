@@ -148,6 +148,11 @@ members = [
     # on it (a sink). NOT in the 3234-test src/ contract (main_wasm.zig has 0
     # tests). See .port/phase-2 WASM workstream report + B1/B2 deferral notes.
     "crates/rustty-wasm",
+    # Browser-freestanding (wasm32-unknown-unknown) deliverable: a small cdylib
+    # pulling the VT C-ABI (rustty-vt-c) + the font-shaper web_canvas backend,
+    # exporting both the terminal C-ABI and the browser-Canvas shaper C-ABI. Pure
+    # Rust; ZERO wasi imports (only the `env` Canvas imports). A TOP SINK.
+    "crates/rustty-web-canvas",
 
     # ----- build orchestration (replaces src/build/) -----
     "xtask",
@@ -193,6 +198,7 @@ rustty-terminfo = { path = "crates/rustty-terminfo" }
 rustty-termio = { path = "crates/rustty-termio" }
 rustty-core = { path = "crates/rustty-core" }
 rustty-wasm = { path = "crates/rustty-wasm" }
+rustty-web-canvas = { path = "crates/rustty-web-canvas" }
 rustty-apprt = { path = "crates/rustty-apprt" }
 # The libghostty embedding C ABI top-sink (cbindgen -> include/rustty-apprt.h).
 rustty-apprt-c = { path = "crates/rustty-apprt-c" }

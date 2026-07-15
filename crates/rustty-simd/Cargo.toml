@@ -23,11 +23,6 @@ build = "build.rs"
 workspace = true
 
 [dependencies]
-# R3: the SIMD kernels link against the SAME C libraries the reference uses,
-# vendored standalone (no ghostty dep). highway provides the runtime dispatch;
-# simdutf provides UTF/base64 transcoding used by base64.cpp / vt.cpp.
-highway-sys = { path = "../../crates-sys/highway-sys" }
-simdutf-sys = { path = "../../crates-sys/simdutf-sys" }
 # `quirks.inlineAssert` (the reference imports `../quirks.zig`) lives in
 # rustty-util (a leaf crate).
 rustty-util = { workspace = true }
@@ -35,6 +30,21 @@ rustty-util = { workspace = true }
 # uucode-derived data in rustty-unicode (R3: no uucode dep), so the scalar path
 # reads the identical values back out of rustty-unicode (a leaf crate).
 rustty-unicode = { workspace = true }
+
+# R3: the SIMD kernels link against the SAME C libraries the reference uses,
+# vendored standalone (no ghostty dep). highway provides the runtime dispatch;
+# simdutf provides UTF/base64 transcoding used by base64.cpp / vt.cpp.
+#
+# WASM DIVERGENCE (`cfg(not(target_arch = "wasm32"))`): the freestanding
+# `wasm32-unknown-unknown` browser target has no libc/libc++, so the C++ SIMD
+# kernels (and their highway/simdutf `-sys` deps) cannot be linked. On wasm the
+# crate compiles PURE-RUST scalar fallbacks instead (see the per-module `SIMD`
+# gates + `build.rs`), so these C deps are excluded from the wasm dependency
+# graph. The `wasm32-wasip1` target ALSO takes this arm (no C++ toolchain wired
+# for it); the shipped `wasm32-wasip1` VT build uses the scalar lanes too.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+highway-sys = { path = "../../crates-sys/highway-sys" }
+simdutf-sys = { path = "../../crates-sys/simdutf-sys" }
 
 [build-dependencies]
 # R3: compile the copied ghostty SIMD .cpp standalone via the host C++ compiler

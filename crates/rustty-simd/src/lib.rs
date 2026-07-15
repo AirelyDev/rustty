@@ -11,7 +11,17 @@
 // Force the cc-built C++ kernel archive (and its highway/simdutf deps) to be
 // linked even before the Rust wrappers reference its symbols, so the copied
 // kernels are present in the final link.
+//
+// WASM DIVERGENCE (`cfg(target_arch = "wasm32")`): the freestanding
+// `wasm32-unknown-unknown` browser target has no libc/libc++ and cannot link the
+// C++ SIMD kernels (highway/simdutf). On wasm we compile PURE-RUST scalar paths
+// instead — the exact code the reference builds when `build_options.simd` is
+// false — so the two `-sys` force-links (and the `cc` C++ compile in `build.rs`)
+// are gated OFF. Same class as the existing `cfg!(miri)` scalar fallback; see the
+// per-module SIMD gates. Native/wasip1 builds are untouched.
+#[cfg(not(target_arch = "wasm32"))]
 extern crate highway_sys as _;
+#[cfg(not(target_arch = "wasm32"))]
 extern crate simdutf_sys as _;
 
 pub mod base64;

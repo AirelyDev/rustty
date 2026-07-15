@@ -27,6 +27,16 @@
 use std::path::PathBuf;
 
 fn main() {
+    // WASM DIVERGENCE (`wasm32`): the freestanding `wasm32-unknown-unknown`
+    // browser target (and the `wasm32-wasip1` VT build) compile PURE-RUST scalar
+    // fallbacks instead of the C++ SIMD kernels — the `highway-sys`/`simdutf-sys`
+    // deps are excluded from the wasm dependency graph (Cargo.toml), so their
+    // `DEP_*_INCLUDE` vars are unset here and there is nothing to compile. Skip
+    // the whole C++ build on wasm. Native/other targets are untouched.
+    if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("wasm32") {
+        return;
+    }
+
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let cbits = manifest_dir.join("cbits");
 

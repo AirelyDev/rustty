@@ -1,0 +1,40 @@
+# rustty-web-canvas — the browser-freestanding (wasm32-unknown-unknown) deliverable
+#
+# Crate IDENTITY is `rustty-web-canvas` (R4). A SMALL cdylib TOP SINK (nothing
+# depends on it) that pulls the VT C-ABI (`rustty-vt-c`) + the font-shaper
+# `web_canvas` backend (`rustty-font-shaper`), exporting BOTH the terminal C-ABI
+# and the browser-Canvas font-shaper C-ABI so a browser can run a terminal + font
+# shaping against a real (offscreen) Canvas. Builds to a PURE-RUST `.wasm` with
+# ZERO `wasi_snapshot_preview1` imports (only the `env` Canvas imports). NO
+# dependency on the ghostty tree (R3).
+[package]
+name = "rustty-web-canvas"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+# cdylib: emits the browser `.wasm` bearing the unmangled C-ABI exports. rlib:
+# lets the retention/helper logic build + be checked on the host so native
+# `cargo build --workspace` stays green.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The VT terminal C-ABI (the `rustty_terminal_*`/`rustty_formatter_*`/… exports).
+# Built freestanding on wasm (pure-Rust: simd scalar fallbacks + zlib gated off).
+rustty-vt-c = { workspace = true }
+# The font-shaper `web_canvas` backend: the browser-Canvas `Face` + `Shaper` and
+# their `rustty_wc_*` C-ABI exports (cfg-gated to wasm inside the crate).
+rustty-font-shaper = { workspace = true }
+# The PURE font leaf: the `Atlas` glyphs are rendered into. Used by the local
+# `rustty_wc_atlas_*` helper exports.
+rustty-font = { workspace = true }
+# `std.mem.Allocator` map for `Atlas<Global>`.
+allocator-api2 = { workspace = true }

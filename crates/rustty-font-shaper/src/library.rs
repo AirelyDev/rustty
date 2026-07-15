@@ -10,6 +10,10 @@
 //! `backend.zig`'s `Backend.default`. (The `freetype`/`harfbuzz`/`stb` FFI glue
 //! this file leans on is superseded by the full `pkg/*` ports later.)
 
+// WASM DIVERGENCE: the freetype FFI glue (`crate::ft`) is not compiled on the
+// `wasm32` web_canvas backend (no FreeType on freestanding wasm); `Library`
+// resolves to `NoopLibrary` there (like the CoreText backend).
+#[cfg(not(target_arch = "wasm32"))]
 use crate::ft;
 
 /// The library-wide mutex type.
@@ -22,13 +26,16 @@ pub type Mutex = std::sync::Mutex<()>;
 // PORT NOTE: `library.zig`'s `pub const Library = switch (options.backend) { ...
 // FreetypeLibrary ... NoopLibrary ... }`. Modeled with `cfg(target_os)` matching
 // `Backend.default`: macOS → `NoopLibrary`, everything else → `FreetypeLibrary`.
-#[cfg(target_os = "macos")]
+// macOS (coretext) AND wasm (web_canvas) → `NoopLibrary`; everything else
+// (Linux fontconfig_freetype) → `FreetypeLibrary`.
+#[cfg(any(target_os = "macos", target_arch = "wasm32"))]
 pub type Library = NoopLibrary;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
 pub type Library = FreetypeLibrary;
 
 /// Library implementation for the freetype backend.
-// PORT NOTE: `library.zig`'s `FreetypeLibrary`.
+// PORT NOTE: `library.zig`'s `FreetypeLibrary`. Not compiled on wasm (no FreeType).
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug)]
 pub struct FreetypeLibrary {
     /// The underlying FreeType library.
@@ -42,6 +49,7 @@ pub struct FreetypeLibrary {
     pub mutex: *mut Mutex,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl FreetypeLibrary {
     /// Initialize the library and its mutex.
     // PORT NOTE: `FreetypeLibrary.init`.
@@ -86,14 +94,14 @@ pub struct NoopLibrary;
 /// `NoopLibrary.InitError = error{}`.
 // PORT NOTE: on the freetype arm this is `ft::FtError`; the two arms share the
 // `Library::init() -> Result<Library, _>` call shape.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_arch = "wasm32"))]
 #[derive(Debug)]
 pub enum LibraryError {}
 
 impl NoopLibrary {
     /// Initialize the (noop) library.
-    // PORT NOTE: `NoopLibrary.init`.
-    #[cfg(target_os = "macos")]
+    // PORT NOTE: `NoopLibrary.init`. Active on macOS (coretext) + wasm (web_canvas).
+    #[cfg(any(target_os = "macos", target_arch = "wasm32"))]
     pub fn init() -> Result<NoopLibrary, LibraryError> {
         Ok(NoopLibrary)
     }

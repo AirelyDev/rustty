@@ -276,6 +276,9 @@ impl Collection {
     // access to the file-struct `faces` field). rustty keeps `faces` private, so
     // this crate-visible accessor exposes exactly that count for the `discovery`
     // sibling module. No reference logic is added.
+    // WASM: the only caller is the CoreText discoverer (`discovery.rs`, macOS-gated),
+    // so this is unused on the wasm web_canvas backend — silence dead-code there.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn style_face_count(&self, style: Style) -> usize {
         self.faces.get(style).count()
     }

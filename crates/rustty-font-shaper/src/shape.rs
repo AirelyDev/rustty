@@ -25,6 +25,9 @@ pub mod run;
 #[path = "shaper/noop.rs"]
 pub mod noop;
 // pub const harfbuzz = @import("shaper/harfbuzz.zig");
+// WASM DIVERGENCE: the HarfBuzz shaper is not compiled on the `wasm32` web_canvas
+// backend (no HarfBuzz on freestanding wasm); the `web_canvas` shaper is active.
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "shaper/harfbuzz.rs"]
 pub mod harfbuzz;
 // pub const coretext = @import("shaper/coretext.zig");
@@ -90,7 +93,10 @@ pub use feature::DEFAULT_FEATURES;
 // submodule.
 #[cfg(target_os = "macos")]
 pub type Shaper = coretext::Shaper;
-#[cfg(not(target_os = "macos"))]
+// `.web_canvas => web_canvas.Shaper` (wasm browser backend).
+#[cfg(target_arch = "wasm32")]
+pub type Shaper = web_canvas::Shaper;
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
 pub type Shaper = harfbuzz::Shaper;
 
 /// A cell is a single glyph within a terminal that should be rendered

@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rustty web_canvas — freestanding wasm demo</title>
+    <style>
+      body {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        max-width: 60rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        line-height: 1.5;
+      }
+      h1 { font-size: 1.2rem; }
+      pre {
+        background: #111;
+        color: #eee;
+        padding: 1rem;
+        border-radius: 6px;
+        overflow-x: auto;
+        white-space: pre-wrap;
+      }
+      #face-canvas canvas {
+        border: 1px solid #ccc;
+        image-rendering: pixelated;
+        margin: 2px;
+        transform: scale(3);
+        transform-origin: top left;
+      }
+      .glyphs { margin: 4rem 0 1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>rustty <code>web_canvas</code> — browser-freestanding wasm</h1>
+    <p>
+      Loads <code>rustty_web_canvas.wasm</code>
+      (<code>wasm32-unknown-unknown</code>, pure Rust, ZERO wasi imports — only the
+      <code>env</code> Canvas imports), wires the Canvas FFI to a real offscreen
+      2d canvas, then: creates a <code>web_canvas</code> font <em>Face</em>, renders
+      glyphs into a texture <em>Atlas</em>, shapes a string with the
+      <em>Shaper</em>, and runs a VT terminal roundtrip via the retained
+      <code>rustty_vt_c</code> C-ABI.
+    </p>
+    <p>
+      Serve from the repo root (<code>python3 -m http.server</code>) and open
+      <code>/example/wasm-web-canvas/index.html</code> — a <code>fetch()</code> of
+      the <code>.wasm</code> needs http(s), not <code>file://</code>.
+    </p>
+
+    <div class="glyphs">Rendered glyph canvases (via web_canvas Face, scaled 3×):</div>
+    <div id="face-canvas"></div>
+
+    <pre id="log">loading…</pre>
+
+    <script type="module">
+      import { makeWebCanvasEnv } from "../../.port/tools/web-canvas-glue.mjs";
+
+      const logEl = document.getElementById("log");
+      const log = (s) => (logEl.textContent += "\n" + s);
+      logEl.textContent = "";
+
+      const WASM = "../../target/wasm32-unknown-unknown/release/rustty_web_canvas.wasm";
+
+      const mod = await WebAssembly.compileStreaming(fetch(WASM));
+
+      // Prove the freestanding link in the page too.
+      const imps = WebAssembly.Module.imports(mod);
+      const wasi = imps.filter((i) => /wasi/i.test(i.module)).length;
+      log(`imports: ${imps.length} (all module="env"), wasi imports: ${wasi}`);
+
+      let inst;
+      const env = makeWebCanvasEnv({
+        memory: () => inst.exports.memory,
+        createCanvas: () => document.createElement("canvas"),
+      });
+      inst = await WebAssembly.instantiate(mod, { env });
+      const ex = inst.exports;
+      const enc = new TextEncoder();
+      const dec = new TextDecoder();
+      const u8 = () => new Uint8Array(ex.memory.buffer);
+      const wr = (bytes) => {
+        const p = ex.rustty_wc_alloc(bytes.length);
+        u8().set(bytes, p);
+        return p;
+      };
+
+      // --- web_canvas Face + glyph render ---
+      const fontBytes = enc.encode("monospace");
+      const fp = wr(fontBytes);
+      const face = ex.rustty_wc_face_new(fp, fontBytes.length, 32.0, 0);
+      ex.rustty_wc_free(fp, fontBytes.length);
+      log("rustty_wc_face_new(monospace, 32px): handle=" + face);
+
+      const atlas = ex.rustty_wc_atlas_new(1024, 0); // grayscale
+      const gbuf = ex.rustty_wc_alloc(64);
+      for (const ch of "Rusty!") {
+        const rc = ex.rustty_wc_face_render_glyph(face, atlas, ch.codePointAt(0), gbuf);
+        const gv = new DataView(ex.memory.buffer, gbuf, 24);
+        log(
+          `render '${ch}': rc=${rc} size=${gv.getUint32(0, true)}x${gv.getUint32(4, true)}` +
+            ` atlas=(${gv.getUint32(16, true)},${gv.getUint32(20, true)})`,
+        );
+        // Append this glyph's canvas to the visual container.
+        ex.rustty_wc_face_debug_canvas(face, ...(() => {
+          const id = enc.encode("face-canvas");
+          const p = wr(id);
+          return [p, id.length];
+        })());
+      }
+      ex.rustty_wc_free(gbuf, 64);
+
+      // --- web_canvas Shaper ---
+      const shaper = ex.rustty_wc_shaper_new(80);
+      const text = "Hi!";
+      const cps = [...text].map((c) => c.codePointAt(0));
+      const n = cps.length;
+      const cpsP = ex.rustty_wc_alloc(n * 4);
+      const clP = ex.rustty_wc_alloc(n * 4);
+      new Uint32Array(ex.memory.buffer, cpsP, n).set(cps);
+      new Uint32Array(ex.memory.buffer, clP, n).set(cps.map((_, i) => i));
+      const outCells = ex.rustty_wc_alloc(n * 16);
+      const count = ex.rustty_wc_shaper_shape(shaper, 0, cpsP, clP, n, outCells, n);
+      log(`rustty_wc_shaper_shape("${text}"): ${count} cells`);
+
+      // --- VT terminal roundtrip via the retained rustty_vt_c C-ABI ---
+      try {
+        const layoutPtr = ex.rustty_type_json();
+        let e = layoutPtr;
+        const mem = u8();
+        while (mem[e]) e++;
+        const LAYOUT = JSON.parse(dec.decode(u8().subarray(layoutPtr, e)));
+        const T = LAYOUT["RusttyTerminalOptions"];
+        const optsPtr = ex.rustty_wc_alloc(T.size);
+        u8().fill(0, optsPtr, optsPtr + T.size);
+        const setU = (base, f, v) => {
+          const fi = T.fields[f];
+          new DataView(ex.memory.buffer, base + fi.offset, fi.size)[
+            fi.size === 1 ? "setUint8" : fi.size === 2 ? "setUint16" : "setUint32"
+          ](0, v, true);
+        };
+        setU(optsPtr, "cols", 80);
+        setU(optsPtr, "rows", 24);
+        const slot = ex.rustty_wc_alloc(4);
+        const r = ex.rustty_terminal_new(0, slot, optsPtr);
+        const term = new DataView(ex.memory.buffer, slot, 4).getUint32(0, true);
+        log(`rustty_terminal_new(80x24): rc=${r} handle=${term}`);
+        const vt = enc.encode("\x1b[1;32mHello from rustty web_canvas.wasm!\x1b[0m");
+        const vp = wr(vt);
+        ex.rustty_terminal_vt_write(term, vp, vt.length);
+        log(`rustty_terminal_vt_write: ${vt.length} bytes parsed`);
+        ex.rustty_terminal_free(term);
+      } catch (err) {
+        log("VT roundtrip skipped: " + err.message);
+      }
+
+      log("\nDONE — terminal + font shaping, all in freestanding WebAssembly.");
+    </script>
+  </body>
+</html>

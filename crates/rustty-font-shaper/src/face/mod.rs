@@ -19,7 +19,16 @@
 // in later F3 subtasks. The `Face = switch(options.backend)` selector still
 // resolves to the scaffold placeholder (below) until those backends land; the
 // concrete `freetype::Face` is reachable directly as `face::freetype::Face`.
+// WASM DIVERGENCE: the FreeType backend face is not compiled on the `wasm32`
+// web_canvas backend (no FreeType on freestanding wasm).
+#[cfg(not(target_arch = "wasm32"))]
 pub mod freetype;
+//
+// PORT NOTE: `face/web_canvas.zig` (the browser Canvas backend `Face`) is ported
+// in the `web_canvas` submodule below, cfg-gated to wasm — the active `Face` on
+// the `web_canvas` backend (`.web_canvas => web_canvas.Face`).
+#[cfg(target_arch = "wasm32")]
+pub mod web_canvas;
 //
 // PORT NOTE: `face/coretext.zig` (the CoreText backend `Face`) is ported in the
 // `coretext` submodule below (macOS only). Like `freetype::Face`, the concrete
@@ -66,7 +75,10 @@ pub mod coretext;
 // `web_canvas => web_canvas.Face` arm lands with the wasm backend.
 #[cfg(target_os = "macos")]
 pub type Face = coretext::Face;
-#[cfg(not(target_os = "macos"))]
+// `.web_canvas => web_canvas.Face` (wasm browser backend).
+#[cfg(target_arch = "wasm32")]
+pub type Face = web_canvas::Face;
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
 pub type Face = freetype::Face;
 
 /// The error type of the active backend `Face` (`coretext::Error` /
@@ -75,7 +87,9 @@ pub type Face = freetype::Face;
 /// (the reference threads the backend's inferred error set through `!` unions).
 #[cfg(target_os = "macos")]
 pub type FaceError = coretext::Error;
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_arch = "wasm32")]
+pub type FaceError = web_canvas::Error;
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
 pub type FaceError = freetype::Error;
 
 /// If a DPI can't be calculated, this DPI is used. This is probably

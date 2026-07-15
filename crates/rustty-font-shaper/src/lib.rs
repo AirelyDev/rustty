@@ -44,9 +44,17 @@ pub mod shared_grid_set;
 // `-sys` crates; see each module's PORT NOTE). Not part of any reference file's
 // test contract — the full `pkg/freetype`, `pkg/harfbuzz`, `src/font/Library.zig`
 // and `src/stb` ports supersede them.
+//
+// WASM DIVERGENCE: the `wasm32` web_canvas backend has no FreeType/HarfBuzz/stb
+// (freestanding wasm has no C deps), so these `-sys` FFI-glue modules are gated
+// OFF; the `Face`/`Shaper`/`Library` selectors resolve to the browser Canvas
+// backend instead (see `face`/`shape`/`library`). Native is untouched.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ft;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod hb;
 pub mod library;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod stb;
 // `uucode` seam (the single `is_emoji_presentation` property `CodepointResolver`
 // reads). Glue, superseded by a full unicode-database port later.

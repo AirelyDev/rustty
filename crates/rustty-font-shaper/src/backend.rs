@@ -73,15 +73,20 @@ impl Backend {
         // // that is the default. It is only used by people who want to
         // // self-compile Ghostty and prefer the freetype aesthetic.
         // return if (target.os.tag.isDarwin()) .coretext else .fontconfig_freetype;
-        #[cfg(target_os = "windows")]
+        // if (target.cpu.arch == .wasm32) return .web_canvas;
+        #[cfg(target_arch = "wasm32")]
+        {
+            Backend::WebCanvas
+        }
+        #[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
         {
             Backend::FreetypeWindows
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", not(target_arch = "wasm32")))]
         {
             Backend::Coretext
         }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_arch = "wasm32")))]
         {
             Backend::FontconfigFreetype
         }

@@ -748,6 +748,7 @@ dependencies = [
  "rustty-datastruct",
  "rustty-font",
  "rustty-render-types",
+ "rustty-unicode",
  "rustty-util",
  "rustty-vt",
 ]
@@ -973,6 +974,16 @@ dependencies = [
  "rustty-core",
  "rustty-os",
  "rustty-vt",
+]
+
+[[package]]
+name = "rustty-web-canvas"
+version = "0.1.0"
+dependencies = [
+ "allocator-api2",
+ "rustty-font",
+ "rustty-font-shaper",
+ "rustty-vt-c",
 ]
 
 [[package]]

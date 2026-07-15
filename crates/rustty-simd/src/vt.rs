@@ -5,9 +5,13 @@ use rustty_util::quirks::inlineAssert as assert;
 
 /// `options.simd` — whether SIMD-accelerated code paths are built. Mirrors the
 /// reference's `build_options.simd`, which defaults to `true`.
+// WASM DIVERGENCE: on `wasm32` the SIMD branch is gated OFF (no C++ kernel on
+// freestanding wasm); the scalar maximal-subpart decoder below is always taken.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const SIMD: bool = true;
 
-// vt.cpp
+// vt.cpp — gated OFF on `wasm32` (no C++ kernel on freestanding wasm).
+#[cfg(not(target_arch = "wasm32"))]
 extern "C" {
     fn rustty_simd_decode_utf8_until_control_seq(
         input: *const u8,
@@ -27,6 +31,7 @@ pub struct DecodeResult {
 pub fn utf8DecodeUntilControlSeq(input: &[u8], output: &mut [u32]) -> DecodeResult {
     assert(output.len() >= input.len());
 
+    #[cfg(not(target_arch = "wasm32"))]
     if SIMD {
         let mut decoded: usize = 0;
         let consumed = unsafe {

@@ -7,6 +7,10 @@ use rustty_util::quirks::inlineAssert as assert;
 
 /// `options.simd` — whether SIMD-accelerated code paths are built. Mirrors the
 /// reference's `build_options.simd`, which defaults to `true`.
+// WASM DIVERGENCE: on `wasm32` both SIMD branches are gated OFF (no C++ kernel on
+// freestanding wasm), so this const is unreferenced there — the scalar lanes are
+// always taken.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const SIMD: bool = true;
 
 // PORT NOTE (Miri): Miri cannot execute the C/C++ side of the FFI ("can't
@@ -18,6 +22,11 @@ const SIMD: bool = true;
 // std-heap allocator fallback in rustty-vt pagelist/mod.rs). The SIMD lane
 // itself stays covered by this crate's ASan G6 route and `cargo test`.
 pub fn max_len(input: &[u8]) -> usize {
+    // WASM DIVERGENCE: the `wasm32` freestanding target has no C++ SIMD kernel
+    // (see `lib.rs`), so the SIMD branch is gated OFF and the pure-Rust scalar
+    // lane below is always taken — identical output by construction, same as the
+    // `cfg!(miri)` fallback the branch guard already carries.
+    #[cfg(not(target_arch = "wasm32"))]
     if SIMD && !cfg!(miri) {
         return unsafe { rustty_simd_base64_max_length(input.as_ptr(), input.len()) };
     }
@@ -43,7 +52,9 @@ fn max_len_scalar(input: &[u8]) -> usize {
 pub struct Base64Invalid;
 
 pub fn decode<'a>(input: &[u8], output: &'a mut [u8]) -> Result<&'a [u8], Base64Invalid> {
-    // See the Miri PORT NOTE on `max_len`.
+    // See the Miri PORT NOTE on `max_len`. WASM DIVERGENCE: SIMD branch gated
+    // OFF on `wasm32` (freestanding has no C++ kernel); scalar lane always taken.
+    #[cfg(not(target_arch = "wasm32"))]
     if SIMD && !cfg!(miri) {
         let res =
             unsafe { rustty_simd_base64_decode(input.as_ptr(), input.len(), output.as_mut_ptr()) };
@@ -79,7 +90,8 @@ fn scalar_input(input: &[u8]) -> &[u8] {
     &input[0..input.len() - i]
 }
 
-// base64.cpp
+// base64.cpp — gated OFF on `wasm32` (no C++ kernel on freestanding wasm).
+#[cfg(not(target_arch = "wasm32"))]
 extern "C" {
     fn rustty_simd_base64_max_length(input: *const u8, len: usize) -> usize;
     fn rustty_simd_base64_decode(input: *const u8, len: usize, output: *mut u8) -> isize;

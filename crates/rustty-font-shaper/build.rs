@@ -7,6 +7,14 @@
 //! face uses it to scale bitmap-strike glyphs (`FT_GLYPH_FORMAT_BITMAP`).
 
 fn main() {
+    // WASM DIVERGENCE (`wasm32`): the freestanding web_canvas backend does not
+    // use the FreeType face and therefore never links `stbir_resize_uint8`; skip
+    // the C compile (freestanding wasm has no C toolchain wired here). The `stb`
+    // module + freetype face are cfg-gated off on wasm (see lib.rs / face/mod.rs).
+    if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("wasm32") {
+        return;
+    }
+
     println!("cargo:rerun-if-changed=vendor/stb_impl.c");
     println!("cargo:rerun-if-changed=vendor/stb_image_resize.h");
 

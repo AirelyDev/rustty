@@ -672,6 +672,21 @@ impl LoadingImage {
         }
     }
 
+    // WASM DIVERGENCE (`wasm32`): the kitty zlib-deflate image path binds the
+    // vendored C `zlib-sys` library, which cannot link on freestanding
+    // `wasm32-unknown-unknown` (no libc). The kitty PNG/zlib image-decode path is
+    // not needed for a terminal-in-browser text demo, so on wasm this method is a
+    // faithful `Unsupported` stub returning `DecompressionFailed` — mirroring how
+    // the reference gates the wasm/lib image path (PNG decode is likewise a null
+    // `sys::decode_png` seam). The `Compression::ZlibDeflate` match arm and its
+    // signature are unchanged; only the body diverges. Native/other targets keep
+    // the real C-zlib inflate below. (`zlib-sys` is `cfg(not(wasm32))` in Cargo.)
+    #[cfg(target_arch = "wasm32")]
+    fn decompressZlib(&mut self) -> Result<(), Error> {
+        Err(Error::DecompressionFailed)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn decompressZlib(&mut self) -> Result<(), Error> {
         // PORT NOTE: the reference opens a `std.compress.flate.Decompress` in
         // zlib mode over `self.data.items`, then appends the remaining
@@ -823,15 +838,25 @@ fn realpath(path: &[u8]) -> std::io::Result<Vec<u8>> {
     Ok(canon.into_os_string().into_vec())
 }
 
-// PORT NOTE (wasm32): wasi exposes the same raw-bytes ↔ OsStr round-trip as unix
-// via `std::os::wasi::ffi` (paths are not required to be UTF-8), so the helper is
-// identical except for the extension trait's module path.
-#[cfg(target_arch = "wasm32")]
+// PORT NOTE (wasm32-wasi): wasi exposes the same raw-bytes ↔ OsStr round-trip as
+// unix via `std::os::wasi::ffi` (paths are not required to be UTF-8), so the
+// helper is identical except for the extension trait's module path.
+#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
 fn realpath(path: &[u8]) -> std::io::Result<Vec<u8>> {
     use std::os::wasi::ffi::{OsStrExt, OsStringExt};
     let p = std::path::Path::new(std::ffi::OsStr::from_bytes(path));
     let canon = std::fs::canonicalize(p)?;
     Ok(canon.into_os_string().into_vec())
+}
+
+// WASM DIVERGENCE (freestanding `wasm32-unknown-unknown`): there is no
+// filesystem and no `std::os::wasi`/`std::os::unix` OsStr byte round-trip. The
+// kitty "file"/"tempfile" transmission media are unreachable in a browser
+// terminal demo, so these path helpers are `Unsupported` stubs. Native + wasi
+// keep the real implementations above.
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+fn realpath(_path: &[u8]) -> std::io::Result<Vec<u8>> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
 }
 
 #[cfg(windows)]
@@ -849,10 +874,16 @@ fn open_file(path: &[u8]) -> std::io::Result<std::fs::File> {
     std::fs::File::open(std::path::Path::new(std::ffi::OsStr::from_bytes(path)))
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
 fn open_file(path: &[u8]) -> std::io::Result<std::fs::File> {
     use std::os::wasi::ffi::OsStrExt;
     std::fs::File::open(std::path::Path::new(std::ffi::OsStr::from_bytes(path)))
+}
+
+// WASM DIVERGENCE (freestanding wasm): no filesystem — see `realpath` note.
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+fn open_file(_path: &[u8]) -> std::io::Result<std::fs::File> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
 }
 
 #[cfg(windows)]
@@ -869,10 +900,16 @@ fn unlink(path: &[u8]) -> std::io::Result<()> {
     std::fs::remove_file(std::path::Path::new(std::ffi::OsStr::from_bytes(path)))
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
 fn unlink(path: &[u8]) -> std::io::Result<()> {
     use std::os::wasi::ffi::OsStrExt;
     std::fs::remove_file(std::path::Path::new(std::ffi::OsStr::from_bytes(path)))
+}
+
+// WASM DIVERGENCE (freestanding wasm): no filesystem — see `realpath` note.
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+fn unlink(_path: &[u8]) -> std::io::Result<()> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
 }
 
 #[cfg(windows)]

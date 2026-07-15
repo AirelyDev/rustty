@@ -2,14 +2,20 @@
 
 /// `options.simd` — whether SIMD-accelerated code paths are built. Mirrors the
 /// reference's `build_options.simd`, which defaults to `true`.
+// WASM DIVERGENCE: on `wasm32` the SIMD branch is gated OFF (no C++ kernel on
+// freestanding wasm); the scalar `index_of_scalar` lane below is always taken.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const SIMD: bool = true;
 
+// index_of.cpp — gated OFF on `wasm32` (no C++ kernel on freestanding wasm).
+#[cfg(not(target_arch = "wasm32"))]
 extern "C" {
     fn rustty_simd_index_of(needle: u8, input: *const u8, count: usize) -> usize;
 }
 
 #[allow(non_snake_case)]
 pub fn indexOf(input: &[u8], needle: u8) -> Option<usize> {
+    #[cfg(not(target_arch = "wasm32"))]
     if SIMD {
         let result = unsafe { rustty_simd_index_of(needle, input.as_ptr(), input.len()) };
         return if result == input.len() {
