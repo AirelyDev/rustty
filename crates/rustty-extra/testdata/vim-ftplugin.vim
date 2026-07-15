@@ -1,6 +1,6 @@
 " Vim filetype plugin file
-" Language: Ghostty config file
-" Maintainer: Ghostty <https://github.com/ghostty-org/ghostty>
+" Language: Rustty config file
+" Maintainer: Rustty <https://github.com/airely/rustty>
 "
 " THIS FILE IS AUTO-GENERATED
 
@@ -15,12 +15,12 @@ setlocal iskeyword+=-
 " Use syntax keywords for completion
 setlocal omnifunc=syntaxcomplete#Complete
 
-" Ask ghostty to explain config keywords
-setlocal keywordprg=ghostty\ +explain-config
+" Ask rustty to explain config keywords
+setlocal keywordprg=rustty\ +explain-config
 
 let b:undo_ftplugin = 'setl cms< isk< ofu< kp<'
 
 if !exists('current_compiler')
-  compiler ghostty
+  compiler rustty
   let b:undo_ftplugin .= " makeprg< errorformat<"
 endif

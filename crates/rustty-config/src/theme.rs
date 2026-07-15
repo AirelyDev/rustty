@@ -99,7 +99,16 @@ impl Location {
                 // const subdir = std.fs.path.join(arena_alloc, &.{
                 //     "ghostty", "themes",
                 // }) catch return error.OutOfMemory;
-                let subdir = join(&[b"ghostty", b"themes"]);
+                //
+                // R2/Task 18: the subdir name carries the product identity
+                // (was hardcoded to the literal `"ghostty"`, an obsolete leak
+                // from the "reused macOS app hardcodes ghostty" rationale) —
+                // sourced from `rustty-identity::CONFIG_DIR` so the user
+                // themes dir is `~/.config/rustty/themes` by default (matching
+                // where `rustty-config` looks for the main config file), and
+                // `~/.config/ghostty/themes` under the `identity-oracle`
+                // parity profile.
+                let subdir = join(&[rustty_identity::CONFIG_DIR.as_bytes(), b"themes"]);
 
                 // break :user internal_os.xdg.config(
                 //     arena_alloc,

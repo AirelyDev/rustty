@@ -10,16 +10,20 @@
 //! text), so this module drives those directly and shells out to the system
 //! `/usr/bin/tic`.
 //!
-//! R2 identity note: `xterm-rustty` is rustty's CANONICAL primary terminfo name
-//! (`rustty-identity::TERMINFO_PRIMARY_NAME`, the value of `TERM` a native rustty
-//! build sets). The macOS Copy-Resources gate, however, reuses the ghostty Swift
-//! app unchanged — its `Ghostty.app` hard-codes `TERM=xterm-ghostty`. So the
-//! runtime terminfo entry MUST be spelled `xterm-ghostty` for the reused app's
-//! `TERM` to resolve at runtime; we therefore build the `Source` through the
-//! `identity-oracle` parity spelling (names `xterm-ghostty | ghostty | Ghostty`,
-//! selected by the `rustty-terminfo/identity-oracle` feature this crate enables).
-//! When the app is rebranded to set `TERM=xterm-rustty`, drop that feature and the
-//! same pipeline emits the canonical entry with zero other changes.
+//! R2 identity note (Task 18): `xterm-rustty` is rustty's CANONICAL primary
+//! terminfo name (`rustty-identity::TERMINFO_PRIMARY_NAME`, the value of `TERM`
+//! a native rustty build sets), and it is what `rustty_terminfo::entry::rustty()`
+//! builds by DEFAULT. This module used to force the `identity-oracle` parity
+//! spelling (`xterm-ghostty | ghostty | Ghostty`) on UNCONDITIONALLY via this
+//! crate's `rustty-terminfo` dependency, on the obsolete rationale that the
+//! reused macOS Swift app hard-coded `TERM=xterm-ghostty`. That app no longer
+//! hardcodes ghostty post-rebrand, so the force was a real bug: the shipped
+//! default-profile terminfo had ghostty content, and `TERM=xterm-rustty`
+//! couldn't resolve. The default profile now compiles the canonical
+//! `xterm-rustty | rustty | Rustty` entry; the oracle spelling remains
+//! available for parity checks via this xtask crate's OWN `identity-oracle`
+//! feature (forwarded to `rustty-terminfo/identity-oracle` — see
+//! `xtask/Cargo.toml`).
 //!
 //! R5: the terminfo generator is fully ported, so terminfo carries no deferral.
 //! In addition to the compiled DB, this module now also emits the terminfo
@@ -34,12 +38,12 @@
 //! warnings + the 1023-byte-truncation notices termcap inherently requires — is
 //! captured and discarded, matching ghostty's `captureStdErr()`.
 //!
-//! R2 identity note (source/termcap filenames, Task 14): unlike the compiled
-//! entry's `xterm-ghostty` primary name (pinned — see above, forced
-//! unconditionally by `rustty-terminfo/identity-oracle` for the reused macOS
-//! Swift app), the `{APP}.terminfo`/`{APP}.termcap` DUMP basenames are just a
-//! human/debug-readable side artifact: `tic`/`infocmp` resolve entries by the
-//! compiled DB content, never by this dump file's name. So these basenames
+//! R2 identity note (source/termcap filenames, Task 14/18): the compiled
+//! entry's primary name now follows the SAME profile as everything else
+//! (`xterm-rustty` by default, `xterm-ghostty` under `identity-oracle` — see
+//! above), and so do the `{APP}.terminfo`/`{APP}.termcap` DUMP basenames: these
+//! are just a human/debug-readable side artifact (`tic`/`infocmp` resolve
+//! entries by the compiled DB content, never by this dump file's name), and
 //! follow [`crate::APP`] like every other output filename: `rustty.terminfo`/
 //! `rustty.termcap` by default, `ghostty.terminfo`/`ghostty.termcap` under
 //! `identity-oracle`.
@@ -65,10 +69,11 @@ use std::process::Command;
 ///      spelling — see the R2 note above) and `encode` it to tic source text.
 ///   2. Write that text to a temporary `.terminfo` file.
 ///   3. Run `/usr/bin/tic -x -o <share>/terminfo <tmp>` to compile it, producing
-///      `share/terminfo/<dir>/xterm-ghostty` (+ the `ghostty` / `Ghostty` alias
-///      entries — pinned regardless of [`crate::APP`], see the R2 note above).
+///      `share/terminfo/<dir>/xterm-rustty` by default (`xterm-ghostty` under
+///      `identity-oracle`; + the `rustty`/`Rustty` or `ghostty`/`Ghostty` alias
+///      entries — same profile as [`crate::APP`], see the R2 note above).
 ///      macOS's case-insensitive filesystem makes `tic` use hashed
-///      two-hex-digit subdirectories (e.g. `78/xterm-ghostty`) rather than the
+///      two-hex-digit subdirectories (e.g. `78/xterm-rustty`) rather than the
 ///      single-letter `x/…` layout used on Linux; both are valid terminfo trees.
 ///   4. Create the `share/{APP}/` root (see [`gen_app_root`]).
 pub fn gen_terminfo(share_dir: &Path) -> Result<(), String> {
@@ -100,9 +105,15 @@ pub fn gen_terminfo(share_dir: &Path) -> Result<(), String> {
     result?;
 
     // Verify tic actually produced the compiled entry (runtime-critical resource).
-    if !compiled_entry_exists(&terminfo_dir) {
+    // The expected primary name follows the active profile — `xterm-rustty` by
+    // default, `xterm-ghostty` under `identity-oracle` — read directly off the
+    // `Source` we just compiled rather than a hardcoded literal (Task 18: this
+    // used to hardcode `xterm-ghostty` unconditionally, which broke once the
+    // default profile stopped being forced to emit ghostty content).
+    let primary_name = String::from_utf8_lossy(&source.names[0]).into_owned();
+    if !compiled_entry_exists(&terminfo_dir, &primary_name) {
         return Err(format!(
-            "tic reported success but no compiled xterm-ghostty entry found under {}",
+            "tic reported success but no compiled {primary_name} entry found under {}",
             terminfo_dir.display()
         ));
     }
@@ -178,17 +189,18 @@ fn emit_source_and_termcap(terminfo_dir: &Path, src_bytes: &[u8]) -> Result<(), 
     Ok(())
 }
 
-/// True if tic produced a compiled `xterm-ghostty` entry anywhere in the terminfo
-/// tree. tic uses either single-letter (`x/xterm-ghostty`) or hashed
-/// (`78/xterm-ghostty`) subdirectories depending on the host filesystem, so we
+/// True if tic produced a compiled entry named `primary_name` anywhere in the
+/// terminfo tree (`xterm-rustty` by default, `xterm-ghostty` under
+/// `identity-oracle` — Task 18). tic uses either single-letter (`x/xterm-…`) or
+/// hashed (`78/xterm-…`) subdirectories depending on the host filesystem, so we
 /// scan the immediate subdirectories rather than assuming one layout.
-fn compiled_entry_exists(terminfo_dir: &Path) -> bool {
+fn compiled_entry_exists(terminfo_dir: &Path, primary_name: &str) -> bool {
     let Ok(entries) = std::fs::read_dir(terminfo_dir) else {
         return false;
     };
     for entry in entries.flatten() {
         let sub = entry.path();
-        if sub.is_dir() && sub.join("xterm-ghostty").exists() {
+        if sub.is_dir() && sub.join(primary_name).exists() {
             return true;
         }
     }
@@ -256,11 +268,14 @@ mod tests {
 
         gen_terminfo(&share).expect("gen_terminfo");
 
-        // Compiled terminfo entry exists (pinned `xterm-ghostty`, regardless of
-        // `crate::APP` — see the module R2 identity note).
+        // Compiled terminfo entry exists under the active profile's primary
+        // name (`xterm-rustty` by default, `xterm-ghostty` under
+        // `identity-oracle` — see the module R2 identity note).
+        let primary_name = rustty_terminfo::entry::rustty().names[0].clone();
+        let primary_name = String::from_utf8(primary_name).unwrap();
         assert!(
-            compiled_entry_exists(&share.join("terminfo")),
-            "no compiled xterm-ghostty entry under {}",
+            compiled_entry_exists(&share.join("terminfo"), &primary_name),
+            "no compiled {primary_name} entry under {}",
             share.join("terminfo").display()
         );
         // Terminfo SOURCE + termcap emitted alongside the compiled DB (P1.3),

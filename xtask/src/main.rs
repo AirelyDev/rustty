@@ -29,13 +29,17 @@ mod res_themes;
 /// e.g. `res_editor.rs`'s vim/nvim filetype-plugin filenames).
 ///
 /// This is a LOCAL `cfg`-gated mirror of `rustty_identity::APP_NAME`'s two
-/// values, NOT a call into that crate — see the `identity-oracle` feature's
-/// doc comment in `xtask/Cargo.toml` for why: this crate's unconditional
-/// `rustty-terminfo/identity-oracle` dependency transitively forces
-/// `rustty-identity`'s `identity-oracle` feature on for the whole build (Cargo
-/// feature unification on the shared `rustty-identity` package), so
-/// `rustty_identity::APP_NAME` would resolve to `"ghostty"` unconditionally if
-/// used here directly.
+/// values, NOT a call into that crate. Historically this dodged a real
+/// feature-unification bug: this crate's `rustty-terminfo` dependency used to
+/// force `identity-oracle` on UNCONDITIONALLY, which (via Cargo feature
+/// unification on the shared `rustty-identity` package) made
+/// `rustty_identity::APP_NAME` resolve to `"ghostty"` even in the default
+/// profile. Task 18 removed that unconditional force (`rustty-terminfo`'s
+/// `identity-oracle` is now forwarded from this crate's OWN feature of the
+/// same name — see `xtask/Cargo.toml`), so the poisoning no longer occurs;
+/// this local mirror is kept as-is (harmless, and touching every `res_*`
+/// module that reads it is not worth the churn) rather than switched back to
+/// a direct `rustty_identity::APP_NAME` call.
 #[cfg(not(feature = "identity-oracle"))]
 pub(crate) const APP: &str = "rustty";
 /// See the `not(feature = "identity-oracle")` arm above for the full doc.

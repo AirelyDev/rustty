@@ -1,7 +1,7 @@
 " Vim filetype detect file
-" Language: Ghostty config file
-" Maintainer: Ghostty <https://github.com/ghostty-org/ghostty>
+" Language: Rustty config file
+" Maintainer: Rustty <https://github.com/airely/rustty>
 "
 " THIS FILE IS AUTO-GENERATED
 
-au BufRead,BufNewFile */ghostty/config,*/*.ghostty/config,*/ghostty/themes/*,*.ghostty setf ghostty
+au BufRead,BufNewFile */rustty/config,*/*.rustty/config,*/rustty/themes/*,*.rustty setf rustty

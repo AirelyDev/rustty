@@ -16,14 +16,18 @@
 //! byte-identical Vim output, mirrored faithfully (a second copy of the same four
 //! files), exactly as the reference's two `addInstallDirectory` steps do.
 //!
-//! R2 IDENTITY NOTE: canonical `TERM` is `xterm-rustty`, but the reused macOS
-//! Swift app hard-codes the `ghostty` identity, so these editor files keep the
-//! upstream `ghostty` naming — the `ghostty.vim` filenames, the `ghostty`
-//! filetype/compiler names, and the `keywordprg=ghostty +explain-config` /
-//! `makeprg=ghostty +validate-config` invocations — matching what the app ships.
-//! `rustty_extra::vim` is the `identity-oracle` byte producer for this subtree;
-//! no `xterm-rustty` variant of the editor files exists (nor is one needed: the
-//! app's config filetype is `ghostty`).
+//! R2 IDENTITY NOTE (Task 18): these editor files now carry the rustty
+//! product identity — `rustty.vim` filenames, the `rustty` filetype/compiler
+//! names, and the `keywordprg=rustty +explain-config` /
+//! `makeprg=rustty +validate-config` invocations — matching `config.rustty`
+//! (`rustty_identity::CONFIG_FILE`). This obsoletes the prior "reused macOS
+//! Swift app hard-codes the `ghostty` identity" rationale: that app no longer
+//! hardcodes ghostty post-rebrand, so shipping `ghostty.vim`/`ghostty`
+//! filetype detection here was a real leak (editor syntax-highlighting of
+//! `config.rustty` silently failed to activate). `rustty_extra::vim` is the
+//! byte producer for this subtree (single rustty-identity profile; no
+//! `identity-oracle` dual-profile exists for this content, matching
+//! `res_shell_integration.rs`'s precedent for content with no oracle variant).
 //!
 //! R5: the generators ARE ported, so this writes real content — no placeholder,
 //! no DEFERRALS entry.
@@ -32,7 +36,7 @@ use std::fs;
 use std::path::Path;
 
 /// The four generated Vim files, as `(subdir, bytes)` — each installs as
-/// `<subdir>/ghostty.vim`. Both the Vim and the Neovim install roots receive
+/// `<subdir>/rustty.vim`. Both the Vim and the Neovim install roots receive
 /// this identical set (reference: one `addWriteFiles` tree, two
 /// `addInstallDirectory` steps).
 fn vim_files() -> [(&'static str, Vec<u8>); 4] {
@@ -44,12 +48,12 @@ fn vim_files() -> [(&'static str, Vec<u8>); 4] {
     ]
 }
 
-/// Write one copy of the four `ghostty.vim` files under `root/<subdir>/ghostty.vim`.
+/// Write one copy of the four `rustty.vim` files under `root/<subdir>/rustty.vim`.
 fn write_plugin_tree(root: &Path) -> Result<(), String> {
     for (subdir, bytes) in vim_files() {
         let dir = root.join(subdir);
         fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
-        let file = dir.join("ghostty.vim");
+        let file = dir.join("rustty.vim");
         fs::write(&file, &bytes).map_err(|e| format!("write {}: {e}", file.display()))?;
     }
     Ok(())
@@ -59,8 +63,8 @@ fn write_plugin_tree(root: &Path) -> Result<(), String> {
 /// (`share_dir` is the `share/` root that Xcode's Copy-Resources phase reads):
 ///
 /// ```text
-/// share/vim/vimfiles/{syntax,ftdetect,ftplugin,compiler}/ghostty.vim
-/// share/nvim/site/{syntax,ftdetect,ftplugin,compiler}/ghostty.vim
+/// share/vim/vimfiles/{syntax,ftdetect,ftplugin,compiler}/rustty.vim
+/// share/nvim/site/{syntax,ftdetect,ftplugin,compiler}/rustty.vim
 /// ```
 ///
 /// Both trees hold the byte-identical generated files (nvim reuses the vim
@@ -89,7 +93,7 @@ mod tests {
             share.join("nvim").join("site"),
         ] {
             for sub in ["syntax", "ftdetect", "ftplugin", "compiler"] {
-                let f = root.join(sub).join("ghostty.vim");
+                let f = root.join(sub).join("rustty.vim");
                 assert!(f.exists(), "missing {}", f.display());
                 assert!(!fs::read(&f).unwrap().is_empty(), "empty {}", f.display());
             }
@@ -97,8 +101,8 @@ mod tests {
 
         // Nvim mirrors Vim byte-for-byte (reference reuses the same write-files tree).
         for sub in ["syntax", "ftdetect", "ftplugin", "compiler"] {
-            let v = fs::read(share.join("vim/vimfiles").join(sub).join("ghostty.vim")).unwrap();
-            let n = fs::read(share.join("nvim/site").join(sub).join("ghostty.vim")).unwrap();
+            let v = fs::read(share.join("vim/vimfiles").join(sub).join("rustty.vim")).unwrap();
+            let n = fs::read(share.join("nvim/site").join(sub).join("rustty.vim")).unwrap();
             assert_eq!(v, n, "vim/nvim differ for {sub}");
         }
         let _ = fs::remove_dir_all(&tmp);

@@ -18,18 +18,18 @@ pub fn syntax() -> Vec<u8> {
 
 // pub const ftdetect = \\...;
 pub const FTDETECT: &[u8] = br#"" Vim filetype detect file
-" Language: Ghostty config file
-" Maintainer: Ghostty <https://github.com/ghostty-org/ghostty>
+" Language: Rustty config file
+" Maintainer: Rustty <https://github.com/airely/rustty>
 "
 " THIS FILE IS AUTO-GENERATED
 
-au BufRead,BufNewFile */ghostty/config,*/*.ghostty/config,*/ghostty/themes/*,*.ghostty setf ghostty
+au BufRead,BufNewFile */rustty/config,*/*.rustty/config,*/rustty/themes/*,*.rustty setf rustty
 "#;
 
 // pub const ftplugin = \\...;
 pub const FTPLUGIN: &[u8] = br#"" Vim filetype plugin file
-" Language: Ghostty config file
-" Maintainer: Ghostty <https://github.com/ghostty-org/ghostty>
+" Language: Rustty config file
+" Maintainer: Rustty <https://github.com/airely/rustty>
 "
 " THIS FILE IS AUTO-GENERATED
 
@@ -44,30 +44,30 @@ setlocal iskeyword+=-
 " Use syntax keywords for completion
 setlocal omnifunc=syntaxcomplete#Complete
 
-" Ask ghostty to explain config keywords
-setlocal keywordprg=ghostty\ +explain-config
+" Ask rustty to explain config keywords
+setlocal keywordprg=rustty\ +explain-config
 
 let b:undo_ftplugin = 'setl cms< isk< ofu< kp<'
 
 if !exists('current_compiler')
-  compiler ghostty
+  compiler rustty
   let b:undo_ftplugin .= " makeprg< errorformat<"
 endif
 "#;
 
 // pub const compiler = \\...;
 pub const COMPILER: &[u8] = br#"" Vim compiler file
-" Language: Ghostty config file
-" Maintainer: Ghostty <https://github.com/ghostty-org/ghostty>
+" Language: Rustty config file
+" Maintainer: Rustty <https://github.com/airely/rustty>
 "
 " THIS FILE IS AUTO-GENERATED
 
 if exists("current_compiler")
   finish
 endif
-let current_compiler = "ghostty"
+let current_compiler = "rustty"
 
-CompilerSet makeprg=ghostty\ +validate-config\ --config-file=%:S
+CompilerSet makeprg=rustty\ +validate-config\ --config-file=%:S
 CompilerSet errorformat=%f:%l:%m,%m
 "#;
 
@@ -76,8 +76,8 @@ CompilerSet errorformat=%f:%l:%m,%m
 fn write_syntax(writer: &mut Vec<u8>) {
     writer.extend_from_slice(
         br#"" Vim syntax file
-" Language: Ghostty config file
-" Maintainer: Ghostty <https://github.com/ghostty-org/ghostty>
+" Language: Rustty config file
+" Maintainer: Rustty <https://github.com/airely/rustty>
 "
 " THIS FILE IS AUTO-GENERATED
 
@@ -85,13 +85,13 @@ if exists('b:current_syntax')
   finish
 endif
 
-let b:current_syntax = 'ghostty'
+let b:current_syntax = 'rustty'
 
 let s:cpo_save = &cpo
 set cpo&vim
 
 syn iskeyword @,48-57,-
-syn keyword ghosttyConfigKeyword"#,
+syn keyword rusttyConfigKeyword"#,
     );
 
     // const config_fields = @typeInfo(Config).@"struct".fields;
@@ -108,10 +108,10 @@ syn keyword ghosttyConfigKeyword"#,
     writer.extend_from_slice(
         br#"
 
-syn match ghosttyConfigComment /^\s*#.*/ contains=@Spell
+syn match rusttyConfigComment /^\s*#.*/ contains=@Spell
 
-hi def link ghosttyConfigComment Comment
-hi def link ghosttyConfigKeyword Keyword
+hi def link rusttyConfigComment Comment
+hi def link rusttyConfigKeyword Keyword
 
 let &cpo = s:cpo_save
 unlet s:cpo_save

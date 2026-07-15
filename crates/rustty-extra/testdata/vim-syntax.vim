@@ -1,6 +1,6 @@
 " Vim syntax file
-" Language: Ghostty config file
-" Maintainer: Ghostty <https://github.com/ghostty-org/ghostty>
+" Language: Rustty config file
+" Maintainer: Rustty <https://github.com/airely/rustty>
 "
 " THIS FILE IS AUTO-GENERATED
 
@@ -8,13 +8,13 @@ if exists('b:current_syntax')
   finish
 endif
 
-let b:current_syntax = 'ghostty'
+let b:current_syntax = 'rustty'
 
 let s:cpo_save = &cpo
 set cpo&vim
 
 syn iskeyword @,48-57,-
-syn keyword ghosttyConfigKeyword
+syn keyword rusttyConfigKeyword
 	\ language
 	\ font-family
 	\ font-family-bold
@@ -219,10 +219,10 @@ syn keyword ghosttyConfigKeyword
 	\ auto-update
 	\ auto-update-channel
 
-syn match ghosttyConfigComment /^\s*#.*/ contains=@Spell
+syn match rusttyConfigComment /^\s*#.*/ contains=@Spell
 
-hi def link ghosttyConfigComment Comment
-hi def link ghosttyConfigKeyword Keyword
+hi def link rusttyConfigComment Comment
+hi def link rusttyConfigKeyword Keyword
 
 let &cpo = s:cpo_save
 unlet s:cpo_save

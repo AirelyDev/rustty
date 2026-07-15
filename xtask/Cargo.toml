@@ -23,29 +23,29 @@ path = "src/main.rs"
 [features]
 # Parity-harness identity profile (R2/Task 14) for the resource-tree OUTPUT
 # names (`share/rustty/…` -> `share/ghostty/…`, `rustty.1` -> `ghostty.1`,
-# `_rustty` -> `_ghostty`, etc — see `main.rs`'s `APP` const).
+# `_rustty` -> `_ghostty`, etc — see `main.rs`'s `APP` const), AND (Task 18)
+# forwarded to `rustty-terminfo/identity-oracle` so the generated terminfo
+# content flips to the reference `xterm-ghostty|ghostty|Ghostty` spelling for
+# oracle byte-for-byte parity checks.
 #
-# Deliberately does NOT forward to `rustty-identity/identity-oracle`: this
-# crate unconditionally forces `rustty-terminfo/identity-oracle` on below
-# (for the reused macOS Swift app's hard-coded `TERM=xterm-ghostty`), and
-# `rustty-terminfo` transitively depends on the SAME `rustty-identity`
-# package this crate would otherwise depend on directly. Cargo unifies a
-# shared dependency's features across one build, so ANY
-# `rustty-identity/identity-oracle` activation from anywhere in this build —
-# including from a forward here — makes `rustty_identity::APP_NAME` resolve
-# to `"ghostty"` UNCONDITIONALLY, defeating DEFAULT=rustty (verified via
-# `cargo tree -p xtask -e features`, which shows a single `identity-oracle`
-# edge, forced by `rustty-terminfo`). `main.rs`'s `APP` const is therefore a
-# LOCAL `cfg`-gated mirror of `rustty_identity::APP_NAME`'s two values rather
-# than a call into that crate; no `rustty-identity` dependency is needed here.
-identity-oracle = []
+# Task 18: this crate used to unconditionally force
+# `rustty-terminfo/identity-oracle` on below regardless of this feature, on
+# the rationale that the reused macOS Swift app hard-coded
+# `TERM=xterm-ghostty`. That app no longer hardcodes ghostty post-rebrand —
+# `TERM=xterm-rustty` must resolve — so the force was a real bug (shipped
+# `zig-out/share/terminfo` had ghostty content even in the default profile).
+# The forward below keeps `main.rs`'s local `cfg`-gated `APP` const mirror
+# (rather than a direct `rustty_identity::APP_NAME` call) only because it
+# is harmless and touches many `res_*` modules; it is no longer required to
+# dodge feature-unification poisoning, since `rustty-terminfo` no longer
+# forces `identity-oracle` on unconditionally.
+identity-oracle = ["rustty-terminfo/identity-oracle"]
 
 [dependencies]
 rustty-extra = { workspace = true }
-# identity-oracle: emit the `xterm-ghostty` terminfo spelling so the reused
-# macOS Swift app's hard-coded `TERM=xterm-ghostty` resolves at runtime (R2;
-# `xterm-rustty` is the canonical name — see xtask/src/res_terminfo.rs). This
-# is forced on UNCONDITIONALLY (not gated behind this crate's own
-# `identity-oracle` feature above) — it is orthogonal to the output-naming
-# flip (see that feature's doc comment for why the two can't be merged).
-rustty-terminfo = { workspace = true, features = ["identity-oracle"] }
+# Default profile: rustty terminfo (`xterm-rustty|rustty|Rustty`). Oracle
+# parity (`xterm-ghostty|ghostty|Ghostty`) is opt-in via this crate's own
+# `identity-oracle` feature (forwarded above), not forced unconditionally —
+# see the `[features]` doc comment for why the previous unconditional force
+# was a bug (Task 18).
+rustty-terminfo = { workspace = true }
