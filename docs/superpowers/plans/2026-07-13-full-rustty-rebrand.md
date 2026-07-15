@@ -1060,6 +1060,87 @@ git add -A crates/rustty crates/rustty-cli
 git commit -m "trace: rename main_ghostty.rs->main_rustty.rs, cli/ghostty.rs->cli/rustty.rs (provenance kept in comments) (Task 15)"
 ```
 
+### Task 17: Rename the `identity-ghostty` cargo feature → `identity-oracle`
+
+Context: user request. The parity/oracle profile feature is named `identity-ghostty` in ~53 files (Cargo.tomls of rustty-identity/config/bench/apprt-c/terminfo/vt/vt-c/xtask, every `#[cfg(feature = "identity-ghostty")]` block, xtask build invocation, the gate/parity scripts, `PARITY_NAMING.md`). Rename it to `identity-oracle` (it flips product identity to the ghostty ORACLE for differential parity — "oracle" is the term already used in PARITY_NAMING.md). This is a mechanical string rename of the FEATURE NAME only — it does NOT change the ghostty string VALUES the feature selects (those stay ghostty — that's the whole point of the oracle profile).
+
+**Files:** every file matching `git grep -l 'identity-ghostty'` — Cargo.toml `[features]` entries + inter-crate feature deps (`rustty-identity/identity-ghostty` → `rustty-identity/identity-oracle`), `#[cfg(feature = "identity-ghostty")]` attributes, `xtask/src/main.rs` (`--features identity-ghostty` → `identity-oracle`), `.port/tools/gates/*`, `.port/tools/parity_names.env`/`PARITY_NAMING.md`, docs.
+
+- [ ] **Step 1: Inventory.**
+```bash
+cd /Users/gael/projects/rustty
+git grep -l 'identity-ghostty' -- '**/Cargo.toml' '**/*.rs' 'xtask/**' '.port/**' 'docs/**' | sort
+```
+
+- [ ] **Step 2: Mechanical rename across all of them** (feature name only; the ghostty VALUES the feature gates are untouched):
+```bash
+cd /Users/gael/projects/rustty
+for f in $(git grep -l 'identity-ghostty'); do sed -i '' 's/identity-ghostty/identity-oracle/g' "$f"; done
+git grep -n 'identity-ghostty' || echo "no identity-ghostty remaining"
+```
+
+- [ ] **Step 3: Verify both profiles + the parity harness still work under the new name.**
+```bash
+cd /Users/gael/projects/rustty
+cargo build --workspace
+cargo test -p rustty-identity
+cargo test -p rustty-identity --features identity-oracle   # was identity-ghostty
+cargo build -p rustty-apprt-c --features identity-oracle
+bash .port/tools/gates/check_rustty_h_abi.sh 2>&1 | tail -3
+bash .port/tools/gates/check_symbol_manifest.sh 2>&1 | tail -3
+```
+Expected: default builds; `--features identity-oracle` flips identity to the ghostty oracle (APP_NAME=="ghostty", TERM=="xterm-ghostty") — the harness tests that asserted the ghostty values now run under `identity-oracle` and pass; gates green.
+
+- [ ] **Step 4: Update the doc note in `PARITY_NAMING.md`** — the invariant now reads "build with `--features identity-oracle`" (was identity-ghostty); the feature name is no longer a ghostty-branding exception (it's `identity-oracle`), so remove that carve-out note. Commit.
+```bash
+git add -A
+git commit -m "parity: rename identity-ghostty cargo feature -> identity-oracle (user request); values unchanged (Task 17)"
+```
+
+### Task 18: Fix the remaining runtime-identity leaks (obsolete-rationale terminfo, config-dir, editor filetype)
+
+Context: found during Task 14. Three real leaks where the shipped default profile still emits ghostty because of the now-obsolete "reused macOS app hardcodes xterm-ghostty / config dir ghostty" rationale. Since Task 11 made `TERM=xterm-rustty` and rustty's config dir is `rustty`, these are functional bugs. (Sequence AFTER Task 17 so it uses the renamed `identity-oracle` feature.)
+
+**Files:**
+- Modify: `xtask/Cargo.toml` (the `rustty-terminfo = { features = ["identity-oracle"] }` forced dep) + `xtask/[features]`
+- Modify: `crates/rustty-config/src/theme.rs:~102` (`join(&[b"ghostty", b"themes"])` → CONFIG_DIR)
+- Modify: `xtask/src/res_editor.rs` (the vim/nvim `ghostty.vim` filenames + the `ghostty` filetype detection)
+
+- [ ] **Step 1: Un-force the xtask terminfo oracle content.** In `xtask/Cargo.toml`, the `rustty-terminfo` dep unconditionally forces `identity-oracle` (emitting `xterm-ghostty` terminfo) — obsolete now that `TERM=xterm-rustty`. Change it so the DEFAULT profile generates rustty terminfo and only `--features identity-oracle` (xtask's own) generates ghostty terminfo:
+```toml
+rustty-terminfo = { workspace = true }              # default: rustty terminfo
+# and in [features]:
+identity-oracle = ["rustty-terminfo/identity-oracle"]   # harness: ghostty terminfo (oracle parity)
+```
+Remove the now-unnecessary local `APP` cfg-workaround in the res_* modules if it was only there to dodge the forced-feature poisoning (xtask can use `rustty_identity::APP_NAME` again once the force is gone) — but keep whatever is needed for the output-name flip.
+
+- [ ] **Step 2: Fix the theme user-dir config-dir leak.** In `crates/rustty-config/src/theme.rs:~102`, `join(&[b"ghostty", b"themes"])` → `join(&[rustty_identity::CONFIG_DIR.as_bytes(), b"themes"])` (keep the ported Zig comment). This makes the user themes dir `~/.config/rustty/themes` (matching CONFIG_DIR), not `~/.config/ghostty/themes`.
+
+- [ ] **Step 3: Rebrand the editor syntax integration.** In `xtask/src/res_editor.rs`, route the vim/nvim output filenames + the config-file filetype through identity: `ghostty.vim` → `rustty.vim`, the ftdetect filetype `ghostty` → `rustty`, and the detected config glob (`*.ghostty`/`config.ghostty` → `*.rustty`/`config.rustty`, matching `CONFIG_FILE`). This makes editor syntax-highlighting of `config.rustty` work. If the syntax-file BODY references the filetype name internally, keep it consistent.
+
+- [ ] **Step 4: Regenerate + verify the shipped resources are now fully rustty (default profile).**
+```bash
+cd /Users/gael/projects/rustty
+cargo run -p xtask -- resources
+head -1 zig-out/share/terminfo/rustty.terminfo    # want: xterm-rustty|rustty|Rustty,
+find zig-out/share/terminfo -type f                # compiled entries should be rustty/xterm-rustty, NOT ghostty
+find zig-out/share -iname '*ghostty*'              # want: EMPTY (default profile)
+find zig-out/share -iname '*rustty*' | head
+```
+Expected: `rustty.terminfo` content starts `xterm-rustty|rustty|Rustty,`; compiled terminfo entries are rustty-named; **no** ghostty-named output remains in the default profile.
+
+- [ ] **Step 5: Verify the oracle profile still emits ghostty (parity) + workspace builds.**
+```bash
+cargo run -p xtask --features identity-oracle -- resources 2>/dev/null && head -1 zig-out/share/terminfo/ghostty.terminfo 2>/dev/null
+cargo build --workspace
+cargo test -p rustty-config 2>/dev/null | tail -3
+```
+Expected: under `identity-oracle`, terminfo emits `xterm-ghostty|ghostty|Ghostty` (oracle parity); workspace builds; config tests green (update any test asserting the ghostty user-theme dir to `rustty`). Commit.
+```bash
+git add -A xtask crates/rustty-config
+git commit -m "identity: ship rustty terminfo by default (un-force xtask oracle) + theme user-dir via CONFIG_DIR + editor filetype rustty (Task 18)"
+```
+
 ### Task 15b: Rename the vendored SIMD/highway `ghostty_*` C symbols → `rustty_*`
 
 Context: discovered during Task 1 — the vendored C/C++ in `rustty-simd` and `highway-sys` defines internal FFI symbols with a hardcoded `ghostty_` prefix (`ghostty_simd_*`, `ghostty_hwy_detect_targets`). These are **internal** helpers (NOT the Swift-app C-ABI), each defined in a `.cpp`/`.c` file and declared in a Rust `extern "C"` block + called within the same crate — so each is a self-contained rename across both sides. This closes the "no ghostty name anywhere in the port" gap.
