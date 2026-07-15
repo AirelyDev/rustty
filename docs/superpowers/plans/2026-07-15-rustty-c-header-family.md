@@ -85,11 +85,33 @@ Expected: `include/rustty/vt.h` + 29 subheaders created.
 Run: `grep -rniE 'ghostty' include/rustty/vt.h include/rustty/vt/ | grep -viE 'src/|oracle|upstream|reference|libghostty'`
 Expected: empty, OR only lines that are genuine `src/…` oracle-path references (leave those). Fix any product-name prose that slipped (e.g. a lowercase `ghostty` product mention → `rustty`). Manually retarget `libghostty-vt` → `librustty-vt` if present.
 
-- [ ] **Step 3: Verify the family compiles (gate check a, pre-gate smoke)**
+- [ ] **Step 2b: Product-URL branding sweep — `ghostty.org` → `rustty.sh` (repo-wide)**
+
+The rustty product website is **`rustty.sh`**. Replace every product-site
+`ghostty.org` URL (and `Ghostty's website` prose) with `rustty.sh`, repo-wide —
+NOT only in the new headers. CRITICAL exclusion: **`deps.files.ghostty.org`** URLs
+are real hosted vendored-dependency tarballs (provenance for the `-sys` crates) —
+leave them untouched.
 
 ```bash
-printf '#include <rustty/vt.h>\nint main(void){return 0;}\n' > /tmp/vt_probe.c
-cc -fsyntax-only -Iinclude /tmp/vt_probe.c && echo "SYNTAX OK"
+# preview product-site refs (must exclude the deps host):
+grep -rn 'ghostty\.org' . 2>/dev/null | grep -vE '/target/|/\.git/|/\.claude/|files\.ghostty\.org'
+# apply only to product-site URLs:
+sed -i '' 's|https://ghostty\.org|https://rustty.sh|g' include/rustty/vt.h
+sed -i '' "s|on Ghostty's website, at https://ghostty\.org/docs/config|on Rustty's website, at https://rustty.sh/docs/config|" crates/rustty-config/src/config-template
+```
+Verify: `grep -rn 'ghostty\.org' . | grep -vE '/target/|/\.git/|/\.claude/|files\.ghostty\.org'` → empty; `deps.files.ghostty.org` count unchanged.
+
+- [ ] **Step 3: Verify the family compiles (gate check a, pre-gate smoke)**
+
+**Compiler note:** in this environment `cc` is a shell alias to `claude` (from the
+user profile) — NEVER invoke bare `cc`. Resolve the real compiler once and reuse:
+`CC="$(xcrun --find clang 2>/dev/null || echo /usr/bin/clang)"`.
+
+```bash
+CC="$(xcrun --find clang 2>/dev/null || echo /usr/bin/clang)"
+printf '#include <rustty/vt.h>\nint main(void){return 0;}\n' > "${TMPDIR:-/tmp}/vt_probe.c"
+"$CC" -fsyntax-only -Iinclude "${TMPDIR:-/tmp}/vt_probe.c" && echo "SYNTAX OK"
 ```
 Expected: `SYNTAX OK`, no warnings/errors. If a subheader references a macro/type not yet renamed, fix the sed output and re-run.
 
@@ -122,10 +144,12 @@ set -e
 root=$(cd "$(dirname "$0")/../../.." && pwd); cd "$root"
 lib=target/release/librustty_vt_c.dylib
 [ -f "$lib" ] || cargo build -p rustty-vt-c --release >/dev/null
+# `cc` is aliased to `claude` in this env — resolve the real compiler.
+CC="$(xcrun --find clang 2>/dev/null || echo /usr/bin/clang)"
 
 echo "== (a) headers compile =="
 printf '#include <rustty/vt.h>\nint main(void){return 0;}\n' > "${TMPDIR:-/tmp}/vt_probe.c"
-cc -fsyntax-only -Wall -Iinclude "${TMPDIR:-/tmp}/vt_probe.c"
+"$CC" -fsyntax-only -Wall -Iinclude "${TMPDIR:-/tmp}/vt_probe.c"
 echo "  OK"
 
 echo "== (b) every declared rustty_* prototype is a real export =="
