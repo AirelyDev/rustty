@@ -15,7 +15,7 @@
 //!   `@typeInfo(Config).@"struct".fields` + the `@typeInfo(field.type)` switch.
 //! - `rustty_config::help_strings::config_help` == `@hasDecl(help_strings.Config,
 //!   name)` / `@field(...)` (fed to `fish::get_description`).
-//! - `rustty_cli::ghostty::Action::{ALL, tag_name, option_specs}` ==
+//! - `rustty_cli::rustty::Action::{ALL, tag_name, option_specs}` ==
 //!   `@typeInfo(Action).@"enum".fields` + `@field(Action,name).options()`.
 //!
 //! PORT NOTE: ghostty's `comptimeGenerate*` two-pass counter/fixed-buffer wrapper

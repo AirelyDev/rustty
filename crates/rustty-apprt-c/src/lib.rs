@@ -276,10 +276,10 @@ pub unsafe extern "C" fn rustty_cli_try_action() {
     // posix.exit(0);
     //
     // TODO(port): the CLI-action-from-C path. The action RUNNER already exists
-    // (`rustty_cli::ghostty::Action::run(self) -> Result<u8, Error>`); the missing
+    // (`rustty_cli::rustty::Action::run(self) -> Result<u8, Error>`); the missing
     // wiring is the `GlobalState<Action>` type parameter (rustty-core binds it to
     // `()`) plus `cli.action.detectArgs` in the `rustty_apprt::init` bootstrap
-    // (BREAK #1). Once wired, `_action` is a `rustty_cli::ghostty::Action` and this
+    // (BREAK #1). Once wired, `_action` is a `rustty_cli::rustty::Action` and this
     // tail becomes, faithful to the reference:
     //     std::process::exit(match action.run() {
     //         Ok(code) => code as c_int,

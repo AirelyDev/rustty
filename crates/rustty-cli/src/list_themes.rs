@@ -21,7 +21,7 @@
 // const args = @import("args.zig");
 use rustty_args::args;
 // const Action = @import("ghostty.zig").Action;
-use crate::ghostty::{Action, Error};
+use crate::rustty::{Action, Error};
 // const Config = @import("../config/Config.zig");
 // const configpkg = @import("../config.zig");
 use rustty_config::Config;

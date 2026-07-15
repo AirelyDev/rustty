@@ -17,7 +17,7 @@
 // const args = @import("args.zig");
 use rustty_args::args;
 // const Action = @import("ghostty.zig").Action;
-use crate::ghostty::{Action, Error};
+use crate::rustty::{Action, Error};
 // const Arena = std.heap.ArenaAllocator;
 // const Allocator = std.mem.Allocator;
 // const configpkg = @import("../config.zig");

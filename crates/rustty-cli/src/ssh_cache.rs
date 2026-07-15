@@ -11,7 +11,7 @@
 // const args = @import("args.zig");
 use rustty_args::args;
 // const Action = @import("ghostty.zig").Action;
-use crate::ghostty::{Action, Error};
+use crate::rustty::{Action, Error};
 // const Duration = @import("../config.zig").Config.Duration;
 use rustty_config::value_types::Duration;
 // pub const Entry = @import("ssh-cache/Entry.zig");

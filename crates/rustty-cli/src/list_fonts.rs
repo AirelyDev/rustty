@@ -19,7 +19,7 @@
 //   rustty uses owned `Vec`/`HashMap` values on the global allocator (RAII), so
 //   there is no arena to create; the `_arena` bookkeeping is dropped tree-wide.
 // const Action = @import("ghostty.zig").Action;
-use crate::ghostty::{Action, Error};
+use crate::rustty::{Action, Error};
 // const args = @import("args.zig");
 use rustty_args::args;
 // const font = @import("../font/main.zig");

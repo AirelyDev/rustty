@@ -6,7 +6,7 @@
 // const args = @import("args.zig");
 use rustty_args::args;
 // const Action = @import("ghostty.zig").Action;
-use crate::ghostty::{Action, Error};
+use crate::rustty::{Action, Error};
 // const Allocator = std.mem.Allocator;
 // const helpgen_actions = @import("../input/helpgen_actions.zig");
 use rustty_input::helpgen_actions::{self, Format, RealHelpStrings};

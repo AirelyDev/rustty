@@ -11,7 +11,7 @@
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;
 // const Action = @import("../cli.zig").ghostty.Action;
-use crate::ghostty::{Action, Error};
+use crate::rustty::{Action, Error};
 // const apprt = @import("../apprt.zig");
 //   PORT NOTE: the reference `apprt.App` is the comptime-selected
 //   `apprt.runtime.App`; for the headless `rustty` CLI build that is

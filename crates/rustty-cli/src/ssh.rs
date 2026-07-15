@@ -15,7 +15,7 @@ use rustty_args::args as cli_args;
 // const diagnostics = @import("diagnostics.zig");
 use rustty_args::diagnostics::DiagnosticList;
 // const Action = @import("ghostty.zig").Action;
-use crate::ghostty::{Action, Error};
+use crate::rustty::{Action, Error};
 // const DiskCache = @import("ssh_cache.zig").DiskCache;
 use crate::ssh_cache::DiskCache;
 // const internal_os = @import("../os/main.zig");

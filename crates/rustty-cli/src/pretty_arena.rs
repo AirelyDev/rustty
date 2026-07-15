@@ -14,7 +14,7 @@
 //! dropped after the `Vaxis` (declared before it), mirroring the reference
 //! `defer arena.deinit()` firing after the vx/tty defers.
 
-use crate::ghostty::Error;
+use crate::rustty::Error;
 use rustty_vaxis::cell::{Segment, Style};
 use rustty_vaxis::window::PrintOptions;
 use rustty_vaxis::Winsize;

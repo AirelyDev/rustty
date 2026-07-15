@@ -14,7 +14,7 @@
 use rustty_args::args;
 // const Allocator = std.mem.Allocator;
 // const Action = @import("ghostty.zig").Action;
-use crate::ghostty::Error;
+use crate::rustty::Error;
 // const help_strings = @import("help_strings");
 //   -> the build-generated tables `rustty_config::help_strings::config_help` and
 //   `rustty_input::help_strings::keybind_help` (see `explain_option`/`explain_keybind`).

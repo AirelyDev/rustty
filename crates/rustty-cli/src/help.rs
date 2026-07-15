@@ -7,7 +7,7 @@
 // const args = @import("args.zig");
 use rustty_args::args;
 // const Action = @import("ghostty.zig").Action;
-use crate::ghostty::{Action, Error};
+use crate::rustty::{Action, Error};
 
 // Note that this options struct doesn't implement the `help` decl like other
 // actions. That is because the help command is special and wants to handle its

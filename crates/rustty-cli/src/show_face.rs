@@ -19,7 +19,7 @@
 //   PORT NOTE: the reference threads an arena; rustty uses owned values on the
 //   global allocator (RAII), so no arena is created.
 // const Action = @import("ghostty.zig").Action;
-use crate::ghostty::{Action, Error};
+use crate::rustty::{Action, Error};
 // const args = @import("args.zig");
 use rustty_args::args;
 // const diagnostics = @import("diagnostics.zig");

@@ -15,7 +15,7 @@
 //! there cycles `apprt→cli`), and `rustty_core::STATE` is bound `Action=()` and
 //! cannot hold a cli action. So the `rustty` BIN — which legitimately deps cli —
 //! runs the detection itself over `os::args` and constructs its OWN
-//! `rustty_global::GlobalState<cli::ghostty::Action>` (NOT core's `Action=()`
+//! `rustty_global::GlobalState<cli::rustty::Action>` (NOT core's `Action=()`
 //! STATE). `rustty_apprt::init` stays cli-free.
 
 // const std = @import("std");
@@ -27,7 +27,7 @@ use rustty_build_config as build_config;
 // const macos = @import("macos");           -> logFn unified-logging (deferred seam)
 // const cli = @import("cli.zig");
 use rustty_cli::action::{self, DetectError};
-use rustty_cli::ghostty::Action;
+use rustty_cli::rustty::Action;
 // const renderer = @import("renderer.zig"); -> only used by the deferred GUI leaf
 // const apprt = @import("apprt.zig");
 //

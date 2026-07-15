@@ -11,7 +11,7 @@
 //! comments are preserved VERBATIM in the commented block below. 0 tests;
 //! comment-fidelity (scoped-G3b) applies.
 
-use crate::ghostty::Error;
+use crate::rustty::Error;
 
 /// The `boo` command is used to display the animation from the rustty website in
 /// the terminal.

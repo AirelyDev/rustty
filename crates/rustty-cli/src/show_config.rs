@@ -7,7 +7,7 @@
 use rustty_args::args;
 // const Allocator = std.mem.Allocator;
 // const Action = @import("ghostty.zig").Action;
-use crate::ghostty::{Action, Error};
+use crate::rustty::{Action, Error};
 // const configpkg = @import("../config.zig");
 // const Config = configpkg.Config;
 use rustty_config::{Config, FileFormatter};

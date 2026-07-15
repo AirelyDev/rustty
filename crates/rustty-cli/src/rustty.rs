@@ -1,4 +1,4 @@
-//! rustty-cli::ghostty
+//! rustty-cli::rustty
 //!
 //! PORTS: ghostty src/cli/ghostty.zig — the concrete `Action` enum (the set of
 //! `+<action>` CLI verbs), its `detectSpecialCase`, and the `run`/`runMain`

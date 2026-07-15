@@ -42,7 +42,7 @@
 // reference `cli.*` surface.
 
 pub mod action;
-pub mod ghostty;
+pub mod rustty;
 pub mod help_strings;
 
 // The action impls. `help`/`version` (C1), the C2 config/introspection actions,
@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn ref_all_decls() {
         use crate::action::DetectError;
-        use crate::ghostty::Action;
+        use crate::rustty::Action;
 
         // The Action enum + its dispatcher-facing surface.
         assert_eq!(Action::ALL.len(), 18);

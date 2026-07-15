@@ -15,7 +15,7 @@
 // const builtin = @import("builtin");
 // const Allocator = std.mem.Allocator;
 // const Action = @import("ghostty.zig").Action;
-use crate::ghostty::{Action, Error};
+use crate::rustty::{Action, Error};
 // const args = @import("args.zig");
 use rustty_args::args;
 // const x11_color = @import("../terminal/main.zig").x11_color;

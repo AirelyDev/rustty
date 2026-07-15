@@ -10,7 +10,7 @@
 // const args = @import("args.zig");
 use rustty_args::args;
 // const Action = @import("ghostty.zig").Action;
-use crate::ghostty::{Action, Error};
+use crate::rustty::{Action, Error};
 // const Config = @import("../config.zig").Config;
 //   R3: `Config.Duration` -> the value-types `Duration` (nanosecond duration +
 //   its `{f}` unit formatter).

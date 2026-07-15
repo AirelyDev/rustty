@@ -24,7 +24,7 @@ use rustty_build_config as build_config;
 //   -> only referenced in the comptime `app_runtime == .gtk` block, which is
 //      statically false for the headless `.none` build; not imported here.
 
-use crate::ghostty::Error;
+use crate::rustty::Error;
 
 // pub const Options = struct {};
 pub struct Options {}

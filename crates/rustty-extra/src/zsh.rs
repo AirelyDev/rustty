@@ -1,6 +1,6 @@
 //! Zsh completions. Port of ghostty's `src/extra/zsh.zig`.
 
-use rustty_cli::ghostty::{Action, OptCompletionKind};
+use rustty_cli::rustty::{Action, OptCompletionKind};
 use rustty_config::config_struct::{config_completion_kind, config_fields, ConfigCompletionKind};
 
 /// A zsh completions configuration that contains all the available commands

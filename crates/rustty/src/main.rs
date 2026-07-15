@@ -16,7 +16,7 @@
 //! ```
 //!
 //! For the `rustty` binary this milestone targets, `exe_entrypoint == .ghostty`,
-//! so the entrypoint is [`main_ghostty`] (ported below). The helpgen/mdgen/webgen
+//! so the entrypoint is [`main_rustty`] (ported below). The helpgen/mdgen/webgen
 //! entrypoints are the doc/completion codegen tools — separate 0-test build
 //! artifacts (DEFERRALS.md "rustty bin C6"), not part of the `rustty` exe.
 //!
@@ -33,17 +33,17 @@
 // const entrypoint = switch (build_config.exe_entrypoint) {
 //     .ghostty => @import("main_ghostty.zig"), ...
 // };
-mod main_ghostty;
+mod main_rustty;
 
 /// The main entrypoint for the program.
 // pub const main = entrypoint.main;
 //
 // PORT NOTE: the reference re-exports `entrypoint.main` as this file's `main`.
 // In Rust the bin's `fn main` calls the selected entrypoint's `main`
-// ([`main_ghostty::main`]) directly. The `.ghostty` arm is the only one the
+// ([`main_rustty::main`]) directly. The `.ghostty` arm is the only one the
 // `rustty` exe uses.
 fn main() {
-    main_ghostty::main();
+    main_rustty::main();
 }
 
 // /// Standard options such as logger overrides.
@@ -53,10 +53,10 @@ fn main() {
 //     .{};
 //
 // PORT NOTE: the reference forwards the entrypoint's `std_options` (log level +
-// `logFn`) as the program-wide `std.Options`. `main_ghostty` DOES declare
+// `logFn`) as the program-wide `std.Options`. `main_rustty` DOES declare
 // `std_options`, so the `@hasDecl` picks its arm. Rust has no `std.Options`
 // global; the faithful projection lives with the log setup in
-// `main_ghostty` (`std_options` + `log_fn` — a deferred log-facade seam,
+// `main_rustty` (`std_options` + `log_fn` — a deferred log-facade seam,
 // consistent with the rest of the tree; see there).
 
 #[cfg(test)]
@@ -67,12 +67,12 @@ mod tests {
     //
     // PORT NOTE: the reference's anonymous `test { _ = entrypoint; }` forces the
     // selected entrypoint to be semantically analyzed. The Rust analogue references
-    // the `main_ghostty` module surface (a wrong path fails to compile). Anonymous
+    // the `main_rustty` module surface (a wrong path fails to compile). Anonymous
     // `test {}` — skipped by check_test_counts.py's zig counter (zig=0); ported for
     // R1 completeness (rust=1 >= 0).
     #[test]
     fn ref_entrypoint() {
         // Touch the entrypoint's `main` so the module is analyzed.
-        let _ = super::main_ghostty::main as fn();
+        let _ = super::main_rustty::main as fn();
     }
 }

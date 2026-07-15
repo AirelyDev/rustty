@@ -24,7 +24,7 @@ rustty-cli = { workspace = true }
 rustty-apprt = { workspace = true }
 rustty-core = { workspace = true }
 # C6 (CLI_BLUEPRINT.md §5/§6 + ADV-FIX 2): the bin runs the CLI action DETECTION
-# itself (`cli::action::detect_iter::<cli::ghostty::Action>`) and constructs its
+# itself (`cli::action::detect_iter::<cli::rustty::Action>`) and constructs its
 # OWN `rustty_global::GlobalState<Action>` (NOT `rustty_core::STATE`, which is
 # bound `Action=()`). Detection living HERE (bin deps cli) — instead of in
 # `rustty_apprt::init` (which sits below cli and would cycle `apprt→cli`) — is the
