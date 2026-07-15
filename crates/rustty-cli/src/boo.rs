@@ -8,8 +8,8 @@
 //! (`rustty_vaxis::vxfw::{App, Text, Center}`) and the reproduced `framedata`
 //! compressed frame asset (build.rs raw-DEFLATEs `assets/framegen/frames/*.txt`
 //! into `$OUT_DIR/framedata.compressed`; decompressed here with
-//! `zlib_sys::inflate_raw`). The R2 product-name comments ("Ghostty website")
-//! retarget to rustty.
+//! `zlib_sys::inflate_raw`). The R2 product-name comment (reference "Ghostty
+//! website") is retargeted to "Rustty website".
 //!
 //! ALIASING (H1/H3, mirihar-vxfw): `Boo` is driven type-erased — `*mut Boo` in the
 //! Widget's `userdata`, cast back per tick/draw. The draw produces a `Surface` whose

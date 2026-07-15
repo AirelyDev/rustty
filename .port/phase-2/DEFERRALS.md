@@ -3790,7 +3790,20 @@ setting `layer` then `wantsLayer` (Metal.zig:110-126).
 **Acceptance test IS un-ignoring this KAT**: both windowed-present KATs
 un-ignored and green on a Metal host.
 
-## rustty-wuffs swizzle — 5 unreached pixel-format seams [added 2026-07-10, T14 reconciliation — VALIDATION_REPORT §3b]
+## rustty-wuffs swizzle — 6 pixel-format seams ✅ RESOLVED (completeness-fill, 2026-07-15) [added 2026-07-10, T14 reconciliation — VALIDATION_REPORT §3b]
+
+**RESOLVED (GAP_ANALYSIS §7 open decision 4 — fill-for-completeness).** All 6
+seams in `crates/rustty-wuffs/src/swizzle.rs` (the 5 public `*ToRgba` wrappers +
+the private `swizzle` helper) are now ported VERBATIM from
+`pkg/wuffs/src/swizzle.zig`, binding
+`wuffs_base__pixel_swizzler__{prepare,swizzle_interleaved_from_slice}` through
+the wuffs-sys FFI (3 new `rustty_wuffs_pixel_format__*` shims added). 6 new
+byte-exact swizzle KATs + ASan-clean (FFI → Miri can't; the ASan gate was
+self-verified to trip on a deliberate under-alloc first). **Faithful finding:**
+`gaToRgba` is unconditionally `Err(WuffsError)` for every input because the
+vendored wuffs C's `pixel_swizzler__prepare` has a `YA_NONPREMUL` case but no
+`YA_PREMUL` case — ported AS-IS per R1 (an upstream dead-code path), documented,
+NOT silently "fixed". Original deferral rationale (for the record):
 
 `crates/rustty-wuffs/src/swizzle.rs` ports `pkg/wuffs/src/swizzle.zig` as five
 R5 `unimplemented!()` seams with the verbatim reference bodies preserved (the
@@ -3811,7 +3824,19 @@ Fidelity-preserving dead code within the vendored wuffs subset.
 swizzle surface directly (e.g. the GTK/OpenGL renderer tier), or a completeness
 pass on the wuffs vendored subset (GAP_ANALYSIS §7 open decision 4).
 
-## rustty-z2d subset guards — 6 by-design `unimplemented!()` arms [added 2026-07-10, T14 reconciliation — VALIDATION_REPORT §3b]
+## rustty-z2d subset guards — 9 `unimplemented!()` arms ✅ RESOLVED (completeness-fill, 2026-07-15) [added 2026-07-10, T14 reconciliation — VALIDATION_REPORT §3b]
+
+**RESOLVED (GAP_ANALYSIS §7 open decision 4 — fill-for-completeness).** All 9
+z2d rasterizer seams are now filled VERBATIM from the vendored z2d-0.10.0 oracle:
+anti-aliased **supersample** fill+stroke (`painter.rs` + new
+`internal/raster/supersample.rs`), **dashed** stroke/polyline tessellation (new
+`internal/tess/dashed_plotter.rs` + `Dasher`), and sub-8-bit **packed-alpha**
+surfaces (`Alpha4/2/1` → new `PackedImageSurface`, with the Surface-enum ripple).
++16 new tests (no count regression), Miri-clean on all three new paths — and the
+naive raw-`*mut Polygon` design for the dashed self-referential result was
+*rejected as UB* on an isolated harness (`mirihar-z2d-dashed`), confirming the
+shipped disjoint-borrow design removes the hazard. Original enumeration (for the
+record):
 
 `rustty-z2d` is `PORT STATUS: done` for the ghostty-exercised z2d 0.10.0
 subset; the arms OUTSIDE the subset are guarded `unimplemented!()` by design
@@ -3834,6 +3859,37 @@ overlay) never construct — latent, not parity-blocking (GAP_ANALYSIS §6).
 **Un-defer trigger:** a consumer constructing those variants (candidate: the
 future GTK/OpenGL renderer tier), or GAP_ANALYSIS §7 open decision 4 choosing
 fill-for-completeness.
+
+## WASM/web target — partial (completeness-fill, 2026-07-15)
+
+**DONE (headless, verified here):** the WASM/web C-ABI surface is ported and the
+pure-Rust half builds for `wasm32-unknown-unknown`:
+- `rustty-os/src/wasm.rs` + `wasm/{log,target}.rs` and `rustty-config/src/wasm.rs`
+  (the `config_new/free/load_string/finalize` C-ABI) audited/completed vs
+  `os/wasm.zig` / `config/Wasm.zig`; **`cargo build -p rustty-os --target
+  wasm32-unknown-unknown` is green.**
+- `xtask wasm-patch-growable-table` — verbatim port of
+  `src/build/wasm_patch_growable_table.zig` (LEB128/section rewrite) + its **7
+  reference tests** (pass).
+- new `rustty-wasm` cdylib+rlib crate (the `src/main_wasm.zig` module-entry
+  analog: `#[used]` fn-ptr retention over the config C-ABI + log sink) — builds
+  green on host.
+
+**DEFERRED — two honest limits (NOT faked, R5):**
+1. **`font/shaper/web_canvas.zig` cannot be faithfully ported.** It calls
+   `run.group.group.faceFromIndex(...)` and `TextRun.group`, both **deleted from
+   the current ghostty tree** (`grep` confirms the only remaining reference is
+   inside `web_canvas.zig` itself; current `TextRun` has `grid: *SharedGrid`),
+   and `face/web_canvas.zig` `@import`s the un-vendored external `zig-js`. Making
+   it compile would require fabricating deleted upstream APIs + a `zig-js` shim
+   (an R5 violation). Faithful action: leave un-ported, documented here.
+2. **The full linked `.wasm` artifact is environment-blocked.** `rustty-wasm`
+   pulls in the C++ dep `simdutf-sys` (transitively via config), and `clang++`
+   cannot compile the vendored `simdutf.cpp` for `wasm32-unknown-unknown` without
+   a wasm C++ toolchain (emscripten/wasi-sdk) — the same class of env-block as
+   GTK/Linux-fontconfig, not a port gap. **Un-defer trigger:** a wasm C++
+   toolchain in the build env (then link the full module), and/or an upstream
+   ghostty that restores the `faceFromIndex`/`TextRun.group` shaper APIs.
 
 ## rustty-font-shaper — Linux fontconfig backend + web_canvas [added 2026-07-10, T14 reconciliation — VALIDATION_REPORT §3b]
 
