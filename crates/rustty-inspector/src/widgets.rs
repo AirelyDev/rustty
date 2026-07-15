@@ -46,7 +46,17 @@ pub mod screen;
 // pub const style = @import("widgets/style.zig");
 pub mod style;
 // pub const surface = @import("widgets/surface.zig");      (Phase 3)
-// pub const terminal = @import("widgets/terminal.zig");    (Phase 3)
+// pub const terminal = @import("widgets/terminal.zig");
+//
+// PORT NOTE (Task 14): the seven free-function tables (`miscTable`,
+// `layoutTable` [INV-3 scrolling_region write-back], `mouseTable`, `colorTable`,
+// `modesTable` [INV-4 comptime modes hand-expansion], `dynamicRGB`, `palette`)
+// are LIVE. The `Info` aggregate + `ScreenMap` + `draw`/`drawOpen`/`screensTable`
+// name `widgets.screen.Info` (the deferred Task-11 aggregate, itself gated on
+// unbound dcimgui-sys DockBuilder symbols) and are carried as the verbatim
+// reference body; they inhabit in place once `screen::Info` lands
+// (grows-in-place, the screen.rs precedent).
+pub mod terminal;
 // pub const termio = @import("widgets/termio.zig");        (Phase 3)
 
 /// Minimal `defer`-style scope guard — runs `f` on drop. Mirrors Zig's `defer`
