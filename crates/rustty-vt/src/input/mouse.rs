@@ -26,7 +26,8 @@ pub enum Action {
 ///
 /// This is backed by a c_int so we can use this as-is for our embedding API.
 ///
-/// IMPORTANT: Any changes here update include/ghostty.h
+/// IMPORTANT: Any changes here update include/rustty-embed.h (renamed from
+/// the reference's include/ghostty.h)
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonState {
@@ -43,7 +44,8 @@ pub enum ButtonState {
 ///
 /// This is backed by a c_int so we can use this as-is for our embedding API.
 ///
-/// IMPORTANT: Any changes here update include/ghostty.h
+/// IMPORTANT: Any changes here update include/rustty-embed.h (renamed from
+/// the reference's include/ghostty.h)
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {

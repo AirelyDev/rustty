@@ -20,7 +20,7 @@ rebrand never makes the port look divergent from the oracle.
 - `.port/phase-0/corpora/**`, `baseline/**`, `examples-out/**` — captured oracle golden bytes
 - `.port/audits/GHOSTTY_LIFETIMES.tsv`           — lifetime audit OF ghostty source
 - the `ghostty_name` column of `CABI_SYMBOLS.tsv` — the oracle symbol names
-- `include/ghostty.h`                            — LOCAL frozen oracle umbrella (product = include/rustty-embed.h)
+- ghostty's upstream `include/ghostty.h` (via `ORACLE_HEADER_PATH`, SHA-256 pinned) — the oracle umbrella (product = include/rustty-embed.h); no longer vendored locally
 
 ## Becomes rustty (the port — renamed by this plan)
 - all C exports: ghostty_* -> rustty_* (alias deleted, Task 1)
@@ -79,10 +79,13 @@ CABI_MAP=.port/audits/CABI_SYMBOLS.tsv
   `/Users/gael/projects/ghostty` (mirroring `check_test_counts.py`'s hardcode,
   per that function's own "must stay identical" comment) — it is out of scope
   for this task and is left untouched.
-- `check_ghostty_h_abi.sh` (the old external-oracle byte-freeze gate, which
-  used to keep the same literal) was renamed `check_rustty_h_abi.sh` and
-  rewritten by rebrand Task 4: it now `source`s this file for `$PORT_UMBRELLA`
-  / `$ORACLE_UMBRELLA` / `$CABI_MAP` and validates the PRODUCT umbrella
-  (`include/rustty-embed.h`) against the LOCAL frozen oracle carve-out
-  (`include/ghostty.h`) via `CABI_SYMBOLS.tsv`'s name-map — it no longer
-  touches the external `/Users/gael/projects/ghostty` checkout at all.
+- `check_ghostty_h_abi.sh` (the old external-oracle byte-freeze gate) was
+  renamed `check_rustty_h_abi.sh`. It `source`s this file for `$PORT_UMBRELLA`
+  / `$ORACLE_HEADER_PATH` / `$CABI_MAP` and validates the PRODUCT umbrella
+  (`include/rustty-embed.h`) against ghostty's upstream `include/ghostty.h` via
+  `CABI_SYMBOLS.tsv`'s name-map. The oracle is read from `$ORACLE_HEADER_PATH`
+  (the pinned `/Users/gael/projects/ghostty` checkout) and pinned to an exact
+  version by a SHA-256 (`.port/tools/oracle-ghostty-h.sha256`). **Update
+  (2026-07-15):** the previously-vendored local carve-out `include/ghostty.h`
+  was removed — the gate references the pinned oracle checkout directly rather
+  than a byte-copy, and BLOCKs gracefully if that checkout is absent.

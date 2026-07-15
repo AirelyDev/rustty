@@ -71,7 +71,8 @@ pub enum ModSide {
 
 /// A bitmask for all key modifiers.
 ///
-/// IMPORTANT: Any changes here update include/ghostty.h
+/// IMPORTANT: Any changes here update include/rustty-embed.h (the embedding
+/// C ABI; renamed from the reference's include/ghostty.h)
 ///
 /// PORT NOTE: `packed struct(u16)` with backing `u16`. The field order maps to
 /// bit positions: shift=0, ctrl=1, alt=2, super=3, caps_lock=4, num_lock=5, then

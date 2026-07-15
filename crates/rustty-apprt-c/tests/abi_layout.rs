@@ -6,8 +6,9 @@
 //! the Rust half of that freeze: for every ABI struct/union/enum in the header it
 //! asserts `size_of`/`align_of` and each pinned enum ordinal equals the value the
 //! header's C declaration produces on the LP64 macOS/iOS ABI. The `.port` gate
-//! `check_ghostty_h_abi.sh` is the complementary half: it byte-diffs the shipped
-//! header against the pinned upstream (preserving the R-A/R-B/R-C typos).
+//! `check_rustty_h_abi.sh` is the complementary half: it verifies rustty-embed.h
+//! is the pinned upstream oracle token-renamed (via ORACLE_HEADER_PATH + a
+//! SHA-256 freeze-pin; preserving the R-A/R-B/R-C typos).
 //!
 //! WHY BOTH compile-time `const _` asserts AND runtime `#[test]`s: the `const`
 //! asserts make ANY layout drift a HARD BUILD FAILURE of the test target (the D2
@@ -18,7 +19,7 @@
 //! not).
 //!
 //! Expected sizes were computed by reading the header field types (see
-//! `/Users/gael/projects/rustty/include/ghostty.h`, the pinned upstream copy) and
+//! `/Users/gael/projects/ghostty/include/ghostty.h`, the pinned upstream oracle) and
 //! laying them out under the C rules for the 64-bit Apple ABI (`double`/pointer =
 //! 8B align-8, `float`/`uint32_t`/C-`enum` = 4B align-4, `bool`/`uint8_t` = 1B,
 //! `uint16_t` = 2B). Several are ALSO asserted at their definition sites in

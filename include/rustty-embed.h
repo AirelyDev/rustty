@@ -1,5 +1,6 @@
 // Rustty embedding API — token-renamed from the Ghostty embedding-API
-// umbrella (oracle: include/ghostty.h).
+// umbrella (oracle: ghostty's upstream include/ghostty.h,
+// verified via check_rustty_h_abi.sh against the pinned checkout).
 //
 // The documentation for the embedding API is only within the Zig source
 // files that define the implementations. This isn't meant to be a general

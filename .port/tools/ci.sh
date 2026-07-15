@@ -174,9 +174,10 @@ GATE_REGISTRY=(
   "D9|PROGRESS|bash $GATES/check_stale_comments.sh"
   # A3 — the rustty-embed.h product-umbrella ABI gate (rebrand Task 4; formerly
   # the ghostty.h byte-freeze). Asserts include/rustty-embed.h is EXACTLY
-  # include/ghostty.h (the kept oracle carve-out) with every ghostty_* token
-  # renamed to rustty_* per CABI_SYMBOLS.tsv's proven name-map — nothing
-  # added, dropped, or left un-renamed. PROGRESS not HARD (R5): a genuine
+  # ghostty's upstream include/ghostty.h (read from the pinned $ORACLE_HEADER_PATH
+  # checkout + a SHA-256 freeze-pin; no longer vendored locally) with every
+  # ghostty_* token renamed to rustty_* per CABI_SYMBOLS.tsv's proven name-map —
+  # nothing added, dropped, or left un-renamed. PROGRESS not HARD (R5): a genuine
   # mismatch/leftover RED is still escalated to a HARD failure by run_gate's
   # PROGRESS-went-RED branch.
   "A3|PROGRESS|bash $GATES/check_rustty_h_abi.sh"

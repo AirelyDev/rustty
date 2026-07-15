@@ -2,7 +2,7 @@
 #
 # Emits the published rustty libghostty C header (the apprt/embedded C ABI). Per
 # R2 the symbols carry the `rustty_` prefix and the header is
-# `include/rustty-apprt.h`. The reference's `include/ghostty.h` ABI-equivalence
+# `include/rustty-apprt.h`. ghostty's upstream `include/ghostty.h` ABI-equivalence
 # gate is DROPPED (R2); the standing gate is header self-consistency (compiles
 # standalone as C AND C++) + the C compile+link smoke KAT (chunk E11) + behavioral
 # parity via the `identity-oracle` harness.
