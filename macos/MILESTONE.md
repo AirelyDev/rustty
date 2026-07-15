@@ -18,9 +18,11 @@
   vim,nvim,fish,zsh,bash-completion,man,locale,bat}` — data ghostty's `zig build` produces.
   rustty has the generators (rustty-terminfo, rustty-extra, rustty-helpgen) but no xtask pipeline
   yet. terminfo is runtime-critical; the rest are build-phase folders. → xtask `resources`.
-- **Identity rebrand** (R2): DONE — app is named "Rustty" everywhere user-visible and the app
-  bundle id is `io.airely.rustty(.debug)`. See `REBRAND.md`. (GhosttyKit module + `ghostty_*`
-  symbols + on-disk `Ghostty.app`/executable name kept for the Branch-A link.)
+- **Identity rebrand** (R2, then full rebrand): DONE — app is named "Rustty" everywhere
+  user-visible and the app bundle id is `io.airely.rustty(.debug)`. See `REBRAND.md`. The
+  R2-era carve-out (GhosttyKit module + `ghostty_*` symbols + on-disk `Ghostty.app`/executable
+  name kept for the Branch-A link) no longer applies: the project is fully on `RusttyKit` /
+  `rustty_*` and builds `Rustty.app`/`rustty`.
 - **Run + iterate**: launch, confirm window + shell + render + input.
 
 ## Deferred (optional features, not MVP)
@@ -29,10 +31,9 @@
 
 ## ✅ MILESTONE ACHIEVED (2026-07-12) — RUNNABLE macOS TERMINAL
 
-`macos/build-rustty.sh` builds `Ghostty.app` (the on-disk bundle + executable keep the
-`Ghostty` product name for the Branch-A `ghostty_*` link, so build/launch paths are unchanged;
-the app now **presents to the user as "Rustty"** everywhere visible — menu/Dock/title/About.
-See `REBRAND.md`); launching it produces:
+`macos/build-rustty.sh` builds `Rustty.app` (product name, executable, and framework are now
+fully `Rustty`/`rustty`/`RusttyKit` — see `REBRAND.md` for the full-rebrand landing); launching it
+produces:
 - **A terminal window** (AppKit surface up — verified: `count of windows` = 1).
 - **A live shell**: the app spawns `/usr/bin/login → /bin/zsh` in a pty via rustty's
   ported termio (verified in the process tree). The full stack works end-to-end:
@@ -46,11 +47,11 @@ AppKit app, running as a real macOS terminal.
   vendored `libz.a` is inflate-only (no `deflate`; sentry needs it) and `gettext-sys` is the
   localename slice only (no `dgettext`). Fold full zlib + gettext into the combined lib to
   drop the system/Homebrew link deps (VALIDATION_REPORT_2 flagged the gettext slice).
-- **Identity rebrand (R2)**: DONE for all user-visible naming (app presents as "Rustty"; bundle
-  id `io.airely.rustty`) — see `REBRAND.md`. Still upstream: the app **icon** (asset set named
-  `Ghostty`), and the internal on-disk product/executable name `Ghostty` (kept for the Branch-A
-  link). Secondary component bundle ids (dock-tile plugin, unit/UI test bundles) also left as
-  `com.mitchellh.*` — non-user-visible, not app-groups.
+- **Identity rebrand**: DONE, full — user-visible naming (app presents as "Rustty"; bundle id
+  `io.airely.rustty`), the app **icon** (`images/Rustty.icon`, `ASSETCATALOG_COMPILER_APPICON_NAME
+  = Rustty`), and the on-disk product/executable name (`Rustty.app`/`rustty`) are all rebranded —
+  see `REBRAND.md`. Secondary component bundle ids are `io.airely.rustty*` (dock-tile plugin, unit/
+  UI test bundles) — no `com.mitchellh.*`/`Ghostty` remnants left on the macOS side.
 - **Deployment target**: staticlib built for macOS 26.5 vs app target 13.0 (harmless warnings;
   set MACOSX_DEPLOYMENT_TARGET on the cargo build to match).
 - **Deferred features**: quicklook, live inspector, the 5 non-display Darwin exports.

@@ -97,8 +97,8 @@
           "fill" : "automatic",
           "glass" : false,
           "hidden" : false,
-          "image-name" : "Ghostty.png",
-          "name" : "Ghostty",
+          "image-name" : "Rustty.png",
+          "name" : "Rustty",
           "position" : {
             "scale" : 1,
             "translation-in-points" : [
@@ -114,8 +114,8 @@
           },
           "glass" : true,
           "hidden" : false,
-          "image-name" : "Ghostty.png",
-          "name" : "GhosttyBlur",
+          "image-name" : "Rustty.png",
+          "name" : "RusttyBlur",
           "position" : {
             "scale" : 1,
             "translation-in-points" : [
