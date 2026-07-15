@@ -1,0 +1,28 @@
+# Rebrand + Inspector — durable record (2026-07-13 → 2026-07-15)
+
+Summary of two sub-projects executed on branch `rebrand/rustty-full`. Detailed plans live in `docs/superpowers/plans/2026-07-13-full-rustty-rebrand.md` and `docs/superpowers/plans/2026-07-14-inspector-port.md`; the parity invariant lives in `.port/tools/PARITY_NAMING.md`. This file is the concise "what landed + why" record (the task-by-task SDD ledger was in the git-ignored `.superpowers/` scratch and is not retained).
+
+## 1. Full Ghostty→Rustty rebrand
+
+**Decision:** the product is **Rustty** everywhere user- and developer-facing. Two locked forks (chosen with the user): (a) **full RusttyKit rename** — dropped the `ghostty_*` C-ABI alias, the Swift app links `rustty_*` directly through `RusttyKit.xcframework`/`include/rustty-embed.h`; (b) **honest `xterm-rustty`** TERM, routed through `rustty-identity`, keeping the ssh TERM-downgrade fallback.
+
+**What changed, by class:**
+- **C-ABI seam** — `ghostty_*` alias deleted; canonical `rustty_*`; `RusttyKit.xcframework` / `libRusttyKit.a` / `rustty.h`; the frozen `include/ghostty.h` kept as a local **oracle** header, `include/rustty-embed.h` = it token-renamed (ABI-faithful via `CABI_SYMBOLS.tsv`).
+- **Swift app** — every file/dir/target/symbol renamed; `Rustty.app` / `rustty` executable / `io.airely.rustty` bundle / `RusttyKit` module / `Rustty` namespace enum; `.xib` customModule, AppleScript `.sdef` cocoa classes ↔ `@objc`, Info.plist keys, the reverse-DNS namespace (`com.mitchellh.ghostty`→`io.airely.rustty`), and the app icon. **`Rustty.app` builds and renders a live terminal (screenshot-verified).**
+- **Runtime identity** — `TERM=xterm-rustty` + a rustty terminfo entry (default profile ships rustty terminfo; the `xtask` forced-oracle bug was fixed); `RUSTTY_*` env vars via `ENV_PREFIX`; `~/.config/rustty` / `config.rustty`; renamed shell-integration scripts, themes, man pages, completions, editor filetype.
+- **Trace + SIMD** — `main_ghostty.rs`→`main_rustty.rs`, `cli/ghostty.rs`→`cli/rustty.rs` (provenance kept in `PORTS:` comments); vendored `ghostty_simd_*`/`ghostty_hwy_*` → `rustty_*`.
+- **Parity feature** — `identity-ghostty` cargo feature renamed → **`identity-oracle`** (user request). It is a **validation** feature, not a product feature: under it every `rustty-identity` string flips to the ghostty reference so the byte-differential harness reproduces the oracle. Default profile = rustty; `--features identity-oracle` = ghostty. See `.port/tools/PARITY_NAMING.md`.
+
+**Casing discipline (learned):** a sweep had lowercased the product name in prose (`Ghostty`→`rustty` instead of `Rustty`), invisible because completion-golden tests passed against a **stale build cache**. Fixed 361 prose + 9 runtime-banner sites (`APP_NAME_TITLECASE` for `--version`/"X failed"/"X helper CLI"), oracle-arbitrated so command/crate/path stay lowercase. Rule captured in the `rename-casing-fidelity` memory: preserve casing per-token, audit the diffs (not just remaining work), use the ghostty oracle as arbiter, `cargo clean` before regenerating goldens.
+
+**Final review:** merge-ready — all coupling seams hold, default fully rustty, oracle parity intact, gates green.
+
+## 2. Inspector port
+
+Ported the full Dear ImGui + Metal terminal inspector (~11,600 lines: `Inspector.zig` + 9 widget submodules + the `imgui_impl_metal` backend) to `rustty-inspector` + the apprt/renderer/core seams. Executed as a **dynamic Workflow** (17 tasks, backend→lifecycle→widgets, implement→verify) that correctly deferred a dependency chain rooted in 3 missing dcimgui DockBuilder bindings; the controller closed it: DockBuilder bindings → aggregation chain (screen/terminal/surface/`Inspector::render`) → Metal render seam (`renderMetal`/`queueInspectorRender` + objc2) → input callbacks → core integration.
+
+**Hazards proven (Miri harnesses under `.port/phase-2/mirihar-inspector-*`):** R1 VTHandler self-alias, R3 mouse-Pin invalidation. R2 acyclic overlay edge via a renderer-defined `InspectorOverlay` accessor trait. R4 reverse-iterator mutation ported faithfully.
+
+**Runtime-panic audit (learned):** `unimplemented!()` is a *compile-clean* runtime panic — `cargo build`/`cargo test` don't execute untested paths, so panic sinks on the inspector's input/mouse/pty callbacks passed every gate until the app crashed on ⌘⌥I. **The audit that catches the class:** enumerate every panic-macro (`unimplemented!`/`todo!`/`panic!`/`unreachable!`) reachable on the macOS runtime path and classify off-Darwin-cfg (unreachable) vs reachable-when-used. It found the real misses beyond the first crash: `surface.rs` mouse-position record (`unreachable!()` → crash on mouse-move) and `termio` `recordPtyRead` (silent no-op → dead VT-events panel). All closed. **Inspector verified functional — ⌘⌥I renders the full UI (Terminal/Surface/Keyboard/Terminal IO/Renderer tabs + Screen Status/Misc/Layout/Mouse/Color/Modes), survives focus+typing+mouse, no crash.**
+
+**Review note:** the `termio recordPtyRead` fix added an acyclic `rustty-termio → rustty-inspector` Cargo edge + an opaque `renderer_state.inspector_ptr: *mut ()` cast back to the concrete `Inspector` (the R2 overlay pointer is narrowed to `renderer_info` and can't reach the sibling `vt_stream`). Reviewed **sound**: set/cleared/read all under `renderer_state.mutex`, cleared before free, matching the reference's `processOutputLocked` lock contract. A typed low-tier trait would be marginally cleaner (future polish), not a correctness issue.
