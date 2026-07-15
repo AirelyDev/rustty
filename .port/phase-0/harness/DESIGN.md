@@ -17,11 +17,11 @@ it (`comparator.py`, `diff_vt.sh`, `ref_driver/`, `port_hook/`,
 ## 0. Principles (from the spec / rules)
 
 - **No canonicalization of identity tokens (R2).** The port is built with the
-  `identity-ghostty` feature so its identity-bearing output (XTVERSION, Primary/
+  `identity-oracle` feature so its identity-bearing output (XTVERSION, Primary/
   Secondary DA, version strings, `TERM`, terminfo name, config dir) equals the
   reference **byte-for-byte**. The comparator therefore performs **raw byte
   diffs** — it never normalizes `ghostty`↔`rustty`. If a divergence is purely an
-  identity token, that means the port was built WITHOUT `identity-ghostty`, which
+  identity token, that means the port was built WITHOUT `identity-oracle`, which
   is itself the bug to surface, not to paper over.
 - **Reference is an external oracle only (R3).** The comparator links the
   reference's prebuilt `zig-out/libghostty-vt.a`; it never makes rustty depend on
@@ -72,7 +72,7 @@ write-back** (the `GHOSTTY_TERMINAL_OPT_*` callbacks: XTVERSION, DA, ENQ, size,
 color-scheme query responses). These extend the canonical record beyond glyphs;
 they are specified here and are the next increment to `vt_driver.c`. The pty
 write-back channel is also where **identity tokens** surface for byte-exact
-matching under `identity-ghostty`.
+matching under `identity-oracle`.
 
 ### (B) Config parse-then-serialize diff *(specified)*
 
@@ -81,7 +81,7 @@ formatter (`config/formatter.zig` → `rustty-cfg-fmt`). Diff the round-tripped
 text. The reference oracle is a small driver over libghostty's config API (or the
 `ghostty +show-config`-style path); the port hook is the analogous `rustty`
 config crate once it exists. Identity-bearing defaults (config dir, `TERM`) match
-byte-exact under `identity-ghostty`. Corpus seed dir: `.port/phase-0/corpora/config`.
+byte-exact under `identity-oracle`. Corpus seed dir: `.port/phase-0/corpora/config`.
 
 ### (C) Input encode diff *(specified)*
 
@@ -170,7 +170,7 @@ falling back to the empty stub today.
 
 When `rustty-vt-c` exists, build a `vt_driver_port` from the **same C source**
 (`ref_driver/vt_driver.c`) but `#include <rustty/vt.h>` and link
-`librustty-vt.a`, with `--features identity-ghostty`. Drop it at
+`librustty-vt.a`, with `--features identity-oracle`. Drop it at
 `bin/vt_driver_port` (or export `RUSTTY_VT_DRIVER`). The wrapper detects it and
 forwards argv+stdin unchanged. The comparator, fixtures, gate, and metric are
 unchanged — only the port slot becomes real, and the empty-divergence gate flips

@@ -133,7 +133,7 @@ per-crate Definition-of-Done.
 - **Breaks:** none (additive glue allowed by R1; adds nothing-lost).
 - **DoD:** exports app name, version strings, `TERM`/`TERM_PROGRAM`, terminfo
   name, config dir, VT query responses (XTVERSION, Primary/Secondary DA); default
-  = `rustty`; feature **`identity-ghostty`** flips every value to the reference's
+  = `rustty`; feature **`identity-oracle`** flips every value to the reference's
   for byte-exact differential testing. **Flag:** this crate has no ported tests;
   identity values cross-checked against reference strings in the differential
   harness, not via ported `test{}`.
@@ -355,7 +355,7 @@ per-crate Definition-of-Done.
 - **Deps:** `identity` (entry name `rustty` per R2).
 - **Breaks:** none.
 - **DoD:** 3 files ported; 4 ported tests pass; emits terminfo named `rustty`
-  (R2; `identity-ghostty` feature emits `ghostty`/`xterm-ghostty` for the parity
+  (R2; `identity-oracle` feature emits `ghostty`/`xterm-ghostty` for the parity
   harness); terminfo corpus matches.
 
 ### 23. rustty-termio — Tests: **44**

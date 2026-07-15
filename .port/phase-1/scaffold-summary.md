@@ -84,7 +84,7 @@ itself would reject a cycle, and the order above is a valid topological sort.
   ghostty source each crate will port. Real lines/comments/`test{}` land as each
   crate is carved.
 - **R2:** crate names are identities, not artifact names. `rustty-terminfo`,
-  `rustty-identity`, etc. carry doc notes about the `identity-ghostty` feature
+  `rustty-identity`, etc. carry doc notes about the `identity-oracle` feature
   that flips identity for the differential harness only.
 - **R3:** zero ghostty Cargo dependency anywhere. `-sys` crates document
   vendored-C / cc+bindgen TODOs; no C is compiled yet.

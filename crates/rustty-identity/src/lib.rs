@@ -12,7 +12,7 @@
 //! # Dual profile (R2)
 //!
 //! All *published* rustty artifacts carry the **rustty** identity (clean
-//! standalone, NOT a ghostty drop-in). The cargo feature **`identity-ghostty`**
+//! standalone, NOT a ghostty drop-in). The cargo feature **`identity-oracle`**
 //! flips EVERY value below to the reference ghostty values; it is used **only**
 //! by the parity / differential harness so port output matches the reference
 //! oracle byte-for-byte (no canonicalization hacks).
@@ -44,31 +44,31 @@
 #![forbid(unsafe_code)]
 
 /// Active identity profile. There is exactly one, chosen at compile time by the
-/// `identity-ghostty` cargo feature (R2). It is `Rustty` by default and
+/// `identity-oracle` cargo feature (R2). It is `Rustty` by default and
 /// `Ghostty` under the parity harness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {
     /// The published product identity (default).
     Rustty,
-    /// The reference parity profile (feature `identity-ghostty`).
+    /// The reference parity profile (feature `identity-oracle`).
     Ghostty,
 }
 
 /// The compile-time-selected active profile.
-#[cfg(not(feature = "identity-ghostty"))]
+#[cfg(not(feature = "identity-oracle"))]
 pub const PROFILE: Profile = Profile::Rustty;
 /// The compile-time-selected active profile.
-#[cfg(feature = "identity-ghostty")]
+#[cfg(feature = "identity-oracle")]
 pub const PROFILE: Profile = Profile::Ghostty;
 
 // ===========================================================================
 // Identity source-of-truth. Every value has a rustty default and a
-// `identity-ghostty`-gated reference value. Keep these two arms in lockstep:
+// `identity-oracle`-gated reference value. Keep these two arms in lockstep:
 // a value defined for one profile MUST be defined for the other.
 // ===========================================================================
 
 // ---- rustty defaults (published identity) ---------------------------------
-#[cfg(not(feature = "identity-ghostty"))]
+#[cfg(not(feature = "identity-oracle"))]
 mod values {
     /// Human-facing application name.
     pub const APP_NAME: &str = "rustty";
@@ -130,7 +130,7 @@ mod values {
 }
 
 // ---- ghostty reference values (parity harness only) -----------------------
-#[cfg(feature = "identity-ghostty")]
+#[cfg(feature = "identity-oracle")]
 mod values {
     /// Human-facing application name. Reference: `src/build_config.zig`.
     pub const APP_NAME: &str = "ghostty";
@@ -227,7 +227,7 @@ pub const APP_NAME_TITLECASE: &str = values::APP_NAME_TITLECASE;
 /// This mirrors the reference `reportXtversion` in
 /// `src/termio/stream_handler.zig` (format `"\x1BP>|{s} {s}\x1B\\"`,
 /// args `"ghostty"`, `build_config.version_string`). Under the default profile
-/// the token/version are rustty's; under `identity-ghostty` they are the
+/// the token/version are rustty's; under `identity-oracle` they are the
 /// reference's, so the byte stream matches the oracle exactly.
 pub fn xtversion_response() -> String {
     format!("\x1bP>|{XTVERSION_NAME} {VERSION}\x1b\\")
@@ -248,7 +248,7 @@ mod tests {
     use super::*;
 
     /// Under the default profile every value is the published rustty identity.
-    #[cfg(not(feature = "identity-ghostty"))]
+    #[cfg(not(feature = "identity-oracle"))]
     #[test]
     fn default_profile_is_rustty() {
         assert_eq!(PROFILE, Profile::Rustty);
@@ -279,8 +279,8 @@ mod tests {
         assert!(!xtversion_response().contains("ghostty"));
     }
 
-    /// Under the `identity-ghostty` feature every value is the reference's.
-    #[cfg(feature = "identity-ghostty")]
+    /// Under the `identity-oracle` feature every value is the reference's.
+    #[cfg(feature = "identity-oracle")]
     #[test]
     fn ghostty_profile_matches_reference() {
         assert_eq!(PROFILE, Profile::Ghostty);

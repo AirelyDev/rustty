@@ -98,7 +98,7 @@ When break **#4** lands (PORT_PLAN crate 12: `terminal/c/` → `rustty-vt-c`),
 `ghostty_terminal_new`, `ghostty_terminal_vt_write`,
 `ghostty_formatter_terminal_new`, `ghostty_formatter_format_alloc`,
 `ghostty_{terminal,formatter}_free`, `ghostty_free` (named `ghostty_*` under the
-`identity-ghostty` profile — see §4). At that point:
+`identity-oracle` profile — see §4). At that point:
 
 ```bash
 # build_port_driver.sh links vt_driver.c against rustty's librustty-vt.a and
@@ -157,7 +157,7 @@ cannot be made green honestly is a STOP-and-surface blocker.
 
 ---
 
-## 4. Why outputs are byte-comparable: the `identity-ghostty` profile (R2)
+## 4. Why outputs are byte-comparable: the `identity-oracle` profile (R2)
 
 The port's published identity is **`rustty`** (binary `rustty`, `rustty_*` C
 symbols, `include/rustty.h`, `TERM=xterm-rustty`, terminfo `rustty`, version /
@@ -169,11 +169,11 @@ and a raw byte diff would report false divergence.
 The fix is **not** canonicalization in the comparator. `comparator.py` performs
 **raw byte diffs** and never rewrites `ghostty`↔`rustty` (DESIGN.md §0). Instead,
 the **single source-of-truth crate `rustty-identity`** carries a build feature
-**`identity-ghostty`** that flips *every* identity value to the reference's:
+**`identity-oracle`** that flips *every* identity value to the reference's:
 `rustty`→`ghostty`, `xterm-rustty`→`xterm-ghostty`, the cbindgen header path and
 `rustty_*`→`ghostty_*` symbol prefix, version/XTVERSION/DA payloads, config dir,
 terminfo name. The port driver for the harness is built **with
-`--features identity-ghostty`**, so:
+`--features identity-oracle`**, so:
 
 - the C ABI it exports is named `ghostty_*` and lives at `ghostty/vt.h` — the
   **same** header the shared `vt_driver.c` `#include`s — so one C source compiles
@@ -184,7 +184,7 @@ terminfo name. The port driver for the harness is built **with
   not a token that happened to be normalized.
 
 Consequence (R2 + R5): if a divergence is *purely* an identity token, that means
-the port was built **without** `identity-ghostty` — which is itself the bug to
+the port was built **without** `identity-oracle` — which is itself the bug to
 surface, not to paper over. The harness only ever links the *parity profile*
 build of the port; the `rustty`-identity build is what ships.
 
@@ -204,7 +204,7 @@ bar — remain fully in force.
 | `diff_vt.sh` | Thin entry point around `comparator.py` (the day-to-day 0%-bar parity driver post-flip). |
 | `ref_driver/vt_driver.c` | The ONE C source both drivers are built from. |
 | `build_ref_driver.sh` | Builds `bin/vt_driver_ref` (links ghostty `libghostty-vt.a`, read-only). |
-| `build_port_driver.sh` | Builds `bin/vt_driver_port` (links rustty `librustty-vt.a`, `identity-ghostty`). Blocks honestly while `rustty-vt-c` is a stub. |
+| `build_port_driver.sh` | Builds `bin/vt_driver_port` (links rustty `librustty-vt.a`, `identity-oracle`). Blocks honestly while `rustty-vt-c` is a stub. |
 | `port_hook/vt_driver_port.sh` | Port slot: resolves real driver → else empty stub (100% divergence). |
 | `fixtures/*.vt` | Curated visible-content VT corpus for the divergence metric. |
 | `results/empty_gate_summary.json`, `results/empty_gate.csv` | Last run's machine-readable verdict. |

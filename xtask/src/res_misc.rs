@@ -18,7 +18,7 @@
 //!  1. **man** (P1.3) — we now emit REAL, rendering `roff` man pages:
 //!     `share/man/man1/{APP}.1` + `share/man/man5/{APP}.5` (`{APP}` =
 //!     [`crate::APP`], Task 14 — `rustty` by default, `ghostty` under
-//!     `identity-ghostty`; verified via `man -M zig-out/share/man <app>`). Only
+//!     `identity-oracle`; verified via `man -M zig-out/share/man <app>`). Only
 //!     the FILENAME follows `{APP}`; the `.TH`/body prose is kept as the
 //!     ghostty documentation data-identity (see the PARTIAL note below).
 //!     ghostty's own pipeline

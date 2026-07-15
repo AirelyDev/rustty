@@ -2,7 +2,7 @@
 //!
 //! R2: the terminal *names* carry the rustty product identity, sourced from the
 //! single-source-of-truth `rustty-identity` crate (`xterm-rustty`, `rustty`,
-//! `Rustty`), or the reference values under the `identity-ghostty` parity
+//! `Rustty`), or the reference values under the `identity-oracle` parity
 //! harness feature. The `xterm-*` compat name (an app-facing compatibility id,
 //! NOT an internal identifier) is the `rustty-identity::TERMINFO_PRIMARY_NAME`
 //! constant; see the HACK comment on it below, ported faithfully from the
@@ -31,7 +31,7 @@ pub fn rustty() -> Source {
             // The preferred name
             rustty_identity::TERMINFO_PREFERRED_NAME.as_bytes().to_vec(),
             // Our "formal" name (the capitalized product name). Mirrors the
-            // reference `"Ghostty"`; under `identity-ghostty` it is the
+            // reference `"Ghostty"`; under `identity-oracle` it is the
             // reference value. Sourced from `rustty-identity` (R2), never a
             // local literal.
             rustty_identity::APP_NAME_TITLECASE.as_bytes().to_vec(),
@@ -432,7 +432,7 @@ mod tests {
     /// the rustty product identity: primary name `xterm-rustty` (must equal
     /// `rustty_identity::TERM`, the ported tcell-primary-name-must-equal-TERM
     /// hack), preferred name `rustty`, and formal/title-case name `Rustty`.
-    #[cfg(not(feature = "identity-ghostty"))]
+    #[cfg(not(feature = "identity-oracle"))]
     #[test]
     fn names_are_rustty_under_default_profile() {
         let src = rustty();
@@ -461,9 +461,9 @@ mod tests {
         assert!(buf.starts_with(b"xterm-rustty|rustty|Rustty,\n"));
     }
 
-    /// Under the `identity-ghostty` parity harness feature, the same
+    /// Under the `identity-oracle` parity harness feature, the same
     /// generator must emit the reference's byte-for-byte identity.
-    #[cfg(feature = "identity-ghostty")]
+    #[cfg(feature = "identity-oracle")]
     #[test]
     fn names_are_ghostty_under_harness_profile() {
         let src = rustty();

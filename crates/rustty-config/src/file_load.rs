@@ -54,7 +54,7 @@ impl From<std::io::Error> for FileLoadError {
 // PORT NOTE (R2): the reference subdir literal `"ghostty/config.ghostty"` is
 // the ghostty identity (config dir + config file name). Under rustty identity
 // these come from `rustty_identity::{CONFIG_DIR, CONFIG_FILE}` (`rustty` /
-// `config.rustty`), flipped back to ghostty's under the `identity-ghostty`
+// `config.rustty`), flipped back to ghostty's under the `identity-oracle`
 // harness feature.
 pub fn default_xdg_path() -> Result<String, FileLoadError> {
     let subdir = format!(

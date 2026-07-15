@@ -353,7 +353,7 @@ items are M5/M6/M7. formatter.rs is read-only (`&*self.screen`/`&*terminal.scree
   Windows spawn+wait; flatpak.rs head + FFI block. ENUMERATION (grep, workspace excl. /target): 1272
   total cfg; 837 platform/feature after excluding cfg(test); non-macos target_os gates: macos 338,
   ios 79, linux 73, freebsd 40, windows 24 (+106 bare cfg(windows)), wasm32 15; feature gates:
-  oniguruma 35, identity-ghostty 10, flatpak 7, wasm 2. All 14 -sys build scripts inspected for
+  oniguruma 35, identity-oracle 10, flatpak 7, wasm 2. All 14 -sys build scripts inspected for
   cc/bindgen/stub. SAMPLED not exhaustively verified: flatpak host_command body; rustty-vaxis
   tty/loop_/vaxis Windows arms; rustty-vt-c Windows arms; rustty-cli ssh_cache/disk_cache Windows
   arms; small linux/freebsd runtime branches; FreeBSD-specific libc constant availability

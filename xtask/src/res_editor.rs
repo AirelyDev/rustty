@@ -21,7 +21,7 @@
 //! upstream `ghostty` naming — the `ghostty.vim` filenames, the `ghostty`
 //! filetype/compiler names, and the `keywordprg=ghostty +explain-config` /
 //! `makeprg=ghostty +validate-config` invocations — matching what the app ships.
-//! `rustty_extra::vim` is the `identity-ghostty` byte producer for this subtree;
+//! `rustty_extra::vim` is the `identity-oracle` byte producer for this subtree;
 //! no `xterm-rustty` variant of the editor files exists (nor is one needed: the
 //! app's config filetype is `ghostty`).
 //!

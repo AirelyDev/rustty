@@ -131,7 +131,7 @@ cp $TI/67/ghostty       terminfo/compiled/ghostty.compiled
   compare the `.terminfo` source / `compiled` entries (which carry no such
   header) instead. **R2 caveat:** under rustty identity these entries become
   `xterm-rustty` / `rustty`; this corpus is the *ghostty-profile* oracle
-  (`identity-ghostty`), matched byte-for-byte only by the parity build.
+  (`identity-oracle`), matched byte-for-byte only by the parity build.
 
 ---
 

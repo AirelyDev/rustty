@@ -1,6 +1,6 @@
 //! Terminfo + `share/{APP}` resource generation for the macOS Copy-Resources
 //! phase (runtime-critical resource). `{APP}` is [`crate::APP`]: `rustty` by
-//! default, `ghostty` under this xtask's own `identity-ghostty` feature.
+//! default, `ghostty` under this xtask's own `identity-oracle` feature.
 //!
 //! PORTS: the terminfo branch of ghostty's `src/build/GhosttyResources.zig` — the
 //! `+terminfo` `build_data_exe` run that emits the terminfo *source* followed by
@@ -16,8 +16,8 @@
 //! app unchanged — its `Ghostty.app` hard-codes `TERM=xterm-ghostty`. So the
 //! runtime terminfo entry MUST be spelled `xterm-ghostty` for the reused app's
 //! `TERM` to resolve at runtime; we therefore build the `Source` through the
-//! `identity-ghostty` parity spelling (names `xterm-ghostty | ghostty | Ghostty`,
-//! selected by the `rustty-terminfo/identity-ghostty` feature this crate enables).
+//! `identity-oracle` parity spelling (names `xterm-ghostty | ghostty | Ghostty`,
+//! selected by the `rustty-terminfo/identity-oracle` feature this crate enables).
 //! When the app is rebranded to set `TERM=xterm-rustty`, drop that feature and the
 //! same pipeline emits the canonical entry with zero other changes.
 //!
@@ -36,13 +36,13 @@
 //!
 //! R2 identity note (source/termcap filenames, Task 14): unlike the compiled
 //! entry's `xterm-ghostty` primary name (pinned — see above, forced
-//! unconditionally by `rustty-terminfo/identity-ghostty` for the reused macOS
+//! unconditionally by `rustty-terminfo/identity-oracle` for the reused macOS
 //! Swift app), the `{APP}.terminfo`/`{APP}.termcap` DUMP basenames are just a
 //! human/debug-readable side artifact: `tic`/`infocmp` resolve entries by the
 //! compiled DB content, never by this dump file's name. So these basenames
 //! follow [`crate::APP`] like every other output filename: `rustty.terminfo`/
 //! `rustty.termcap` by default, `ghostty.terminfo`/`ghostty.termcap` under
-//! `identity-ghostty`.
+//! `identity-oracle`.
 //!
 //! The `share/{APP}/` tree (shell-integration scripts, themes) is NOT yet ported
 //! as rustty data — ghostty ships those as static files under
@@ -61,7 +61,7 @@ use std::process::Command;
 /// `gen_*` convention of the sibling resource modules.
 ///
 /// Pipeline (mirrors ghostty's `GhosttyResources.zig` terminfo install):
-///   1. Build the `Source` via `rustty_terminfo::entry::rustty()` (identity-ghostty
+///   1. Build the `Source` via `rustty_terminfo::entry::rustty()` (identity-oracle
 ///      spelling — see the R2 note above) and `encode` it to tic source text.
 ///   2. Write that text to a temporary `.terminfo` file.
 ///   3. Run `/usr/bin/tic -x -o <share>/terminfo <tmp>` to compile it, producing
@@ -197,7 +197,7 @@ fn compiled_entry_exists(terminfo_dir: &Path) -> bool {
 
 /// Create the `share/{APP}/` resource root the macOS Copy-Resources phase
 /// references as `../zig-out/share/{APP}` (`{APP}` = [`crate::APP`]: `rustty`
-/// by default, `ghostty` under `identity-ghostty` — Task 14; this dir must
+/// by default, `ghostty` under `identity-oracle` — Task 14; this dir must
 /// match the runtime lookup, which resolves the same way via
 /// `rustty_os::resourcesdir`'s `app_subdir()` -> `rustty_identity::APP_NAME`).
 ///

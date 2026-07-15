@@ -49,16 +49,16 @@ A **runnable windowed terminal** needs: app+surface lifecycle (`ghostty_app_new/
 
 **Files:**
 - Create: `crates/rustty-apprt-c/src/ghostty_alias.rs`
-- Modify: `crates/rustty-apprt-c/src/lib.rs` (add `#[cfg(feature = "identity-ghostty")] mod ghostty_alias;`), `crates/rustty-apprt-c/Cargo.toml` (add `identity-ghostty` feature)
+- Modify: `crates/rustty-apprt-c/src/lib.rs` (add `#[cfg(feature = "identity-oracle")] mod ghostty_alias;`), `crates/rustty-apprt-c/Cargo.toml` (add `identity-oracle` feature)
 
 **Interfaces:**
 - Consumes: A1's manifest.
-- Produces: under `--features identity-ghostty`, the staticlib exports both `rustty_<name>` and `ghostty_<name>` (identical symbol, one body). Mechanism: `#[no_mangle] pub unsafe extern "C" fn ghostty_<name>(args) -> Ret { rustty_<name>(args) }` thin forwarders (the PREPORT §3 option (a); simplest, works with staticlib + xcframework; avoids linker-alias portability issues).
+- Produces: under `--features identity-oracle`, the staticlib exports both `rustty_<name>` and `ghostty_<name>` (identical symbol, one body). Mechanism: `#[no_mangle] pub unsafe extern "C" fn ghostty_<name>(args) -> Ret { rustty_<name>(args) }` thin forwarders (the PREPORT §3 option (a); simplest, works with staticlib + xcframework; avoids linker-alias portability issues).
 
 - [ ] **Step 1:** Generate `ghostty_alias.rs` from the manifest: one forwarder per app export, each `#[no_mangle] pub unsafe extern "C" fn ghostty_x(...) -> R { crate::x_or_rustty_x(...) }`, with the exact ported signature (copy from the `rustty_*` decl). Darwin-only ones gated `#[cfg(any(target_os="macos", target_os="ios"))]` (PREPORT §5).
-- [ ] **Step 2:** `cargo build -p rustty-apprt-c --features identity-ghostty` green; `nm -gU target/debug/librustty_apprt_c.a | grep -c '_ghostty_'` == 90 (or the non-Darwin subset on non-mac).
+- [ ] **Step 2:** `cargo build -p rustty-apprt-c --features identity-oracle` green; `nm -gU target/debug/librustty_apprt_c.a | grep -c '_ghostty_'` == 90 (or the non-Darwin subset on non-mac).
 - [ ] **Step 3:** Run `check_symbol_manifest.sh` against the built lib → GREEN.
-- [ ] **Step 4:** Commit. `"cabi: ghostty_* alias forwarders over rustty_* (Branch A, identity-ghostty feature) (A2)"`
+- [ ] **Step 4:** Commit. `"cabi: ghostty_* alias forwarders over rustty_* (Branch A, identity-oracle feature) (A2)"`
 
 ### Task A3: xcframework header + ABI-layout gate
 
@@ -93,11 +93,11 @@ A **runnable windowed terminal** needs: app+surface lifecycle (`ghostty_app_new/
 - Modify: `xtask/src/main.rs` (+ a new `xtask/src/xcframework.rs`)
 
 **Interfaces:**
-- Consumes: A2's `identity-ghostty` staticlib.
+- Consumes: A2's `identity-oracle` staticlib.
 - Produces: `dist/GhosttyKit.xcframework/macos-arm64_x86_64/{Headers/ghostty.h, GhosttyKit}` (mirror the oracle structure; universal arm64+x86_64 via `lipo`, header from A3). Command: `cargo run -p xtask -- xcframework`.
 
 - [ ] **Step 1:** Read the oracle recipe (`GhosttyXCFramework.zig` + `XCFrameworkStep.zig` + `LibtoolStep.zig`): it builds the static lib per-arch, `libtool`-combines archives, then `xcodebuild -create-xcframework -library <lib> -headers <dir>`. Inspect `/Users/gael/projects/ghostty/macos/GhosttyKit.xcframework/Info.plist` for the exact slice layout to reproduce.
-- [ ] **Step 2:** Implement `xtask xcframework`: (a) `cargo build -p rustty-apprt-c --release --features identity-ghostty --target aarch64-apple-darwin` (and `x86_64-apple-darwin` if the target is installed; else arm64-only slice for MVP); (b) `lipo -create` the per-arch `librustty_apprt_c.a` into a universal archive (or single-arch); (c) stage `Headers/ghostty.h` (upstream, A3); (d) `xcodebuild -create-xcframework -library <universal.a> -headers <headers_dir> -output dist/GhosttyKit.xcframework`.
+- [ ] **Step 2:** Implement `xtask xcframework`: (a) `cargo build -p rustty-apprt-c --release --features identity-oracle --target aarch64-apple-darwin` (and `x86_64-apple-darwin` if the target is installed; else arm64-only slice for MVP); (b) `lipo -create` the per-arch `librustty_apprt_c.a` into a universal archive (or single-arch); (c) stage `Headers/ghostty.h` (upstream, A3); (d) `xcodebuild -create-xcframework -library <universal.a> -headers <headers_dir> -output dist/GhosttyKit.xcframework`.
 - [ ] **Step 3:** Run it: `cargo run -p xtask -- xcframework` → `dist/GhosttyKit.xcframework` exists; `xcrun xcodebuild -version` and `plutil -p dist/GhosttyKit.xcframework/Info.plist` confirm a valid framework; `nm -gU dist/GhosttyKit.xcframework/macos-*/GhosttyKit | grep -c ghostty_` == 90.
 - [ ] **Step 4:** Commit. `"xtask: package rustty-apprt-c into GhosttyKit.xcframework (ghostty_* symbols, upstream ghostty.h) (B1)"`
 

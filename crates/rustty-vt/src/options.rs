@@ -78,7 +78,7 @@ pub const TMUX_CONTROL_MODE: bool = ONIGURUMA;
 // library, so its version is the vt LIB version from `rustty-identity` (the R2
 // identity source of truth) — NOT `CARGO_PKG_VERSION` (the workspace/app
 // version, which only coincidentally matched): `0.1.0` under the rustty
-// profile, the reference's exact `0.1.0-dev` under `identity-ghostty`.
+// profile, the reference's exact `0.1.0-dev` under `identity-oracle`.
 const VERSION: SemanticVersion = SemanticVersion::parse(rustty_identity::VT_LIB_VERSION);
 
 /// The version string, `MAJOR.MINOR.PATCH[-PRE][+BUILD]`.
@@ -154,7 +154,7 @@ mod tests {
     }
 
     /// Under the default (rustty) profile the vt lib version is `0.1.0`.
-    #[cfg(not(feature = "identity-ghostty"))]
+    #[cfg(not(feature = "identity-oracle"))]
     #[test]
     fn version_is_rustty_vt_lib_version() {
         assert_eq!("0.1.0", VERSION_STRING);
@@ -165,10 +165,10 @@ mod tests {
         assert_eq!(None, VERSION_BUILD);
     }
 
-    /// Under `identity-ghostty` the vt lib version is the reference's SEPARATE
+    /// Under `identity-oracle` the vt lib version is the reference's SEPARATE
     /// libghostty version (`build.zig:10`), exactly as the c-vt-build-info
     /// golden records it: "Version: 0.1.0-dev", "Version pre  : dev".
-    #[cfg(feature = "identity-ghostty")]
+    #[cfg(feature = "identity-oracle")]
     #[test]
     fn version_is_reference_lib_version() {
         assert_eq!("0.1.0-dev", VERSION_STRING);

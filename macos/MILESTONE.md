@@ -4,7 +4,7 @@
 - **Phase A** — ABI prep: symbol manifest (90 exports), `ghostty_*` alias layer (Branch A),
   ghostty.h ABI-layout gate, `rt_surface` pin proof. Plus the ABI-completion pass
   (config/main_c/benchmark aliases) — all 84 Swift-referenced `ghostty_*` functions resolve.
-- **B1** — `cargo run -p xtask -- xcframework` packages rustty-apprt-c (identity-ghostty,
+- **B1** — `cargo run -p xtask -- xcframework` packages rustty-apprt-c (identity-oracle,
   panic=abort profile) into `dist/GhosttyKit.xcframework` (macos-arm64, 96 ghostty_* symbols,
   rustty's vendored ghostty.h).
 - **B2** — the reused ghostty Swift app imported to `macos/` (Branch A, byte-identical), rustty's

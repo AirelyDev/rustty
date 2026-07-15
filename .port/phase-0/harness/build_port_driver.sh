@@ -25,7 +25,7 @@
 # IDENTITY (R2): the reference lib is built with simd=true (the zig default;
 # the c-vt-build-info golden records "SIMD: enabled"), so the port driver build
 # enables the matching `rustty-vt/simd` feature — harness build-config parity.
-# The build also enables `identity-ghostty` (rustty-vt-c -> rustty-vt ->
+# The build also enables `identity-oracle` (rustty-vt-c -> rustty-vt ->
 # rustty-identity), the R2 parity profile: it flips the vt LIBRARY version to
 # the reference's SEPARATE libghostty version (`build.zig:10` `lib_version =
 # "0.1.0-dev"` — "We use a separate version from the app"), which is what the
@@ -49,14 +49,14 @@ CVT_OUT_DIR="$HARNESS_DIR/bin/cvt"
 LIBA="${RUSTTY_VT_LIB:-}"
 if [ -z "$LIBA" ]; then
   if command -v cargo >/dev/null 2>&1 && [ -f "$RUSTTY_ROOT/Cargo.toml" ]; then
-    echo "build_port_driver: cargo build --profile release-safe -p rustty-vt-c --features rustty-vt/simd,identity-ghostty ..." >&2
-    # simd mirrors the reference build config; identity-ghostty selects the R2
+    echo "build_port_driver: cargo build --profile release-safe -p rustty-vt-c --features rustty-vt/simd,identity-oracle ..." >&2
+    # simd mirrors the reference build config; identity-oracle selects the R2
     # parity identity profile (reference vt lib version — see header note).
     # DG2/DG4 (PORT_RULES §DG2/DG4): the harness links the `release-safe`
     # profile — release optimization with debug-assertions (and the inherited
     # overflow-checks) ON — matching the oracle's ReleaseSafe build mode
     # (std.debug.assert active), so ported debug_assert! sites are LIVE under G4.
-    ( cd "$RUSTTY_ROOT" && cargo build --profile release-safe -p rustty-vt-c --features rustty-vt/simd,identity-ghostty ) >&2 || \
+    ( cd "$RUSTTY_ROOT" && cargo build --profile release-safe -p rustty-vt-c --features rustty-vt/simd,identity-oracle ) >&2 || \
       echo "build_port_driver: cargo build failed; probing for an existing staticlib anyway." >&2
   fi
   for cand in \
@@ -158,7 +158,7 @@ fi
 
 echo "CC=$CC"
 echo "INC=$INC"
-echo "LIBA=$LIBA   (rustty port; rustty-vt/simd + identity-ghostty on, matching the ref build)"
+echo "LIBA=$LIBA   (rustty port; rustty-vt/simd + identity-oracle on, matching the ref build)"
 echo "ALIASES=$ALIAS_COUNT rustty_* -> ghostty_* (ld64 -alias_list)"
 echo "OUT=$OUT"
 

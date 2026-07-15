@@ -16,7 +16,7 @@
 // stderr only. Exit code 0 on success; non-zero on any libghostty error.
 //
 // The reference is linked against zig-out/libghostty-vt — the IDENTITY oracle.
-// Per R2, the rustty port side will be built with the `identity-ghostty`
+// Per R2, the rustty port side will be built with the `identity-oracle`
 // profile so identity tokens (XTVERSION/DA/version strings emitted into the
 // stream, TERM, etc.) match byte-for-byte with NO canonicalization here.
 

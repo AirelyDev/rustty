@@ -5,7 +5,7 @@ sources `.port/tools/parity_names.env` for the port↔oracle name pairs so the
 rebrand never makes the port look divergent from the oracle.
 
 ## Two ways parity is proven (both name-aware)
-1. **String/behaviour parity** — build rustty **with `--features identity-ghostty`**,
+1. **String/behaviour parity** — build rustty **with `--features identity-oracle`**,
    which flips every `rustty-identity` string constant (APP_NAME, TERM, ENV_PREFIX,
    terminfo names, config dir) to its ghostty value. Byte output then matches the
    oracle. This flips STRINGS, never filenames or symbols.
@@ -20,7 +20,6 @@ rebrand never makes the port look divergent from the oracle.
 - `.port/phase-0/corpora/**`, `baseline/**`, `examples-out/**` — captured oracle golden bytes
 - `.port/audits/GHOSTTY_LIFETIMES.tsv`           — lifetime audit OF ghostty source
 - the `ghostty_name` column of `CABI_SYMBOLS.tsv` — the oracle symbol names
-- every `#[cfg(feature = "identity-ghostty")]` string block — the oracle-string profile
 - `include/ghostty.h`                            — LOCAL frozen oracle umbrella (product = include/rustty-embed.h)
 
 ## Becomes rustty (the port — renamed by this plan)
@@ -32,8 +31,12 @@ rebrand never makes the port look divergent from the oracle.
 
 ## Residual-grep rule
 A gate that fails on a stray `ghostty` MUST exclude the carve-out paths above
-and MUST allow `#[cfg(feature = "identity-ghostty")]` blocks and the `ghostty_name`
-TSV column.
+and MUST allow the `ghostty_name` TSV column. The `identity-oracle` feature
+name is no longer a ghostty-branding exception — it carries no literal
+`ghostty` substring, so it needs no carve-out from this rule (only the
+ghostty-valued STRING CONSTANTS it flips to, e.g. `APP_NAME == "ghostty"`,
+`TERM == "xterm-ghostty"`, are the oracle values and remain covered by the
+"Stays ghostty" list above).
 
 ## How the map is sourced
 

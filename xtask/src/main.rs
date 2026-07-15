@@ -19,7 +19,7 @@ mod res_terminfo;
 mod res_themes;
 
 /// Single source of truth for the resource-tree OUTPUT name (rebrand Task 14):
-/// `rustty` by default, `ghostty` under this crate's own `identity-ghostty`
+/// `rustty` by default, `ghostty` under this crate's own `identity-oracle`
 /// feature. Every `res_*` module derives its `share/{APP}/…` tree, man pages,
 /// and completion filenames from this constant, so the whole `zig-out/share/`
 /// output flips atomically between profiles. NOT used for values that are
@@ -29,17 +29,17 @@ mod res_themes;
 /// e.g. `res_editor.rs`'s vim/nvim filetype-plugin filenames).
 ///
 /// This is a LOCAL `cfg`-gated mirror of `rustty_identity::APP_NAME`'s two
-/// values, NOT a call into that crate — see the `identity-ghostty` feature's
+/// values, NOT a call into that crate — see the `identity-oracle` feature's
 /// doc comment in `xtask/Cargo.toml` for why: this crate's unconditional
-/// `rustty-terminfo/identity-ghostty` dependency transitively forces
-/// `rustty-identity`'s `identity-ghostty` feature on for the whole build (Cargo
+/// `rustty-terminfo/identity-oracle` dependency transitively forces
+/// `rustty-identity`'s `identity-oracle` feature on for the whole build (Cargo
 /// feature unification on the shared `rustty-identity` package), so
 /// `rustty_identity::APP_NAME` would resolve to `"ghostty"` unconditionally if
 /// used here directly.
-#[cfg(not(feature = "identity-ghostty"))]
+#[cfg(not(feature = "identity-oracle"))]
 pub(crate) const APP: &str = "rustty";
-/// See the `not(feature = "identity-ghostty")` arm above for the full doc.
-#[cfg(feature = "identity-ghostty")]
+/// See the `not(feature = "identity-oracle")` arm above for the full doc.
+#[cfg(feature = "identity-oracle")]
 pub(crate) const APP: &str = "ghostty";
 
 const USAGE: &str = "\
@@ -52,7 +52,7 @@ SUBCOMMANDS:
     header-gen         Generate include/rustty.h from rustty-vt-c via cbindgen (R2)
     header-gen-apprt   Generate include/rustty-apprt.h from rustty-apprt-c via cbindgen (R2)
     xcframework        Package rustty-apprt-c into dist/RusttyKit.xcframework (macOS Swift-app tier)
-    resources          Generate zig-out/share/{terminfo,<app>,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase (<app> = rustty by default, ghostty under identity-ghostty)
+    resources          Generate zig-out/share/{terminfo,<app>,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase (<app> = rustty by default, ghostty under identity-oracle)
     help               Show this help
 ";
 
@@ -125,7 +125,7 @@ fn workspace_root() -> PathBuf {
 ///
 /// Per R2 the reference `ghostty.h` ABI-equivalence gate is DROPPED; the gate
 /// here is header self-consistency (cbindgen succeeds + the header compiles as
-/// C) plus behavioral parity via the `identity-ghostty` harness.
+/// C) plus behavioral parity via the `identity-oracle` harness.
 ///
 /// This shells out to the installed `cbindgen` CLI rather than linking the
 /// cbindgen crate, keeping xtask light. Equivalent manual command:
@@ -223,7 +223,7 @@ fn header_gen_apprt() -> Result<PathBuf, String> {
 /// module map — the Swift app links the canonical `rustty_*` ABI directly),
 /// then `xcodebuild -create-xcframework`. The staticlib is built under the
 /// `xcframework` profile (`panic = "abort"`, PREPORT_SWIFT_APP §4) using the
-/// DEFAULT feature set — the `identity-ghostty` alias layer was deleted
+/// DEFAULT feature set — the `identity-oracle` alias layer was deleted
 /// (rebrand Task 1), so only `rustty_*` symbols are exported.
 ///
 /// macOS-arm64 slice only (the host target). A universal slice would add
@@ -248,7 +248,7 @@ fn xcframework() -> Result<PathBuf, String> {
     // 1. Build the DEFAULT-profile staticlib under the abort profile.
     //
     // The shipped lib exports ONLY the canonical `rustty_*` ABI — the
-    // `identity-ghostty` alias feature was deleted (rebrand Task 1), so it is
+    // `identity-oracle` alias feature was deleted (rebrand Task 1), so it is
     // deliberately NOT passed here; the Swift app links `rustty_*` directly.
     //
     // MACOSX_DEPLOYMENT_TARGET pins the minimum-OS the compiler stamps into

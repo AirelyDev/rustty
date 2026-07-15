@@ -2800,7 +2800,7 @@ program dir `ghostty` → `rustty` (Entry default terminfo, DiskCache.add's cach
 terminfo, ssh's `TERM`/`SetEnv`/`infocmp` remote script + `ghostty-ssh-`
 control-path prefix, and every ported test fixture) route through
 `rustty-identity` (`TERMINFO_PRIMARY_NAME` / `APP_NAME`), so the tests stay
-self-consistent under both the default and `identity-ghostty` profiles. No new
+self-consistent under both the default and `identity-oracle` profiles. No new
 deferrals; two convention notes (NOT deferrals — no follow-up scheduled):
 
 - **The 2 DiskCache `FailingAllocator` OOM tests (`disk cache reads/add survives
@@ -3923,7 +3923,7 @@ later cleanup pass.
 in the global C-API state during `ghostty_init` and, if present, runs it and
 `posix.exit`s with its code; if absent it returns (the GUI-launch path). Ported to
 `rustty_cli_try_action` in `crates/rustty-apprt-c/src/lib.rs` (+ the `ghostty_*`
-alias under `identity-ghostty`). **What's LIVE:** the null-action GUI-launch path —
+alias under `identity-oracle`). **What's LIVE:** the null-action GUI-launch path —
 `state.action orelse return` — which is the macOS Swift-app milestone's actual need
 (a windowed launch stashes no action and returns cleanly WITHOUT exiting). **What's
 deferred:** the non-null CLI-action-from-C path. The state field

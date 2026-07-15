@@ -153,7 +153,7 @@ AUDIT: quality of the PORTED TEST SUITE itself — do the 4000+ Rust tests actua
 AUDIT: workspace/dependency/build hygiene against R3 (self-contained, same C libs) and R4 (acyclic layering).
 1. cargo metadata is OK to run (read-only, no build lock): dump the workspace graph; check no crate depends on anything referencing /Users/gael/projects/ghostty (also grep all build.rs and .cargo/config* for that path); confirm zero path/git deps escaping the repo.
 2. Pure-Rust substitution creep (R3 violation): list all crates.io deps of parity crates and flag any that REPLACE a C lib the reference uses (e.g. a pure-Rust png/freetype/regex instead of vendored C). Rust bindings to the same C lib are fine.
-3. Feature/profile audit: workspace Cargo.toml profiles — debug-assertions, overflow-checks, panic strategy per profile; cdylib/staticlib crate-types on the C-ABI crates; does identity-ghostty feature exist and flip cleanly (grep its cfg usage)?
+3. Feature/profile audit: workspace Cargo.toml profiles — debug-assertions, overflow-checks, panic strategy per profile; cdylib/staticlib crate-types on the C-ABI crates; does identity-oracle feature exist and flip cleanly (grep its cfg usage)?
 4. R4: run python3 .port/tools/cycle_check.py (read-only) and report; also sanity-check the layering intent: does rustty-font depend on rustty-vt or vice versa correctly (memory says font must stay BELOW vt with no vt edge)?
 5. Vendored C sources: verify checked-in vendored code identity where feasible (oniguruma/wuffs/etc. version headers vs what ghostty pins in build.zig.zon).`,
   },

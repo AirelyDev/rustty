@@ -176,7 +176,7 @@ mod tests {
     fn cache_entry_parsing_valid_formats() {
         // The terminfo token is the rustty product identity's primary terminfo
         // name (ADV-FIX 5); building the fixtures from it keeps the parse
-        // round-trip self-consistent under both the default and `identity-ghostty`
+        // round-trip self-consistent under both the default and `identity-oracle`
         // profiles.
         let ti = rustty_identity::TERMINFO_PRIMARY_NAME;
 

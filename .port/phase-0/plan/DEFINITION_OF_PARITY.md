@@ -399,14 +399,14 @@ fully in force.
 
 | Dropped constitution gate | Why it cannot hold under R2 | Replacement gate (binding) | Check |
 |---|---|---|---|
-| **ghostty.h ABI byte-match** (rustty header == `ghostty.h`) | header is `rustty.h`, symbols are `rustty_*`, tree is `rustty/vt/*` | **R2-ABI-shape:** rustty exports the *same set of functions with the same signatures*, renamed `ghostty_*`→`rustty_*`; the cbindgen-emitted `include/rustty.h` + `rustty/vt/*` tree exists and is symbol-complete vs the reference header set | `python3 .port/tools/gates/check_abi_shape.py --ref-headers $REF/zig-out/include/ghostty --rust-headers $RUSTTY/target/include/rustty --rename ghostty_=rustty_` → every ref symbol has a renamed counterpart; `nm -gU librustty-vt.dylib` exposes the full renamed set; **zero** residual `ghostty_*` symbols. Behavioral equivalence of each exported fn is proven by **G4 differential** with rustty built `--features identity-ghostty`. |
+| **ghostty.h ABI byte-match** (rustty header == `ghostty.h`) | header is `rustty.h`, symbols are `rustty_*`, tree is `rustty/vt/*` | **R2-ABI-shape:** rustty exports the *same set of functions with the same signatures*, renamed `ghostty_*`→`rustty_*`; the cbindgen-emitted `include/rustty.h` + `rustty/vt/*` tree exists and is symbol-complete vs the reference header set | `python3 .port/tools/gates/check_abi_shape.py --ref-headers $REF/zig-out/include/ghostty --rust-headers $RUSTTY/target/include/rustty --rename ghostty_=rustty_` → every ref symbol has a renamed counterpart; `nm -gU librustty-vt.dylib` exposes the full renamed set; **zero** residual `ghostty_*` symbols. Behavioral equivalence of each exported fn is proven by **G4 differential** with rustty built `--features identity-oracle`. |
 | **Swift-app-links-unchanged** (reference macOS app links our lib unmodified) | rustty ships its own identity; it is NOT a drop-in for the ghostty Swift app | **R2-xcframework-consumable:** `rustty-vt.xcframework` builds with all reference slices (`macos-arm64_x86_64`, `ios-arm64`, `ios-arm64-simulator`) and a sample Swift consumer linking the **rustty** framework compiles+links+runs | `xtask xcframework` produces the framework; `swiftc` test consumer links `rustty-vt.xcframework` and runs a smoke test → exit 0. (Equivalence to ghostty's own app is explicitly NOT required.) |
 | **terminfo == ghostty** (entry name/caps byte-equal to `ghostty` entry) | entry is named `rustty`; `TERM=xterm-rustty` (R2) | **R2-terminfo-cap-parity:** the rustty terminfo entry has the **same capability set/values** as the reference, with only the entry name + identity strings renamed `ghostty`→`rustty` | `infocmp -1 rustty` vs `infocmp -1 ghostty` (from `$REF`), diffed after applying the `ghostty`→`rustty` rename to names only → **zero** capability-value deltas. This is part of G9/P-SURF. |
 
-**What is retained unchanged:** the dual-profile `identity-ghostty` build feature
+**What is retained unchanged:** the dual-profile `identity-oracle` build feature
 makes the *behavioral* gates (G4 differential, G5 fuzz, conformance) compare
 byte-for-byte against the reference with **no canonicalization hacks** — when the
-parity harness builds rustty with `identity-ghostty`, every identity byte
+parity harness builds rustty with `identity-oracle`, every identity byte
 (XTVERSION, Primary/Secondary DA, `TERM`/`TERM_PROGRAM`, version strings, config
 dir) flips to the reference's value, so a byte diff in G4 is always a *real*
 behavioral divergence, never an identity artifact. Default (published) builds carry

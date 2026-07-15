@@ -15,17 +15,17 @@ authors.workspace = true
 [lints]
 workspace = true
 
-# `identity-ghostty` no longer compiles any `ghostty_benchmark_cli` C-ABI alias (that
+# `identity-oracle` no longer compiles any `ghostty_benchmark_cli` C-ABI alias (that
 # forwarder layer was deleted by the rebrand — rebrand Task 1); the canonical product
-# exports only `rustty_benchmark_cli` (R2), always. Enabling `identity-ghostty` now
+# exports only `rustty_benchmark_cli` (R2), always. Enabling `identity-oracle` now
 # only flips this crate's `rustty-identity` string identity; apprt-c enables this
-# feature from its own `identity-ghostty` so the flip is consistent across the linked
+# feature from its own `identity-oracle` so the flip is consistent across the linked
 # staticlib.
 [features]
-identity-ghostty = ["rustty-identity/identity-ghostty"]
+identity-oracle = ["rustty-identity/identity-oracle"]
 
 [dependencies]
-# Pulled in solely so `identity-ghostty` (above) has a string-identity crate to flip;
+# Pulled in solely so `identity-oracle` (above) has a string-identity crate to flip;
 # this crate's own logic reads no identity values today.
 rustty-identity = { workspace = true }
 rustty-vt = { workspace = true }

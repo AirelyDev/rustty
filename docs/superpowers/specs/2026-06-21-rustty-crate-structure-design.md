@@ -24,7 +24,7 @@ Binding amendments (see `.port/PORT_RULES.md`):
   content removed/weakened.
 - **R2 — Identity:** published artifacts are `rustty` (binary, `rustty_*` symbols,
   `rustty.h`, `TERM=xterm-rustty`, terminfo `rustty`, `~/.config/rustty`). A
-  `identity-ghostty` build feature flips all identity to the reference's values
+  `identity-oracle` build feature flips all identity to the reference's values
   for byte-exact differential testing only.
 - **R3 — Self-contained:** copy all needed C sources into rustty, build via
   `cc`+`bindgen`; zero dep on the ghostty tree (it's an external oracle only).
@@ -58,7 +58,7 @@ break (Section 4) lands, under the acyclicity gate, leaves-first.
 |---|---|---|
 | `rustty-util` | `quirks.zig, math.zig, fastmem.zig, file_type.zig, tripwire.zig` | assert/util leaf (after `quirks→font` break) |
 | `rustty-build-config` | `build_config.zig` | comptime config + backend enums (defined here, not pulled up) |
-| `rustty-identity` | (new) | single source of truth for R2 identity; `identity-ghostty` feature |
+| `rustty-identity` | (new) | single source of truth for R2 identity; `identity-oracle` feature |
 | `rustty-datastruct` | `datastruct/` | |
 | `rustty-unicode` | `unicode/` + generated tables | parity-replicated tables |
 | `rustty-simd` | `simd/` | + `simdutf-sys`, `highway-sys` |
@@ -167,7 +167,7 @@ Phase-0 emits the authoritative file-level `PORT_PLAN.md` from this.
 
 `rustty-identity` exports: app name, version strings, `TERM`/`TERM_PROGRAM`,
 terminfo name, config dir, and VT query responses (XTVERSION, Primary/Secondary
-DA). Default = `rustty`. Feature `identity-ghostty` (parity harness only) →
+DA). Default = `rustty`. Feature `identity-oracle` (parity harness only) →
 reference values, so differential output matches byte-for-byte with no
 canonicalization. Identity-equivalence gates dropped; behavioral gates retained.
 
@@ -177,7 +177,7 @@ canonicalization. Identity-equivalence gates dropped; behavioral gates retained.
 
 `app-runtime-{none,gtk}`, `renderer-{opengl,metal,software}`,
 `font-{freetype,coretext,fontconfig}`, `simd`, `sentry`, `i18n`, `wayland`,
-`x11`, `identity-ghostty`. Mirror reference defaults per target.
+`x11`, `identity-oracle`. Mirror reference defaults per target.
 
 ---
 
@@ -185,7 +185,7 @@ canonicalization. Identity-equivalence gates dropped; behavioral gates retained.
 
 1. **Ported assertions** — every reference `test{}` → Rust test (R1).
 2. **Differential testing (primary)** — identical input to reference (external
-   oracle, `identity-ghostty` build / golden corpora) and port; diff canonical
+   oracle, `identity-oracle` build / golden corpora) and port; diff canonical
    output via the vt formatters (Screen/PageList), config parse-then-serialize,
    input encode, render perceptual diff. Differential **fuzzing** stood up early.
 3. **Conformance & goldens** — vttest/esctest, the c-vt-* programs, snapshot

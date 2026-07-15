@@ -5,7 +5,7 @@
 # `include/rustty-apprt.h`. The reference's `include/ghostty.h` ABI-equivalence
 # gate is DROPPED (R2); the standing gate is header self-consistency (compiles
 # standalone as C AND C++) + the C compile+link smoke KAT (chunk E11) + behavioral
-# parity via the `identity-ghostty` harness.
+# parity via the `identity-oracle` harness.
 #
 # Generate with (wired into `xtask header-gen` in chunk E11):
 #   cbindgen --config crates/rustty-apprt-c/cbindgen.toml \

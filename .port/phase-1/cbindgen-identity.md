@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-21
 **Scope:** (1) Flesh out `rustty-identity` as the R2 source-of-truth with the
-`identity-ghostty` parity feature. (2) Stand up the cbindgen toolchain for
+`identity-oracle` parity feature. (2) Stand up the cbindgen toolchain for
 `rustty-vt-c` and prove it emits `include/rustty.h` with `rustty_*` symbols.
 **Governs:** `.port/PORT_RULES.md` (R1–R5) + the crate-structure design
 (`docs/superpowers/specs/2026-06-21-rustty-crate-structure-design.md`, §6) +
@@ -21,7 +21,7 @@
 value. There is no ghostty source file behind it — it is the additive R2 seam
 (R1 allows additive glue that loses nothing). All values are plain `&str`
 constants with two compile-time arms selected by the cargo feature
-`identity-ghostty`:
+`identity-oracle`:
 
 - **default (feature OFF) → `rustty`** — the published product identity.
 - **feature ON → `ghostty`** — the reference values, for the parity /
@@ -34,7 +34,7 @@ time so consumers can branch/log on the active identity.
 
 ### 1.2 The values (rustty default vs. ghostty reference)
 
-| Symbol | rustty (default) | ghostty (`identity-ghostty`) | Reference source |
+| Symbol | rustty (default) | ghostty (`identity-oracle`) | Reference source |
 |---|---|---|---|
 | `APP_NAME` | `rustty` | `ghostty` | `src/build_config.zig` |
 | `VERSION` | `0.1.0` | `1.3.2-dev` | `build.zig.zon` (`.version`) |
@@ -73,7 +73,7 @@ are *not* a fixed identity string — they are encoded from the
 `conformance_level=.vt220` + `features=.{.ansi_color}`; DA2 from
 `device_type=.vt220`, firmware/ROM = 0). Those numeric responses are
 identity-independent (a VT-conformance concern, owned by `rustty-vt`), so they
-are **not** flipped by `identity-ghostty`. The only DA-family string that is
+are **not** flipped by `identity-oracle`. The only DA-family string that is
 identity-bearing is the XTVERSION (`CSI > 0 q`) name, captured above. This is
 documented here so the boundary is explicit and nothing is silently dropped (R1).
 
@@ -97,14 +97,14 @@ running 1 test
 test tests::default_profile_is_rustty ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; ...
 
-$ cargo test -p rustty-identity --features identity-ghostty
+$ cargo test -p rustty-identity --features identity-oracle
 running 1 test
 test tests::ghostty_profile_matches_reference ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; ...
 ```
 
 `cargo clippy -p rustty-identity` and
-`cargo clippy -p rustty-identity --features identity-ghostty` are both clean
+`cargo clippy -p rustty-identity --features identity-oracle` are both clean
 (no warnings) under the workspace lints.
 
 ---
@@ -200,8 +200,8 @@ gates are **DROPPED** for rustty:
    - `clang -xc  -std=c11   -Wall -Wextra -I include -fsyntax-only <stub>.c`  → OK
    - `clang -xc++ -std=c++17 -Wall -Wextra -I include -fsyntax-only <stub>.cpp` → OK
    - double `#include "rustty.h"` compiles (include guard `RUSTTY_H`) → OK
-2. **Behavioral parity via `identity-ghostty`** — the differential harness builds
-   the port with `--features identity-ghostty` so every identity-bearing byte
+2. **Behavioral parity via `identity-oracle`** — the differential harness builds
+   the port with `--features identity-oracle` so every identity-bearing byte
    (TERM, TERM_PROGRAM, terminfo, XTVERSION, config paths, version) matches the
    reference oracle exactly, and the BEHAVIORAL parity gates (ported assertions,
    differential output, conformance/goldens, fuzz) — all of which remain in full
@@ -220,7 +220,7 @@ Created:
 - `.port/phase-1/cbindgen-identity.md` (this file)
 
 Modified:
-- `crates/rustty-identity/Cargo.toml` — added `[features] identity-ghostty = []`.
+- `crates/rustty-identity/Cargo.toml` — added `[features] identity-oracle = []`.
 - `crates/rustty-identity/src/lib.rs` — identity source-of-truth + dual-profile
   values + XTVERSION composers + the two per-profile unit tests.
 - `crates/rustty-vt-c/src/lib.rs` — toolchain-proof `rustty_vt_abi_version`
@@ -236,7 +236,7 @@ Modified:
   `ghostty/vt/*` layout).
 - `rustty-terminfo` (crate #22) consumes `rustty-identity`'s
   `TERMINFO_PRIMARY_NAME` / `TERMINFO_PREFERRED_NAME` (and emits the
-  `xterm-ghostty`/`ghostty` entry under `identity-ghostty` for the harness).
+  `xterm-ghostty`/`ghostty` entry under `identity-oracle` for the harness).
 - `rustty-config` / `rustty-os` consume `CONFIG_DIR` / `CONFIG_FILE`; `termio`
   consumes `TERM` / `TERM_PROGRAM`; `rustty-vt` wires `XTVERSION_NAME` /
   `xtversion_response()` into the XTVERSION effect.

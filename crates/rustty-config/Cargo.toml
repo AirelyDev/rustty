@@ -34,13 +34,13 @@ oniguruma = ["dep:rustty-oniguruma"]
 # compiled in the desktop config cluster; the gate flips on with the wasm
 # app-runtime (see src/wasm.rs and .port/phase-2/DEFERRALS.md).
 wasm = []
-# `identity-ghostty` no longer compiles any `ghostty_config_*` C-ABI alias layer (that
+# `identity-oracle` no longer compiles any `ghostty_config_*` C-ABI alias layer (that
 # forwarder layer was deleted by the rebrand — rebrand Task 1); the canonical product
-# exports only `rustty_config_*` (R2), always. Enabling `identity-ghostty` now only
+# exports only `rustty_config_*` (R2), always. Enabling `identity-oracle` now only
 # flips the `rustty-identity` string identity this crate reads (e.g. default `TERM`,
-# config subdir); apprt-c enables this feature from its own `identity-ghostty` so the
+# config subdir); apprt-c enables this feature from its own `identity-oracle` so the
 # flip is consistent across the linked staticlib.
-identity-ghostty = ["rustty-identity/identity-ghostty"]
+identity-oracle = ["rustty-identity/identity-oracle"]
 
 [dependencies]
 rustty-build-config = { workspace = true }

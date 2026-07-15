@@ -25,27 +25,27 @@ path = "src/main.rs"
 # names (`share/rustty/…` -> `share/ghostty/…`, `rustty.1` -> `ghostty.1`,
 # `_rustty` -> `_ghostty`, etc — see `main.rs`'s `APP` const).
 #
-# Deliberately does NOT forward to `rustty-identity/identity-ghostty`: this
-# crate unconditionally forces `rustty-terminfo/identity-ghostty` on below
+# Deliberately does NOT forward to `rustty-identity/identity-oracle`: this
+# crate unconditionally forces `rustty-terminfo/identity-oracle` on below
 # (for the reused macOS Swift app's hard-coded `TERM=xterm-ghostty`), and
 # `rustty-terminfo` transitively depends on the SAME `rustty-identity`
 # package this crate would otherwise depend on directly. Cargo unifies a
 # shared dependency's features across one build, so ANY
-# `rustty-identity/identity-ghostty` activation from anywhere in this build —
+# `rustty-identity/identity-oracle` activation from anywhere in this build —
 # including from a forward here — makes `rustty_identity::APP_NAME` resolve
 # to `"ghostty"` UNCONDITIONALLY, defeating DEFAULT=rustty (verified via
-# `cargo tree -p xtask -e features`, which shows a single `identity-ghostty`
+# `cargo tree -p xtask -e features`, which shows a single `identity-oracle`
 # edge, forced by `rustty-terminfo`). `main.rs`'s `APP` const is therefore a
 # LOCAL `cfg`-gated mirror of `rustty_identity::APP_NAME`'s two values rather
 # than a call into that crate; no `rustty-identity` dependency is needed here.
-identity-ghostty = []
+identity-oracle = []
 
 [dependencies]
 rustty-extra = { workspace = true }
-# identity-ghostty: emit the `xterm-ghostty` terminfo spelling so the reused
+# identity-oracle: emit the `xterm-ghostty` terminfo spelling so the reused
 # macOS Swift app's hard-coded `TERM=xterm-ghostty` resolves at runtime (R2;
 # `xterm-rustty` is the canonical name — see xtask/src/res_terminfo.rs). This
 # is forced on UNCONDITIONALLY (not gated behind this crate's own
-# `identity-ghostty` feature above) — it is orthogonal to the output-naming
+# `identity-oracle` feature above) — it is orthogonal to the output-naming
 # flip (see that feature's doc comment for why the two can't be merged).
-rustty-terminfo = { workspace = true, features = ["identity-ghostty"] }
+rustty-terminfo = { workspace = true, features = ["identity-oracle"] }

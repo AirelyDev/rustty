@@ -85,7 +85,7 @@ fuzzing the *comparator* (DESIGN.md), not just each side for crashes.
                         ┌─────────────────────┴─────────────────────┐
                         ▼                                            ▼
               [ref  vt_driver_ref]                         [port vt_driver_port]
-              libghostty-vt formatter                      librustty-vt (identity-ghostty)
+              libghostty-vt formatter                      librustty-vt (identity-oracle)
                         │  canonical_ref                              │  canonical_port
                         └───────────────────► comparator.py ◄────────┘
                                        diff → byte_divergence%
@@ -99,7 +99,7 @@ fuzzing the *comparator* (DESIGN.md), not just each side for crashes.
    `rustty-synthetic` output. Both sides consume the *same bytes* for every run.
 2. **Two oracles via one CLI contract.** `vt_driver_ref` (reference,
    libghostty-vt) and `vt_driver_port` (port, librustty-vt built with
-   `--features identity-ghostty`, R2). Identical flags/stdin (DESIGN.md §2).
+   `--features identity-oracle`, R2). Identical flags/stdin (DESIGN.md §2).
 3. **Differential check = `comparator.py`.** For each corpus input, diff the two
    canonical serializations; **any** `byte_divergence > 0` is a divergence to
    triage. (Per-side crash/hang detection still comes from native AFL on each
@@ -115,7 +115,7 @@ fuzzing the *comparator* (DESIGN.md), not just each side for crashes.
    as a blocker until parity is restored. Divergent inputs become permanent
    differential regression fixtures.
 6. **Identity matching.** No canonicalization in the comparator. The port harness
-   is built with `identity-ghostty` so identity tokens (XTVERSION/DA/version/
+   is built with `identity-oracle` so identity tokens (XTVERSION/DA/version/
    `TERM`) match byte-for-byte; a divergence in those bytes means the harness was
    mis-built — a real finding, not noise (R2).
 

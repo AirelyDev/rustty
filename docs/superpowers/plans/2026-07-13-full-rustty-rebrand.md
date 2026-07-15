@@ -4,7 +4,7 @@
 
 **Goal:** Convert every product-facing "Ghostty" name in the port — the C-ABI link seam, the macOS Swift app, the runtime identity, and the source-fidelity trace names — to "Rustty", while keeping the differential-parity machinery working by making it explicitly name-aware (port = `rustty` ↔ oracle = `ghostty`).
 
-**Architecture:** Three seams change together. (1) **C-ABI seam** — drop the `ghostty_*` alias layer entirely; the Swift app calls the already-canonical `rustty_*` symbols directly through a `RusttyKit` module. (2) **Swift app** — mechanical symbol/import repoint, then file/dir/Xcode-target renames. (3) **Runtime identity** — route the handful of hardcoded `xterm-ghostty` / `GHOSTTY_*` sites through the `rustty-identity` consts that already default to rustty. The `identity-ghostty` cargo feature is **retained** but **decoupled from the alias**: it now only flips identity *strings* so the byte-differential harness can still reproduce the ghostty oracle exactly.
+**Architecture:** Three seams change together. (1) **C-ABI seam** — drop the `ghostty_*` alias layer entirely; the Swift app calls the already-canonical `rustty_*` symbols directly through a `RusttyKit` module. (2) **Swift app** — mechanical symbol/import repoint, then file/dir/Xcode-target renames. (3) **Runtime identity** — route the handful of hardcoded `xterm-ghostty` / `GHOSTTY_*` sites through the `rustty-identity` consts that already default to rustty. The `identity-oracle` cargo feature is **retained** but **decoupled from the alias**: it now only flips identity *strings* so the byte-differential harness can still reproduce the ghostty oracle exactly.
 
 **Tech Stack:** Rust (cargo workspace + `xtask`), Swift/SwiftUI + Xcode (`xcodebuild`), cbindgen, macOS Metal, shell-integration scripts (bash/zsh/fish/elvish/nushell), terminfo.
 
@@ -15,7 +15,7 @@
 - **Swift namespace enum `Ghostty` → `Rustty`** (the `enum Ghostty { … }` / `extension Ghostty` namespace used throughout `macos/Sources`).
 - **TERM = `xterm-rustty`**, terminfo entry `rustty|xterm-rustty|Rustty`, env-var prefix `RUSTTY_`, config dir `rustty` — all sourced from `rustty-identity` consts (never hardcoded).
 - **Preserve ghostty's TERM-downgrade ssh fallback** (converts TERM → `xterm-256color` on remote hosts lacking the entry). It is not identity-specific; do not remove it.
-- **`identity-ghostty` feature is retained** as the parity/oracle profile: under it, every identity string flips back to the ghostty value so the differential harness reproduces the oracle byte-for-byte. It must **no longer** compile any `ghostty_*` C alias (the alias is gone).
+- **`identity-oracle` feature is retained** as the parity/oracle profile: under it, every identity string flips back to the ghostty value so the differential harness reproduces the oracle byte-for-byte. It must **no longer** compile any `ghostty_*` C alias (the alias is gone).
 - **Oracle carve-out — these KEEP ghostty names** because they *are* the external ghostty reference, not the rustty product: the read-only oracle tree `/Users/gael/projects/ghostty`; the captured baseline corpora under `.port/phase-0/**` (literal ghostty output bytes used for byte-differential comparison); `.port/audits/GHOSTTY_LIFETIMES.tsv` (a field-lifetime audit *of the ghostty source*). Any script or doc that references these must be made **name-aware**: it maps the rustty port artifact to its ghostty oracle counterpart explicitly, rather than assuming one name.
 - **R1 fidelity / R2 identity / R3 self-contained / R4 acyclicity** rules from the port continue to apply. Renaming a fidelity-trace *code* file (e.g. `main_ghostty.rs`) keeps its header comment's `PORTS: ghostty src/…` provenance line intact — the trace lives in the comment, not the filename.
 - **Every rename uses `git mv`** (never `rm`+`add`) so history is preserved. **Never `git push`, `git reset`, or `git stash`.** Retry on `index.lock` (sleep 3, ≤10×).
@@ -46,7 +46,7 @@ Context: the differential/gap infrastructure already treats **the external `/Use
 **Files:**
 - Read: `.port/tools/gates/check_symbol_manifest.sh`, `.port/tools/gates/run_differential.sh`, `.port/tools/gates/check_parity_surface.py`, `.port/tools/gates/check_constants_parity.py`, `.port/tools/ci.sh`
 - Read: `.port/audits/CABI_SYMBOLS.tsv` (the ghostty↔rustty symbol map — the model for name-awareness)
-- Read: `crates/rustty-identity/src/lib.rs:72-127` (the `#[cfg(feature = "identity-ghostty")] mod values` block)
+- Read: `crates/rustty-identity/src/lib.rs:72-127` (the `#[cfg(feature = "identity-oracle")] mod values` block)
 - Create: `.port/tools/parity_names.env` (the single sourced port↔oracle name map)
 - Create: `.port/tools/PARITY_NAMING.md` (the invariant + carve-out + how the map is used)
 
@@ -56,7 +56,7 @@ Context: the differential/gap infrastructure already treats **the external `/Use
 - [ ] **Step 1: Inventory every parity/gap script that keys on a rustty-or-ghostty name.**
 ```bash
 cd /Users/gael/projects/rustty
-grep -rn 'ghostty\|rustty\|identity-ghostty\|xterm-\|GHOSTTY_\|/projects/ghostty\|CABI_SYMBOLS' \
+grep -rn 'ghostty\|rustty\|identity-oracle\|xterm-\|GHOSTTY_\|/projects/ghostty\|CABI_SYMBOLS' \
   .port/tools/gates/*.sh .port/tools/gates/*.py .port/tools/ci.sh 2>/dev/null \
   | grep -viE '^\s*#' | head -60
 ```
@@ -111,7 +111,7 @@ sources `.port/tools/parity_names.env` for the port↔oracle name pairs so the
 rebrand never makes the port look divergent from the oracle.
 
 ## Two ways parity is proven (both name-aware)
-1. **String/behaviour parity** — build rustty **with `--features identity-ghostty`**,
+1. **String/behaviour parity** — build rustty **with `--features identity-oracle`**,
    which flips every `rustty-identity` string constant (APP_NAME, TERM, ENV_PREFIX,
    terminfo names, config dir) to its ghostty value. Byte output then matches the
    oracle. This flips STRINGS, never filenames or symbols.
@@ -126,7 +126,7 @@ rebrand never makes the port look divergent from the oracle.
 - `.port/phase-0/corpora/**`, `baseline/**`, `examples-out/**` — captured oracle golden bytes
 - `.port/audits/GHOSTTY_LIFETIMES.tsv`           — lifetime audit OF ghostty source
 - the `ghostty_name` column of `CABI_SYMBOLS.tsv` — the oracle symbol names
-- every `#[cfg(feature = "identity-ghostty")]` string block — the oracle-string profile
+- every `#[cfg(feature = "identity-oracle")]` string block — the oracle-string profile
 
 ## Becomes rustty (the port — renamed by this plan)
 - all C exports: ghostty_* -> rustty_* (alias deleted, Task 1)
@@ -137,7 +137,7 @@ rebrand never makes the port look divergent from the oracle.
 
 ## Residual-grep rule
 A gate that fails on a stray `ghostty` MUST exclude the carve-out paths above
-and MUST allow `#[cfg(feature = "identity-ghostty")]` blocks and the `ghostty_name`
+and MUST allow `#[cfg(feature = "identity-oracle")]` blocks and the `ghostty_name`
 TSV column.
 ```
 
@@ -164,7 +164,7 @@ git commit -m "parity: sourced port<->oracle name map + name-aware gap scripts +
 
 ## Phase 1 — C-ABI seam: drop the alias, repackage as RusttyKit
 
-### Task 1: Delete the `ghostty_*` C-ABI alias layer; decouple `identity-ghostty` from it
+### Task 1: Delete the `ghostty_*` C-ABI alias layer; decouple `identity-oracle` from it
 
 **Files:**
 - Delete: `crates/rustty-apprt-c/src/ghostty_alias.rs`
@@ -172,7 +172,7 @@ git commit -m "parity: sourced port<->oracle name map + name-aware gap scripts +
 - Delete: `crates/rustty-bench/src/ghostty_alias.rs`
 - Modify: `crates/rustty-apprt-c/src/lib.rs` (remove the `mod ghostty_alias;` + any force-link ref)
 - Modify: `crates/rustty-config/src/lib.rs`, `crates/rustty-bench/src/lib.rs` (same)
-- Modify: `crates/rustty-apprt-c/Cargo.toml`, `crates/rustty-config/Cargo.toml`, `crates/rustty-bench/Cargo.toml` (the `identity-ghostty` feature keeps flipping `rustty-identity` strings but no longer references the alias module)
+- Modify: `crates/rustty-apprt-c/Cargo.toml`, `crates/rustty-config/Cargo.toml`, `crates/rustty-bench/Cargo.toml` (the `identity-oracle` feature keeps flipping `rustty-identity` strings but no longer references the alias module)
 - Modify: `.port/tools/gates/check_symbol_manifest.sh` (remove the A2 "alias forwarder" verification section — the forwarders are gone; keep the A1 `CABI_SYMBOLS.tsv` bridge + live-`rustty_*`-export check; find the `# NOTE: A2 alias section removed by rebrand Task 1` marker left by Task 0)
 
 **Interfaces:**
@@ -184,7 +184,7 @@ git commit -m "parity: sourced port<->oracle name map + name-aware gap scripts +
 cd /Users/gael/projects/rustty
 grep -rn 'ghostty_alias\|mod ghostty_alias' crates/*/src/lib.rs crates/*/Cargo.toml
 ```
-Expected: `mod ghostty_alias;` (often `#[cfg(feature = "identity-ghostty")]`-gated) in the three crates + feature wiring in the Cargo.tomls.
+Expected: `mod ghostty_alias;` (often `#[cfg(feature = "identity-oracle")]`-gated) in the three crates + feature wiring in the Cargo.tomls.
 
 - [ ] **Step 2: Delete the three alias source files.**
 ```bash
@@ -195,16 +195,16 @@ git rm crates/rustty-apprt-c/src/ghostty_alias.rs \
 
 - [ ] **Step 3: Remove the `mod ghostty_alias;` declarations** from `crates/rustty-apprt-c/src/lib.rs`, `crates/rustty-config/src/lib.rs`, `crates/rustty-bench/src/lib.rs` (and any `#[used]`/force-link line that named an alias symbol). Leave the rest of each `lib.rs` untouched.
 
-- [ ] **Step 4: Update the three `Cargo.toml` `identity-ghostty` feature entries** so the feature still enables `rustty-config/identity-ghostty` + `rustty-bench/identity-ghostty` + `rustty-identity/identity-ghostty` (the string flip) but its doc comment no longer claims to compile an alias. In `crates/rustty-apprt-c/Cargo.toml` change the feature line to also propagate the identity crate:
+- [ ] **Step 4: Update the three `Cargo.toml` `identity-oracle` feature entries** so the feature still enables `rustty-config/identity-oracle` + `rustty-bench/identity-oracle` + `rustty-identity/identity-oracle` (the string flip) but its doc comment no longer claims to compile an alias. In `crates/rustty-apprt-c/Cargo.toml` change the feature line to also propagate the identity crate:
 ```toml
-identity-ghostty = ["rustty-config/identity-ghostty", "rustty-bench/identity-ghostty", "rustty-identity/identity-ghostty"]
+identity-oracle = ["rustty-config/identity-oracle", "rustty-bench/identity-oracle", "rustty-identity/identity-oracle"]
 ```
 (Confirm `rustty-identity` is a dependency of apprt-c; if not, add it under `[dependencies]` — it is a tiny leaf.)
 
 - [ ] **Step 5: Build both profiles and assert the alias is gone.**
 ```bash
 cargo build -p rustty-apprt-c
-cargo build -p rustty-apprt-c --features identity-ghostty
+cargo build -p rustty-apprt-c --features identity-oracle
 ```
 Expected: both succeed.
 
@@ -224,7 +224,7 @@ Expected: passes (or progress-mode if the oracle header is absent) — NOT red o
 - [ ] **Step 8: Commit.**
 ```bash
 git add -A crates/rustty-apprt-c crates/rustty-config crates/rustty-bench .port/tools/gates/check_symbol_manifest.sh
-git commit -m "abi: delete ghostty_* alias layer; identity-ghostty flips strings only; drop A2 gate section (Task 1)"
+git commit -m "abi: delete ghostty_* alias layer; identity-oracle flips strings only; drop A2 gate section (Task 1)"
 ```
 
 ### Task 2: Produce the canonical `include/rustty-embed.h` umbrella by renaming the validated frozen `ghostty.h`
@@ -324,7 +324,7 @@ std::fs::write(
 // 3. xcodebuild -create-xcframework
 let out = dist.join("RusttyKit.xcframework");
 ```
-Update the `libtool -o` / `CombineArchivesStep` target name to `libRusttyKit.a`, and update the doc comments that say `dist/GhosttyKit.xcframework` / "frozen `include/ghostty.h` + a `GhosttyKit` module map" / the stale `identity-ghostty`-emits-aliases note (xtask ~line 201, flagged in Task 1) to the Rustty equivalents. The abort-profile staticlib is still built with `--features identity-ghostty`? **No** — for the shipped product it must be the **default** profile now (the alias is gone; the Swift app links `rustty_*`). Change the staticlib build args to drop `--features identity-ghostty` (leave the `[profile.xcframework]` panic=abort profile).
+Update the `libtool -o` / `CombineArchivesStep` target name to `libRusttyKit.a`, and update the doc comments that say `dist/GhosttyKit.xcframework` / "frozen `include/ghostty.h` + a `GhosttyKit` module map" / the stale `identity-oracle`-emits-aliases note (xtask ~line 201, flagged in Task 1) to the Rustty equivalents. The abort-profile staticlib is still built with `--features identity-oracle`? **No** — for the shipped product it must be the **default** profile now (the alias is gone; the Swift app links `rustty_*`). Change the staticlib build args to drop `--features identity-oracle` (leave the `[profile.xcframework]` panic=abort profile).
 
 - [ ] **Step 2: Update the usage string** at line ~30: `Package rustty-apprt-c into dist/RusttyKit.xcframework (macOS Swift-app tier)`.
 
@@ -814,14 +814,14 @@ git commit -m "app: rename icon asset + wire build-rustty.sh to RusttyKit; Rustt
 - Modify: `crates/rustty-identity/src/lib.rs` (both `mod values` blocks + the public re-export section)
 
 **Interfaces:**
-- Produces: `rustty_identity::ENV_PREFIX` — `"RUSTTY"` by default, `"GHOSTTY"` under `identity-ghostty`.
+- Produces: `rustty_identity::ENV_PREFIX` — `"RUSTTY"` by default, `"GHOSTTY"` under `identity-oracle`.
 
-- [ ] **Step 1: Add the const to the default (`#[cfg(not(feature = "identity-ghostty"))]`) `mod values`:**
+- [ ] **Step 1: Add the const to the default (`#[cfg(not(feature = "identity-oracle"))]`) `mod values`:**
 ```rust
 /// Uppercase prefix for product environment variables (`{ENV_PREFIX}_RESOURCES_DIR`, …).
 pub const ENV_PREFIX: &str = "RUSTTY";
 ```
-and to the `#[cfg(feature = "identity-ghostty")]` block:
+and to the `#[cfg(feature = "identity-oracle")]` block:
 ```rust
 pub const ENV_PREFIX: &str = "GHOSTTY";
 ```
@@ -835,7 +835,7 @@ pub const ENV_PREFIX: &str = values::ENV_PREFIX;
 - [ ] **Step 3: Extend the identity tests** (`crates/rustty-identity/src/lib.rs` test mod) to assert `ENV_PREFIX == "RUSTTY"` (default) and, under the ghostty profile test, `"GHOSTTY"`. Run:
 ```bash
 cargo test -p rustty-identity
-cargo test -p rustty-identity --features identity-ghostty
+cargo test -p rustty-identity --features identity-oracle
 ```
 Expected: both green.
 
@@ -908,14 +908,14 @@ names: vec![
 ```
 Note: if `rustty-identity` has no title-case const, add `APP_NAME_TITLECASE` = `"Rustty"`/`"Ghostty"` in Task 10's pattern, or derive it inline. Keep it identity-sourced, not literal.
 
-- [ ] **Step 3: Update the doc note** at `crates/rustty-terminfo/src/lib.rs:9` to: "Default profile emits rustty/xterm-rustty; feature identity-ghostty emits ghostty/xterm-ghostty for the parity harness."
+- [ ] **Step 3: Update the doc note** at `crates/rustty-terminfo/src/lib.rs:9` to: "Default profile emits rustty/xterm-rustty; feature identity-oracle emits ghostty/xterm-ghostty for the parity harness."
 
 - [ ] **Step 4: Update/guard the `#[cfg(test)]` `encode` fixture** at source.rs:315 — its `expected` literal `ghostty|xterm-ghostty|Ghostty` is a hand-built `Source` with literal names, so it still passes (it doesn't go through identity). Leave the literal test as-is (it tests the *encoder*, not the product name). Add one new test that builds the real generator names and asserts they equal `b"rustty|xterm-rustty|Rustty,\n…"` under the default profile.
 
 - [ ] **Step 5: Test both profiles.**
 ```bash
 cargo test -p rustty-terminfo
-cargo test -p rustty-terminfo --features identity-ghostty 2>/dev/null | tail -5
+cargo test -p rustty-terminfo --features identity-oracle 2>/dev/null | tail -5
 ```
 Expected: default emits rustty names; harness emits ghostty names.
 
@@ -937,7 +937,7 @@ git commit -m "terminfo: entry names via rustty-identity (rustty/xterm-rustty), 
 - Modify: `crates/rustty-termio/src/shell_integration.rs` (29 `GHOSTTY_*` refs) + the env-write sites `crates/rustty-core/src/surface.rs`, `crates/rustty-termio/src/exec.rs`, `crates/rustty-os/src/resourcesdir.rs`, `crates/rustty-global/src/lib.rs`, `crates/rustty-renderer/src/lib.rs`, `crates/rustty-cli/src/pager.rs`, `crates/rustty-apprt-api/src/{action,ipc}.rs`, `crates/rustty-apprt/src/embedded.rs`, `crates/rustty-config/src/config_struct.rs`
 
 **Interfaces:**
-- Produces: the running terminal sets `RUSTTY_RESOURCES_DIR`, `RUSTTY_SHELL_*`, etc., and injects the `rustty.*` integration scripts. Under `identity-ghostty` the prefix reverts to `GHOSTTY_` (via `rustty_identity::ENV_PREFIX`) so parity holds.
+- Produces: the running terminal sets `RUSTTY_RESOURCES_DIR`, `RUSTTY_SHELL_*`, etc., and injects the `rustty.*` integration scripts. Under `identity-oracle` the prefix reverts to `GHOSTTY_` (via `rustty_identity::ENV_PREFIX`) so parity holds.
 
 - [ ] **Step 1: Rename the five scripts.**
 ```bash
@@ -965,9 +965,9 @@ Apply the same pattern at each env-write/read site listed above. Where a var nam
 
 - [ ] **Step 4: Confirm no literal `GHOSTTY_` remains in non-test emulator code** (test files may keep literals if they assert the harness profile):
 ```bash
-grep -rn 'GHOSTTY_' crates/rustty-*/src | grep -v '#\[cfg(' | grep -viE 'test|identity-ghostty'
+grep -rn 'GHOSTTY_' crates/rustty-*/src | grep -v '#\[cfg(' | grep -viE 'test|identity-oracle'
 ```
-Expected: empty (every remaining `GHOSTTY_` is inside an `identity-ghostty`/test context or built from `ENV_PREFIX`).
+Expected: empty (every remaining `GHOSTTY_` is inside an `identity-oracle`/test context or built from `ENV_PREFIX`).
 
 - [ ] **Step 5: Build + shell-integration tests.**
 ```bash
@@ -1060,23 +1060,23 @@ git add -A crates/rustty crates/rustty-cli
 git commit -m "trace: rename main_ghostty.rs->main_rustty.rs, cli/ghostty.rs->cli/rustty.rs (provenance kept in comments) (Task 15)"
 ```
 
-### Task 17: Rename the `identity-ghostty` cargo feature → `identity-oracle`
+### Task 17: Rename the `identity-oracle` cargo feature → `identity-oracle`
 
-Context: user request. The parity/oracle profile feature is named `identity-ghostty` in ~53 files (Cargo.tomls of rustty-identity/config/bench/apprt-c/terminfo/vt/vt-c/xtask, every `#[cfg(feature = "identity-ghostty")]` block, xtask build invocation, the gate/parity scripts, `PARITY_NAMING.md`). Rename it to `identity-oracle` (it flips product identity to the ghostty ORACLE for differential parity — "oracle" is the term already used in PARITY_NAMING.md). This is a mechanical string rename of the FEATURE NAME only — it does NOT change the ghostty string VALUES the feature selects (those stay ghostty — that's the whole point of the oracle profile).
+Context: user request. The parity/oracle profile feature is named `identity-oracle` in ~53 files (Cargo.tomls of rustty-identity/config/bench/apprt-c/terminfo/vt/vt-c/xtask, every `#[cfg(feature = "identity-oracle")]` block, xtask build invocation, the gate/parity scripts, `PARITY_NAMING.md`). Rename it to `identity-oracle` (it flips product identity to the ghostty ORACLE for differential parity — "oracle" is the term already used in PARITY_NAMING.md). This is a mechanical string rename of the FEATURE NAME only — it does NOT change the ghostty string VALUES the feature selects (those stay ghostty — that's the whole point of the oracle profile).
 
-**Files:** every file matching `git grep -l 'identity-ghostty'` — Cargo.toml `[features]` entries + inter-crate feature deps (`rustty-identity/identity-ghostty` → `rustty-identity/identity-oracle`), `#[cfg(feature = "identity-ghostty")]` attributes, `xtask/src/main.rs` (`--features identity-ghostty` → `identity-oracle`), `.port/tools/gates/*`, `.port/tools/parity_names.env`/`PARITY_NAMING.md`, docs.
+**Files:** every file matching `git grep -l 'identity-oracle'` — Cargo.toml `[features]` entries + inter-crate feature deps (`rustty-identity/identity-oracle` → `rustty-identity/identity-oracle`), `#[cfg(feature = "identity-oracle")]` attributes, `xtask/src/main.rs` (`--features identity-oracle` → `identity-oracle`), `.port/tools/gates/*`, `.port/tools/parity_names.env`/`PARITY_NAMING.md`, docs.
 
 - [ ] **Step 1: Inventory.**
 ```bash
 cd /Users/gael/projects/rustty
-git grep -l 'identity-ghostty' -- '**/Cargo.toml' '**/*.rs' 'xtask/**' '.port/**' 'docs/**' | sort
+git grep -l 'identity-oracle' -- '**/Cargo.toml' '**/*.rs' 'xtask/**' '.port/**' 'docs/**' | sort
 ```
 
 - [ ] **Step 2: Mechanical rename across all of them** (feature name only; the ghostty VALUES the feature gates are untouched):
 ```bash
 cd /Users/gael/projects/rustty
-for f in $(git grep -l 'identity-ghostty'); do sed -i '' 's/identity-ghostty/identity-oracle/g' "$f"; done
-git grep -n 'identity-ghostty' || echo "no identity-ghostty remaining"
+for f in $(git grep -l 'identity-oracle'); do sed -i '' 's/identity-oracle/identity-oracle/g' "$f"; done
+git grep -n 'identity-oracle' || echo "no identity-oracle remaining"
 ```
 
 - [ ] **Step 3: Verify both profiles + the parity harness still work under the new name.**
@@ -1084,17 +1084,17 @@ git grep -n 'identity-ghostty' || echo "no identity-ghostty remaining"
 cd /Users/gael/projects/rustty
 cargo build --workspace
 cargo test -p rustty-identity
-cargo test -p rustty-identity --features identity-oracle   # was identity-ghostty
+cargo test -p rustty-identity --features identity-oracle   # was identity-oracle
 cargo build -p rustty-apprt-c --features identity-oracle
 bash .port/tools/gates/check_rustty_h_abi.sh 2>&1 | tail -3
 bash .port/tools/gates/check_symbol_manifest.sh 2>&1 | tail -3
 ```
 Expected: default builds; `--features identity-oracle` flips identity to the ghostty oracle (APP_NAME=="ghostty", TERM=="xterm-ghostty") — the harness tests that asserted the ghostty values now run under `identity-oracle` and pass; gates green.
 
-- [ ] **Step 4: Update the doc note in `PARITY_NAMING.md`** — the invariant now reads "build with `--features identity-oracle`" (was identity-ghostty); the feature name is no longer a ghostty-branding exception (it's `identity-oracle`), so remove that carve-out note. Commit.
+- [ ] **Step 4: Update the doc note in `PARITY_NAMING.md`** — the invariant now reads "build with `--features identity-oracle`" (was identity-oracle); the feature name is no longer a ghostty-branding exception (it's `identity-oracle`), so remove that carve-out note. Commit.
 ```bash
 git add -A
-git commit -m "parity: rename identity-ghostty cargo feature -> identity-oracle (user request); values unchanged (Task 17)"
+git commit -m "parity: rename identity-oracle cargo feature -> identity-oracle (user request); values unchanged (Task 17)"
 ```
 
 ### Task 18: Fix the remaining runtime-identity leaks (obsolete-rationale terminfo, config-dir, editor filetype)
@@ -1196,7 +1196,7 @@ git commit -m "simd: rename internal vendored ghostty_simd_*/ghostty_hwy_* FFI s
 - Read-only across the tree; may touch stragglers surfaced by the sweep.
 
 **Interfaces:**
-- Produces: a tree whose only `ghostty` names are the documented oracle carve-out + `identity-ghostty` string blocks.
+- Produces: a tree whose only `ghostty` names are the documented oracle carve-out + `identity-oracle` string blocks.
 
 - [ ] **Step 1: Residual grep — everything tracked, minus the carve-out.**
 ```bash
@@ -1209,10 +1209,10 @@ Expected: **empty**. Any survivor is either a straggler to rename or must be add
 - [ ] **Step 2: Residual grep — content (case-insensitive `ghostty`) outside carve-out + identity/parity contexts.**
 ```bash
 git grep -in 'ghostty' -- crates macos xtask include \
-  | grep -viE 'identity-ghostty|ENV_PREFIX|PORTS: ghostty|oracle|parity|xterm-ghostty".to_vec\(\).*harness' \
-  | grep -viE 'cfg\(feature = "identity-ghostty"\)' | head -40
+  | grep -viE 'identity-oracle|ENV_PREFIX|PORTS: ghostty|oracle|parity|xterm-ghostty".to_vec\(\).*harness' \
+  | grep -viE 'cfg\(feature = "identity-oracle"\)' | head -40
 ```
-Review each hit: it must be (a) a `PORTS:`/oracle/provenance comment, (b) inside an `identity-ghostty` cfg block, or (c) a genuine straggler → fix it.
+Review each hit: it must be (a) a `PORTS:`/oracle/provenance comment, (b) inside an `identity-oracle` cfg block, or (c) a genuine straggler → fix it.
 
 - [ ] **Step 3: Workspace build + test.**
 ```bash
@@ -1223,8 +1223,8 @@ Expected: green (or the pre-existing known-red lanes only — no NEW failures fr
 
 - [ ] **Step 4: Prove parity still works** — build the harness profile and confirm identity strings flip back to ghostty:
 ```bash
-cargo test -p rustty-identity --features identity-ghostty
-cargo test -p rustty-terminfo --features identity-ghostty 2>/dev/null | tail -5
+cargo test -p rustty-identity --features identity-oracle
+cargo test -p rustty-terminfo --features identity-oracle 2>/dev/null | tail -5
 ```
 Expected: under the harness, `APP_NAME=="ghostty"`, `TERM=="xterm-ghostty"`, `ENV_PREFIX=="GHOSTTY"`, terminfo emits ghostty names.
 
@@ -1251,6 +1251,6 @@ git commit -m "rebrand: final residual sweep — tree is rustty-branded, oracle 
 
 **2. Placeholder scan:** No "TBD"/"handle edge cases"/"similar to Task N". The one soft spot — Task 12 Step 2 references `APP_NAME_TITLECASE` which may not yet exist; the step says to add it in Task 10's pattern or derive inline, with an exact value. Task 13's env-write list is enumerated from the actual grep. Acceptable — flagged inline, not hidden.
 
-**3. Type/name consistency:** `RusttyKit` (module), `libRusttyKit.a`, `rustty.h`, `Rustty.xcodeproj`, `Sources/RusttyKit`, `RusttyUITests`, `Rustty` (Swift namespace), `rustty_*` (C symbols), `rustty_identity::{TERM, ENV_PREFIX, TERMINFO_PREFERRED_NAME}`, `xterm-rustty` — used consistently across all tasks. The `identity-ghostty` feature name is deliberately unchanged (it names the *oracle* it reproduces — a name-aware exception, documented in Task 0).
+**3. Type/name consistency:** `RusttyKit` (module), `libRusttyKit.a`, `rustty.h`, `Rustty.xcodeproj`, `Sources/RusttyKit`, `RusttyUITests`, `Rustty` (Swift namespace), `rustty_*` (C symbols), `rustty_identity::{TERM, ENV_PREFIX, TERMINFO_PREFERRED_NAME}`, `xterm-rustty` — used consistently across all tasks. The `identity-oracle` feature name is deliberately unchanged (it names the *oracle* it reproduces — a name-aware exception, documented in Task 0).
 
 **Known coupling to respect during execution:** Tasks 1→2→3→4 are strictly ordered (alias must die before header regen before repackage before frozen-header delete). Tasks 5→6→7→8→9 are strictly ordered (symbols before namespace before files before pbxproj before build). Phase 3 tasks are independent of Phase 2 and may be done by a separate implementer, but Task 13 and Task 11/12 all touch `config_struct.rs` — run them sequentially, not in parallel.

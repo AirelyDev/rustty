@@ -53,7 +53,7 @@ librustty exports `rustty_*` as the real, documented ABI (`include/rustty.h`) â€
 compat view over the identical struct/enum layouts. Rationale: the reused Swift app (~150 files,
 ~163 hard-coded `ghostty_` symbols) stays **byte-identical to upstream**, so re-syncing ghostty's
 ongoing Swift development is a plain copy; 100% of the adaptation lives in one generated file in
-rustty's tree; zero Swift source touched. This mirrors the blessed `identity-ghostty` build-feature
+rustty's tree; zero Swift source touched. This mirrors the blessed `identity-oracle` build-feature
 precedent (reference-compat as an isolated, supported profile). Detailed design deferred to
 Sub-project #3.
 

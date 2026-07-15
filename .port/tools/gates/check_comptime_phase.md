@@ -76,7 +76,7 @@ reply emitter, tick every box:
       (`write!`/`concat!`/`macro`), never assembled by parsing rendered bytes.
 - [ ] The Zig test-for-test parity assertions for the emitter are preserved (R1);
       the golden strings match the reference's expected bytes exactly (identity
-      differences are handled by the `identity-ghostty` profile, R2 — never by
+      differences are handled by the `identity-oracle` profile, R2 — never by
       canonicalizing the golden).
 
 ### Emitter inventory currently covered by the golden corpus

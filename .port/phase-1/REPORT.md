@@ -29,7 +29,7 @@ critic agent returned its verdict structured but did not write the files.)*
   Each: exit 0 GREEN / non-zero RED / exit 3 BLOCKED; each has `--self-test`; all 9 self-tests pass.
 - **CI:** `.port/tools/ci.sh` + `.github/workflows/ci.yml` + `CI.md` (hard-fail vs
   progress-mode-while-porting documented).
-- **Identity dual-profile:** `crates/rustty-identity` with `identity-ghostty` feature
+- **Identity dual-profile:** `crates/rustty-identity` with `identity-oracle` feature
   (default=rustty, feature=ghostty values); both profiles' tests pass.
 - **cbindgen:** wired for `rustty-vt-c` → git-tracked `include/rustty.h`
   (`rustty_*` prefix, zero `ghostty_*` symbols).
@@ -37,7 +37,7 @@ critic agent returned its verdict structured but did not write the files.)*
   `links=z`, bindgen, 4/4 bit-exact test). Template in `crates-sys/README.md`.
 - **Harness gate:** `.port/phase-0/harness/gate_empty_divergence.sh` runs;
   current divergence 100% vs empty port (correct); `GATE.md` documents the
-  100%→0% flip path via `identity-ghostty`.
+  100%→0% flip path via `identity-oracle`.
 
 ## Gate self-test matrix
 

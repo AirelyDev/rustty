@@ -7,7 +7,7 @@
 #                [INPUT_FILE]   (or VT bytes on stdin)
 #   - Reads identical VT bytes, runs them through the rustty VT core, and emits
 #     the SAME canonical Screen/PageList serialization to stdout (byte-for-byte
-#     with the reference when the port is built with the `identity-ghostty`
+#     with the reference when the port is built with the `identity-oracle`
 #     feature, per R2 — no canonicalization is performed here).
 #   - stdout = canonical bytes ONLY; diagnostics to stderr; exit 0 on success.
 #
@@ -23,7 +23,7 @@
 #   `rustty_formatter_*`, linked against `librustty-vt.a`) OR a Rust binary in
 #   `rustty-bench`/a harness crate — point RUSTTY_VT_DRIVER at it (or drop a
 #   binary at bin/vt_driver_port). It MUST be built with `--features
-#   identity-ghostty` so emitted identity tokens match the reference byte-exact.
+#   identity-oracle` so emitted identity tokens match the reference byte-exact.
 #   This wrapper then forwards argv+stdin to it unchanged. build_port_driver.sh
 #   produces exactly such a binary from the SAME ref_driver/vt_driver.c source.
 set -euo pipefail
@@ -34,7 +34,7 @@ HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 #   1. $RUSTTY_VT_DRIVER (explicit override)
 #   2. bin/vt_driver_port (built artifact, if/when it exists)
 #   3. opt-in auto-build via build_port_driver.sh (RUSTTY_AUTOBUILD_PORT=1), which
-#      compiles vt_driver.c against rustty's librustty-vt.a (identity-ghostty).
+#      compiles vt_driver.c against rustty's librustty-vt.a (identity-oracle).
 PORT_BIN="${RUSTTY_VT_DRIVER:-}"
 if [ -z "$PORT_BIN" ] && [ -x "$HARNESS_DIR/bin/vt_driver_port" ]; then
   PORT_BIN="$HARNESS_DIR/bin/vt_driver_port"

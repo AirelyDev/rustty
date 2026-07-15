@@ -28,26 +28,26 @@ workspace = true
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
 
-# `identity-ghostty` no longer compiles any `ghostty_*` C-ABI alias layer (that
+# `identity-oracle` no longer compiles any `ghostty_*` C-ABI alias layer (that
 # forwarder layer was deleted by the rebrand — rebrand Task 1). The canonical product
-# exports ONLY `rustty_*` (R2), always, in every profile. `identity-ghostty` now flips
+# exports ONLY `rustty_*` (R2), always, in every profile. `identity-oracle` now flips
 # ONLY the `rustty-identity` string identity (app name/version/TERM/terminfo/etc.) to
 # the reference ghostty values, for the parity/differential harness — never for a
 # published rustty artifact.
 [features]
-# Enabling apprt-c's `identity-ghostty` also turns on rustty-config's + rustty-bench's
-# `identity-ghostty` (which themselves flip via `rustty-identity`), and flips
+# Enabling apprt-c's `identity-oracle` also turns on rustty-config's + rustty-bench's
+# `identity-oracle` (which themselves flip via `rustty-identity`), and flips
 # `rustty-identity` directly too so the whole linked staticlib sees one consistent
 # identity profile regardless of which crate in the graph first pulls it in.
-identity-ghostty = [
-    "rustty-config/identity-ghostty",
-    "rustty-bench/identity-ghostty",
-    "rustty-identity/identity-ghostty",
+identity-oracle = [
+    "rustty-config/identity-oracle",
+    "rustty-bench/identity-oracle",
+    "rustty-identity/identity-oracle",
 ]
 
 [dependencies]
 rustty-apprt = { workspace = true }
-# The `identity-ghostty` feature above flips this crate's string identity directly
+# The `identity-oracle` feature above flips this crate's string identity directly
 # (app name/version/etc.), independent of whatever rustty-config/rustty-bench do with
 # their own copies of the feature. Not otherwise used by apprt-c's own logic.
 rustty-identity = { workspace = true }
@@ -103,7 +103,7 @@ rustty-build-config = { workspace = true }
 # lives in rustty-bench (`benchmark/CApi.zig`). The reference `main_c.zig` force-references
 # it via `comptime { _ = @import("benchmark/main.zig").CApi; }` so the export is linked into
 # the C API lib; apprt-c (this hub) mirrors that with an `extern crate rustty_bench as _;`
-# force-link in `lib.rs`, and enables its `identity-ghostty` feature (above) for the alias.
+# force-link in `lib.rs`, and enables its `identity-oracle` feature (above) for the alias.
 # apprt-c is a TOP SINK (nothing depends on it), so this forward edge to member 28 keeps
 # check_acyclic.sh GREEN.
 rustty-bench = { workspace = true }

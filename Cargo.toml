@@ -191,7 +191,7 @@ rustty-cli = { path = "crates/rustty-cli" }
 rustty-extra = { path = "crates/rustty-extra" }
 # The benchmark suite + its `rustty_benchmark_cli` C-ABI export (port of src/benchmark/).
 # apprt-c force-links it (the `_ = benchmark.CApi` analog) so `ghostty_benchmark_cli` lands
-# in the app C-ABI staticlib under `identity-ghostty`.
+# in the app C-ABI staticlib under `identity-oracle`.
 rustty-bench = { path = "crates/rustty-bench" }
 # Additive infra glue (R1): Zig stdlib equivalents; not in the parity contract.
 rustty-zigstd = { path = "crates/rustty-zigstd" }

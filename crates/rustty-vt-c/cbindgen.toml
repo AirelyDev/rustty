@@ -4,7 +4,7 @@
 # prefix and the header is `include/rustty.h` (with the `rustty/vt/*` family
 # carved out as the ABI is ported). The reference's `include/ghostty.h` ABI-
 # equivalence gate is DROPPED (R2); the standing gate is header
-# self-consistency + behavioral parity via the `identity-ghostty` harness.
+# self-consistency + behavioral parity via the `identity-oracle` harness.
 #
 # Generate with:
 #   cbindgen --config crates/rustty-vt-c/cbindgen.toml \

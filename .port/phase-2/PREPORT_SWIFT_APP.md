@@ -216,7 +216,7 @@ breach is memory-unsafety on one side or the other.
 **Status tension to surface honestly.** The tasking says this milestone "is gated on **open**
 decision #1 … DO NOT resolve it." The completion-plan memory, however, records decision #1 as
 **user-locked to Branch A** ("C-ABI symbol identity = `ghostty_*` aliases over a canonical
-`rustty_*` ABI … all glue in one generated alias file; mirrors the `identity-ghostty` precedent").
+`rustty_*` ABI … all glue in one generated alias file; mirrors the `identity-oracle` precedent").
 This artifact treats it as **open per the tasking** and makes the pre-port robust to either branch;
 the port lead should reconcile the lock vs the "open" framing before the port pass.
 
@@ -226,7 +226,7 @@ layer** emits each `ghostty_*` name pointing at the same code. The reused Swift 
 ~163 hard-coded `ghostty_` symbols) stays byte-identical to upstream → cheap upstream re-sync.
 - Alias mechanism options (pick during port, not now): (a) `#[export_name = "ghostty_app_new"]`
   thin wrappers; (b) a generated linker-alias/`.def`/`objcopy --add-symbol`; (c) a cargo
-  `identity-ghostty` feature toggling the export names — the direct analog of ghostty's own build
+  `identity-oracle` feature toggling the export names — the direct analog of ghostty's own build
   option the memory cites.
 - cbindgen emits **two** headers: `rustty.h` (canonical, the rustty-native product) **and** a
   `ghostty.h` that is **byte-identical to `include/ghostty.h`** so the Swift umbrella header and

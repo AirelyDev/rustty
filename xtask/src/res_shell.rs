@@ -8,7 +8,7 @@
 //! Layout matches ghostty's `zig build` install tree (verified against
 //! `GhosttyResources.zig`), with the OUTPUT filenames routed through
 //! [`crate::APP`] (Task 14 — `rustty` by default, `ghostty` under
-//! `identity-ghostty`):
+//! `identity-oracle`):
 //!   - bash: `share/bash-completion/completions/{APP}.bash`
 //!   - zsh:  `share/zsh/site-functions/_{APP}`
 //!   - fish: `share/fish/vendor_completions.d/{APP}.fish`

@@ -48,7 +48,7 @@ Ranked by severity, then reachability.
   largest behavioral divergence in this tier. Documented R5 deferral (not
   silent), but documentation does not restore the behavior.
 - **Fix sketch**: vendor ghostty's `src/shell-integration/` tree as rustty data
-  (identity-ghostty spelling) and copy it into `share/ghostty/shell-integration/`
+  (identity-oracle spelling) and copy it into `share/ghostty/shell-integration/`
   from `gen_ghostty_root`, mirroring `addInstallDirectory(exclude .md)`.
 
 ### 2.2 [HIGH] `share/ghostty/themes/` not shipped though ghostty defaults emit-themes ON
@@ -247,7 +247,7 @@ Each attested behavior-preserving unless flagged.
   `enum(c_int)`, `const char*`, by-value structs) all identical.
 - **Info struct layout + BuildMode ordinals + version source** — `{c_int, *const
   u8, usize}` bit-matches `ghostty_info_s`; BuildMode 0/1/2/3 order preserved;
-  version from `&'static str` (VERSION = "1.3.2-dev" under identity-ghostty),
+  version from `&'static str` (VERSION = "1.3.2-dev" under identity-oracle),
   read as non-NUL bytes for exactly version_len.
 - **Darwin gating** — 6 Darwin-only forwarders gated `macos|ios`;
   `set_window_background_blur` left ungated exactly as `ghostty.h`.
@@ -272,7 +272,7 @@ Each attested behavior-preserving unless flagged.
   `UnsupportedPlatform` all lowered faithfully (objc null-check → raw-ptr
   `is_null()`), tag mapping macos=1/ios=2 line-for-line.
 - **Terminfo capability table** — 268/268 names identical (empty set-diff both
-  directions); acsc/Smulx/Setulc/sgr byte-for-byte; identity-ghostty names
+  directions); acsc/Smulx/Setulc/sgr byte-for-byte; identity-oracle names
   `xterm-ghostty|ghostty|Ghostty`.
 - **Completion/vim/sublime install paths + content** — every `install_subdir`
   string matches character-for-character; single generated tree reused for

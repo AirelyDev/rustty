@@ -38,7 +38,7 @@ ghostty drop-in): binary `rustty`, `rustty_*` C symbols, `include/rustty.h` +
 config dir `~/.config/rustty`, version/XTVERSION/DA responses reporting rustty.
 
 A single `rustty-identity` source-of-truth crate holds all of these. A build
-feature **`identity-ghostty`** flips every value to the reference's, used **only**
+feature **`identity-oracle`** flips every value to the reference's, used **only**
 by the parity harness so differential output matches the reference byte-for-byte
 (no canonicalization hacks). The identity-EQUIVALENCE gates from the constitution
 (ghostty.h ABI match, Swift-app-links-unchanged, terminfo==ghostty) are dropped;

@@ -19,7 +19,7 @@ workspace = true
 # Parity-harness identity profile (R2). Flips the terminfo names to the
 # reference ghostty values by forwarding to `rustty-identity`'s feature of the
 # same name, so differential output matches the oracle byte-for-byte.
-identity-ghostty = ["rustty-identity/identity-ghostty"]
+identity-oracle = ["rustty-identity/identity-oracle"]
 
 [dependencies]
 rustty-identity = { workspace = true }

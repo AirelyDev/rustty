@@ -1,7 +1,7 @@
 //! `res_themes` — emit the ghostty color-theme corpus into
 //! `share/{APP}/themes/` for the macOS Xcode Copy-Resources phase (`{APP}` =
 //! [`crate::APP`], Task 14 — `rustty` by default, `ghostty` under
-//! `identity-ghostty`).
+//! `identity-oracle`).
 //!
 //! Faithful port of ghostty's `src/build/GhosttyResources.zig` "Themes" block:
 //!

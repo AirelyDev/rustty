@@ -28,7 +28,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 # version (`build.zig:10` `lib_version = "0.1.0-dev"`), so the G4
 # c-vt-build-info golden matches byte-for-byte. Harness only — never enable
 # for a published rustty artifact.
-identity-ghostty = ["rustty-vt/identity-ghostty"]
+identity-oracle = ["rustty-vt/identity-oracle"]
 
 [dependencies]
 rustty-vt = { workspace = true }

@@ -33,7 +33,7 @@ simd = []
 # to the reference ghostty value by forwarding to `rustty-identity`'s feature
 # of the same name, so the G4 differential output (c-vt-build-info) matches
 # the oracle byte-for-byte. Harness only — never for published artifacts.
-identity-ghostty = ["rustty-identity/identity-ghostty"]
+identity-oracle = ["rustty-identity/identity-oracle"]
 # Whether the apprt-layer `dcimgui` (cimgui) binding is available. Gates
 # `input::key::Key::imgui_key` (the Key->cimgui-constant mapping), an apprt-layer
 # GUI-glue dependency (R3) DEFERRED to apprt — see DEFERRALS.md. Off by default so

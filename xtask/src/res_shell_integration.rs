@@ -18,11 +18,11 @@
 //! (`rustty.bash`, `rustty-integration.elv`, `rustty-shell-integration.fish`,
 //! `rustty.nu`, `rustty-integration`) and rewrote every `GHOSTTY_*` env var and
 //! `ghostty` self-reference inside them to `RUSTTY_*`/`rustty`
-//! unconditionally (no `identity-ghostty` dual-profile for this content). The
+//! unconditionally (no `identity-oracle` dual-profile for this content). The
 //! DESTINATION keys below (`FILES`) were updated in Task 14 to match those
 //! renamed sources exactly. The enclosing `share/{APP}/shell-integration/`
 //! root DOES still route through [`crate::APP`] (Task 14): `rustty` by
-//! default, `ghostty` under `identity-ghostty` — matching the runtime lookup
+//! default, `ghostty` under `identity-oracle` — matching the runtime lookup
 //! (`rustty_os::resourcesdir` / `rustty_identity::APP_NAME`).
 //!
 //! R5: every emitted file carries REAL vendored content (never faked); `*.md`
@@ -42,7 +42,7 @@ use std::path::Path;
 ///
 /// The destination basenames below are LITERAL (not `crate::APP`-routed):
 /// Task 13 renamed the five scripts unconditionally to their rustty spelling
-/// (no `identity-ghostty` variant exists for this content), so the
+/// (no `identity-oracle` variant exists for this content), so the
 /// destination key simply matches each renamed source file's actual name.
 const FILES: &[(&str, &[u8])] = &[
     (

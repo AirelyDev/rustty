@@ -81,7 +81,7 @@ log(`Fetched ${good.length}/${sources.length} source clusters, ${good.reduce((n,
 phase('Synthesize')
 const synthesis = await agent(`You are synthesizing research on the Bun Zig→Rust rewrite into an actionable learnings document for rustty (full-fidelity Zig→Rust port of Ghostty; rules R1-R6 as described below).
 
-rustty PORT_RULES summary: R1 100% fidelity (every line/comment/test/assertion, no loss; completeness critic vs Phase-0 inventory); R2 rustty identity + identity-ghostty parity profile; R3 self-contained, same C libs, ghostty used only as external oracle; R4 acyclic layered crates (39 crates), cycle_check gate; R5 never weaken gates; R6 Miri primary for pure-Rust, ASan for FFI, LSan deferred to Linux CI. Known rustty-specific hazards from prior work: Stacked-Borrows UB from &mut args re-read across assert_integrity (fixed via raw-ptr args), long-lived raw aliases + interleaved &mut (fixed via raw-self helpers, proven on isolated Miri harnesses).
+rustty PORT_RULES summary: R1 100% fidelity (every line/comment/test/assertion, no loss; completeness critic vs Phase-0 inventory); R2 rustty identity + identity-oracle parity profile; R3 self-contained, same C libs, ghostty used only as external oracle; R4 acyclic layered crates (39 crates), cycle_check gate; R5 never weaken gates; R6 Miri primary for pure-Rust, ASan for FFI, LSan deferred to Linux CI. Known rustty-specific hazards from prior work: Stacked-Borrows UB from &mut args re-read across assert_integrity (fixed via raw-ptr args), long-lived raw aliases + interleaved &mut (fixed via raw-self helpers, proven on isolated Miri harnesses).
 
 Here are the raw findings from ${good.length} research agents (JSON):
 ${JSON.stringify(good, null, 1)}
