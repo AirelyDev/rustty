@@ -45,7 +45,17 @@ pub mod renderer;
 pub mod screen;
 // pub const style = @import("widgets/style.zig");
 pub mod style;
-// pub const surface = @import("widgets/surface.zig");      (Phase 3)
+// pub const surface = @import("widgets/surface.zig");
+//
+// PORT NOTE (Task 15): the `Mouse` state (whose `last_point: Option<Pin>` is the
+// R3 hazard field, SB/TB-clean handling PROVEN on `.port/phase-2/
+// mirihar-inspector-pin`) + the window-name constants are LIVE. The top-level
+// `Inspector` aggregate + surface `Info` widget + the dimensions/font/mouse
+// tables are carried as the preserved-verbatim reference body (R1) — blocked on
+// the cyclic core `Surface` accessor-trait seam (Task 6/17), `widgets::termio::
+// Stream` (Task 16), `widgets::terminal::Info`, and three unbound dcimgui-sys
+// DockBuilder symbols — and inhabit in place (grows-in-place doctrine).
+pub mod surface;
 // pub const terminal = @import("widgets/terminal.zig");
 //
 // PORT NOTE (Task 14): the seven free-function tables (`miscTable`,
