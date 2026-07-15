@@ -365,7 +365,7 @@ pub enum WindowTheme {
     System,
     Light,
     Dark,
-    Ghostty,
+    Rustty,
 }
 
 // pub const WindowColorspace = enum { srgb, "display-p3" };
@@ -859,7 +859,7 @@ bare_enum_names!(WindowTheme {
     System => b"system",
     Light => b"light",
     Dark => b"dark",
-    Ghostty => b"ghostty",
+    Rustty => b"rustty",
 });
 
 // WindowColorspace: hoisted to rustty-render-types (Chunk 3a); its bare-enum

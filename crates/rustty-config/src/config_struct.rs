@@ -3209,14 +3209,14 @@ pub struct Config {
     pub window_show_tab_bar: WindowShowTabBar,
     // @"window-titlebar-background": ?Color = null,
     /// Background color for the window titlebar. This only takes effect if
-    /// window-theme is set to ghostty. Currently only supported in the GTK app
+    /// window-theme is set to rustty. Currently only supported in the GTK app
     /// runtime.
     ///
     /// Specified as either hex (`#RRGGBB` or `RRGGBB`) or a named X11 color.
     pub window_titlebar_background: Option<Color>,
     // @"window-titlebar-foreground": ?Color = null,
     /// Foreground color for the window titlebar. This only takes effect if
-    /// window-theme is set to ghostty. Currently only supported in the GTK app
+    /// window-theme is set to rustty. Currently only supported in the GTK app
     /// runtime.
     ///
     /// Specified as either hex (`#RRGGBB` or `RRGGBB`) or a named X11 color.

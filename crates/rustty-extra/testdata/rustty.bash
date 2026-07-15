@@ -368,7 +368,7 @@ _rustty() {
       --window-decoration) _compreply compgen -W "auto client server none" -- "$cur"; _add_spaces ;;
       --window-title-font-family) return ;;
       --window-subtitle) _compreply compgen -W "false working-directory" -- "$cur"; _add_spaces ;;
-      --window-theme) _compreply compgen -W "auto system light dark ghostty" -- "$cur"; _add_spaces ;;
+      --window-theme) _compreply compgen -W "auto system light dark rustty" -- "$cur"; _add_spaces ;;
       --window-colorspace) _compreply compgen -W "srgb display-p3" -- "$cur"; _add_spaces ;;
       --window-height) return ;;
       --window-width) return ;;

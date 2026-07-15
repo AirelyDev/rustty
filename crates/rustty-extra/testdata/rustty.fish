@@ -112,7 +112,7 @@ complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l window-inhe
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l window-decoration -r -f -a "auto client server none" -d "Configure a preference for window decorations."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l window-title-font-family -r -f -d "The font that will be used for the application's window and tab titles."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l window-subtitle -r -f -a "false working-directory" -d "The text that will be displayed in the subtitle of the window."
-complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l window-theme -r -f -a "auto system light dark ghostty" -d "The theme to use for the windows."
+complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l window-theme -r -f -a "auto system light dark rustty" -d "The theme to use for the windows."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l window-colorspace -r -f -a "srgb display-p3" -d "The color space to use when interpreting terminal colors."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l window-height -r -f -d "The initial window size."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l window-width -r -f

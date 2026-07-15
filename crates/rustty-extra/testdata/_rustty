@@ -125,7 +125,7 @@ _config() {
     "--window-decoration=-:::(auto client server none)" \
     "--window-title-font-family=-:::( )" \
     "--window-subtitle=-:::(false working-directory)" \
-    "--window-theme=-:::(auto system light dark ghostty)" \
+    "--window-theme=-:::(auto system light dark rustty)" \
     "--window-colorspace=-:::(srgb display-p3)" \
     "--window-height=-:::( )" \
     "--window-width=-:::( )" \
