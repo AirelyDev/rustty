@@ -1,13 +1,12 @@
-# Example: `ghostty-vt` Static Linking
+# Example: `rustty-vt` Static Linking
 
-This contains a simple example of how to statically link the `ghostty-vt`
-C library with a C program using the `ghostty-vt-static` artifact. It is
+This contains a simple example of how to statically link the `rustty-vt`
+C library with a C program using the `rustty-vt-static` artifact. It is
 otherwise identical to the `c-vt` example.
 
-This uses a `build.zig` and `Zig` to build the C program so that we
-can reuse a lot of our build logic and depend directly on our source
-tree, but Rustty emits a standard C library that can be used with any
-C tooling.
+This uses a `build.sh` (invoking `clang`) to build the C program against
+`librustty_vt_c`. Rustty emits a standard C library (`librustty_vt_c` +
+`include/rustty/vt.h`) that can be used with any C tooling.
 
 ## Usage
 

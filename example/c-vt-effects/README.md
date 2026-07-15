@@ -1,13 +1,12 @@
-# Example: `ghostty-vt` Terminal Effects
+# Example: `rustty-vt` Terminal Effects
 
 This contains a simple example of how to register and use terminal
 effect callbacks (`write_pty`, `bell`, `title_changed`) with the
-`ghostty-vt` C library.
+`rustty-vt` C library.
 
-This uses a `build.zig` and `Zig` to build the C program so that we
-can reuse a lot of our build logic and depend directly on our source
-tree, but Rustty emits a standard C library that can be used with any
-C tooling.
+This uses a `build.sh` (invoking `clang`) to build the C program against
+`librustty_vt_c`. Rustty emits a standard C library (`librustty_vt_c` +
+`include/rustty/vt.h`) that can be used with any C tooling.
 
 ## Usage
 
