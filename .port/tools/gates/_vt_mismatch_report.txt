@@ -1,0 +1,7 @@
+== (a) headers compile ==
+  OK
+== (b) every declared+cbindgen rustty_* symbol is a real export ==
+  OK (168 symbols cross-checked)
+== (c) struct layouts match rustty_type_json() ==
+    115 field offsets across the declared structs OK
+VT-HEADERS: GREEN
