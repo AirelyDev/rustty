@@ -243,6 +243,7 @@ mod page_alloc {
     }
 
     /// pub fn alloc(n: usize) ![]align(page_size_min) u8
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn alloc(n: usize) -> Option<Backing> {
         // posix.mmap(null, n, PROT.READ|PROT.WRITE, .{ .TYPE=.PRIVATE, .ANONYMOUS=true }, -1, 0)
         let ptr = unsafe {
@@ -265,6 +266,7 @@ mod page_alloc {
     }
 
     /// pub fn free(mem: []align(page_size_min) u8) void
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn free(b: &Backing) {
         unsafe {
             libc_munmap(b.ptr as *mut core::ffi::c_void, b.len);
@@ -274,7 +276,9 @@ mod page_alloc {
     // Minimal libc bindings for mmap/munmap. We avoid pulling the `libc` crate
     // as a new dependency; these signatures are stable across the platforms we
     // target.
+    #[cfg(not(target_arch = "wasm32"))]
     pub const PROT_READ: i32 = 0x1;
+    #[cfg(not(target_arch = "wasm32"))]
     pub const PROT_WRITE: i32 = 0x2;
 
     #[cfg(target_os = "macos")]
@@ -286,8 +290,10 @@ mod page_alloc {
     #[cfg(target_os = "linux")]
     pub const MAP_ANONYMOUS: i32 = 0x0020;
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub const MAP_FAILED: *mut core::ffi::c_void = (-1isize) as *mut core::ffi::c_void;
 
+    #[cfg(not(target_arch = "wasm32"))]
     extern "C" {
         #[link_name = "mmap"]
         fn libc_mmap(
@@ -301,6 +307,44 @@ mod page_alloc {
 
         #[link_name = "munmap"]
         fn libc_munmap(addr: *mut core::ffi::c_void, len: usize) -> i32;
+    }
+
+    // PORT NOTE (wasm32): the reference selects `AllocPosix` (mmap) or
+    // `AllocWindows` (VirtualAlloc) at comptime. wasm32 is a THIRD host with no
+    // `mmap` syscall, so we obtain the same page-aligned, zeroed backing the
+    // module contract promises directly from the Rust global allocator via
+    // `alloc_zeroed` with `page_size_min` alignment. This is the freestanding
+    // analog of the wasm allocator ghostty's `os/wasm.zig` installs — no faked
+    // behavior: the returned block is page-aligned and zeroed exactly as the
+    // POSIX `MAP_PRIVATE|MAP_ANONYMOUS` path guarantees. `free` reconstructs the
+    // identical `Layout` (same size + alignment) required by `dealloc`.
+    #[cfg(target_arch = "wasm32")]
+    fn backing_layout(n: usize) -> core::alloc::Layout {
+        core::alloc::Layout::from_size_align(n, super::PAGE_SIZE_MIN)
+            .expect("page backing layout is valid (n>0, align=page_size_min)")
+    }
+
+    /// pub fn alloc(n: usize) ![]align(page_size_min) u8
+    #[cfg(target_arch = "wasm32")]
+    pub fn alloc(n: usize) -> Option<Backing> {
+        if n == 0 {
+            return None;
+        }
+        // SAFETY: layout has non-zero size; `alloc_zeroed` yields page-aligned,
+        // zeroed memory — the same contract as the POSIX mmap path.
+        let ptr = unsafe { std::alloc::alloc_zeroed(backing_layout(n)) };
+        if ptr.is_null() {
+            return None;
+        }
+        Some(Backing { ptr, len: n })
+    }
+
+    /// pub fn free(mem: []align(page_size_min) u8) void
+    #[cfg(target_arch = "wasm32")]
+    pub fn free(b: &Backing) {
+        // SAFETY: `b.ptr` came from `alloc_zeroed(backing_layout(b.len))`; the
+        // reconstructed layout is identical, as `dealloc` requires.
+        unsafe { std::alloc::dealloc(b.ptr, backing_layout(b.len)) }
     }
 }
 

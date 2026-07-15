@@ -57,12 +57,23 @@ impl Default for Backend {
         {
             Backend::Iocp
         }
+        // PORT NOTE: `.wasi => .wasi_poll` — the reference's wasi arm. The
+        // WasiPoll backend body itself is a whole follow-up port (the wasm build
+        // runs the synchronous C-ABI with no event loop, so the placeholder
+        // Loop/Async no-op types in `lib.rs`'s non-macOS seam stand in for it);
+        // `default()`/`candidates()` still name it faithfully so the crate
+        // compiles for wasm32 (backend selection is comptime here).
+        #[cfg(target_os = "wasi")]
+        {
+            Backend::WasiPoll
+        }
         #[cfg(not(any(
             target_os = "macos",
             target_os = "ios",
             target_os = "freebsd",
             target_os = "linux",
-            target_os = "windows"
+            target_os = "windows",
+            target_os = "wasi"
         )))]
         {
             compile_error!("no default backend for this target")
@@ -90,12 +101,19 @@ impl Backend {
         {
             &[Backend::Iocp]
         }
+        // PORT NOTE: `.wasi => &.{.wasi_poll}` — the single-candidate wasi arm
+        // (mirrors the macOS single-candidate shape; WasiPoll body deferred).
+        #[cfg(target_os = "wasi")]
+        {
+            &[Backend::WasiPoll]
+        }
         #[cfg(not(any(
             target_os = "macos",
             target_os = "ios",
             target_os = "freebsd",
             target_os = "linux",
-            target_os = "windows"
+            target_os = "windows",
+            target_os = "wasi"
         )))]
         {
             compile_error!("no candidate backends for this target")

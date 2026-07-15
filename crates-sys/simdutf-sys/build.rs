@@ -42,6 +42,14 @@ fn main() {
         .flag_if_supported("-fno-exceptions")
         .flag_if_supported("-fno-rtti");
 
+    // wasm32: with SIMDUTF_NO_LIBCXX the amalgamation needs no C++ standard
+    // library at link time. The freestanding wasm toolchain has no `-lc++`, and
+    // the cc crate would otherwise emit `cargo:rustc-link-lib=c++` and break the
+    // final wasm link. Disable the C++ stdlib link (native targets untouched).
+    if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("wasm32") {
+        build.cpp_link_stdlib(None);
+    }
+
     build.file(vendor.join("simdutf.cpp"));
     println!("cargo:rerun-if-changed=vendor/simdutf.cpp");
     println!("cargo:rerun-if-changed=vendor/simdutf.h");

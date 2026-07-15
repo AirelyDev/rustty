@@ -64,7 +64,11 @@ pub mod open;
 // allocator is OS-specific (darwin tagged mmap vs generic posix page allocator),
 // so it is hosted in this `os` crate, mirroring the reference's reach into
 // `../os/mach.zig` for the darwin path.
-#[cfg(not(target_arch = "wasm32"))]
+// PORT NOTE (§3.4 wasm32): the page allocator IS needed on wasm32 — it is the VT
+// core's page-backing allocator (PageList). On wasm it has no `mmap`, so it
+// serves page-aligned, zeroed memory from the Rust global heap (see
+// `page_allocator.rs`'s std-heap branch, shared with the Miri path). So it stays
+// ungated (unlike the POSIX-only modules).
 pub mod page_allocator;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod passwd;

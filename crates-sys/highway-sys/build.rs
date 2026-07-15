@@ -59,6 +59,15 @@ fn main() {
         build.flag_if_supported("-fno-exceptions");
     }
 
+    // wasm32: Highway is compiled with HWY_NO_LIBCXX (above), so it needs no C++
+    // standard library at link time. The freestanding wasm toolchain (zig's
+    // bundled libc++ is not surfaced as a plain `-lc++`) has no `-lc++`, and the
+    // cc crate would otherwise emit `cargo:rustc-link-lib=c++` and break the
+    // final wasm link. Disable the C++ stdlib link (native targets untouched).
+    if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("wasm32") {
+        build.cpp_link_stdlib(None);
+    }
+
     // The three Highway runtime TUs the reference compiles (abort.cc,
     // per_target.cc, targets.cpp), plus the C-ported target detection.
     for src in ["cpp/abort.cc", "cpp/per_target.cc", "cpp/targets.cpp"] {

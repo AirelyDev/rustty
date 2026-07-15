@@ -42,9 +42,26 @@ use rustty_util::quirks::inlineAssert as assert;
 // PORT NOTE: temp-file helpers. The reference's `temp_dir` is a small namespace
 // over `os/TempDir.zig` + `os/file.zig`; here they come from `rustty_os`.
 mod temp_dir {
+    #[cfg(not(target_arch = "wasm32"))]
     pub use rustty_os::file::{allocTmpDir, freeTmpDir};
     #[cfg(test)]
     pub use rustty_os::tempdir::TempDir;
+
+    // PORT NOTE (wasm32): `rustty_os::file` is POSIX-only (rlimit/arc4random) and
+    // gated out on wasm. `allocTmpDir`'s non-windows body is pure-std (reads
+    // `$TMPDIR`/`$TMP`, else `/tmp`), so it is reproduced here for wasm —
+    // byte-faithful to `os/file.zig`'s POSIX `allocTmpDir`.
+    #[cfg(target_arch = "wasm32")]
+    #[allow(non_snake_case)]
+    pub fn allocTmpDir() -> String {
+        match std::env::var_os("TMPDIR").or_else(|| std::env::var_os("TMP")) {
+            Some(v) => v.to_string_lossy().trim_end_matches('/').to_string(),
+            None => "/tmp".to_string(),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    #[allow(non_snake_case)]
+    pub fn freeTmpDir(_dir: &str) {}
 }
 
 // const log = std.log.scoped(.kitty_gfx);
@@ -239,19 +256,21 @@ impl LoadingImage {
         // We gate the same way: anything that is not a libc POSIX target (here,
         // non-windows / non-android) supports shm; otherwise unsupported.
         //
-        // libc is required for shm_open
-        #[cfg(any(windows, target_os = "android"))]
+        // libc is required for shm_open. PORT NOTE (wasm32): freestanding wasm has
+        // no POSIX shared memory (the reference's `!builtin.link_libc` →
+        // `UnsupportedMedium` gate), so wasm takes the unsupported arm too.
+        #[cfg(any(windows, target_os = "android", target_arch = "wasm32"))]
         {
             let _ = (t, path);
             return Err(Error::UnsupportedMedium);
         }
-        #[cfg(not(any(windows, target_os = "android")))]
+        #[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
         {
             self.readSharedMemoryPosix(t, path)
         }
     }
 
-    #[cfg(not(any(windows, target_os = "android")))]
+    #[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
     fn readSharedMemoryPosix(
         &mut self,
         t: &command::Transmission,
@@ -796,9 +815,20 @@ fn index_of(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// `posix.realpath(path, &buf)`: resolve `path` to a canonical absolute path,
 /// returning the path bytes. On platforms where paths are not UTF-8 this still
 /// round-trips the raw bytes via `OsStr`.
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_arch = "wasm32")))]
 fn realpath(path: &[u8]) -> std::io::Result<Vec<u8>> {
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let p = std::path::Path::new(std::ffi::OsStr::from_bytes(path));
+    let canon = std::fs::canonicalize(p)?;
+    Ok(canon.into_os_string().into_vec())
+}
+
+// PORT NOTE (wasm32): wasi exposes the same raw-bytes ↔ OsStr round-trip as unix
+// via `std::os::wasi::ffi` (paths are not required to be UTF-8), so the helper is
+// identical except for the extension trait's module path.
+#[cfg(target_arch = "wasm32")]
+fn realpath(path: &[u8]) -> std::io::Result<Vec<u8>> {
+    use std::os::wasi::ffi::{OsStrExt, OsStringExt};
     let p = std::path::Path::new(std::ffi::OsStr::from_bytes(path));
     let canon = std::fs::canonicalize(p)?;
     Ok(canon.into_os_string().into_vec())
@@ -813,9 +843,15 @@ fn realpath(path: &[u8]) -> std::io::Result<Vec<u8>> {
 }
 
 /// `std.fs.cwd().openFile(path, .{})`.
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_arch = "wasm32")))]
 fn open_file(path: &[u8]) -> std::io::Result<std::fs::File> {
     use std::os::unix::ffi::OsStrExt;
+    std::fs::File::open(std::path::Path::new(std::ffi::OsStr::from_bytes(path)))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn open_file(path: &[u8]) -> std::io::Result<std::fs::File> {
+    use std::os::wasi::ffi::OsStrExt;
     std::fs::File::open(std::path::Path::new(std::ffi::OsStr::from_bytes(path)))
 }
 
@@ -827,9 +863,15 @@ fn open_file(path: &[u8]) -> std::io::Result<std::fs::File> {
 }
 
 /// `posix.unlink(path)`.
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_arch = "wasm32")))]
 fn unlink(path: &[u8]) -> std::io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
+    std::fs::remove_file(std::path::Path::new(std::ffi::OsStr::from_bytes(path)))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn unlink(path: &[u8]) -> std::io::Result<()> {
+    use std::os::wasi::ffi::OsStrExt;
     std::fs::remove_file(std::path::Path::new(std::ffi::OsStr::from_bytes(path)))
 }
 

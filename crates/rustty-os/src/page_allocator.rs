@@ -106,7 +106,7 @@ unsafe impl Allocator for PageAllocator {
     // interpreter we serve page-aligned, zeroed allocations from the std heap.
     // The observable contract callers rely on (page-aligned, zeroed-on-handout
     // memory) is identical to the mmap path; only the backing differs.
-    #[cfg(not(miri))]
+    #[cfg(not(any(miri, target_arch = "wasm32")))]
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         // PORT NOTE: `map(n, alignment)` — `n` is the byte count, `alignment` the
         // requested byte alignment. The mmap'd region is lazily OS-zeroed.
@@ -129,12 +129,17 @@ unsafe impl Allocator for PageAllocator {
         Ok(NonNull::from(slice))
     }
 
-    #[cfg(miri)]
+    // PORT NOTE (wasm32): wasm has no `mmap` syscall, so — exactly like the Miri
+    // branch, and faithful to the reference's `if (builtin.is_test) return
+    // std.testing.allocator;` fallback — we serve page-aligned, zeroed
+    // allocations from the Rust global heap. The observable contract (page
+    // alignment + zeroed-on-handout) is identical to the mmap path.
+    #[cfg(any(miri, target_arch = "wasm32"))]
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         miri_alloc::allocate(layout)
     }
 
-    #[cfg(not(miri))]
+    #[cfg(not(any(miri, target_arch = "wasm32")))]
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         // PORT NOTE: `free(memory, ...)` -> `unmap(memory)`. `unmap` page-rounds the
         // length and `munmap`s it. A zero-size allocation mapped one page (see
@@ -144,7 +149,7 @@ unsafe impl Allocator for PageAllocator {
         self.unmap_pages(slice);
     }
 
-    #[cfg(miri)]
+    #[cfg(any(miri, target_arch = "wasm32"))]
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         unsafe { miri_alloc::deallocate(ptr, layout) };
     }
@@ -155,7 +160,7 @@ unsafe impl Allocator for PageAllocator {
 // zeroed on handout (matching the mmap path's observable zero contract). We
 // record the exact `Layout` we allocated with by over-allocating a header so the
 // matching `dealloc` uses the same size/align Miri requires.
-#[cfg(miri)]
+#[cfg(any(miri, target_arch = "wasm32"))]
 mod miri_alloc {
     use core::alloc::Layout;
     use core::ptr::NonNull;
@@ -307,7 +312,9 @@ fn align_pointer(ptr: *mut u8, align: usize) -> Option<*mut u8> {
 // `mremap` branch, the windows mapping path is left unported until a windows
 // target lands. Compiling for windows is a deliberate error until then so the
 // gap is explicit rather than silently wrong.
-#[cfg(not(unix))]
+// wasm32 is excluded here: it never reaches `map_pages`/`unmap_pages` (its trait
+// impl above serves from the std heap, like Miri), so no mapping path is needed.
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
 impl PageAllocator {
     fn map_pages(&self, _n: usize, _align: usize) -> Option<NonNull<u8>> {
         compile_error!("rustty-os::page_allocator: windows VM mapping path is not yet ported");

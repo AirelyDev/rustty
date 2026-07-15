@@ -69,6 +69,14 @@ fn main() {
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
+    // wasm32: the SIMD kernels are compiled with HWY_NO_LIBCXX/SIMDUTF_NO_LIBCXX
+    // (above), so they need no C++ standard library at link time. The
+    // freestanding wasm toolchain has no `-lc++`; without this the cc crate emits
+    // `cargo:rustc-link-lib=c++` and the final wasm link fails. Native untouched.
+    if target_arch == "wasm32" {
+        build.cpp_link_stdlib(None);
+    }
+
     // From hwy/detect_targets.h
     const HWY_AVX10_2: i64 = 1 << 3;
     const HWY_AVX3_SPR: i64 = 1 << 4;
