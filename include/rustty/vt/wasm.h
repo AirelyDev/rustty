@@ -1,7 +1,7 @@
 /**
  * @file wasm.h
  *
- * WebAssembly utility functions for libghostty-vt.
+ * WebAssembly utility functions for librustty-vt.
  */
 
 #ifndef RUSTTY_VT_WASM_H
@@ -16,7 +16,7 @@
 /** @defgroup wasm WebAssembly Utilities
  *
  * Convenience functions for allocating various types in WebAssembly builds.
- * **These are only available the libghostty-vt wasm module.**
+ * **These are only available the librustty-vt wasm module.**
  *
  * Rustty relies on pointers to various types for ABI compatibility, and
  * creating those pointers in Wasm can be tedious. These functions provide
@@ -62,7 +62,7 @@
  * @endcode
  *
  * @remark The code above is pretty ugly! This is the lowest level interface
- * to the libghostty-vt Wasm module. In practice, this should be wrapped
+ * to the librustty-vt Wasm module. In practice, this should be wrapped
  * in a higher-level API that abstracts away all this.
  *
  * @{

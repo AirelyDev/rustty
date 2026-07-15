@@ -424,7 +424,7 @@ typedef void (*RusttyTerminalWritePtyFn)(RusttyTerminal terminal,
  * Called when the terminal receives an XTVERSION query (CSI > q).
  * Return the version string (e.g. "myterm 1.0") as a RusttyString.
  * The memory must remain valid until the callback returns. Return a
- * zero-length string to report the default "libghostty" version.
+ * zero-length string to report the default "librustty" version.
  *
  * @param terminal The terminal handle
  * @param userdata The userdata pointer set via RUSTTY_TERMINAL_OPT_USERDATA
@@ -478,7 +478,7 @@ typedef enum RUSTTY_ENUM_TYPED {
 
   /**
    * Callback invoked when the terminal receives an XTVERSION query
-   * (CSI > q). Set to NULL to report the default "libghostty" string.
+   * (CSI > q). Set to NULL to report the default "librustty" string.
    *
    * Input type: RusttyTerminalXtversionFn
    */

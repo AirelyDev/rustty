@@ -1,7 +1,7 @@
 /**
  * @file build_info.h
  *
- * Build info - query compile-time build configuration of libghostty-vt.
+ * Build info - query compile-time build configuration of librustty-vt.
  */
 
 #ifndef RUSTTY_VT_BUILD_INFO_H
@@ -9,7 +9,7 @@
 
 /** @defgroup build_info Build Info
  *
- * Query compile-time build configuration of libghostty-vt.
+ * Query compile-time build configuration of librustty-vt.
  *
  * These values reflect the options the library was built with and are
  * constant for the lifetime of the process.

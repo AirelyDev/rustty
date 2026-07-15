@@ -1,7 +1,7 @@
 /**
  * @file types.h
  *
- * Common types, macros, and utilities for libghostty-vt.
+ * Common types, macros, and utilities for librustty-vt.
  */
 
 #ifndef RUSTTY_VT_TYPES_H
@@ -69,7 +69,7 @@
 #define RUSTTY_ENUM_MAX_VALUE INT_MAX
 
 /**
- * Result codes for libghostty-vt operations.
+ * Result codes for librustty-vt operations.
  */
 typedef enum RUSTTY_ENUM_TYPED {
     /** Operation completed successfully */

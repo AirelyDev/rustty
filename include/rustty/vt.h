@@ -1,7 +1,7 @@
 /**
  * @file vt.h
  *
- * libghostty-vt - Virtual terminal emulator library
+ * librustty-vt - Virtual terminal emulator library
  * 
  * This library provides functionality for parsing and handling terminal
  * escape sequences as well as maintaining terminal state such as styles,
@@ -12,12 +12,12 @@
  */
 
 /**
- * @mainpage libghostty-vt - Virtual Terminal Emulator Library
+ * @mainpage librustty-vt - Virtual Terminal Emulator Library
  *
- * libghostty-vt is a C library which implements a modern terminal emulator,
+ * librustty-vt is a C library which implements a modern terminal emulator,
  * extracted from the [Rustty](https://rustty.sh) terminal emulator.
  *
- * libghostty-vt contains the logic for handling the core parts of a terminal
+ * librustty-vt contains the logic for handling the core parts of a terminal
  * emulator: parsing terminal escape sequences, maintaining terminal state,
  * encoding input events, etc. It can handle scrollback, line wrapping, 
  * reflow on resize, and more.

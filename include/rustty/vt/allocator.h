@@ -1,7 +1,7 @@
 /**
  * @file allocator.h
  *
- * Memory management interface for libghostty-vt.
+ * Memory management interface for librustty-vt.
  */
 
 #ifndef RUSTTY_VT_ALLOCATOR_H
@@ -14,21 +14,21 @@
 
 /** @defgroup allocator Memory Management
  *
- * libghostty-vt does require memory allocation for various operations,
+ * librustty-vt does require memory allocation for various operations,
  * but is resilient to allocation failures and will gracefully handle
  * out-of-memory situations by returning error codes.
  *
  * The exact memory management semantics are documented in the relevant
  * functions and data structures.
  *
- * libghostty-vt uses explicit memory allocation via an allocator
+ * librustty-vt uses explicit memory allocation via an allocator
  * interface provided by RusttyAllocator. The interface is based on the
  * [Zig](https://ziglang.org) allocator interface, since this has been
  * shown to be a flexible and powerful interface in practice and enables
  * a wide variety of allocation strategies.
  *
  * **For the common case, you can pass NULL as the allocator for any
- * function that accepts one,** and libghostty will use a default allocator.
+ * function that accepts one,** and librustty will use a default allocator.
  * The default allocator will be libc malloc/free if libc is linked. 
  * Otherwise, a custom allocator is used (currently Zig's SMP allocator)
  * that doesn't require any external dependencies.
@@ -51,9 +51,9 @@
  * interface for allocating and freeing byte buffers through the library's
  * allocator. These are useful when:
  *
- * - You need to allocate a buffer to pass into a libghostty-vt function
+ * - You need to allocate a buffer to pass into a librustty-vt function
  *   (e.g. preparing input data for rustty_terminal_vt_write()).
- * - You need to free a buffer returned by a libghostty-vt function
+ * - You need to free a buffer returned by a librustty-vt function
  *   (e.g. the output of rustty_formatter_format_alloc()).
  * - You are on a platform where the library's internal allocator differs
  *   from the consumer's C runtime (e.g. Windows, where Zig's libc and
@@ -226,7 +226,7 @@ typedef struct RusttyAllocator {
 RUSTTY_API uint8_t* rustty_alloc(const RusttyAllocator* allocator, size_t len);
 
 /**
- * Free memory that was allocated by a libghostty-vt function.
+ * Free memory that was allocated by a librustty-vt function.
  *
  * Use this to free buffers returned by functions such as
  * rustty_formatter_format_alloc(). Pass the same allocator that was
