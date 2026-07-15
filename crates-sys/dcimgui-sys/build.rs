@@ -104,6 +104,17 @@ fn main() {
         build.flag_if_supported("-fPIC");
     }
 
+    // On macOS the Metal rendering backend is compiled (as a separate ObjC++
+    // TU below). Activate ext.cpp's `imgui_impl_metal.h` __has_include block by
+    // defining ZIGPKG_IMGUI_ENABLE_METAL for the TU that compiles ext.cpp,
+    // mirroring how the reference sets ZIGPKG_IMGUI_ENABLE_OPENGL3 when its
+    // `backend-opengl3` option is on (pkg/dcimgui/build.zig:72-74). The
+    // reference's own selector is `backend-metal = isDarwin`
+    // (src/build/SharedDeps.zig:539).
+    if target_os == "macos" {
+        build.define("ZIGPKG_IMGUI_ENABLE_METAL", "1");
+    }
+
     // Dear ImGui core translation units (reference addCSourceFiles).
     for src in [
         "imgui/imgui.cpp",
@@ -129,6 +140,58 @@ fn main() {
     // `cargo:rustc-link-lib=static=dcimgui` + search-path directives. Because
     // the crate declares `links = "dcimgui"`, Cargo enforces a single linkage.
     build.compile("dcimgui");
+
+    // Metal rendering backend (macOS only). The reference compiles
+    // `backends/imgui_impl_metal.mm` when its `backend-metal` option is set,
+    // which SharedDeps.zig turns on for all Darwin targets
+    // (src/build/SharedDeps.zig:539) — pkg/dcimgui/build.zig:133-144 adds the
+    // `.mm` with the same "flags common to all" TUs. It is Objective-C++, so it
+    // cannot share the C++ `cc::Build` above (which would force `-x
+    // objective-c++` onto every pure-C++ TU); compile it as its own archive.
+    // Zig compiles `.mm` files ARC-off, so pass `-fno-objc-arc` to match. The
+    // `.mm` `#include`s "imgui.h" (vendor/imgui) and "imgui_impl_metal.h"
+    // (vendor/imgui/backends) and `#import`s <Metal/Metal.h> +
+    // <QuartzCore/CAMetalLayer.h>.
+    if target_os == "macos" {
+        let backends = imgui.join("backends");
+        let mut metal = cc::Build::new();
+        metal
+            .cpp(true)
+            .std("c++17")
+            // Compile as Objective-C++ with ARC disabled (the reference relies
+            // on Zig's default ARC-off `.mm` compilation).
+            .flag("-x")
+            .flag("objective-c++")
+            .flag("-fno-objc-arc")
+            // Include paths: vendor/imgui (for "imgui.h") and vendor/imgui/
+            // backends (for the sibling "imgui_impl_metal.h").
+            .include(&imgui)
+            .include(&backends)
+            // Vendored upstream code: do not let its warnings fail the build.
+            .warnings(false)
+            .flag_if_supported("-w")
+            // Same "flags common to all" TUs the reference applies (build.zig
+            // `flags`): the layout macros, obsolete-function stripping, the
+            // freetype flag (part of the common set), and the non-Windows
+            // IMGUI_IMPL_API = extern "C" that names the backend's exported
+            // symbols.
+            .define("IMGUI_HAS_DOCK", "1")
+            .define("IMGUI_USE_WCHAR32", "1")
+            .define("IMGUI_DISABLE_OBSOLETE_FUNCTIONS", "1")
+            .define("IMGUI_ENABLE_FREETYPE", "1")
+            .define("IMGUI_IMPL_API", "extern \"C\"")
+            .file(backends.join("imgui_impl_metal.mm"));
+        metal.compile("dcimgui_metal");
+        println!("cargo:rerun-if-changed=vendor/imgui/backends/imgui_impl_metal.mm");
+        println!("cargo:rerun-if-changed=vendor/imgui/backends/imgui_impl_metal.h");
+
+        // The Metal backend `#import`s <Metal/Metal.h> +
+        // <QuartzCore/CAMetalLayer.h> and uses Foundation types; link the
+        // frameworks so downstream binaries resolve those symbols.
+        println!("cargo:rustc-link-lib=framework=Metal");
+        println!("cargo:rustc-link-lib=framework=QuartzCore");
+        println!("cargo:rustc-link-lib=framework=Foundation");
+    }
 
     // Auto-generate the FFI from the same public header the reference's
     // `main.zig` @cIncludes (see wrapper.h: `dcimgui.h`). The include path needs

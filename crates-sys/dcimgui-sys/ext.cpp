@@ -50,4 +50,22 @@ CIMGUI_API void ImGui_ImplOpenGL3_ShutdownWithLoaderCleanup()
 #endif // __has_include("backends/imgui_impl_opengl3.h")
 #endif // IMGUI_DISABLE
 
+// Metal rendering backend header (macOS). Mirrors the OpenGL3 block above:
+// gated on the header being vendored (__has_include) and the backend being
+// enabled (ZIGPKG_IMGUI_ENABLE_METAL, which build.rs defines on macOS,
+// mirroring the reference's `backend-metal = isDarwin` in
+// src/build/SharedDeps.zig). The reference compiles imgui_impl_metal.mm when
+// backend-metal is set (pkg/dcimgui/build.zig:133-144). The ObjC-API
+// declarations inside imgui_impl_metal.h are themselves guarded by __OBJC__, so
+// in this plain-C++ TU the include resolves to nothing beyond imgui.h; the
+// C-ABI shim surface the port actually calls is added as an ObjC++ TU (see
+// build.rs' separate Metal cc::Build).
+#ifndef IMGUI_DISABLE
+#if __has_include("backends/imgui_impl_metal.h")
+#ifdef ZIGPKG_IMGUI_ENABLE_METAL
+#include "backends/imgui_impl_metal.h"
+#endif // ZIGPKG_IMGUI_ENABLE_METAL
+#endif // __has_include("backends/imgui_impl_metal.h")
+#endif // IMGUI_DISABLE
+
 }
