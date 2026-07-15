@@ -1547,7 +1547,7 @@ impl<A: apprt::App + 'static> Drop for InspEvGuard<A> {
             //     ev.deinit(self.alloc);
             //     break :ev;
             // };
-            let _insp = match unsafe { (*self.surface).inspector } {
+            let insp = match unsafe { (*self.surface).inspector } {
                 Some(v) => v,
                 None => {
                     ev.deinit(unsafe { (*self.surface).alloc });
@@ -1561,11 +1561,27 @@ impl<A: apprt::App + 'static> Drop for InspEvGuard<A> {
             //     log.warn("error adding key event to inspector err={}", .{err});
             // }
             //
-            // PORT NOTE (CORE_BLUEPRINT §4): the Some-arm needs the Phase-3
-            // `Inspector.recordKeyEvent` (+ the queueRender kick) — the
-            // pointee is uninhabited, so this arm is unreachable until the
-            // Phase-3 fill (the deinit/activateInspector arm precedent).
-            unreachable!("inspector is unconstructible until Phase 3 (recordKeyEvent)");
+            // (`recordKeyEvent` takes the owned `Event` by value — the ring records
+            // it with the max_capacity=50 grow-then-evict policy. The `log.warn` site
+            // is preserved as a comment per surface.rs's no-logging-shim convention;
+            // `err` is the ring-full/OutOfMemory signal. The `queueRender` deref
+            // happens here in the guard's `Drop` — strictly AFTER the keyCallback
+            // body's last `&mut self` use, per the raw-ptr discipline documented on
+            // this guard.)
+            let alloc = unsafe { (*self.surface).alloc };
+            match unsafe { (*insp).recordKeyEvent(alloc, ev) } {
+                Ok(()) => {
+                    // self.queueRender() catch {};
+                    //
+                    // (`queueRender` is `renderer_thread.wakeup.notify()`; inlined
+                    // here because the method carries the `ApprtSurface` associated-
+                    // type bound the `impl Drop for InspEvGuard` cannot restate — a
+                    // `Drop` impl must match the type's declared bounds exactly. The
+                    // field-level notify needs no such bound. `catch {}` -> `let _`.)
+                    let _ = unsafe { &(*self.surface).renderer_thread.wakeup }.notify();
+                }
+                Err(_err) => {}
+            }
         }
     }
 }
@@ -2655,13 +2671,13 @@ where
         //     self.alloc.destroy(v);
         // }
         //
-        // PORT NOTE (CORE_BLUEPRINT §4): `Inspector` is the deferred
-        // uninhabited placeholder — the pointer is always `None` until
-        // Phase 3 (`activateInspector`, the only constructor, defers verbatim
-        // below), so the Some-arm (preserved verbatim above) is
-        // unreachable-by-construction until the Phase-3 fill.
-        if self.inspector.is_some() {
-            unreachable!("inspector is unconstructible until Phase 3 (activateInspector deferred)");
+        // PORT NOTE (Task 6): `activateInspector` now constructs the inspector, so
+        // a Surface torn down with an active inspector must free it here (the
+        // deactivate path nulls `self.inspector`, so this fires only when a live
+        // inspector outlives the Surface). `alloc.destroy` -> `Box::from_raw` drop.
+        if let Some(v) = self.inspector {
+            unsafe { (*v).deinit(self.alloc) };
+            unsafe { drop(Box::from_raw(v)) };
         }
 
         // Clean up our keyboard state
@@ -2854,10 +2870,64 @@ where
     //     self.queueIo(.{ .inspector = true }, .unlocked);
     // }
     pub fn activateInspector(&mut self) -> Result<(), Error> {
-        unimplemented!(
-            "Surface.activateInspector deferred (Phase-3 inspector, CORE_BLUEPRINT §4); \
-             verbatim body above"
-        )
+        // if (self.inspector != null) return;
+        if self.inspector.is_some() {
+            return Ok(());
+        }
+
+        // Setup the inspector
+        // const ptr = try self.alloc.create(inspectorpkg.Inspector);
+        // errdefer self.alloc.destroy(ptr);
+        // ptr.* = try inspectorpkg.Inspector.init(self.alloc);
+        // errdefer ptr.deinit(self.alloc);
+        // self.inspector = ptr;
+        // errdefer self.inspector = null;
+        //
+        // (`alloc.create` + `init` -> infallible `Box::into_raw(Box::new(...))`
+        // under the global allocator — the mutex-create precedent at `init`. The
+        // errdefer destroy/deinit/null chains collapse: the allocation and
+        // `Inspector::init` are both infallible (a real OOM aborts — panic=abort
+        // parity), so there is no fallible step after the field is set.)
+        let ptr: *mut inspectorpkg::Inspector =
+            Box::into_raw(Box::new(inspectorpkg::Inspector::init(self.alloc)));
+        self.inspector = Some(ptr);
+
+        // Put the inspector onto the render state
+        {
+            // self.renderer_state.mutex.lock();
+            // defer self.renderer_state.mutex.unlock();
+            unsafe { (*self.renderer_state.mutex).lock() };
+            // assert(self.renderer_state.inspector == null);
+            assert!(self.renderer_state.inspector.is_none());
+            // self.renderer_state.inspector = self.inspector;
+            //
+            // R2 ACYCLIC OVERLAY EDGE (renderer `state.rs` Task-5 PORT NOTE): the
+            // renderer field is `Option<*mut dyn InspectorOverlay>`. Core unsize-
+            // coerces the inspector's `renderer_info` sub-object (which impls
+            // `InspectorOverlay`) into the fat pointer — the `inspector -> renderer`
+            // edge, never the reverse. This is the Rust shape of the reference's
+            // `= self.inspector`, whose whole-`Inspector` pointer the renderer read
+            // through `rendererInfo().overlayFeatures()`. `&mut` is materialized only
+            // instantaneously (immediately decayed to raw + stored); core never holds
+            // a protected `&mut Inspector` spanning the renderer's raw reads.
+            let info_ref: &mut dyn rendererpkg::state::InspectorOverlay =
+                unsafe { &mut (*ptr).renderer_info };
+            let info_ptr: *mut rendererpkg::state::Inspector = info_ref;
+            self.renderer_state.inspector = Some(info_ptr);
+            unsafe { (*self.renderer_state.mutex).unlock() };
+        }
+
+        // Notify our components we have an inspector active
+        // _ = self.renderer_thread.mailbox.push(.{ .inspector = true }, .{ .forever = {} });
+        let _ = unsafe { &*self.renderer_thread.mailbox }
+            .push(rendererpkg::Message::Inspector(true), Timeout::Forever);
+        // self.queueIo(.{ .inspector = true }, .unlocked);
+        self.queueIo(
+            termio::Message::Inspector(true),
+            termio::termio_impl::MutexState::Unlocked,
+        );
+
+        Ok(())
     }
 
     /// Deactivate the inspector and stop collecting any information.
@@ -2888,10 +2958,45 @@ where
     //     self.inspector = null;
     // }
     pub fn deactivateInspector(&mut self) {
-        unimplemented!(
-            "Surface.deactivateInspector deferred (Phase-3 inspector, CORE_BLUEPRINT §4); \
-             verbatim body above"
-        )
+        // const insp = self.inspector orelse return;
+        let insp = match self.inspector {
+            Some(v) => v,
+            None => return,
+        };
+
+        // Remove the inspector from the render state
+        {
+            // self.renderer_state.mutex.lock();
+            // defer self.renderer_state.mutex.unlock();
+            unsafe { (*self.renderer_state.mutex).lock() };
+            // assert(self.renderer_state.inspector != null);
+            assert!(self.renderer_state.inspector.is_some());
+            // self.renderer_state.inspector = null;
+            self.renderer_state.inspector = None;
+            unsafe { (*self.renderer_state.mutex).unlock() };
+        }
+
+        // Notify our components we have deactivated inspector
+        // _ = self.renderer_thread.mailbox.push(.{ .inspector = false }, .{ .forever = {} });
+        let _ = unsafe { &*self.renderer_thread.mailbox }
+            .push(rendererpkg::Message::Inspector(false), Timeout::Forever);
+        // self.queueIo(.{ .inspector = false }, .unlocked);
+        self.queueIo(
+            termio::Message::Inspector(false),
+            termio::termio_impl::MutexState::Unlocked,
+        );
+
+        // Deinit the inspector
+        // insp.deinit(self.alloc);
+        // self.alloc.destroy(insp);
+        //
+        // (`insp.deinit` runs first for the reference call-shape; `alloc.destroy`
+        // -> `Box::from_raw` drop frees the heap allocation — the streams/map free
+        // on that Box drop.)
+        unsafe { (*insp).deinit(self.alloc) };
+        unsafe { drop(Box::from_raw(insp)) };
+        // self.inspector = null;
+        self.inspector = None;
     }
 
     /// True if the surface requires confirmation to quit. This should be called
@@ -13700,5 +13805,53 @@ mod isize_from_float_tests {
     #[should_panic(expected = "@intFromFloat")]
     fn isize_from_float_out_of_range_traps_in_checked_builds() {
         let _ = isize_from_float(1e300);
+    }
+}
+
+// Task 6 inspector-lifecycle KAT. A full Surface-level activate->deactivate
+// cannot be exercised in a unit test — `Surface::init` spawns the render/io
+// threads and needs a live apprt `App` + pty — so this KAT proves the exact
+// cross-crate seams `activateInspector` / `deactivateInspector` / the keyCallback
+// inspector defer wire up, which ARE constructible without a Surface. The Surface
+// control flow itself (the mutex/mailbox/queueIo sequence) is covered by the
+// workspace build gate + the app shakedown (plan Task 18).
+#[cfg(test)]
+mod inspector_lifecycle_tests {
+    use super::*;
+
+    // The R2 acyclic overlay coercion `activateInspector` performs: an inspector's
+    // `renderer_info` sub-object unsize-coerces to the renderer-owned
+    // `*mut dyn InspectorOverlay` fat pointer, through which the renderer reads
+    // overlay features (INV-7). Proves the type wiring compiles AND the call
+    // crosses the seam end-to-end (a fresh inspector enables no overlays).
+    #[test]
+    fn inspector_renderer_info_coerces_to_overlay_and_reads() {
+        let mut insp = inspectorpkg::Inspector::init(Allocator);
+
+        // Exactly the coercion `activateInspector` stores onto renderer_state.inspector.
+        let info_ref: &mut dyn rendererpkg::state::InspectorOverlay = &mut insp.renderer_info;
+        let info_ptr: *mut rendererpkg::state::Inspector = info_ref;
+
+        // The renderer reads overlay features through the fat pointer.
+        let features = unsafe { (*info_ptr).overlay_features() };
+        assert!(features.is_empty());
+
+        insp.deinit(Allocator);
+    }
+
+    // The keyCallback inspector defer records key events via `recordKeyEvent` with
+    // the max_capacity=50 grow-then-evict policy (INV-9). Filling well past capacity
+    // must never surface an error (the ring self-evicts) and never panic — driving
+    // both the `resize` grow branch and the `delete_oldest` + re-append evict branch.
+    #[test]
+    fn record_key_event_grows_then_evicts_bounded() {
+        let mut insp = inspectorpkg::Inspector::init(Allocator);
+
+        for _ in 0..200 {
+            insp.recordKeyEvent(Allocator, inspectorpkg::KeyEvent::default())
+                .expect("recordKeyEvent self-evicts at capacity, never surfaces OutOfMemory");
+        }
+
+        insp.deinit(Allocator);
     }
 }
