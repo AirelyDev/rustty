@@ -37,7 +37,9 @@ README), so it diffs cleanly against upstream.
   `types.rs::resolve_ty` (native output unchanged). All 24 example-touched fields
   now match ghostty's `type_json` exactly.
 - [x] `wasm-sgr` — **DONE, PARITY CONFIRMED (2026-07-15).** 1:1 swap; same SGR sequence (`4:3;38;2;51;51;51;48;2;170;170;170;58;2;255;97;136`) → identical 4-attribute output in both (Underline curly / RESET_STRIKETHROUGH / FG RGB(170,170,170) / RESET_UNDERLINE). Verified side-by-side in Chrome; the SGR tag enum values match ghostty.
-- [ ] `wasm-key-encode` — key events → escape sequences (ghostty 687L)
+- [x] `wasm-key-encode` — **DONE, PARITY CONFIRMED (2026-07-15).** 1:1 swap; Ctrl+A encodes to an identical 7-byte Kitty sequence in both (Hex `1b 5b 39 37 3b 35 75` = `\x1b[97;5u`). Verified side-by-side in Chrome; the key/mods/action enum maps + key_encoder/key_event C-ABI match ghostty (set_utf8 name matches too).
+
+**Phase A COMPLETE** — all 3 ghostty wasm examples ported 1:1 and parity-verified against their ghostty twins.
 
 ### Phase B — c-vt examples (~23)  ·  C programs vs `librustty` static lib + `include/rustty.h`
 c-vt, -build-info, -cmake{,-cross,-static}, -colors, -effects, -encode-{focus,key,mouse},
