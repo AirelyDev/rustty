@@ -20,7 +20,14 @@ pub mod key;
 // LIVE — `Info` + `overlayFeatures` (impl'd as the renderer-owned
 // `InspectorOverlay` trait, INV-7). The ImGui `draw` half is Task 10.
 pub mod renderer;
-// pub const screen = @import("widgets/screen.zig");        (Phase 3)
+// pub const screen = @import("widgets/screen.zig");
+//
+// PORT NOTE (Task 11): the six free-function tables (cursorTable / cursorStyle
+// / keyboardTable / kittyGraphicsTable / internalStateTable /
+// semanticPromptTable — the S6 mechanical seam) are LIVE. The `Info` aggregate
+// + its `draw`/`createDockSpace` embed `widgets.pagelist.{Inspector,
+// CellChooser}` and inhabit when pagelist (Task 13) lands (grows-in-place).
+pub mod screen;
 // pub const style = @import("widgets/style.zig");
 pub mod style;
 // pub const surface = @import("widgets/surface.zig");      (Phase 3)
