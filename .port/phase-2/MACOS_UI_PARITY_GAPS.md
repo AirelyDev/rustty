@@ -161,6 +161,47 @@ resolve byte-identically`.
 
 ---
 
+## 6. Whole-port audit of the class (is it permanently addressed?)
+
+The class = C-ABI aggregates crossing an FFI boundary whose Rust layout can
+diverge from the header. Two detectors together make it permanent:
+`improper_ctypes_definitions` (fires on FFI-*unsafe* fields crossing by value) +
+per-surface size/offset gates (catch `repr(C)`-but-wrong-size, which is lint-silent).
+
+**Coverage matrix (after this work):**
+
+| C-ABI surface | by-value struct returns (sret crash class) | layout gate | in CI |
+|---|---|---|---|
+| embedding `rustty-embed.h` | 8 fns / 6 types — all frozen & header-matched | **A4** `check_embed_h_abi.sh` (size) + `abi_layout.rs` (size+align) + `const _` freezes | ✅ A4 + `cargo test --workspace` |
+| vt `rustty/vt.h` | **none** (header declares zero by-value struct returns) | **A5** `check_rustty_vt_headers.sh` (size + 115 field offsets via `rustty_type_json()`) | ✅ now registered (was orphaned) |
+| compiler lint | — | `improper_ctypes_definitions` active workspace-wide (NOT blanket-allowed) | ✅ `cargo build/test` |
+
+**`improper_ctypes_definitions` suppression audit (6 sites, all benign):**
+- `rustty_app_new`, `rustty_surface_new` — take `*const Options`/`*const SurfaceOptions`
+  by **pointer**; lint fires on the pointee's callback fn-ptrs, no by-value crossing.
+- `embedded::Options` struct def — carries fn-ptr callbacks; passed only by pointer.
+- `rustty_surface_config_new`, `rustty_surface_inherited_config` → `SurfaceOptions`
+  (88), `rustty_surface_tty_name` → `String` (24) — by-value returns, but sizes
+  MATCH the header (A4-frozen), so both sides use the same sret convention.
+- **`rustty_config_trigger` — the one that DIDN'T match (20≠12). Fixed.**
+
+**Verdict:** the sret crash class is now fully contained and gated on the
+embedding surface (A4); the vt surface has no instances and is offset-gated (A5,
+newly wired into CI); the compiler lint guards new FFI-unsafe-by-value additions.
+
+**Honest residual (not the crash class):** A4 checks embedding aggregate *sizes*,
+not *field offsets*; a >16B embedding struct with correct total size but a
+transposed field would misread (not crash). `abi_layout.rs` documents those
+offsets in comments and freezes size+align, but does not `offset_of!`-assert them.
+Adding a `rustty_type_json()`-style reflection for the embedding crates (mirroring
+vt's A5) would close this; it is a follow-up, tracked here, not a live crash risk.
+
+Also noted: `check_symbol_manifest.sh` (a symbol-coverage gate, not layout) is
+likewise unregistered in ci.sh — orthogonal to this class; flagged for the CI
+owner.
+
+---
+
 ## 5. Other gaps scanned — none found in this layer
 
 - Swift sources: parity (see §1).

@@ -189,6 +189,14 @@ GATE_REGISTRY=(
   # shortcuts (MACOS_UI_PARITY_GAPS.md). PROGRESS: a coverage gap or size drift
   # RED is escalated to HARD by run_gate's PROGRESS-went-RED branch.
   "A4|PROGRESS|bash $GATES/check_embed_h_abi.sh"
+  # A5 — the rustty/vt.h family struct-layout ABI gate. Cross-checks every
+  # cbindgen/curated vt struct's sizeof + field OFFSETS against the Rust
+  # `#[repr(C)]` layout via `rustty_type_json()` (the vt surface's answer to the
+  # embedding A4/abi_layout freeze). Self-builds the vt-c dylib+wasm. It existed
+  # but was never wired into this runner; registered here so the vt C-ABI is
+  # continuously layout-gated (the vt header declares no by-value struct returns,
+  # so this covers field-offset drift rather than the A4 sret crash class).
+  "A5|PROGRESS|sh $GATES/check_rustty_vt_headers.sh"
 )
 
 HARD_FAILURES=()   # hard-fail checks that failed, or a claimed-done regression
