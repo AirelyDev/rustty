@@ -122,7 +122,7 @@ typedef enum {
 } Style;
 
 /**
- * C: GhosttyCellData
+ * C: GhosttyCellData -> RusttyCellData (R2)
  */
 typedef enum {
     CELL_DATA_CELL_DATA_INVALID = 0,
@@ -186,7 +186,7 @@ typedef enum {
 } CellData;
 
 /**
- * C: GhosttyRenderStateRowData
+ * C: GhosttyRenderStateRowData -> RusttyRenderStateRowData (R2)
  */
 typedef enum {
     ROW_DATA_ROW_DATA_INVALID = 0,
@@ -234,7 +234,7 @@ typedef enum {
 } Tag;
 
 /**
- * C: GhosttySelectionFormat — the `enum(c_int)` projection of `formatter.Format`.
+ * C: GhosttySelectionFormat -> RusttySelectionFormat (R2) — the `enum(c_int)` projection of `formatter.Format`.
  */
 typedef enum {
     FORMAT_FORMAT_PLAIN = 0,
@@ -243,7 +243,7 @@ typedef enum {
 } Format;
 
 /**
- * C: GhosttyKittyGraphicsData
+ * C: GhosttyKittyGraphicsData -> RusttyKittyGraphicsData (R2)
  */
 typedef enum {
     DATA_DATA_INVALID = 0,
@@ -251,7 +251,7 @@ typedef enum {
 } Data;
 
 /**
- * C: GhosttyKittyGraphicsImageData
+ * C: GhosttyKittyGraphicsImageData -> RusttyKittyGraphicsImageData (R2)
  */
 typedef enum {
     IMAGE_DATA_IMAGE_DATA_INVALID = 0,
@@ -266,7 +266,7 @@ typedef enum {
 } ImageData;
 
 /**
- * C: GhosttyKittyGraphicsPlacementData
+ * C: GhosttyKittyGraphicsPlacementData -> RusttyKittyGraphicsPlacementData (R2)
  */
 typedef enum {
     PLACEMENT_DATA_PLACEMENT_DATA_INVALID = 0,
@@ -285,7 +285,7 @@ typedef enum {
 } PlacementData;
 
 /**
- * C: GhosttyRenderStateRowCellsData
+ * C: GhosttyRenderStateRowCellsData -> RusttyRenderStateRowCellsData (R2)
  */
 typedef enum {
     ROW_CELLS_DATA_ROW_CELLS_DATA_INVALID = 0,
@@ -310,7 +310,7 @@ typedef enum {
 } ScrollViewportTag;
 
 /**
- * C: GhosttyTerminalData
+ * C: GhosttyTerminalData -> RusttyTerminalData (R2)
  */
 typedef enum {
     TERMINAL_DATA_TERMINAL_DATA_INVALID = 0,
@@ -349,7 +349,7 @@ typedef enum {
 } TerminalData;
 
 /**
- * C: GhosttySelectionAdjustment — the `enum(c_int)` projection of
+ * C: GhosttySelectionAdjustment -> RusttySelectionAdjustment (R2) — the `enum(c_int)` projection of
  * `Selection.Adjustment`.
  */
 typedef enum {
@@ -366,7 +366,7 @@ typedef enum {
 } Adjustment;
 
 /**
- * C: GhosttySelectionOrder — the `enum(c_int)` projection of `Selection.Order`.
+ * C: GhosttySelectionOrder -> RusttySelectionOrder (R2) — the `enum(c_int)` projection of `Selection.Order`.
  */
 typedef enum {
     ORDER_ORDER_FORWARD = 0,
@@ -467,12 +467,12 @@ typedef KeyEncoderWrapper *Encoder;
 typedef TerminalWrapper *Terminal;
 
 /**
- * C: GhosttyCell
+ * C: GhosttyCell -> RusttyCell (R2)
  */
 typedef uint64_t CCell;
 
 /**
- * C: GhosttyRow
+ * C: GhosttyRow -> RusttyRow (R2)
  */
 typedef uint64_t CRow;
 
@@ -540,7 +540,7 @@ typedef union {
 } CValue;
 
 /**
- * C: GhosttySgrAttribute — the hand-authored tagged union (`Attribute.C`).
+ * C: GhosttySgrAttribute -> RusttySgrAttribute (R2) — the hand-authored tagged union (`Attribute.C`).
  */
 typedef struct {
     Tag tag;
@@ -621,7 +621,7 @@ typedef struct {
 } TerminalOptions;
 
 /**
- * C: GhosttyKittyGraphics
+ * C: GhosttyKittyGraphics -> RusttyKittyGraphics (R2)
  */
 typedef void *KittyGraphics;
 
@@ -636,17 +636,17 @@ typedef struct {
 } Image;
 
 /**
- * C: GhosttyKittyGraphicsImage
+ * C: GhosttyKittyGraphicsImage -> RusttyKittyGraphicsImage (R2)
  */
 typedef const Image *ImageHandle;
 
 /**
- * C: GhosttyKittyGraphicsPlacementIterator
+ * C: GhosttyKittyGraphicsPlacementIterator -> RusttyKittyGraphicsPlacementIterator (R2)
  */
 typedef PlacementIteratorWrapper *PlacementIterator;
 
 /**
- * C: GhosttyKittyGraphicsPlacementRenderInfo
+ * C: GhosttyKittyGraphicsPlacementRenderInfo -> RusttyKittyGraphicsPlacementRenderInfo (R2)
  */
 typedef struct {
     uintptr_t size;
@@ -664,12 +664,12 @@ typedef struct {
 } PlacementRenderInfo;
 
 /**
- * C: GhosttyRenderState
+ * C: GhosttyRenderState -> RusttyRenderState (R2)
  */
 typedef RenderStateWrapper *RenderState;
 
 /**
- * C: GhosttyRenderStateColors
+ * C: GhosttyRenderStateColors -> RusttyRenderStateColors (R2)
  */
 typedef struct {
     uintptr_t size;
@@ -681,22 +681,22 @@ typedef struct {
 } Colors;
 
 /**
- * C: GhosttyRenderStateRowIterator
+ * C: GhosttyRenderStateRowIterator -> RusttyRenderStateRowIterator (R2)
  */
 typedef RowIteratorWrapper *RowIterator;
 
 /**
- * C: GhosttyRenderStateRowCells
+ * C: GhosttyRenderStateRowCells -> RusttyRenderStateRowCells (R2)
  */
 typedef RowCellsWrapper *RowCells;
 
 /**
- * C: GhosttySelectionGesture
+ * C: GhosttySelectionGesture -> RusttySelectionGesture (R2)
  */
 typedef GestureWrapper *Gesture;
 
 /**
- * C: GhosttyTerminalOptions
+ * C: GhosttyTerminalOptions -> RusttyTerminalOptions (R2)
  */
 typedef struct {
     CellCountInt cols;
@@ -716,7 +716,7 @@ typedef union {
 } ScrollViewportCValue;
 
 /**
- * C: GhosttyTerminalScrollViewport — the hand-authored tagged union.
+ * C: GhosttyTerminalScrollViewport -> RusttyTerminalScrollViewport (R2) — the hand-authored tagged union.
  */
 typedef struct {
     ScrollViewportTag tag;
@@ -724,12 +724,12 @@ typedef struct {
 } ScrollViewportC;
 
 /**
- * C: GhosttyTerminalScrollViewport
+ * C: GhosttyTerminalScrollViewport -> RusttyTerminalScrollViewport (R2)
  */
 typedef ScrollViewportC ScrollViewport;
 
 /**
- * C: GhosttyTerminalSelectWordOptions
+ * C: GhosttyTerminalSelectWordOptions -> RusttyTerminalSelectWordOptions (R2)
  */
 typedef struct {
     uintptr_t size;
@@ -739,7 +739,7 @@ typedef struct {
 } SelectWordOptions;
 
 /**
- * C: GhosttyTerminalSelectWordBetweenOptions
+ * C: GhosttyTerminalSelectWordBetweenOptions -> RusttyTerminalSelectWordBetweenOptions (R2)
  */
 typedef struct {
     uintptr_t size;
@@ -750,7 +750,7 @@ typedef struct {
 } SelectWordBetweenOptions;
 
 /**
- * C: GhosttyTerminalSelectLineOptions
+ * C: GhosttyTerminalSelectLineOptions -> RusttyTerminalSelectLineOptions (R2)
  */
 typedef struct {
     uintptr_t size;
@@ -761,7 +761,7 @@ typedef struct {
 } SelectLineOptions;
 
 /**
- * C: GhosttyTerminalSelectionFormatOptions
+ * C: GhosttyTerminalSelectionFormatOptions -> RusttyTerminalSelectionFormatOptions (R2)
  */
 typedef struct {
     uintptr_t size;
@@ -2279,6 +2279,30 @@ int rustty_tracked_grid_ref_set(CTrackedGridRef ref_, Terminal terminal, PointC 
  * valid, writable pointer to a `CGridRef`.
  */
 int rustty_tracked_grid_ref_snapshot(CTrackedGridRef ref_, CGridRef *out_ref);
+
+Opaque *rustty_wasm_alloc_opaque(void);
+
+void rustty_wasm_free_opaque(Opaque *ptr);
+
+uint8_t *rustty_wasm_alloc_u8_array(uintptr_t len);
+
+void rustty_wasm_free_u8_array(uint8_t *ptr, uintptr_t len);
+
+uint16_t *rustty_wasm_alloc_u16_array(uintptr_t len);
+
+void rustty_wasm_free_u16_array(uint16_t *ptr, uintptr_t len);
+
+uint8_t *rustty_wasm_alloc_u8(void);
+
+void rustty_wasm_free_u8(uint8_t *ptr);
+
+uintptr_t *rustty_wasm_alloc_usize(void);
+
+void rustty_wasm_free_usize(uintptr_t *ptr);
+
+AttributeC *rustty_wasm_alloc_sgr_attribute(void);
+
+void rustty_wasm_free_sgr_attribute(AttributeC *attr);
 
 #ifdef __cplusplus
 }  // extern "C"
