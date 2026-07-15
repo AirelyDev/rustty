@@ -36,7 +36,7 @@ README), so it diffs cleanly against upstream.
   (ghostty derives the label from `@bitSizeOf`). Fixed centrally in
   `types.rs::resolve_ty` (native output unchanged). All 24 example-touched fields
   now match ghostty's `type_json` exactly.
-- [ ] `wasm-sgr` — parse SGR → styling attributes (ghostty 457L; uses `wasm_alloc_sgr_attribute`)
+- [x] `wasm-sgr` — **DONE, PARITY CONFIRMED (2026-07-15).** 1:1 swap; same SGR sequence (`4:3;38;2;51;51;51;48;2;170;170;170;58;2;255;97;136`) → identical 4-attribute output in both (Underline curly / RESET_STRIKETHROUGH / FG RGB(170,170,170) / RESET_UNDERLINE). Verified side-by-side in Chrome; the SGR tag enum values match ghostty.
 - [ ] `wasm-key-encode` — key events → escape sequences (ghostty 687L)
 
 ### Phase B — c-vt examples (~23)  ·  C programs vs `librustty` static lib + `include/rustty.h`
