@@ -99,7 +99,7 @@
       const gbuf = ex.rustty_wc_alloc(64);
       let maxX = 0,
         maxY = 0;
-      for (const ch of "Rusty!") {
+      for (const ch of "Rustty!") {
         const rc = ex.rustty_wc_face_render_glyph(face, atlas, ch.codePointAt(0), gbuf);
         const gv = new DataView(ex.memory.buffer, gbuf, 24);
         const w = gv.getUint32(0, true),
@@ -113,7 +113,7 @@
       ex.rustty_wc_free(gbuf, 64);
 
       // Blit the packed texture atlas (grayscale coverage of every rasterized
-      // glyph, top-left) into a real, up-scaled canvas so "Rusty!" is visible as
+      // glyph, top-left) into a real, up-scaled canvas so "Rustty!" is visible as
       // web_canvas actually drew it via the browser Canvas.
       {
         const asize = ex.rustty_wc_atlas_size(atlas);
