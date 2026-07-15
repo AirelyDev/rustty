@@ -5,17 +5,22 @@
 //! placements). ghostty shells out to its `build-data` exe; rustty calls the
 //! already-ported pure byte generators in `rustty-extra` directly.
 //!
-//! Layout matches ghostty's `zig build` install tree exactly (verified against
-//! `GhosttyResources.zig`):
-//!   - bash: `share/bash-completion/completions/ghostty.bash`
-//!   - zsh:  `share/zsh/site-functions/_ghostty`
-//!   - fish: `share/fish/vendor_completions.d/ghostty.fish`
+//! Layout matches ghostty's `zig build` install tree (verified against
+//! `GhosttyResources.zig`), with the OUTPUT filenames routed through
+//! [`crate::APP`] (Task 14 — `rustty` by default, `ghostty` under
+//! `identity-ghostty`):
+//!   - bash: `share/bash-completion/completions/{APP}.bash`
+//!   - zsh:  `share/zsh/site-functions/_{APP}`
+//!   - fish: `share/fish/vendor_completions.d/{APP}.fish`
 //!
 //! R2 identity note: the reused macOS Swift app invokes the binary as `ghostty`
 //! (its `Ghostty.app` bundle hard-codes `ghostty` / `xterm-ghostty`), so the
-//! completion scripts must complete the `ghostty` command — which is exactly what
-//! `rustty-extra`'s generators emit (`complete -c ghostty`, `_ghostty()`,
-//! `#compdef ghostty`). No brand rename is applied here.
+//! completion **script CONTENT** must complete the `ghostty` command — which is
+//! exactly what `rustty-extra`'s generators emit (`complete -c ghostty`,
+//! `_ghostty()`, `#compdef ghostty`), byte-exact golden-tested against ghostty's
+//! own generated output (R1). No brand rename is applied to that content. Task
+//! 14 only renames the OUTPUT FILENAME each script is written to; the bytes
+//! written are unchanged.
 //!
 //! R5: all three shell generators are ported and emit non-empty scripts, so no
 //! DEFERRALS entry is needed for this resource.
@@ -25,30 +30,33 @@ use std::path::Path;
 /// Write `share/{bash-completion,zsh,fish}` completion trees under `share_dir`.
 ///
 /// `share_dir` is the `share/` directory (e.g. `zig-out/share`). Each shell's
-/// script is produced by the corresponding `rustty-extra` generator and written
-/// to the ghostty-matching path.
+/// script is produced by the corresponding `rustty-extra` generator (content
+/// unchanged — see the module R2 note) and written to a [`crate::APP`]-named
+/// path.
 pub fn gen_shell(share_dir: &Path) -> Result<(), String> {
-    // bash -> share/bash-completion/completions/ghostty.bash
+    let app = crate::APP;
+
+    // bash -> share/bash-completion/completions/{APP}.bash
     write_completion(
         share_dir,
         "bash-completion/completions",
-        "ghostty.bash",
+        &format!("{app}.bash"),
         rustty_extra::bash::completions(),
     )?;
 
-    // zsh -> share/zsh/site-functions/_ghostty
+    // zsh -> share/zsh/site-functions/_{APP}
     write_completion(
         share_dir,
         "zsh/site-functions",
-        "_ghostty",
+        &format!("_{app}"),
         rustty_extra::zsh::completions(),
     )?;
 
-    // fish -> share/fish/vendor_completions.d/ghostty.fish
+    // fish -> share/fish/vendor_completions.d/{APP}.fish
     write_completion(
         share_dir,
         "fish/vendor_completions.d",
-        "ghostty.fish",
+        &format!("{app}.fish"),
         rustty_extra::fish::completions(),
     )?;
 

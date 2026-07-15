@@ -1,5 +1,7 @@
 //! `res_themes` — emit the ghostty color-theme corpus into
-//! `share/ghostty/themes/` for the macOS Xcode Copy-Resources phase.
+//! `share/{APP}/themes/` for the macOS Xcode Copy-Resources phase (`{APP}` =
+//! [`crate::APP`], Task 14 — `rustty` by default, `ghostty` under
+//! `identity-ghostty`).
 //!
 //! Faithful port of ghostty's `src/build/GhosttyResources.zig` "Themes" block:
 //!
@@ -23,16 +25,23 @@
 //! self-contained: rather than fetch that tarball at build time, rustty vendors
 //! the corpus **verbatim** into `crates/rustty-extra/themes/` (byte-identical to
 //! the upstream set — see that dir's `README.md` for provenance). This module
-//! copies that vendored tree into `share/ghostty/themes/`, applying the SAME
+//! copies that vendored tree into `share/{APP}/themes/`, applying the SAME
 //! `.md` exclusion ghostty uses — which skips the vendored `README.md` and keeps
 //! the emitted count exactly equal to ghostty's shipped set (534 themes).
 //!
-//! R2 IDENTITY NOTE: the product is `rustty`, but this corpus keeps ghostty's
-//! DATA identity — it installs to `share/ghostty/themes/` (not `share/rustty/…`)
-//! because the reused macOS Swift app and the ported `list_themes` fuzzy-picker /
-//! `theme =` config setting resolve theme names against that hard-coded
-//! `share/ghostty/themes` path. Renaming the directory would break both, so the
-//! ghostty name is retained deliberately.
+//! R2 IDENTITY NOTE (CORRECTED, Task 14): this comment previously claimed the
+//! corpus must install to a hard-coded `share/ghostty/themes/` because the
+//! ported `list_themes` fuzzy-picker / `theme =` config setting resolve theme
+//! names against that literal path. That claim was FALSE for the Rust runtime:
+//! `rustty_config::theme::Location::Resources` resolves via
+//! `resources_dir_app()` -> `rustty_os::resourcesdir`'s `app_subdir()` ->
+//! `rustty_identity::APP_NAME` (`crates/rustty-config/src/theme.rs`), i.e. it
+//! ALREADY looks under `share/{APP}/themes` dynamically — `share/rustty/themes`
+//! by default. This module now matches that lookup by installing to
+//! `share/{APP}/themes/` (`{APP}` = [`crate::APP`]) instead of a hard-coded
+//! `ghostty` literal. (A separate, unrelated hard-coded `"ghostty"` XDG
+//! user-config theme subdir remains at `theme.rs`'s `Location::User` arm —
+//! out of this xtask module's scope; see the Task 14 report.)
 //!
 //! R1/R5: the files are real upstream data copied byte-for-byte — no placeholder,
 //! no synthesized content, no DEFERRALS entry.
@@ -50,7 +59,7 @@ const VENDORED_THEMES: &str = concat!(
 /// Generate the theme resource subtree under `share_dir`:
 ///
 /// ```text
-/// share/ghostty/themes/<Theme Name>   (534 iTerm2-derived .conf theme files)
+/// share/{APP}/themes/<Theme Name>   (534 iTerm2-derived .conf theme files)
 /// ```
 ///
 /// Copies every vendored theme file verbatim, excluding `.md` files (mirroring
@@ -58,7 +67,7 @@ const VENDORED_THEMES: &str = concat!(
 /// `README.md` so the emitted set is byte-identical to ghostty's shipped corpus).
 pub fn gen_themes(share_dir: &Path) -> Result<(), String> {
     let src = Path::new(VENDORED_THEMES);
-    let dest = share_dir.join("ghostty").join("themes");
+    let dest = share_dir.join(crate::APP).join("themes");
     fs::create_dir_all(&dest).map_err(|e| format!("mkdir {}: {e}", dest.display()))?;
 
     let entries =
@@ -107,7 +116,7 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         gen_themes(&share).expect("gen_themes");
 
-        let themes = share.join("ghostty").join("themes");
+        let themes = share.join(crate::APP).join("themes");
         let count = fs::read_dir(&themes)
             .expect("read emitted themes")
             .filter(|e| e.as_ref().unwrap().path().is_file())

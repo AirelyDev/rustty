@@ -16,8 +16,12 @@
 //! `.port/phase-2/DEFERRALS.swiftapp-misc.md`):
 //!
 //!  1. **man** (P1.3) — we now emit REAL, rendering `roff` man pages:
-//!     `share/man/man1/ghostty.1` + `share/man/man5/ghostty.5` (verified via
-//!     `man -M zig-out/share/man ghostty`). ghostty's own pipeline
+//!     `share/man/man1/{APP}.1` + `share/man/man5/{APP}.5` (`{APP}` =
+//!     [`crate::APP`], Task 14 — `rustty` by default, `ghostty` under
+//!     `identity-ghostty`; verified via `man -M zig-out/share/man <app>`). Only
+//!     the FILENAME follows `{APP}`; the `.TH`/body prose is kept as the
+//!     ghostty documentation data-identity (see the PARTIAL note below).
+//!     ghostty's own pipeline
 //!     (`GhosttyDocs.zig`) runs `mdgen` (`src/build/mdgen/`) to emit *markdown*
 //!     from the `help_strings` corpus, then `pandoc --to man` converts it to
 //!     roff. pandoc is not available in this build environment, so we do NOT run
@@ -296,27 +300,31 @@ pub fn gen_misc(share_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// `share/man` — emit real, rendering `roff` man pages `man1/ghostty.1` and
-/// `man5/ghostty.5` (P1.3). The `.TH` title line (carrying the live crate
-/// version, ghostty's `@@VERSION@@` substitution) is prepended to the
-/// [`MAN1_BODY`]/[`MAN5_BODY`] roff bodies. Verify with
-/// `man -M <share>/man ghostty` / `man -M <share>/man 5 ghostty`.
+/// `share/man` — emit real, rendering `roff` man pages `man1/{APP}.1` and
+/// `man5/{APP}.5` (P1.3; `{APP}` = [`crate::APP`], Task 14). The `.TH` title
+/// line (carrying the live crate version, ghostty's `@@VERSION@@`
+/// substitution) is prepended to the [`MAN1_BODY`]/[`MAN5_BODY`] roff bodies —
+/// only the output FILENAME is `{APP}`-routed; the `.TH`/body text keeps the
+/// `GHOSTTY`/`Ghostty` documentation data-identity (R2, see the module
+/// DEFERRAL SUMMARY). Verify with `man -M <share>/man <app>` /
+/// `man -M <share>/man 5 <app>`.
 fn gen_man(share_dir: &Path) -> Result<(), String> {
     let ver = env!("CARGO_PKG_VERSION");
+    let app = crate::APP;
 
     let man1_dir = share_dir.join("man").join("man1");
     mkdirp(&man1_dir)?;
     let page1 = format!(
         ".TH GHOSTTY 1 \"\" \"Version {ver}\" \"Ghostty terminal emulator\"\n{MAN1_BODY}"
     );
-    write_file(&man1_dir.join("ghostty.1"), page1.as_bytes())?;
+    write_file(&man1_dir.join(format!("{app}.1")), page1.as_bytes())?;
 
     let man5_dir = share_dir.join("man").join("man5");
     mkdirp(&man5_dir)?;
     let page5 = format!(
         ".TH GHOSTTY 5 \"\" \"Version {ver}\" \"Ghostty terminal emulator configuration file\"\n{MAN5_BODY}"
     );
-    write_file(&man5_dir.join("ghostty.5"), page5.as_bytes())
+    write_file(&man5_dir.join(format!("{app}.5")), page5.as_bytes())
 }
 
 /// `share/locale` — minimal-valid folder only; rustty i18n is a deferred BREAK,

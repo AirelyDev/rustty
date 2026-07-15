@@ -18,6 +18,30 @@ mod res_shell_integration;
 mod res_terminfo;
 mod res_themes;
 
+/// Single source of truth for the resource-tree OUTPUT name (rebrand Task 14):
+/// `rustty` by default, `ghostty` under this crate's own `identity-ghostty`
+/// feature. Every `res_*` module derives its `share/{APP}/…` tree, man pages,
+/// and completion filenames from this constant, so the whole `zig-out/share/`
+/// output flips atomically between profiles. NOT used for values that are
+/// pinned regardless of this profile (documentation/content data-identity,
+/// the compiled terminfo entry's primary name, or filenames whose format
+/// independently requires the reference spelling — see the per-module notes,
+/// e.g. `res_editor.rs`'s vim/nvim filetype-plugin filenames).
+///
+/// This is a LOCAL `cfg`-gated mirror of `rustty_identity::APP_NAME`'s two
+/// values, NOT a call into that crate — see the `identity-ghostty` feature's
+/// doc comment in `xtask/Cargo.toml` for why: this crate's unconditional
+/// `rustty-terminfo/identity-ghostty` dependency transitively forces
+/// `rustty-identity`'s `identity-ghostty` feature on for the whole build (Cargo
+/// feature unification on the shared `rustty-identity` package), so
+/// `rustty_identity::APP_NAME` would resolve to `"ghostty"` unconditionally if
+/// used here directly.
+#[cfg(not(feature = "identity-ghostty"))]
+pub(crate) const APP: &str = "rustty";
+/// See the `not(feature = "identity-ghostty")` arm above for the full doc.
+#[cfg(feature = "identity-ghostty")]
+pub(crate) const APP: &str = "ghostty";
+
 const USAGE: &str = "\
 xtask — rustty build orchestration
 
@@ -28,7 +52,7 @@ SUBCOMMANDS:
     header-gen         Generate include/rustty.h from rustty-vt-c via cbindgen (R2)
     header-gen-apprt   Generate include/rustty-apprt.h from rustty-apprt-c via cbindgen (R2)
     xcframework        Package rustty-apprt-c into dist/RusttyKit.xcframework (macOS Swift-app tier)
-    resources          Generate zig-out/share/{terminfo,ghostty,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase
+    resources          Generate zig-out/share/{terminfo,<app>,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase (<app> = rustty by default, ghostty under identity-ghostty)
     help               Show this help
 ";
 
@@ -210,7 +234,7 @@ fn header_gen_apprt() -> Result<PathBuf, String> {
 /// `check_ghostty_h_abi.sh`), never the ghostty checkout.
 /// The minimum macOS version the shipped staticlib targets. Matches the floor
 /// of the reused Swift app's `MACOSX_DEPLOYMENT_TARGET` in
-/// `macos/Ghostty.xcodeproj` (the main app + most configs are 13.0; a few
+/// `macos/Rustty.xcodeproj` (the main app + most configs are 13.0; a few
 /// helpers are 13.1/15.5). Pinning the Rust/C build to this floor makes the
 /// object files compatible with every app target and silences the ld
 /// "object file was built for newer macOS version than being linked" warnings
@@ -339,8 +363,8 @@ fn xcframework() -> Result<PathBuf, String> {
 }
 
 /// Generate the `zig-out/share/` resource tree the macOS Xcode Copy-Resources
-/// phase copies into `Ghostty.app` (referenced as `../zig-out/share/<name>`
-/// from `macos/Ghostty.xcodeproj`).
+/// phase copies into `Rustty.app` (referenced as `../zig-out/share/<name>`
+/// from `macos/Rustty.xcodeproj`).
 ///
 /// Ports the resource branch of ghostty's `zig build install` (the
 /// `GhosttyResources.zig` / `GhosttyDocs.zig` / `GhosttyI18n.zig` install steps
@@ -348,7 +372,7 @@ fn xcframework() -> Result<PathBuf, String> {
 /// disjoint generator module driving the already-ported pure Rust generators
 /// (`rustty-terminfo`, `rustty-extra`, `rustty-helpgen`, …):
 ///
-///   * [`res_terminfo::gen_terminfo`] — `share/{terminfo,ghostty}` (runtime-critical).
+///   * [`res_terminfo::gen_terminfo`] — `share/{terminfo,<app>}` (runtime-critical).
 ///   * [`res_shell::gen_shell`]       — `share/{bash-completion,zsh,fish}`.
 ///   * [`res_editor::gen_editor`]     — `share/{vim,nvim}`.
 ///   * [`res_misc::gen_misc`]         — `share/{man,locale,bat}`.
