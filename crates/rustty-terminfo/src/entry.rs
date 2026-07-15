@@ -10,15 +10,6 @@
 
 use crate::source::{Capability, Source, Value};
 
-/// rustty's "formal" terminal name (the capitalized product name). Mirrors the
-/// reference `"Ghostty"`; under `identity-ghostty` it is the reference value.
-#[cfg(not(feature = "identity-ghostty"))]
-const FORMAL_NAME: &[u8] = b"Rustty";
-/// rustty's "formal" terminal name (the capitalized product name). Mirrors the
-/// reference `"Ghostty"`; under `identity-ghostty` it is the reference value.
-#[cfg(feature = "identity-ghostty")]
-const FORMAL_NAME: &[u8] = b"Ghostty";
-
 /// rustty's terminfo entry.
 ///
 /// The reference is a comptime `const ghostty: Source`; the faithful Rust port
@@ -39,8 +30,11 @@ pub fn rustty() -> Source {
             rustty_identity::TERMINFO_PRIMARY_NAME.as_bytes().to_vec(),
             // The preferred name
             rustty_identity::TERMINFO_PREFERRED_NAME.as_bytes().to_vec(),
-            // Our "formal" name
-            FORMAL_NAME.to_vec(),
+            // Our "formal" name (the capitalized product name). Mirrors the
+            // reference `"Ghostty"`; under `identity-ghostty` it is the
+            // reference value. Sourced from `rustty-identity` (R2), never a
+            // local literal.
+            rustty_identity::APP_NAME_TITLECASE.as_bytes().to_vec(),
         ],
 
         // NOTE: These capabilities are super underdocumented and I'm not 100%
@@ -430,5 +424,60 @@ mod tests {
         let mut buf: Vec<u8> = Vec::new();
         rustty().encode(&mut buf).unwrap();
         assert!(!buf.is_empty());
+    }
+
+    /// Task 12: the REAL (non-test-fixture) name-generation site — this
+    /// `rustty()` function — must build every name from `rustty-identity`,
+    /// never a local literal. Under the default profile this must produce
+    /// the rustty product identity: primary name `xterm-rustty` (must equal
+    /// `rustty_identity::TERM`, the ported tcell-primary-name-must-equal-TERM
+    /// hack), preferred name `rustty`, and formal/title-case name `Rustty`.
+    #[cfg(not(feature = "identity-ghostty"))]
+    #[test]
+    fn names_are_rustty_under_default_profile() {
+        let src = rustty();
+        assert_eq!(
+            src.names,
+            vec![
+                b"xterm-rustty".to_vec(),
+                b"rustty".to_vec(),
+                b"Rustty".to_vec(),
+            ]
+        );
+        // Cross-check directly against the identity consts (not re-literalized).
+        assert_eq!(
+            src.names[0],
+            rustty_identity::TERMINFO_PRIMARY_NAME.as_bytes()
+        );
+        assert_eq!(
+            src.names[1],
+            rustty_identity::TERMINFO_PREFERRED_NAME.as_bytes()
+        );
+        assert_eq!(src.names[2], rustty_identity::APP_NAME_TITLECASE.as_bytes());
+
+        // The encoded header line carries the rustty product identity.
+        let mut buf: Vec<u8> = Vec::new();
+        src.encode(&mut buf).unwrap();
+        assert!(buf.starts_with(b"xterm-rustty|rustty|Rustty,\n"));
+    }
+
+    /// Under the `identity-ghostty` parity harness feature, the same
+    /// generator must emit the reference's byte-for-byte identity.
+    #[cfg(feature = "identity-ghostty")]
+    #[test]
+    fn names_are_ghostty_under_harness_profile() {
+        let src = rustty();
+        assert_eq!(
+            src.names,
+            vec![
+                b"xterm-ghostty".to_vec(),
+                b"ghostty".to_vec(),
+                b"Ghostty".to_vec(),
+            ]
+        );
+
+        let mut buf: Vec<u8> = Vec::new();
+        src.encode(&mut buf).unwrap();
+        assert!(buf.starts_with(b"xterm-ghostty|ghostty|Ghostty,\n"));
     }
 }

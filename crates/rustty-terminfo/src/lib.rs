@@ -6,7 +6,8 @@
 //! extract this into a more full-featured library on its own.
 //!
 //! PORTS: ghostty src/terminfo/ (Source, ghostty -> entry name `rustty` per R2, main).
-//! Feature identity-ghostty emits ghostty/xterm-ghostty for the parity harness.
+//! Default profile emits rustty/xterm-rustty; feature identity-ghostty emits
+//! ghostty/xterm-ghostty for the parity harness.
 //!
 //! Per R2 the terminfo *names* carry the rustty product identity via the
 //! `rustty-identity` crate (the reference's `ghostty.zig` exposes `ghostty`;
