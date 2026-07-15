@@ -29,6 +29,9 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 # c-vt-build-info golden matches byte-for-byte. Harness only — never enable
 # for a published rustty artifact.
 identity-oracle = ["rustty-vt/identity-oracle"]
+# Expose rustty-vt's SIMD build knob at the C-ABI level so the oracle-parity
+# build (c-vt examples vs ghostty's default simd=true) can enable it.
+simd = ["rustty-vt/simd"]
 
 [dependencies]
 rustty-vt = { workspace = true }
