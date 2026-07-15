@@ -21,7 +21,8 @@ pub mod key;
 // `InspectorOverlay` trait, INV-7). The ImGui `draw` half is Task 10.
 pub mod renderer;
 // pub const screen = @import("widgets/screen.zig");        (Phase 3)
-// pub const style = @import("widgets/style.zig");          (Phase 3)
+// pub const style = @import("widgets/style.zig");
+pub mod style;
 // pub const surface = @import("widgets/surface.zig");      (Phase 3)
 // pub const terminal = @import("widgets/terminal.zig");    (Phase 3)
 // pub const termio = @import("widgets/termio.zig");        (Phase 3)
