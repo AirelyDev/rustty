@@ -266,6 +266,14 @@ impl Plotter<'_> {
         // `_runLineTo(.round, ...)`; we collect the (state-independent) spline
         // line_to points first, then replay them through `_run_line_to` — the
         // dasher advances identically since replay is in order.
+        //
+        // PORT NOTE (faithful-but-safe divergence, error path only): the oracle's
+        // `CurveToCtx.line_to` records a `_runLineTo` error into `err_` and lets
+        // `spline.decompose` run to completion, surfacing it afterward; here the
+        // replay loop propagates the FIRST `_run_line_to` error immediately via
+        // `?`. The success path is identical (spline decomposition is
+        // state-independent); only the post-error continuation differs, and that
+        // is unobservable — the first error aborts the stroke in both.
         let mut pts: Vec<PathLineTo> = Vec::new();
         {
             let mut collector = |n: PathLineTo| -> Result<(), InternalError> {
