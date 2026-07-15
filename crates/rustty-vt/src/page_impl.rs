@@ -208,6 +208,19 @@ impl Page {
         self.memory_ptr
     }
 
+    /// Returns the length in bytes of the page's backing memory.
+    //
+    // PORT NOTE (visibility): the reference field `Page.memory` is a `pub` slice,
+    // so both its base pointer AND its length are public data. `memory_ptr`
+    // already projects the base; this projects the `.len` half. The inspector's
+    // `page` widget reads it for `units.toKibiBytes(page.memory.len)`
+    // (inspector/widgets/page.zig:109) — a non-fabricating seam over the
+    // reference's own public datum.
+    #[inline]
+    pub fn memory_len(&self) -> usize {
+        self.memory_len
+    }
+
     /// Reads the backing memory base pointer through a raw `*const Page` without
     /// forming a `&Page` over the whole struct.
     ///

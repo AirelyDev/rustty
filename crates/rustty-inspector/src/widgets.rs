@@ -10,7 +10,12 @@
 // const cimgui = @import("dcimgui");
 use core::ffi::CStr;
 
-// pub const page = @import("widgets/page.zig");           (Phase 3)
+// pub const page = @import("widgets/page.zig");
+//
+// PORT NOTE (Task 12): the page-information widget is fully LIVE — pure
+// display-only reads of a `terminal.Page` under the surface mutex (INV-1); the
+// dirty reads (`page.isDirty()` / `row.dirty`) are pure observation (INV-2).
+pub mod page;
 // pub const pagelist = @import("widgets/pagelist.zig");    (Phase 3)
 // pub const key = @import("widgets/key.zig");
 pub mod key;
