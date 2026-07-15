@@ -26,7 +26,7 @@ use std::io::Write;
 // pub const Options = struct {
 #[derive(Default)]
 pub struct Options {
-    /// If set, connect to a custom instance of Ghostty.
+    /// If set, connect to a custom instance of rustty.
     // class: ?[:0]const u8 = null,
     //   R3: `[:0]const u8` -> owned raw bytes; R2: the "Ghostty" brand in the doc.
     pub class: Option<Vec<u8>>,

@@ -190,11 +190,11 @@ impl args::Target for Options {
     }
 }
 
-/// The `show-face` command shows what font face Ghostty will use to render a
+/// The `show-face` command shows what font face rustty will use to render a
 /// specific codepoint. Note that this command does not take into consideration
 /// grapheme clustering or any other Unicode features that might modify the
 /// presentation of a codepoint, so this may show a different font face than
-/// Ghostty uses to render a codepoint in a terminal session.
+/// rustty uses to render a codepoint in a terminal session.
 ///
 /// Flags:
 ///

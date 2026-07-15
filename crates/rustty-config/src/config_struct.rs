@@ -2087,7 +2087,7 @@ pub struct Config {
     /// created when rustty starts, use the `initial-command` configuration.
     ///
     /// rustty supports the common `-e` flag for executing a command with
-    /// arguments. For example, `ghostty -e fish --with --custom --args`.
+    /// arguments. For example, `rustty -e fish --with --custom --args`.
     /// This flag sets the `initial-command` configuration, see that for more
     /// information.
     pub command: Option<Command>,
@@ -2101,14 +2101,14 @@ pub struct Config {
     /// this at runtime works but will only affect the next terminal surface
     /// if it is the first one ever created.
     ///
-    /// If you're using the `ghostty` CLI there is also a shortcut to set this
-    /// with arguments directly: you can use the `-e` flag. For example: `ghostty -e
+    /// If you're using the `rustty` CLI there is also a shortcut to set this
+    /// with arguments directly: you can use the `-e` flag. For example: `rustty -e
     /// fish --with --custom --args`. The `-e` flag automatically forces some
     /// other behaviors as well:
     ///
     ///   * Disables shell expansion since the input is expected to already
     ///     be shell-expanded by the upstream (e.g. the shell used to type in
-    ///     the `ghostty -e` command).
+    ///     the `rustty -e` command).
     ///
     ///   * `gtk-single-instance=false` - This ensures that a new instance is
     ///     launched and the CLI args are respected.
@@ -2432,7 +2432,7 @@ pub struct Config {
     /// The class name must follow the requirements defined [in the GTK
     /// documentation](https://docs.gtk.org/gio/type_func.Application.id_is_valid.html).
     ///
-    /// The default is `com.mitchellh.ghostty`.
+    /// The default is `io.airely.rustty`.
     ///
     /// This only affects GTK builds.
     pub class: Option<Vec<u8>>,
@@ -2440,7 +2440,7 @@ pub struct Config {
     /// This controls the instance name field of the `WM_CLASS` X11 property when
     /// running under X11. It has no effect otherwise.
     ///
-    /// The default is `ghostty`.
+    /// The default is `rustty`.
     ///
     /// This only affects GTK builds.
     pub x11_instance_name: Option<Vec<u8>>,
@@ -2471,7 +2471,7 @@ pub struct Config {
     // keybind: Keybinds = .{},
     /// Key bindings. The format is `trigger=action`. Duplicate triggers will
     /// overwrite previously set values. The list of actions is available in
-    /// the documentation or using the `ghostty +list-actions` command.
+    /// the documentation or using the `rustty +list-actions` command.
     ///
     /// Trigger: `+`-separated list of keys and modifiers. Example: `ctrl+a`,
     /// `ctrl+shift+b`, `up`.
@@ -2602,7 +2602,7 @@ pub struct Config {
     ///     e.g. `text:\x15` sends Ctrl-U.
     ///
     ///   * All other actions can be found in the documentation or by using the
-    ///     `ghostty +list-actions` command.
+    ///     `rustty +list-actions` command.
     ///
     /// Some notes for the action:
     ///
@@ -3056,7 +3056,7 @@ pub struct Config {
     ///   * `system` - Use the system theme.
     ///   * `light` - Use the light theme regardless of system theme.
     ///   * `dark` - Use the dark theme regardless of system theme.
-    ///   * `ghostty` - Use the background and foreground colors specified in the
+    ///   * `rustty` - Use the background and foreground colors specified in the
     ///     rustty configuration. This is only supported on Linux builds.
     ///
     /// On macOS, if `macos-titlebar-style` is `tabs` or `transparent`, the window theme will be
@@ -3792,7 +3792,7 @@ pub struct Config {
     ///   * `title` - Set the window title via shell integration.
     ///
     ///   * `ssh-env` - Enable SSH environment variable compatibility. Automatically
-    ///     converts TERM from `xterm-ghostty` to `xterm-256color` when connecting to
+    ///     converts TERM from `xterm-rustty` to `xterm-256color` when connecting to
     ///     remote hosts and propagates COLORTERM, TERM_PROGRAM, and TERM_PROGRAM_VERSION.
     ///     Whether or not these variables will be accepted by the remote host(s) will
     ///     depend on whether or not the variables are allowed in their sshd_config.
@@ -3807,14 +3807,14 @@ pub struct Config {
     ///     cache manually using various arguments.
     ///     (Available since: 1.2.0)
     ///
-    ///   * `path` - Add rustty's binary directory to PATH. This ensures the `ghostty`
+    ///   * `path` - Add rustty's binary directory to PATH. This ensures the `rustty`
     ///     command is available in the shell even if shell init scripts reset PATH.
     ///     This is particularly useful on macOS where PATH is often overridden by
     ///     system scripts. The directory is only added if not already present.
     ///
     /// SSH features work independently and can be combined for optimal experience:
     /// when both `ssh-env` and `ssh-terminfo` are enabled, rustty will install its
-    /// terminfo on remote hosts and use `xterm-ghostty` as TERM, falling back to
+    /// terminfo on remote hosts and use `xterm-rustty` as TERM, falling back to
     /// `xterm-256color` with environment variables if terminfo installation fails.
     pub shell_integration_features: ShellIntegrationFeatures,
 
@@ -4637,7 +4637,7 @@ pub struct Config {
     ///   * https://docs.gtk.org/gtk4/css-properties.html - A comprehensive list
     ///     of supported CSS properties.
     ///
-    /// Launch rustty with `env GTK_DEBUG=interactive ghostty` to tweak rustty's
+    /// Launch rustty with `env GTK_DEBUG=interactive rustty` to tweak rustty's
     /// CSS in real time using the GTK Inspector. Errors in your CSS files would
     /// also be reported in the terminal you started rustty from. See
     /// https://developer.gnome.org/documentation/tools/inspector.html for more
@@ -4694,7 +4694,7 @@ pub struct Config {
     /// HACK: We set this with an `xterm` prefix because vim uses that to enable key
     /// protocols (specifically this will enable `modifyOtherKeys`), among other
     /// features. An option exists in vim to modify this: `:set
-    /// keyprotocol=ghostty:kitty`, however a bug in the implementation prevents it
+    /// keyprotocol=rustty:kitty`, however a bug in the implementation prevents it
     /// from working properly. https://github.com/vim/vim/pull/13211 fixes this.
     pub term: Vec<u8>,
     // @"enquiry-response": []const u8 = "",
@@ -5787,13 +5787,13 @@ impl Config {
     }
 
     /// Load configurations from the default configuration files. The default
-    /// configuration file is at `$XDG_CONFIG_HOME/ghostty/config.ghostty`.
+    /// configuration file is at `$XDG_CONFIG_HOME/rustty/config.rustty`.
     ///
     /// On macOS, `$HOME/Library/Application Support/$CFBundleIdentifier/`
     /// is also loaded.
     ///
     /// The legacy `config` file (without extension) is first loaded,
-    /// then `config.ghostty`.
+    /// then `config.rustty`.
     // pub fn loadDefaultFiles(self: *Config, alloc: Allocator) !void {
     pub fn load_default_files(&mut self) -> Result<(), LoadError> {
         // Load XDG first
