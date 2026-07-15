@@ -3873,6 +3873,10 @@ in-browser playground), broken since the 2024-04-06 Group→SharedGrid refactor
 2025-01-07 (`8bf5c4ed7`), replaced 2025-09 by libghostty-vt (Mitchell's
 "Libghostty Is Coming" — a zero-dep embeddable VT engine; wasm consumers render
 themselves). So the earlier "port web_canvas" framing targeted DEAD code.
+**UPDATE (2026-07-15):** the user nonetheless requested `web_canvas` be resurrected
+for completeness — DONE and browser-verified; see RESIDUAL #1 below. It is ported
+against the MODERN font stack (not the deleted `Group`), so it is a live, working
+backend rather than a resurrection of the deleted architecture.
 
 **The correct target is `rustty-vt-c`** (the port of `terminal/c/` = libghostty-vt),
 already a cdylib. It now cross-compiles to **`target/wasm32-wasip1/release/
@@ -3896,14 +3900,34 @@ rustty_vt_c.wasm` (~1.02 MB, valid WASM MVP, 157 exports)** — the rustty analo
   table-patch step of `GhosttyLibVt.initWasm`).
 
 **RESIDUAL (small, documented):**
-1. **`web_canvas.zig` / `main_wasm.zig` — NOT ported, by design (dead upstream),**
-   not a gap. See the reframing above.
-2. **Target is `wasm32-wasip1` (wasi), not browser-freestanding
-   `wasm32-unknown-unknown`.** wasi supplies libc/libc++ headers via zig; the
-   freestanding target ghostty's dead playground used would need libc shims for
-   the zlib/simdutf C to link. Moot for the deliverable (the VT C-ABI wasm is the
-   modern artifact). **Un-defer trigger:** if a browser-freestanding `.wasm` is
-   wanted, add the libc shims (a small further step).
+1. ~~**`web_canvas.zig` NOT ported (dead upstream)**~~ **RESOLVED — PORTED &
+   BROWSER-VERIFIED (2026-07-15, user-requested completion).** `web_canvas.zig`
+   (face 561L + shaper 305L) is now a live port in
+   `crates/rustty-font-shaper/src/{face,shaper}/web_canvas.rs` as the
+   `Backend::WebCanvas` wasm backend. The deleted `run.group.group.faceFromIndex`
+   is faithfully modernized to `(*run.grid).resolver.collection.get_face(...)`
+   (the modern `Collection::get_face` IS the deleted `Group.faceFromIndex` logic —
+   confirmed vs `git show 06df9b786^:src/font/Group.zig`). `zig-js` → a 14-op
+   `#[link(wasm_import_module="env")]` Canvas FFI + JS glue
+   (`.port/tools/web-canvas-glue.mjs`). **Verified in real Chrome**
+   (`example/wasm-web-canvas/index.html`): `web_canvas` Face measures + rasterizes
+   real glyphs via the browser Canvas (distinct metrics R 21×25 / u 18×19 / s
+   18×20 / t 18×24 / y 20×26 / ! 14×25), populates the atlas, the Shaper produces
+   cells, and the VT terminal roundtrip runs — all with 0 console errors.
+   (`main_wasm.zig` stays un-ported: it is the dead monolithic playground entry;
+   the modern equivalent is the per-C-ABI wasm module, which is what we build.)
+2. ~~**Target is wasi, not browser-freestanding `wasm32-unknown-unknown`**~~
+   **RESOLVED (2026-07-15).** Built a TRUE freestanding
+   `target/wasm32-unknown-unknown/release/rustty_web_canvas.wasm` (**936 KB, 184
+   exports, `WebAssembly.Module.imports` modules = `["env"]` only — ZERO wasi
+   imports**), loadable directly in a browser with no wasi shim. Achieved by
+   making the wasm build PURE RUST: `rustty-simd` scalar-Rust fallbacks under
+   cfg(wasm) for every simdutf/highway kernel (base64, codepoint_width, index_of,
+   utf8-vt — extending the existing `cfg!(miri)` scalar precedent; C++ `-sys`
+   gated off), and `rustty-vt` kitty zlib path → `Unsupported` stub on wasm
+   (drops `zlib-sys`). New `crates/rustty-web-canvas` cdylib pulls `rustty-vt-c` +
+   `rustty-font-shaper` + web_canvas. The wasi `rustty-vt-c.wasm` (residual 3)
+   remains as the server/node variant; native + wasip1 builds stay green.
 3. ~~**Runtime proof is instantiate + `rustty_type_json()`**~~ **RESOLVED
    (2026-07-15).** The full terminal state machine now runs end-to-end in
    WebAssembly: `.port/tools/wasm-vt-roundtrip.mjs` (node WASI, mirrors ghostty's
@@ -3931,9 +3955,11 @@ fork:
   The fontconfig discovery half is the same deferral class as the empty
   `fontconfig-sys` stub (VALIDATION_REPORT §3f). **Un-defer trigger: the Linux
   font-discovery milestone** (platform-linux workstream, GAP_ANALYSIS §3.6).
-- **`face/web_canvas.zig`** — the wasm browser face: NOT ported (no Rust file,
-  no seam marker). **Un-defer trigger: the rustty wasm app-runtime milestone**
-  (same target as the config/vt wasm exports + the font Atlas wasm test above).
+- ~~**`face/web_canvas.zig`** — the wasm browser face: NOT ported~~ **RESOLVED
+  (2026-07-15).** Ported to `face/web_canvas.rs` + `shaper/web_canvas.rs` as the
+  `Backend::WebCanvas` wasm backend (Canvas FFI replaces `zig-js`; faceFromIndex →
+  modern `Collection::get_face`). Browser-verified in real Chrome. See the WASM/web
+  section RESIDUAL #1/#2 above for the full record.
 
 The cli C2 entry's "Non-macOS Fontconfig discovery is still DEFERRED in the
 shaper" note points here.
