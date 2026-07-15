@@ -3,21 +3,25 @@
 //
 // Ported to Rust for rustty from z2d 0.10.0 `src/surface.zig` (R3 vendored dep).
 //
-// SUBSET NOTE (rustty): only the memory-backed `ImageSurface` variants (argb,
-// xrgb, rgb, rgba, alpha8) are ported — the ghostty sprite/glyf rasterizers use
-// `alpha8` (plus rgb/rgba scratch surfaces). The sub-8-bit `PackedImageSurface`
-// (alpha4/2/1) and the `get_stride` path are NOT part of this subset (they pull
-// in the full SIMD compositor); those methods are present but unimplemented, and
-// calling them panics with a clear message. The compositor-backed `composite` /
-// `composite_stride` paths ARE ported, but as scalar reproductions that route
-// each pixel through the integer `run_pixel_t` core rather than the SIMD
-// `SurfaceCompositor`/`StrideCompositor` (integer operators only); see the
-// crate-level blockers doc.
+// SUBSET NOTE (rustty): the memory-backed `ImageSurface` variants (argb, xrgb,
+// rgb, rgba, alpha8) and the sub-8-bit little-endian bit-packed
+// `PackedImageSurface` (alpha4/2/1) are both ported — the ghostty sprite/glyf
+// rasterizers use `alpha8` (plus rgb/rgba scratch surfaces), and the packed
+// alpha formats round out the `Surface` union so the supersample rasterizer's
+// alpha4/2/1 mask arm is a real, reachable type. The `get_stride`/`Stride` path
+// is NOT part of this subset (it feeds the full SIMD `StrideCompositor` and is
+// unused by the rasterizers, which write via `paint_stride`/`composite_stride`);
+// the packed reference tests' `getStride` sub-blocks are correspondingly
+// omitted. The compositor-backed `composite` / `composite_stride` paths ARE
+// ported, but as scalar reproductions that route each pixel through the integer
+// `run_pixel_t` core rather than the SIMD `SurfaceCompositor`/`StrideCompositor`
+// (integer operators only); see the crate-level blockers doc.
 
 //! Surface types represented by the library.
 
 use crate::compositor::Operator;
-use crate::pixel::{self, Alpha8, Argb, Format, Pixel, Rgb, Rgba, Xrgb};
+use crate::pixel::{self, Alpha1, Alpha2, Alpha4, Alpha8, Argb, Format, Pixel, Rgb, Rgba, Xrgb};
+use core::marker::PhantomData;
 
 pub const SUPERSAMPLE_SCALE: i32 = 4;
 
@@ -305,7 +309,393 @@ impl<T: SurfacePixel> ImageSurface<T> {
     }
 }
 
-/// Represents an interface as an enum of the (memory-backed) pixel formats.
+/// The sub-8-bit alpha pixel trait implemented by `Alpha4`/`Alpha2`/`Alpha1`,
+/// which the `PackedImageSurface` generic is parameterized over. Faithful to the
+/// `comptime T` interface z2d's `PackedImageSurface(T)` requires (`format`,
+/// `Opaque`, `fromPixel`/`asPixel`, `average`, and the packed-integer bit
+/// width). `value`/`from_value` expose the raw channel integer so the packed
+/// `_get`/`_set` bit math can round-trip it (the Zig `@bitCast` to/from the
+/// struct's backing integer).
+pub trait PackedAlpha: Copy + PartialEq + Default {
+    /// The packed channel bit width (`@bitSizeOf(T)`): 4, 2 or 1.
+    const NUM_BITS: usize;
+    /// The maximum (fully-opaque) channel value: `(1 << NUM_BITS) - 1`.
+    const MAX_INT: u8;
+    /// The format descriptor for this pixel format.
+    const FORMAT: Format;
+    /// Shorthand for a fully-opaque pixel in this format (`T.Opaque`).
+    fn opaque() -> Self;
+    /// The raw packed channel integer.
+    fn value(self) -> u8;
+    /// Reconstructs the pixel from a raw packed channel integer.
+    fn from_value(v: u8) -> Self;
+    /// Returns the pixel translated to this alpha format (`T.fromPixel`).
+    fn from_pixel(p: Pixel) -> Self;
+    /// Returns this pixel as an interface (`T.asPixel`).
+    fn as_pixel(self) -> Pixel;
+    /// Returns an average of the pixels in the supplied slice (`T.average`).
+    fn average(ps: &[Self]) -> Self;
+    /// The `SurfaceType` interface tag corresponding to this pixel format.
+    fn surface_type() -> SurfaceType;
+}
+
+impl PackedAlpha for Alpha4 {
+    const NUM_BITS: usize = Alpha4::NUM_BITS;
+    const MAX_INT: u8 = Alpha4::MAX_INT;
+    const FORMAT: Format = Alpha4::FORMAT;
+    fn opaque() -> Self {
+        Alpha4::OPAQUE
+    }
+    fn value(self) -> u8 {
+        self.a
+    }
+    fn from_value(v: u8) -> Self {
+        Alpha4 { a: v }
+    }
+    fn from_pixel(p: Pixel) -> Self {
+        Alpha4::from_pixel(p)
+    }
+    fn as_pixel(self) -> Pixel {
+        Alpha4::as_pixel(self)
+    }
+    fn average(ps: &[Self]) -> Self {
+        Alpha4::average(ps)
+    }
+    fn surface_type() -> SurfaceType {
+        SurfaceType::ImageSurfaceAlpha4
+    }
+}
+
+impl PackedAlpha for Alpha2 {
+    const NUM_BITS: usize = Alpha2::NUM_BITS;
+    const MAX_INT: u8 = Alpha2::MAX_INT;
+    const FORMAT: Format = Alpha2::FORMAT;
+    fn opaque() -> Self {
+        Alpha2::OPAQUE
+    }
+    fn value(self) -> u8 {
+        self.a
+    }
+    fn from_value(v: u8) -> Self {
+        Alpha2 { a: v }
+    }
+    fn from_pixel(p: Pixel) -> Self {
+        Alpha2::from_pixel(p)
+    }
+    fn as_pixel(self) -> Pixel {
+        Alpha2::as_pixel(self)
+    }
+    fn average(ps: &[Self]) -> Self {
+        Alpha2::average(ps)
+    }
+    fn surface_type() -> SurfaceType {
+        SurfaceType::ImageSurfaceAlpha2
+    }
+}
+
+impl PackedAlpha for Alpha1 {
+    const NUM_BITS: usize = Alpha1::NUM_BITS;
+    const MAX_INT: u8 = Alpha1::MAX_INT;
+    const FORMAT: Format = Alpha1::FORMAT;
+    fn opaque() -> Self {
+        Alpha1::OPAQUE
+    }
+    fn value(self) -> u8 {
+        self.a
+    }
+    fn from_value(v: u8) -> Self {
+        Alpha1 { a: v }
+    }
+    fn from_pixel(p: Pixel) -> Self {
+        Alpha1::from_pixel(p)
+    }
+    fn as_pixel(self) -> Pixel {
+        Alpha1::as_pixel(self)
+    }
+    fn average(ps: &[Self]) -> Self {
+        Alpha1::average(ps)
+    }
+    fn surface_type() -> SurfaceType {
+        SurfaceType::ImageSurfaceAlpha1
+    }
+}
+
+/// A specialized surface for pixel types that are smaller than 8 bits in size,
+/// packing the data into the buffer in little-endian fashion. Faithful port of
+/// `surface.zig` `PackedImageSurface(comptime T)`.
+///
+/// ## Accessing pixel data
+///
+/// The buffer is stored as a `Vec<u8>` (the Zig `[]u8`) in little-endian
+/// fashion, consistent with the layout of the packed pixel structs. As an
+/// example, for an 8x2 Alpha1 surface, the first row is stored in `buf[0]` and
+/// the second row in `buf[1]`, with the lowest column index for each in the LSB
+/// (i.e., x=0,y=0 in mask=0x1 of `buf[0]`, and x=0,y=1 in mask=0x1 of `buf[1]`).
+///
+/// Because every supported bit width (4, 2, 1) divides 8, no packed pixel ever
+/// straddles a byte boundary, so `readPackedInt`/`writePackedInt` reduce to a
+/// single-byte shift-and-mask (still little-endian: index `i` lives at bit
+/// offset `i * NUM_BITS`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PackedImageSurface<T: PackedAlpha> {
+    /// The width of the surface.
+    pub width: i32,
+    /// The height of the surface.
+    pub height: i32,
+    /// The underlying buffer as a densely-packed `[]u8`. See the type
+    /// documentation for details on how to interpret the buffer.
+    pub buf: Vec<u8>,
+    _marker: PhantomData<T>,
+}
+
+impl<T: PackedAlpha> PackedImageSurface<T> {
+    /// Initializes a surface. If non-null, the surface is initialized with the
+    /// supplied `initial_px`.
+    pub fn init(
+        width: i32,
+        height: i32,
+        initial_px: Option<T>,
+    ) -> Result<PackedImageSurface<T>, Error> {
+        if width < 1 {
+            return Err(Error::InvalidWidth);
+        }
+        if height < 1 {
+            return Err(Error::InvalidHeight);
+        }
+        let h_usize = height.max(0) as usize;
+        let w_usize = width.max(0) as usize;
+        let len = (h_usize * w_usize * T::NUM_BITS + 7) / 8;
+        let mut buf = vec![0u8; len];
+        if let Some(px) = initial_px {
+            Self::paint_pixel_buf(&mut buf, px);
+        }
+        Ok(PackedImageSurface {
+            width,
+            height,
+            buf,
+            _marker: PhantomData,
+        })
+    }
+
+    /// De-allocates the surface buffer (Rust: drops the backing `Vec`).
+    pub fn deinit(&mut self) {
+        self.buf = Vec::new();
+    }
+
+    /// Downsamples a buffer in place, using simple pixel averaging.
+    pub fn downsample_buffer(&mut self) {
+        if self.width < SUPERSAMPLE_SCALE || self.height < SUPERSAMPLE_SCALE {
+            return;
+        }
+        let scale = SUPERSAMPLE_SCALE as usize;
+        let height = (self.height / SUPERSAMPLE_SCALE).max(0) as usize;
+        let width = (self.width / SUPERSAMPLE_SCALE).max(0) as usize;
+        let width_orig_u = self.width.max(0) as usize;
+
+        for y in 0..height {
+            for x in 0..width {
+                let mut pixels = vec![T::default(); scale * scale];
+                for i in 0..scale {
+                    for j in 0..scale {
+                        let idx = (y * scale + i) * width_orig_u + (x * scale + j);
+                        pixels[i * scale + j] = self._get(idx);
+                    }
+                }
+                self._set(y * width + x, T::average(&pixels));
+            }
+        }
+        self.height = height as i32;
+        self.width = width as i32;
+    }
+
+    /// Resizes the buffer to the dimensions set within the surface.
+    pub fn resize_buffer(&mut self) {
+        let height = self.height.max(0) as usize;
+        let width = self.width.max(0) as usize;
+        let new_len = (height * width * T::NUM_BITS + 7) / 8;
+        if self.buf.len() == new_len {
+            return;
+        }
+        self.buf.truncate(new_len);
+        self.buf.shrink_to_fit();
+    }
+
+    /// Downsamples the image, then resizes the buffer. See `downsample_buffer`.
+    pub fn downsample(&mut self) {
+        self.downsample_buffer();
+        self.resize_buffer();
+    }
+
+    /// Gets the pixel data at the co-ordinates specified. Returns `None` if the
+    /// co-ordinates are out of range.
+    pub fn get_pixel(&self, x: i32, y: i32) -> Option<Pixel> {
+        if x < 0 || y < 0 || x >= self.width || y >= self.height {
+            return None;
+        }
+        let idx = (self.width as isize * y as isize + x as isize).max(0) as usize;
+        Some(self._get(idx).as_pixel())
+    }
+
+    /// Puts a single pixel at the `x` and `y` co-ordinates. No-ops if the pixel
+    /// is out of range.
+    pub fn put_pixel(&mut self, x: i32, y: i32, px: Pixel) {
+        if x < 0 || y < 0 || x >= self.width || y >= self.height {
+            return;
+        }
+        let idx = (self.width as isize * y as isize + x as isize).max(0) as usize;
+        self._set(idx, T::from_pixel(px));
+    }
+
+    /// Replaces the surface with the supplied pixel.
+    pub fn paint_pixel(&mut self, px: Pixel) {
+        Self::paint_pixel_buf(&mut self.buf, T::from_pixel(px));
+    }
+
+    /// Copies a single pixel to the range starting at `(x, y)` and proceeding
+    /// for `len`. Out-of-range start co-ordinates cause a no-op.
+    pub fn paint_stride(&mut self, x: i32, y: i32, len: usize, px: Pixel) {
+        if x < 0 || y < 0 || x >= self.width || y >= self.height {
+            return;
+        }
+        // Because we are doing a partial paint here, we need to be a bit more
+        // careful than we would be with paint_pixel. We can do the majority
+        // still with our internal `paint_pixel_buf` routine, but we need to
+        // slice off the contiguous part of memory to do so.
+        //
+        // We've already properly aligned our buffer, so we can check the start
+        // and end to make sure they're evenly divisible against our bit size.
+        // The remainders are the leftovers we need to individually set, if they
+        // exist.
+        let src_px = T::from_pixel(px);
+        let scale = 8 / T::NUM_BITS;
+        let w_usize = self.width.max(0) as usize;
+        let y_usize = y.max(0) as usize;
+        let x_usize = x.max(0) as usize;
+        let start = w_usize * y_usize + x_usize;
+        let end = start + len;
+        let slice_start = start / scale;
+        let slice_end = end / scale;
+        if slice_start > slice_end {
+            panic!("invalid range for paint (start > end). this is a bug, please report it");
+        } else if slice_start == slice_end {
+            // There's nothing we can memset, just set the range individually.
+            for idx in start..end {
+                self._set(idx, src_px);
+            }
+            return;
+        }
+        let start_rem = start % scale;
+        let slice_offset = if start_rem > 0 { 1 } else { 0 };
+        // Set our contiguous range
+        Self::paint_pixel_buf(&mut self.buf[slice_start + slice_offset..slice_end], src_px);
+        // Set the ends.
+        // Note that the subtractions here should be safe; start_rem is
+        // (start % scale), the result of which will always be less than scale,
+        // so worst case it is (scale - (max(0, scale - 1))). Worst case for
+        // (end - end % scale) is always 0 when end < scale, and positive
+        // otherwise.
+        let l_low: usize = start; // start of left of non-contiguous range
+        let l_high: usize = start + (scale - start_rem); // end of left of non-contiguous range
+        let r_low: usize = end - end % scale; // start of right non-contiguous range
+        let r_high: usize = end; // end of right of non-contiguous range
+        for idx in l_low..l_high {
+            self._set(idx, src_px);
+        }
+        for idx in r_low..r_high {
+            self._set(idx, src_px);
+        }
+    }
+
+    /// Composites a single pixel using the specified operation, with an optional
+    /// opacity, to the range starting at `(x, y)` for `len`. Integer operators
+    /// only. Faithful port of `PackedImageSurface(T).compositeStride`.
+    pub fn composite_stride(
+        &mut self,
+        x: i32,
+        y: i32,
+        len: usize,
+        px: Pixel,
+        operator: Operator,
+        opacity: u8,
+    ) {
+        if x < 0 || y < 0 || x >= self.width || y >= self.height {
+            return;
+        }
+        let w_usize = self.width.max(0) as usize;
+        let y_usize = y.max(0) as usize;
+        let x_usize = x.max(0) as usize;
+        let start = w_usize * y_usize + x_usize;
+
+        // We use RGBA as our base intermediary pixel for the source.
+        let mut src: Rgba = Rgba::from_pixel(px);
+        if opacity < 255 {
+            src = Rgba::from_pixel(crate::compositor::run_pixel_t(
+                src.as_pixel(),
+                Pixel::Alpha8(Alpha8 { a: opacity }),
+                Operator::DstIn,
+            ));
+        }
+
+        for idx in start..start + len {
+            let out = crate::compositor::run_pixel_t(
+                self._get(idx).as_pixel(),
+                src.as_pixel(),
+                operator,
+            );
+            self._set(idx, T::from_pixel(out));
+        }
+    }
+
+    /// Utility to get a packed pixel out of the buffer at `index`. Because
+    /// `NUM_BITS` divides 8, the value lives entirely within one byte at bit
+    /// offset `(index * NUM_BITS) % 8` (little-endian). Faithful to
+    /// `readPackedInt(IntType, buf, index * bits, .little)`.
+    fn _get(&self, index: usize) -> T {
+        let bit = index * T::NUM_BITS;
+        let byte = self.buf[bit / 8];
+        let shift = (bit % 8) as u32;
+        let val = (byte >> shift) & T::MAX_INT;
+        T::from_value(val)
+    }
+
+    /// Utility to set a packed pixel in the buffer at `index`. See `_get`.
+    /// Faithful to `writePackedInt(IntType, buf, index * bits, px, .little)`.
+    fn _set(&mut self, index: usize, value: T) {
+        let bit = index * T::NUM_BITS;
+        let shift = (bit % 8) as u32;
+        let b = &mut self.buf[bit / 8];
+        *b = (*b & !(T::MAX_INT << shift)) | ((value.value() & T::MAX_INT) << shift);
+    }
+
+    /// Sets an entire (sub)buffer to a single packed pixel. Faithful port of
+    /// `_paintPixel`: builds one byte packed with as many copies of the pixel
+    /// as fit, then fills the slice with it (a zero pixel short-circuits to a
+    /// zero fill). This may fill past the end of the canvas into the excess in
+    /// the last byte, but that space is undefined in our implementation anyway.
+    fn paint_pixel_buf(buf: &mut [u8], px: T) {
+        if px == T::default() {
+            // Short-circuit to writing zeroes if the pixel we're setting is zero
+            for b in buf.iter_mut() {
+                *b = 0;
+            }
+            return;
+        }
+
+        let px_u8: u8 = px.value();
+        let mut packed_px: u8 = 0;
+        let mut sh: usize = 0;
+        while sh <= 8 - T::NUM_BITS {
+            packed_px |= px_u8 << sh;
+            sh += T::NUM_BITS;
+        }
+
+        for b in buf.iter_mut() {
+            *b = packed_px;
+        }
+    }
+}
+
+/// Represents an interface as an enum of the pixel formats.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Surface {
     ImageSurfaceArgb(ImageSurface<Argb>),
@@ -313,6 +703,9 @@ pub enum Surface {
     ImageSurfaceRgb(ImageSurface<Rgb>),
     ImageSurfaceRgba(ImageSurface<Rgba>),
     ImageSurfaceAlpha8(ImageSurface<Alpha8>),
+    ImageSurfaceAlpha4(PackedImageSurface<Alpha4>),
+    ImageSurfaceAlpha2(PackedImageSurface<Alpha2>),
+    ImageSurfaceAlpha1(PackedImageSurface<Alpha1>),
 }
 
 /// Dispatches an expression over each concrete surface variant, binding `s` to
@@ -325,6 +718,9 @@ macro_rules! dispatch {
             Surface::ImageSurfaceRgb($s) => $body,
             Surface::ImageSurfaceRgba($s) => $body,
             Surface::ImageSurfaceAlpha8($s) => $body,
+            Surface::ImageSurfaceAlpha4($s) => $body,
+            Surface::ImageSurfaceAlpha2($s) => $body,
+            Surface::ImageSurfaceAlpha1($s) => $body,
         }
     };
 }
@@ -349,13 +745,15 @@ impl Surface {
             SurfaceType::ImageSurfaceAlpha8 => Ok(Surface::ImageSurfaceAlpha8(ImageSurface::init(
                 width, height, None,
             )?)),
-            SurfaceType::ImageSurfaceAlpha4
-            | SurfaceType::ImageSurfaceAlpha2
-            | SurfaceType::ImageSurfaceAlpha1 => {
-                unimplemented!(
-                    "PackedImageSurface (sub-8-bit alpha) is not part of the ghostty z2d subset"
-                )
-            }
+            SurfaceType::ImageSurfaceAlpha4 => Ok(Surface::ImageSurfaceAlpha4(
+                PackedImageSurface::init(width, height, None)?,
+            )),
+            SurfaceType::ImageSurfaceAlpha2 => Ok(Surface::ImageSurfaceAlpha2(
+                PackedImageSurface::init(width, height, None)?,
+            )),
+            SurfaceType::ImageSurfaceAlpha1 => Ok(Surface::ImageSurfaceAlpha1(
+                PackedImageSurface::init(width, height, None)?,
+            )),
         }
     }
 
@@ -388,11 +786,21 @@ impl Surface {
                 height,
                 Some(px),
             )?)),
-            Pixel::Alpha4(_) | Pixel::Alpha2(_) | Pixel::Alpha1(_) => {
-                unimplemented!(
-                    "PackedImageSurface (sub-8-bit alpha) is not part of the ghostty z2d subset"
-                )
-            }
+            Pixel::Alpha4(px) => Ok(Surface::ImageSurfaceAlpha4(PackedImageSurface::init(
+                width,
+                height,
+                Some(px),
+            )?)),
+            Pixel::Alpha2(px) => Ok(Surface::ImageSurfaceAlpha2(PackedImageSurface::init(
+                width,
+                height,
+                Some(px),
+            )?)),
+            Pixel::Alpha1(px) => Ok(Surface::ImageSurfaceAlpha1(PackedImageSurface::init(
+                width,
+                height,
+                Some(px),
+            )?)),
         }
     }
 
@@ -424,6 +832,9 @@ impl Surface {
             Surface::ImageSurfaceRgb(_) => Format::Rgb,
             Surface::ImageSurfaceRgba(_) => Format::Rgba,
             Surface::ImageSurfaceAlpha8(_) => Format::Alpha8,
+            Surface::ImageSurfaceAlpha4(_) => Format::Alpha4,
+            Surface::ImageSurfaceAlpha2(_) => Format::Alpha2,
+            Surface::ImageSurfaceAlpha1(_) => Format::Alpha1,
         }
     }
 
@@ -602,6 +1013,405 @@ const _: Option<pixel::Format> = None;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Port of `surface.zig` `test "PackedImageSurface, alpha4"`. The `getStride`
+    // sub-block is omitted — `get_stride`/`Stride` is not part of the rustty
+    // subset (see the module SUBSET NOTE).
+    #[test]
+    fn packed_image_surface_alpha4() {
+        {
+            // basic layout test, 3x3, puts pixels in the following layout:
+            //
+            // 5  0  0
+            // 0  10 0
+            // 0  0  15
+            //
+            // In this instance, we expect [5]u8 as the buffer, with the
+            // appropriate bits set, endian defined. Our padding (last 6 bits in
+            // the last byte) is all zeroes.
+            let mut sfc = PackedImageSurface::<Alpha4>::init(3, 3, None).unwrap();
+            sfc.put_pixel(0, 0, Pixel::Alpha4(Alpha4 { a: 5 }));
+            sfc.put_pixel(1, 1, Pixel::Alpha4(Alpha4 { a: 10 }));
+            sfc.put_pixel(2, 2, Pixel::Alpha4(Alpha4 { a: 15 }));
+
+            assert_eq!(5, sfc.buf.len());
+            assert_eq!(5, sfc.buf[0]);
+            assert_eq!(0, sfc.buf[1]);
+            assert_eq!(10, sfc.buf[2]);
+            assert_eq!(0, sfc.buf[3]);
+            assert_eq!(15, sfc.buf[4]);
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 5 })), sfc.get_pixel(0, 0));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 0 })), sfc.get_pixel(1, 0));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 0 })), sfc.get_pixel(2, 0));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 0 })), sfc.get_pixel(0, 1));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 10 })), sfc.get_pixel(1, 1));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 0 })), sfc.get_pixel(2, 1));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 0 })), sfc.get_pixel(0, 2));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 0 })), sfc.get_pixel(1, 2));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 15 })), sfc.get_pixel(2, 2));
+            assert_eq!(None, sfc.get_pixel(0, 3));
+            sfc.deinit();
+        }
+
+        {
+            // Initial pixel initialization. We expect this to fill the whole 3
+            // bytes in the buffer even though the buffer is supposed to only be
+            // 18 bits (bounds checks are a product of HxW on part of the
+            // consumer).
+            let mut sfc = PackedImageSurface::<Alpha4>::init(3, 3, Some(Alpha4 { a: 15 })).unwrap();
+
+            assert_eq!(5, sfc.buf.len());
+            assert_eq!(0xFF, sfc.buf[0]);
+            assert_eq!(0xFF, sfc.buf[1]);
+            assert_eq!(0xFF, sfc.buf[2]);
+            assert_eq!(0xFF, sfc.buf[3]);
+            assert_eq!(0xFF, sfc.buf[4]);
+            sfc.deinit();
+        }
+
+        {
+            // Downsampling
+            let mut sfc = PackedImageSurface::<Alpha4>::init(4, 4, None).unwrap();
+            sfc.put_pixel(0, 0, Pixel::Alpha4(Alpha4 { a: 15 }));
+            sfc.put_pixel(0, 1, Pixel::Alpha4(Alpha4 { a: 15 }));
+            sfc.put_pixel(0, 2, Pixel::Alpha4(Alpha4 { a: 15 }));
+            sfc.put_pixel(0, 3, Pixel::Alpha4(Alpha4 { a: 15 }));
+            sfc.put_pixel(1, 0, Pixel::Alpha4(Alpha4 { a: 15 }));
+            sfc.put_pixel(1, 1, Pixel::Alpha4(Alpha4 { a: 15 }));
+            sfc.put_pixel(1, 2, Pixel::Alpha4(Alpha4 { a: 15 }));
+            sfc.put_pixel(1, 3, Pixel::Alpha4(Alpha4 { a: 15 }));
+
+            sfc.downsample();
+
+            assert_eq!(1, sfc.width);
+            assert_eq!(1, sfc.height);
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 7 })), sfc.get_pixel(0, 0));
+            sfc.deinit();
+        }
+
+        {
+            // paintStride, testing contiguous ranges. Unlike paintPixel, we
+            // want to make sure only a very specific range of pixels were
+            // touched.
+            let mut sfc = PackedImageSurface::<Alpha4>::init(3, 3, None).unwrap();
+
+            sfc.paint_stride(1, 0, 6, Pixel::Alpha4(Alpha4 { a: 15 }));
+
+            assert_eq!(5, sfc.buf.len());
+            assert_eq!(0xF0, sfc.buf[0]);
+            assert_eq!(0xFF, sfc.buf[1]);
+            assert_eq!(0xFF, sfc.buf[2]);
+            assert_eq!(0x0F, sfc.buf[3]);
+            assert_eq!(0x00, sfc.buf[4]);
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 0 })), sfc.get_pixel(0, 0));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 15 })), sfc.get_pixel(1, 0));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 15 })), sfc.get_pixel(2, 0));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 15 })), sfc.get_pixel(0, 1));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 15 })), sfc.get_pixel(1, 1));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 15 })), sfc.get_pixel(2, 1));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 15 })), sfc.get_pixel(0, 2));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 0 })), sfc.get_pixel(1, 2));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 0 })), sfc.get_pixel(2, 2));
+
+            sfc.paint_pixel(Pixel::Alpha4(Alpha4 { a: 0 }));
+            sfc.paint_stride(0, 1, 6, Pixel::Alpha4(Alpha4 { a: 15 }));
+            assert_eq!(0x00, sfc.buf[0]);
+            assert_eq!(0xF0, sfc.buf[1]);
+            assert_eq!(0xFF, sfc.buf[2]);
+            assert_eq!(0xFF, sfc.buf[3]);
+            assert_eq!(0x0F, sfc.buf[4]);
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 0 })), sfc.get_pixel(0, 0));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 0 })), sfc.get_pixel(1, 0));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 0 })), sfc.get_pixel(2, 0));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 15 })), sfc.get_pixel(0, 1));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 15 })), sfc.get_pixel(1, 1));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 15 })), sfc.get_pixel(2, 1));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 15 })), sfc.get_pixel(0, 2));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 15 })), sfc.get_pixel(1, 2));
+            assert_eq!(Some(Pixel::Alpha4(Alpha4 { a: 15 })), sfc.get_pixel(2, 2));
+            sfc.deinit();
+        }
+    }
+
+    // Port of `surface.zig` `test "PackedImageSurface, alpha2"` (getStride
+    // sub-block omitted, see SUBSET NOTE).
+    #[test]
+    fn packed_image_surface_alpha2() {
+        {
+            // basic layout test, 3x3:
+            //
+            // 1 0 0
+            // 0 2 0
+            // 0 0 3
+            let mut sfc = PackedImageSurface::<Alpha2>::init(3, 3, None).unwrap();
+            sfc.put_pixel(0, 0, Pixel::Alpha2(Alpha2 { a: 1 }));
+            sfc.put_pixel(1, 1, Pixel::Alpha2(Alpha2 { a: 2 }));
+            sfc.put_pixel(2, 2, Pixel::Alpha2(Alpha2 { a: 3 }));
+
+            assert_eq!(3, sfc.buf.len());
+            assert_eq!(1, sfc.buf[0]);
+            assert_eq!(2, sfc.buf[1]);
+            assert_eq!(3, sfc.buf[2]);
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 1 })), sfc.get_pixel(0, 0));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 0 })), sfc.get_pixel(1, 0));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 0 })), sfc.get_pixel(2, 0));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 0 })), sfc.get_pixel(0, 1));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 2 })), sfc.get_pixel(1, 1));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 0 })), sfc.get_pixel(2, 1));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 0 })), sfc.get_pixel(0, 2));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 0 })), sfc.get_pixel(1, 2));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 3 })), sfc.get_pixel(2, 2));
+            assert_eq!(None, sfc.get_pixel(0, 3));
+            sfc.deinit();
+        }
+
+        {
+            // Initial pixel initialization.
+            let mut sfc = PackedImageSurface::<Alpha2>::init(3, 3, Some(Alpha2 { a: 3 })).unwrap();
+
+            assert_eq!(3, sfc.buf.len());
+            assert_eq!(0xFF, sfc.buf[0]);
+            assert_eq!(0xFF, sfc.buf[1]);
+            assert_eq!(0xFF, sfc.buf[2]);
+            sfc.deinit();
+        }
+
+        {
+            // Downsampling
+            let mut sfc = PackedImageSurface::<Alpha2>::init(4, 4, None).unwrap();
+            sfc.put_pixel(0, 0, Pixel::Alpha2(Alpha2 { a: 3 }));
+            sfc.put_pixel(0, 1, Pixel::Alpha2(Alpha2 { a: 3 }));
+            sfc.put_pixel(0, 2, Pixel::Alpha2(Alpha2 { a: 3 }));
+            sfc.put_pixel(0, 3, Pixel::Alpha2(Alpha2 { a: 3 }));
+            sfc.put_pixel(1, 0, Pixel::Alpha2(Alpha2 { a: 3 }));
+            sfc.put_pixel(1, 1, Pixel::Alpha2(Alpha2 { a: 3 }));
+            sfc.put_pixel(1, 2, Pixel::Alpha2(Alpha2 { a: 3 }));
+            sfc.put_pixel(1, 3, Pixel::Alpha2(Alpha2 { a: 3 }));
+            sfc.put_pixel(2, 0, Pixel::Alpha2(Alpha2 { a: 3 }));
+            sfc.put_pixel(2, 1, Pixel::Alpha2(Alpha2 { a: 3 }));
+            sfc.put_pixel(2, 2, Pixel::Alpha2(Alpha2 { a: 3 }));
+
+            sfc.downsample();
+
+            assert_eq!(1, sfc.width);
+            assert_eq!(1, sfc.height);
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 2 })), sfc.get_pixel(0, 0));
+            sfc.deinit();
+        }
+
+        {
+            // paintStride, testing contiguous ranges.
+            let mut sfc = PackedImageSurface::<Alpha2>::init(3, 3, None).unwrap();
+
+            sfc.paint_stride(1, 0, 6, Pixel::Alpha2(Alpha2 { a: 3 }));
+
+            assert_eq!(3, sfc.buf.len());
+            assert_eq!(0xFC, sfc.buf[0]);
+            assert_eq!(0x3F, sfc.buf[1]);
+            assert_eq!(0x00, sfc.buf[2]);
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 0 })), sfc.get_pixel(0, 0));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 3 })), sfc.get_pixel(1, 0));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 3 })), sfc.get_pixel(2, 0));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 3 })), sfc.get_pixel(0, 1));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 3 })), sfc.get_pixel(1, 1));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 3 })), sfc.get_pixel(2, 1));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 3 })), sfc.get_pixel(0, 2));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 0 })), sfc.get_pixel(1, 2));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 0 })), sfc.get_pixel(2, 2));
+
+            sfc.paint_pixel(Pixel::Alpha2(Alpha2 { a: 0 }));
+            sfc.paint_stride(0, 1, 6, Pixel::Alpha2(Alpha2 { a: 3 }));
+            assert_eq!(0xC0, sfc.buf[0]);
+            assert_eq!(0xFF, sfc.buf[1]);
+            assert_eq!(0x03, sfc.buf[2]);
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 0 })), sfc.get_pixel(0, 0));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 0 })), sfc.get_pixel(1, 0));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 0 })), sfc.get_pixel(2, 0));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 3 })), sfc.get_pixel(0, 1));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 3 })), sfc.get_pixel(1, 1));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 3 })), sfc.get_pixel(2, 1));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 3 })), sfc.get_pixel(0, 2));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 3 })), sfc.get_pixel(1, 2));
+            assert_eq!(Some(Pixel::Alpha2(Alpha2 { a: 3 })), sfc.get_pixel(2, 2));
+            sfc.deinit();
+        }
+    }
+
+    // Port of `surface.zig` `test "PackedImageSurface, alpha1"` (getStride
+    // sub-block omitted, see SUBSET NOTE).
+    #[test]
+    fn packed_image_surface_alpha1() {
+        {
+            // basic layout test, 3x3:
+            //
+            // 1 0 0
+            // 0 1 0
+            // 0 0 1
+            let mut sfc = PackedImageSurface::<Alpha1>::init(3, 3, None).unwrap();
+            sfc.put_pixel(0, 0, Pixel::Alpha1(Alpha1 { a: 1 }));
+            sfc.put_pixel(1, 1, Pixel::Alpha1(Alpha1 { a: 1 }));
+            sfc.put_pixel(2, 2, Pixel::Alpha1(Alpha1 { a: 1 }));
+
+            assert_eq!(2, sfc.buf.len());
+            assert_eq!(0b10001, sfc.buf[0]);
+            assert_eq!(1, sfc.buf[1]);
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(0, 0));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 0 })), sfc.get_pixel(1, 0));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 0 })), sfc.get_pixel(2, 0));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 0 })), sfc.get_pixel(0, 1));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(1, 1));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 0 })), sfc.get_pixel(2, 1));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 0 })), sfc.get_pixel(0, 2));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 0 })), sfc.get_pixel(1, 2));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(2, 2));
+            assert_eq!(None, sfc.get_pixel(0, 3));
+            sfc.deinit();
+        }
+
+        {
+            // Initial pixel initialization.
+            let mut sfc = PackedImageSurface::<Alpha1>::init(3, 3, Some(Alpha1 { a: 1 })).unwrap();
+
+            assert_eq!(2, sfc.buf.len());
+            assert_eq!(0xFF, sfc.buf[0]);
+            assert_eq!(0xFF, sfc.buf[1]);
+            sfc.deinit();
+        }
+
+        {
+            // Downsampling. Note that we don't really use downsampling on
+            // Alpha1 as it's kind of pointless (a pixel is either just off or
+            // on).
+            let mut sfc = PackedImageSurface::<Alpha1>::init(4, 4, Some(Alpha1 { a: 1 })).unwrap();
+
+            sfc.downsample();
+
+            assert_eq!(1, sfc.width);
+            assert_eq!(1, sfc.height);
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(0, 0));
+            sfc.deinit();
+        }
+
+        {
+            // Downsampling with a pixel off (will render the whole downsampled
+            // pixel off as per the Alpha1 implementation).
+            let mut sfc = PackedImageSurface::<Alpha1>::init(4, 4, Some(Alpha1 { a: 1 })).unwrap();
+
+            sfc.put_pixel(0, 0, Pixel::Alpha1(Alpha1 { a: 0 }));
+            sfc.downsample();
+
+            assert_eq!(1, sfc.width);
+            assert_eq!(1, sfc.height);
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 0 })), sfc.get_pixel(0, 0));
+            sfc.deinit();
+        }
+
+        {
+            // paintStride, testing contiguous ranges.
+            let mut sfc = PackedImageSurface::<Alpha1>::init(3, 3, None).unwrap();
+
+            sfc.paint_stride(1, 0, 6, Pixel::Alpha1(Alpha1 { a: 1 }));
+
+            assert_eq!(2, sfc.buf.len());
+            assert_eq!(0b1111110, sfc.buf[0]);
+            assert_eq!(0, sfc.buf[1]);
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 0 })), sfc.get_pixel(0, 0));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(1, 0));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(2, 0));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(0, 1));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(1, 1));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(2, 1));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(0, 2));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 0 })), sfc.get_pixel(1, 2));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 0 })), sfc.get_pixel(2, 2));
+
+            sfc.paint_pixel(Pixel::Alpha1(Alpha1 { a: 0 }));
+            sfc.paint_stride(0, 1, 6, Pixel::Alpha1(Alpha1 { a: 1 }));
+            assert_eq!(0b11111000, sfc.buf[0]);
+            assert_eq!(1, sfc.buf[1]);
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 0 })), sfc.get_pixel(0, 0));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 0 })), sfc.get_pixel(1, 0));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 0 })), sfc.get_pixel(2, 0));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(0, 1));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(1, 1));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(2, 1));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(0, 2));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(1, 2));
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(2, 2));
+            sfc.deinit();
+        }
+    }
+
+    // Port of `surface.zig` `test "PackedImageSurface, dimension validation"`.
+    // NOTE: the Zig error cases invoke `ImageSurface(pixel.Alpha1).init` (the
+    // non-packed generic); rustty's `ImageSurface<T>` requires a `SurfacePixel`
+    // and does not carry the packed alpha types, so we invoke
+    // `PackedImageSurface::<Alpha1>::init` for all cases — the InvalidWidth/
+    // InvalidHeight assertions (raised before any allocation) are identical.
+    #[test]
+    fn packed_image_surface_dimension_validation() {
+        {
+            let mut sfc = PackedImageSurface::<Alpha1>::init(1, 1, Some(Alpha1 { a: 1 })).unwrap();
+            sfc.deinit();
+        }
+        assert_eq!(
+            Err(Error::InvalidWidth),
+            PackedImageSurface::<Alpha1>::init(0, 1, Some(Alpha1 { a: 1 }))
+        );
+        assert_eq!(
+            Err(Error::InvalidWidth),
+            PackedImageSurface::<Alpha1>::init(-1, 1, Some(Alpha1 { a: 1 }))
+        );
+        assert_eq!(
+            Err(Error::InvalidHeight),
+            PackedImageSurface::<Alpha1>::init(1, 0, Some(Alpha1 { a: 1 }))
+        );
+        assert_eq!(
+            Err(Error::InvalidHeight),
+            PackedImageSurface::<Alpha1>::init(1, -1, Some(Alpha1 { a: 1 }))
+        );
+    }
+
+    // Port of `surface.zig` `test "PackedImageSurface.downsample, edge cases"`.
+    #[test]
+    fn packed_image_surface_downsample_edge_cases() {
+        {
+            // Width not divisible by 4
+            let mut sfc = PackedImageSurface::<Alpha1>::init(7, 4, Some(Alpha1 { a: 1 })).unwrap();
+            sfc.downsample();
+            assert_eq!(1, sfc.width);
+            assert_eq!(1, sfc.height);
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(0, 0));
+            sfc.deinit();
+        }
+        {
+            // Height not divisible by 4
+            let mut sfc = PackedImageSurface::<Alpha1>::init(4, 7, Some(Alpha1 { a: 1 })).unwrap();
+            sfc.downsample();
+            assert_eq!(1, sfc.width);
+            assert_eq!(1, sfc.height);
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(0, 0));
+            sfc.deinit();
+        }
+        {
+            // Width too small
+            let mut sfc = PackedImageSurface::<Alpha1>::init(3, 4, Some(Alpha1 { a: 1 })).unwrap();
+            sfc.downsample();
+            assert_eq!(3, sfc.width);
+            assert_eq!(4, sfc.height);
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(0, 0));
+            sfc.deinit();
+        }
+        {
+            // Height too small
+            let mut sfc = PackedImageSurface::<Alpha1>::init(4, 3, Some(Alpha1 { a: 1 })).unwrap();
+            sfc.downsample();
+            assert_eq!(4, sfc.width);
+            assert_eq!(3, sfc.height);
+            assert_eq!(Some(Pixel::Alpha1(Alpha1 { a: 1 })), sfc.get_pixel(0, 0));
+            sfc.deinit();
+        }
+    }
 
     #[test]
     fn image_surface_init_deinit() {

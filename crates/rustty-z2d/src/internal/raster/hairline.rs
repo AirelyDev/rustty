@@ -605,31 +605,46 @@ mod tests {
     }
 
     #[test]
-    fn hairline_dashed_is_blocker() {
-        // A valid dash array with hairline stroking must hit the
-        // polyline_plotter Dasher.validate `unimplemented!()` (subset-guard
-        // contract; parity with stroke_plotter's dashed blocker).
+    fn hairline_dashed_produces_gaps() {
+        // Replaces the former dashed-hairline blocker contract: a valid dash
+        // array with hairline stroking now flows through
+        // `polyline_plotter`'s `dashedLineTo` → the hairline rasterizer, and
+        // must produce a gapped (dashed) line rather than a solid one. We stroke
+        // a long horizontal hairline with a `[2,2]` dash and assert that at
+        // least one pixel along the run is "on" (drawn) and at least one is
+        // "off" (a gap) — i.e., the line is genuinely dashed, not solid.
         use crate::internal::path_nodes::{PathLineTo, PathMoveTo, PathNode};
         use crate::painter::{self, StrokeOptions};
 
-        let result = std::panic::catch_unwind(|| {
-            let mut sfc = Surface::init(SurfaceType::ImageSurfaceAlpha8, 8, 8).unwrap();
-            let pattern = opaque_alpha8();
-            let nodes = [
-                PathNode::MoveTo(PathMoveTo {
-                    point: Point { x: 1.0, y: 1.0 },
-                }),
-                PathNode::LineTo(PathLineTo {
-                    point: Point { x: 5.0, y: 1.0 },
-                }),
-            ];
-            let opts = StrokeOptions {
-                hairline: true,
-                dashes: vec![2.0, 2.0],
-                ..StrokeOptions::default()
-            };
-            let _ = painter::stroke(&mut sfc, &pattern, &nodes, opts);
-        });
-        assert!(result.is_err(), "expected dashed-hairline blocker panic");
+        let mut sfc = Surface::init(SurfaceType::ImageSurfaceAlpha8, 16, 4).unwrap();
+        let pattern = opaque_alpha8();
+        let nodes = [
+            PathNode::MoveTo(PathMoveTo {
+                point: Point { x: 0.0, y: 1.0 },
+            }),
+            PathNode::LineTo(PathLineTo {
+                point: Point { x: 15.0, y: 1.0 },
+            }),
+        ];
+        let opts = StrokeOptions {
+            hairline: true,
+            anti_aliasing_mode: AntiAliasMode::None,
+            dashes: vec![2.0, 2.0],
+            ..StrokeOptions::default()
+        };
+        painter::stroke(&mut sfc, &pattern, &nodes, opts).unwrap();
+
+        let mut any_on = false;
+        let mut any_off = false;
+        for x in 0..15 {
+            if alpha_at(&sfc, x, 1) != 0 {
+                any_on = true;
+            } else {
+                any_off = true;
+            }
+        }
+        assert!(any_on, "dashed hairline drew nothing");
+        assert!(any_off, "dashed hairline has no gaps (drew solid)");
+        sfc.deinit();
     }
 }

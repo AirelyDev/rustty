@@ -6,10 +6,13 @@
 // by the run-length `sparse_coverage` buffer) rasterizer are ported — the
 // latter is what ghostty's default-AA glyf/sprite fills use. The `hairline`
 // (1px thin-line) rasterizer is ported (reached by the renderer debug overlay,
-// not the sprite canvas). The `supersample` rasterizer is a blocker.
+// not the sprite canvas). The `supersample` rasterizer is ported too (mask-and-
+// downsample AA; unreachable via the sprite/glyf consumer, which uses the
+// default multisample path, but ported for full parity).
 
 pub mod direct;
 pub mod hairline;
 pub mod multisample;
 pub mod shared;
 pub mod sparse_coverage;
+pub mod supersample;

@@ -28,20 +28,24 @@
 //!   arc→bezier-spline decomposition).
 //! * [`pixel`] — `Format`/`Pixel` with the RGB(A) family + `Alpha8` (full).
 //! * [`surface::Surface`] — memory-backed `ImageSurface` (argb/xrgb/rgb/rgba/
-//!   alpha8); putPixel/paintStride/clearStride/getPixel/init/initPixel.
-//! * [`painter::fill`] — the FILL operation for both the non-AA (`.none`)
-//!   scanline rasterizer ([`internal::raster::direct`]) and the default
-//!   anti-aliased (`.default`/`.multisample_4x`) rasterizer
-//!   ([`internal::raster::multisample`] + [`internal::raster::sparse_coverage`]),
-//!   via [`internal::tess::fill_plotter`] + [`internal::tess::polygon`].
-//! * [`painter::stroke`] — the STROKE operation for the (non-dashed) path the
-//!   sprite canvas exercises, via [`internal::tess::stroke_plotter`] +
-//!   [`internal::tess::pen`] / [`internal::tess::face`] /
-//!   [`internal::tess::slope`] + `internal::tess::polygon::Contour`, fed into the
-//!   same fill rasterizers (butt/round caps, miter/bevel/round joins). Plus the
-//!   HAIRLINE (1px thin-line) fast-path — [`internal::tess::polyline_plotter`] +
-//!   [`internal::raster::hairline`] (Bresenham / Xiaolin-Wu) — used by the
-//!   renderer debug overlay.
+//!   alpha8) AND the sub-8-bit little-endian bit-packed `PackedImageSurface`
+//!   (alpha4/2/1); putPixel/paintStride/clearStride/getPixel/init/initPixel/
+//!   downsample/compositeStride.
+//! * [`painter::fill`] — the FILL operation for the non-AA (`.none`) scanline
+//!   rasterizer ([`internal::raster::direct`]), the default anti-aliased
+//!   (`.default`/`.multisample_4x`) rasterizer ([`internal::raster::multisample`]
+//!   + [`internal::raster::sparse_coverage`]), AND the mask-and-downsample
+//!   (`.supersample_4x`) rasterizer ([`internal::raster::supersample`]), via
+//!   [`internal::tess::fill_plotter`] + [`internal::tess::polygon`].
+//! * [`painter::stroke`] — the STROKE operation, including DASHED stroking
+//!   ([`internal::tess::dashed_plotter`] + [`internal::tess::dasher`]), via
+//!   [`internal::tess::stroke_plotter`] + [`internal::tess::pen`] /
+//!   [`internal::tess::face`] / [`internal::tess::slope`] +
+//!   `internal::tess::polygon::Contour`, fed into the `.none`/`.default`/
+//!   `.supersample_4x` rasterizers (butt/round/square caps, miter/bevel/round
+//!   joins). Plus the HAIRLINE (1px thin-line) fast-path —
+//!   [`internal::tess::polyline_plotter`] (dashed and undashed) +
+//!   [`internal::raster::hairline`] (Bresenham / Xiaolin-Wu).
 //! * [`compositor`] — `Operator`/`Precision` plus the scalar integer single-pixel
 //!   core (`run_pixel_t` + `IntegerOps`) used by `Surface::composite_stride` for
 //!   anti-aliased partial-coverage spans.
@@ -51,15 +55,20 @@
 //!
 //! ## NOT yet ported (blockers for full ghostty pixel-parity)
 //!
-//! * The `.supersample_4x` fill/stroke rasterizer, and the SIMD-vectorized
-//!   `StrideCompositor` / `RGBA16Vec` / `RGBAFloat` (`color`/`color_vector`)
-//!   pipelines. Only the scalar integer single-pixel compositor is ported.
-//! * Dashed stroking (`Dasher`/`dashed_plotter`) — not reached by the sprite
-//!   canvas or the hairline path.
-//! * `PackedImageSurface` (sub-8-bit alpha), gradients, dithering, PNG export.
+//! * The SIMD-vectorized `StrideCompositor` / `SurfaceCompositor` /
+//!   `RGBA16Vec` / `RGBAFloat` (`color`/`color_vector`) pipelines. Only the
+//!   scalar integer single-pixel compositor is ported; the multi-step
+//!   compositors are reproduced per-pixel through it (see
+//!   [`internal::raster::supersample`] / [`internal::raster::shared`]), faithful
+//!   for the opaque-pattern subset.
+//! * The `get_stride`/`Stride` accessor path (feeds the SIMD `StrideCompositor`;
+//!   unused by the rasterizers, which write via `paint_stride`/
+//!   `composite_stride`).
+//! * `Pattern` gradient/dither sources, PNG export.
 //!
-//! Those code paths are marked `unimplemented!` where present. See the task
-//! blockers report for detail.
+//! Those out-of-subset paths are the only remaining gaps; the anti-aliased
+//! supersample rasterizer, dashed tessellation, and packed-alpha surfaces are
+//! now fully ported.
 
 pub mod compositor;
 pub mod context;

@@ -507,7 +507,109 @@ impl Alpha8 {
     }
 }
 
+/// Low-level primitive used to scale up/down alpha bytes, uses repeating-bit
+/// padding when scaling up. Faithful port of the generic `Alpha(fmt).shlr`
+/// (`pixel.zig`), with the source/target bit widths passed as runtime values
+/// (Zig carries them as the integer `@TypeOf`). `from_bits`/`to_bits` are the
+/// source and target bit widths.
+fn shlr(val: u8, from_bits: usize, to_bits: usize) -> u8 {
+    if val == 0 {
+        return val;
+    }
+    if to_bits == from_bits {
+        return val;
+    }
+    if from_bits > to_bits {
+        return val >> (from_bits - to_bits);
+    }
+
+    // For scaling up (left shift), we use a repeating-bit padding scheme to
+    // make sure that there is as little error as possible. As our cases are
+    // very simple, we can reduce this to a lookup table of the difference
+    // between our source and target bits:
+    //
+    // 2, 4 should accommodate u2 to u4 and u4 to u8 (2x bit-difference)
+    // 6 should accommodate u2 to u8 (3x bit-difference)
+    let _val: u16 = val as u16;
+    let out: u16 = match to_bits - from_bits {
+        2 | 4 => (_val << (to_bits - from_bits)) + _val,
+        6 => {
+            (_val << (to_bits - from_bits))
+                | (_val << (to_bits - 2 * from_bits))
+                | (_val << (to_bits - 3 * from_bits))
+                | _val
+        }
+        _ => panic!("invalid bit difference in lookup table"),
+    };
+    out as u8
+}
+
+/// Faithful port of the generic `Alpha(fmt).scaleIntoIntAlpha`: scale a source
+/// alpha value of `from_bits` width into a target of `to_bits` width, with
+/// `max_int` the target's maximum value. Single-bit sources multiply into the
+/// target's max (the on/off convention).
+fn scale_into_int_alpha(val: u8, from_bits: usize, to_bits: usize, max_int: u8) -> u8 {
+    if from_bits == 1 {
+        return val * max_int;
+    }
+    shlr(val, from_bits, to_bits)
+}
+
+/// Shared `Alpha(fmt).fromPixel` for the sub-8-bit packed alpha types: RGB is
+/// opaque, every other source carries its alpha scaled into `to_bits`.
+fn alpha_from_pixel(p: Pixel, to_bits: usize, max_int: u8) -> u8 {
+    match p {
+        // Special case: we assume that RGB pixels are always opaque
+        Pixel::Xrgb(_) | Pixel::Rgb(_) => max_int,
+        Pixel::Argb(q) => scale_into_int_alpha(q.a, 8, to_bits, max_int),
+        Pixel::Rgba(q) => scale_into_int_alpha(q.a, 8, to_bits, max_int),
+        Pixel::Alpha8(q) => scale_into_int_alpha(q.a, 8, to_bits, max_int),
+        Pixel::Alpha4(q) => scale_into_int_alpha(q.a, 4, to_bits, max_int),
+        Pixel::Alpha2(q) => scale_into_int_alpha(q.a, 2, to_bits, max_int),
+        Pixel::Alpha1(q) => scale_into_int_alpha(q.a, 1, to_bits, max_int),
+    }
+}
+
+/// Shared `Alpha(fmt).average` for the packed alpha types: integer mean of the
+/// raw channel values (a zero-length slice averages to transparent). Limited to
+/// 256 entries, as in the reference.
+fn alpha_average(ps: &[u8]) -> u8 {
+    debug_assert!(ps.len() <= 256);
+    if ps.is_empty() {
+        return 0;
+    }
+    let mut a: u16 = 0;
+    for &p in ps {
+        a += p as u16;
+    }
+    (a / ps.len() as u16) as u8
+}
+
 impl Alpha4 {
+    pub const FORMAT: Format = Format::Alpha4;
+    /// Number of significant bits in the packed channel.
+    pub const NUM_BITS: usize = 4;
+    /// Maximum (fully-opaque) channel value: `(1 << NUM_BITS) - 1`.
+    pub const MAX_INT: u8 = (1 << Self::NUM_BITS) - 1;
+    /// Shorthand for a fully-opaque pixel in this format.
+    pub const OPAQUE: Alpha4 = Alpha4 { a: Self::MAX_INT };
+
+    /// Returns the pixel translated to the alpha format.
+    pub fn from_pixel(p: Pixel) -> Alpha4 {
+        Alpha4 {
+            a: alpha_from_pixel(p, Self::NUM_BITS, Self::MAX_INT),
+        }
+    }
+
+    /// Returns an average of the pixels in the supplied slice. The average of a
+    /// zero-length slice is transparent.
+    pub fn average(ps: &[Alpha4]) -> Alpha4 {
+        let vals: Vec<u8> = ps.iter().map(|p| p.a).collect();
+        Alpha4 {
+            a: alpha_average(&vals),
+        }
+    }
+
     pub fn as_pixel(self) -> Pixel {
         Pixel::Alpha4(self)
     }
@@ -517,6 +619,30 @@ impl Alpha4 {
 }
 
 impl Alpha2 {
+    pub const FORMAT: Format = Format::Alpha2;
+    /// Number of significant bits in the packed channel.
+    pub const NUM_BITS: usize = 2;
+    /// Maximum (fully-opaque) channel value: `(1 << NUM_BITS) - 1`.
+    pub const MAX_INT: u8 = (1 << Self::NUM_BITS) - 1;
+    /// Shorthand for a fully-opaque pixel in this format.
+    pub const OPAQUE: Alpha2 = Alpha2 { a: Self::MAX_INT };
+
+    /// Returns the pixel translated to the alpha format.
+    pub fn from_pixel(p: Pixel) -> Alpha2 {
+        Alpha2 {
+            a: alpha_from_pixel(p, Self::NUM_BITS, Self::MAX_INT),
+        }
+    }
+
+    /// Returns an average of the pixels in the supplied slice. The average of a
+    /// zero-length slice is transparent.
+    pub fn average(ps: &[Alpha2]) -> Alpha2 {
+        let vals: Vec<u8> = ps.iter().map(|p| p.a).collect();
+        Alpha2 {
+            a: alpha_average(&vals),
+        }
+    }
+
     pub fn as_pixel(self) -> Pixel {
         Pixel::Alpha2(self)
     }
@@ -526,6 +652,30 @@ impl Alpha2 {
 }
 
 impl Alpha1 {
+    pub const FORMAT: Format = Format::Alpha1;
+    /// Number of significant bits in the packed channel.
+    pub const NUM_BITS: usize = 1;
+    /// Maximum (fully-opaque) channel value: `(1 << NUM_BITS) - 1`.
+    pub const MAX_INT: u8 = (1 << Self::NUM_BITS) - 1;
+    /// Shorthand for a fully-opaque pixel in this format.
+    pub const OPAQUE: Alpha1 = Alpha1 { a: Self::MAX_INT };
+
+    /// Returns the pixel translated to the alpha format.
+    pub fn from_pixel(p: Pixel) -> Alpha1 {
+        Alpha1 {
+            a: alpha_from_pixel(p, Self::NUM_BITS, Self::MAX_INT),
+        }
+    }
+
+    /// Returns an average of the pixels in the supplied slice. The average of a
+    /// zero-length slice is transparent.
+    pub fn average(ps: &[Alpha1]) -> Alpha1 {
+        let vals: Vec<u8> = ps.iter().map(|p| p.a).collect();
+        Alpha1 {
+            a: alpha_average(&vals),
+        }
+    }
+
     pub fn as_pixel(self) -> Pixel {
         Pixel::Alpha1(self)
     }
@@ -595,6 +745,57 @@ mod tests {
             a: 0
         })
         .is_opaque());
+    }
+
+    #[test]
+    fn average_alpha() {
+        // Port of the alpha arms of `pixel.zig` `test "average"` — integer
+        // mean of the raw packed channel values.
+        let alpha8 = [
+            Alpha8 { a: 13 },
+            Alpha8 { a: 14 },
+            Alpha8 { a: 15 },
+            Alpha8 { a: 16 },
+        ];
+        let alpha8_expected = Alpha8 { a: 14 };
+
+        let alpha4 = [
+            Alpha4 { a: 3 },
+            Alpha4 { a: 4 },
+            Alpha4 { a: 5 },
+            Alpha4 { a: 6 },
+        ];
+        let alpha4_expected = Alpha4 { a: 4 };
+
+        let alpha2 = [
+            Alpha2 { a: 0 },
+            Alpha2 { a: 1 },
+            Alpha2 { a: 2 },
+            Alpha2 { a: 3 },
+        ];
+        let alpha2_expected = Alpha2 { a: 1 };
+
+        let alpha1_full = [
+            Alpha1 { a: 1 },
+            Alpha1 { a: 1 },
+            Alpha1 { a: 1 },
+            Alpha1 { a: 1 },
+        ];
+        let alpha1_full_expected = Alpha1 { a: 1 };
+
+        let alpha1_partial = [
+            Alpha1 { a: 1 },
+            Alpha1 { a: 0 },
+            Alpha1 { a: 1 },
+            Alpha1 { a: 1 },
+        ];
+        let alpha1_partial_expected = Alpha1 { a: 0 };
+
+        assert_eq!(alpha8_expected, Alpha8::average(&alpha8));
+        assert_eq!(alpha4_expected, Alpha4::average(&alpha4));
+        assert_eq!(alpha2_expected, Alpha2::average(&alpha2));
+        assert_eq!(alpha1_full_expected, Alpha1::average(&alpha1_full));
+        assert_eq!(alpha1_partial_expected, Alpha1::average(&alpha1_partial));
     }
 
     #[test]

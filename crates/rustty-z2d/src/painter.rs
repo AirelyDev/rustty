@@ -3,27 +3,26 @@
 //
 // Ported to Rust for rustty from z2d 0.10.0 `src/painter.zig` (R3 vendored dep).
 //
-// SUBSET NOTE (rustty): the FILL operation is ported for both the non-anti-
-// aliased (`.none`) rasterizer (`internal/raster/direct.rs`) and the default
-// anti-aliased (`.default` / `.multisample_4x`) rasterizer
-// (`internal/raster/multisample.rs` + `sparse_coverage.rs` + the scalar integer
-// compositor), which together are the pixel-producing core ghostty's glyf/sprite
-// fills use. The STROKE operation is ported for the (non-hairline, non-dashed)
-// path the sprite canvas exercises — `internal/tess/stroke_plotter.rs` +
-// `Pen`/`Face`/`Slope` + `Contour`, fed into the same `.none`/`.default`
-// rasterizers as fill (butt/round caps, miter/bevel/round joins). HAIRLINE
-// stroking (`polyline_plotter` + `hairline` — the 1px thin-line fast-path used
-// by the renderer debug overlay, not the sprite canvas) IS now ported. The
-// `.supersample_4x` rasterizer and dashed stroking (`Dasher`/`dashed_plotter`)
-// are NOT part of this subset; those code paths are `unimplemented!` (and
-// reported as blockers).
+// SUBSET NOTE (rustty): the FILL operation is ported for the non-anti-aliased
+// (`.none`) rasterizer (`internal/raster/direct.rs`), the default anti-aliased
+// (`.default` / `.multisample_4x`) rasterizer (`internal/raster/multisample.rs`
+// + `sparse_coverage.rs` + the scalar integer compositor), and the
+// mask-and-downsample `.supersample_4x` rasterizer
+// (`internal/raster/supersample.rs`). The STROKE operation is ported for the
+// polygon path (`internal/tess/stroke_plotter.rs` + `Pen`/`Face`/`Slope` +
+// `Contour`, fed into the fill rasterizers — butt/round/square caps,
+// miter/bevel/round joins), the HAIRLINE (1px thin-line) fast-path
+// (`polyline_plotter` + `hairline`), AND DASHED stroking
+// (`Dasher`/`dashed_plotter`, plus the dashed `polyline_plotter` branch). The
+// only remaining out-of-subset pieces are the SIMD compositor pipelines,
+// gradient/dither pattern sources, and PNG export (see the crate-level doc).
 
 //! Contains unmanaged painter functions for filling and stroking.
 
 use crate::compositor::{Operator, Precision};
 use crate::internal::error::InternalError;
 use crate::internal::path_nodes::PathNode;
-use crate::internal::raster::{direct, hairline, multisample};
+use crate::internal::raster::{direct, hairline, multisample, supersample};
 use crate::internal::tess::{fill_plotter, polyline_plotter, stroke_plotter};
 use crate::options::{self, AntiAliasMode, CapMode, FillRule, JoinMode};
 use crate::pattern::Pattern;
@@ -125,7 +124,15 @@ pub fn fill(
             );
         }
         AntiAliasMode::Supersample4x => {
-            unimplemented!("anti-aliased fill (supersample) is not part of the initial z2d subset");
+            supersample::run(
+                surface,
+                pattern,
+                &polygons,
+                opts.fill_rule,
+                scale,
+                opts.operator,
+                opts.precision,
+            );
         }
     }
 
@@ -319,8 +326,14 @@ pub fn stroke(
             );
         }
         AntiAliasMode::Supersample4x => {
-            unimplemented!(
-                "anti-aliased stroke (supersample) is not part of the initial z2d subset"
+            supersample::run(
+                surface,
+                pattern,
+                &polygons,
+                FillRule::NonZero,
+                scale,
+                opts.operator,
+                opts.precision,
             );
         }
     }

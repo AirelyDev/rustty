@@ -4,22 +4,26 @@
 // Ported to Rust for rustty from z2d 0.10.0 `src/internal/tess/stroke_plotter.zig`
 // (R3 vendored dep).
 //
-// SUBSET NOTE (rustty): the sprite/glyf stroke path never uses dashed lines, so
-// the `Dasher`/`dashed_plotter` branch is not ported; the leading
-// `Dasher.validate` guard IS ported and reports a blocker (`unimplemented!`) if a
-// valid dash array is ever supplied. Because dashes are excluded, there is only
-// one plotter type, so the Zig `join`/`plotSingle`/`plotOpenJoined`/
-// `plotClosedJoined` helpers (which are generic over the plotter `T` so the
-// dashed plotter can reuse them) are expressed here as inherent methods on
-// `Plotter`. The Zig `PlotterVTable` (type-erased `line_to` callbacks used for
-// spline decomposition and cap plotting) is expressed as `&mut dyn FnMut(...)`
-// sinks / collected point vectors — equivalent behavior, no raw pointers, which
-// keeps the Miri gate clean.
+// PORT NOTE (rustty): `plot` routes to `dashed_plotter::plot` when the dash
+// array validates, exactly as the reference does. The four helpers the Zig
+// declares as generic over the plotter type `T` — `plotSingle` /
+// `plotOpenJoined` / `plotClosedJoined` / `join` — are ported as free functions
+// generic over a `StrokePlotter` trait, so the dashed plotter can reuse them
+// against BOTH its `Plotter` and its nested `InitialPolygon` (via a view), which
+// is the whole reason the Zig makes them `fn(T: type, self: *T, ...)`. The trait
+// exposes the mutable stroke state (opts/pen/clockwise/result/outer/inner) in
+// one shot via `StrokeState` so the helpers can hold the disjoint field borrows
+// the polygon surgery needs (concat outer+inner, add-edges from both). The Zig
+// `PlotterVTable` (type-erased `line_to` callbacks for spline decomposition and
+// cap plotting) and the `Joiner` vtable (outer/inner target swap) are expressed
+// as `&mut dyn FnMut(...)` sinks / `join_plot_outer`/`join_plot_inner` helpers —
+// equivalent behavior, no raw pointers, which keeps the Miri gate clean.
 
 use crate::internal::error::InternalError;
 use crate::internal::path_nodes::{PathCurveTo, PathLineTo, PathMoveTo, PathNode};
 use crate::internal::point::Point;
 use crate::internal::tess::dasher;
+use crate::internal::tess::dashed_plotter;
 use crate::internal::tess::face::Face;
 use crate::internal::tess::pen::Pen;
 use crate::internal::tess::point_buffer::PointBuffer;
@@ -43,7 +47,7 @@ pub struct PlotterOptions {
 
 pub fn plot(nodes: &[PathNode], opts: PlotterOptions) -> Result<Polygon, InternalError> {
     if dasher::validate(&opts.dashes) {
-        unimplemented!("dashed stroke tessellation is not part of the z2d sprite subset");
+        return dashed_plotter::plot(nodes, opts);
     }
 
     let pen = if opts.join_mode == JoinMode::Round || opts.cap_mode == CapMode::Round {
@@ -69,6 +73,43 @@ pub fn plot(nodes: &[PathNode], opts: PlotterOptions) -> Result<Polygon, Interna
     plotter.run()?;
 
     Ok(plotter.result)
+}
+
+/// A bundle of disjoint mutable references to a stroke plotter's mutable state,
+/// as required by the generic `plot_single`/`plot_open_joined`/
+/// `plot_closed_joined`/`join` helpers. This is what lets the helpers be generic
+/// over both `stroke_plotter::Plotter` and `dashed_plotter`'s `InitialPolygon`
+/// (via a view that stitches the initial polygon's fields to the plotter's
+/// `result`): each implementor hands back disjoint borrows of its own fields in
+/// a single call, so the borrow checker permits the simultaneous outer+inner and
+/// result+outer accesses the polygon surgery performs.
+pub struct StrokeState<'s> {
+    pub opts: &'s PlotterOptions,
+    pub pen: Option<&'s Pen>,
+    pub clockwise_: &'s mut Option<bool>,
+    pub result: &'s mut Polygon,
+    pub outer: &'s mut Contour,
+    pub inner: &'s mut Contour,
+}
+
+/// Implemented by anything the generic stroke helpers can plot into. Faithful to
+/// the Zig `fn(T: type, self: *T, ...)` shape, but exposing the touched fields
+/// (`opts`/`pen`/`clockwise_`/`result`/`outer`/`inner`) in one borrow.
+pub trait StrokePlotter {
+    fn state(&mut self) -> StrokeState<'_>;
+}
+
+impl StrokePlotter for Plotter<'_> {
+    fn state(&mut self) -> StrokeState<'_> {
+        StrokeState {
+            opts: self.opts,
+            pen: self.pen.as_ref(),
+            clockwise_: &mut self.clockwise_,
+            result: &mut self.result,
+            outer: &mut self.outer,
+            inner: &mut self.inner,
+        }
+    }
 }
 
 struct Plotter<'a> {
@@ -125,7 +166,7 @@ impl Plotter<'_> {
             let t3 = self.points.tail(3).unwrap();
             let t2 = self.points.tail(2).unwrap();
             let t1 = self.points.tail(1).unwrap();
-            self.join(join_mode, t3, t2, t1, None);
+            join(self, join_mode, t3, t2, t1, None);
         }
         Ok(())
     }
@@ -176,14 +217,14 @@ impl Plotter<'_> {
             2 => {
                 let h0 = self.points.head(0).unwrap();
                 let h1 = self.points.head(1).unwrap();
-                self.plot_single(h0, h1);
+                plot_single(self, h0, h1);
             }
             _ => {
                 let h0 = self.points.head(0).unwrap();
                 let h1 = self.points.head(1).unwrap();
                 let t2 = self.points.tail(2).unwrap();
                 let t1 = self.points.tail(1).unwrap();
-                self.plot_closed_joined(h0, h1, t2, t1);
+                plot_closed_joined(self, h0, h1, t2, t1);
             }
         }
         self.points.reset();
@@ -195,14 +236,14 @@ impl Plotter<'_> {
             2 => {
                 let h0 = self.points.head(0).unwrap();
                 let h1 = self.points.head(1).unwrap();
-                self.plot_single(h0, h1);
+                plot_single(self, h0, h1);
             }
             _ => {
                 let h0 = self.points.head(0).unwrap();
                 let h1 = self.points.head(1).unwrap();
                 let t2 = self.points.tail(2).unwrap();
                 let t1 = self.points.tail(1).unwrap();
-                self.plot_open_joined(h0, h1, t2, t1);
+                plot_open_joined(self, h0, h1, t2, t1);
             }
         }
     }
@@ -244,228 +285,232 @@ impl Plotter<'_> {
             self.clockwise_ = None;
         }
     }
+}
 
-    fn plot_single(&mut self, start: Point, end: Point) {
-        // Single-segment line. This can be drawn off of
-        // our start line caps.
-        debug_assert!(self.inner.len == 0); // should have not been used
-        let cap_points = Face::init(start, end, self.opts.thickness, self.opts.ctm);
-        let cap_mode = self.opts.cap_mode;
-        {
-            let outer = &mut self.outer;
-            let pen = self.pen.as_ref();
-            let mut plot = |p: Point| outer.plot(p, None);
-            cap_points.cap_p0(&mut plot, cap_mode, true, pen);
-            cap_points.cap_p1(&mut plot, cap_mode, true, pen);
-        }
-
-        // Convert our contour to edges
-        self.result.add_edges_from_contour(&self.outer);
-
-        // Done, de-allocate our contour corners now that they have been converted
-        // to edges, and reset our states (only need to do outer, as inner was not
-        // touched).
-        self.outer = Contour::new(self.opts.scale);
-        self.clockwise_ = None;
+pub fn plot_single(sp: &mut impl StrokePlotter, start: Point, end: Point) {
+    // Single-segment line. This can be drawn off of
+    // our start line caps.
+    let st = sp.state();
+    debug_assert!(st.inner.len == 0); // should have not been used
+    let cap_points = Face::init(start, end, st.opts.thickness, st.opts.ctm);
+    let cap_mode = st.opts.cap_mode;
+    {
+        let outer = &mut *st.outer;
+        let pen = st.pen;
+        let mut plot = |p: Point| outer.plot(p, None);
+        cap_points.cap_p0(&mut plot, cap_mode, true, pen);
+        cap_points.cap_p1(&mut plot, cap_mode, true, pen);
     }
 
-    fn plot_open_joined(&mut self, start0: Point, end0: Point, start1: Point, end1: Point) {
-        // Open path, plot our cap ends and concatenate
-        // outer and inner.
-        let thickness = self.opts.thickness;
-        let ctm = self.opts.ctm;
-        let cap_mode = self.opts.cap_mode;
-        let cap_points_start = Face::init(start0, end0, thickness, ctm);
-        let cap_points_end = Face::init(start1, end1, thickness, ctm);
+    // Convert our contour to edges
+    st.result.add_edges_from_contour(&*st.outer);
 
-        // Check our direction so we know how to plot our cap points
-        let clockwise = self.clockwise_.unwrap_or(true);
+    // Done, de-allocate our contour corners now that they have been converted
+    // to edges, and reset our states (only need to do outer, as inner was not
+    // touched).
+    *st.outer = Contour::new(st.opts.scale);
+    *st.clockwise_ = None;
+}
 
-        // Start point
-        {
-            let before = self.outer.corners_first();
-            let outer = &mut self.outer;
-            let pen = self.pen.as_ref();
-            let mut plot = |p: Point| outer.plot(p, before);
-            cap_points_start.cap_p0(&mut plot, cap_mode, clockwise, pen);
-        }
+pub fn plot_open_joined(
+    sp: &mut impl StrokePlotter,
+    start0: Point,
+    end0: Point,
+    start1: Point,
+    end1: Point,
+) {
+    // Open path, plot our cap ends and concatenate
+    // outer and inner.
+    let st = sp.state();
+    let thickness = st.opts.thickness;
+    let ctm = st.opts.ctm;
+    let cap_mode = st.opts.cap_mode;
+    let cap_points_start = Face::init(start0, end0, thickness, ctm);
+    let cap_points_end = Face::init(start1, end1, thickness, ctm);
 
-        // End point
-        {
-            let outer = &mut self.outer;
-            let pen = self.pen.as_ref();
-            let mut plot = |p: Point| outer.plot(p, None);
-            cap_points_end.cap_p1(&mut plot, cap_mode, clockwise, pen);
-        }
+    // Check our direction so we know how to plot our cap points
+    let clockwise = (*st.clockwise_).unwrap_or(true);
 
-        // Now, concat the end of the inner contour to the end of the outer to give
-        // a single contour (polyline) representing the whole open stroke.
-        {
-            let (outer, inner) = (&mut self.outer, &mut self.inner);
-            outer.concat(inner);
-        }
-
-        // Convert our completed contour to edges
-        self.result.add_edges_from_contour(&self.outer);
-
-        // Deinit our contour now that it's converted, and reset the state. Note
-        // that we don't need to deinit the inner contour as all its corners were
-        // moved to the outer.
-        self.outer = Contour::new(self.opts.scale);
-        self.inner = Contour::new(self.opts.scale);
-        self.clockwise_ = None;
+    // Start point
+    {
+        let before = st.outer.corners_first();
+        let outer = &mut *st.outer;
+        let pen = st.pen;
+        let mut plot = |p: Point| outer.plot(p, before);
+        cap_points_start.cap_p0(&mut plot, cap_mode, clockwise, pen);
     }
 
-    fn plot_closed_joined(&mut self, initial0: Point, initial1: Point, p1: Point, p2: Point) {
-        // Fully closed path, record the final join, and then
-        // insert a join at the start of each the already plotted
-        // inner and outer polygons. Append both.
-        let join_mode = self.opts.join_mode;
-        if !p2.equal(initial0) {
-            // Normal case - current point does not equal the initial point.
-            //
-            // Do the final join (close_path acts as line_to to initial point), and
-            // then join around the initial point.
-            self.join(join_mode, p1, p2, initial0, None);
-            self.join(join_mode, p2, initial0, initial1, None);
-        } else {
-            // Degenerate case - the current point is equal to the initial point.
-            //
-            // This will happen when a line_to or equivalent has already been
-            // processed previously to the initial point. In this case, the final
-            // join (p1 -> p2 -> initial0 as per above in the normal case) will
-            // have already been done, and our points will have essentially shifted
-            // up so that effectively p1 takes the place of p2. This means that we
-            // only need to join p1 -> initial0 -> initial1 as our closing join.
-            self.join(join_mode, p1, initial0, initial1, None);
-        }
-
-        // Convert both of our outer and inner contours to edges, as they both
-        // represent two different closed polygons.
-        self.result.add_edges_from_contour(&self.outer);
-        self.result.add_edges_from_contour(&self.inner);
-
-        // Done, de-allocate our contour corners now that they have been converted
-        // to edges, and reset our states.
-        self.outer = Contour::new(self.opts.scale);
-        self.inner = Contour::new(self.opts.scale);
-        self.clockwise_ = None;
+    // End point
+    {
+        let outer = &mut *st.outer;
+        let pen = st.pen;
+        let mut plot = |p: Point| outer.plot(p, None);
+        cap_points_end.cap_p1(&mut plot, cap_mode, clockwise, pen);
     }
 
-    /// Plots `point` on the outer side of the join. The Zig original uses a
-    /// vtable-swapped `Joiner` so that, when the join direction differs from the
-    /// larger polygon's clockwise direction, the "outer" and "inner" targets are
-    /// swapped to preserve edge order and prevent twisting; here that swap is
-    /// `direction_switched`. Note `before` only applies to outer (append/insert)
-    /// plotting — the inner side always plots in reverse and ignores it.
-    fn join_plot_outer(&mut self, direction_switched: bool, point: Point, before: Option<usize>) {
-        if direction_switched {
-            self.inner.plot_reverse(point);
-        } else {
-            self.outer.plot(point, before);
-        }
+    // Now, concat the end of the inner contour to the end of the outer to give
+    // a single contour (polyline) representing the whole open stroke.
+    {
+        let (outer, inner) = (&mut *st.outer, &mut *st.inner);
+        outer.concat(inner);
     }
 
-    /// Plots `point` on the inner side of the join (see `join_plot_outer`).
-    fn join_plot_inner(&mut self, direction_switched: bool, point: Point, before: Option<usize>) {
-        if direction_switched {
-            self.outer.plot(point, before);
-        } else {
-            self.inner.plot_reverse(point);
-        }
+    // Convert our completed contour to edges
+    st.result.add_edges_from_contour(&*st.outer);
+
+    // Deinit our contour now that it's converted, and reset the state. Note
+    // that we don't need to deinit the inner contour as all its corners were
+    // moved to the outer.
+    *st.outer = Contour::new(st.opts.scale);
+    *st.inner = Contour::new(st.opts.scale);
+    *st.clockwise_ = None;
+}
+
+pub fn plot_closed_joined(
+    sp: &mut impl StrokePlotter,
+    initial0: Point,
+    initial1: Point,
+    p1: Point,
+    p2: Point,
+) {
+    // Fully closed path, record the final join, and then
+    // insert a join at the start of each the already plotted
+    // inner and outer polygons. Append both.
+    let join_mode = sp.state().opts.join_mode;
+    if !p2.equal(initial0) {
+        // Normal case - current point does not equal the initial point.
+        //
+        // Do the final join (close_path acts as line_to to initial point), and
+        // then join around the initial point.
+        join(sp, join_mode, p1, p2, initial0, None);
+        join(sp, join_mode, p2, initial0, initial1, None);
+    } else {
+        // Degenerate case - the current point is equal to the initial point.
+        //
+        // This will happen when a line_to or equivalent has already been
+        // processed previously to the initial point. In this case, the final
+        // join (p1 -> p2 -> initial0 as per above in the normal case) will
+        // have already been done, and our points will have essentially shifted
+        // up so that effectively p1 takes the place of p2. This means that we
+        // only need to join p1 -> initial0 -> initial1 as our closing join.
+        join(sp, join_mode, p1, initial0, initial1, None);
     }
 
-    fn join(
-        &mut self,
-        join_mode: JoinMode,
-        p0: Point,
-        p1: Point,
-        p2: Point,
-        before_outer: Option<usize>,
-    ) {
-        // Guard against no-op joins - if one of our segments is degenerate, just return.
-        if p0.equal(p1) || p1.equal(p2) {
-            if self.clockwise_.is_none() {
-                self.clockwise_ = Some(false);
-            }
-            return;
+    // Convert both of our outer and inner contours to edges, as they both
+    // represent two different closed polygons.
+    let st = sp.state();
+    st.result.add_edges_from_contour(&*st.outer);
+    st.result.add_edges_from_contour(&*st.inner);
+
+    // Done, de-allocate our contour corners now that they have been converted
+    // to edges, and reset our states.
+    *st.outer = Contour::new(st.opts.scale);
+    *st.inner = Contour::new(st.opts.scale);
+    *st.clockwise_ = None;
+}
+
+/// Plots `point` on the outer side of the join. The Zig original uses a
+/// vtable-swapped `Joiner` so that, when the join direction differs from the
+/// larger polygon's clockwise direction, the "outer" and "inner" targets are
+/// swapped to preserve edge order and prevent twisting; here that swap is
+/// `direction_switched`. Note `before` only applies to outer (append/insert)
+/// plotting — the inner side always plots in reverse and ignores it.
+fn join_plot_outer(
+    st: &mut StrokeState,
+    direction_switched: bool,
+    point: Point,
+    before: Option<usize>,
+) {
+    if direction_switched {
+        st.inner.plot_reverse(point);
+    } else {
+        st.outer.plot(point, before);
+    }
+}
+
+/// Plots `point` on the inner side of the join (see `join_plot_outer`).
+fn join_plot_inner(
+    st: &mut StrokeState,
+    direction_switched: bool,
+    point: Point,
+    before: Option<usize>,
+) {
+    if direction_switched {
+        st.outer.plot(point, before);
+    } else {
+        st.inner.plot_reverse(point);
+    }
+}
+
+pub fn join(
+    sp: &mut impl StrokePlotter,
+    join_mode: JoinMode,
+    p0: Point,
+    p1: Point,
+    p2: Point,
+    before_outer: Option<usize>,
+) {
+    let mut st = sp.state();
+
+    // Guard against no-op joins - if one of our segments is degenerate, just return.
+    if p0.equal(p1) || p1.equal(p2) {
+        if st.clockwise_.is_none() {
+            *st.clockwise_ = Some(false);
         }
+        return;
+    }
 
-        let in_ = Face::init(p0, p1, self.opts.thickness, self.opts.ctm);
-        let out = Face::init(p1, p2, self.opts.thickness, self.opts.ctm);
-        let join_clockwise = in_.dev_slope.compare(out.dev_slope) < 0;
+    let in_ = Face::init(p0, p1, st.opts.thickness, st.opts.ctm);
+    let out = Face::init(p1, p2, st.opts.thickness, st.opts.ctm);
+    let join_clockwise = in_.dev_slope.compare(out.dev_slope) < 0;
 
-        // Calculate if the join direction is different from the larger
-        // polygon's clockwise direction. If it is, we need to plot respective
-        // points on the opposite sides of what you would normally expect to
-        // preserve correct edge order and prevent twisting. We use vtables to
-        // avoid the constant need to branch while plotting.
-        let poly_clockwise = self.clockwise_.unwrap_or(join_clockwise);
-        let direction_switched: bool = join_clockwise != poly_clockwise;
+    // Calculate if the join direction is different from the larger
+    // polygon's clockwise direction. If it is, we need to plot respective
+    // points on the opposite sides of what you would normally expect to
+    // preserve correct edge order and prevent twisting. We use vtables to
+    // avoid the constant need to branch while plotting.
+    let poly_clockwise = (*st.clockwise_).unwrap_or(join_clockwise);
+    let direction_switched: bool = join_clockwise != poly_clockwise;
 
-        // If our slopes are equal (co-linear), only plot the end of the
-        // inbound face, regardless of join mode.
-        if in_.dev_slope.compare(out.dev_slope) == 0 {
-            self.join_plot_outer(
-                direction_switched,
-                if join_clockwise {
-                    in_.p1_ccw
-                } else {
-                    in_.p1_cw
-                },
-                before_outer,
-            );
-            self.join_plot_inner(
-                direction_switched,
-                if join_clockwise {
-                    in_.p1_cw
-                } else {
-                    in_.p1_ccw
-                },
-                before_outer,
-            );
-            if self.clockwise_.is_none() {
-                self.clockwise_ = Some(poly_clockwise);
-            }
-            return;
+    // If our slopes are equal (co-linear), only plot the end of the
+    // inbound face, regardless of join mode.
+    if in_.dev_slope.compare(out.dev_slope) == 0 {
+        join_plot_outer(
+            &mut st,
+            direction_switched,
+            if join_clockwise {
+                in_.p1_ccw
+            } else {
+                in_.p1_cw
+            },
+            before_outer,
+        );
+        join_plot_inner(
+            &mut st,
+            direction_switched,
+            if join_clockwise {
+                in_.p1_cw
+            } else {
+                in_.p1_ccw
+            },
+            before_outer,
+        );
+        if st.clockwise_.is_none() {
+            *st.clockwise_ = Some(poly_clockwise);
         }
+        return;
+    }
 
-        match join_mode {
-            JoinMode::Miter | JoinMode::Bevel => {
-                if join_mode == JoinMode::Miter
-                    && Slope::compare_for_miter_limit(
-                        in_.dev_slope,
-                        out.dev_slope,
-                        self.opts.miter_limit,
-                    )
-                {
-                    let pt = Face::intersect(in_, out, join_clockwise);
-                    self.join_plot_outer(direction_switched, pt, before_outer);
-                } else {
-                    self.join_plot_outer(
-                        direction_switched,
-                        if join_clockwise {
-                            in_.p1_ccw
-                        } else {
-                            in_.p1_cw
-                        },
-                        before_outer,
-                    );
-                    self.join_plot_outer(
-                        direction_switched,
-                        if join_clockwise {
-                            out.p0_ccw
-                        } else {
-                            out.p0_cw
-                        },
-                        before_outer,
-                    );
-                }
-            }
-
-            JoinMode::Round => {
-                debug_assert!(self.pen.is_some());
-                self.join_plot_outer(
+    match join_mode {
+        JoinMode::Miter | JoinMode::Bevel => {
+            if join_mode == JoinMode::Miter
+                && Slope::compare_for_miter_limit(in_.dev_slope, out.dev_slope, st.opts.miter_limit)
+            {
+                let pt = Face::intersect(in_, out, join_clockwise);
+                join_plot_outer(&mut st, direction_switched, pt, before_outer);
+            } else {
+                join_plot_outer(
+                    &mut st,
                     direction_switched,
                     if join_clockwise {
                         in_.p1_ccw
@@ -474,21 +519,8 @@ impl Plotter<'_> {
                     },
                     before_outer,
                 );
-                // Collect the pen's fan points (immutable borrow of the pen)
-                // before plotting them (which needs `&mut self`).
-                let fan: Vec<Point> = {
-                    let pen = self.pen.as_ref().unwrap();
-                    let vit = pen.vertex_iterator_for(in_.dev_slope, out.dev_slope, join_clockwise);
-                    vit.map(|v| Point {
-                        x: p1.x + v.point.x,
-                        y: p1.y + v.point.y,
-                    })
-                    .collect()
-                };
-                for pt in fan {
-                    self.join_plot_outer(direction_switched, pt, before_outer);
-                }
-                self.join_plot_outer(
+                join_plot_outer(
+                    &mut st,
                     direction_switched,
                     if join_clockwise {
                         out.p0_ccw
@@ -500,31 +532,71 @@ impl Plotter<'_> {
             }
         }
 
-        // Inner join. We plot our ends depending on direction, going through
-        // the midpoint.
-        self.join_plot_inner(
-            direction_switched,
-            if join_clockwise {
-                in_.p1_cw
-            } else {
-                in_.p1_ccw
-            },
-            before_outer,
-        );
-        self.join_plot_inner(direction_switched, p1, before_outer);
-        self.join_plot_inner(
-            direction_switched,
-            if join_clockwise {
-                out.p0_cw
-            } else {
-                out.p0_ccw
-            },
-            before_outer,
-        );
-
-        if self.clockwise_.is_none() {
-            self.clockwise_ = Some(poly_clockwise);
+        JoinMode::Round => {
+            debug_assert!(st.pen.is_some());
+            join_plot_outer(
+                &mut st,
+                direction_switched,
+                if join_clockwise {
+                    in_.p1_ccw
+                } else {
+                    in_.p1_cw
+                },
+                before_outer,
+            );
+            // Collect the pen's fan points (immutable borrow of the pen)
+            // before plotting them (which needs `&mut` on the contours).
+            let fan: Vec<Point> = {
+                let pen = st.pen.unwrap();
+                let vit = pen.vertex_iterator_for(in_.dev_slope, out.dev_slope, join_clockwise);
+                vit.map(|v| Point {
+                    x: p1.x + v.point.x,
+                    y: p1.y + v.point.y,
+                })
+                .collect()
+            };
+            for pt in fan {
+                join_plot_outer(&mut st, direction_switched, pt, before_outer);
+            }
+            join_plot_outer(
+                &mut st,
+                direction_switched,
+                if join_clockwise {
+                    out.p0_ccw
+                } else {
+                    out.p0_cw
+                },
+                before_outer,
+            );
         }
+    }
+
+    // Inner join. We plot our ends depending on direction, going through
+    // the midpoint.
+    join_plot_inner(
+        &mut st,
+        direction_switched,
+        if join_clockwise {
+            in_.p1_cw
+        } else {
+            in_.p1_ccw
+        },
+        before_outer,
+    );
+    join_plot_inner(&mut st, direction_switched, p1, before_outer);
+    join_plot_inner(
+        &mut st,
+        direction_switched,
+        if join_clockwise {
+            out.p0_cw
+        } else {
+            out.p0_ccw
+        },
+        before_outer,
+    );
+
+    if st.clockwise_.is_none() {
+        *st.clockwise_ = Some(poly_clockwise);
     }
 }
 
@@ -595,5 +667,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    // Behavioral test: a dashed stroke of a straight line produces multiple
+    // disjoint filled dashes (replaces the old dashed-panic blocker contract). A
+    // plain (undashed) open single-segment horizontal stroke is one butt-capped
+    // rectangle whose two horizontal sides contribute no scanline edges, so 2
+    // edges; the `[2,2]`-dashed version tessellates several on-dash
+    // sub-polygons, so it must yield strictly more edges than the undashed one.
+    #[test]
+    fn dashed_stroke_produces_multiple_dashes() {
+        let nodes = vec![mv(0.0, 0.0), ln(10.0, 0.0)];
+        let undashed = plot(&nodes, base_opts()).unwrap();
+
+        let opts = PlotterOptions {
+            dashes: vec![2.0, 2.0],
+            ..base_opts()
+        };
+        let result = plot(&nodes, opts).unwrap();
+        assert!(
+            result.edges.len() > undashed.edges.len(),
+            "dashed stroke did not tessellate multiple dashes: {} edges (undashed {})",
+            result.edges.len(),
+            undashed.edges.len()
+        );
     }
 }

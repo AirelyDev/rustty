@@ -1,0 +1,11 @@
+[package]
+name = "mirihar-z2d-dashed"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "mirihar-z2d-dashed"
+path = "src/main.rs"
+
+# Standalone: not part of the rustty root workspace (this is a proof artifact).
+[workspace]
