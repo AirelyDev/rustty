@@ -24,9 +24,9 @@
       #face-canvas canvas {
         border: 1px solid #ccc;
         image-rendering: pixelated;
-        margin: 2px;
-        transform: scale(3);
-        transform-origin: top left;
+        background: #111;
+        display: block;
+        margin: 4px 0;
       }
       .glyphs { margin: 4rem 0 1rem; }
     </style>
@@ -48,7 +48,10 @@
       the <code>.wasm</code> needs http(s), not <code>file://</code>.
     </p>
 
-    <div class="glyphs">Rendered glyph canvases (via web_canvas Face, scaled 3×):</div>
+    <div class="glyphs">
+      Texture atlas — every glyph rasterized by the <code>web_canvas</code> Face
+      via the browser Canvas, packed and shown 5×:
+    </div>
     <div id="face-canvas"></div>
 
     <pre id="log">loading…</pre>
@@ -94,21 +97,57 @@
 
       const atlas = ex.rustty_wc_atlas_new(1024, 0); // grayscale
       const gbuf = ex.rustty_wc_alloc(64);
+      let maxX = 0,
+        maxY = 0;
       for (const ch of "Rusty!") {
         const rc = ex.rustty_wc_face_render_glyph(face, atlas, ch.codePointAt(0), gbuf);
         const gv = new DataView(ex.memory.buffer, gbuf, 24);
-        log(
-          `render '${ch}': rc=${rc} size=${gv.getUint32(0, true)}x${gv.getUint32(4, true)}` +
-            ` atlas=(${gv.getUint32(16, true)},${gv.getUint32(20, true)})`,
-        );
-        // Append this glyph's canvas to the visual container.
-        ex.rustty_wc_face_debug_canvas(face, ...(() => {
-          const id = enc.encode("face-canvas");
-          const p = wr(id);
-          return [p, id.length];
-        })());
+        const w = gv.getUint32(0, true),
+          h = gv.getUint32(4, true);
+        const ax = gv.getUint32(16, true),
+          ay = gv.getUint32(20, true);
+        maxX = Math.max(maxX, ax + w);
+        maxY = Math.max(maxY, ay + h);
+        log(`render '${ch}': rc=${rc} size=${w}x${h} atlas=(${ax},${ay})`);
       }
       ex.rustty_wc_free(gbuf, 64);
+
+      // Blit the packed texture atlas (grayscale coverage of every rasterized
+      // glyph, top-left) into a real, up-scaled canvas so "Rusty!" is visible as
+      // web_canvas actually drew it via the browser Canvas.
+      {
+        const asize = ex.rustty_wc_atlas_size(atlas);
+        const lenP = ex.rustty_wc_alloc(4);
+        const dataPtr = ex.rustty_wc_atlas_data(atlas, lenP);
+        const src = new Uint8Array(ex.memory.buffer, dataPtr, asize * asize);
+        const cropW = Math.min(asize, maxX + 2),
+          cropH = Math.min(asize, maxY + 2),
+          SCALE = 5;
+        // grayscale coverage -> luminance so the shapes are visible regardless of
+        // fg/bg convention.
+        const tmp = document.createElement("canvas");
+        tmp.width = cropW;
+        tmp.height = cropH;
+        const tctx = tmp.getContext("2d");
+        const img = tctx.createImageData(cropW, cropH);
+        for (let y = 0; y < cropH; y++)
+          for (let x = 0; x < cropW; x++) {
+            const v = src[y * asize + x];
+            const o = (y * cropW + x) * 4;
+            img.data[o] = img.data[o + 1] = img.data[o + 2] = v;
+            img.data[o + 3] = 255;
+          }
+        tctx.putImageData(img, 0, 0);
+        const out = document.createElement("canvas");
+        out.width = cropW * SCALE;
+        out.height = cropH * SCALE;
+        const octx = out.getContext("2d");
+        octx.imageSmoothingEnabled = false;
+        octx.drawImage(tmp, 0, 0, cropW, cropH, 0, 0, out.width, out.height);
+        document.getElementById("face-canvas").append(out);
+        ex.rustty_wc_free(lenP, 4);
+        log(`atlas blit: ${cropW}x${cropH} region, shown ${SCALE}x`);
+      }
 
       // --- web_canvas Shaper ---
       const shaper = ex.rustty_wc_shaper_new(80);
