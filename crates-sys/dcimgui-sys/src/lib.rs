@@ -43,6 +43,75 @@ mod bindings {
 
 pub use bindings::*;
 
+// ---------------------------------------------------------------------------
+// Dear ImGui Metal rendering backend FFI (macOS).
+//
+// The inspector's `apprt.embedded.Inspector` drives Dear ImGui through the
+// Metal backend (`vendor/imgui/backends/imgui_impl_metal.mm`, compiled by
+// build.rs on macOS into the sibling `dcimgui_metal` archive). That backend's
+// entry points are declared in `imgui_impl_metal.h` inside an `#ifdef __OBJC__`
+// block using Objective-C `id<MTL...>` protocol types, so bindgen — which
+// parses the plain-C Dear Bindings surface (`dcimgui.h`) with no Objective-C —
+// never sees them and emits nothing for `ImGui_ImplMetal_*`.
+//
+// But the reference compiles the `.mm` with `IMGUI_IMPL_API = extern "C"` on
+// non-Windows (see build.rs' Metal `cc::Build`), so every entry point is
+// exported with plain C linkage, and Objective-C `id`/pointer arguments are
+// ABI-transparent (an `id` is a pointer). We therefore declare the symbols
+// directly here rather than via a C-ABI shim — exactly mirroring the
+// reference's own binding surface (ghostty pkg/dcimgui/main.zig:23-27), which
+// declares them as `pub extern fn ImGui_ImplMetal_*` with `*anyopaque` for the
+// objc ids and `*c.ImDrawData` for the draw data.
+//
+// The objc handles cross as `*mut c_void`:
+//   * `device`                     — `id<MTLDevice>`
+//   * `render_pass_descriptor`     — `MTLRenderPassDescriptor*`
+//   * `command_buffer`             — `id<MTLCommandBuffer>`
+//   * `command_encoder`            — `id<MTLRenderCommandEncoder>`
+// and the per-frame draw data (never stored — see PREPORT_INSPECTOR §1) crosses
+// as `*mut ImDrawData`. These names are stable: the apprt-c
+// `rustty_inspector_metal_{init,render,shutdown}` exports call them directly.
+#[cfg(target_os = "macos")]
+extern "C" {
+    /// Initialize the Metal backend for the current ImGui context.
+    /// `device` is an `id<MTLDevice>` objc handle. Returns false on failure.
+    /// (imgui_impl_metal.h:32 — `ImGui_ImplMetal_Init(id<MTLDevice> device)`.)
+    pub fn ImGui_ImplMetal_Init(device: *mut std::os::raw::c_void) -> bool;
+
+    /// Tear down the Metal backend global state. Called from the inspector's
+    /// `Backend.deinit` / `renderMetal` teardown.
+    /// (imgui_impl_metal.h:33 — `ImGui_ImplMetal_Shutdown()`.)
+    pub fn ImGui_ImplMetal_Shutdown();
+
+    /// Begin a new Metal frame. `render_pass_descriptor` is a
+    /// `MTLRenderPassDescriptor*`.
+    /// (imgui_impl_metal.h:34 —
+    /// `ImGui_ImplMetal_NewFrame(MTLRenderPassDescriptor*)`.)
+    pub fn ImGui_ImplMetal_NewFrame(render_pass_descriptor: *mut std::os::raw::c_void);
+
+    /// Encode the accumulated ImGui draw data into the given command buffer /
+    /// render command encoder. `draw_data` is the per-frame `*ImDrawData`
+    /// returned by `ImGui_GetDrawData()`; `command_buffer` is an
+    /// `id<MTLCommandBuffer>` and `command_encoder` an
+    /// `id<MTLRenderCommandEncoder>`.
+    /// (imgui_impl_metal.h:35-37.)
+    pub fn ImGui_ImplMetal_RenderDrawData(
+        draw_data: *mut ImDrawData,
+        command_buffer: *mut std::os::raw::c_void,
+        command_encoder: *mut std::os::raw::c_void,
+    );
+
+    /// (Called by Init/NewFrame/Shutdown.) Create the backend's device
+    /// objects for `device` (`id<MTLDevice>`). Returns false on failure.
+    /// (imgui_impl_metal.h:40 — `ImGui_ImplMetal_CreateDeviceObjects`.)
+    pub fn ImGui_ImplMetal_CreateDeviceObjects(device: *mut std::os::raw::c_void) -> bool;
+
+    /// (Called by Init/NewFrame/Shutdown.) Destroy the backend's device
+    /// objects. (imgui_impl_metal.h:41 —
+    /// `ImGui_ImplMetal_DestroyDeviceObjects()`.)
+    pub fn ImGui_ImplMetal_DestroyDeviceObjects();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,6 +159,35 @@ mod tests {
 
             // Tear down (frees the context and its default font atlas).
             ImGui_DestroyContext(ctx);
+        }
+    }
+
+    /// Link test for the Dear ImGui Metal backend FFI surface
+    /// (`ImGui_ImplMetal_*`). References each entry point so that a missing
+    /// export from the compiled `dcimgui_metal` archive is a *link* error, not
+    /// a silent runtime failure. We take each function's address (behind a
+    /// `black_box` so the reference is not optimized away) rather than calling
+    /// it — invoking the Metal backend would require a live `MTLDevice`, which
+    /// is not available in a headless unit test. The exact set mirrors the
+    /// inspector's calls (embedded.zig renderMetal / Backend.deinit +
+    /// pkg/dcimgui/main.zig:23-27).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn link_imgui_impl_metal_ffi() {
+        // Coerce each `extern "C"` fn item to an opaque address; the linker
+        // must resolve every symbol to build this test binary.
+        let symbols: [*const (); 6] = [
+            ImGui_ImplMetal_Init as *const (),
+            ImGui_ImplMetal_Shutdown as *const (),
+            ImGui_ImplMetal_NewFrame as *const (),
+            ImGui_ImplMetal_RenderDrawData as *const (),
+            ImGui_ImplMetal_CreateDeviceObjects as *const (),
+            ImGui_ImplMetal_DestroyDeviceObjects as *const (),
+        ];
+        for sym in symbols {
+            // black_box keeps the reference (and thus the link dependency)
+            // from being elided; a resolved symbol is never null.
+            assert!(!std::hint::black_box(sym).is_null());
         }
     }
 }
