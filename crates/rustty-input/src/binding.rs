@@ -3020,14 +3020,37 @@ pub enum TriggerKey {
 
 /// The extern struct used for triggers in the C API.
 //
-// PORT NOTE: `Trigger.C = extern struct { tag, key: C.Key (extern union), mods }`.
+// PORT NOTE: `Trigger.C = extern struct { tag, key: C.Key (extern union), mods }`
+// where the reference's `mods` is `key.Mods = packed struct(u16)`. The embedding
+// C ABI (rustty-embed.h) projects `mods` as `rustty_input_mods_e`, an `int`-wide
+// C enum (4 bytes on the Apple LP64 ABI). We therefore carry `mods` as the packed
+// integer widened to that 4-byte slot rather than embedding the ergonomic `Mods`
+// struct (10 bytes, NOT `#[repr(C)]`): embedding it made `size_of::<TriggerC>()`
+// 20, so `rustty_config_trigger` returned a >16-byte struct via the AAPCS64 x8
+// sret path while every C/Swift caller (12-byte header struct) expected a
+// register return — a hard ABI mismatch that crashed on the first call. Using the
+// 4-byte packed slot restores byte-exact parity with the header (and hence the
+// reference's proven 12-byte, register-returned ABI). The `int()` bit layout is
+// identical to the reference's `key.Mods` backing integer. See the
+// `size_of::<TriggerC>() == 12` freeze below and
+// `.port/phase-2/MACOS_UI_PARITY_GAPS.md`.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct TriggerC {
     pub tag: TriggerCTag,
     pub key: TriggerCKey,
-    pub mods: Mods,
+    /// Packed `Mods` (`Mods::int()`) widened to the header's `int`-wide
+    /// `rustty_input_mods_e` slot. Reconstruct with `Mods::from_int(mods as u16)`.
+    pub mods: u32,
 }
+
+// ABI freeze: the header (`rustty_input_trigger_s`) is `{ tag(4), key(4),
+// mods(4) } = 12` bytes, register-returned. Any drift back above 16 bytes
+// re-introduces the sret crash. (Companion runtime check: rustty-input
+// `abi_trigger_c_layout`; embedding-header gate: check_embed_h_abi.sh.)
+// @embed-abi rustty_input_trigger_s 12
+const _: () = assert!(core::mem::size_of::<TriggerC>() == 12);
+const _: () = assert!(core::mem::align_of::<TriggerC>() == 4);
 
 /// PORT NOTE: `Trigger.C.Tag = enum(c_int) { physical, unicode, catch_all }`.
 #[repr(C)]
@@ -3261,7 +3284,9 @@ impl Trigger {
                     physical: KeyKey::Unidentified,
                 },
             },
-            mods: self.mods,
+            // Project the ergonomic `Mods` struct to its packed integer, widened
+            // to the header's `int`-wide `rustty_input_mods_e` slot (see TriggerC).
+            mods: u32::from(self.mods.int()),
         }
     }
 

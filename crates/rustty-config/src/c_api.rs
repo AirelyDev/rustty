@@ -169,12 +169,13 @@ pub unsafe extern "C" fn rustty_config_get(
 /// `self` must be a valid `Config` pointer and `str`/`len` a readable byte range.
 //
 // PORT NOTE: the reference's `Trigger.C` is `extern struct { tag, key, mods:
-// key.Mods }` where `key.Mods` is a `packed struct(u16)` — FFI-safe in Zig. The
-// rustty `TriggerC.mods` is `rustty_input`'s `Mods` (a `bool`-field struct with
-// the same `int()` bit layout); its C-layout unification belongs to rustty-input
-// (cbindgen / the input C ABI), so the `improper_ctypes_definitions` lint is
-// allowed locally on this faithful projection rather than re-laid-out here.
-#[allow(improper_ctypes_definitions)]
+// key.Mods }` where `key.Mods` is a `packed struct(u16)` — FFI-safe in Zig.
+// `TriggerC.mods` now carries that packed integer (widened to the header's
+// `int`-wide `rustty_input_mods_e` slot) instead of the non-`#[repr(C)]` `Mods`
+// struct, so `TriggerC` is the header's 12-byte, register-returned layout and the
+// `improper_ctypes_definitions` lint is no longer triggered. (Embedding the raw
+// `Mods` struct made this 20 bytes → x8 sret return vs the caller's register
+// return → a hard crash; see rustty-input `TriggerC` + MACOS_UI_PARITY_GAPS.md.)
 #[no_mangle]
 pub unsafe extern "C" fn rustty_config_trigger(
     self_: *mut Config,
@@ -270,6 +271,11 @@ pub extern "C" fn rustty_config_open_path() -> String {
 pub struct Diagnostic {
     pub message: *const std::os::raw::c_char,
 }
+
+// `rustty_diagnostic_s` = `{ const char* message }` = one pointer. Returned
+// by value by `rustty_config_get_diagnostic`; frozen so it stays register-sized.
+// @embed-abi rustty_diagnostic_s 8
+const _: () = assert!(core::mem::size_of::<Diagnostic>() == 8);
 
 impl Default for Diagnostic {
     fn default() -> Self {

@@ -181,6 +181,14 @@ GATE_REGISTRY=(
   # mismatch/leftover RED is still escalated to a HARD failure by run_gate's
   # PROGRESS-went-RED branch.
   "A3|PROGRESS|bash $GATES/check_rustty_h_abi.sh"
+  # A4 — the rustty-embed.h ABI-SIZE gate (companion to A3's name gate). Clang-
+  # probes every umbrella-header aggregate's C sizeof and HARD-requires every
+  # by-value-return type (the AAPCS64 sret crash class) to carry a Rust
+  # `@embed-abi` size-freeze that matches. Built after rustty_config_trigger
+  # shipped a 20-byte TriggerC vs the header's 12 → sret crash → blank menu
+  # shortcuts (MACOS_UI_PARITY_GAPS.md). PROGRESS: a coverage gap or size drift
+  # RED is escalated to HARD by run_gate's PROGRESS-went-RED branch.
+  "A4|PROGRESS|bash $GATES/check_embed_h_abi.sh"
 )
 
 HARD_FAILURES=()   # hard-fail checks that failed, or a claimed-done regression

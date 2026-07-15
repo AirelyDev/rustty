@@ -56,6 +56,7 @@ const PTR: usize = core::mem::size_of::<*mut c_void>();
 // ── ghostty_runtime_config_s (App.Options, ghostty.h:1019-1028) ──
 // void* userdata@0(8); bool supports_selection_clipboard@8(1→pad); then 6 fn-ptr
 // callbacks @16,24,32,40,48,56 → size 64, align 8.
+// @embed-abi rustty_runtime_config_s 64
 const _: () = assert!(core::mem::size_of::<Options>() == 64);
 const _: () = assert!(core::mem::align_of::<Options>() == 8);
 
@@ -64,6 +65,7 @@ const _: () = assert!(core::mem::align_of::<Options>() == 8);
 // scale_factor(double)@24(8); font_size(float)@32(4→pad); working_directory@40(8);
 // command@48(8); env_vars@56(8); env_var_count(size_t)@64(8); initial_input@72(8);
 // wait_after_command(bool)@80(1→pad); context(enum)@84(4) → size 88, align 8.
+// @embed-abi rustty_surface_config_s 88
 const _: () = assert!(core::mem::size_of::<SurfaceOptions>() == 88);
 const _: () = assert!(core::mem::align_of::<SurfaceOptions>() == 8);
 
@@ -75,10 +77,12 @@ const _: () = assert!(core::mem::size_of::<PlatformCMacOS>() == PTR);
 const _: () = assert!(core::mem::size_of::<PlatformCIOS>() == PTR);
 
 // ── ghostty_env_var_s (ghostty.h:443-446) ── {const char* key, value} → 16, align 8.
+// @embed-abi rustty_env_var_s 16
 const _: () = assert!(core::mem::size_of::<EnvVar>() == 16);
 const _: () = assert!(core::mem::align_of::<EnvVar>() == 8);
 
 // ── ghostty_clipboard_content_s (ghostty.h:76-79) ── {const char* mime, data} → 16.
+// @embed-abi rustty_clipboard_content_s 16
 const _: () = assert!(core::mem::size_of::<ClipboardContent>() == 16);
 const _: () = assert!(core::mem::align_of::<ClipboardContent>() == 8);
 
@@ -86,37 +90,44 @@ const _: () = assert!(core::mem::align_of::<ClipboardContent>() == 8);
 // double tl_px_x@0(8); double tl_px_y@8(8); uint32_t offset_start@16(4);
 // uint32_t offset_len@20(4); const char* text@24(8); uintptr_t text_len@32(8)
 // → size 40, align 8.
+// @embed-abi rustty_text_s 40
 const _: () = assert!(core::mem::size_of::<rustty_apprt_c::capi::Text>() == 40);
 const _: () = assert!(core::mem::align_of::<rustty_apprt_c::capi::Text>() == 8);
 
 // ── ghostty_string_s (main_c.zig / ghostty.h:402-406) ──
 // const char* ptr@0(8); uintptr_t len@8(8); bool sentinel@16(1→pad) → size 24, align 8.
+// @embed-abi rustty_string_s 24
 const _: () = assert!(core::mem::size_of::<GhosttyString>() == 24);
 const _: () = assert!(core::mem::align_of::<GhosttyString>() == 8);
 
 // ── ghostty_surface_size_s (ghostty.h:482-489) ──
 // uint16_t columns,rows; uint32_t width_px,height_px,cell_width_px,cell_height_px
 // → size 20, align 4.
+// @embed-abi rustty_surface_size_s 20
 const _: () = assert!(core::mem::size_of::<SurfaceSize>() == 20);
 const _: () = assert!(core::mem::align_of::<SurfaceSize>() == 4);
 
 // ── ghostty_point_s (ghostty.h:429-435) ── {enum tag, enum coord, u32 x, u32 y} → 16, align 4.
+// @embed-abi rustty_point_s 16
 const _: () = assert!(core::mem::size_of::<Point>() == 16);
 const _: () = assert!(core::mem::align_of::<Point>() == 4);
 
 // ── ghostty_selection_s (ghostty.h:437-441) ── {Point tl@0(16), Point br@16(16), bool@32} → 36, align 4.
+// @embed-abi rustty_selection_s 36
 const _: () = assert!(core::mem::size_of::<Selection>() == 36);
 const _: () = assert!(core::mem::align_of::<Selection>() == 4);
 
 // ── ghostty_input_key_s wire form (KeyEvent, embedded.zig:1248) ──
 // action@0(4) mods@4(4) consumed_mods@8(4) keycode@12(4) text@16(8)
 // unshifted_codepoint@24(4) composing@28(1→pad) → size 32, align 8.
+// @embed-abi rustty_input_key_s 32
 const _: () = assert!(core::mem::size_of::<KeyEvent>() == 32);
 const _: () = assert!(core::mem::align_of::<KeyEvent>() == 8);
 
 // ── ghostty_target_s / _u (ghostty.h:555-567) ──
 // union{ ghostty_surface_t } → one pointer (8). struct{ enum key@0(4→pad), union@8(8) } → 16.
 const _: () = assert!(core::mem::size_of::<TargetCValue>() == PTR);
+// @embed-abi rustty_target_s 16
 const _: () = assert!(core::mem::size_of::<TargetC>() == 16);
 const _: () = assert!(core::mem::align_of::<TargetC>() == 8);
 
@@ -127,7 +138,9 @@ const _: () = assert!(core::mem::align_of::<TargetC>() == 8);
 // per-arm C structs is deferred to the embedded C-API milestone (see the
 // `ActionCValue` note in apprt-api `action.rs`); this pins the Rust layout that
 // the action_cb ships by value, which is what the Swift boundary reads.
+// @embed-abi rustty_action_u 24
 const _: () = assert!(core::mem::size_of::<ActionCValue>() == 24);
+// @embed-abi rustty_action_s 32
 const _: () = assert!(core::mem::size_of::<ActionC>() == 32);
 const _: () = assert!(core::mem::align_of::<ActionC>() == 8);
 

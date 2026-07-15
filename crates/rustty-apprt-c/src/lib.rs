@@ -828,6 +828,13 @@ pub struct Info {
     pub version_len: usize,
 }
 
+// `rustty_info_s` = `{ enum build_mode(4→pad8); const char* version(8);
+// uintptr_t version_len(8) }` = 24, align 8. Returned by value by `rustty_info`
+// (now landed — supersedes abi_layout.rs's stale "DEFERRED" note). Frozen here.
+// @embed-abi rustty_info_s 24
+const _: () = assert!(core::mem::size_of::<Info>() == 24);
+const _: () = assert!(core::mem::align_of::<Info>() == 8);
+
 /// The `Info.BuildMode` optimization-mode enum (`ghostty_build_mode_e`). The ordinals
 /// are ABI-frozen (ghostty.h:385-390 / PREPORT_SWIFT_APP §6): `debug = 0`,
 /// `release_safe = 1`, `release_fast = 2`, `release_small = 3`.
