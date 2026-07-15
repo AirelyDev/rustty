@@ -4,7 +4,7 @@
 # Rebrand Task 4 repoints the old "ghostty.h byte-freeze" gate (A3) at the
 # PRODUCT embedding umbrella. Task 2 produced two headers:
 #
-#   ORACLE_UMBRELLA  include/ghostty.h        — the frozen, UNCHANGED upstream
+#   ORACLE_HEADER_PATH  <ghostty checkout>/include/ghostty.h — the pinned upstream
 #                                                header, kept locally as a
 #                                                carve-out so gap-comparison
 #                                                tooling can diff product<->
@@ -20,7 +20,7 @@
 # map (columns 1 -> 2). This gate proves the rename was applied EXACTLY:
 #
 #   1. NAME-MAPPED EQUIVALENCE. Extract the oracle's `GHOSTTY_API` function
-#      set from ORACLE_UMBRELLA, apply the TSV's ghostty->rustty map to it,
+#      set from ORACLE_HEADER_PATH, apply the TSV's ghostty->rustty map to it,
 #      and assert the result is EXACTLY (no more, no less) the product's
 #      `RUSTTY_API` function set extracted from PORT_UMBRELLA. Every oracle
 #      function must have a TSV row (else the map itself is incomplete); any
@@ -60,20 +60,20 @@ note() { printf '  %s\n' "$*"; }
 # --- source the port<->oracle name map (single source of truth) -------------
 PARITY_ENV="$ROOT/.port/tools/parity_names.env"
 if [ ! -f "$PARITY_ENV" ]; then
-  echo "BLOCKED: $PARITY_ENV not found (nothing to source PORT_UMBRELLA/ORACLE_UMBRELLA/CABI_MAP from)"
+  echo "BLOCKED: $PARITY_ENV not found (nothing to source PORT_UMBRELLA/ORACLE_HEADER_PATH/CABI_MAP from)"
   exit 3
 fi
 # shellcheck source=/dev/null
 source "$PARITY_ENV"
 
 : "${PORT_UMBRELLA:?PORT_UMBRELLA not set by parity_names.env}"
-: "${ORACLE_UMBRELLA:?ORACLE_UMBRELLA not set by parity_names.env}"
+: "${ORACLE_HEADER_PATH:?ORACLE_HEADER_PATH not set by parity_names.env}"
 : "${CABI_MAP:?CABI_MAP not set by parity_names.env}"
 : "${PORT_ENV_PREFIX:?PORT_ENV_PREFIX not set by parity_names.env}"
 : "${ORACLE_ENV_PREFIX:?ORACLE_ENV_PREFIX not set by parity_names.env}"
 
 PRODUCT="$ROOT/$PORT_UMBRELLA"
-ORACLE="$ROOT/$ORACLE_UMBRELLA"
+ORACLE="$ORACLE_HEADER_PATH"   # the pinned ghostty oracle checkout (no vendored copy)
 TSV="$ROOT/$CABI_MAP"
 
 # --- tooling / inputs (BLOCKED, not FAIL, if absent) ------------------------
@@ -85,8 +85,21 @@ if [ ! -f "$TSV" ]; then
   exit 3
 fi
 if [ ! -f "$ORACLE" ]; then
-  echo "BLOCKED: oracle umbrella not found at $ORACLE"
+  echo "BLOCKED: ghostty oracle header not found at $ORACLE (external READ-ONLY pinned oracle; set ORACLE_TREE / clone the pinned ghostty checkout)"
   exit 3
+fi
+# Freeze-pin: the oracle checkout must be the exact version this gate was pinned
+# to. Replaces the old vendored include/ghostty.h byte-freeze with a tiny SHA-256.
+PIN="$ROOT/.port/tools/oracle-ghostty-h.sha256"
+if [ -f "$PIN" ] && command -v shasum >/dev/null 2>&1; then
+  have="$(shasum -a 256 "$ORACLE" | awk '{print $1}')"
+  want="$(cat "$PIN")"
+  if [ "$have" != "$want" ]; then
+    echo "BLOCKED: oracle $ORACLE drifted from the pinned SHA-256"
+    echo "  pinned: $want"; echo "  actual: $have"
+    echo "  (bump .port/tools/oracle-ghostty-h.sha256 only after an intentional oracle update)"
+    exit 3
+  fi
 fi
 if [ ! -f "$PRODUCT" ]; then
   echo "BLOCKED: product umbrella not found at $PRODUCT (Task 2 not yet seeded here)"
@@ -182,5 +195,5 @@ if [ "$fail" -ne 0 ]; then
   echo ">> Task-4 FAIL: product umbrella is not exactly the oracle token-renamed by the name-map."
   exit 1
 fi
-echo ">> Task-4 PASS: $PORT_UMBRELLA is exactly $ORACLE_UMBRELLA renamed ${ORACLE_NAME}->${PORT_NAME} ($product_count functions), zero ${ORACLE_NAME}_* left behind."
+echo ">> Task-4 PASS: $PORT_UMBRELLA is exactly the pinned ghostty oracle header renamed ${ORACLE_NAME}->${PORT_NAME} ($product_count functions), zero ${ORACLE_NAME}_* left behind."
 exit 0

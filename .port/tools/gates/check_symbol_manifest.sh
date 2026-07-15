@@ -2,7 +2,7 @@
 # check_symbol_manifest.sh — GATE A1 (macOS Swift-app C-ABI symbol manifest + drift) [PROGRESS]
 #
 # DoP id:  A1  (2026-07-12-macos-swift-app-milestone.md, Task A1)
-# Reads:   $GHOSTTY_H (pinned upstream header; default oracle include/ghostty.h) — R3 external oracle
+# Reads:   $GHOSTTY_H (pinned upstream header; default $ORACLE_HEADER_PATH) — R3 external oracle
 #          .port/audits/CABI_SYMBOLS.tsv        (the committed manifest: ghostty_name<TAB>rustty_name
 #                                                 <TAB>signature<TAB>source_file<TAB>darwin_only)
 #          crates/**/*.rs                        (the LIVE rustty_* C-ABI exports)
