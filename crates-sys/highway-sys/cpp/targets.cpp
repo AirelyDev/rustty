@@ -3,7 +3,7 @@
 //
 // Local modifications:
 // - Dropped upstream CPU feature probing and platform-specific detection code
-//   in favor of Ghostty's Zig-provided ghostty_hwy_detect_targets().
+//   in favor of Ghostty's Zig-provided rustty_hwy_detect_targets().
 // - Removed the HWY_WARN baseline-mismatch diagnostic path so this file does
 //   not depend on libc-backed formatting/logging.
 // - Kept only the chosen-target bookkeeping and runtime dispatch state that
@@ -21,7 +21,7 @@
 
 namespace hwy {
 
-extern "C" int64_t ghostty_hwy_detect_targets();
+extern "C" int64_t rustty_hwy_detect_targets();
 
 // Vendored from Highway's hwy/targets.cc. Ghostty provides target detection in
 // Zig, so this TU only retains the runtime dispatch/chosen-target state.
@@ -31,7 +31,7 @@ static int64_t DetectTargets() {
 #if (HWY_ARCH_X86 || HWY_ARCH_ARM || HWY_ARCH_PPC || HWY_ARCH_S390X || \
      HWY_ARCH_RISCV || HWY_ARCH_LOONGARCH) && \
     HWY_HAVE_RUNTIME_DISPATCH
-  bits |= ghostty_hwy_detect_targets();
+  bits |= rustty_hwy_detect_targets();
 #else
   bits |= HWY_ENABLED_BASELINE;
 #endif

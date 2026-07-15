@@ -6,13 +6,13 @@ const SIMD: bool = true;
 
 // vt.cpp
 extern "C" {
-    fn ghostty_simd_codepoint_width(cp: u32) -> i8;
+    fn rustty_simd_codepoint_width(cp: u32) -> i8;
 }
 
 #[allow(non_snake_case)]
 pub fn codepointWidth(cp: u32) -> i8 {
     if SIMD {
-        return unsafe { ghostty_simd_codepoint_width(cp) };
+        return unsafe { rustty_simd_codepoint_width(cp) };
     }
     // const uucode = @import("uucode");
     // R3: rustty has no `uucode` Cargo dependency; the uucode-derived data is

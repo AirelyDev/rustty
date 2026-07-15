@@ -8,7 +8,7 @@
 # translation units the reference compiles (its locally-modified `abort.cc`,
 # `per_target.cc`, `targets.cpp`) are vendored under `cpp/` byte-identical and
 # compiled with the reference's flags (see build.rs). `cpp/detect.c` is the C
-# port of the reference's Zig-provided `ghostty_hwy_detect_targets` (R3: rustty
+# port of the reference's Zig-provided `rustty_hwy_detect_targets` (R3: rustty
 # has no Zig, so the runtime's target-detection symbol is ported to C).
 # `links` declares the native lib so Cargo enforces one-version linking.
 [package]

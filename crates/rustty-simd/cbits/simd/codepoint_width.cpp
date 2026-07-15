@@ -510,7 +510,7 @@ int8_t CodepointWidth(uint32_t cp) {
 
 extern "C" {
 
-int8_t ghostty_simd_codepoint_width(uint32_t cp) {
+int8_t rustty_simd_codepoint_width(uint32_t cp) {
   return ghostty::CodepointWidth(cp);
 }
 

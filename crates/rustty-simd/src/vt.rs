@@ -9,7 +9,7 @@ const SIMD: bool = true;
 
 // vt.cpp
 extern "C" {
-    fn ghostty_simd_decode_utf8_until_control_seq(
+    fn rustty_simd_decode_utf8_until_control_seq(
         input: *const u8,
         count: usize,
         output: *mut u32,
@@ -30,7 +30,7 @@ pub fn utf8DecodeUntilControlSeq(input: &[u8], output: &mut [u32]) -> DecodeResu
     if SIMD {
         let mut decoded: usize = 0;
         let consumed = unsafe {
-            ghostty_simd_decode_utf8_until_control_seq(
+            rustty_simd_decode_utf8_until_control_seq(
                 input.as_ptr(),
                 input.len(),
                 output.as_mut_ptr(),

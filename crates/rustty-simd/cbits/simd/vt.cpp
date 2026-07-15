@@ -303,7 +303,7 @@ size_t DecodeUTF8UntilControlSeq(const uint8_t* HWY_RESTRICT input,
 
 extern "C" {
 
-size_t ghostty_simd_decode_utf8_until_control_seq(const uint8_t* HWY_RESTRICT
+size_t rustty_simd_decode_utf8_until_control_seq(const uint8_t* HWY_RESTRICT
                                                       input,
                                                   size_t count,
                                                   char32_t* output,

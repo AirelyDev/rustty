@@ -5,13 +5,13 @@
 const SIMD: bool = true;
 
 extern "C" {
-    fn ghostty_simd_index_of(needle: u8, input: *const u8, count: usize) -> usize;
+    fn rustty_simd_index_of(needle: u8, input: *const u8, count: usize) -> usize;
 }
 
 #[allow(non_snake_case)]
 pub fn indexOf(input: &[u8], needle: u8) -> Option<usize> {
     if SIMD {
-        let result = unsafe { ghostty_simd_index_of(needle, input.as_ptr(), input.len()) };
+        let result = unsafe { rustty_simd_index_of(needle, input.as_ptr(), input.len()) };
         return if result == input.len() {
             None
         } else {

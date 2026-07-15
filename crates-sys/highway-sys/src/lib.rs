@@ -11,7 +11,7 @@
 //!
 //! The thin FFI below exposes the runtime's C entry points
 //! (`hwy_supported_targets` from the vendored `targets.cpp`, and the C-ported
-//! `ghostty_hwy_detect_targets`) so the link test exercises the compiled
+//! `rustty_hwy_detect_targets`) so the link test exercises the compiled
 //! archive end-to-end.
 
 #![allow(non_camel_case_types)]
@@ -24,9 +24,9 @@ extern "C" {
     pub fn hwy_supported_targets() -> c_longlong;
 
     /// Runtime CPU target detection (C port of the reference's Zig
-    /// `ghostty_hwy_detect_targets`; vendored `cpp/detect.c`). Returns the
+    /// `rustty_hwy_detect_targets`; vendored `cpp/detect.c`). Returns the
     /// Highway target bitmask for the running CPU.
-    pub fn ghostty_hwy_detect_targets() -> c_longlong;
+    pub fn rustty_hwy_detect_targets() -> c_longlong;
 }
 
 #[cfg(test)]
@@ -52,6 +52,6 @@ mod tests {
     #[test]
     fn detect_targets_links() {
         // SAFETY: no arguments; pure CPU-feature probing.
-        let _ = unsafe { ghostty_hwy_detect_targets() };
+        let _ = unsafe { rustty_hwy_detect_targets() };
     }
 }

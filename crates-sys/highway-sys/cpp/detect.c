@@ -1,10 +1,10 @@
-// ghostty_hwy_detect_targets() — C port of the reference's Zig target detection.
+// rustty_hwy_detect_targets() — C port of the reference's Zig target detection.
 //
 // PORT NOTE (R3, rustty):
 //   In the reference (ghostty), this symbol is produced by Zig
 //   (pkg/highway/src/detect.zig + detect/*.zig + targets.zig). The vendored
 //   Highway runtime (cpp/targets.cpp) calls it via
-//   `extern "C" int64_t ghostty_hwy_detect_targets();` to learn the runtime
+//   `extern "C" int64_t rustty_hwy_detect_targets();` to learn the runtime
 //   target mask. rustty has no Zig, so this translation unit ports that Zig
 //   detection to C verbatim (same bit layout, same probing logic, same
 //   comments) so the vendored Highway runtime links and behaves identically.
@@ -41,7 +41,7 @@ static int darwin_sysctl_bool(const char* name) {
   return rc == 0 && value != 0;
 }
 
-int64_t ghostty_hwy_detect_targets(void) {
+int64_t rustty_hwy_detect_targets(void) {
   int64_t t = 0;
 
   // All AArch64 implementations have NEON.
@@ -76,7 +76,7 @@ static long sve_vector_bytes(void) {
   return 16;
 }
 
-int64_t ghostty_hwy_detect_targets(void) {
+int64_t rustty_hwy_detect_targets(void) {
   int64_t t = 0;
 
   // All AArch64 implementations have NEON.
@@ -116,7 +116,7 @@ int64_t ghostty_hwy_detect_targets(void) {
 }
 
 #else
-int64_t ghostty_hwy_detect_targets(void) {
+int64_t rustty_hwy_detect_targets(void) {
   // Other OS: return baseline NEON.
   return TGT_NEON_NO_AES;
 }
@@ -130,7 +130,7 @@ static inline int bit_set(unsigned int val, int pos) {
   return ((val >> pos) & 1u) != 0;
 }
 
-int64_t ghostty_hwy_detect_targets(void) {
+int64_t rustty_hwy_detect_targets(void) {
   int64_t t = 0;
 
   // x86_64 always has SSE2.
@@ -184,5 +184,5 @@ int64_t ghostty_hwy_detect_targets(void) {
 }
 
 #else
-int64_t ghostty_hwy_detect_targets(void) { return 0; }
+int64_t rustty_hwy_detect_targets(void) { return 0; }
 #endif

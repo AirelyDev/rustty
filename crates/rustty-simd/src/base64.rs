@@ -19,7 +19,7 @@ const SIMD: bool = true;
 // itself stays covered by this crate's ASan G6 route and `cargo test`.
 pub fn max_len(input: &[u8]) -> usize {
     if SIMD && !cfg!(miri) {
-        return unsafe { ghostty_simd_base64_max_length(input.as_ptr(), input.len()) };
+        return unsafe { rustty_simd_base64_max_length(input.as_ptr(), input.len()) };
     }
 
     max_len_scalar(input)
@@ -46,7 +46,7 @@ pub fn decode<'a>(input: &[u8], output: &'a mut [u8]) -> Result<&'a [u8], Base64
     // See the Miri PORT NOTE on `max_len`.
     if SIMD && !cfg!(miri) {
         let res =
-            unsafe { ghostty_simd_base64_decode(input.as_ptr(), input.len(), output.as_mut_ptr()) };
+            unsafe { rustty_simd_base64_decode(input.as_ptr(), input.len(), output.as_mut_ptr()) };
         if res < 0 {
             return Err(Base64Invalid);
         }
@@ -81,8 +81,8 @@ fn scalar_input(input: &[u8]) -> &[u8] {
 
 // base64.cpp
 extern "C" {
-    fn ghostty_simd_base64_max_length(input: *const u8, len: usize) -> usize;
-    fn ghostty_simd_base64_decode(input: *const u8, len: usize, output: *mut u8) -> isize;
+    fn rustty_simd_base64_max_length(input: *const u8, len: usize) -> usize;
+    fn rustty_simd_base64_decode(input: *const u8, len: usize, output: *mut u8) -> isize;
 }
 
 #[cfg(test)]

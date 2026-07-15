@@ -41,7 +41,7 @@ size_t IndexOf(const uint8_t needle,
 
 extern "C" {
 
-size_t ghostty_simd_index_of(const uint8_t needle,
+size_t rustty_simd_index_of(const uint8_t needle,
                              const uint8_t* HWY_RESTRICT input,
                              size_t count) {
   return ghostty::IndexOf(needle, input, count);

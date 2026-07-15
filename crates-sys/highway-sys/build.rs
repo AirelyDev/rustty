@@ -12,7 +12,7 @@
 //!      vendored byte-identical under `cpp/` and compiled here with the
 //!      reference's flags (mirrors pkg/highway/build.zig's flag list).
 //!   3. `cpp/detect.c` ports the reference's Zig-provided
-//!      `ghostty_hwy_detect_targets` to C (R3: rustty has no Zig; the runtime's
+//!      `rustty_hwy_detect_targets` to C (R3: rustty has no Zig; the runtime's
 //!      `cpp/targets.cpp` references this symbol via `extern "C"`).
 //!   4. `cargo:rustc-link-*` is emitted by `cc` (static archive `libhwy`), and
 //!      the vendored header dir is exported via `DEP_HWY_INCLUDE` so the
