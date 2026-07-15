@@ -120,6 +120,26 @@ fn push_json_string(out: &mut String, s: &str) {
     out.push('"');
 }
 
+// PORT NOTE: reproduce the reference's target-aware integer type strings.
+// `types.zig` derives an unsigned field's `"u32"`/`"u64"` label from its actual
+// `@bitSizeOf` on the build target, so `usize` is `"u32"` on wasm32 (4 bytes) and
+// `"u64"` on 64-bit (8 bytes). The rows below hardcode `"u64"` for `usize` (right
+// on 64-bit); deriving the label from the real `size_of` narrows it correctly on
+// wasm32 while leaving 64-bit output byte-identical. Non-integer labels
+// (`enum`/`bool`/`opaque`/`struct`) and fixed-width ints pass through unchanged.
+fn resolve_ty(ty: &'static str, size: usize) -> &'static str {
+    match ty {
+        "u8" | "u16" | "u32" | "u64" => match size {
+            1 => "u8",
+            2 => "u16",
+            4 => "u32",
+            8 => "u64",
+            _ => ty,
+        },
+        _ => ty,
+    }
+}
+
 // PORT NOTE: build one `StructInfo` from explicit `(field-name, offset, size,
 // type-string)` rows. The reference derives these via `@typeInfo`/`@offsetOf`/
 // `@sizeOf`; here `offset_of!`/`size_of` of the identical `#[repr(C)]` types
@@ -135,7 +155,7 @@ macro_rules! struct_info {
                         name: $name,
                         offset: offset_of!($T, $field),
                         size: size_of::<$ft>(),
-                        ty: $tystr,
+                        ty: resolve_ty($tystr, size_of::<$ft>()),
                     },
                 )*
             ],
