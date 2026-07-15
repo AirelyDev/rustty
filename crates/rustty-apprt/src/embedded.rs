@@ -41,8 +41,17 @@
 //! `rustty_inspector::Inspector::render` + the `MTLRenderCommandEncoder` objc2
 //! `msg_send!` construction) is the apprt-tier finale of the inspector port
 //! (see `renderMetal`'s own doc for the R4 acyclic `SurfaceData`/`wakeup` seam).
-//! The mouse/scroll/cursor/focus/text/key callbacks remain documented
-//! `unimplemented!()` leaves (Task 6/9). `queueRender` forwards LIVE to
+//! The mouse/scroll/cursor/focus/text/key callbacks (`mouseButtonCallback`/
+//! `scrollCallback`/`cursorPosCallback`/`focusCallback`/`textCallback`/
+//! `keyCallback`), plus `updateSize`'s `DisplaySize` write, are now LIVE too
+//! (Task 6/9 un-defer — this closes the crash-on-open bug where
+//! `becomeFirstResponder` -> `setFocus` -> `focusCallback` hit an
+//! `unimplemented!()` panic sink): each drives the matching dcimgui
+//! `ImGuiIO_Add*Event` behind `ImGui_SetCurrentContext(self.ig_ctx)` (INV-11).
+//! `keyCallback`'s `Key -> ImGuiKey` mapping lands as the free fn
+//! `key_to_imgui_key` right after this `impl Inspector` block (see its own doc
+//! for why the mapping is NOT filled into rustty-vt's `Key::imgui_key`).
+//! `queueRender` forwards LIVE to
 //! the Surface's `queueInspectorRender` (itself a Phase-3 leaf). E4 also lands
 //! `Surface::initInspector` (deferred from E3's range because it constructs the real
 //! `Inspector`) and replaces E2's `Inspector` E2->E4 sequencing stub.
@@ -2278,25 +2287,28 @@ impl Inspector {
 
     // pub fn updateSize(self: *Inspector, width: u32, height: u32) void { ... }
     //
-    // PORT NOTE (blueprint E4: REAL, non-GPU): the imgui IO `DisplaySize` write is a
-    // dcimgui leaf, deferred until dcimgui-sys is wired (Phase-3). The Inspector
-    // holds no Rust-side size field (`DisplaySize` lives in imgui's IO), so the
-    // ported body accepts the size and defers — it does NOT panic. `width`/`height`
-    // are function parameters (never linted for unused).
+    // PORT NOTE (Phase-3 un-defer, INV-11): the imgui IO `DisplaySize` write now
+    // goes live — `ImGui_SetCurrentContext` first (INV-11: every dcimgui IO touch
+    // is gated on the Inspector's own context), then `ImGui_GetIO()`, then the
+    // `DisplaySize` field write.
     pub fn updateSize(&mut self, width: u32, height: u32) {
         // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        unsafe { dcimgui_sys::ImGui_SetCurrentContext(self.ig_ctx) };
         // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
+        let io = unsafe { dcimgui_sys::ImGui_GetIO() };
         // io.DisplaySize = .{ .x = @floatFromInt(width), .y = @floatFromInt(height) };
-        //
-        // (accepted-but-deferred: the imgui IO `DisplaySize` write is the only effect
-        // and it is a dcimgui leaf — see the PORT NOTE above.)
-        let _ = (width, height);
+        unsafe {
+            (*io).DisplaySize = dcimgui_sys::ImVec2 {
+                x: width as f32,
+                y: height as f32,
+            };
+        }
     }
 
     // pub fn mouseButtonCallback(self, action, button, mods) void { ... }
     //
-    // PORT NOTE: dcimgui `ImGuiIO_AddMouseButtonEvent` (imgui button mapping) —
-    // Phase-3 leaf. Target of the E9 CAPI `rustty_inspector_mouse_button`.
+    // PORT NOTE (Phase-3 un-defer, INV-11): dcimgui `ImGuiIO_AddMouseButtonEvent`
+    // now goes live. Target of the E9 CAPI `rustty_inspector_mouse_button`.
     pub fn mouseButtonCallback(
         &mut self,
         action: mouse::ButtonState,
@@ -2304,11 +2316,15 @@ impl Inspector {
         mods: Mods,
     ) {
         // _ = mods;
-        //
+        let _ = mods;
+
         // self.queueRender();
+        self.queueRender();
         // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        unsafe { dcimgui_sys::ImGui_SetCurrentContext(self.ig_ctx) };
         // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
-        //
+        let io = unsafe { dcimgui_sys::ImGui_GetIO() };
+
         // const imgui_button = switch (button) {
         //     .left => cimgui.c.ImGuiMouseButton_Left,
         //     .middle => cimgui.c.ImGuiMouseButton_Middle,
@@ -2316,97 +2332,130 @@ impl Inspector {
         //     else => return, // unsupported
         // };
         //
+        // PORT NOTE: `dcimgui_sys`'s bindgen surface names the (tagged, non-anonymous)
+        // C enum's constants `ImGuiMouseButton__ImGuiMouseButton_{Left,Right,Middle}`
+        // (the tag `ImGuiMouseButton_` is itself prefixed onto each already-prefixed
+        // variant name — a bindgen naming artifact of the tagged C enum, confirmed
+        // against the generated `bindings.rs`); `ImGuiIO_AddMouseButtonEvent`'s `button`
+        // parameter is a plain `c_int` (not the enum type), matching the reference's
+        // untyped `ImGuiMouseButton_Left` usage.
+        let imgui_button: c_int = match button {
+            mouse::Button::Left => dcimgui_sys::ImGuiMouseButton__ImGuiMouseButton_Left as c_int,
+            mouse::Button::Middle => {
+                dcimgui_sys::ImGuiMouseButton__ImGuiMouseButton_Middle as c_int
+            }
+            mouse::Button::Right => dcimgui_sys::ImGuiMouseButton__ImGuiMouseButton_Right as c_int,
+            _ => return, // unsupported
+        };
+
         // cimgui.c.ImGuiIO_AddMouseButtonEvent(io, imgui_button, action == .press);
-        let _ = (action, button, mods);
-        unimplemented!(
-            "embedded::Inspector::mouseButtonCallback — dcimgui \
-             ImGuiIO_AddMouseButtonEvent (Phase-3 leaf, embedded.zig:1134-1154)"
-        )
+        unsafe {
+            dcimgui_sys::ImGuiIO_AddMouseButtonEvent(
+                io,
+                imgui_button,
+                action == mouse::ButtonState::Press,
+            )
+        };
     }
 
     // pub fn scrollCallback(self, xoff, yoff, mods) void { ... }
     //
-    // PORT NOTE: dcimgui `ImGuiIO_AddMouseWheelEvent` — Phase-3 leaf. Target of the
-    // E9 CAPI `rustty_inspector_mouse_scroll`.
+    // PORT NOTE (Phase-3 un-defer, INV-11): dcimgui `ImGuiIO_AddMouseWheelEvent`
+    // now goes live. Target of the E9 CAPI `rustty_inspector_mouse_scroll`.
     pub fn scrollCallback(&mut self, xoff: f64, yoff: f64, mods: mouse::ScrollMods) {
         // self.queueRender();
+        self.queueRender();
         // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        unsafe { dcimgui_sys::ImGui_SetCurrentContext(self.ig_ctx) };
         // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
-        //
+        let io = unsafe { dcimgui_sys::ImGui_GetIO() };
+
         // // For precision scrolling (trackpads), the values are in pixels which
         // // scroll way too fast. Scale them down to approximate discrete wheel
         // // notches. imgui expects 1.0 to scroll ~5 lines of text.
         // const scale: f64 = if (mods.precision) 0.1 else 1.0;
+        let scale: f64 = if mods.precision { 0.1 } else { 1.0 };
         // cimgui.c.ImGuiIO_AddMouseWheelEvent(
         //     io,
         //     @floatCast(xoff * scale),
         //     @floatCast(yoff * scale),
         // );
-        let _ = (xoff, yoff, mods);
-        unimplemented!(
-            "embedded::Inspector::scrollCallback — dcimgui ImGuiIO_AddMouseWheelEvent \
-             (Phase-3 leaf, embedded.zig:1156-1175)"
-        )
+        unsafe {
+            dcimgui_sys::ImGuiIO_AddMouseWheelEvent(io, (xoff * scale) as f32, (yoff * scale) as f32)
+        };
     }
 
     // pub fn cursorPosCallback(self: *Inspector, x: f64, y: f64) void { ... }
     //
-    // PORT NOTE: dcimgui `ImGuiIO_AddMousePosEvent` (scaled by `content_scale`) —
-    // Phase-3 leaf. Target of the E9 CAPI `rustty_inspector_mouse_pos`.
+    // PORT NOTE (Phase-3 un-defer, INV-11): dcimgui `ImGuiIO_AddMousePosEvent`
+    // (scaled by `content_scale`) now goes live. Target of the E9 CAPI
+    // `rustty_inspector_mouse_pos`.
     pub fn cursorPosCallback(&mut self, x: f64, y: f64) {
         // self.queueRender();
+        self.queueRender();
         // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        unsafe { dcimgui_sys::ImGui_SetCurrentContext(self.ig_ctx) };
         // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
+        let io = unsafe { dcimgui_sys::ImGui_GetIO() };
         // cimgui.c.ImGuiIO_AddMousePosEvent(
         //     io,
         //     @floatCast(x * self.content_scale),
         //     @floatCast(y * self.content_scale),
         // );
-        let _ = (x, y);
-        unimplemented!(
-            "embedded::Inspector::cursorPosCallback — dcimgui ImGuiIO_AddMousePosEvent \
-             (Phase-3 leaf, embedded.zig:1177-1186)"
-        )
+        unsafe {
+            dcimgui_sys::ImGuiIO_AddMousePosEvent(
+                io,
+                (x * self.content_scale) as f32,
+                (y * self.content_scale) as f32,
+            )
+        };
     }
 
     // pub fn focusCallback(self: *Inspector, focused: bool) void { ... }
     //
-    // PORT NOTE: dcimgui `ImGuiIO_AddFocusEvent` — Phase-3 leaf. Target of the E9
-    // CAPI `rustty_inspector_set_focus`.
+    // PORT NOTE (Phase-3 un-defer, INV-11): dcimgui `ImGuiIO_AddFocusEvent` now
+    // goes live — this is the crash-on-open fix (`becomeFirstResponder` →
+    // `setFocus` → this callback). Target of the E9 CAPI
+    // `rustty_inspector_set_focus`.
     pub fn focusCallback(&mut self, focused: bool) {
         // self.queueRender();
+        self.queueRender();
         // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        unsafe { dcimgui_sys::ImGui_SetCurrentContext(self.ig_ctx) };
         // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
+        let io = unsafe { dcimgui_sys::ImGui_GetIO() };
         // cimgui.c.ImGuiIO_AddFocusEvent(io, focused);
-        let _ = focused;
-        unimplemented!(
-            "embedded::Inspector::focusCallback — dcimgui ImGuiIO_AddFocusEvent \
-             (Phase-3 leaf, embedded.zig:1188-1193)"
-        )
+        unsafe { dcimgui_sys::ImGuiIO_AddFocusEvent(io, focused) };
     }
 
     // pub fn textCallback(self: *Inspector, text: [:0]const u8) void { ... }
     //
-    // PORT NOTE: dcimgui `ImGuiIO_AddInputCharactersUTF8` — Phase-3 leaf. The
-    // `[:0]const u8` NUL-terminated slice → `&CStr` (`text.ptr` is the load-bearing
-    // sentinel handed to imgui). Target of the E9 CAPI `rustty_inspector_text`.
+    // PORT NOTE (Phase-3 un-defer, INV-11): dcimgui `ImGuiIO_AddInputCharactersUTF8`
+    // now goes live. The `[:0]const u8` NUL-terminated slice → `&CStr` (`text.ptr`
+    // is the load-bearing sentinel handed to imgui, matched here by `CStr::as_ptr`).
+    // Target of the E9 CAPI `rustty_inspector_text`.
     pub fn textCallback(&mut self, text: &CStr) {
         // self.queueRender();
+        self.queueRender();
         // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        unsafe { dcimgui_sys::ImGui_SetCurrentContext(self.ig_ctx) };
         // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
+        let io = unsafe { dcimgui_sys::ImGui_GetIO() };
         // cimgui.c.ImGuiIO_AddInputCharactersUTF8(io, text.ptr);
-        let _ = text;
-        unimplemented!(
-            "embedded::Inspector::textCallback — dcimgui ImGuiIO_AddInputCharactersUTF8 \
-             (Phase-3 leaf, embedded.zig:1195-1200)"
-        )
+        unsafe { dcimgui_sys::ImGuiIO_AddInputCharactersUTF8(io, text.as_ptr()) };
     }
 
     // pub fn keyCallback(self, action, key, mods) !void { ... }
     //
-    // PORT NOTE: dcimgui `ImGuiIO_AddKeyEvent` (modifiers + `key.imguiKey()` — the
-    // `Key::imgui_key` dcimgui binding, itself a deferred leaf in rustty-vt) —
-    // Phase-3 leaf. Target of the E9 CAPI `rustty_inspector_key`.
+    // PORT NOTE (Phase-3 un-defer, INV-11): dcimgui `ImGuiIO_AddKeyEvent` (modifiers
+    // + `key.imguiKey()`) now goes live. The `Key -> ImGuiKey` mapping is ported as
+    // the free fn [`key_to_imgui_key`] just below this `impl` block rather than
+    // filling in `rustty_vt::input::key::Key::imgui_key` — that method stays the
+    // documented `#[cfg(feature = "imgui")]` `unimplemented!()` leaf (DEFERRALS.md
+    // "Key::imgui_key — dcimgui (cimgui) binding") because rustty-vt must stay a
+    // dcimgui-sys-free, apprt-agnostic crate (D1: rustty-vt is pure and below the
+    // apprt/GUI edge); DEFERRALS.md itself names "Target: apprt layer" for this
+    // exact leaf, which is here. Target of the E9 CAPI `rustty_inspector_key`.
     pub fn keyCallback(
         &mut self,
         action: key::Action,
@@ -2414,15 +2463,24 @@ impl Inspector {
         mods: Mods,
     ) -> Result<(), ApprtError> {
         // self.queueRender();
+        self.queueRender();
         // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
+        unsafe { dcimgui_sys::ImGui_SetCurrentContext(self.ig_ctx) };
         // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
-        //
+        let io = unsafe { dcimgui_sys::ImGui_GetIO() };
+
         // // Update all our modifiers
         // cimgui.c.ImGuiIO_AddKeyEvent(io, cimgui.c.ImGuiKey_LeftShift, mods.shift);
         // cimgui.c.ImGuiIO_AddKeyEvent(io, cimgui.c.ImGuiKey_LeftCtrl, mods.ctrl);
         // cimgui.c.ImGuiIO_AddKeyEvent(io, cimgui.c.ImGuiKey_LeftAlt, mods.alt);
         // cimgui.c.ImGuiIO_AddKeyEvent(io, cimgui.c.ImGuiKey_LeftSuper, mods.super);
-        //
+        unsafe {
+            dcimgui_sys::ImGuiIO_AddKeyEvent(io, dcimgui_sys::ImGuiKey_LeftShift as c_int, mods.shift);
+            dcimgui_sys::ImGuiIO_AddKeyEvent(io, dcimgui_sys::ImGuiKey_LeftCtrl as c_int, mods.ctrl);
+            dcimgui_sys::ImGuiIO_AddKeyEvent(io, dcimgui_sys::ImGuiKey_LeftAlt as c_int, mods.alt);
+            dcimgui_sys::ImGuiIO_AddKeyEvent(io, dcimgui_sys::ImGuiKey_LeftSuper as c_int, mods.super_);
+        }
+
         // // Send our keypress
         // if (key.imguiKey()) |imgui_key| {
         //     cimgui.c.ImGuiIO_AddKeyEvent(
@@ -2431,11 +2489,17 @@ impl Inspector {
         //         action == .press or action == .repeat,
         //     );
         // }
-        let _ = (action, key, mods);
-        unimplemented!(
-            "embedded::Inspector::keyCallback — dcimgui ImGuiIO_AddKeyEvent + \
-             key.imguiKey (Phase-3 leaf, embedded.zig:1202-1226)"
-        )
+        if let Some(imgui_key) = key_to_imgui_key(key) {
+            unsafe {
+                dcimgui_sys::ImGuiIO_AddKeyEvent(
+                    io,
+                    imgui_key,
+                    action == key::Action::Press || action == key::Action::Repeat,
+                )
+            };
+        }
+
+        Ok(())
     }
 
     // fn newFrame(self: *Inspector) !void { ... }
@@ -2483,6 +2547,216 @@ impl Inspector {
 
         Ok(())
     }
+}
+
+// PORTS: ghostty `src/input/key.zig`'s `Key.imguiKey` (called from
+// `Inspector.keyCallback` above as `key.imguiKey()`).
+//
+// PORT NOTE: this is the apprt-layer landing spot DEFERRALS.md names for
+// `Key::imgui_key` ("Target: apprt layer") — rustty-vt's own
+// `input::key::Key::imgui_key` (gated behind the off-by-default `imgui` cargo
+// feature) stays the documented `unimplemented!()` placeholder because rustty-vt
+// must remain free of the dcimgui-sys (apprt GUI-glue) dependency (D1: rustty-vt
+// is pure and sits below the apprt/GUI edge). `Inspector::keyCallback` is the one
+// caller, and it lives in rustty-apprt, which already depends on dcimgui-sys — so
+// the mapping is reproduced here instead, verbatim against the reference switch.
+//
+// Reference body (key.zig `imguiKey`), reproduced faithfully — every arm below is
+// a direct transliteration; the final `=> null` arm's variant list is preserved
+// 1:1 (including the reference's own stale-looking "We map KP_SEPARATOR to Comma"
+// comment ahead of the `numpad_left`/`numpad_right`/... arms, and the
+// `numpad_page_up`/`numpad_page_down` arms BOTH mapping to `ImGuiKey_PageUp` — a
+// reference quirk kept as-is, R1).
+fn key_to_imgui_key(key: key::Key) -> Option<c_int> {
+    use key::Key;
+    Some(match key {
+        Key::KeyA => dcimgui_sys::ImGuiKey_A,
+        Key::KeyB => dcimgui_sys::ImGuiKey_B,
+        Key::KeyC => dcimgui_sys::ImGuiKey_C,
+        Key::KeyD => dcimgui_sys::ImGuiKey_D,
+        Key::KeyE => dcimgui_sys::ImGuiKey_E,
+        Key::KeyF => dcimgui_sys::ImGuiKey_F,
+        Key::KeyG => dcimgui_sys::ImGuiKey_G,
+        Key::KeyH => dcimgui_sys::ImGuiKey_H,
+        Key::KeyI => dcimgui_sys::ImGuiKey_I,
+        Key::KeyJ => dcimgui_sys::ImGuiKey_J,
+        Key::KeyK => dcimgui_sys::ImGuiKey_K,
+        Key::KeyL => dcimgui_sys::ImGuiKey_L,
+        Key::KeyM => dcimgui_sys::ImGuiKey_M,
+        Key::KeyN => dcimgui_sys::ImGuiKey_N,
+        Key::KeyO => dcimgui_sys::ImGuiKey_O,
+        Key::KeyP => dcimgui_sys::ImGuiKey_P,
+        Key::KeyQ => dcimgui_sys::ImGuiKey_Q,
+        Key::KeyR => dcimgui_sys::ImGuiKey_R,
+        Key::KeyS => dcimgui_sys::ImGuiKey_S,
+        Key::KeyT => dcimgui_sys::ImGuiKey_T,
+        Key::KeyU => dcimgui_sys::ImGuiKey_U,
+        Key::KeyV => dcimgui_sys::ImGuiKey_V,
+        Key::KeyW => dcimgui_sys::ImGuiKey_W,
+        Key::KeyX => dcimgui_sys::ImGuiKey_X,
+        Key::KeyY => dcimgui_sys::ImGuiKey_Y,
+        Key::KeyZ => dcimgui_sys::ImGuiKey_Z,
+
+        Key::Digit0 => dcimgui_sys::ImGuiKey_0,
+        Key::Digit1 => dcimgui_sys::ImGuiKey_1,
+        Key::Digit2 => dcimgui_sys::ImGuiKey_2,
+        Key::Digit3 => dcimgui_sys::ImGuiKey_3,
+        Key::Digit4 => dcimgui_sys::ImGuiKey_4,
+        Key::Digit5 => dcimgui_sys::ImGuiKey_5,
+        Key::Digit6 => dcimgui_sys::ImGuiKey_6,
+        Key::Digit7 => dcimgui_sys::ImGuiKey_7,
+        Key::Digit8 => dcimgui_sys::ImGuiKey_8,
+        Key::Digit9 => dcimgui_sys::ImGuiKey_9,
+
+        Key::Semicolon => dcimgui_sys::ImGuiKey_Semicolon,
+        Key::Space => dcimgui_sys::ImGuiKey_Space,
+        Key::Quote => dcimgui_sys::ImGuiKey_Apostrophe,
+        Key::Comma => dcimgui_sys::ImGuiKey_Comma,
+        Key::Backquote => dcimgui_sys::ImGuiKey_GraveAccent,
+        Key::Period => dcimgui_sys::ImGuiKey_Period,
+        Key::Slash => dcimgui_sys::ImGuiKey_Slash,
+        Key::Minus => dcimgui_sys::ImGuiKey_Minus,
+        Key::Equal => dcimgui_sys::ImGuiKey_Equal,
+        Key::BracketLeft => dcimgui_sys::ImGuiKey_LeftBracket,
+        Key::BracketRight => dcimgui_sys::ImGuiKey_RightBracket,
+        Key::Backslash => dcimgui_sys::ImGuiKey_Backslash,
+
+        Key::ArrowUp => dcimgui_sys::ImGuiKey_UpArrow,
+        Key::ArrowDown => dcimgui_sys::ImGuiKey_DownArrow,
+        Key::ArrowLeft => dcimgui_sys::ImGuiKey_LeftArrow,
+        Key::ArrowRight => dcimgui_sys::ImGuiKey_RightArrow,
+        Key::Home => dcimgui_sys::ImGuiKey_Home,
+        Key::End => dcimgui_sys::ImGuiKey_End,
+        Key::Insert => dcimgui_sys::ImGuiKey_Insert,
+        Key::Delete => dcimgui_sys::ImGuiKey_Delete,
+        Key::CapsLock => dcimgui_sys::ImGuiKey_CapsLock,
+        Key::ScrollLock => dcimgui_sys::ImGuiKey_ScrollLock,
+        Key::NumLock => dcimgui_sys::ImGuiKey_NumLock,
+        Key::PageUp => dcimgui_sys::ImGuiKey_PageUp,
+        Key::PageDown => dcimgui_sys::ImGuiKey_PageDown,
+        Key::Escape => dcimgui_sys::ImGuiKey_Escape,
+        Key::Enter => dcimgui_sys::ImGuiKey_Enter,
+        Key::Tab => dcimgui_sys::ImGuiKey_Tab,
+        Key::Backspace => dcimgui_sys::ImGuiKey_Backspace,
+        Key::PrintScreen => dcimgui_sys::ImGuiKey_PrintScreen,
+        Key::Pause => dcimgui_sys::ImGuiKey_Pause,
+        Key::ContextMenu => dcimgui_sys::ImGuiKey_Menu,
+
+        Key::F1 => dcimgui_sys::ImGuiKey_F1,
+        Key::F2 => dcimgui_sys::ImGuiKey_F2,
+        Key::F3 => dcimgui_sys::ImGuiKey_F3,
+        Key::F4 => dcimgui_sys::ImGuiKey_F4,
+        Key::F5 => dcimgui_sys::ImGuiKey_F5,
+        Key::F6 => dcimgui_sys::ImGuiKey_F6,
+        Key::F7 => dcimgui_sys::ImGuiKey_F7,
+        Key::F8 => dcimgui_sys::ImGuiKey_F8,
+        Key::F9 => dcimgui_sys::ImGuiKey_F9,
+        Key::F10 => dcimgui_sys::ImGuiKey_F10,
+        Key::F11 => dcimgui_sys::ImGuiKey_F11,
+        Key::F12 => dcimgui_sys::ImGuiKey_F12,
+
+        Key::Numpad0 => dcimgui_sys::ImGuiKey_Keypad0,
+        Key::Numpad1 => dcimgui_sys::ImGuiKey_Keypad1,
+        Key::Numpad2 => dcimgui_sys::ImGuiKey_Keypad2,
+        Key::Numpad3 => dcimgui_sys::ImGuiKey_Keypad3,
+        Key::Numpad4 => dcimgui_sys::ImGuiKey_Keypad4,
+        Key::Numpad5 => dcimgui_sys::ImGuiKey_Keypad5,
+        Key::Numpad6 => dcimgui_sys::ImGuiKey_Keypad6,
+        Key::Numpad7 => dcimgui_sys::ImGuiKey_Keypad7,
+        Key::Numpad8 => dcimgui_sys::ImGuiKey_Keypad8,
+        Key::Numpad9 => dcimgui_sys::ImGuiKey_Keypad9,
+        Key::NumpadDecimal => dcimgui_sys::ImGuiKey_KeypadDecimal,
+        Key::NumpadDivide => dcimgui_sys::ImGuiKey_KeypadDivide,
+        Key::NumpadMultiply => dcimgui_sys::ImGuiKey_KeypadMultiply,
+        Key::NumpadSubtract => dcimgui_sys::ImGuiKey_KeypadSubtract,
+        Key::NumpadAdd => dcimgui_sys::ImGuiKey_KeypadAdd,
+        Key::NumpadEnter => dcimgui_sys::ImGuiKey_KeypadEnter,
+        Key::NumpadEqual => dcimgui_sys::ImGuiKey_KeypadEqual,
+        // We map KP_SEPARATOR to Comma because traditionally a numpad would
+        // have a numeric separator key. Most modern numpads do not
+        Key::NumpadLeft => dcimgui_sys::ImGuiKey_LeftArrow,
+        Key::NumpadRight => dcimgui_sys::ImGuiKey_RightArrow,
+        Key::NumpadUp => dcimgui_sys::ImGuiKey_UpArrow,
+        Key::NumpadDown => dcimgui_sys::ImGuiKey_DownArrow,
+        Key::NumpadPageUp => dcimgui_sys::ImGuiKey_PageUp,
+        Key::NumpadPageDown => dcimgui_sys::ImGuiKey_PageUp,
+        Key::NumpadHome => dcimgui_sys::ImGuiKey_Home,
+        Key::NumpadEnd => dcimgui_sys::ImGuiKey_End,
+        Key::NumpadInsert => dcimgui_sys::ImGuiKey_Insert,
+        Key::NumpadDelete => dcimgui_sys::ImGuiKey_Delete,
+        Key::NumpadBegin => dcimgui_sys::ImGuiKey_NamedKey_BEGIN,
+
+        Key::ShiftLeft => dcimgui_sys::ImGuiKey_LeftShift,
+        Key::ControlLeft => dcimgui_sys::ImGuiKey_LeftCtrl,
+        Key::AltLeft => dcimgui_sys::ImGuiKey_LeftAlt,
+        Key::MetaLeft => dcimgui_sys::ImGuiKey_LeftSuper,
+        Key::ShiftRight => dcimgui_sys::ImGuiKey_RightShift,
+        Key::ControlRight => dcimgui_sys::ImGuiKey_RightCtrl,
+        Key::AltRight => dcimgui_sys::ImGuiKey_RightAlt,
+        Key::MetaRight => dcimgui_sys::ImGuiKey_RightSuper,
+
+        // These keys aren't represented in cimgui
+        Key::F13
+        | Key::F14
+        | Key::F15
+        | Key::F16
+        | Key::F17
+        | Key::F18
+        | Key::F19
+        | Key::F20
+        | Key::F21
+        | Key::F22
+        | Key::F23
+        | Key::F24
+        | Key::F25
+        | Key::IntlBackslash
+        | Key::IntlRo
+        | Key::IntlYen
+        | Key::Convert
+        | Key::KanaMode
+        | Key::NonConvert
+        | Key::NumpadSeparator
+        | Key::NumpadBackspace
+        | Key::NumpadClear
+        | Key::NumpadClearEntry
+        | Key::NumpadComma
+        | Key::NumpadMemoryAdd
+        | Key::NumpadMemoryClear
+        | Key::NumpadMemoryRecall
+        | Key::NumpadMemoryStore
+        | Key::NumpadMemorySubtract
+        | Key::NumpadParenLeft
+        | Key::NumpadParenRight
+        | Key::Fn
+        | Key::FnLock
+        | Key::BrowserBack
+        | Key::BrowserFavorites
+        | Key::BrowserForward
+        | Key::BrowserHome
+        | Key::BrowserRefresh
+        | Key::BrowserSearch
+        | Key::BrowserStop
+        | Key::Eject
+        | Key::LaunchApp1
+        | Key::LaunchApp2
+        | Key::LaunchMail
+        | Key::MediaPlayPause
+        | Key::MediaSelect
+        | Key::MediaStop
+        | Key::MediaTrackNext
+        | Key::MediaTrackPrevious
+        | Key::Power
+        | Key::Sleep
+        | Key::AudioVolumeDown
+        | Key::AudioVolumeMute
+        | Key::AudioVolumeUp
+        | Key::WakeUp
+        | Key::Help
+        | Key::Copy
+        | Key::Cut
+        | Key::Paste
+        | Key::Unidentified => return None,
+    } as c_int)
 }
 
 // The EMBEDDED_BLUEPRINT §2 growth-point table: the exact set of methods core's
