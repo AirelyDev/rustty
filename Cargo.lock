@@ -529,6 +529,7 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "dcimgui-sys",
+ "objc2",
  "rustty-apprt-api",
  "rustty-args",
  "rustty-config",
@@ -539,6 +540,7 @@ dependencies = [
  "rustty-os",
  "rustty-renderer",
  "rustty-vt",
+ "rustty-xev",
 ]
 
 [[package]]

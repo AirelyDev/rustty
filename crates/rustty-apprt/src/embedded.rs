@@ -34,14 +34,15 @@
 //! (EMBEDDED_BLUEPRINT §7):
 //!
 //! E4 ports `embedded.zig:992-1243` — the `Inspector` (dcimgui + Metal terminal
-//! inspector) as a Phase-3 INHABITED PLACEHOLDER (blueprint row E4). The struct +
-//! `Backend` enum are inhabited with real fields; the two NON-GPU state methods
-//! `updateContentScale`/`updateSize` are REAL (the `content_scale` cache is ported
-//! LIVE, the dcimgui side effects deferred); every dcimgui/Metal method
-//! (`init`/`deinit`/`initMetal`/`renderMetal`/`newFrame`/`Backend::deinit` + the
-//! mouse/scroll/cursor/focus/text/key callbacks) is a documented `unimplemented!()`
-//! leaf — dcimgui-sys is NOT wired (the `cimgui.*`/`ImGui_ImplMetal_*`/objc bodies
-//! are preserved verbatim as comments, Phase-3/R-d). `queueRender` forwards LIVE to
+//! inspector). The struct + `Backend` enum are inhabited with real fields;
+//! `init`/`deinit`/`initMetal`/`renderMetal`/`newFrame`/`Backend::deinit`/
+//! `updateContentScale`/`updateSize`/`queueRender` are all LIVE — the Metal
+//! render loop (`renderMetal`'s double-frame loop +
+//! `rustty_inspector::Inspector::render` + the `MTLRenderCommandEncoder` objc2
+//! `msg_send!` construction) is the apprt-tier finale of the inspector port
+//! (see `renderMetal`'s own doc for the R4 acyclic `SurfaceData`/`wakeup` seam).
+//! The mouse/scroll/cursor/focus/text/key callbacks remain documented
+//! `unimplemented!()` leaves (Task 6/9). `queueRender` forwards LIVE to
 //! the Surface's `queueInspectorRender` (itself a Phase-3 leaf). E4 also lands
 //! `Surface::initInspector` (deferred from E3's range because it constructs the real
 //! `Inspector`) and replaces E2's `Inspector` E2->E4 sequencing stub.
@@ -1657,11 +1658,33 @@ impl Surface {
     }
 
     /// reference `fn queueInspectorRender(self: *Surface) void` (embedded.zig:922)
-    /// — chunk E3/E4. It reaches the `render_inspector` action (dcimgui/Metal
-    /// Phase-3 leaf); called by [`App::redrawInspector`]. Kept an `unimplemented!()`
-    /// placeholder leaf here.
+    /// — called by [`App::redrawInspector`]. Dispatches the `render_inspector`
+    /// action to the C host (the same `performAction` -> host-callback seam every
+    /// other apprt action already routes through), which schedules the next Metal
+    /// frame that ultimately reaches [`Inspector::renderMetal`] via the apprt-c
+    /// `rustty_inspector_metal_render` export (INV-12's render-thread wakeup is a
+    /// separate, `Inspector::render`-internal notify — this fn only asks the host
+    /// to draw a frame at all).
+    //
+    // fn queueInspectorRender(self: *Surface) void {
+    //     _ = self.app.performAction(
+    //         .{ .surface = &self.core_surface },
+    //         .render_inspector,
+    //         {},
+    //     ) catch |err| {
+    //         log.err("error rendering the inspector err={}", .{err});
+    //         return;
+    //     };
+    // }
     pub fn queueInspectorRender(&mut self) {
-        unimplemented!("embedded::Surface::queueInspectorRender — chunk E3/E4")
+        // SAFETY: `self.app` is a live `*mut App` for the lifetime of this Surface
+        // (E1/E2 invariant — the embedded app outlives every surface it owns).
+        if let Err(_err) = unsafe { &*self.app }.perform_action(
+            Target::Surface(&self.core_surface),
+            Action::RenderInspector,
+        ) {
+            // log.err("error rendering the inspector err={}", .{err});
+        }
     }
 
     // pub fn newSurfaceOptions(self: *const Surface, context: apprt.surface.NewSurfaceContext) apprt.Surface.Options { ... }
@@ -1777,24 +1800,21 @@ impl Surface {
 //
 // pub const Inspector = struct { ... }   (embedded.zig:994)
 //
-// [CHUNK E4 / Task 4 — INHABITED PLACEHOLDER] The inspector is the dcimgui (Dear
-// ImGui) + Metal debug UI. Per the placeholder-leaf doctrine (blueprint row E4)
-// the struct is INHABITED with its real fields. Task 4 wires dcimgui-sys and ports
-// the ImGui *context* lifecycle LIVE: `init` (`ImGui_CreateContext` +
-// `CoreInspector.setup()` the shared IO once, INV-11), `deinit`
-// (`ImGui_ImplMetal_Shutdown` if a backend + `ImGui_DestroyContext`), and
-// `Backend::deinit`, plus the REAL non-GPU `updateContentScale`/`updateSize`. Task 3
-// (the Metal exports) additionally lands `initMetal` (the dcimgui
-// `ImGui_ImplMetal_Init` + backend management; the objc `device.release` msgSend is
-// deferred with the rest of the objc/Metal work) and `newFrame` (the pure
-// delta-time `io.DeltaTime` setup) LIVE. `renderMetal` remains a documented
-// `unimplemented!()` leaf: its `inspector.render(surface)` call needs
-// `rustty_inspector::Inspector::render` (Task 15/17 — the widget aggregate is still a
-// zero-field placeholder) and its `MTLRenderCommandEncoder` construction needs the
-// objc2 msgSend seam, neither available yet. The objc/imgui input callbacks
-// (mouse/scroll/cursor/focus/text/key) likewise remain leaves that land with the
-// input wiring (Task 6/9). `queueRender` forwards LIVE to
-// [`Surface::queueInspectorRender`] (itself a Phase-3 leaf).
+// [CHUNK E4 — the apprt-tier Metal render loop, complete] The inspector is the
+// dcimgui (Dear ImGui) + Metal debug UI. The struct is inhabited with its real
+// fields; `init` (`ImGui_CreateContext` + `CoreInspector.setup()` the shared IO
+// once, INV-11), `deinit` (`ImGui_ImplMetal_Shutdown` if a backend +
+// `ImGui_DestroyContext`), `Backend::deinit`, the REAL non-GPU
+// `updateContentScale`/`updateSize`, `initMetal` (the dcimgui
+// `ImGui_ImplMetal_Init` + backend management + the objc `device.release`
+// msgSend balance), `newFrame` (the pure delta-time `io.DeltaTime` setup), and
+// `renderMetal` (the double-frame loop + `rustty_inspector::Inspector::render`
+// via the R4 acyclic `SurfaceData`/`wakeup` seam + the `MTLRenderCommandEncoder`
+// objc2 `msg_send!` construction/`endEncoding`) are all LIVE. The objc/imgui
+// input callbacks (mouse/scroll/cursor/focus/text/key) remain leaves that land
+// with the input wiring (Task 6/9). `queueRender` forwards LIVE to
+// [`Surface::queueInspectorRender`], which now itself dispatches the
+// `render_inspector` action to the C host.
 pub struct Inspector {
     // const cimgui = @import("dcimgui");
     //
@@ -1851,6 +1871,24 @@ impl Backend {
                 };
             }
         }
+    }
+}
+
+/// Minimal `defer`-style scope guard — runs `f` on drop. Mirrors the private
+/// `Defer` helper `rustty_inspector::widgets::surface` uses for its ImGui
+/// `Begin`/`End` pairings; here it backs the objc release/`endEncoding`
+/// balances in [`Inspector::initMetal`]/[`Inspector::renderMetal`] (the
+/// reference's `defer { … }` blocks), so the release/`endEncoding` msgSend runs
+/// on every exit path (including the early `return false` in `initMetal`).
+/// panic=abort means no unwinding ever crosses these FFI calls, so
+/// drop-on-scope-exit is the sole runtime path (no double-fire, no leak).
+#[cfg(target_os = "macos")]
+struct Defer<F: FnMut()>(F);
+
+#[cfg(target_os = "macos")]
+impl<F: FnMut()> Drop for Defer<F> {
+    fn drop(&mut self) {
+        (self.0)();
     }
 }
 
@@ -1953,15 +1991,25 @@ impl Inspector {
     pub fn initMetal(&mut self, device: *mut c_void) -> bool {
         // defer device.msgSend(void, objc.sel("release"), .{});
         //
-        // PORT NOTE (objc leaf — deferred): the reference balances the +1 retain the
-        // host handed us by releasing `device` on scope exit (INV-11 / I16 objc-id
-        // balance). That `release` msgSend needs an objc runtime binding (objc2),
-        // which rustty-apprt does not yet pull in — it lands together with
-        // `renderMetal`'s `MTLRenderCommandEncoder` msgSends (both objc, same
-        // milestone). Omitting the balancing release over-RETAINS the host-owned
-        // `device` by one ref (a leak — never an over-release, the safe direction the
-        // task's "do NOT over-release" contract mandates). This path is inert until
-        // `renderMetal` goes live, so in practice no device is initialized here yet.
+        // PORT NOTE (INV-11 / I16 objc-id balance): balances the +1 retain the host
+        // handed us by releasing `device` on scope exit — via the `Defer` guard so
+        // it fires on every exit path, including the early `return false` below.
+        // `device` is an opaque objc id crossing the C ABI untyped (never a
+        // compile-time Metal type), so this uses the same raw-`AnyObject` +
+        // `msg_send!` idiom as `renderMetal`'s command_buffer/desc release and the
+        // `rustty_set_window_background_blur` blur leaf (rustty-apprt-c/src/lib.rs)
+        // — no objc2-metal/objc2-foundation typed bindings needed. This fn (like
+        // `renderMetal`) is reached only through the `#[cfg(target_os = "macos")]`
+        // CAPI export, so the guard is likewise macOS-only; off macOS `device` is
+        // untouched (never released — there is no host retain to balance there).
+        #[cfg(target_os = "macos")]
+        let _release_device = Defer(|| {
+            let ptr: *mut objc2::runtime::AnyObject = device.cast();
+            // SAFETY: `device` is the host-owned `id<MTLDevice>` handed to this
+            // call at +1 (the CAPI contract); `release` balances that exactly
+            // once, on every exit path, and is never sent again afterward.
+            let _: () = unsafe { objc2::msg_send![ptr, release] };
+        });
 
         // cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
         unsafe { dcimgui_sys::ImGui_SetCurrentContext(self.ig_ctx) };
@@ -2014,16 +2062,35 @@ impl Inspector {
 
     // pub fn renderMetal(self: *Inspector, command_buffer: objc.Object, desc: objc.Object) !void { ... }
     //
-    // PORT NOTE (Task 3 — still a leaf, two live blockers): the double-frame loop's
-    // dcimgui half (`ImGui_ImplMetal_NewFrame`/`ImGui_NewFrame`/`ImGui_Render`/
-    // `ImGui_GetDrawData`/`ImGui_ImplMetal_RenderDrawData`) and `self.newFrame()` ARE
-    // available now, but the body cannot yet compile: (1) `inspector.render(surface)`
-    // needs `rustty_inspector::Inspector::render`, which does not exist — the widget
-    // aggregate is a zero-field placeholder until Task 15/17; and (2) building the
-    // `MTLRenderCommandEncoder` (`command_buffer.msgSend(renderCommandEncoderWithDescriptor:)`)
-    // + the `release`/`endEncoding` msgSends need the objc2 seam rustty-apprt does not
-    // yet pull in. The two objc `objc.Object` handles → opaque `*mut c_void`. Target
-    // of the Darwin CAPI `rustty_inspector_metal_render`.
+    // PORT NOTE (Task 3/4 — live): the double-frame loop's dcimgui half
+    // (`ImGui_ImplMetal_NewFrame`/`ImGui_NewFrame`/`ImGui_Render`/
+    // `ImGui_GetDrawData`/`ImGui_ImplMetal_RenderDrawData`) and `self.newFrame()`
+    // were already wired; this landed the two remaining blockers: (1)
+    // `inspector.render(surface)` -> `rustty_inspector::Inspector::render` (Task
+    // 15/17's widget aggregate, now inhabited) fed the R4 acyclic `SurfaceData`
+    // gathered straight off `core_surface` (main-thread-affine, INV-11;
+    // `render`'s own `gui.draw` takes `renderer_state.mutex` internally, INV-1 —
+    // no lock is taken HERE) plus the `&rustty_xev::Async` wakeup handle; and (2)
+    // the `MTLRenderCommandEncoder` construction
+    // (`command_buffer.msgSend(renderCommandEncoderWithDescriptor:)`) + the
+    // `release`/`endEncoding` msgSends via the objc2 raw-`AnyObject` + `msg_send!`
+    // idiom (`Defer`-backed, matching the `rustty_set_window_background_blur`
+    // blur leaf precedent). The two objc `objc.Object` handles stay opaque
+    // `*mut c_void` (crossing the C ABI untyped, never a compile-time Metal
+    // type). Target of the Darwin CAPI `rustty_inspector_metal_render`.
+    //
+    // FIDELITY NOTE: the reference `renderMetal` body does NOT call
+    // `ImGui_SetCurrentContext` (unlike `initMetal`/`updateContentScale`/
+    // `updateSize`, which all do) — verified against embedded.zig:1066-1126.
+    // Ported faithfully as-is (R1); not adding a call the reference omits.
+    //
+    // CFG NOTE: Metal (and the `ImGui_ImplMetal_*` dcimgui-sys symbols /
+    // macOS-only `objc2` msgSends this body uses) exists only on Darwin, so —
+    // like the `MacOS`/`IOS` platform structs above — this fn is split into a
+    // live `#[cfg(target_os = "macos")]` definition and a non-Darwin stub. The
+    // sole caller is the `#[cfg(target_os = "macos")]` CAPI export
+    // `rustty_inspector_metal_render`, so the stub is unreachable in practice.
+    #[cfg(target_os = "macos")]
     pub fn renderMetal(
         &mut self,
         command_buffer: *mut c_void,
@@ -2033,46 +2100,153 @@ impl Inspector {
         //     command_buffer.msgSend(void, objc.sel("release"), .{});
         //     desc.msgSend(void, objc.sel("release"), .{});
         // }
+        //
+        // PORT NOTE (INV-11/I16 objc-id balance): both ids arrive at +1 from the
+        // host; declared first (Rust drops in REVERSE declaration order) so they
+        // release LAST — after `_end_encoding` below — exactly mirroring the
+        // reference's nesting (the later `defer encoder.endEncoding()` fires
+        // first, LIFO). Declaring `desc` before `command_buffer` here means they
+        // drop in `command_buffer`-then-`desc` order, matching the reference's
+        // combined-block statement order; the two objects are independent, so
+        // this ordering is not load-bearing, only faithful.
+        let _release_desc = Defer(|| {
+            let ptr: *mut objc2::runtime::AnyObject = desc.cast();
+            // SAFETY: `desc` is the host-owned render-pass-descriptor id handed
+            // to this call at +1; released exactly once, on every exit path.
+            let _: () = unsafe { objc2::msg_send![ptr, release] };
+        });
+        let _release_command_buffer = Defer(|| {
+            let ptr: *mut objc2::runtime::AnyObject = command_buffer.cast();
+            // SAFETY: `command_buffer` is the host-owned command-buffer id
+            // handed to this call at +1; released exactly once, on every exit.
+            let _: () = unsafe { objc2::msg_send![ptr, release] };
+        });
+
         // assert(self.backend == .metal);
+        assert_eq!(self.backend, Some(Backend::Metal));
         // //log.debug("render", .{});
-        //
-        // // Setup our imgui frame. We need to render multiple frames to ensure
-        // // ImGui completes all its state processing. I don't know how to fix
-        // // this.
+
+        // Setup our imgui frame. We need to render multiple frames to ensure
+        // ImGui completes all its state processing. I don't know how to fix
+        // this.
         // for (0..2) |_| {
-        //     cimgui.ImGui_ImplMetal_NewFrame(desc.value);
-        //     try self.newFrame();
-        //     cimgui.c.ImGui_NewFrame();
-        //
-        //     // Build our UI
-        //     render: {
-        //         const surface = &self.surface.core_surface;
-        //         const inspector = surface.inspector orelse break :render;
-        //         inspector.render(surface);
-        //     }
-        //
-        //     // Render
-        //     cimgui.c.ImGui_Render();
-        // }
-        //
-        // // MTLRenderCommandEncoder
+        for _ in 0..2 {
+            // cimgui.ImGui_ImplMetal_NewFrame(desc.value);
+            // SAFETY: `desc` is the host-owned `MTLRenderPassDescriptor*`.
+            unsafe { dcimgui_sys::ImGui_ImplMetal_NewFrame(desc) };
+            // try self.newFrame();
+            self.newFrame()?;
+            // cimgui.c.ImGui_NewFrame();
+            unsafe { dcimgui_sys::ImGui_NewFrame() };
+
+            // Build our UI
+            // render: {
+            //     const surface = &self.surface.core_surface;
+            //     const inspector = surface.inspector orelse break :render;
+            //     inspector.render(surface);
+            // }
+            'render: {
+                // const surface = &self.surface.core_surface;
+                // SAFETY: `self.surface` is the live back-reference to the owning
+                // apprt Surface (embedded.zig:997/1029 LIFETIMES row).
+                let core_surface: *mut CoreSurface =
+                    unsafe { &raw mut (*self.surface).core_surface };
+                // const inspector = surface.inspector orelse break :render;
+                // SAFETY: `core_surface` is valid for the duration of this call
+                // (owned by the live `self.surface`).
+                let inspector: *mut rustty_inspector::Inspector =
+                    match unsafe { (*core_surface).inspector } {
+                        Some(v) => v,
+                        None => break 'render,
+                    };
+                // inspector.render(surface);
+                //
+                // PORT NOTE (R4 acyclic Surface seam, rustty_inspector::
+                // Inspector.rs module doc): `SurfaceData` replaces the
+                // reference's `surface: *Surface`; every field is a plain `Copy`
+                // value or raw pointer read directly off `core_surface` (none of
+                // them are terminal derefs — `Inspector::render`'s own
+                // `gui.draw` takes `renderer_state.mutex` internally across
+                // every sub-window, INV-1, so no lock is taken here). `wakeup`
+                // replaces `surface.renderer_thread` (INV-12).
+                let data = rustty_inspector::widgets::surface::SurfaceData {
+                    renderer_state: unsafe { &raw mut (*core_surface).renderer_state },
+                    alloc: allocator_api2::alloc::Global,
+                    size: unsafe { (*core_surface).size },
+                    font_size_points: unsafe { (*core_surface).font_size.points },
+                    font_size_pixels: unsafe { (*core_surface).font_size.pixels() },
+                    mouse_click_state: unsafe { (*core_surface).mouse.click_state },
+                    selection_gesture: unsafe {
+                        &raw const (*core_surface).mouse.selection_gesture
+                    },
+                };
+                let wakeup: &rustty_xev::Async =
+                    unsafe { &(*core_surface).renderer_thread.wakeup };
+                // SAFETY: `inspector` is non-null (validated above) and owned by
+                // `core_surface`'s renderer state for the duration of this call.
+                unsafe { (*inspector).render(data, wakeup) };
+            }
+
+            // Render
+            // cimgui.c.ImGui_Render();
+            unsafe { dcimgui_sys::ImGui_Render() };
+        }
+
+        // MTLRenderCommandEncoder
         // const encoder = command_buffer.msgSend(
         //     objc.Object,
         //     objc.sel("renderCommandEncoderWithDescriptor:"),
         //     .{desc.value},
         // );
+        //
+        // PORT NOTE: the raw-`AnyObject` + `msg_send!` idiom (no objc2-metal
+        // typed `MTLCommandBuffer`/`MTLRenderCommandEncoder` bindings) — these
+        // ids cross the C ABI untyped, exactly like the reference's untyped
+        // `objc.Object.fromId(...).msgSend(...)`.
+        let encoder: *mut objc2::runtime::AnyObject = {
+            let cb_ptr: *mut objc2::runtime::AnyObject = command_buffer.cast();
+            let desc_ptr: *mut objc2::runtime::AnyObject = desc.cast();
+            // SAFETY: `command_buffer`/`desc` are the host-owned live ids above;
+            // `renderCommandEncoderWithDescriptor:` is a Cocoa "get" method (the
+            // returned encoder is autoreleased, NOT owned by us at +1 — it must
+            // NOT be released, only `endEncoding`'d below).
+            unsafe { objc2::msg_send![cb_ptr, renderCommandEncoderWithDescriptor: desc_ptr] }
+        };
         // defer encoder.msgSend(void, objc.sel("endEncoding"), .{});
+        let _end_encoding = Defer(|| {
+            let _: () = unsafe { objc2::msg_send![encoder, endEncoding] };
+        });
         // cimgui.ImGui_ImplMetal_RenderDrawData(
         //     cimgui.c.ImGui_GetDrawData(),
         //     command_buffer.value,
         //     encoder.value,
         // );
+        // SAFETY: `command_buffer`/`encoder` are live objc ids for the duration
+        // of this call; `ImGui_GetDrawData()` returns the current context's
+        // per-frame draw data (never stored — PREPORT_INSPECTOR §1).
+        unsafe {
+            dcimgui_sys::ImGui_ImplMetal_RenderDrawData(
+                dcimgui_sys::ImGui_GetDrawData(),
+                command_buffer,
+                encoder.cast(),
+            )
+        };
+
+        Ok(())
+    }
+
+    /// Non-Darwin stub — see the CFG NOTE on the macOS `renderMetal` above.
+    /// Metal does not exist off Darwin, so there is nothing to port here; this
+    /// fn is unreachable off macOS (its sole caller, `rustty_inspector_metal_render`,
+    /// is itself `#[cfg(target_os = "macos")]`).
+    #[cfg(not(target_os = "macos"))]
+    pub fn renderMetal(
+        &mut self,
+        command_buffer: *mut c_void,
+        desc: *mut c_void,
+    ) -> Result<(), ApprtError> {
         let _ = (command_buffer, desc);
-        unimplemented!(
-            "embedded::Inspector::renderMetal — blocked on rustty_inspector::Inspector::render \
-             (Task 15/17, widget aggregate) + the objc2 MTLRenderCommandEncoder msgSend seam \
-             (embedded.zig:1066-1109)"
-        )
+        unimplemented!("embedded::Inspector::renderMetal — Metal is Darwin-only; unreachable off macOS")
     }
 
     // pub fn updateContentScale(self: *Inspector, x: f64, y: f64) void { ... }
@@ -2267,10 +2441,8 @@ impl Inspector {
     // fn newFrame(self: *Inspector) !void { ... }
     //
     // PORT NOTE (Task 3): the imgui frame delta-time setup (`io.DeltaTime`), ported
-    // LIVE — pure dcimgui + `std::time` (no objc). A private helper called ONLY by
-    // [`Inspector::renderMetal`], which is itself still a leaf (see its note), so this
-    // stays `#[allow(dead_code)]` until that render path compiles.
-    #[allow(dead_code)]
+    // LIVE — pure dcimgui + `std::time` (no objc). A private helper called by
+    // [`Inspector::renderMetal`]'s double-frame loop.
     fn newFrame(&mut self) -> Result<(), ApprtError> {
         // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
         let io = unsafe { dcimgui_sys::ImGui_GetIO() };

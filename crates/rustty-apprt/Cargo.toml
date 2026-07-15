@@ -39,3 +39,24 @@ rustty-args = { workspace = true }
 # `none::App::perform_ipc` static fn takes a passed-in allocator (reference
 # none.zig `performIpc(_: Allocator, ...)`), matching `rustty_apprt_api::ipc`.
 allocator-api2 = { workspace = true }
+# `rustty_xev::Async` — `Inspector::render`'s wakeup-handle parameter (the R4
+# acyclic Surface seam's `&rustty_xev::Async` leaf standing in for the whole
+# core-local `renderer_thread: Thread<A>`; INV-12). Already a transitive dep via
+# rustty-core; named directly here so `embedded::Inspector::renderMetal` can
+# reach `core_surface.renderer_thread.wakeup` by its real type.
+rustty-xev = { workspace = true }
+
+# objc2/Metal msgSends (renderMetal's MTLRenderCommandEncoder construction, the
+# device/command_buffer/desc release balances) are Darwin-only, exactly like
+# rustty-renderer/rustty-apprt-c/rustty-os's own objc2 deps below.
+[target.'cfg(target_os = "macos")'.dependencies]
+# objc2: the ObjC runtime (`msg_send!`), pinned to the same 0.6 the rest of the
+# workspace uses (rustty-renderer/rustty-apprt-c/rustty-os). `renderMetal`'s
+# `MTLRenderCommandEncoder` construction (`renderCommandEncoderWithDescriptor:`
+# + `endEncoding`) and the `device`/`command_buffer`/`desc` release msgSends
+# operate on OPAQUE ids crossing the C ABI (never a compile-time Metal type),
+# exactly mirroring the reference's untyped `objc.Object.fromId(...).msgSend(...)`
+# — the same raw-`AnyObject` + `msg_send!` idiom already used by the
+# `rustty_set_window_background_blur` blur leaf (rustty-apprt-c/src/lib.rs), so
+# no objc2-metal/objc2-foundation typed bindings are needed for this leaf.
+objc2 = { version = "0.6" }
