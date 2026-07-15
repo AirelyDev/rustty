@@ -642,18 +642,13 @@ git commit -m "swift: rename source files/dirs Ghostty -> Rustty (Task 7)"
 **Interfaces:**
 - Produces: an Xcode project that builds a `Rustty.app` product with module name `RusttyKit`, referencing the renamed files, with `.xib` customModule + AppleScript cocoa classes + Info.plist keys all consistent.
 
-- [ ] **Step 1: Rename the container files/dirs.**
+- [ ] **Step 1: Rename the `.xcodeproj` directory.** NOTE: Task 7's file-rename loop already renamed the top-level config files (`Rustty-Info.plist`, `Rustty.entitlements`, `RusttyDebug.entitlements`, `RusttyReleaseLocal.entitlements`, `Rustty.sdef`, `Rustty.xctestplan`) and the scheme (`Rustty.xcscheme`, still inside the `Ghostty.xcodeproj` dir). Only the `.xcodeproj` directory itself remains:
 ```bash
 cd /Users/gael/projects/rustty/macos
 git mv Ghostty.xcodeproj Rustty.xcodeproj
-git mv "Rustty.xcodeproj/xcshareddata/xcschemes/Ghostty.xcscheme" "Rustty.xcodeproj/xcshareddata/xcschemes/Rustty.xcscheme"
-git mv Ghostty-Info.plist Rustty-Info.plist
-git mv Ghostty.entitlements Rustty.entitlements
-git mv GhosttyDebug.entitlements RusttyDebug.entitlements
-git mv GhosttyReleaseLocal.entitlements RusttyReleaseLocal.entitlements
-git mv Ghostty.sdef Rustty.sdef
-git mv Ghostty.xctestplan Rustty.xctestplan
+ls -d Rustty.xcodeproj && ls Rustty.xcodeproj/xcshareddata/xcschemes/  # should show Rustty.xcscheme
 ```
+(The pbxproj CONTENT still references the old paths/names — that is fixed in Step 2.)
 
 - [ ] **Step 2: Rewrite `project.pbxproj` references.** The pbxproj references old paths (`Sources/Ghostty`, `GhosttyUITests`, `Ghostty-Info.plist`, `Ghostty.entitlements`, the `Ghostty` target/product/scheme, the `GhosttyKit` framework, `PRODUCT_MODULE_NAME`, `SWIFT_OBJC_BRIDGING_HEADER`, `INFOPLIST_FILE`, `CODE_SIGN_ENTITLEMENTS`). Apply the path + name rewrites:
 ```bash
