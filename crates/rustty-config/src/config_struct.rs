@@ -5074,7 +5074,7 @@ impl Default for Config {
             progress_style: true,
             bold_color: None,
             faint_opacity: 0.5,
-            term: b"xterm-ghostty".to_vec(),
+            term: rustty_identity::TERM.as_bytes().to_vec(),
             enquiry_response: b"".to_vec(),
             async_backend: AsyncBackend::Auto,
             auto_update: None,
@@ -6974,7 +6974,7 @@ impl Config {
         if self.term.is_empty() {
             // HACK: See comment above at definition
             // self.term = "xterm-ghostty";
-            self.term = b"xterm-ghostty".to_vec();
+            self.term = rustty_identity::TERM.as_bytes().to_vec();
         }
 
         // The default for the working directory depends on the system.
