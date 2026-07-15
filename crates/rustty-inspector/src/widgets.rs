@@ -16,7 +16,17 @@ use core::ffi::CStr;
 // display-only reads of a `terminal.Page` under the surface mutex (INV-1); the
 // dirty reads (`page.isDirty()` / `row.dirty`) are pure observation (INV-2).
 pub mod page;
-// pub const pagelist = @import("widgets/pagelist.zig");    (Phase 3)
+// pub const pagelist = @import("widgets/pagelist.zig");
+//
+// PORT NOTE (Task 13): the PageList inspector widget (`Inspector` /
+// `CellChooser` / `CellInfo` + the summary/scrollbar/regions/tracked-pins/pages
+// tables) is fully LIVE — display-only reads of a `terminal.PageList` under the
+// surface mutex (INV-1); the `pin.isDirty()` read is pure observation (INV-2).
+// The §3 comptime obligations (`std.meta.tags(point.Tag)`, the `combo_width`
+// comptime block, `regionHelpText`/`regionRow` per-tag) are hand-expanded in the
+// file. `screen.rs`'s `Info` embeds `pagelist.{Inspector, CellChooser}` when
+// Task 15/17 folds the aggregate together.
+pub mod pagelist;
 // pub const key = @import("widgets/key.zig");
 pub mod key;
 // pub const renderer = @import("widgets/renderer.zig");
