@@ -834,6 +834,14 @@ pub struct Info {
 // @embed-abi rustty_info_s 24
 const _: () = assert!(core::mem::size_of::<Info>() == 24);
 const _: () = assert!(core::mem::align_of::<Info>() == 8);
+// C field `build_mode` is the Rust field `mode` (same offset); the gate probes
+// the C name, this const-assert the Rust name — they meet at the offset.
+// @embed-abi-field rustty_info_s build_mode 0
+const _: () = assert!(core::mem::offset_of!(Info, mode) == 0);
+// @embed-abi-field rustty_info_s version 8
+const _: () = assert!(core::mem::offset_of!(Info, version) == 8);
+// @embed-abi-field rustty_info_s version_len 16
+const _: () = assert!(core::mem::offset_of!(Info, version_len) == 16);
 
 /// The `Info.BuildMode` optimization-mode enum (`ghostty_build_mode_e`). The ordinals
 /// are ABI-frozen (ghostty.h:385-390 / PREPORT_SWIFT_APP §6): `debug = 0`,

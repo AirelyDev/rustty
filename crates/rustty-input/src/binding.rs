@@ -3051,6 +3051,12 @@ pub struct TriggerC {
 // @embed-abi rustty_input_trigger_s 12
 const _: () = assert!(core::mem::size_of::<TriggerC>() == 12);
 const _: () = assert!(core::mem::align_of::<TriggerC>() == 4);
+// @embed-abi-field rustty_input_trigger_s tag 0
+const _: () = assert!(core::mem::offset_of!(TriggerC, tag) == 0);
+// @embed-abi-field rustty_input_trigger_s key 4
+const _: () = assert!(core::mem::offset_of!(TriggerC, key) == 4);
+// @embed-abi-field rustty_input_trigger_s mods 8
+const _: () = assert!(core::mem::offset_of!(TriggerC, mods) == 8);
 
 /// PORT NOTE: `Trigger.C.Tag = enum(c_int) { physical, unicode, catch_all }`.
 #[repr(C)]

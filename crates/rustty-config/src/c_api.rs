@@ -276,6 +276,8 @@ pub struct Diagnostic {
 // by value by `rustty_config_get_diagnostic`; frozen so it stays register-sized.
 // @embed-abi rustty_diagnostic_s 8
 const _: () = assert!(core::mem::size_of::<Diagnostic>() == 8);
+// @embed-abi-field rustty_diagnostic_s message 0
+const _: () = assert!(core::mem::offset_of!(Diagnostic, message) == 0);
 
 impl Default for Diagnostic {
     fn default() -> Self {

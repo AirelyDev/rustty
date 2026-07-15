@@ -189,12 +189,17 @@ per-surface size/offset gates (catch `repr(C)`-but-wrong-size, which is lint-sil
 embedding surface (A4); the vt surface has no instances and is offset-gated (A5,
 newly wired into CI); the compiler lint guards new FFI-unsafe-by-value additions.
 
-**Honest residual (not the crash class):** A4 checks embedding aggregate *sizes*,
-not *field offsets*; a >16B embedding struct with correct total size but a
-transposed field would misread (not crash). `abi_layout.rs` documents those
-offsets in comments and freezes size+align, but does not `offset_of!`-assert them.
-Adding a `rustty_type_json()`-style reflection for the embedding crates (mirroring
-vt's A5) would close this; it is a follow-up, tracked here, not a live crash risk.
+**Residual CLOSED (field offsets):** A4 now also cross-checks FIELD OFFSETS. Each
+by-value-return struct's fields carry `// @embed-abi-field <c_struct> <c_field>
+<offset>` annotations paired with compile-time `offset_of!` freezes (enforced by
+`cargo test --workspace`); the A4 gate clang-probes the header's
+`offsetof(c_struct, c_field)` and hard-fails on any mismatch — catching a
+same-total-size field transposition that the sizeof check alone misses (28 fields
+across the 6 by-value-return types; negative-tested). No `type_json` reflection
+symbol was added, because that would break the `rustty-embed.h == ghostty.h`
+symbol freeze (gate A3) — the Rust half is const-asserts, the gate is the header
+half. Field-offset freezes for the pointer-passed aggregates (ActionC union, etc.)
+remain a low-priority follow-up (no sret hazard; total size + align already frozen).
 
 Also noted: `check_symbol_manifest.sh` (a symbol-coverage gate, not layout) is
 likewise unregistered in ci.sh — orthogonal to this class; flagged for the CI

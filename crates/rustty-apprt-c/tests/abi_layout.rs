@@ -68,6 +68,30 @@ const _: () = assert!(core::mem::align_of::<Options>() == 8);
 // @embed-abi rustty_surface_config_s 88
 const _: () = assert!(core::mem::size_of::<SurfaceOptions>() == 88);
 const _: () = assert!(core::mem::align_of::<SurfaceOptions>() == 8);
+// @embed-abi-field rustty_surface_config_s platform_tag 0
+const _: () = assert!(core::mem::offset_of!(SurfaceOptions, platform_tag) == 0);
+// @embed-abi-field rustty_surface_config_s platform 8
+const _: () = assert!(core::mem::offset_of!(SurfaceOptions, platform) == 8);
+// @embed-abi-field rustty_surface_config_s userdata 16
+const _: () = assert!(core::mem::offset_of!(SurfaceOptions, userdata) == 16);
+// @embed-abi-field rustty_surface_config_s scale_factor 24
+const _: () = assert!(core::mem::offset_of!(SurfaceOptions, scale_factor) == 24);
+// @embed-abi-field rustty_surface_config_s font_size 32
+const _: () = assert!(core::mem::offset_of!(SurfaceOptions, font_size) == 32);
+// @embed-abi-field rustty_surface_config_s working_directory 40
+const _: () = assert!(core::mem::offset_of!(SurfaceOptions, working_directory) == 40);
+// @embed-abi-field rustty_surface_config_s command 48
+const _: () = assert!(core::mem::offset_of!(SurfaceOptions, command) == 48);
+// @embed-abi-field rustty_surface_config_s env_vars 56
+const _: () = assert!(core::mem::offset_of!(SurfaceOptions, env_vars) == 56);
+// @embed-abi-field rustty_surface_config_s env_var_count 64
+const _: () = assert!(core::mem::offset_of!(SurfaceOptions, env_var_count) == 64);
+// @embed-abi-field rustty_surface_config_s initial_input 72
+const _: () = assert!(core::mem::offset_of!(SurfaceOptions, initial_input) == 72);
+// @embed-abi-field rustty_surface_config_s wait_after_command 80
+const _: () = assert!(core::mem::offset_of!(SurfaceOptions, wait_after_command) == 80);
+// @embed-abi-field rustty_surface_config_s context 84
+const _: () = assert!(core::mem::offset_of!(SurfaceOptions, context) == 84);
 
 // ── ghostty_platform_u + macos/ios arms (ghostty.h:448-459) ──
 // Each arm is a single `void*`; the union is exactly pointer-sized.
@@ -99,6 +123,12 @@ const _: () = assert!(core::mem::align_of::<rustty_apprt_c::capi::Text>() == 8);
 // @embed-abi rustty_string_s 24
 const _: () = assert!(core::mem::size_of::<GhosttyString>() == 24);
 const _: () = assert!(core::mem::align_of::<GhosttyString>() == 8);
+// @embed-abi-field rustty_string_s ptr 0
+const _: () = assert!(core::mem::offset_of!(GhosttyString, ptr) == 0);
+// @embed-abi-field rustty_string_s len 8
+const _: () = assert!(core::mem::offset_of!(GhosttyString, len) == 8);
+// @embed-abi-field rustty_string_s sentinel 16
+const _: () = assert!(core::mem::offset_of!(GhosttyString, sentinel) == 16);
 
 // ── ghostty_surface_size_s (ghostty.h:482-489) ──
 // uint16_t columns,rows; uint32_t width_px,height_px,cell_width_px,cell_height_px
@@ -106,6 +136,18 @@ const _: () = assert!(core::mem::align_of::<GhosttyString>() == 8);
 // @embed-abi rustty_surface_size_s 20
 const _: () = assert!(core::mem::size_of::<SurfaceSize>() == 20);
 const _: () = assert!(core::mem::align_of::<SurfaceSize>() == 4);
+// @embed-abi-field rustty_surface_size_s columns 0
+const _: () = assert!(core::mem::offset_of!(SurfaceSize, columns) == 0);
+// @embed-abi-field rustty_surface_size_s rows 2
+const _: () = assert!(core::mem::offset_of!(SurfaceSize, rows) == 2);
+// @embed-abi-field rustty_surface_size_s width_px 4
+const _: () = assert!(core::mem::offset_of!(SurfaceSize, width_px) == 4);
+// @embed-abi-field rustty_surface_size_s height_px 8
+const _: () = assert!(core::mem::offset_of!(SurfaceSize, height_px) == 8);
+// @embed-abi-field rustty_surface_size_s cell_width_px 12
+const _: () = assert!(core::mem::offset_of!(SurfaceSize, cell_width_px) == 12);
+// @embed-abi-field rustty_surface_size_s cell_height_px 16
+const _: () = assert!(core::mem::offset_of!(SurfaceSize, cell_height_px) == 16);
 
 // ── ghostty_point_s (ghostty.h:429-435) ── {enum tag, enum coord, u32 x, u32 y} → 16, align 4.
 // @embed-abi rustty_point_s 16

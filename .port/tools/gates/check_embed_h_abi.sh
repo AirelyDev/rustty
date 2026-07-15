@@ -28,6 +28,14 @@
 #       compile-time `const _: () = assert!(size_of::<T>() == bytes)`), and that
 #       the annotated size equals the clang-probed header size.
 #       A missing annotation is the coverage gap that let TriggerC through → FAIL.
+#   (b2) FIELD OFFSETS. Every Rust `// @embed-abi-field <c_struct> <c_field>
+#       <offset>` annotation (paired with a compile-time `offset_of!` freeze) is
+#       cross-checked against the header's `offsetof(c_struct, c_field)` — catching
+#       a same-total-size field TRANSPOSITION that (b)'s sizeof check misses. No
+#       exported reflection symbol is added (that would break the rustty-embed.h ==
+#       ghostty.h symbol freeze / gate A3), so the Rust side is const-assert
+#       freezes enforced by `cargo test --workspace`, and this gate is the header
+#       half.
 #   (c) Prints a full coverage ledger for ALL aggregates (frozen / unfrozen) so the
 #       long tail of pointer-passed structs is visible even though only the
 #       by-value-return class is hard-gated here.
@@ -102,6 +110,49 @@ for a in "${BYVAL[@]}"; do
   warn=""; [ "$cs" -gt 16 ] && warn="  <-- WARN >16B: returned via x8 sret; must match exactly"
   echo "  ok   $a — $cs bytes (frozen)$warn"
 done
+
+# --- (b2) field-offset cross-check ------------------------------------------
+# Every Rust `@embed-abi-field <c_struct> <c_field> <offset>` annotation (paired
+# with a compile-time `offset_of!` freeze that cargo enforces) is cross-checked
+# against the header's own `offsetof(c_struct, c_field)`. This catches a
+# same-total-size field TRANSPOSITION that the sizeof check in (b) misses — the
+# residual the embedding gate previously left open (no exported type_json symbol
+# is added, preserving the rustty-embed.h == ghostty.h symbol freeze / gate A3).
+grep -rhoE '@embed-abi-field +[a-z_]+_(s|u) +[a-z_]+ +[0-9]+' "$ROOT/crates" 2>/dev/null \
+  | awk '{print $2, $3, $4}' | sort -u > "$TMP/fields.txt"
+
+nfields=$(wc -l < "$TMP/fields.txt" | tr -d ' ')
+echo
+echo "== field-offset cross-check ($nfields annotated fields) =="
+if [ "$nfields" -gt 0 ]; then
+  {
+    echo "#include \"$HDR\""
+    echo '#include <stddef.h>'
+    echo '#include <stdio.h>'
+    echo 'int main(void){'
+    while read -r st fld off; do
+      [ -n "$st" ] || continue
+      printf '  printf("%s %s %%zu\\n", offsetof(%s, %s));\n' "$st" "$fld" "$st" "$fld"
+    done < "$TMP/fields.txt"
+    echo '  return 0; }'
+  } > "$TMP/offprobe.c"
+  if ! clang -I "$INCDIR" "$TMP/offprobe.c" -o "$TMP/offprobe" 2>"$TMP/off.err"; then
+    echo "  BLOCKED: offsetof probe did not compile (C field-name drift?):"; sed 's/^/    /' "$TMP/off.err"; fail=1
+  else
+    "$TMP/offprobe" > "$TMP/coff.txt"   # lines: "<struct> <field> <c_offset>"
+    bad=0
+    while read -r st fld off; do
+      [ -n "$st" ] || continue
+      coff="$(awk -v s="$st" -v f="$fld" '$1==s && $2==f{print $3}' "$TMP/coff.txt")"
+      if [ -z "$coff" ]; then
+        echo "  FAIL $st.$fld — no header offset (C field-name drift?)"; bad=1; fail=1
+      elif [ "$coff" != "$off" ]; then
+        echo "  FAIL $st.$fld — header offset=$coff != Rust freeze=$off (field transposition)"; bad=1; fail=1
+      fi
+    done < "$TMP/fields.txt"
+    [ "$bad" -eq 0 ] && echo "  ok — all $nfields field offsets match the header"
+  fi
+fi
 
 # --- (c) full coverage ledger (report-only for pointer-passed aggregates) ----
 echo
