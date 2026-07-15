@@ -19,6 +19,12 @@
 // pub const widgets = @import("widgets.zig");
 pub mod widgets;
 
+// PORT NOTE: `units.zig` is a sibling leaf module of `main.zig`/`widgets.zig` in
+// the reference (reached by the widgets via `@import("../units.zig")`, not
+// re-exported by main.zig). Declared here as a crate-internal module so the
+// `page`/`pagelist`/`screen` widget ports can reach `crate::units::toKibiBytes`.
+pub mod units;
+
 // pub const Inspector = @import("Inspector.zig");
 //
 // PORT NOTE (Task 4 — INHABITED PLACEHOLDER, placeholder-leaf doctrine):

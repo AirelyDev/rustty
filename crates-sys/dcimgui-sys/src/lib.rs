@@ -77,6 +77,44 @@ extern "C" {
 }
 
 // ---------------------------------------------------------------------------
+// Dear ImGui internal DockBuilder API.
+//
+// The docking-branch DockBuilder functions live in `dcimgui_internal.h`, which
+// the reference does NOT run through Dear Bindings (its bitfields cannot be
+// C-translated), so bindgen — which parses only the public `dcimgui.h` surface —
+// emits nothing for them. But they ARE compiled into the `dcimgui` archive
+// (docking build) and exported with C linkage, so we declare them directly here,
+// exactly mirroring the reference's own binding surface (ghostty
+// pkg/dcimgui/main.zig:52-73, a manual `pub extern fn` block for the same
+// reason). The inspector's `DetachableHeader`/`detachableHeader` (widgets.zig)
+// drive window docking through these three; the wider DockBuilder set the
+// reference declares can be added as later widget tasks need it.
+//
+// `ImGuiID` is a `c_uint` and `ImGuiDir` a `c_int` (bindgen type aliases); the
+// out-params cross as `*mut ImGuiID`.
+extern "C" {
+    /// Split a dock node into two, returning the new node id and writing the
+    /// two halves into the out-params. `split_dir` is an `ImGuiDir`,
+    /// `size_ratio_for_node_at_dir` the fraction claimed by the `at_dir` half.
+    /// (ghostty pkg/dcimgui/main.zig:71 — `ImGui_DockBuilderSplitNode`.)
+    pub fn ImGui_DockBuilderSplitNode(
+        node_id: ImGuiID,
+        split_dir: ImGuiDir,
+        size_ratio_for_node_at_dir: f32,
+        out_id_at_dir: *mut ImGuiID,
+        out_id_at_opposite_dir: *mut ImGuiID,
+    ) -> ImGuiID;
+
+    /// Dock the window named `window_name` into the node `node_id`.
+    /// (ghostty pkg/dcimgui/main.zig:52 — `ImGui_DockBuilderDockWindow`.)
+    pub fn ImGui_DockBuilderDockWindow(window_name: *const std::os::raw::c_char, node_id: ImGuiID);
+
+    /// Finalize the dock layout built under `node_id`.
+    /// (ghostty pkg/dcimgui/main.zig:73 — `ImGui_DockBuilderFinish`.)
+    pub fn ImGui_DockBuilderFinish(node_id: ImGuiID);
+}
+
+// ---------------------------------------------------------------------------
 // Dear ImGui Metal rendering backend FFI (macOS).
 //
 // The inspector's `apprt.embedded.Inspector` drives Dear ImGui through the
