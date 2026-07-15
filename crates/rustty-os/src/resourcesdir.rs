@@ -211,9 +211,9 @@ pub fn maybeDir(
 // ---------------------------------------------------------------------------
 
 /// PORT NOTE: the reference reads the `GHOSTTY_RESOURCES_DIR` env var. Retargeted to
-/// the published `rustty` identity (R2): `<APP_NAME upper>_RESOURCES_DIR`.
+/// the published `rustty` identity (R2): `<ENV_PREFIX>_RESOURCES_DIR`.
 fn resources_dir_env_var() -> String {
-    format!("{}_RESOURCES_DIR", rustty_identity::APP_NAME.to_uppercase())
+    format!("{}_RESOURCES_DIR", rustty_identity::ENV_PREFIX)
 }
 
 /// PORT NOTE: the reference's terminfo sentinels. Retargeted to the `rustty`

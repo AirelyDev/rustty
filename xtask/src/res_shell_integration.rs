@@ -36,25 +36,27 @@ const FILES: &[(&str, &[u8])] = &[
         include_bytes!("../../crates/rustty-extra/shell-integration/bash/bash-preexec.sh"),
     ),
     (
+        // PORT NOTE (Task 13): source file renamed ghostty.bash -> rustty.bash;
+        // this destination key is bundling/install-path naming, owned by Task 14.
         "bash/ghostty.bash",
-        include_bytes!("../../crates/rustty-extra/shell-integration/bash/ghostty.bash"),
+        include_bytes!("../../crates/rustty-extra/shell-integration/bash/rustty.bash"),
     ),
     (
         "elvish/lib/ghostty-integration.elv",
         include_bytes!(
-            "../../crates/rustty-extra/shell-integration/elvish/lib/ghostty-integration.elv"
+            "../../crates/rustty-extra/shell-integration/elvish/lib/rustty-integration.elv"
         ),
     ),
     (
         "fish/vendor_conf.d/ghostty-shell-integration.fish",
         include_bytes!(
-            "../../crates/rustty-extra/shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish"
+            "../../crates/rustty-extra/shell-integration/fish/vendor_conf.d/rustty-shell-integration.fish"
         ),
     ),
     (
         "nushell/vendor/autoload/ghostty.nu",
         include_bytes!(
-            "../../crates/rustty-extra/shell-integration/nushell/vendor/autoload/ghostty.nu"
+            "../../crates/rustty-extra/shell-integration/nushell/vendor/autoload/rustty.nu"
         ),
     ),
     (
@@ -63,7 +65,7 @@ const FILES: &[(&str, &[u8])] = &[
     ),
     (
         "zsh/ghostty-integration",
-        include_bytes!("../../crates/rustty-extra/shell-integration/zsh/ghostty-integration"),
+        include_bytes!("../../crates/rustty-extra/shell-integration/zsh/rustty-integration"),
     ),
 ];
 
@@ -153,7 +155,7 @@ mod tests {
         assert_eq!(
             zsh.as_slice(),
             include_bytes!(
-                "../../crates/rustty-extra/shell-integration/zsh/ghostty-integration"
+                "../../crates/rustty-extra/shell-integration/zsh/rustty-integration"
             )
             .as_slice()
         );

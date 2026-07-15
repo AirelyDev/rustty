@@ -2073,9 +2073,9 @@ where
             // env.remove("GHOSTTY_LOG");
             //
             // PORT NOTE (R2 identity): the reference's `GHOSTTY_*` env names carry
-            // the product identity — `<APP_NAME upper>_<suffix>` (the termio
+            // the product identity — `<ENV_PREFIX>_<suffix>` (the termio
             // shell_integration `env_name` precedent).
-            env.remove(&format!("{}_LOG", rustty_identity::APP_NAME.to_uppercase()));
+            env.remove(&format!("{}_LOG", rustty_identity::ENV_PREFIX));
 
             // var buf: [18]u8 = undefined;
             // try env.put(
@@ -2086,7 +2086,7 @@ where
             // ("0x" + 16 zero-padded hex digits fills the [18]u8 exactly; the
             // `catch unreachable` collapses — `format!` is infallible.)
             env.insert(
-                format!("{}_SURFACE_ID", rustty_identity::APP_NAME.to_uppercase()),
+                format!("{}_SURFACE_ID", rustty_identity::ENV_PREFIX),
                 format!("0x{:016x}", unsafe { (*self_).id }),
             );
 

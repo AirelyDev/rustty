@@ -1,10 +1,10 @@
-# Ghostty shell integration
-export module ghostty {
+# Rustty shell integration
+export module rustty {
   def has_feature [feature: string] {
-    $feature in ($env.GHOSTTY_SHELL_FEATURES | default "" | split row ',')
+    $feature in ($env.RUSTTY_SHELL_FEATURES | default "" | split row ',')
   }
 
-  # Wrap `ssh` with `ghostty +ssh` and translate the shell-integration
+  # Wrap `ssh` with `rustty +ssh` and translate the shell-integration
   # feature flags into command options.
   export def --wrapped ssh [...args] {
     if not ((has_feature "ssh-env") or (has_feature "ssh-terminfo")) {
@@ -12,7 +12,7 @@ export module ghostty {
       return
     }
 
-    let ghostty = ($env.GHOSTTY_BIN_DIR? | default "") | path join "ghostty"
+    let rustty = ($env.RUSTTY_BIN_DIR? | default "") | path join "rustty"
     mut flags = []
     if not (has_feature "ssh-env") {
       $flags = ($flags ++ ["--forward-env=false"])
@@ -20,10 +20,10 @@ export module ghostty {
     if not (has_feature "ssh-terminfo") {
       $flags = ($flags ++ ["--terminfo=false"])
     }
-    ^$ghostty "+ssh" ...$flags "--" ...$args
+    ^$rustty "+ssh" ...$flags "--" ...$args
   }
 
-  # Wrap `sudo` to preserve Ghostty's TERMINFO environment variable
+  # Wrap `sudo` to preserve Rustty's TERMINFO environment variable
   export def --wrapped sudo [...args] {
     mut sudo_args = $args
 
@@ -45,10 +45,10 @@ export module ghostty {
   }
 }
 
-# Clean up XDG_DATA_DIRS by removing GHOSTTY_SHELL_INTEGRATION_XDG_DIR
-if 'GHOSTTY_SHELL_INTEGRATION_XDG_DIR' in $env {
+# Clean up XDG_DATA_DIRS by removing RUSTTY_SHELL_INTEGRATION_XDG_DIR
+if 'RUSTTY_SHELL_INTEGRATION_XDG_DIR' in $env {
   if 'XDG_DATA_DIRS' in $env {
-    $env.XDG_DATA_DIRS = ($env.XDG_DATA_DIRS | str replace $"($env.GHOSTTY_SHELL_INTEGRATION_XDG_DIR):" "")
+    $env.XDG_DATA_DIRS = ($env.XDG_DATA_DIRS | str replace $"($env.RUSTTY_SHELL_INTEGRATION_XDG_DIR):" "")
   }
-  hide-env GHOSTTY_SHELL_INTEGRATION_XDG_DIR
+  hide-env RUSTTY_SHELL_INTEGRATION_XDG_DIR
 }

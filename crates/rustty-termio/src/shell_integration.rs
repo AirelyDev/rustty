@@ -783,10 +783,10 @@ fn basename(path: &[u8]) -> &[u8] {
 }
 
 /// PORT NOTE (R2 identity): the reference's `GHOSTTY_*` env-var names carry the
-/// product identity: `<APP_NAME upper>_<suffix>` (rustty-os resourcesdir
+/// product identity: `<ENV_PREFIX>_<suffix>` (rustty-os resourcesdir
 /// precedent).
 pub(crate) fn env_name(suffix: &str) -> String {
-    format!("{}_{}", rustty_identity::APP_NAME.to_uppercase(), suffix)
+    format!("{}_{}", rustty_identity::ENV_PREFIX, suffix)
 }
 
 /// PORT NOTE: the crate's `EnvMap` models `std.process.EnvMap` with Rust
