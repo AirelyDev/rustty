@@ -3860,36 +3860,55 @@ overlay) never construct — latent, not parity-blocking (GAP_ANALYSIS §6).
 future GTK/OpenGL renderer tier), or GAP_ANALYSIS §7 open decision 4 choosing
 fill-for-completeness.
 
-## WASM/web target — partial (completeness-fill, 2026-07-15)
+## WASM/web target — ✅ DONE (VT C-ABI wasm), 2026-07-15 (superseded the 2 "limits" below)
 
-**DONE (headless, verified here):** the WASM/web C-ABI surface is ported and the
-pure-Rust half builds for `wasm32-unknown-unknown`:
-- `rustty-os/src/wasm.rs` + `wasm/{log,target}.rs` and `rustty-config/src/wasm.rs`
-  (the `config_new/free/load_string/finalize` C-ABI) audited/completed vs
-  `os/wasm.zig` / `config/Wasm.zig`; **`cargo build -p rustty-os --target
-  wasm32-unknown-unknown` is green.**
+**A real, running `.wasm` is produced and merged (main @ ea92fb4).** CRITICAL
+REFRAMING from the first pass: the modern ghostty wasm artifact is
+**`ghostty-vt.wasm`** — `build.zig:118` → `GhosttyLibVt.initWasm` compiles the
+`vt_c` module (root `src/lib_vt.zig` = **libghostty-vt, the terminal VT C-ABI
+ONLY**), NOT the font shaper. `main_wasm.zig` is referenced NOWHERE in the build
+system; it + `font/shaper/web_canvas.zig` are **abandoned legacy** (the old
+in-browser playground), broken since the 2024-04-06 Group→SharedGrid refactor
+(`06df9b786` deleted `faceFromIndex`/`GroupCache`), their build target removed
+2025-01-07 (`8bf5c4ed7`), replaced 2025-09 by libghostty-vt (Mitchell's
+"Libghostty Is Coming" — a zero-dep embeddable VT engine; wasm consumers render
+themselves). So the earlier "port web_canvas" framing targeted DEAD code.
+
+**The correct target is `rustty-vt-c`** (the port of `terminal/c/` = libghostty-vt),
+already a cdylib. It now cross-compiles to **`target/wasm32-wasip1/release/
+rustty_vt_c.wasm` (~1.02 MB, valid WASM MVP, 157 exports)** — the rustty analog of
+`ghostty-vt.wasm`. **Runtime-verified:** instantiated in node WASI, called
+`rustty_type_json()` → correct 7262-byte type-layout JSON. Repro:
+`.port/tools/build-wasm.sh --release`.
+- **Toolchain:** `.port/tools/zig-{cc,cxx,ar}-wasm.sh` route the cc-crate to
+  `zig cc/c++/ar -target wasm32-wasi` (zig 0.15.2 bundles the wasi sysroot +
+  libc++ headers) via target-scoped `CC_/CXX_/AR_wasm32_wasip1` env — NATIVE
+  builds untouched (`cargo build --workspace` green). Disproves the old "needs
+  emscripten, env-blocked like GTK" claim: zig cross-compiles the C/C++ `-sys`
+  deps (zlib C; simdutf/highway C++ with `NO_LIBCXX`) fine.
+- **Faithful wasm-cfg-scoped fixes:** `rustty-xev` wasi backend arm (no-op Loop —
+  the C-ABI is synchronous, no event loop, matching ghostty's wasm); `rustty-os`
+  page_allocator + `rustty-vt` page.rs mmap→`alloc_zeroed` on wasm (same
+  page-aligned/zeroed contract); kitty shared-mem → `UnsupportedMedium`
+  (faithful to ghostty's `!link_libc` gate); the C++ `-sys` `cpp_link_stdlib(None)`.
 - `xtask wasm-patch-growable-table` — verbatim port of
-  `src/build/wasm_patch_growable_table.zig` (LEB128/section rewrite) + its **7
-  reference tests** (pass).
-- new `rustty-wasm` cdylib+rlib crate (the `src/main_wasm.zig` module-entry
-  analog: `#[used]` fn-ptr retention over the config C-ABI + log sink) — builds
-  green on host.
+  `src/build/wasm_patch_growable_table.zig` + its 7 reference tests (mirrors the
+  table-patch step of `GhosttyLibVt.initWasm`).
 
-**DEFERRED — two honest limits (NOT faked, R5):**
-1. **`font/shaper/web_canvas.zig` cannot be faithfully ported.** It calls
-   `run.group.group.faceFromIndex(...)` and `TextRun.group`, both **deleted from
-   the current ghostty tree** (`grep` confirms the only remaining reference is
-   inside `web_canvas.zig` itself; current `TextRun` has `grid: *SharedGrid`),
-   and `face/web_canvas.zig` `@import`s the un-vendored external `zig-js`. Making
-   it compile would require fabricating deleted upstream APIs + a `zig-js` shim
-   (an R5 violation). Faithful action: leave un-ported, documented here.
-2. **The full linked `.wasm` artifact is environment-blocked.** `rustty-wasm`
-   pulls in the C++ dep `simdutf-sys` (transitively via config), and `clang++`
-   cannot compile the vendored `simdutf.cpp` for `wasm32-unknown-unknown` without
-   a wasm C++ toolchain (emscripten/wasi-sdk) — the same class of env-block as
-   GTK/Linux-fontconfig, not a port gap. **Un-defer trigger:** a wasm C++
-   toolchain in the build env (then link the full module), and/or an upstream
-   ghostty that restores the `faceFromIndex`/`TextRun.group` shaper APIs.
+**RESIDUAL (small, documented):**
+1. **`web_canvas.zig` / `main_wasm.zig` — NOT ported, by design (dead upstream),**
+   not a gap. See the reframing above.
+2. **Target is `wasm32-wasip1` (wasi), not browser-freestanding
+   `wasm32-unknown-unknown`.** wasi supplies libc/libc++ headers via zig; the
+   freestanding target ghostty's dead playground used would need libc shims for
+   the zlib/simdutf C to link. Moot for the deliverable (the VT C-ABI wasm is the
+   modern artifact). **Un-defer trigger:** if a browser-freestanding `.wasm` is
+   wanted, add the libc shims (a small further step).
+3. **Runtime proof is instantiate + `rustty_type_json()`;** full terminal
+   state-machine execution (new→vt_write→format, as ghostty's `example/wasm-vt`
+   does) needs host JS glue (an exported allocator / memory management) — follow-on.
+4. The earlier `rustty-wasm` crate (config/core/font, the `main_wasm.zig` analog)
+   is the legacy path — retained (builds natively) but NOT the wasm deliverable.
 
 ## rustty-font-shaper — Linux fontconfig backend + web_canvas [added 2026-07-10, T14 reconciliation — VALIDATION_REPORT §3b]
 
