@@ -62,15 +62,17 @@ fn write_file(path: &Path, contents: &str) {
     std::fs::write(path, contents).expect("failed to write fixture file");
 }
 
-// `rustty +version` -> exit 0, stdout starts `rustty `. ADV-FIX 1: do NOT assert
-// the renderer/libxev/toolchain line content (stubbed until R-d/D6).
+// `rustty +version` -> exit 0, stdout starts `Rustty ` (the title-case product
+// name via rustty_identity::APP_NAME_TITLECASE; `ghostty` prints `Ghostty `).
+// ADV-FIX 1: do NOT assert the renderer/libxev/toolchain line content (stubbed
+// until R-d/D6).
 #[test]
 fn version_plus() {
     let out = run(&["+version"], &[]);
     assert!(out.status.success(), "+version should exit 0");
     assert!(
-        out.stdout.starts_with(b"rustty "),
-        "+version stdout should start with `rustty `, got: {:?}",
+        out.stdout.starts_with(b"Rustty "),
+        "+version stdout should start with `Rustty `, got: {:?}",
         String::from_utf8_lossy(&out.stdout),
     );
 }
@@ -81,8 +83,8 @@ fn version_dashes() {
     let out = run(&["--version"], &[]);
     assert!(out.status.success(), "--version should exit 0");
     assert!(
-        out.stdout.starts_with(b"rustty "),
-        "--version stdout should start with `rustty `",
+        out.stdout.starts_with(b"Rustty "),
+        "--version stdout should start with `Rustty `",
     );
 }
 
