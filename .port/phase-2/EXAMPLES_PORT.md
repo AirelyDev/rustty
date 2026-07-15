@@ -62,3 +62,19 @@ Spec/plan: `docs/superpowers/specs|plans/2026-07-15-rustty-c-header-family*`. Th
 c-vt example ports are now unblocked — each `.c` symbol-swaps onto `<rustty/vt.h>`
 and links `clang src/*.c -Iinclude -Ltarget/release -lrustty_vt_c` (native), parity =
 identical stdout vs ghostty's `zig build run`.
+
+### Phase B runtime examples — DONE, 21/21 BYTE-IDENTICAL (2026-07-15)
+All ghostty c-vt/cpp-vt RUNTIME examples ported 1:1 onto `<rustty/vt.h>` and
+verified byte-identical to ghostty's `zig build run` via `.port/tools/cvt-parity.sh`:
+c-vt-build-info + c-vt, -colors, -effects, -encode-{focus,key,mouse}, -formatter,
+-grid-ref-tracked, -grid-traverse, -kitty-graphics, -modes, -paste, -render,
+-selection{,-gesture}, -sgr, -size-report, -static, -stream, cpp-vt-stream.
+Each = ported src/*.c(pp) (symbol-swap) + build.sh (clang vs librustty_vt_c under
+the `identity-oracle`+`simd` oracle-parity profile) + ported README. ZERO
+mismatches — the entire VT C-ABI (terminal/formatter/sgr/colors/encoding/grid/
+kitty/modes/paste/render/selection/size-report/stream) is byte-faithful to ghostty.
+Fanned out via `.port/phase-2/wf-cvt-examples.js` (20 agents, 0 errors).
+
+STILL PENDING in Phase B: the 3 `c-vt-cmake*` build-mechanism demos (CMake linking;
+`-cross` targets Windows/MinGW — likely env-blocked). Phase C: zig-vt/zig-vt-stream/
+zig-formatter (Zig API → rustty Rust-native usage) + swift-vt-xcframework.
