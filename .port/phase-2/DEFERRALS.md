@@ -3904,9 +3904,18 @@ rustty_vt_c.wasm` (~1.02 MB, valid WASM MVP, 157 exports)** — the rustty analo
    the zlib/simdutf C to link. Moot for the deliverable (the VT C-ABI wasm is the
    modern artifact). **Un-defer trigger:** if a browser-freestanding `.wasm` is
    wanted, add the libc shims (a small further step).
-3. **Runtime proof is instantiate + `rustty_type_json()`;** full terminal
-   state-machine execution (new→vt_write→format, as ghostty's `example/wasm-vt`
-   does) needs host JS glue (an exported allocator / memory management) — follow-on.
+3. ~~**Runtime proof is instantiate + `rustty_type_json()`**~~ **RESOLVED
+   (2026-07-15).** The full terminal state machine now runs end-to-end in
+   WebAssembly: `.port/tools/wasm-vt-roundtrip.mjs` (node WASI, mirrors ghostty's
+   `example/wasm-vt`) does `rustty_terminal_new` (80×24 — exercises the wasm page
+   allocator) → `rustty_terminal_vt_write` (parses VT incl. SGR colours into the
+   page tree) → `rustty_formatter_format_alloc` → reads back the correct plain
+   text. Enabled by porting the **`lib_vt.zig` wasm-export block** (12
+   `rustty_wasm_*` allocator convenience helpers over `rustty_lib::allocator::
+   convenience` + `sgr::wasm_{alloc,free}_attribute`, wasm-cfg-gated in
+   `rustty-vt-c/src/lib.rs`/`sgr.rs`) — which also un-defers the stale sgr
+   `wasm_alloc_attribute` PORT NOTE (its "rustty does not yet build a WASM target"
+   justification was obsolete). Module now exports 169 symbols.
 4. The earlier `rustty-wasm` crate (config/core/font, the `main_wasm.zig` analog)
    is the legacy path — retained (builds natively) but NOT the wasm deliverable.
 

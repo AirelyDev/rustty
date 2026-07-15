@@ -1327,6 +1327,72 @@ pub extern "C" fn rustty_type_json() -> *const std::os::raw::c_char {
     types::get_json()
 }
 
+// ----- wasm allocator convenience exports -----
+//
+// PORT: `lib_vt.zig`'s `if (builtin.target.cpu.arch.isWasm()) { … }` block
+// (its 12 `@export(&alloc.*, .{ .name = "ghostty_wasm_*" })` / `@export(&c.*)`
+// lines). rustty relies on pointers-to-types for ABI compatibility, and creating
+// those in wasm from JS is tedious — these purely-additive helpers let a wasm
+// host (e.g. browser JS) allocate out-param slots and byte buffers against the
+// module's own allocator without changing the C API. The bodies live in
+// `rustty_lib::allocator::convenience` (the `lib/allocator/convenience.zig`
+// analog) + `sgr::wasm_{alloc,free}_attribute`; here we re-export them under the
+// `rustty_wasm_*` names, wasm-only (matching the reference's `isWasm()` gate so
+// native builds carry no extra symbols).
+#[cfg(target_arch = "wasm32")]
+mod wasm_alloc_exports {
+    use rustty_lib::allocator::convenience as conv;
+
+    #[no_mangle]
+    pub extern "C" fn rustty_wasm_alloc_opaque() -> *mut conv::Opaque {
+        conv::alloc_opaque()
+    }
+    #[no_mangle]
+    pub extern "C" fn rustty_wasm_free_opaque(ptr: *mut conv::Opaque) {
+        conv::free_opaque(ptr)
+    }
+    #[no_mangle]
+    pub extern "C" fn rustty_wasm_alloc_u8_array(len: usize) -> *mut u8 {
+        conv::alloc_u8_array(len)
+    }
+    #[no_mangle]
+    pub extern "C" fn rustty_wasm_free_u8_array(ptr: *mut u8, len: usize) {
+        conv::free_u8_array(ptr, len)
+    }
+    #[no_mangle]
+    pub extern "C" fn rustty_wasm_alloc_u16_array(len: usize) -> *mut u16 {
+        conv::alloc_u16_array(len)
+    }
+    #[no_mangle]
+    pub extern "C" fn rustty_wasm_free_u16_array(ptr: *mut u16, len: usize) {
+        conv::free_u16_array(ptr, len)
+    }
+    #[no_mangle]
+    pub extern "C" fn rustty_wasm_alloc_u8() -> *mut u8 {
+        conv::alloc_u8()
+    }
+    #[no_mangle]
+    pub extern "C" fn rustty_wasm_free_u8(ptr: *mut u8) {
+        conv::free_u8(ptr)
+    }
+    #[no_mangle]
+    pub extern "C" fn rustty_wasm_alloc_usize() -> *mut usize {
+        conv::alloc_usize()
+    }
+    #[no_mangle]
+    pub extern "C" fn rustty_wasm_free_usize(ptr: *mut usize) {
+        conv::free_usize(ptr)
+    }
+    #[no_mangle]
+    pub extern "C" fn rustty_wasm_alloc_sgr_attribute() -> *mut crate::sgr::AttributeC {
+        crate::sgr::wasm_alloc_attribute()
+    }
+    #[no_mangle]
+    pub extern "C" fn rustty_wasm_free_sgr_attribute(attr: *mut crate::sgr::AttributeC) {
+        crate::sgr::wasm_free_attribute(attr)
+    }
+}
+
 // ----- kitty_graphics -----
 // PORT NOTE: 1:1 with the 16 `@export(&c.kitty_graphics_*, ...)` lines in
 // `lib_vt.zig`. The `c.zig` aliases map two names to differently-named module

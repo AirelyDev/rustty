@@ -651,10 +651,44 @@ pub unsafe fn attribute_value(attr: *mut AttributeC) -> *mut CValue {
     unsafe { std::ptr::addr_of_mut!((*attr).value) }
 }
 
-// PORT NOTE: the reference `wasm_alloc_attribute`/`wasm_free_attribute` allocate
-// a single `sgr.Attribute.C` via `std.heap.wasm_allocator`. These are WASM-only
-// helpers; rustty does not yet build a WASM target, so they are carried as this
-// PORT NOTE and not exported (no `@export` line references them in `lib_vt.zig`).
+// PORT: the reference `wasm_alloc_attribute`/`wasm_free_attribute` allocate a
+// single `sgr.Attribute.C` via `std.heap.wasm_allocator`. WASM-only helpers
+// (`lib_vt.zig` exports them as `ghostty_wasm_alloc/free_sgr_attribute` only on
+// `isWasm()`); the rustty analog is exported from `lib.rs` under the same gate.
+// The rustty default allocator IS the global Rust allocator on wasm (the moral
+// equivalent of `std.heap.wasm_allocator`).
+
+// pub fn wasm_alloc_attribute() callconv(.c) *sgr.Attribute.C {
+//     const alloc = std.heap.wasm_allocator;
+//     const ptr = alloc.create(sgr.Attribute.C) catch @panic("out of memory");
+//     return ptr;
+// }
+#[cfg(target_arch = "wasm32")]
+pub extern "C" fn wasm_alloc_attribute() -> *mut AttributeC {
+    let layout = std::alloc::Layout::new::<AttributeC>();
+    // SAFETY: non-zero-sized `AttributeC`; the returned uninitialized storage is
+    // written by the caller before use (the reference returns raw `create`d mem).
+    let ptr = unsafe { std::alloc::alloc(layout) } as *mut AttributeC;
+    if ptr.is_null() {
+        // `catch @panic("out of memory")`
+        std::alloc::handle_alloc_error(layout);
+    }
+    ptr
+}
+
+// pub fn wasm_free_attribute(attr: *sgr.Attribute.C) callconv(.c) void {
+//     const alloc = std.heap.wasm_allocator;
+//     alloc.destroy(attr);
+// }
+#[cfg(target_arch = "wasm32")]
+pub extern "C" fn wasm_free_attribute(attr: *mut AttributeC) {
+    if !attr.is_null() {
+        let layout = std::alloc::Layout::new::<AttributeC>();
+        // SAFETY: `attr` came from `wasm_alloc_attribute` (caller contract),
+        // freed once with the matching layout.
+        unsafe { std::alloc::dealloc(attr as *mut u8, layout) };
+    }
+}
 
 #[cfg(test)]
 mod tests {
