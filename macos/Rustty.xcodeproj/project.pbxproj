@@ -12,16 +12,16 @@
 		552964E62B34A9B400030505 /* vim in Resources */ = {isa = PBXBuildFile; fileRef = 552964E52B34A9B400030505 /* vim */; };
 		819324582F24E78800A9ED8F /* DockTilePlugin.plugin in Copy DockTilePlugin */ = {isa = PBXBuildFile; fileRef = 8193244D2F24E6C000A9ED8F /* DockTilePlugin.plugin */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		819324642F24FF2100A9ED8F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A5B30538299BEAAB0047F10C /* Assets.xcassets */; };
-		8F3A9B4C2FA6B88000A18D13 /* Ghostty.sdef in Resources */ = {isa = PBXBuildFile; fileRef = 8F3A9B4B2FA6B88000A18D13 /* Ghostty.sdef */; };
+		8F3A9B4C2FA6B88000A18D13 /* Rustty.sdef in Resources */ = {isa = PBXBuildFile; fileRef = 8F3A9B4B2FA6B88000A18D13 /* Rustty.sdef */; };
 		9351BE8E3D22937F003B3499 /* nvim in Resources */ = {isa = PBXBuildFile; fileRef = 9351BE8E2D22937F003B3499 /* nvim */; };
 		A51BFC272B30F1B800E92F16 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A51BFC262B30F1B800E92F16 /* Sparkle */; };
-		A53D0C8E2B53B0EA00305CE6 /* GhosttyKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A5D495A1299BEC7E00DD1313 /* GhosttyKit.xcframework */; };
+		A53D0C8E2B53B0EA00305CE6 /* RusttyKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A5D495A1299BEC7E00DD1313 /* RusttyKit.xcframework */; };
 		A53D0C952B53B4D800305CE6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A5B30538299BEAAB0047F10C /* Assets.xcassets */; };
 		A546F1142D7B68D7003B11A0 /* locale in Resources */ = {isa = PBXBuildFile; fileRef = A546F1132D7B68D7003B11A0 /* locale */; };
 		A553F4132E06EB1600257779 /* Ghostty.icon in Resources */ = {isa = PBXBuildFile; fileRef = A553F4122E06EB1600257779 /* Ghostty.icon */; };
 		A553F4142E06EB1600257779 /* Ghostty.icon in Resources */ = {isa = PBXBuildFile; fileRef = A553F4122E06EB1600257779 /* Ghostty.icon */; };
 		A56B880B2A840447007A0E29 /* Carbon.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A56B880A2A840447007A0E29 /* Carbon.framework */; };
-		A571AB1D2A206FCF00248498 /* GhosttyKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A5D495A1299BEC7E00DD1313 /* GhosttyKit.xcframework */; };
+		A571AB1D2A206FCF00248498 /* RusttyKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A5D495A1299BEC7E00DD1313 /* RusttyKit.xcframework */; };
 		A586167C2B7703CC009BDB1D /* fish in Resources */ = {isa = PBXBuildFile; fileRef = A586167B2B7703CC009BDB1D /* fish */; };
 		A5985CE62C33060F00C57AD3 /* man in Resources */ = {isa = PBXBuildFile; fileRef = A5985CE52C33060F00C57AD3 /* man */; };
 		A5A1F8852A489D6800D1E8BC /* terminfo in Resources */ = {isa = PBXBuildFile; fileRef = A5A1F8842A489D6800D1E8BC /* terminfo */; };
@@ -36,7 +36,7 @@
 			containerPortal = A5B30529299BEAAA0047F10C /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = A5B30530299BEAAA0047F10C;
-			remoteInfo = Ghostty;
+			remoteInfo = Rustty;
 		};
 		819324672F2502FB00A9ED8F /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -50,7 +50,7 @@
 			containerPortal = A5B30529299BEAAA0047F10C /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = A5B30530299BEAAA0047F10C;
-			remoteInfo = Ghostty;
+			remoteInfo = Rustty;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -70,27 +70,27 @@
 
 /* Begin PBXFileReference section */
 		29C15B1C2CDC3B2000520DD4 /* bat */ = {isa = PBXFileReference; lastKnownFileType = folder; name = bat; path = "../zig-out/share/bat"; sourceTree = "<group>"; };
-		3B39CAA42B33949B00DABEB8 /* GhosttyReleaseLocal.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = GhosttyReleaseLocal.entitlements; sourceTree = "<group>"; };
+		3B39CAA42B33949B00DABEB8 /* RusttyReleaseLocal.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RusttyReleaseLocal.entitlements; sourceTree = "<group>"; };
 		55154BDF2B33911F001622DC /* ghostty */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ghostty; path = "../zig-out/share/ghostty"; sourceTree = "<group>"; };
 		552964E52B34A9B400030505 /* vim */ = {isa = PBXFileReference; lastKnownFileType = folder; name = vim; path = "../zig-out/share/vim"; sourceTree = "<group>"; };
-		810ACC9F2E9D3301004F8F92 /* GhosttyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GhosttyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		810ACC9F2E9D3301004F8F92 /* RusttyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RusttyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8193244D2F24E6C000A9ED8F /* DockTilePlugin.plugin */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DockTilePlugin.plugin; sourceTree = BUILT_PRODUCTS_DIR; };
-		8F3A9B4B2FA6B88000A18D13 /* Ghostty.sdef */ = {isa = PBXFileReference; lastKnownFileType = text.sdef; path = Ghostty.sdef; sourceTree = "<group>"; };
+		8F3A9B4B2FA6B88000A18D13 /* Rustty.sdef */ = {isa = PBXFileReference; lastKnownFileType = text.sdef; path = Rustty.sdef; sourceTree = "<group>"; };
 		9351BE8E2D22937F003B3499 /* nvim */ = {isa = PBXFileReference; lastKnownFileType = folder; name = nvim; path = "../zig-out/share/nvim"; sourceTree = "<group>"; };
-		A51BFC282B30F26D00E92F16 /* GhosttyDebug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = GhosttyDebug.entitlements; sourceTree = "<group>"; };
+		A51BFC282B30F26D00E92F16 /* RusttyDebug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RusttyDebug.entitlements; sourceTree = "<group>"; };
 		A546F1132D7B68D7003B11A0 /* locale */ = {isa = PBXFileReference; lastKnownFileType = folder; name = locale; path = "../zig-out/share/locale"; sourceTree = "<group>"; };
-		A54F45F32E1F047A0046BD5C /* GhosttyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GhosttyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A54F45F32E1F047A0046BD5C /* RusttyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RusttyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A553F4122E06EB1600257779 /* Ghostty.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; name = Ghostty.icon; path = ../images/Ghostty.icon; sourceTree = SOURCE_ROOT; };
 		A56B880A2A840447007A0E29 /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = System/Library/Frameworks/Carbon.framework; sourceTree = SDKROOT; };
-		A571AB1C2A206FC600248498 /* Ghostty-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Ghostty-Info.plist"; sourceTree = "<group>"; };
+		A571AB1C2A206FC600248498 /* Rustty-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Rustty-Info.plist"; sourceTree = "<group>"; };
 		A586167B2B7703CC009BDB1D /* fish */ = {isa = PBXFileReference; lastKnownFileType = folder; name = fish; path = "../zig-out/share/fish"; sourceTree = "<group>"; };
 		A5985CE52C33060F00C57AD3 /* man */ = {isa = PBXFileReference; lastKnownFileType = folder; name = man; path = "../zig-out/share/man"; sourceTree = "<group>"; };
 		A5A1F8842A489D6800D1E8BC /* terminfo */ = {isa = PBXFileReference; lastKnownFileType = folder; name = terminfo; path = "../zig-out/share/terminfo"; sourceTree = "<group>"; };
-		A5B30531299BEAAA0047F10C /* Ghostty.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ghostty.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A5B30531299BEAAA0047F10C /* Rustty.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Rustty.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A5B30538299BEAAB0047F10C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		A5B3053D299BEAAB0047F10C /* Ghostty.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Ghostty.entitlements; sourceTree = "<group>"; };
-		A5D4499D2B53AE7B000F5B83 /* Ghostty-iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Ghostty-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		A5D495A1299BEC7E00DD1313 /* GhosttyKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = GhosttyKit.xcframework; sourceTree = "<group>"; };
+		A5B3053D299BEAAB0047F10C /* Rustty.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Rustty.entitlements; sourceTree = "<group>"; };
+		A5D4499D2B53AE7B000F5B83 /* Rustty-iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Rustty-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A5D495A1299BEC7E00DD1313 /* RusttyKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = RusttyKit.xcframework; sourceTree = "<group>"; };
 		FC5218F92D10FFC7004C93E0 /* zsh */ = {isa = PBXFileReference; lastKnownFileType = folder; name = zsh; path = "../zig-out/share/zsh"; sourceTree = "<group>"; };
 		FC9ABA9B2D0F538D0020D4C8 /* bash-completion */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "bash-completion"; path = "../zig-out/share/bash-completion"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -100,12 +100,12 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				"Features/Custom App Icon/AppIcon.swift",
-				"Features/Custom App Icon/ColorizedGhosttyIcon.swift",
+				"Features/Custom App Icon/ColorizedRusttyIcon.swift",
 				"Features/Custom App Icon/DockTilePlugin.swift",
 				"Features/Custom App Icon/Extensions/Notification+AppIcon.swift",
 				"Features/Custom App Icon/Extensions/UserDefaults+AppIcon.swift",
-				Ghostty/Ghostty.ConfigTypes.swift,
-				Ghostty/GhosttyPackageMeta.swift,
+				RusttyKit/Rustty.ConfigTypes.swift,
+				RusttyKit/RusttyPackageMeta.swift,
 				Helpers/CrossKit.swift,
 				"Helpers/Extensions/NSImage+Extension.swift",
 				"Helpers/Extensions/OSColor+Extension.swift",
@@ -117,7 +117,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				App/macOS/AppDelegate.swift,
-				"App/macOS/AppDelegate+Ghostty.swift",
+				"App/macOS/AppDelegate+Rustty.swift",
 				App/macOS/main.swift,
 				App/macOS/MainMenu.xib,
 				Features/About/About.xib,
@@ -131,14 +131,14 @@
 				"Features/App Intents/Entities/TerminalEntity.swift",
 				"Features/App Intents/FocusTerminalIntent.swift",
 				"Features/App Intents/GetTerminalDetailsIntent.swift",
-				"Features/App Intents/GhosttyIntentError.swift",
+				"Features/App Intents/RusttyIntentError.swift",
 				"Features/App Intents/InputIntent.swift",
 				"Features/App Intents/IntentPermission.swift",
 				"Features/App Intents/KeybindIntent.swift",
 				"Features/App Intents/NewTerminalIntent.swift",
 				"Features/App Intents/QuickTerminalIntent.swift",
 				"Features/AppleScript/AppDelegate+AppleScript.swift",
-				"Features/AppleScript/Ghostty.Input.Mods+AppleScript.swift",
+				"Features/AppleScript/Rustty.Input.Mods+AppleScript.swift",
 				Features/AppleScript/ScriptInputTextCommand.swift,
 				Features/AppleScript/ScriptKeyEventCommand.swift,
 				Features/AppleScript/ScriptMouseButtonCommand.swift,
@@ -155,9 +155,9 @@
 				"Features/Command Palette/CommandPalette.swift",
 				"Features/Command Palette/TerminalCommandPalette.swift",
 				"Features/Custom App Icon/AppIcon.swift",
-				"Features/Custom App Icon/ColorizedGhosttyIcon.swift",
-				"Features/Custom App Icon/ColorizedGhosttyIconImage.swift",
-				"Features/Custom App Icon/ColorizedGhosttyIconView.swift",
+				"Features/Custom App Icon/ColorizedRusttyIcon.swift",
+				"Features/Custom App Icon/ColorizedRusttyIconImage.swift",
+				"Features/Custom App Icon/ColorizedRusttyIconView.swift",
 				"Features/Custom App Icon/DockTilePlugin.swift",
 				"Features/Custom App Icon/Extensions/Notification+AppIcon.swift",
 				"Features/Custom App Icon/Extensions/UserDefaults+AppIcon.swift",
@@ -208,18 +208,18 @@
 				Features/Update/UpdatePopoverView.swift,
 				Features/Update/UpdateSimulator.swift,
 				Features/Update/UpdateViewModel.swift,
-				"Ghostty/FullscreenMode+Extension.swift",
-				Ghostty/Ghostty.Error.swift,
-				Ghostty/Ghostty.Event.swift,
-				Ghostty/Ghostty.Input.swift,
-				Ghostty/Ghostty.MenuShortcutManager.swift,
-				Ghostty/Ghostty.Surface.swift,
-				"Ghostty/NSEvent+Extension.swift",
-				"Ghostty/Surface View/InspectorView.swift",
-				"Ghostty/Surface View/SurfaceDragSource.swift",
-				"Ghostty/Surface View/SurfaceGrabHandle.swift",
-				"Ghostty/Surface View/SurfaceScrollView.swift",
-				"Ghostty/Surface View/SurfaceView_AppKit.swift",
+				"RusttyKit/FullscreenMode+Extension.swift",
+				RusttyKit/Rustty.Error.swift,
+				RusttyKit/Rustty.Event.swift,
+				RusttyKit/Rustty.Input.swift,
+				RusttyKit/Rustty.MenuShortcutManager.swift,
+				RusttyKit/Rustty.Surface.swift,
+				"RusttyKit/NSEvent+Extension.swift",
+				"RusttyKit/Surface View/InspectorView.swift",
+				"RusttyKit/Surface View/SurfaceDragSource.swift",
+				"RusttyKit/Surface View/SurfaceGrabHandle.swift",
+				"RusttyKit/Surface View/SurfaceScrollView.swift",
+				"RusttyKit/Surface View/SurfaceView_AppKit.swift",
 				Helpers/AppInfo.swift,
 				Helpers/CodableBridge.swift,
 				Helpers/Cursor.swift,
@@ -256,21 +256,21 @@
 				Helpers/TabTitleEditor.swift,
 				Helpers/VibrantLayer.m,
 			);
-			target = A5D4499C2B53AE7B000F5B83 /* Ghostty-iOS */;
+			target = A5D4499C2B53AE7B000F5B83 /* Rustty-iOS */;
 		};
 		81F82CB12E8281F9001EDFA7 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				App/iOS/iOSApp.swift,
 				"Features/Custom App Icon/DockTilePlugin.swift",
-				"Ghostty/Surface View/SurfaceView_UIKit.swift",
+				"RusttyKit/Surface View/SurfaceView_UIKit.swift",
 			);
-			target = A5B30530299BEAAA0047F10C /* Ghostty */;
+			target = A5B30530299BEAAA0047F10C /* Rustty */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		810ACCA02E9D3302004F8F92 /* GhosttyUITests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = GhosttyUITests; sourceTree = "<group>"; };
+		810ACCA02E9D3302004F8F92 /* RusttyUITests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = RusttyUITests; sourceTree = "<group>"; };
 		81F82BC72E82815D001EDFA7 /* Sources */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (81F82CB12E8281F9001EDFA7 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, 81F82CB02E8281F5001EDFA7 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, 8193245D2F24E80800A9ED8F /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = Sources; sourceTree = "<group>"; };
 		A54F45F42E1F047A0046BD5C /* Tests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Tests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -303,7 +303,7 @@
 			files = (
 				A51BFC272B30F1B800E92F16 /* Sparkle in Frameworks */,
 				A56B880B2A840447007A0E29 /* Carbon.framework in Frameworks */,
-				A571AB1D2A206FCF00248498 /* GhosttyKit.xcframework in Frameworks */,
+				A571AB1D2A206FCF00248498 /* RusttyKit.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -311,7 +311,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A53D0C8E2B53B0EA00305CE6 /* GhosttyKit.xcframework in Frameworks */,
+				A53D0C8E2B53B0EA00305CE6 /* RusttyKit.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -338,16 +338,16 @@
 		A5B30528299BEAAA0047F10C = {
 			isa = PBXGroup;
 			children = (
-				A571AB1C2A206FC600248498 /* Ghostty-Info.plist */,
-				8F3A9B4B2FA6B88000A18D13 /* Ghostty.sdef */,
+				A571AB1C2A206FC600248498 /* Rustty-Info.plist */,
+				8F3A9B4B2FA6B88000A18D13 /* Rustty.sdef */,
 				A5B30538299BEAAB0047F10C /* Assets.xcassets */,
 				A553F4122E06EB1600257779 /* Ghostty.icon */,
-				A5B3053D299BEAAB0047F10C /* Ghostty.entitlements */,
-				A51BFC282B30F26D00E92F16 /* GhosttyDebug.entitlements */,
-				3B39CAA42B33949B00DABEB8 /* GhosttyReleaseLocal.entitlements */,
+				A5B3053D299BEAAB0047F10C /* Rustty.entitlements */,
+				A51BFC282B30F26D00E92F16 /* RusttyDebug.entitlements */,
+				3B39CAA42B33949B00DABEB8 /* RusttyReleaseLocal.entitlements */,
 				81F82BC72E82815D001EDFA7 /* Sources */,
 				A54F45F42E1F047A0046BD5C /* Tests */,
-				810ACCA02E9D3302004F8F92 /* GhosttyUITests */,
+				810ACCA02E9D3302004F8F92 /* RusttyUITests */,
 				A5D495A3299BECBA00DD1313 /* Frameworks */,
 				A5A1F8862A489D7400D1E8BC /* Resources */,
 				A5B30532299BEAAA0047F10C /* Products */,
@@ -357,10 +357,10 @@
 		A5B30532299BEAAA0047F10C /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A5B30531299BEAAA0047F10C /* Ghostty.app */,
-				A5D4499D2B53AE7B000F5B83 /* Ghostty-iOS.app */,
-				A54F45F32E1F047A0046BD5C /* GhosttyTests.xctest */,
-				810ACC9F2E9D3301004F8F92 /* GhosttyUITests.xctest */,
+				A5B30531299BEAAA0047F10C /* Rustty.app */,
+				A5D4499D2B53AE7B000F5B83 /* Rustty-iOS.app */,
+				A54F45F32E1F047A0046BD5C /* RusttyTests.xctest */,
+				810ACC9F2E9D3301004F8F92 /* RusttyUITests.xctest */,
 				8193244D2F24E6C000A9ED8F /* DockTilePlugin.plugin */,
 			);
 			name = Products;
@@ -370,7 +370,7 @@
 			isa = PBXGroup;
 			children = (
 				A56B880A2A840447007A0E29 /* Carbon.framework */,
-				A5D495A1299BEC7E00DD1313 /* GhosttyKit.xcframework */,
+				A5D495A1299BEC7E00DD1313 /* RusttyKit.xcframework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -378,9 +378,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		810ACC9E2E9D3301004F8F92 /* GhosttyUITests */ = {
+		810ACC9E2E9D3301004F8F92 /* RusttyUITests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 810ACCA72E9D3302004F8F92 /* Build configuration list for PBXNativeTarget "GhosttyUITests" */;
+			buildConfigurationList = 810ACCA72E9D3302004F8F92 /* Build configuration list for PBXNativeTarget "RusttyUITests" */;
 			buildPhases = (
 				810ACC9B2E9D3301004F8F92 /* Sources */,
 				810ACC9C2E9D3301004F8F92 /* Frameworks */,
@@ -392,13 +392,13 @@
 				810ACCA62E9D3302004F8F92 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				810ACCA02E9D3302004F8F92 /* GhosttyUITests */,
+				810ACCA02E9D3302004F8F92 /* RusttyUITests */,
 			);
-			name = GhosttyUITests;
+			name = RusttyUITests;
 			packageProductDependencies = (
 			);
-			productName = GhosttyUITests;
-			productReference = 810ACC9F2E9D3301004F8F92 /* GhosttyUITests.xctest */;
+			productName = RusttyUITests;
+			productReference = 810ACC9F2E9D3301004F8F92 /* RusttyUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 		8193244C2F24E6C000A9ED8F /* DockTilePlugin */ = {
@@ -420,9 +420,9 @@
 			productReference = 8193244D2F24E6C000A9ED8F /* DockTilePlugin.plugin */;
 			productType = "com.apple.product-type.bundle";
 		};
-		A54F45F22E1F047A0046BD5C /* GhosttyTests */ = {
+		A54F45F22E1F047A0046BD5C /* RusttyTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A54F45FC2E1F047A0046BD5C /* Build configuration list for PBXNativeTarget "GhosttyTests" */;
+			buildConfigurationList = A54F45FC2E1F047A0046BD5C /* Build configuration list for PBXNativeTarget "RusttyTests" */;
 			buildPhases = (
 				A54F45EF2E1F047A0046BD5C /* Sources */,
 				A54F45F02E1F047A0046BD5C /* Frameworks */,
@@ -436,16 +436,16 @@
 			fileSystemSynchronizedGroups = (
 				A54F45F42E1F047A0046BD5C /* Tests */,
 			);
-			name = GhosttyTests;
+			name = RusttyTests;
 			packageProductDependencies = (
 			);
-			productName = GhosttyTests;
-			productReference = A54F45F32E1F047A0046BD5C /* GhosttyTests.xctest */;
+			productName = RusttyTests;
+			productReference = A54F45F32E1F047A0046BD5C /* RusttyTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		A5B30530299BEAAA0047F10C /* Ghostty */ = {
+		A5B30530299BEAAA0047F10C /* Rustty */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A5B30540299BEAAB0047F10C /* Build configuration list for PBXNativeTarget "Ghostty" */;
+			buildConfigurationList = A5B30540299BEAAB0047F10C /* Build configuration list for PBXNativeTarget "Rustty" */;
 			buildPhases = (
 				FC501E0B2F46B410007AE49D /* Run SwiftLint */,
 				A5B3052D299BEAAA0047F10C /* Sources */,
@@ -461,17 +461,17 @@
 			fileSystemSynchronizedGroups = (
 				81F82BC72E82815D001EDFA7 /* Sources */,
 			);
-			name = Ghostty;
+			name = Rustty;
 			packageProductDependencies = (
 				A51BFC262B30F1B800E92F16 /* Sparkle */,
 			);
-			productName = Ghostty;
-			productReference = A5B30531299BEAAA0047F10C /* Ghostty.app */;
+			productName = Rustty;
+			productReference = A5B30531299BEAAA0047F10C /* Rustty.app */;
 			productType = "com.apple.product-type.application";
 		};
-		A5D4499C2B53AE7B000F5B83 /* Ghostty-iOS */ = {
+		A5D4499C2B53AE7B000F5B83 /* Rustty-iOS */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A5D449AB2B53AE7B000F5B83 /* Build configuration list for PBXNativeTarget "Ghostty-iOS" */;
+			buildConfigurationList = A5D449AB2B53AE7B000F5B83 /* Build configuration list for PBXNativeTarget "Rustty-iOS" */;
 			buildPhases = (
 				A5D449992B53AE7B000F5B83 /* Sources */,
 				A5D4499A2B53AE7B000F5B83 /* Frameworks */,
@@ -484,9 +484,9 @@
 			fileSystemSynchronizedGroups = (
 				81F82BC72E82815D001EDFA7 /* Sources */,
 			);
-			name = "Ghostty-iOS";
-			productName = "Ghostty-iOS";
-			productReference = A5D4499D2B53AE7B000F5B83 /* Ghostty-iOS.app */;
+			name = "Rustty-iOS";
+			productName = "Rustty-iOS";
+			productReference = A5D4499D2B53AE7B000F5B83 /* Rustty-iOS.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -519,7 +519,7 @@
 					};
 				};
 			};
-			buildConfigurationList = A5B3052C299BEAAA0047F10C /* Build configuration list for PBXProject "Ghostty" */;
+			buildConfigurationList = A5B3052C299BEAAA0047F10C /* Build configuration list for PBXProject "Rustty" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -535,11 +535,11 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				A5B30530299BEAAA0047F10C /* Ghostty */,
-				A5D4499C2B53AE7B000F5B83 /* Ghostty-iOS */,
+				A5B30530299BEAAA0047F10C /* Rustty */,
+				A5D4499C2B53AE7B000F5B83 /* Rustty-iOS */,
 				8193244C2F24E6C000A9ED8F /* DockTilePlugin */,
-				A54F45F22E1F047A0046BD5C /* GhosttyTests */,
-				810ACC9E2E9D3301004F8F92 /* GhosttyUITests */,
+				A54F45F22E1F047A0046BD5C /* RusttyTests */,
+				810ACC9E2E9D3301004F8F92 /* RusttyUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -575,7 +575,7 @@
 				A553F4142E06EB1600257779 /* Ghostty.icon in Resources */,
 				29C15B1D2CDC3B2900520DD4 /* bat in Resources */,
 				A586167C2B7703CC009BDB1D /* fish in Resources */,
-				8F3A9B4C2FA6B88000A18D13 /* Ghostty.sdef in Resources */,
+				8F3A9B4C2FA6B88000A18D13 /* Rustty.sdef in Resources */,
 				55154BE02B33911F001622DC /* ghostty in Resources */,
 				A546F1142D7B68D7003B11A0 /* locale in Resources */,
 				A5985CE62C33060F00C57AD3 /* man in Resources */,
@@ -662,7 +662,7 @@
 /* Begin PBXTargetDependency section */
 		810ACCA62E9D3302004F8F92 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = A5B30530299BEAAA0047F10C /* Ghostty */;
+			target = A5B30530299BEAAA0047F10C /* Rustty */;
 			targetProxy = 810ACCA52E9D3302004F8F92 /* PBXContainerItemProxy */;
 		};
 		819324682F2502FB00A9ED8F /* PBXTargetDependency */ = {
@@ -672,7 +672,7 @@
 		};
 		A54F45F82E1F047A0046BD5C /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = A5B30530299BEAAA0047F10C /* Ghostty */;
+			target = A5B30530299BEAAA0047F10C /* Rustty */;
 			targetProxy = A54F45F72E1F047A0046BD5C /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -736,11 +736,11 @@
 		3B39CAA32B33946300DABEB8 /* ReleaseLocal */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = Ghostty;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Rustty;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_ENTITLEMENTS = GhosttyReleaseLocal.entitlements;
+				CODE_SIGN_ENTITLEMENTS = RusttyReleaseLocal.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -749,10 +749,10 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				EXECUTABLE_NAME = ghostty;
+				EXECUTABLE_NAME = rustty;
 				GCC_OPTIMIZATION_LEVEL = fast;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = "Ghostty-Info.plist";
+				INFOPLIST_FILE = "Rustty-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Rustty;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "A program running within Rustty would like to use AppleScript.";
@@ -783,7 +783,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = io.airely.rustty;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/ghostty-bridging-header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/rustty-bridging-header.h";
 				SWIFT_VERSION = 5.0;
 			};
 			name = ReleaseLocal;
@@ -799,7 +799,7 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mitchellh.GhosttyUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.airely.RusttyUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
@@ -807,7 +807,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = Ghostty;
+				TEST_TARGET_NAME = Rustty;
 			};
 			name = Debug;
 		};
@@ -822,7 +822,7 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mitchellh.GhosttyUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.airely.RusttyUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
@@ -830,7 +830,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = Ghostty;
+				TEST_TARGET_NAME = Rustty;
 			};
 			name = Release;
 		};
@@ -845,7 +845,7 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mitchellh.GhosttyUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.airely.RusttyUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
@@ -853,7 +853,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = Ghostty;
+				TEST_TARGET_NAME = Rustty;
 			};
 			name = ReleaseLocal;
 		};
@@ -867,14 +867,14 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Ghostty Dock Tile Plugin";
+				INFOPLIST_KEY_CFBundleDisplayName = "Rustty Dock Tile Plugin";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSPrincipalClass = "";
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Bundles";
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.mitchellh.ghostty-dock-tile";
+				PRODUCT_BUNDLE_IDENTIFIER = "io.airely.rustty-dock-tile";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SKIP_INSTALL = YES;
@@ -896,14 +896,14 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Ghostty Dock Tile Plugin";
+				INFOPLIST_KEY_CFBundleDisplayName = "Rustty Dock Tile Plugin";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSPrincipalClass = "";
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Bundles";
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.mitchellh.ghostty-dock-tile";
+				PRODUCT_BUNDLE_IDENTIFIER = "io.airely.rustty-dock-tile";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SKIP_INSTALL = YES;
@@ -925,14 +925,14 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Ghostty Dock Tile Plugin";
+				INFOPLIST_KEY_CFBundleDisplayName = "Rustty Dock Tile Plugin";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSPrincipalClass = "";
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Bundles";
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.mitchellh.ghostty-dock-tile";
+				PRODUCT_BUNDLE_IDENTIFIER = "io.airely.rustty-dock-tile";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SKIP_INSTALL = YES;
@@ -956,7 +956,7 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mitchellh.GhosttyTests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.airely.RusttyTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
@@ -964,7 +964,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ghostty.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ghostty";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Rustty.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/rustty";
 			};
 			name = Debug;
 		};
@@ -980,14 +980,14 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mitchellh.GhosttyTests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.airely.RusttyTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ghostty.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ghostty";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Rustty.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/rustty";
 			};
 			name = Release;
 		};
@@ -1003,14 +1003,14 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mitchellh.GhosttyTests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.airely.RusttyTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ghostty.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ghostty";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Rustty.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/rustty";
 			};
 			name = ReleaseLocal;
 		};
@@ -1134,11 +1134,11 @@
 		A5B30541299BEAAB0047F10C /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = Ghostty;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Rustty;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_ENTITLEMENTS = GhosttyDebug.entitlements;
+				CODE_SIGN_ENTITLEMENTS = RusttyDebug.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -1148,9 +1148,9 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				EXECUTABLE_NAME = ghostty;
+				EXECUTABLE_NAME = rustty;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = "Ghostty-Info.plist";
+				INFOPLIST_FILE = "Rustty-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Rustty[DEBUG]";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "A program running within Rustty would like to use AppleScript.";
@@ -1180,7 +1180,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = io.airely.rustty.debug;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/ghostty-bridging-header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/rustty-bridging-header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 			};
@@ -1189,11 +1189,11 @@
 		A5B30542299BEAAB0047F10C /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = Ghostty;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Rustty;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_ENTITLEMENTS = Ghostty.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Rustty.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -1202,10 +1202,10 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				EXECUTABLE_NAME = ghostty;
+				EXECUTABLE_NAME = rustty;
 				GCC_OPTIMIZATION_LEVEL = fast;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = "Ghostty-Info.plist";
+				INFOPLIST_FILE = "Rustty-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Rustty;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "A program running within Rustty would like to use AppleScript.";
@@ -1235,7 +1235,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = io.airely.rustty;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/ghostty-bridging-header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/rustty-bridging-header.h";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
@@ -1243,7 +1243,7 @@
 		A5D449A82B53AE7B000F5B83 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = Ghostty;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Rustty;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
@@ -1269,7 +1269,7 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MARKETING_VERSION = 0.1;
 				"OTHER_LDFLAGS[arch=*]" = "-lstdc++";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.mitchellh.ghostty-ios";
+				PRODUCT_BUNDLE_IDENTIFIER = "io.airely.rustty-ios";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
@@ -1282,7 +1282,7 @@
 		A5D449A92B53AE7B000F5B83 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = Ghostty;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Rustty;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
@@ -1308,7 +1308,7 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MARKETING_VERSION = 0.1;
 				"OTHER_LDFLAGS[arch=*]" = "-lstdc++";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.mitchellh.ghostty-ios";
+				PRODUCT_BUNDLE_IDENTIFIER = "io.airely.rustty-ios";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1321,7 +1321,7 @@
 		A5D449AA2B53AE7B000F5B83 /* ReleaseLocal */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = Ghostty;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Rustty;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
@@ -1347,7 +1347,7 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MARKETING_VERSION = 0.1;
 				"OTHER_LDFLAGS[arch=*]" = "-lstdc++";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.mitchellh.ghostty-ios";
+				PRODUCT_BUNDLE_IDENTIFIER = "io.airely.rustty-ios";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1360,7 +1360,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		810ACCA72E9D3302004F8F92 /* Build configuration list for PBXNativeTarget "GhosttyUITests" */ = {
+		810ACCA72E9D3302004F8F92 /* Build configuration list for PBXNativeTarget "RusttyUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				810ACCA82E9D3302004F8F92 /* Debug */,
@@ -1380,7 +1380,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = ReleaseLocal;
 		};
-		A54F45FC2E1F047A0046BD5C /* Build configuration list for PBXNativeTarget "GhosttyTests" */ = {
+		A54F45FC2E1F047A0046BD5C /* Build configuration list for PBXNativeTarget "RusttyTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A54F45F92E1F047A0046BD5C /* Debug */,
@@ -1390,7 +1390,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = ReleaseLocal;
 		};
-		A5B3052C299BEAAA0047F10C /* Build configuration list for PBXProject "Ghostty" */ = {
+		A5B3052C299BEAAA0047F10C /* Build configuration list for PBXProject "Rustty" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A5B3053E299BEAAB0047F10C /* Debug */,
@@ -1400,7 +1400,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = ReleaseLocal;
 		};
-		A5B30540299BEAAB0047F10C /* Build configuration list for PBXNativeTarget "Ghostty" */ = {
+		A5B30540299BEAAB0047F10C /* Build configuration list for PBXNativeTarget "Rustty" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A5B30541299BEAAB0047F10C /* Debug */,
@@ -1410,7 +1410,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = ReleaseLocal;
 		};
-		A5D449AB2B53AE7B000F5B83 /* Build configuration list for PBXNativeTarget "Ghostty-iOS" */ = {
+		A5D449AB2B53AE7B000F5B83 /* Build configuration list for PBXNativeTarget "Rustty-iOS" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A5D449A82B53AE7B000F5B83 /* Debug */,
