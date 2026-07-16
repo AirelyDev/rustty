@@ -6548,7 +6548,7 @@ fn pagelist_clone_remap_tracked_pin() {
     let mut opts = super::access::Clone {
         top: point::Point::Active(point::Coordinate { x: 0, y: 5 }),
         bot: None,
-        tracked_pins: Some(super::access::TrackedPinsRemap::new()),
+        tracked_pins: Some(super::access::TrackedPinsRemap::default()),
     };
     let mut s2 = s.clone(&mut opts).unwrap();
 
@@ -6582,7 +6582,7 @@ fn pagelist_clone_remap_tracked_pin_not_in_cloned_area() {
     let mut opts = super::access::Clone {
         top: point::Point::Active(point::Coordinate { x: 0, y: 5 }),
         bot: None,
-        tracked_pins: Some(super::access::TrackedPinsRemap::new()),
+        tracked_pins: Some(super::access::TrackedPinsRemap::default()),
     };
     let mut s2 = s.clone(&mut opts).unwrap();
 

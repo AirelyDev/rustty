@@ -718,7 +718,48 @@ pub struct Clone {
 
 // PORT NOTE: the reference `TrackedPinsRemap = std.AutoHashMap(*Pin, *Pin)`.
 // Ported to the std `HashMap` keyed by the raw `*mut Pin` pointer identity.
-pub type TrackedPinsRemap = std::collections::HashMap<*mut Pin, *mut Pin>;
+// PERF(port): Zig's `AutoHashMap` hashes a pointer key with a cheap integer
+// autoHash and no per-map random seed; the std default `RandomState`
+// (SipHash-1-3) is a heavyweight keyed hash. Restore the reference's cheap
+// idiom with a small multiply/xor mix over the pointer bits ([`PtrHasher`]).
+pub type TrackedPinsRemap =
+    std::collections::HashMap<*mut Pin, *mut Pin, std::hash::BuildHasherDefault<PtrHasher>>;
+
+/// Pointer-identity hasher for [`TrackedPinsRemap`].
+// PERF(port): see the `TrackedPinsRemap` note above. `*mut Pin` keys hash
+// through `Hash for *mut T`, which feeds the thin-pointer address via
+// `write_usize`; a single splitmix-style multiply + xor-shift spreads the
+// (aligned, heap-clustered) address bits across the table.
+#[derive(Default)]
+pub struct PtrHasher(u64);
+
+impl std::hash::Hasher for PtrHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        // Pointer keys enter through `write_usize`; keep the hasher total
+        // for any other input shape.
+        for &b in bytes {
+            self.write_u64(u64::from(b));
+        }
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        let mut x = self.0 ^ i;
+        x = x.wrapping_mul(0x9E37_79B9_7F4A_7C15); // 2^64 / phi (splitmix64 increment)
+        x ^= x >> 32;
+        self.0 = x;
+    }
+
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.write_u64(i as u64);
+    }
+}
 
 /// `PageList.CloneError`.
 //

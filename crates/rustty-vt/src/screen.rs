@@ -844,7 +844,9 @@ impl Screen {
         let mut opts = pagelist::access::Clone {
             top,
             bot,
-            tracked_pins: Some(pagelist::access::TrackedPinsRemap::new()),
+            // PERF(port): `default()` (not `new()`) since the remap now uses
+            // the reference's cheap pointer hasher instead of `RandomState`.
+            tracked_pins: Some(pagelist::access::TrackedPinsRemap::default()),
         };
 
         // PORT NOTE: `PageList::clone` returns `CloneError` (OutOfMemory |
