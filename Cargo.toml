@@ -299,9 +299,15 @@ all = { level = "warn", priority = -1 }
 overflow-checks = true
 
 # Parity/bench profile mirroring the tagged ReleaseFast artifact (Goal-2 only).
+# PERF(port): release-fast mirrors Zig ReleaseFast — whole-program (fat) LTO,
+# a single codegen unit, and aborting panics — the Bun-in-Rust cross-language-
+# LTO learning. Goal-2 bench profile ONLY; tests keep [profile.release]'s unwind.
 [profile.release-fast]
 inherits = "release"
 overflow-checks = false
+lto = "fat"
+codegen-units = 1
+panic = "abort"
 
 # DG4: differential harness + CI test lane run the oracle's ReleaseSafe
 # assert semantics (std.debug.assert active) against ported debug_assert!.
