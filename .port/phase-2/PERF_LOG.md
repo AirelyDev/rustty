@@ -461,3 +461,36 @@ Verified binary: `.perf-bins/rustty-bench-r4-render` (untracked stash, RF
 profile) — bit-identical (sha efed4a8f) to the hunt's validated
 `rustty-bench-r4-render-hoist-RF`. Official idle-gated N=7 sweep still
 owed per protocol.
+
+## r4 FINAL GATE (full-worktree, @ a26a4b1)
+
+- `cargo build --workspace --release`: exit 0.
+- `cargo test --workspace` (debug lane canonical): 113 suites, 3807
+  passed / 0 failed, exit 0 (two consecutive clean full runs).
+- `cargo test -p rustty-vt --features alloc-bench`: 2042 passed / 0
+  failed (+ 8/13/2/1 integration suites). The KNOWN pre-existing
+  round-3 flake `search::thread::tests::search_thread` (mutex
+  PoisonError at search/thread.rs:2249/2093) fired on 2 of 9 parallel
+  full runs and passed standalone twice — search subsystem, untouched
+  by r4, same signature as the round-3 record above.
+- clippy `-p rustty-vt --no-deps -- -D warnings`: clean (default AND
+  `--features alloc-bench`).
+- `cargo fmt -p rustty-vt --check`: clean. NOTE: workspace-wide
+  `cargo fmt --check` fails in rustty-apprt / rustty-apprt-c / xtask —
+  PRE-EXISTING on main (rustfmt 1.8.0-stable 2026-02-11 reflows code
+  those crates were authored under an older rustfmt; reproduced in the
+  clean main checkout at /Users/gael/projects/rustty). No file touched
+  by this branch is affected; not introduced or fixable here.
+- `check_acyclic.sh`: GREEN (graph acyclic, rustty-font has no
+  rustty-vt edge).
+- `check_comment_coverage.py`: cli missing=2 / inspector missing=22 /
+  vt missing=2 — EXACTLY the recorded baseline, zero NEW misses.
+- SHIP stash: `.perf-bins/rustty-bench-r4-SHIP-RF` rebuilt from
+  a26a4b1 (`--profile release-fast`), sha efed4a8f — bit-identical to
+  the validated `rustty-bench-r4-render` / `-hoist-RF` binaries.
+- Gate-day confirmation sweep (NON-OFFICIAL, interleaved 20-run
+  batches x8 reps, rep 1 discarded, medians of 7; machine under
+  moderate load — absolute values inflated, deltas interleaved):
+  zig 18.618 / r4-SHIP-RF 17.315 ms = **-7.0% vs zig**, ranges
+  disjoint (r4 worst 17.494 < zig best 18.560). Consistent with the
+  hunt's -8.2%. Official idle-gated sweep remains the parent's job.
