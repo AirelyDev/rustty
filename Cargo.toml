@@ -299,15 +299,15 @@ all = { level = "warn", priority = -1 }
 overflow-checks = true
 
 # Parity/bench profile mirroring the tagged ReleaseFast artifact (Goal-2 only).
-# PERF(port): release-fast mirrors Zig ReleaseFast — whole-program (fat) LTO,
-# a single codegen unit, and aborting panics — the Bun-in-Rust cross-language-
-# LTO learning. Goal-2 bench profile ONLY; tests keep [profile.release]'s unwind.
+# PERF(port): overflow-checks off = the Zig ReleaseFast arithmetic tier.
+# MEASURED 2026-07-16 (PERF_LOG.md): fat/thin LTO + codegen-units=1 + panic=abort
+# were tried here and REVERTED — they sped osc-parser (-16%) and screen-clone.clone
+# (-16%) but pessimized terminal-parser by ~60% (322ms -> 531ms; over-inlining/
+# register pressure in the per-byte Parser::next loop). Plain overflow-checks=false
+# is the empirical optimum across the 14-bench suite on this codebase.
 [profile.release-fast]
 inherits = "release"
 overflow-checks = false
-lto = "fat"
-codegen-units = 1
-panic = "abort"
 
 # DG4: differential harness + CI test lane run the oracle's ReleaseSafe
 # assert semantics (std.debug.assert active) against ported debug_assert!.
