@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=KonqPopupMenu/Plugin
+MimeType=inode/directory
+Actions=RunRusttyDir
+
+[Desktop Action RunRusttyDir]
+Name=Open Rustty Here
+Icon=io.airely.rustty
+Exec=rustty +new-window --working-directory=%F
