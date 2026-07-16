@@ -44,6 +44,12 @@ identity-oracle = [
     "rustty-bench/identity-oracle",
     "rustty-identity/identity-oracle",
 ]
+# SIMD acceleration passthrough (mirrors rustty-vt-c's `simd`): forwards to
+# rustty-vt's `simd` feature so the shipped RusttyKit.xcframework can be built
+# SIMD-on — matching upstream Ghostty's default-on library and consistent with
+# the CMake wrapper's RUSTTY_VT_SIMD default. Off by default (rustty's default
+# for a plain `cargo build`); `xtask xcframework` enables it.
+simd = ["rustty-vt/simd"]
 
 [dependencies]
 rustty-apprt = { workspace = true }

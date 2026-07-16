@@ -1,0 +1,393 @@
+# CMake wrapper for librustty-vt
+#
+# This file delegates to `cargo build -p rustty-vt-c` to produce the shared and
+# static libraries. It exists so that CMake-based projects can consume
+# librustty-vt without interacting with the Cargo build system directly.
+# Downstream users do still require `cargo` (the Rust toolchain) on the PATH.
+# Please consult the Rustty docs for the required toolchain version (pinned in
+# rust-toolchain.toml):
+#
+# https://rustty.sh/docs/install/build
+#
+# Building within the Rustty repo
+# -------------------------------
+#
+#   cmake -B build
+#   cmake --build build
+#   cmake --install build --prefix /usr/local
+#
+# Pass extra flags to the Cargo build with RUSTTY_CARGO_BUILD_FLAGS:
+#
+#   cmake -B build -DRUSTTY_CARGO_BUILD_FLAGS="--features simd"
+#
+# Integrating into a downstream CMake project
+# -------------------------------------------
+#
+# Option 1 — FetchContent (recommended, no manual install step):
+#
+#   include(FetchContent)
+#   FetchContent_Declare(rustty
+#       GIT_REPOSITORY https://github.com/AirelyDev/rustty.git
+#       GIT_TAG main
+#   )
+#   FetchContent_MakeAvailable(rustty)
+#
+#   target_link_libraries(myapp PRIVATE rustty-vt)        # shared
+#   target_link_libraries(myapp PRIVATE rustty-vt-static) # static
+#
+# To use a local checkout instead of fetching:
+#
+#   cmake -B build -DFETCHCONTENT_SOURCE_DIR_RUSTTY=/path/to/rustty
+#
+# Option 2 — find_package (after installing to a prefix):
+#
+#   find_package(rustty-vt REQUIRED)
+#   target_link_libraries(myapp PRIVATE rustty-vt::rustty-vt)        # shared
+#   target_link_libraries(myapp PRIVATE rustty-vt::rustty-vt-static) # static
+#
+# Cross-compilation
+# -----------------
+#
+# For building librustty-vt for a non-native Rust target (e.g. cross-
+# compiling), use the rustty_vt_add_target() function after FetchContent:
+#
+#   FetchContent_MakeAvailable(rustty)
+#   rustty_vt_add_target(NAME linux-amd64 RUST_TARGET x86_64-unknown-linux-gnu)
+#
+#   target_link_libraries(myapp PRIVATE rustty-vt-static-linux-amd64) # static
+#   target_link_libraries(myapp PRIVATE rustty-vt-linux-amd64)        # shared
+#
+# This handles the cargo invocation, build-type-to-profile mapping, and output
+# path conventions internally. Extra flags can be forwarded with CARGO_FLAGS.
+#
+# See dist/cmake/README.md for more details, example/c-vt-cmake/ for a
+# complete working example, and example/c-vt-cmake-cross/ for a cross-
+# compilation example.
+
+cmake_minimum_required(VERSION 3.19)
+project(rustty-vt VERSION 0.1.0 LANGUAGES C)
+
+# --- Options ----------------------------------------------------------------
+
+set(RUSTTY_CARGO_BUILD_FLAGS "" CACHE STRING "Additional flags to pass to cargo build")
+
+# Build librustty-vt with SIMD acceleration. Defaults ON to match upstream
+# Ghostty's semantics (its `simd` build option defaults true), even though
+# rustty-vt-c's underlying cargo feature defaults OFF. Turn OFF for a minimal
+# static archive with no vendored C++ SIMD runtime (highway/simdutf) — this is
+# the analog of Ghostty's `-Dsimd=false`.
+option(RUSTTY_VT_SIMD "Build librustty-vt with SIMD acceleration (matches upstream default-on)" ON)
+
+set(_RUSTTY_FEATURE_FLAGS "")
+if(RUSTTY_VT_SIMD)
+    list(APPEND _RUSTTY_FEATURE_FLAGS --features simd)
+endif()
+
+# Map CMake build types to Cargo profiles. The result is stored in
+# _RUSTTY_CARGO_PROFILE (the target/ subdir) and _RUSTTY_PROFILE_FLAG (the
+# cargo flag) so both the native build and rustty_vt_add_target() can reuse
+# the mapping without duplicating logic. Cargo's default profile is `dev`
+# (output dir target/debug); a Release-family build type maps to `--release`
+# (output dir target/release).
+set(_RUSTTY_CARGO_PROFILE "debug")
+set(_RUSTTY_PROFILE_FLAG "")
+if(CMAKE_BUILD_TYPE)
+    string(TOUPPER "${CMAKE_BUILD_TYPE}" _bt)
+    if(_bt STREQUAL "RELEASE" OR _bt STREQUAL "MINSIZEREL" OR _bt STREQUAL "RELWITHDEBINFO")
+        set(_RUSTTY_CARGO_PROFILE "release")
+        set(_RUSTTY_PROFILE_FLAG "--release")
+    endif()
+    unset(_bt)
+endif()
+
+# --- Find Cargo --------------------------------------------------------------
+
+find_program(CARGO_EXECUTABLE cargo REQUIRED)
+message(STATUS "Found cargo: ${CARGO_EXECUTABLE}")
+
+# --- Build via cargo build ---------------------------------------------------
+
+# cargo builds into target/<profile>/ relative to the workspace root. Unlike
+# the Zig build, cargo emits a flat layout (no bin/ vs lib/ split) and no
+# versioned soname / symlinks — just librustty_vt_c.{dylib,so,a} (the crate is
+# `rustty-vt-c`, so the artifact stem is `rustty_vt_c`).
+set(RUSTTY_OUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/target/${_RUSTTY_CARGO_PROFILE}")
+
+# The public C headers are checked into the source tree (cbindgen output under
+# include/rustty/), not generated into target/.
+set(RUSTTY_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# Shared + static library names (cargo produces both from crate-type
+# ["cdylib","staticlib","rlib"]).
+if(APPLE)
+    set(RUSTTY_VT_REALNAME "${CMAKE_SHARED_LIBRARY_PREFIX}rustty_vt_c${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    set(RUSTTY_VT_SONAME "${RUSTTY_VT_REALNAME}")
+elseif(WIN32)
+    set(RUSTTY_VT_REALNAME "rustty_vt_c.dll")
+    set(RUSTTY_VT_IMPLIB "rustty_vt_c.dll.lib")
+else()
+    set(RUSTTY_VT_REALNAME "${CMAKE_SHARED_LIBRARY_PREFIX}rustty_vt_c${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    set(RUSTTY_VT_SONAME "${RUSTTY_VT_REALNAME}")
+endif()
+
+set(RUSTTY_VT_SHARED_LIBRARY "${RUSTTY_OUT_DIR}/${RUSTTY_VT_REALNAME}")
+
+# Static library name. cargo names it librustty_vt_c.a on all Unix platforms
+# and rustty_vt_c.lib on Windows (MSVC); use the platform static suffix.
+if(WIN32)
+    set(RUSTTY_VT_STATIC_REALNAME "rustty_vt_c.lib")
+else()
+    set(RUSTTY_VT_STATIC_REALNAME "librustty_vt_c.a")
+endif()
+set(RUSTTY_VT_STATIC_LIBRARY "${RUSTTY_OUT_DIR}/${RUSTTY_VT_STATIC_REALNAME}")
+
+# Custom command: run cargo build -p rustty-vt-c (produces both shared + static)
+set(_RUSTTY_CARGO_OUTPUTS "${RUSTTY_VT_SHARED_LIBRARY}" "${RUSTTY_VT_STATIC_LIBRARY}")
+if(WIN32)
+    list(APPEND _RUSTTY_CARGO_OUTPUTS "${RUSTTY_OUT_DIR}/${RUSTTY_VT_IMPLIB}")
+endif()
+
+add_custom_command(
+    OUTPUT ${_RUSTTY_CARGO_OUTPUTS}
+    COMMAND "${CARGO_EXECUTABLE}" build -p rustty-vt-c ${_RUSTTY_PROFILE_FLAG} ${_RUSTTY_FEATURE_FLAGS} ${RUSTTY_CARGO_BUILD_FLAGS}
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Building librustty-vt via cargo build..."
+    USES_TERMINAL
+)
+
+add_custom_target(cargo_build_lib_vt ALL
+    DEPENDS "${RUSTTY_VT_SHARED_LIBRARY}" "${RUSTTY_VT_STATIC_LIBRARY}"
+)
+
+# --- IMPORTED library targets ------------------------------------------------
+
+# Shared
+add_library(rustty-vt SHARED IMPORTED GLOBAL)
+set_target_properties(rustty-vt PROPERTIES
+    IMPORTED_LOCATION "${RUSTTY_VT_SHARED_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${RUSTTY_INCLUDE_DIR}"
+)
+if(APPLE)
+    set_target_properties(rustty-vt PROPERTIES
+        IMPORTED_SONAME "@rpath/${RUSTTY_VT_SONAME}"
+    )
+elseif(WIN32)
+    set_target_properties(rustty-vt PROPERTIES
+        IMPORTED_IMPLIB "${RUSTTY_OUT_DIR}/${RUSTTY_VT_IMPLIB}"
+    )
+else()
+    set_target_properties(rustty-vt PROPERTIES
+        IMPORTED_SONAME "${RUSTTY_VT_SONAME}"
+    )
+endif()
+add_dependencies(rustty-vt cargo_build_lib_vt)
+
+# Static
+#
+# The static library is a self-contained archive of the rustty-vt-c crate and
+# its Rust dependencies. Consumers must link the system libraries that Rust's
+# std relies on; the exact set is platform-specific and is expressed via
+# INTERFACE_LINK_LIBRARIES below (populated empirically — see
+# dist/cmake/rustty-vt-config.cmake.in for the installed-package equivalent).
+#
+# Note: with RUSTTY_VT_SIMD ON (the default), the static archive bundles the
+# vendored C++ SIMD runtime (highway/simdutf), so the C++ runtime must be
+# linked (covered by the lists below). Set RUSTTY_VT_SIMD=OFF for a minimal
+# static archive with no C++ SIMD deps — the analog of Ghostty's `-Dsimd=false`.
+add_library(rustty-vt-static STATIC IMPORTED GLOBAL)
+set_target_properties(rustty-vt-static PROPERTIES
+    IMPORTED_LOCATION "${RUSTTY_VT_STATIC_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${RUSTTY_INCLUDE_DIR}"
+    INTERFACE_COMPILE_DEFINITIONS "RUSTTY_STATIC"
+)
+if(APPLE)
+    # Rust std + the crate's C deps on macOS. The base list is the authoritative
+    # `rustc --print native-static-libs` output for rustty-vt-c (order matters).
+    # Additionally, the static archive pulls in rustty-os's i18n object, which
+    # references gettext (bindtextdomain/dgettext/textdomain). Unlike Linux
+    # (glibc provides these), macOS needs an external libintl — install gettext
+    # (`brew install gettext`). This is only required for the STATIC library;
+    # the shared library dead-code-eliminates the unused i18n path.
+    find_library(RUSTTY_INTL_LIBRARY intl
+        HINTS /opt/homebrew/opt/gettext/lib /opt/homebrew/lib
+              /usr/local/opt/gettext/lib /usr/local/lib)
+    if(NOT RUSTTY_INTL_LIBRARY)
+        message(WARNING "libintl (gettext) not found; static linking of "
+            "rustty-vt-static may fail. Install gettext (brew install gettext).")
+        set(RUSTTY_INTL_LIBRARY "intl")
+    endif()
+    set_target_properties(rustty-vt-static PROPERTIES
+        INTERFACE_LINK_LIBRARIES "c++;-framework CoreFoundation;-framework Foundation;iconv;${RUSTTY_INTL_LIBRARY};System;objc;c;m"
+    )
+elseif(WIN32)
+    # Rust std on Windows (MSVC) uses these system import libraries.
+    set_target_properties(rustty-vt-static PROPERTIES
+        INTERFACE_LINK_LIBRARIES "ntdll;kernel32;ws2_32;userenv;bcrypt;advapi32"
+    )
+else()
+    # Rust std on Linux/BSD links libc, pthread, dl, and the unwinder.
+    set_target_properties(rustty-vt-static PROPERTIES
+        INTERFACE_LINK_LIBRARIES "c;m;pthread;dl;gcc_s"
+    )
+endif()
+add_dependencies(rustty-vt-static cargo_build_lib_vt)
+
+# --- Install -----------------------------------------------------------------
+
+include(GNUInstallDirs)
+
+# Install shared library. cargo produces no versioned soname / symlinks, so
+# (unlike the Zig build) there is no SONAME->REALNAME symlink dance.
+if(WIN32)
+    install(FILES "${RUSTTY_VT_SHARED_LIBRARY}" TYPE BIN)
+    install(FILES "${RUSTTY_OUT_DIR}/${RUSTTY_VT_IMPLIB}" TYPE LIB)
+else()
+    install(FILES "${RUSTTY_VT_SHARED_LIBRARY}" TYPE LIB)
+endif()
+
+# Install static library
+install(FILES "${RUSTTY_VT_STATIC_LIBRARY}" TYPE LIB)
+
+# Install headers
+install(DIRECTORY "${RUSTTY_INCLUDE_DIR}/rustty" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+
+# --- CMake package config for find_package() ---------------------------------
+
+include(CMakePackageConfigHelpers)
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/dist/cmake/rustty-vt-config.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/rustty-vt-config.cmake"
+    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/rustty-vt"
+)
+
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/rustty-vt-config-version.cmake"
+    VERSION "${PROJECT_VERSION}"
+    COMPATIBILITY SameMajorVersion
+)
+
+install(
+    FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/rustty-vt-config.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/rustty-vt-config-version.cmake"
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/rustty-vt"
+)
+
+# --- Cross-compilation helper ------------------------------------------------
+#
+# For downstream projects that need to build librustty-vt for a specific Rust
+# target triple. For native builds, use the IMPORTED targets above
+# (rustty-vt, rustty-vt-static) directly.
+#
+# Usage (in a downstream CMakeLists.txt after FetchContent_MakeAvailable):
+#
+#   rustty_vt_add_target(NAME linux-amd64 RUST_TARGET x86_64-unknown-linux-gnu)
+#
+# Creates:
+#   rustty-vt-static-linux-amd64   (IMPORTED STATIC library)
+#   rustty-vt-linux-amd64          (IMPORTED SHARED library)
+#
+# Optional CARGO_FLAGS to pass additional flags to cargo build:
+#
+#   rustty_vt_add_target(NAME linux-amd64 RUST_TARGET x86_64-unknown-linux-gnu
+#                        CARGO_FLAGS --features simd)
+#
+# Note: the target's Rust std must be installed (`rustup target add
+# <RUST_TARGET>`), and linking the final C executable for a foreign target
+# needs a cross C linker — see dist/cmake/RusttyCrossCompiler.cmake.
+
+function(rustty_vt_add_target)
+    cmake_parse_arguments(PARSE_ARGV 0 _RVT "" "NAME;RUST_TARGET" "CARGO_FLAGS")
+
+    if(NOT _RVT_NAME)
+        message(FATAL_ERROR "rustty_vt_add_target: NAME is required")
+    endif()
+    if(NOT _RVT_RUST_TARGET)
+        message(FATAL_ERROR "rustty_vt_add_target: RUST_TARGET is required")
+    endif()
+
+    set(_src_dir "${CMAKE_CURRENT_FUNCTION_LIST_DIR}")
+    set(_prefix "${CMAKE_CURRENT_BINARY_DIR}/rustty-${_RVT_NAME}")
+
+    # Build flags. Cross builds always use --release (a debug cross build can
+    # pull in sanitizer/unwind runtimes that are not available for every
+    # target). SIMD follows the RUSTTY_VT_SIMD option (default ON, matching
+    # upstream); pass extra flags via CARGO_FLAGS.
+    set(_flags
+        build -p rustty-vt-c --release
+        --target ${_RVT_RUST_TARGET}
+        --target-dir "${_prefix}"
+    )
+    if(RUSTTY_VT_SIMD)
+        list(APPEND _flags --features simd)
+    endif()
+    if(_RVT_CARGO_FLAGS)
+        list(APPEND _flags ${_RVT_CARGO_FLAGS})
+    endif()
+
+    # Output paths: cargo nests cross output under
+    # <target-dir>/<triple>/release/ (flat).
+    set(_out "${_prefix}/${_RVT_RUST_TARGET}/release")
+    if(_RVT_RUST_TARGET MATCHES "windows")
+        set(_static_lib "${_out}/rustty_vt_c.lib")
+        set(_shared_lib "${_out}/rustty_vt_c.dll")
+        set(_implib "${_out}/rustty_vt_c.dll.lib")
+    elseif(_RVT_RUST_TARGET MATCHES "darwin|apple")
+        set(_static_lib "${_out}/librustty_vt_c.a")
+        set(_shared_lib "${_out}/librustty_vt_c.dylib")
+    else()
+        set(_static_lib "${_out}/librustty_vt_c.a")
+        set(_shared_lib "${_out}/librustty_vt_c.so")
+    endif()
+
+    add_custom_command(
+        OUTPUT "${_static_lib}" "${_shared_lib}"
+        COMMAND "${CARGO_EXECUTABLE}" ${_flags}
+        WORKING_DIRECTORY "${_src_dir}"
+        COMMENT "Building librustty-vt for ${_RVT_RUST_TARGET}..."
+        USES_TERMINAL
+    )
+
+    set(_build_target "cargo_build_lib_vt_${_RVT_NAME}")
+    add_custom_target(${_build_target} ALL
+        DEPENDS "${_static_lib}" "${_shared_lib}"
+    )
+
+    # Static target
+    set(_static_target "rustty-vt-static-${_RVT_NAME}")
+    add_library(${_static_target} STATIC IMPORTED GLOBAL)
+    set_target_properties(${_static_target} PROPERTIES
+        IMPORTED_LOCATION "${_static_lib}"
+        INTERFACE_INCLUDE_DIRECTORIES "${RUSTTY_INCLUDE_DIR}"
+        INTERFACE_COMPILE_DEFINITIONS "RUSTTY_STATIC"
+    )
+    if(_RVT_RUST_TARGET MATCHES "windows")
+        set_target_properties(${_static_target} PROPERTIES
+            INTERFACE_LINK_LIBRARIES "ntdll;kernel32;ws2_32;userenv;bcrypt;advapi32"
+        )
+    endif()
+    add_dependencies(${_static_target} ${_build_target})
+
+    # Shared target
+    set(_shared_target "rustty-vt-${_RVT_NAME}")
+    add_library(${_shared_target} SHARED IMPORTED GLOBAL)
+    set_target_properties(${_shared_target} PROPERTIES
+        IMPORTED_LOCATION "${_shared_lib}"
+        INTERFACE_INCLUDE_DIRECTORIES "${RUSTTY_INCLUDE_DIR}"
+    )
+    if(_RVT_RUST_TARGET MATCHES "windows")
+        set_target_properties(${_shared_target} PROPERTIES
+            IMPORTED_IMPLIB "${_implib}"
+        )
+    elseif(_RVT_RUST_TARGET MATCHES "darwin|apple")
+        set_target_properties(${_shared_target} PROPERTIES
+            IMPORTED_SONAME "@rpath/librustty_vt_c.dylib"
+        )
+    else()
+        set_target_properties(${_shared_target} PROPERTIES
+            IMPORTED_SONAME "librustty_vt_c.so"
+        )
+    endif()
+    add_dependencies(${_shared_target} ${_build_target})
+endfunction()

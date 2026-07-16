@@ -1,0 +1,86 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+set(_rustty_vt_libdir "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@")
+
+# Shared library target
+if(NOT TARGET rustty-vt::rustty-vt)
+    add_library(rustty-vt::rustty-vt SHARED IMPORTED)
+
+    if(WIN32)
+        set(_rustty_vt_shared_location "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_BINDIR@/@RUSTTY_VT_REALNAME@")
+    else()
+        set(_rustty_vt_shared_location "${_rustty_vt_libdir}/@RUSTTY_VT_REALNAME@")
+    endif()
+
+    set_target_properties(rustty-vt::rustty-vt PROPERTIES
+        IMPORTED_LOCATION "${_rustty_vt_shared_location}"
+        INTERFACE_INCLUDE_DIRECTORIES "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@"
+    )
+    unset(_rustty_vt_shared_location)
+
+    if(APPLE)
+        set_target_properties(rustty-vt::rustty-vt PROPERTIES
+            IMPORTED_SONAME "@rpath/@RUSTTY_VT_SONAME@"
+            INTERFACE_LINK_DIRECTORIES "${_rustty_vt_libdir}"
+        )
+        # Ensure consumers can find the @rpath dylib at runtime
+        set_property(TARGET rustty-vt::rustty-vt APPEND PROPERTY
+            INTERFACE_LINK_OPTIONS "LINKER:-rpath,${_rustty_vt_libdir}"
+        )
+    elseif(WIN32)
+        set_target_properties(rustty-vt::rustty-vt PROPERTIES
+            IMPORTED_IMPLIB "${_rustty_vt_libdir}/@RUSTTY_VT_IMPLIB@"
+        )
+    else()
+        set_target_properties(rustty-vt::rustty-vt PROPERTIES
+            IMPORTED_SONAME "@RUSTTY_VT_SONAME@"
+        )
+    endif()
+endif()
+
+# Static library target
+#
+# Consumers must link the system libraries that Rust's std relies on. These
+# are platform-specific (Rust's static archive is self-contained for the crate
+# and its Rust deps, but not for the platform runtime). With SIMD on (the
+# default, RUSTTY_VT_SIMD), the archive also bundles the vendored C++ SIMD
+# runtime (highway/simdutf), so the C++ runtime is included in the lists below;
+# a RUSTTY_VT_SIMD=OFF build needs none of it.
+if(NOT TARGET rustty-vt::rustty-vt-static)
+    add_library(rustty-vt::rustty-vt-static STATIC IMPORTED)
+
+    set_target_properties(rustty-vt::rustty-vt-static PROPERTIES
+        IMPORTED_LOCATION "${_rustty_vt_libdir}/@RUSTTY_VT_STATIC_REALNAME@"
+        INTERFACE_INCLUDE_DIRECTORIES "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@"
+        INTERFACE_COMPILE_DEFINITIONS "RUSTTY_STATIC"
+    )
+    if(APPLE)
+        # Base list from `rustc --print native-static-libs` (order matters). The
+        # static archive also pulls in rustty-os's i18n object, which references
+        # gettext; on macOS that needs an external libintl (brew install gettext).
+        find_library(_rustty_intl intl
+            HINTS /opt/homebrew/opt/gettext/lib /opt/homebrew/lib
+                  /usr/local/opt/gettext/lib /usr/local/lib)
+        if(NOT _rustty_intl)
+            set(_rustty_intl "intl")
+        endif()
+        set_target_properties(rustty-vt::rustty-vt-static PROPERTIES
+            INTERFACE_LINK_LIBRARIES "c++;-framework CoreFoundation;-framework Foundation;iconv;${_rustty_intl};System;objc;c;m"
+        )
+        unset(_rustty_intl)
+    elseif(WIN32)
+        set_target_properties(rustty-vt::rustty-vt-static PROPERTIES
+            INTERFACE_LINK_LIBRARIES "ntdll;kernel32;ws2_32;userenv;bcrypt;advapi32"
+        )
+    else()
+        set_target_properties(rustty-vt::rustty-vt-static PROPERTIES
+            INTERFACE_LINK_LIBRARIES "c;m;pthread;dl;gcc_s"
+        )
+    endif()
+endif()
+
+unset(_rustty_vt_libdir)
+
+check_required_components(rustty-vt)

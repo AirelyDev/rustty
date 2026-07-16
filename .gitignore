@@ -66,11 +66,21 @@ macos/GhosttyKit.xcframework/
 macos/build/
 macos/DerivedData/
 
-# regenerable xcframework output (cargo run -p xtask -- xcframework)
-dist/
+# regenerable xcframework output (cargo run -p xtask -- xcframework).
+# NOT all of dist/ — dist/cmake, dist/doxygen (and dist/linux|windows|macos)
+# are checked-in source assets.
+/dist/RusttyKit.xcframework/
+/dist/xcframework-headers/
 
 # llvm coverage profiling artifacts
 *.profraw
 
 # SDD scratch (ledger, briefs, reports, review diffs) — not tracked
 .superpowers/
+
+# CMake wrapper build dir (cmake -B build-cmake) + Doxygen output — regenerable
+/build-cmake/
+/doc/
+
+# CMake example build dirs (example/c-vt-cmake*/build)
+example/**/build/

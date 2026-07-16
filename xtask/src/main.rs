@@ -283,6 +283,11 @@ fn xcframework() -> Result<PathBuf, String> {
             "rustty-apprt-c",
             "--profile",
             "xcframework",
+            // SIMD on for the shipped product library, matching upstream
+            // Ghostty's default-on lib and the CMake wrapper's RUSTTY_VT_SIMD
+            // default. (rustty's plain-`cargo build` default stays SIMD-off.)
+            "--features",
+            "simd",
             "--target",
             target,
         ])
