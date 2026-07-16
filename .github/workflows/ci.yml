@@ -43,7 +43,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout (rustty only — ghostty is NOT a dependency, R3)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain (pinned via rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@stable
