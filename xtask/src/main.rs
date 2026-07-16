@@ -10,6 +10,8 @@
 
 mod wasm_patch_growable_table;
 
+mod dist;
+
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
@@ -59,6 +61,8 @@ SUBCOMMANDS:
     header-gen-apprt   Generate include/rustty-apprt.h from rustty-apprt-c via cbindgen (R2)
     xcframework        Package rustty-apprt-c into dist/RusttyKit.xcframework (macOS Swift-app tier)
     resources          Generate zig-out/share/{terminfo,<app>,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase (<app> = rustty by default, ghostty under identity-oracle)
+    dist               Build the source tarball at dist/rustty-<version>.tar.gz (git archive)
+    distcheck          Build the source tarball, extract it, and build it to validate self-containment
     wasm-patch-growable-table <in.wasm> <out.wasm>
                        Patch a WASM binary's table section to be growable (R2)
     help               Show this help
@@ -107,6 +111,26 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("dist") => match dist::dist() {
+            Ok(out) => {
+                println!("wrote {}", out.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("xtask: dist failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("distcheck") => match dist::distcheck() {
+            Ok(out) => {
+                println!("distcheck OK: {}", out.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("xtask: distcheck failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Some("wasm-patch-growable-table") => match wasm_patch_growable_table_cmd(&mut args) {
             Ok(out) => {
                 println!("wrote {}", out.display());
@@ -130,7 +154,7 @@ fn main() -> ExitCode {
 }
 
 /// Workspace root = the parent of this crate's directory (`xtask/..`).
-fn workspace_root() -> PathBuf {
+pub(crate) fn workspace_root() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir
         .parent()
@@ -354,10 +378,12 @@ fn xcframework() -> Result<PathBuf, String> {
     std::fs::create_dir_all(&headers).map_err(|e| format!("mkdir headers: {e}"))?;
     let src_h = root.join("include/rustty-embed.h");
     if !src_h.exists() {
-        return Err(format!("embedding umbrella header missing: {}", src_h.display()));
+        return Err(format!(
+            "embedding umbrella header missing: {}",
+            src_h.display()
+        ));
     }
-    std::fs::copy(&src_h, headers.join("rustty.h"))
-        .map_err(|e| format!("copy rustty.h: {e}"))?;
+    std::fs::copy(&src_h, headers.join("rustty.h")).map_err(|e| format!("copy rustty.h: {e}"))?;
     // Umbrella module map — same shape as upstream GhosttyKit.xcframework.
     std::fs::write(
         headers.join("module.modulemap"),

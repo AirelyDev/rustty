@@ -366,7 +366,33 @@ assertions for rustty:
    `fromRustupToolchainFile`; confirm it honors the pinned 1.93.1 + components.
 6. **Binary cache:** whether to stand up a rustty cachix and re-add `nixConfig`.
 
+## Phase C — deferred `.github/` workflows (Nix/app-coupled)
+
+Folded in here (per decision) because they depend on the Nix flake and/or the
+live GTK Linux app, so they can't be exercised until this batch lands. Port +
+rebrand them alongside the flake:
+
+| Workflow | Coupling | Notes |
+|---|---|---|
+| `nix.yml` | Nix | runs `nix flake check` / builds via the flake; wire to Phase A/B outputs |
+| `release-tag.yml` | Nix (13 refs) | tagged-release pipeline; builds via nix, signs with minisign, runs `dist/macos/update_appcast_tag.py`. Rebrand env vars `RUSTTY_*`, the minisign key ref, `rustty.sh` release host |
+| `release-tip.yml` | Nix (44 refs) | per-commit tip build; `dist/macos/update_appcast_tip.py`, `tip.rustty.sh` |
+| `publish-tag.yml` | release infra | tag-publish step (pairs with release-tag) — defer with the release pipeline |
+| `update-colorschemes.yml` | Nix (8 refs) | regenerates theme list via nix; rebrand to the rustty theme generator |
+| `flatpak.yml` | GTK app | builds a flatpak of the GTK app (needs the live app); references `dist/linux` (already ported in Batch 3) |
+| `snap.yml` | GTK app | builds a snap of the GTK app |
+| `test.yml` (example-build jobs) | Nix | the `build-examples-{zig→cargo,cmake,swift}` jobs build via nix; extract into a rustty examples workflow. rustty's own `ci.yml` already covers the core gate — do NOT port test.yml wholesale |
+
+Verification (Linux, gated on Phase A/B): `act` or a real push exercises them;
+`actionlint` for static validation.
+
+**Kept on the "doable now" side (Batch 5, Nix-independent):** `clean-artifacts.yml`,
+`milestone.yml`, `dependabot.yml`, `pinact.yml`, issue/PR/discussion templates,
+scripts, and the vouch-* drop. Those do not depend on Nix or the GTK app.
+
 ## Out of scope
 
 - Standing up a rustty binary cache / cachix (external infra).
 - Making the GTK apprt live (Phase B is gated on it, not blocked-in-this-batch).
+- The release signing keypair / Sentry DSN / release host infra (external; the
+  release workflows reference them as maintainer-provided secrets).

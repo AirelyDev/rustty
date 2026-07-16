@@ -71,6 +71,8 @@ macos/DerivedData/
 # are checked-in source assets.
 /dist/RusttyKit.xcframework/
 /dist/xcframework-headers/
+# Source tarball produced by `cargo run -p xtask -- dist`
+/dist/rustty-*.tar.gz
 
 # llvm coverage profiling artifacts
 *.profraw

@@ -27,3 +27,9 @@
 *.dylib     binary
 *.wasm      binary
 *.png       binary
+
+# Dev-process internals excluded from `git archive` source tarballs
+# (cargo run -p xtask -- dist). These are the port harness/plans/specs, not
+# part of the shipped product source.
+.port export-ignore
+docs/superpowers export-ignore
