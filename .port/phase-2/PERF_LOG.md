@@ -239,3 +239,54 @@ Needs its own R1-parity fix + test outside the perf round.
 
 Verified binary: `.perf-bins/rustty-bench-r3-clone-outline-RF` (untracked
 stash, RF profile). Working-tree change left UNCOMMITTED for round-3 review.
+
+## r3-render (fix-render-column-hoist) — screen-clone.render (+8.6% residual)
+
+Target: screen-clone.render zig 15.7 vs rust 17.0 official (post-r2).
+File: `crates/rustty-vt/src/render.rs` (only).
+
+Diagnosis (xctrace Time Profiler, --all-processes, identical 400-invocation
+traces of BOTH binaries, per-symbol + per-instruction self-time diff):
+
+- `RenderState::update` self-time IS the entire official gap (rust 4619 vs
+  zig 3837 samples incl. memmove ≈ +1.95 ms/1000 updates); the managed
+  per-cell style loop is ~94% of update self-time in BOTH binaries
+  (rust 4011/4272 vs zig 3350/3520).
+- RUST-ONLY cost #1: per-styled-cell bounds check in `CellList::set_style`
+  (`self.style[x]`) — the style-column len re-load `ldr [x22,#0x28]` alone
+  carried 630 samples (~15% of update) + cmp + b.hs. Zig writes through the
+  hoisted `cells_slice.items(.style)` pointer with no check
+  (render.zig:508-510).
+- RUST-ONLY cost #2: per-cell re-load of the style-column base pointer
+  `ldr [x22,#0x20]` — the store through `&mut self` inside the helper defeats
+  hoisting; styled path was 28 instrs in rust vs 20 in zig.
+- NOT the gap (shared/equal): post-store cell re-load is HOTTER in zig
+  (1602 vs 827), raw-column memmove equal (347 vs 317); dirty iteration,
+  update() entry, row Vec bookkeeping, allocator — negligible in both.
+
+Fix: replace the private `CellList::set_style`/`set_grapheme` helpers (only
+callers were this loop; grep-verified) with `slice_mut()` returning the three
+disjoint mutable field borrows (style column, grapheme-span column, grapheme
+arena) — the Rust analogue of the reference's hoisted column pointers
+(render.zig:508-510). `update()` hoists them once per row before the managed
+loop and pre-slices `[..n]`, so per-write bounds checks fold into the loop
+bound. Pure borrow-hoist reshape: identical writes in identical order; the
+`[..n]` re-slices cannot panic because `rebuild_raw` (called 3 lines above on
+the same `page_cells`) enforces `style.len() == grapheme_spans.len() ==
+raw.len() == page_cells.len()`, and `assert!(page_cells.len() == self.cols)`
+already guards above; no unsafe; no test touched. Disassembly (prototype)
+confirmed the per-cell len load + column-base load are gone (residual
+register-only cmp/b.hs, harmless).
+
+Measured (NON-OFFICIAL, interleaved 20-run batches x7 reps, rep 1 discarded
+as binary-cold; medians of per-run wall time incl. process startup):
+r2-SHIP 16.90 / r3 15.49 / zig 15.50 ms — closes the full +1.3 ms/1000-updates
+official gap to a tie with zig. rustty-vt suite green (2039 passed / 0
+failed; one parallel-run flake in `search::thread::tests::search_thread`
+[mutex PoisonError], passes standalone twice, unrelated subsystem); the
+`--features alloc-bench` lane also green (2039 passed); `cargo clippy
+--no-deps -D warnings` and `cargo fmt --check` clean.
+
+Verified binary: `.perf-bins/rustty-bench-r3-render` (untracked stash, RF
+profile). Committed as `rustty: perf — r3-render: hoist mutable
+style/grapheme column borrows in update()`.

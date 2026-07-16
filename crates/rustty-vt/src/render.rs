@@ -419,19 +419,24 @@ impl CellList {
         self.grapheme_buf.clear();
     }
 
-    // PORT NOTE (reshape): `cells_style[x] = ...` — write the style column for a
-    // flagged cell.
-    fn set_style(&mut self, x: usize, style: Style) {
-        self.style[x] = style;
-    }
-
-    // PORT NOTE (reshape): `cells_grapheme[x] = try arena_alloc.dupe(u21, ...)`
-    // — append the grapheme codepoints into the row's reusable `grapheme_buf`
-    // and record their span.
-    fn set_grapheme(&mut self, x: usize, cps: &[u32]) {
-        let off = self.grapheme_buf.len() as u32;
-        self.grapheme_buf.extend_from_slice(cps);
-        self.grapheme_spans[x] = (off, cps.len() as u32);
+    // PORT NOTE (reshape): the reference hoists the mutable column pointers
+    // once before the managed per-cell loop — `const cells_grapheme =
+    // cells_slice.items(.grapheme); const cells_style =
+    // cells_slice.items(.style);` (render.zig:508-510). `slice_mut` is the
+    // Rust analogue: the three disjoint mutable field borrows (style column,
+    // grapheme-span column, grapheme arena) handed to `update()` so it can
+    // hoist them the same way.
+    //
+    // PERF(port): the previous per-write `set_style`/`set_grapheme` helpers
+    // went through `&mut self`, so every styled cell re-loaded the column
+    // len + base pointer (a bounds check per cell the reference doesn't pay);
+    // hoisting the borrows lets those loads live in registers across the loop.
+    fn slice_mut(&mut self) -> (&mut [Style], &mut [GraphemeSpan], &mut Vec<u32>) {
+        (
+            &mut self.style,
+            &mut self.grapheme_spans,
+            &mut self.grapheme_buf,
+        )
     }
 }
 
@@ -781,6 +786,21 @@ impl RenderState {
             }
 
             // const arena_alloc = arena.allocator();
+            // const cells_grapheme = cells_slice.items(.grapheme);
+            // const cells_style = cells_slice.items(.style);
+            //
+            // PERF(port): hoist the mutable column borrows once per row (the
+            // reference's hoisted column pointers above, render.zig:508-510)
+            // instead of calling `&mut self` helpers per cell — see
+            // `CellList::slice_mut`. The `[..n]` re-slices cannot panic:
+            // `rebuild_raw` (called above on the same `page_cells`) enforces
+            // `style.len() == grapheme_spans.len() == raw.len() ==
+            // page_cells.len()`, letting the compiler elide the per-write
+            // bounds checks against the loop bound.
+            let n = page_cells.len();
+            let (cells_style, cells_spans, grapheme_buf) = row.cells.slice_mut();
+            let cells_style = &mut cells_style[..n];
+            let cells_spans = &mut cells_spans[..n];
             for (x, page_cell) in page_cells.iter().enumerate() {
                 // Append assuming its a single-codepoint, styled cell
                 // (most common by far).
@@ -790,7 +810,7 @@ impl RenderState {
                         let base = (*p).memory_ptr();
                         *(*p).styles.get(base, page_cell.style_id())
                     };
-                    row.cells.set_style(x, style);
+                    cells_style[x] = style;
                 }
 
                 // Switch on our content tag to handle less likely cases.
@@ -805,42 +825,44 @@ impl RenderState {
                     page::ContentTag::CodepointGrapheme => {
                         // @branchHint(.unlikely);
                         // cells_grapheme[x] = try arena_alloc.dupe(u21, ... orelse &.{});
+                        //
+                        // PORT NOTE (reshape): the arena `dupe` — append the
+                        // grapheme codepoints into the row's reusable
+                        // `grapheme_buf` and record their span.
                         let g: &[u32] = unsafe {
                             match (*p).lookup_grapheme(page_cell as *const page::Cell) {
                                 Some(s) => s,
                                 None => &[],
                             }
                         };
-                        row.cells.set_grapheme(x, g);
+                        let off = grapheme_buf.len() as u32;
+                        grapheme_buf.extend_from_slice(g);
+                        cells_spans[x] = (off, g.len() as u32);
                     }
 
                     page::ContentTag::BgColorRgb => {
                         // @branchHint(.unlikely);
+                        // cells_style[x] = .{ .bg_color = .{ .rgb = ... } };
                         let rgb = page_cell.content_color_rgb();
-                        row.cells.set_style(
-                            x,
-                            Style {
-                                bg_color: crate::style::Color::Rgb(color::RGB {
-                                    r: rgb.r,
-                                    g: rgb.g,
-                                    b: rgb.b,
-                                }),
-                                ..Style::default()
-                            },
-                        );
+                        cells_style[x] = Style {
+                            bg_color: crate::style::Color::Rgb(color::RGB {
+                                r: rgb.r,
+                                g: rgb.g,
+                                b: rgb.b,
+                            }),
+                            ..Style::default()
+                        };
                     }
 
                     page::ContentTag::BgColorPalette => {
                         // @branchHint(.unlikely);
-                        row.cells.set_style(
-                            x,
-                            Style {
-                                bg_color: crate::style::Color::Palette(
-                                    page_cell.content_color_palette(),
-                                ),
-                                ..Style::default()
-                            },
-                        );
+                        // cells_style[x] = .{ .bg_color = .{ .palette = ... } };
+                        cells_style[x] = Style {
+                            bg_color: crate::style::Color::Palette(
+                                page_cell.content_color_palette(),
+                            ),
+                            ..Style::default()
+                        };
                     }
                 }
             }
