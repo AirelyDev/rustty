@@ -11,6 +11,17 @@ use crate::rand::Rng;
 #[derive(Default)]
 pub struct Options {}
 
+impl rustty_args::args::Target for Options {
+    fn parse_into_field(
+        &mut self,
+        _key: &[u8],
+        _value: Option<&[u8]>,
+    ) -> Result<(), rustty_args::args::ParseError> {
+        // Options is empty — no field matches; `parse` maps this to "unknown field".
+        Err(rustty_args::args::Error::InvalidField)
+    }
+}
+
 // PORT NOTE: `checkAsciiAlphabet` — printable ASCII minus the space.
 generate_alphabet!(pub ascii, |c| match c {
     b' ' => false,

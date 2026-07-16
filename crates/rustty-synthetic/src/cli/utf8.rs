@@ -48,6 +48,53 @@ impl Default for Options {
     }
 }
 
+impl rustty_args::args::Target for Options {
+    fn parse_into_field(
+        &mut self,
+        key: &[u8],
+        value: Option<&[u8]>,
+    ) -> Result<(), rustty_args::args::ParseError> {
+        match key {
+            // seed: ?u64 = null
+            b"seed" => {
+                self.seed = Some(rustty_args::args::parse_field_int::<u64>(value)?);
+                Ok(())
+            }
+            // @"weight-one": f64 = 1.0
+            b"weight-one" => {
+                self.weight_one = rustty_args::args::parse_field_float::<f64>(value)?;
+                Ok(())
+            }
+            // @"weight-two": f64 = 1.0
+            b"weight-two" => {
+                self.weight_two = rustty_args::args::parse_field_float::<f64>(value)?;
+                Ok(())
+            }
+            // @"weight-three": f64 = 1.0
+            b"weight-three" => {
+                self.weight_three = rustty_args::args::parse_field_float::<f64>(value)?;
+                Ok(())
+            }
+            // @"weight-four": f64 = 1.0
+            b"weight-four" => {
+                self.weight_four = rustty_args::args::parse_field_float::<f64>(value)?;
+                Ok(())
+            }
+            // @"ascii-printable-only": bool = false
+            b"ascii-printable-only" => {
+                self.ascii_printable_only = rustty_args::args::parse_field_bool(value)?;
+                Ok(())
+            }
+            // @"invalid-rate": f64 = 0.0
+            b"invalid-rate" => {
+                self.invalid_rate = rustty_args::args::parse_field_float::<f64>(value)?;
+                Ok(())
+            }
+            _ => Err(rustty_args::args::Error::InvalidField),
+        }
+    }
+}
+
 /// PORT NOTE: `const Utf8 = @This()`.
 pub struct Utf8 {
     opts: Options,

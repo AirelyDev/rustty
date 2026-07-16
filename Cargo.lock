@@ -886,6 +886,7 @@ dependencies = [
 name = "rustty-synthetic"
 version = "0.1.0"
 dependencies = [
+ "rustty-args",
  "rustty-os",
  "rustty-vt",
 ]

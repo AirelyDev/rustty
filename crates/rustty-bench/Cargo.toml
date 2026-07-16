@@ -15,6 +15,13 @@ authors.workspace = true
 [lints]
 workspace = true
 
+# Faithful port of ghostty `src/main_bench.zig` (the 2-line re-export hub whose
+# `pub const main = benchmark.cli.main` names the program entry point). The lib
+# and bin share the `rustty-bench` name (a same-named lib+bin is permitted).
+[[bin]]
+name = "rustty-bench"
+path = "src/main_bench.rs"
+
 # `identity-oracle` no longer compiles any `ghostty_benchmark_cli` C-ABI alias (that
 # forwarder layer was deleted by the rebrand — rebrand Task 1); the canonical product
 # exports only `rustty_benchmark_cli` (R2), always. Enabling `identity-oracle` now

@@ -17,6 +17,17 @@ pub enum Style {
     Parser,
 }
 
+impl Style {
+    /// `std.meta.stringToEnum(@TypeOf(style), name)` — the inline-enum tag names.
+    fn from_name(name: &[u8]) -> Option<Style> {
+        match name {
+            b"streaming" => Some(Style::Streaming),
+            b"parser" => Some(Style::Parser),
+            _ => None,
+        }
+    }
+}
+
 /// PORT NOTE: `pub const Options = struct { ... }`.
 pub struct Options {
     /// Probability of generating a valid value.
@@ -30,6 +41,28 @@ impl Default for Options {
         Options {
             p_valid: 0.5,
             style: Style::Streaming,
+        }
+    }
+}
+
+impl rustty_args::args::Target for Options {
+    fn parse_into_field(
+        &mut self,
+        key: &[u8],
+        value: Option<&[u8]>,
+    ) -> Result<(), rustty_args::args::ParseError> {
+        match key {
+            // @"p-valid": f64 = 0.5
+            b"p-valid" => {
+                self.p_valid = rustty_args::args::parse_field_float::<f64>(value)?;
+                Ok(())
+            }
+            // style: enum { streaming, parser } = .streaming
+            b"style" => {
+                self.style = rustty_args::args::parse_field_enum(value, Style::from_name)?;
+                Ok(())
+            }
+            _ => Err(rustty_args::args::Error::InvalidField),
         }
     }
 }
