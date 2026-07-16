@@ -214,19 +214,136 @@ impl<Elem: WriteZig> Tables<Elem> {
 /// PARITY: this is the shape `props_table.table` / `symbols_table.table` use —
 /// the reference's `Tables(Elem)` with `[]const` fields pointing at the
 /// generated `stage1`/`stage2`/`stage3` constants.
+// PERF(port): the reference's `[]const` slices index without any runtime
+// bounds checks in ReleaseFast; the port's `&[u16]` slices made every stage
+// length opaque, so each of the three stage lookups paid a bounds-check
+// branch. Const-generic fixed-size array references restore the
+// comptime-known lengths of the generated constants (props: [u16; 8192] /
+// [u16; 31744] / [Properties; 30]; symbols: [u16; 8192] / [u16; 1792] /
+// [bool; 2]) so LLVM can elide the checks.
 #[derive(Clone, Copy)]
-pub struct TablesRef<'a, Elem: 'a> {
-    pub stage1: &'a [u16],
-    pub stage2: &'a [u16],
-    pub stage3: &'a [Elem],
+pub struct TablesRef<'a, Elem: 'a, const S1: usize, const S2: usize, const S3: usize> {
+    pub stage1: &'a [u16; S1],
+    pub stage2: &'a [u16; S2],
+    pub stage3: &'a [Elem; S3],
 }
 
-impl<'a, Elem: Copy> TablesRef<'a, Elem> {
+impl<'a, Elem: Copy, const S1: usize, const S2: usize, const S3: usize>
+    TablesRef<'a, Elem, S1, S2, S3>
+{
     /// Given a codepoint, returns the mapping for that codepoint.
     #[inline]
     pub fn get(&self, cp: u32) -> Elem {
-        let high = cp >> 8;
-        let low = cp & 0xFF;
-        self.stage3[self.stage2[self.stage1[high as usize] as usize + low as usize] as usize]
+        // PERF(port): the reference takes `cp: u21` (lut.zig `get`), so the
+        // codepoint is provably <= 0x1F_FFFF by its parameter type; the port
+        // widened the parameter to u32, which made the stage1 range
+        // unprovable. Mask back to the u21 domain — a no-op for every value
+        // expressible in the reference — so the stage1 bounds check folds
+        // away at monomorphization (S1 == 8192 == 0x20_0000 >> 8 covers the
+        // full u21 >> 8 range for every generated table).
+        let cp = cp & 0x1F_FFFF;
+        let high = (cp >> 8) as usize;
+        let low = (cp & 0xFF) as usize;
+        let s2_idx = self.stage1[high] as usize + low;
+        // PERF(port): the reference indexes stage2/stage3 with no runtime
+        // checks in ReleaseFast. LLVM cannot range-analyze the constant
+        // table contents, so the fixed sizes alone leave two residual
+        // bounds-check branches here; elide them under the generator
+        // invariant (every stage1 entry + 255 < stage2.len(); every stage2
+        // entry < stage3.len()), which the `generated_tables_uphold_lut_
+        // invariant` unit test machine-checks over the embedded constants.
+        debug_assert!(s2_idx < S2);
+        // SAFETY: `s2_idx = stage1[high] + low` with `low <= 0xFF`; by the
+        // generator invariant (machine-checked over the generated constants
+        // by the unit test below) every stage1 entry + 255 < S2.
+        let s3_idx = unsafe { *self.stage2.get_unchecked(s2_idx) } as usize;
+        debug_assert!(s3_idx < S3);
+        // SAFETY: by the generator invariant (machine-checked by the unit
+        // test below) every stage2 entry < S3.
+        unsafe { *self.stage3.get_unchecked(s3_idx) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::generated::{props_data, symbols_data};
+
+    /// Machine-checks the generator invariant `TablesRef::get` relies on to
+    /// elide the stage2/stage3 bounds checks, over every embedded generated
+    /// table: each stage1 entry, plus the maximum low byte (0xFF), indexes
+    /// within stage2; each stage2 entry indexes within stage3.
+    #[test]
+    fn generated_tables_uphold_lut_invariant() {
+        fn check<Elem>(stage1: &[u16], stage2: &[u16], stage3: &[Elem]) {
+            for &s1 in stage1 {
+                assert!(s1 as usize + 0xFF < stage2.len());
+            }
+            for &s2 in stage2 {
+                assert!((s2 as usize) < stage3.len());
+            }
+        }
+        check(
+            &props_data::STAGE1,
+            &props_data::STAGE2,
+            &props_data::STAGE3,
+        );
+        check(
+            &symbols_data::STAGE1,
+            &symbols_data::STAGE2,
+            &symbols_data::STAGE3,
+        );
+    }
+
+    /// The getter must return exactly what the reference's plain 3-stage
+    /// slice indexing returns for every codepoint in the u21 domain
+    /// (including 0x10FFFF and the mask boundary 0x1F_FFFF), and masking
+    /// must make out-of-u21-domain inputs (inexpressible in the reference's
+    /// `cp: u21` parameter) alias their masked counterparts.
+    #[test]
+    fn get_matches_reference_indexing_across_u21_sweep() {
+        fn reference_get<Elem: Copy>(
+            stage1: &[u16],
+            stage2: &[u16],
+            stage3: &[Elem],
+            cp: u32,
+        ) -> Elem {
+            let high = cp >> 8;
+            let low = cp & 0xFF;
+            stage3[stage2[stage1[high as usize] as usize + low as usize] as usize]
+        }
+
+        let props = crate::props_table::table();
+        let symbols = crate::symbols_table::table();
+        for cp in 0..=0x1F_FFFFu32 {
+            assert_eq!(
+                props.get(cp),
+                reference_get(
+                    &props_data::STAGE1,
+                    &props_data::STAGE2,
+                    &props_data::STAGE3,
+                    cp
+                ),
+                "props mismatch at cp={cp:#x}"
+            );
+            assert_eq!(
+                symbols.get(cp),
+                reference_get(
+                    &symbols_data::STAGE1,
+                    &symbols_data::STAGE2,
+                    &symbols_data::STAGE3,
+                    cp
+                ),
+                "symbols mismatch at cp={cp:#x}"
+            );
+        }
+
+        // Mask boundary: values above the u21 domain (inexpressible as the
+        // reference's `u21`) must alias their masked counterparts.
+        for cp in [0u32, 0x41, 0x10FFFF, 0x1F_FFFF] {
+            let above = cp | 0x20_0000;
+            assert_eq!(props.get(above), props.get(cp));
+            assert_eq!(symbols.get(above), symbols.get(cp));
+            assert_eq!(props.get(cp | 0xFFE0_0000), props.get(cp));
+        }
     }
 }
