@@ -6,6 +6,10 @@ use crate::props::{GraphemeBreakNoControl, Properties};
 /// PARITY: uucode pins this to `0x10FFFF` (the Unicode code space maximum).
 pub const MAX_CODE_POINT: u32 = 0x10FFFF;
 
+// PERF(port): Zig compiles callers whole-program so this per-codepoint lookup
+// inlines under ReleaseFast; a non-generic cross-crate fn is un-inlinable
+// without LTO — #[inline] restores the idiom.
+#[inline]
 pub fn get(cp: u32) -> Properties {
     if cp > MAX_CODE_POINT {
         return Properties {

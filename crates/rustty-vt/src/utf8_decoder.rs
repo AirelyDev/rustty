@@ -83,7 +83,9 @@ impl UTF8Decoder {
     ///
     /// If the byte is not consumed, the caller is responsible for calling
     /// again with the same byte before continuing.
-    #[inline]
+    // PERF(port): Zig `pub inline fn` (UTF8Decoder.zig:56) is a MANDATORY
+    // inline — upgrade #[inline] to #[inline(always)] to restore it.
+    #[inline(always)]
     pub fn next(&mut self, byte: u8) -> (Option<u32>, bool) {
         let char_class = CHAR_CLASSES[byte as usize];
 

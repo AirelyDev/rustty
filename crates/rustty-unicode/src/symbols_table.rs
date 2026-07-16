@@ -2,6 +2,10 @@ use crate::generated::symbols_data;
 use crate::lut::TablesRef;
 
 /// The lookup tables for Ghostty.
+// PERF(port): Zig resolves this table reference at comptime; a non-generic
+// cross-crate fn is un-inlinable without LTO — #[inline] restores the
+// zero-cost access idiom.
+#[inline]
 pub const fn table() -> TablesRef<'static, bool> {
     // This is only available after running a generator as part of the Ghostty
     // build.zig process, but due to Zig's lazy analysis we can still reference

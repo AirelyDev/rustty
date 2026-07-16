@@ -426,6 +426,10 @@ impl<'a> Parser<'a> {
     /// Up to 3 actions may need to be executed -- in order -- representing
     /// the state exit, transition, and entry actions.
     // pub fn next(self: *Parser, c: u8) [3]?Action {
+    // PERF(port): Zig compiles bench + parser whole-program, so the per-byte
+    // bench->next call (benchmark/TerminalParser.zig:100) inlines under
+    // ReleaseFast; #[inline] restores cross-crate inlinability without LTO.
+    #[inline]
     pub fn next(&mut self, c: u8) -> [Option<Action>; 3] {
         let effect = table[c as usize][self.state as usize];
 
@@ -532,6 +536,9 @@ impl<'a> Parser<'a> {
     // PORT NOTE: turns a staged action into the user-facing `Action`, copying
     // the (now-stable) intermediate/param prefixes into owned `Vec`s. The
     // `final` byte for CSI/ESC/DCS dispatch is captured in the staged variant.
+    // PERF(port): port-only glue with no Zig counterpart — it must never be an
+    // out-of-line call on the per-byte path (Zig builds the Action in-place).
+    #[inline(always)]
     fn stage_to_action(
         staged: Staged,
         intermediates: &[u8],
@@ -567,6 +574,9 @@ impl<'a> Parser<'a> {
     }
 
     // pub inline fn collect(self: *Parser, c: u8) void {
+    // PERF(port): Zig `pub inline fn` (Parser.zig:313) — restore
+    // mandatory-inline idiom.
+    #[inline(always)]
     pub fn collect(&mut self, c: u8) {
         if self.intermediates_idx as usize >= MAX_INTERMEDIATE {
             // @branchHint(.cold);
@@ -579,6 +589,9 @@ impl<'a> Parser<'a> {
     }
 
     // inline fn doAction(self: *Parser, action: TransitionAction, c: u8) ?Action {
+    // PERF(port): Zig `inline fn` (Parser.zig:324) — restore mandatory-inline
+    // idiom.
+    #[inline(always)]
     fn do_action(&mut self, action: TransitionAction, c: u8) -> Staged {
         match action {
             // .none, .ignore => null,
@@ -687,6 +700,9 @@ impl<'a> Parser<'a> {
     }
 
     // pub inline fn clear(self: *Parser) void {
+    // PERF(port): Zig `pub inline fn` (Parser.zig:409) — restore
+    // mandatory-inline idiom.
+    #[inline(always)]
     pub fn clear(&mut self) {
         self.intermediates_idx = 0;
         self.params_idx = 0;

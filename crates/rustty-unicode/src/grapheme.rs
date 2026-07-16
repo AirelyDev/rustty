@@ -38,6 +38,10 @@ impl BreakState {
 /// line feeds, and carriage returns are expected to be filtered out before
 /// calling this function. This is because this function is tuned for
 /// Ghostty.
+// PERF(port): Zig compiles callers whole-program so this per-codepoint lookup
+// inlines under ReleaseFast; a non-generic cross-crate fn is un-inlinable
+// without LTO — #[inline] restores the idiom.
+#[inline]
 pub fn grapheme_break(cp1: u32, cp2: u32, state: &mut BreakState) -> bool {
     let value = Precompute::DATA[Key {
         gb1: table().get(cp1).grapheme_break,

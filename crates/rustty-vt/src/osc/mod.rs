@@ -613,6 +613,10 @@ impl Capture {
     /// succeeds (growing on demand).
     /// Returns `true` on success and `false` on the `error.WriteFailed`
     /// overflow path (the natural mirror of the Zig `writeByte(c) catch`).
+    // PERF(port): the Zig fixed writer's `writeByte` (osc.zig:543-549 via
+    // std.Io.Writer.fixed) is a bounds check + store that inlines under
+    // ReleaseFast; #[inline] restores cross-crate inlinability without LTO.
+    #[inline]
     pub fn write_byte(&mut self, c: u8) -> bool {
         match &mut self.backing {
             CaptureBacking::Fixed(w) => {
@@ -717,6 +721,9 @@ impl<'a> Parser<'a> {
 
     /// Make sure that we have an allocator. If we don't, set the state to
     /// invalid so that any additional OSC data is discarded.
+    // PERF(port): Zig `inline fn` (osc.zig:441) — restore mandatory-inline
+    // idiom.
+    #[inline]
     fn ensure_allocator(&mut self) -> bool {
         if self.alloc.is_some() {
             return true;
@@ -737,6 +744,9 @@ impl<'a> Parser<'a> {
     ///
     /// Get the trailing data using `capture.trailing()`. Do not access
     /// the writer directly.
+    // PERF(port): Zig `inline fn` (osc.zig:503) — restore mandatory-inline
+    // idiom.
+    #[inline]
     fn capture_trailing(&mut self, mode: CaptureMode) {
         // assert(self.capture == null);
         debug_assert!(self.capture.is_none());
@@ -766,6 +776,10 @@ impl<'a> Parser<'a> {
     }
 
     /// Consume the next character c and advance the parser state.
+    // PERF(port): the reference forces this per-byte call inline —
+    // `@call(.always_inline, osc.Parser.next, ...)` at Parser.zig:364 and
+    // benchmark/OscParser.zig:103 — restore the mandatory-inline idiom.
+    #[inline(always)]
     pub fn next(&mut self, c: u8) {
         // If the state becomes invalid for any reason, just discard
         // any further input.
