@@ -2961,9 +2961,10 @@ mod macos_impl {
             // the `cell-foreground`/`cell-background` cursor-color + cursor-text arms.
             let cursor_sgr_style: Style = match hoisted_cursor_vp {
                 Some((cvx, cvy, _)) => {
-                    let cc = &self.terminal_state.row_data[cvy as usize].cells[cvx as usize];
-                    if cc.raw.has_styling() {
-                        cc.style
+                    // PORT NOTE (reshape): read the SoA `raw`/`style` columns.
+                    let cc = &self.terminal_state.row_data[cvy as usize].cells;
+                    if cc.raw()[cvx as usize].has_styling() {
+                        cc.style()[cvx as usize]
                     } else {
                         Style::default()
                     }
@@ -3000,8 +3001,10 @@ mod macos_impl {
                 // `row_data[y].cells`/`highlights`) — SB-SAFE across `rebuild_row`'s
                 // `&mut *self` reborrows (§C.3(2)): a reborrow retags the inline
                 // `Renderer`, not these separate heap allocations.
-                let cells_ptr: *const [render::Cell] =
-                    self.terminal_state.row_data[y_usize].cells.as_slice();
+                // PORT NOTE (reshape): a `*const CellList` (the reference passes
+                // `cells: *std.MultiArrayList(RenderState.Cell)` into `rebuildRow`).
+                let cells_ptr: *const render::CellList =
+                    &self.terminal_state.row_data[y_usize].cells;
                 let highlights_ptr: *const [Highlight] =
                     self.terminal_state.row_data[y_usize].highlights.as_slice();
 
@@ -3213,6 +3216,7 @@ mod macos_impl {
 
         // fn rebuildRow(self, y, row, cells: *MultiArrayList(Cell), preedit_range,
         //               selection, highlights: *const ArrayList(Highlight), links) !void
+        // PORT NOTE (reshape): `cells: *MultiArrayList(Cell)` -> `*const CellList`.
         //
         // SAFETY (§C.3(2,3)): `cells`/`highlights` are HEAP-backed raw ptrs (the `Vec`
         // backing buffers of `row_data[y]`), SB-SAFE across this method's sub-calls
@@ -3250,7 +3254,7 @@ mod macos_impl {
             &mut self,
             y: CellCountInt,
             row: page::Row,
-            cells: *const [render::Cell],
+            cells: *const render::CellList,
             preedit_range: Option<PreeditRange>,
             selection: Option<[CellCountInt; 2]>,
             highlights: *const [Highlight],
@@ -3268,15 +3272,18 @@ mod macos_impl {
 
             // If our viewport is wider than our cell contents buffer,
             // we still only process cells up to the width of the buffer.
-            // (`cells_slice` is HEAP-backed — survives `&mut *self`; §C.3(2).)
-            let cells_slice: &[render::Cell] = unsafe { &*cells };
-            let cells_len = core::cmp::min(cells_slice.len(), self.cells.size.columns as usize);
-            // PORT NOTE: the reference reads two SoA projections `cells.items(.raw)` /
-            // `.items(.style)`. rustty's cells are AoS, so `cells_raw` is a fresh
-            // row-local `Vec<page::Cell>` (the `cell.rs::raw_cells` precedent) — it does
-            // NOT alias `self.terminal_state`, so it is a plain owned local (§D.5), and
-            // `cells_slice[x].style` is the `.items(.style)` projection read inline.
-            let cells_raw: Vec<page::Cell> = cells_slice.iter().map(|c| c.raw).collect();
+            // (`cells_ref`/its columns are HEAP-backed — the `Vec` backing buffers
+            // of `row_data[y].cells` — so they survive `&mut *self`; §C.3(2).)
+            let cells_ref: &render::CellList = unsafe { &*cells };
+            let cells_slice: render::CellSlice = cells_ref.slice();
+            // PORT NOTE (reshape): the reference reads two SoA projections
+            // `cells.items(.raw)` / `.items(.style)`; rustty's cells are the SoA
+            // `CellList`, so `cells_raw` IS the `raw` column (`cells_slice.raw`, a
+            // borrow into `row_data`'s heap — a separate allocation from `Renderer`,
+            // not one of the §C.3 raw-pointer triad) and `cells_slice.style[x]` is
+            // the `.items(.style)` projection.
+            let cells_raw: &[page::Cell] = cells_slice.raw;
+            let cells_len = core::cmp::min(cells_raw.len(), self.cells.size.columns as usize);
 
             // On primary screen, we still apply vertical padding
             // extension under certain conditions we feel are safe.
@@ -3290,11 +3297,21 @@ mod macos_impl {
                 // Apply heuristics for padding extension.
                 WindowPaddingColor::Extend => {
                     if y == 0 {
-                        self.uniforms.padding_extend.up =
-                            !never_extend_bg(row, cells_slice, &palette, background);
+                        self.uniforms.padding_extend.up = !never_extend_bg(
+                            row,
+                            cells_raw,
+                            cells_slice.style,
+                            &palette,
+                            background,
+                        );
                     } else if y == self.cells.size.rows - 1 {
-                        self.uniforms.padding_extend.down =
-                            !never_extend_bg(row, cells_slice, &palette, background);
+                        self.uniforms.padding_extend.down = !never_extend_bg(
+                            row,
+                            cells_raw,
+                            cells_slice.style,
+                            &palette,
+                            background,
+                        );
                     }
                 }
             }
@@ -3341,7 +3358,7 @@ mod macos_impl {
 
             'cells: for x in 0..cells_len {
                 let cell: &page::Cell = &cells_raw[x];
-                let managed_style: Style = cells_slice[x].style;
+                let managed_style: Style = cells_slice.style[x];
 
                 // If this cell falls within our preedit range then we
                 // skip this because preedits are setup separately.
@@ -3818,7 +3835,7 @@ mod macos_impl {
                                     x as CellCountInt,
                                     y,
                                     cols as usize,
-                                    &cells_raw,
+                                    cells_raw,
                                     shaped_cells[shaper_cells_i],
                                     shaper_run.unwrap(),
                                     fg,
@@ -4013,10 +4030,12 @@ mod macos_impl {
             x: CellCountInt,
             y: CellCountInt,
             cols: usize,
-            // PORT NOTE (§D.5): a plain safe `&[page::Cell]` — the AoS `cells_raw`
-            // projection is a fresh row-local `Vec` in `rebuild_row` (you cannot
-            // reinterpret `&[render::Cell]` as `&[page::Cell]`), so it does NOT alias
-            // `self.terminal_state` and is NOT one of the §C.3 raw-pointer triad.
+            // PORT NOTE (reshape, §D.5): a plain safe `&[page::Cell]` — the SoA
+            // `raw` column projection (`cells_slice.raw`) in `rebuild_row`. It is a
+            // shared borrow into `row_data`'s heap (a separate allocation from
+            // `Renderer` and never mutated here), so it is NOT one of the §C.3
+            // raw-pointer triad and coexists with the narrow `&mut self` field
+            // access below. This mirrors the reference passing `cells.items(.raw)`.
             cell_raws: &[page::Cell],
             shaper_cell: shape::Cell,
             shaper_run: shape::TextRun,

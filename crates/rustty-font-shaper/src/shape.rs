@@ -167,10 +167,11 @@ pub struct RunOptions<'a> {
     /// The cells for the row to shape.
     // cells: std.MultiArrayList(terminal.RenderState.Cell).Slice = .empty,
     //
-    // PORT NOTE: rustty's `RenderState` cells are an AoS `render::Cell` slice
-    // (carrying `.raw`/`.grapheme`/`.style`), not a `MultiArrayList`; the
-    // reference default `.empty` is the empty slice (`&[]`).
-    pub cells: &'a [rustty_vt::render::Cell],
+    // PORT NOTE (reshape): rustty's `RenderState` cells are the SoA `CellList`;
+    // this is its borrowed `CellSlice` view (`.raw`/`.style` columns +
+    // `.grapheme(x)`), the direct analogue of `MultiArrayList(Cell).Slice`. The
+    // reference default `.empty` is an empty `CellSlice`.
+    pub cells: rustty_vt::render::CellSlice<'a>,
 
     /// The x boundaries of the selection in this row.
     // selection: ?[2]u16 = null,

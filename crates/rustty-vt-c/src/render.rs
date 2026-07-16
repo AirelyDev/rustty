@@ -44,7 +44,9 @@ use rustty_lib::types::Buffer;
 use rustty_vt::color::{Palette, RGB};
 use rustty_vt::cursor;
 use rustty_vt::page;
-use rustty_vt::render::{Dirty as RenderDirty, RenderState as ZigRenderState, Row as RenderRow};
+use rustty_vt::render::{
+    CellList, Dirty as RenderDirty, RenderState as ZigRenderState, Row as RenderRow,
+};
 use rustty_vt::size;
 use rustty_vt::style::{Color, Fg, Style};
 
@@ -119,12 +121,14 @@ pub struct RowIteratorWrapper {
 //     palette: *const colorpkg.Palette,
 // };
 //
-// PORT NOTE: `raws`/`graphemes`/`styles` collapse to a raw `*const [Cell]` (the
-// `RenderState.Cell` carries `raw`, `grapheme`, `style` together).
+// PORT NOTE (reshape): the reference `raws`/`graphemes`/`styles` are the three
+// SoA columns of the row's `MultiArrayList(Cell)`; rustty's `RenderState` stores
+// them in a `CellList` (SoA), so this holds a single `*const CellList` and reads
+// `(*cells).raw()[x]` / `.style()[x]` / `.grapheme(x)` — the same projections.
 pub struct RowCellsWrapper {
     pub alloc: Box<dyn rustty_lib::allocator::ZigAllocator>,
     pub x: Option<size::CellCountInt>,
-    pub cells: *const [rustty_vt::render::Cell],
+    pub cells: *const CellList,
     pub selection: Option<[size::CellCountInt; 2]>,
 
     /// The color palette, needed to resolve palette-indexed background colors.
@@ -886,10 +890,15 @@ pub unsafe fn row_cells_new(alloc_: Option<&CAllocator>, result: *mut RowCells) 
     let alloc = rustty_lib::allocator::default(alloc_);
     // PORT NOTE: reference `undefined` fields become null/`None` sentinels;
     // real values are installed by `row_get(.., .cells, ..)`.
+    // PORT NOTE (reshape): the sentinel is a pointer to a shared empty `CellList`
+    // (len 0). `row_cells_next`/`select` must deref it to read the length, so it
+    // must be a valid `CellList` (not a dangling pointer); real values are
+    // installed by `row_get(.., .cells, ..)`.
+    static EMPTY_CELLS: CellList = CellList::empty();
     let ptr = Box::into_raw(Box::new(RowCellsWrapper {
         alloc,
         x: None,
-        cells: &[] as *const [rustty_vt::render::Cell],
+        cells: &EMPTY_CELLS as *const CellList,
         selection: None,
         palette: std::ptr::null(),
     }));
@@ -921,8 +930,9 @@ pub unsafe fn row_cells_next(cells_: RowCells) -> bool {
         None => 0,
     };
     // if (next_x >= cells.raws.len) return false;
-    // PORT NOTE: `<*const [T]>::len` reads slice-pointer metadata (no autoref).
-    let cells_len = cells.cells.len();
+    // PORT NOTE (reshape): `cells.cells` is now a `*const CellList`, so the length
+    // is read via a deref of the (valid) pointer's `raw` column.
+    let cells_len = unsafe { (*cells.cells).len() };
     if (next_x as usize) >= cells_len {
         return false;
     }
@@ -947,8 +957,8 @@ pub unsafe fn row_cells_select(cells_: RowCells, x: size::CellCountInt) -> Resul
     // SAFETY: `cells_` is a live wrapper (caller contract).
     let cells = unsafe { &mut *cells_ };
     // if (x >= cells.raws.len) return .invalid_value;
-    // PORT NOTE: `<*const [T]>::len` reads slice-pointer metadata (no autoref).
-    let cells_len = cells.cells.len();
+    // PORT NOTE (reshape): length via a deref of the `*const CellList` pointer.
+    let cells_len = unsafe { (*cells.cells).len() };
     if (x as usize) >= cells_len {
         return Result::InvalidValue;
     }
@@ -1099,12 +1109,13 @@ unsafe fn row_cells_get_typed(cells_: RowCells, data: RowCellsData, out: *mut c_
         None => return Result::InvalidValue,
     };
     // const cell = cells.raws[x];
-    // PORT NOTE: rustty-vt's `RenderState.Cell` bundles `raw`/`grapheme`/`style`;
-    // `cell` is the `page.Cell` (`cells.cells[x].raw`).
-    // SAFETY: `cells.cells` is a valid slice pointer installed by `row_get`; `x`
-    // is bounds-checked by `row_cells_next`/`row_cells_select`.
-    let render_cell = unsafe { &(*cells.cells)[x as usize] };
-    let cell: page::Cell = render_cell.raw;
+    // PORT NOTE (reshape): rustty-vt stores cells SoA (`CellList`); `cell` is the
+    // `page.Cell` (`(*cells.cells).raw()[x]`), and the `style`/`grapheme` columns
+    // are projected from the same list below.
+    // SAFETY: `cells.cells` is a valid `CellList` pointer installed by `row_get`;
+    // `x` is bounds-checked by `row_cells_next`/`row_cells_select`.
+    let cell_list = unsafe { &*cells.cells };
+    let cell: page::Cell = cell_list.raw()[x as usize];
     match data {
         // .invalid => return .invalid_value,
         RowCellsData::Invalid => return Result::InvalidValue,
@@ -1116,7 +1127,7 @@ unsafe fn row_cells_get_typed(cells_: RowCells, data: RowCellsData, out: *mut c_
         // .style => out.* = if (cell.hasStyling()) style_c.Style.fromStyle(cells.styles[x]) else style_c.Style.fromStyle(.{}),
         RowCellsData::Style => {
             let s = if cell.has_styling() {
-                style_c::Style::from_style(render_cell.style)
+                style_c::Style::from_style(cell_list.style()[x as usize])
             } else {
                 style_c::Style::from_style(Style::default())
             };
@@ -1135,7 +1146,7 @@ unsafe fn row_cells_get_typed(cells_: RowCells, data: RowCellsData, out: *mut c_
                 return Result::Success;
             }
             let extra: &[u32] = if cell.has_grapheme() {
-                &render_cell.grapheme
+                cell_list.grapheme(x as usize)
             } else {
                 &[]
             };
@@ -1154,7 +1165,7 @@ unsafe fn row_cells_get_typed(cells_: RowCells, data: RowCellsData, out: *mut c_
                 return Result::Success;
             }
             let extra: &[u32] = if cell.has_grapheme() {
-                &render_cell.grapheme
+                cell_list.grapheme(x as usize)
             } else {
                 &[]
             };
@@ -1179,7 +1190,7 @@ unsafe fn row_cells_get_typed(cells_: RowCells, data: RowCellsData, out: *mut c_
         // },
         RowCellsData::BgColor => {
             let s: Style = if cell.has_styling() {
-                render_cell.style
+                cell_list.style()[x as usize]
             } else {
                 Style::default()
             };
@@ -1201,7 +1212,7 @@ unsafe fn row_cells_get_typed(cells_: RowCells, data: RowCellsData, out: *mut c_
         // },
         RowCellsData::FgColor => {
             let s: Style = if cell.has_styling() {
-                render_cell.style
+                cell_list.style()[x as usize]
             } else {
                 Style::default()
             };
@@ -1238,7 +1249,7 @@ unsafe fn row_cells_get_typed(cells_: RowCells, data: RowCellsData, out: *mut c_
         // .graphemes_utf8 => return rowCellsGetGraphemesUtf8(cell, if (cell.hasGrapheme()) cells.graphemes[x] else &.{}, out),
         RowCellsData::GraphemesUtf8 => {
             let extra: &[u32] = if cell.has_grapheme() {
-                &render_cell.grapheme
+                cell_list.grapheme(x as usize)
             } else {
                 &[]
             };
@@ -1475,7 +1486,7 @@ unsafe fn row_get_typed(iterator_: RowIterator, data: RowData, out: *mut c_void)
             let cells = unsafe { &mut *cells_ptr };
             // cells.* = .{ ... };
             cells.x = None;
-            cells.cells = row.cells.as_slice() as *const [rustty_vt::render::Cell];
+            cells.cells = &row.cells as *const CellList;
             cells.selection = row.selection;
             cells.palette = it.palette;
         }

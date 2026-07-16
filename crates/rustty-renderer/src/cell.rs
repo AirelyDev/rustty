@@ -437,12 +437,12 @@ mod tests {
         }
     }
 
-    // PORT NOTE: the reference passes `state.row_data.get(0).cells.items(.raw)` —
-    // the SoA projection of the `raw` field across the row's cells. The Rust
-    // render port stores cells AoS (`Vec<render::Cell>`, each with a `.raw`), so
-    // this rebuilds the `[]const page::Cell` slice from each cell's `.raw`.
+    // PORT NOTE (reshape): the reference passes
+    // `state.row_data.get(0).cells.items(.raw)` — the SoA projection of the `raw`
+    // field across the row's cells. rustty's render port now stores cells SoA
+    // (`CellList`), so this IS the `raw` column directly.
     fn raw_cells(state: &RenderState, row: usize) -> Vec<page::Cell> {
-        state.row_data[row].cells.iter().map(|c| c.raw).collect()
+        state.row_data[row].cells.raw().to_vec()
     }
 
     // test Contents

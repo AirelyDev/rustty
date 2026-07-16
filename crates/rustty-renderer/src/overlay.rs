@@ -287,12 +287,13 @@ impl Overlay {
                 continue;
             }
 
-            let raw_cells = &row.cells;
+            // PORT NOTE (reshape): `cells.slice().items(.raw)` -> the SoA raw column.
+            let raw_cells: &[rustty_vt::page::Cell] = row.cells.raw();
 
             let mut x: usize = 0;
             while x < raw_cells.len() {
                 // Skip cells without hyperlinks
-                if !raw_cells[x].raw.hyperlink() {
+                if !raw_cells[x].hyperlink() {
                     x += 1;
                     continue;
                 }
@@ -301,7 +302,7 @@ impl Overlay {
                 let start_x = x;
 
                 // Find end of contiguous hyperlink cells
-                while x < raw_cells.len() && raw_cells[x].raw.hyperlink() {
+                while x < raw_cells.len() && raw_cells[x].hyperlink() {
                     x += 1;
                 }
                 let end_x = x;
@@ -454,11 +455,12 @@ impl Overlay {
         // Highlight contiguous semantic cells within rows.
         // for (row_cells, 0..) |cells, y|
         for (y, row) in state.row_data.iter().enumerate() {
-            let raw_cells = &row.cells;
+            // PORT NOTE (reshape): `cells.slice().items(.raw)` -> the SoA raw column.
+            let raw_cells: &[rustty_vt::page::Cell] = row.cells.raw();
 
             let mut x: usize = 0;
             while x < raw_cells.len() {
-                let content = raw_cells[x].raw.semantic_content();
+                let content = raw_cells[x].semantic_content();
                 let start_x = x;
 
                 // We skip output because its just the rest of the non-prompt
@@ -471,7 +473,7 @@ impl Overlay {
                 // Find the end of this content.
                 x += 1;
                 while x < raw_cells.len() {
-                    let next = raw_cells[x].raw.semantic_content();
+                    let next = raw_cells[x].semantic_content();
                     if next != content {
                         break;
                     }
@@ -852,8 +854,8 @@ mod tests {
 
         // Mark row 0 cols 0..1 as a hyperlink run.
         state.row_data[0].raw.set_hyperlink(true);
-        state.row_data[0].cells[0].raw.set_hyperlink(true);
-        state.row_data[0].cells[1].raw.set_hyperlink(true);
+        state.row_data[0].cells.raw_mut()[0].set_hyperlink(true);
+        state.row_data[0].cells.raw_mut()[1].set_hyperlink(true);
 
         let sz = size(80, 48); // cell 8x16 (existing helper) → 10x3 terminal
         let mut o = Overlay::init(sz).unwrap();

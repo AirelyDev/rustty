@@ -132,12 +132,13 @@ impl<'a, H: RunIteratorHook> RunIterator<'a, H> {
         // const graphemes: []const []const u21 = slice.items(.grapheme);
         // const styles: []const terminal.Style = slice.items(.style);
         //
-        // PORT NOTE: the reference's cells are a `MultiArrayList` split into
-        // parallel `.raw`/`.grapheme`/`.style` arrays; rustty's `RenderState`
-        // cells are an AoS `render::Cell` carrying all three, so `cells[i]` /
-        // `graphemes[i]` / `styles[i]` become `cells[i].raw` / `cells[i].grapheme`
-        // / `cells[i].style`. `cells` is a `Copy` of the `&'a` slice, independent
-        // of `self`, so `&mut self` helper calls below don't conflict.
+        // PORT NOTE (reshape): the reference's cells are a `MultiArrayList`
+        // projected into parallel `.raw`/`.grapheme`/`.style` arrays; rustty's
+        // `RenderState` cells are the SoA `CellList`, whose `CellSlice` view
+        // exposes the same columns — `cells[i]` / `styles[i]` / `graphemes[i]`
+        // become `cells.raw[i]` / `cells.style[i]` / `cells.grapheme(i)`. `cells`
+        // is a `Copy` `CellSlice`, independent of `self`, so the `&mut self`
+        // helper calls below don't conflict.
         let cells = self.opts.cells;
         let grid = self.opts.grid;
         let selection = self.opts.selection;
@@ -147,7 +148,7 @@ impl<'a, H: RunIteratorHook> RunIterator<'a, H> {
         let max: usize = 'max: {
             for i in 0..cells.len() {
                 let rev_i = cells.len() - i - 1;
-                if !cells[rev_i].raw.is_empty() {
+                if !cells.raw[rev_i].is_empty() {
                     break 'max rev_i + 1;
                 }
             }
@@ -158,7 +159,7 @@ impl<'a, H: RunIteratorHook> RunIterator<'a, H> {
         // Invisible cells don't have any glyphs rendered,
         // so we explicitly skip them in the shaping process.
         while self.i < max
-            && (cells[self.i].raw.has_styling() && cells[self.i].style.flags.invisible)
+            && (cells.raw[self.i].has_styling() && cells.style[self.i].flags.invisible)
         {
             self.i += 1;
         }
@@ -179,8 +180,8 @@ impl<'a, H: RunIteratorHook> RunIterator<'a, H> {
         let mut hasher = hasher_init();
 
         // Let's get our style that we'll expect for the run.
-        let style: TermStyle = if cells[self.i].raw.has_styling() {
-            cells[self.i].style
+        let style: TermStyle = if cells.raw[self.i].has_styling() {
+            cells.style[self.i]
         } else {
             TermStyle::default()
         };
@@ -195,7 +196,7 @@ impl<'a, H: RunIteratorHook> RunIterator<'a, H> {
                 // row produce the same hash, enabling cache reuse.
                 let cluster = j - self.i;
                 // const cell: *const terminal.page.Cell = &cells[j];
-                let cell = &cells[j].raw;
+                let cell = &cells.raw[j];
 
                 // If we have a selection and we're at a boundary point, then
                 // we break the run here.
@@ -223,7 +224,7 @@ impl<'a, H: RunIteratorHook> RunIterator<'a, H> {
                 // one color when the two components have different styling.
                 if j > self.i {
                     'style: {
-                        let prev_cell = cells[j - 1].raw;
+                        let prev_cell = cells.raw[j - 1];
 
                         // If the prev cell and this cell are both plain
                         // codepoints then we check if they are commonly "bad"
@@ -262,7 +263,7 @@ impl<'a, H: RunIteratorHook> RunIterator<'a, H> {
                         // styles but any other change results in a new run.
                         let c1 = comparable_style(style);
                         let c2 = comparable_style(if cell.has_styling() {
-                            cells[j].style
+                            cells.style[j]
                         } else {
                             TermStyle::default()
                         });
@@ -293,7 +294,7 @@ impl<'a, H: RunIteratorHook> RunIterator<'a, H> {
                     'p: {
                         // We only check the FIRST codepoint because I believe the
                         // presentation format must be directly adjacent to the codepoint.
-                        let cps = &cells[j].grapheme;
+                        let cps = cells.grapheme(j);
                         assert(!cps.is_empty());
                         if cps[0] == 0xFE0E {
                             break 'p Some(Presentation::Text);
@@ -356,7 +357,7 @@ impl<'a, H: RunIteratorHook> RunIterator<'a, H> {
                     if let Some(idx) = self.index_for_cell(
                         alloc,
                         cell,
-                        &cells[j].grapheme,
+                        cells.grapheme(j),
                         font_style,
                         presentation,
                     )? {
@@ -431,7 +432,7 @@ impl<'a, H: RunIteratorHook> RunIterator<'a, H> {
                     cluster as u32,
                 );
                 if cell.has_grapheme() {
-                    for &cp in &cells[j].grapheme {
+                    for &cp in cells.grapheme(j) {
                         // Do not send presentation modifiers
                         if cp == 0xFE0E || cp == 0xFE0F {
                             continue;

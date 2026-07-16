@@ -13,12 +13,23 @@
 // `std.MultiArrayList(Row)` (a struct-of-arrays for cache locality) and each
 // `Row` carries an `ArenaAllocator.State` + `std.MultiArrayList(Cell)`. The
 // arena exists purely to bulk-free per-row grapheme dupes cheaply while
-// retaining the cells' MultiArrayList capacity across `update` calls. Neither
-// the SoA layout nor the arena is observable behavior, so the faithful Rust
-// port uses `Vec<Row>`, each `Row` owning `Vec<Cell>` / `Vec<Highlight>` and
-// the grapheme cluster owned per-cell as a `Vec<u32>`. Rust ownership frees on
-// drop / clear, replacing the explicit arena reset/deinit. `.slice().items(.X)`
-// projections in the reference become direct field access over the `Vec`.
+// retaining the cells' MultiArrayList capacity across `update` calls.
+// `row_data` itself stays `Vec<Row>` (only `update` cares about the row-level
+// projections and it iterates them once per frame), but the per-row cells are
+// the hot path:
+//
+// PORT NOTE (reshape): restore MultiArrayList SoA (render.zig:187) — each
+// row's cells are stored as parallel columns in `CellList` (`raw:
+// Vec<page::Cell>`, `style: Vec<Style>`, and grapheme codepoints in a single
+// per-row reusable `grapheme_buf: Vec<u32>` addressed by a `(offset, len)`
+// span column). `grapheme_buf.clear()` (retaining capacity) is the direct
+// analogue of the reference per-row `arena.reset(.retain_capacity)`
+// (render.zig:469-471). An earlier port draft stored cells AoS (`Vec<Cell>`
+// with a per-cell owned `Vec<u32>` grapheme); that lost the raw-column memcpy
+// rebuild whose value the reference's own comment quantifies at ~300% on the
+// `screen-clone` benchmark (render.zig:494-499) and paid per-cell push +
+// `Style::default()`/`Vec::new()` stores + drop glue. The reference's
+// `.slice().items(.X)` projections become the `CellSlice` column accessors.
 
 use crate::color;
 use crate::cursor;
@@ -182,7 +193,9 @@ pub struct Row {
     pub raw: page::Row,
 
     /// The cells in this row. Guaranteed to be `cols` length.
-    pub cells: Vec<Cell>,
+    //
+    // PORT NOTE (reshape): `std.MultiArrayList(Cell)` -> `CellList` (SoA).
+    pub cells: CellList,
 
     /// A dirty flag that can be used by the renderer to track
     /// its own draw state. `update` will mark this true whenever
@@ -205,7 +218,14 @@ pub struct Highlight {
     pub range: [size::CellCountInt; 2],
 }
 
-pub struct Cell {
+// PORT NOTE (reshape): the reference `RenderState.Cell` is the ELEMENT type of
+// a `std.MultiArrayList(Cell)`, so its `raw`/`grapheme`/`style` fields live in
+// three parallel column arrays, never as a contiguous array of structs. The
+// Rust port mirrors that with `CellList` below; `CellRef` is the by-value view
+// the reference's `MultiArrayList.get(i)` yields (used by tests and the
+// `CellList::get` convenience accessor). The reference field docs are carried
+// onto the `CellList` columns.
+pub struct CellRef<'a> {
     /// Always set, this is the raw copied cell data from page.Cell.
     /// The managed memory (hyperlinks, graphames, etc.) is NOT safe
     /// to access from here. It is duplicated into the other fields if
@@ -216,13 +236,178 @@ pub struct Cell {
     /// raw cell's content_tag is `codepoint_grapheme`.
     //
     // PORT NOTE: the reference is `[]const u21` arena-allocated; the Rust port
-    // owns the grapheme cluster per-cell as a `Vec<u32>` (`lookupGrapheme`
-    // yields `&[u32]`). "undefined" becomes an empty `Vec` here.
-    pub grapheme: Vec<u32>,
+    // borrows the grapheme cluster as `&[u32]` out of the row's `grapheme_buf`
+    // (`lookupGrapheme` yields `&[u32]`). "undefined" is an empty slice.
+    pub grapheme: &'a [u32],
 
     /// The style data for the cell. This is undefined unless
     /// the style_id is non-default on raw.
     pub style: Style,
+}
+
+/// `(offset, len)` into a `CellList`'s `grapheme_buf`. `(0, 0)` (an empty
+/// slice) is the safe "no grapheme" sentinel for unflagged cells.
+type GraphemeSpan = (u32, u32);
+
+/// Struct-of-arrays storage for a row's cells, mirroring the reference
+/// `std.MultiArrayList(Cell)`.
+//
+// PORT NOTE (reshape): see the module note. The columns are kept exactly `cols`
+// long; `raw` is filled by a single `extend_from_slice` memcpy on rebuild (the
+// reference `fastmem.copy(..., cells_slice.items(.raw), page_cells)`), while
+// `style`/`grapheme` are written ONLY for flagged cells in the managed-row loop
+// — the reference's "undefined unless flagged" discipline (render.zig:491-505).
+// `grapheme_buf` is a reusable per-row arena analogue: cleared (retaining
+// capacity) each rebuild.
+pub struct CellList {
+    raw: Vec<page::Cell>,
+    style: Vec<Style>,
+    grapheme_spans: Vec<GraphemeSpan>,
+    grapheme_buf: Vec<u32>,
+}
+
+/// A borrowed SoA view over a `CellList`, mirroring
+/// `std.MultiArrayList(Cell).Slice`. Consumers project `.raw` / `.style` /
+/// `.grapheme(x)` exactly as the reference projects `.items(.raw)` etc.
+#[derive(Clone, Copy)]
+pub struct CellSlice<'a> {
+    /// `.items(.raw)`
+    pub raw: &'a [page::Cell],
+    /// `.items(.style)`
+    pub style: &'a [Style],
+    spans: &'a [GraphemeSpan],
+    buf: &'a [u32],
+}
+
+impl<'a> CellSlice<'a> {
+    /// Number of cells (columns) in the row.
+    pub fn len(&self) -> usize {
+        self.raw.len()
+    }
+
+    /// True if there are no cells.
+    pub fn is_empty(&self) -> bool {
+        self.raw.is_empty()
+    }
+
+    /// `.items(.grapheme)[x]`: the grapheme cluster for cell `x`. Undefined
+    /// (empty) unless the raw cell's `content_tag` is `codepoint_grapheme`.
+    pub fn grapheme(&self, x: usize) -> &'a [u32] {
+        let (off, len) = self.spans[x];
+        &self.buf[off as usize..off as usize + len as usize]
+    }
+}
+
+impl Default for CellList {
+    fn default() -> CellList {
+        CellList::empty()
+    }
+}
+
+impl CellList {
+    /// Empty (the reference `.empty`).
+    pub const fn empty() -> CellList {
+        CellList {
+            raw: Vec::new(),
+            style: Vec::new(),
+            grapheme_spans: Vec::new(),
+            grapheme_buf: Vec::new(),
+        }
+    }
+
+    /// Number of cells (columns) in the row.
+    pub fn len(&self) -> usize {
+        self.raw.len()
+    }
+
+    /// True if there are no cells.
+    pub fn is_empty(&self) -> bool {
+        self.raw.is_empty()
+    }
+
+    /// `.items(.raw)`: the raw cell column.
+    pub fn raw(&self) -> &[page::Cell] {
+        &self.raw
+    }
+
+    /// Mutable `.items(.raw)` column (used to stamp flags on the render copy,
+    /// e.g. the overlay tests / hyperlink marking).
+    pub fn raw_mut(&mut self) -> &mut [page::Cell] {
+        &mut self.raw
+    }
+
+    /// `.items(.style)`: the style column. Only valid for flagged cells.
+    pub fn style(&self) -> &[Style] {
+        &self.style
+    }
+
+    /// `.items(.grapheme)[x]`. Undefined (empty) unless flagged.
+    pub fn grapheme(&self, x: usize) -> &[u32] {
+        let (off, len) = self.grapheme_spans[x];
+        &self.grapheme_buf[off as usize..off as usize + len as usize]
+    }
+
+    /// A borrowed SoA view (the reference `cells.slice()`).
+    pub fn slice(&self) -> CellSlice<'_> {
+        CellSlice {
+            raw: &self.raw,
+            style: &self.style,
+            spans: &self.grapheme_spans,
+            buf: &self.grapheme_buf,
+        }
+    }
+
+    /// The reference `MultiArrayList.get(x)` — a by-value cell view.
+    pub fn get(&self, x: usize) -> CellRef<'_> {
+        CellRef {
+            raw: self.raw[x],
+            grapheme: self.grapheme(x),
+            style: self.style[x],
+        }
+    }
+
+    // PORT NOTE (reshape): `_ = arena.reset(.retain_capacity)` +
+    // `clearRetainingCapacity()` — drops the logical length of every column and
+    // the grapheme arena while retaining backing capacity.
+    fn clear_retaining_capacity(&mut self) {
+        self.raw.clear();
+        self.style.clear();
+        self.grapheme_spans.clear();
+        self.grapheme_buf.clear();
+    }
+
+    // PORT NOTE (reshape): `try cells.resize(alloc, self.cols)` followed by
+    // `fastmem.copy(page.Cell, cells_slice.items(.raw), page_cells)`. The raw
+    // column is filled by a single `extend_from_slice` memcpy; the `style`
+    // column length is matched to `cols` (only NEW tail slots take
+    // `Style::default()`, existing slots keep stale-but-unread values — the
+    // reference leaves them undefined); the grapheme spans are reset to the
+    // empty `(0, 0)` sentinel and `grapheme_buf` cleared so any unflagged cell
+    // reads back an empty cluster.
+    fn rebuild_raw(&mut self, page_cells: &[page::Cell]) {
+        self.raw.clear();
+        self.raw.extend_from_slice(page_cells);
+        let n = self.raw.len();
+        self.style.resize(n, Style::default());
+        self.grapheme_spans.clear();
+        self.grapheme_spans.resize(n, (0, 0));
+        self.grapheme_buf.clear();
+    }
+
+    // PORT NOTE (reshape): `cells_style[x] = ...` — write the style column for a
+    // flagged cell.
+    fn set_style(&mut self, x: usize, style: Style) {
+        self.style[x] = style;
+    }
+
+    // PORT NOTE (reshape): `cells_grapheme[x] = try arena_alloc.dupe(u21, ...)`
+    // — append the grapheme codepoints into the row's reusable `grapheme_buf`
+    // and record their span.
+    fn set_grapheme(&mut self, x: usize, cps: &[u32]) {
+        let off = self.grapheme_buf.len() as u32;
+        self.grapheme_buf.extend_from_slice(cps);
+        self.grapheme_spans[x] = (off, cps.len() as u32);
+    }
 }
 
 // Dirty state.
@@ -414,7 +599,7 @@ impl RenderState {
                             garbage: false,
                         },
                         raw: page::Row::zeroed(),
-                        cells: Vec::new(),
+                        cells: CellList::empty(),
                         dirty: true,
                         selection: None,
                         highlights: Vec::new(),
@@ -521,7 +706,8 @@ impl RenderState {
             // Reset our cells if we're rebuilding this row.
             if !self.row_data[y as usize].cells.is_empty() {
                 // _ = arena.reset(.retain_capacity);
-                self.row_data[y as usize].cells.clear();
+                // clearRetainingCapacity()
+                self.row_data[y as usize].cells.clear_retaining_capacity();
                 self.row_data[y as usize].selection = None;
                 self.row_data[y as usize].highlights = Vec::new();
             }
@@ -549,18 +735,14 @@ impl RenderState {
             // this ends up being something around 300% faster based on
             // the `screen-clone` benchmark.
             // fastmem.copy(page.Cell, cells_slice.items(.raw), page_cells);
-            {
-                let cells = &mut self.row_data[y as usize].cells;
-                cells.clear();
-                cells.reserve(self.cols as usize);
-                for page_cell in page_cells.iter() {
-                    cells.push(Cell {
-                        raw: *page_cell,
-                        grapheme: Vec::new(),
-                        style: Style::default(),
-                    });
-                }
-            }
+            //
+            // PERF(port): restore the reference's SoA raw-column memcpy
+            // (render.zig:492-505). `rebuild_raw` fills the whole `raw` column
+            // with one `extend_from_slice` and leaves `style`/`grapheme`
+            // untouched (written below only for flagged cells), instead of the
+            // prior per-cell `push(Cell { .. })` with a capacity check +
+            // `Style::default()`/`Vec::new()` stores + drop glue per cell.
+            self.row_data[y as usize].cells.rebuild_raw(page_cells);
             if !unsafe { (*page_rac.row).managed_memory() } {
                 y += 1;
                 continue;
@@ -571,10 +753,12 @@ impl RenderState {
                 // Append assuming its a single-codepoint, styled cell
                 // (most common by far).
                 if page_cell.style_id() > 0 {
-                    self.row_data[y as usize].cells[x].style = unsafe {
+                    // cells_style[x] = p.styles.get(p.memory, page_cell.style_id).*;
+                    let style = unsafe {
                         let base = (*p).memory_ptr();
                         *(*p).styles.get(base, page_cell.style_id())
                     };
+                    self.row_data[y as usize].cells.set_style(x, style);
                 }
 
                 // Switch on our content tag to handle less likely cases.
@@ -595,30 +779,36 @@ impl RenderState {
                                 None => &[],
                             }
                         };
-                        self.row_data[y as usize].cells[x].grapheme = g.to_vec();
+                        self.row_data[y as usize].cells.set_grapheme(x, g);
                     }
 
                     page::ContentTag::BgColorRgb => {
                         // @branchHint(.unlikely);
                         let rgb = page_cell.content_color_rgb();
-                        self.row_data[y as usize].cells[x].style = Style {
-                            bg_color: crate::style::Color::Rgb(color::RGB {
-                                r: rgb.r,
-                                g: rgb.g,
-                                b: rgb.b,
-                            }),
-                            ..Style::default()
-                        };
+                        self.row_data[y as usize].cells.set_style(
+                            x,
+                            Style {
+                                bg_color: crate::style::Color::Rgb(color::RGB {
+                                    r: rgb.r,
+                                    g: rgb.g,
+                                    b: rgb.b,
+                                }),
+                                ..Style::default()
+                            },
+                        );
                     }
 
                     page::ContentTag::BgColorPalette => {
                         // @branchHint(.unlikely);
-                        self.row_data[y as usize].cells[x].style = Style {
-                            bg_color: crate::style::Color::Palette(
-                                page_cell.content_color_palette(),
-                            ),
-                            ..Style::default()
-                        };
+                        self.row_data[y as usize].cells.set_style(
+                            x,
+                            Style {
+                                bg_color: crate::style::Color::Palette(
+                                    page_cell.content_color_palette(),
+                                ),
+                                ..Style::default()
+                            },
+                        );
                     }
                 }
             }
@@ -857,13 +1047,17 @@ impl RenderState {
         mut map: Option<&mut StringMap>,
     ) -> Result<(), StringError> {
         for (y, row) in self.row_data.iter().enumerate() {
-            for (x, cell) in row.cells.iter().enumerate() {
-                let cp = cell.raw.codepoint();
+            // PORT NOTE (reshape): `cells_slice.items(.raw)` / `.items(.grapheme)`
+            // -> the SoA columns, indexed by `x`.
+            let cells = &row.cells;
+            for x in 0..cells.len() {
+                let raw = cells.raw()[x];
+                let cp = raw.codepoint();
                 let mut len: usize =
                     utf8_codepoint_sequence_length(cp).ok_or(StringError::WriteFailed)?;
                 write_codepoint(writer, cp).map_err(|_| StringError::WriteFailed)?;
-                if cell.raw.has_grapheme() {
-                    for &gcp in cell.grapheme.iter() {
+                if raw.has_grapheme() {
+                    for &gcp in cells.grapheme(x).iter() {
                         len +=
                             utf8_codepoint_sequence_length(gcp).ok_or(StringError::WriteFailed)?;
                         write_codepoint(writer, gcp).map_err(|_| StringError::WriteFailed)?;
@@ -944,8 +1138,10 @@ impl RenderState {
 
         for (y, row) in self.row_data.iter().enumerate() {
             let pin = row.pin;
-            'cells: for (x, cell) in row.cells.iter().enumerate() {
-                if !cell.raw.hyperlink() {
+            // PORT NOTE (reshape): `cells.items(.raw)` -> the SoA raw column.
+            let raw_cells = row.cells.raw();
+            'cells: for (x, raw) in raw_cells.iter().enumerate() {
+                if !raw.hyperlink() {
                     continue;
                 }
 
@@ -1132,11 +1328,11 @@ mod tests {
         assert_eq!(10, state.row_data[2].cells.len());
 
         // Row zero should contain our text
-        assert_eq!('A' as u32, state.row_data[0].cells[0].raw.codepoint());
-        assert_eq!('B' as u32, state.row_data[0].cells[1].raw.codepoint());
-        assert_eq!('C' as u32, state.row_data[0].cells[2].raw.codepoint());
-        assert_eq!('D' as u32, state.row_data[0].cells[3].raw.codepoint());
-        assert_eq!(0, state.row_data[0].cells[4].raw.codepoint());
+        assert_eq!('A' as u32, state.row_data[0].cells.get(0).raw.codepoint());
+        assert_eq!('B' as u32, state.row_data[0].cells.get(1).raw.codepoint());
+        assert_eq!('C' as u32, state.row_data[0].cells.get(2).raw.codepoint());
+        assert_eq!('D' as u32, state.row_data[0].cells.get(3).raw.codepoint());
+        assert_eq!(0, state.row_data[0].cells.get(4).raw.codepoint());
 
         state.deinit(alloc);
         t.deinit(alloc);
@@ -1170,18 +1366,18 @@ mod tests {
 
         // Row zero should contain our text
         {
-            let cell = &state.row_data[0].cells[0];
+            let cell = &state.row_data[0].cells.get(0);
             assert_eq!('A' as u32, cell.raw.codepoint());
             assert!(cell.style.flags.bold);
         }
         {
-            let cell = &state.row_data[0].cells[1];
+            let cell = &state.row_data[0].cells.get(1);
             assert_eq!('B' as u32, cell.raw.codepoint());
             assert!(!cell.style.flags.bold);
             assert!(cell.style.flags.italic);
         }
-        assert_eq!('C' as u32, state.row_data[0].cells[2].raw.codepoint());
-        assert_eq!(0, state.row_data[0].cells[3].raw.codepoint());
+        assert_eq!('C' as u32, state.row_data[0].cells.get(2).raw.codepoint());
+        assert_eq!(0, state.row_data[0].cells.get(3).raw.codepoint());
 
         state.deinit(alloc);
         t.deinit(alloc);
@@ -1214,17 +1410,17 @@ mod tests {
 
         // Row zero should contain our text
         {
-            let cell = &state.row_data[0].cells[0];
+            let cell = &state.row_data[0].cells.get(0);
             assert_eq!('A' as u32, cell.raw.codepoint());
         }
         {
-            let cell = &state.row_data[0].cells[1];
+            let cell = &state.row_data[0].cells.get(1);
             assert_eq!(0x1F468, cell.raw.codepoint());
             assert_eq!(page::Wide::Wide, cell.raw.wide());
-            assert_eq!(&[0x200Du32][..], cell.grapheme.as_slice());
+            assert_eq!(&[0x200Du32][..], cell.grapheme);
         }
         {
-            let cell = &state.row_data[0].cells[2];
+            let cell = &state.row_data[0].cells.get(2);
             assert_eq!(0, cell.raw.codepoint());
             assert_eq!(page::Wide::SpacerTail, cell.raw.wide());
         }
