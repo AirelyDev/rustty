@@ -321,6 +321,26 @@ impl Page {
         unsafe { *ss.get(base, id) }
     }
 
+    /// `style_get_of` without the copy-out: returns the raw pointer to the
+    /// style entry inside `page`'s backing memory.
+    // PERF(port) (reshape): lets the clone chain hand
+    // `RefCountedSet::add_with_id_ptr` a stable pointer straight into the
+    // source page instead of marshaling a 28-byte `Style` stack copy per call
+    // (see the PERF(port) note on `RefCountedSet::add`). The pointee lives in
+    // `other`'s memory and is only read; the destination set writes only into
+    // `self`'s (distinct) memory, so the pointee is untouched for the whole
+    // call — exactly the reference's by-const-reference parameter semantics.
+    ///
+    /// # Safety
+    ///
+    /// `page` must point at a live `Page`; `id` must be a valid live entry.
+    #[inline]
+    pub(crate) unsafe fn style_get_ptr_of(page: *const Page, id: StyleId) -> *const Style {
+        let base = unsafe { Page::memory_ptr_of(page) };
+        let ss = unsafe { &*core::ptr::addr_of!((*page).styles) };
+        unsafe { ss.get(base, id) as *const Style }
+    }
+
     /// Frees a `string_alloc` byte slice through a raw `*mut Page`, projecting to
     /// the `string_alloc` field only (avoids retagging the whole `Page`, which
     /// would conflict with a strongly-protected `&mut hyperlink_set` when called
@@ -1099,9 +1119,163 @@ impl Page {
                 unsafe { core::slice::from_raw_parts_mut(dst_cells_off_ptr, span) };
             let other_cells = unsafe { core::slice::from_raw_parts(other_cells_ptr, span) };
             fastmem::copy(dst_cells, other_cells);
+        } else if !same_page {
+            // We have managed memory, so we have to do a slower copy to
+            // get all of that right.
+            //
+            // PERF(port) (reshape): different-page managed copy. The
+            // reference runs its per-cell loop (page.zig:895-984)
+            // unconditionally; profiling put ~2/3 of screen-clone.clone in
+            // this loop plus its per-styled-cell style-set adds. Source and
+            // destination here are distinct pages (distinct allocations — no
+            // aliasing), so the loop is reorganized around maximal runs of
+            // consecutive "style-run" cells (no grapheme, no hyperlink; see
+            // `Cell::is_style_run_cell`) sharing one style_id:
+            //
+            //   - The first cell of a run is handled exactly like the
+            //     reference loop body: reset copy, row styled flag,
+            //     `add_with_id`, write back the mapped style id — same calls,
+            //     same order, same error mapping, so an error exit leaves the
+            //     identical prefix state.
+            //   - The remaining k-1 identical `add_with_id` calls collapse
+            //     into ONE `use_multiple(id, k-1)` iff they would provably
+            //     take the pure ref-bump fast path
+            //     (`add_with_id_is_pure_ref_bump`; the style context's
+            //     `deleted` is the trait-default no-op, so the only per-call
+            //     effect is the +1). The run-mate cell writes then collapse
+            //     into a bulk copy: per cell they would be `reset(src)` +
+            //     `set_style_id(src.style_id())`, which reproduces the source
+            //     bits verbatim (machine-checked by `cell_style_run_facts`).
+            //     If the fast path is not provable (dead/foreign item at that
+            //     id — the paths that also mutate `living`/`next_id`), the
+            //     run-mates fall back to the verbatim per-cell body.
+            //   - Default-style runs are the degenerate case with no set
+            //     calls at all: the reset alone is the identity, one bulk
+            //     copy.
+            //   - The kitty virtual-placeholder row flag is accumulated over
+            //     the run-mates and applied after the (error-free) batched
+            //     copy; the flag is a write-only idempotent set-true, so the
+            //     observable end state is identical to per-cell application.
+            //
+            // Cells with a grapheme or hyperlink go one-at-a-time through
+            // `clone_cell_managed_from` (the loop body verbatim).
+            let mut i: usize = 0;
+            while i < span {
+                let first = unsafe { *other_cells_ptr.add(i) };
+                if !first.is_style_run_cell() {
+                    self.clone_cell_managed_from(
+                        other,
+                        dst_row,
+                        unsafe { dst_cells_off_ptr.add(i) },
+                        unsafe { other_cells_ptr.add(i) },
+                    )?;
+                    i += 1;
+                    continue;
+                }
+
+                // Scan the maximal run [i, j) of style-run cells sharing
+                // `first`'s style id, accumulating the run-mates' kitty
+                // placeholder checks.
+                let run_style_id = first.style_id();
+                let mut j = i + 1;
+                let mut mates_kitty = false;
+                while j < span {
+                    let c = unsafe { *other_cells_ptr.add(j) };
+                    if !c.is_style_run_cell() || c.style_id() != run_style_id {
+                        break;
+                    }
+                    mates_kitty |= KITTY_GRAPHICS && c.codepoint() == KITTY_PLACEHOLDER;
+                    j += 1;
+                }
+
+                // First cell of the run: the reference loop body verbatim
+                // (the grapheme/hyperlink arms are dormant by the run
+                // predicate).
+                let dst_cell: *mut Cell = unsafe { dst_cells_off_ptr.add(i) };
+                unsafe { *dst_cell = first.copy_with_managed_reset() };
+                let mut batch_mates = true;
+                if run_style_id != stylepkg::DEFAULT_ID {
+                    unsafe { (*dst_row).set_styled(true) };
+
+                    // Slow path: Get the style from the other
+                    // page and add it to this page's style set.
+                    // PERF(port) (reshape): by pointer — no 28-byte marshal
+                    // (see `style_get_ptr_of` / `add_with_id_ptr`).
+                    let other_style = unsafe { Page::style_get_ptr_of(other, run_style_id) };
+                    let added = unsafe {
+                        self.styles
+                            .add_with_id_ptr(self_base, other_style, run_style_id)
+                    }
+                    .map_err(|e| match e {
+                        // The style set capacity needs to be increased.
+                        crate::ref_counted_set::AddError::OutOfMemory => {
+                            CloneFromError::StyleSetOutOfMemory
+                        }
+                        // The style set needs to be rehashed.
+                        crate::ref_counted_set::AddError::NeedsRehash => {
+                            CloneFromError::StyleSetNeedsRehash
+                        }
+                    })?;
+                    unsafe { (*dst_cell).set_style_id(added.unwrap_or(run_style_id)) };
+
+                    if j - i > 1 {
+                        batch_mates = unsafe {
+                            self.styles.add_with_id_is_pure_ref_bump(
+                                self_base,
+                                other_style,
+                                run_style_id,
+                            )
+                        };
+                        if batch_mates {
+                            // The k-1 pure ref bumps in one call.
+                            unsafe {
+                                self.styles.use_multiple(
+                                    self_base,
+                                    run_style_id,
+                                    RefCountIntTrait::from_usize(j - i - 1),
+                                )
+                            };
+                        }
+                    }
+                }
+                if KITTY_GRAPHICS && first.codepoint() == KITTY_PLACEHOLDER {
+                    unsafe { (*dst_row).set_kitty_virtual_placeholder(true) };
+                }
+
+                // Run-mates [i+1, j).
+                if batch_mates {
+                    if j - i > 1 {
+                        let n = j - i - 1;
+                        let dst_cells = unsafe {
+                            core::slice::from_raw_parts_mut(dst_cells_off_ptr.add(i + 1), n)
+                        };
+                        let src_cells =
+                            unsafe { core::slice::from_raw_parts(other_cells_ptr.add(i + 1), n) };
+                        fastmem::copy(dst_cells, src_cells);
+                        if mates_kitty {
+                            unsafe { (*dst_row).set_kitty_virtual_placeholder(true) };
+                        }
+                    }
+                } else {
+                    // Non-batchable run-mates: verbatim per-cell handling.
+                    for k in (i + 1)..j {
+                        self.clone_cell_managed_from(
+                            other,
+                            dst_row,
+                            unsafe { dst_cells_off_ptr.add(k) },
+                            unsafe { other_cells_ptr.add(k) },
+                        )?;
+                    }
+                }
+                i = j;
+            }
         } else {
             // We have managed memory, so we have to do a slower copy to
             // get all of that right.
+            //
+            // (Same-page partial clone: source and destination cells may
+            // alias, so the reference's per-cell loop is kept verbatim; the
+            // plain-run bulk copy above is only valid for distinct pages.)
             for i in 0..span {
                 let dst_cell: *mut Cell = unsafe { dst_cells_off_ptr.add(i) };
                 let src_cell: *const Cell = unsafe { other_cells_ptr.add(i) };
@@ -1197,6 +1371,80 @@ impl Page {
             if unsafe { (*last).wide() } == Wide::SpacerHead {
                 unsafe { (*last).set_wide(Wide::Narrow) };
             }
+        }
+
+        Ok(())
+    }
+
+    /// One managed-copy loop iteration of `clone_partial_row_from_inner` for
+    /// a DIFFERENT-page source cell that `needs_managed_clone` — the loop
+    /// body verbatim with `same_page` specialized to `false`.
+    // PERF(port) (reshape): outlined (`#[inline(never)]`) so the plain-run
+    // scan loop in the caller keeps its loop invariants in registers; only
+    // cells that actually fire an arm (rare) pay the call. Same calls, same
+    // order, same error mapping as the same-page loop below with
+    // `same_page == false`.
+    #[inline(never)]
+    fn clone_cell_managed_from(
+        &mut self,
+        other: *const Page,
+        dst_row: *mut Row,
+        dst_cell: *mut Cell,
+        src_cell: *const Cell,
+    ) -> Result<(), CloneFromError> {
+        let self_base = self.memory_ptr();
+
+        // Reset any managed memory markers on the cell so that we don't
+        // hit an integrity check if we have to return an error because
+        // the page can't fit the new memory.
+        // PERF(port): `copy_with_managed_reset` is the single masked
+        // store form of `*dst = *src` + the three sequential setter
+        // resets (see its PORT NOTE in page.rs).
+        unsafe { *dst_cell = (*src_cell).copy_with_managed_reset() };
+
+        // PORT NOTE (reshape): post-store snapshot of the source cell — see
+        // the same-page loop's note; here `dst_cell` cannot alias `src_cell`
+        // (distinct pages), so the snapshot equals the reference's
+        // per-branch reloads trivially.
+        let src = unsafe { *src_cell };
+
+        if src.has_grapheme() {
+            self.clone_cell_graphemes_from(other, false, dst_row, dst_cell, src_cell)?;
+        }
+        if src.hyperlink() {
+            // PORT FIX (parity): see the same-page loop — the helper's bool
+            // (true = same-page fast path taken, never here) is
+            // informational only; the style/kitty arms below still run.
+            let _ = self.clone_cell_hyperlink_from(other, false, dst_row, dst_cell, src_cell)?;
+        }
+        if src.style_id() != stylepkg::DEFAULT_ID {
+            unsafe { (*dst_row).set_styled(true) };
+
+            // Slow path: Get the style from the other
+            // page and add it to this page's style set.
+            let src_style_id = src.style_id();
+            // PERF(port) (reshape): pass the style by pointer into the other
+            // page's memory — no 28-byte marshal per call (see
+            // `style_get_ptr_of` / `RefCountedSet::add_with_id_ptr`).
+            let other_style = unsafe { Page::style_get_ptr_of(other, src_style_id) };
+            let added = unsafe {
+                self.styles
+                    .add_with_id_ptr(self_base, other_style, src_style_id)
+            }
+            .map_err(|e| match e {
+                // The style set capacity needs to be increased.
+                crate::ref_counted_set::AddError::OutOfMemory => {
+                    CloneFromError::StyleSetOutOfMemory
+                }
+                // The style set needs to be rehashed.
+                crate::ref_counted_set::AddError::NeedsRehash => {
+                    CloneFromError::StyleSetNeedsRehash
+                }
+            })?;
+            unsafe { (*dst_cell).set_style_id(added.unwrap_or(src_style_id)) };
+        }
+        if KITTY_GRAPHICS && src.codepoint() == KITTY_PLACEHOLDER {
+            unsafe { (*dst_row).set_kitty_virtual_placeholder(true) };
         }
 
         Ok(())
@@ -1330,8 +1578,12 @@ impl Page {
                             // is ever actually useful, I think it may not be.
                             let self_ptr: *mut Page = self;
         self.hyperlink_set.context.set_page(self_ptr);
+                            // PERF(port) (reshape): by-pointer add — no
+                            // per-call marshal of the PageEntry (see
+                            // `RefCountedSet::add_with_id_ptr`).
                             let added = unsafe {
-                                self.hyperlink_set.add_with_id(self_base, dst_link, id)
+                                self.hyperlink_set
+                                    .add_with_id_ptr(self_base, &raw const dst_link, id)
                             }
                             .map_err(|e| match e {
                                 // The hyperlink set capacity needs to be increased.
