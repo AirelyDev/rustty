@@ -819,15 +819,22 @@ impl<'a> Parser<'a> {
             // (bounds check + store into `self.buffer`, osc.zig:543-549);
             // no Vec, no grow check — the `len < MAX_BUF` guard also lets the
             // indexing bounds check fold away.
+            //
+            // PORT NOTE (reshape): the success store is written as the
+            // fall-through arm (`len < MAX_BUF` first) — the same shape as the
+            // Zig writer's `if (end < buffer.len)` fast path — so the per-byte
+            // loop takes 2 taken branches instead of 3 (measured: the fat-LTO
+            // build's only osc win over release-fast was exactly this block
+            // layout; see PERF_LOG.md osc-parser entry).
             match &mut cap.backing {
                 CaptureBacking::Fixed(len) => {
-                    // We have overflowed our buffer or had some other error, set the
-                    // state to invalid so that we discard any further input.
-                    if *len >= MAX_BUF {
-                        self.state = State::Invalid;
-                    } else {
+                    if *len < MAX_BUF {
                         self.buffer[*len] = c;
                         *len += 1;
+                    } else {
+                        // We have overflowed our buffer or had some other error, set the
+                        // state to invalid so that we discard any further input.
+                        self.state = State::Invalid;
                     }
                 }
                 CaptureBacking::Allocating(w) => {
