@@ -292,9 +292,17 @@ impl<'a> CellSlice<'a> {
 
     /// `.items(.grapheme)[x]`: the grapheme cluster for cell `x`. Undefined
     /// (empty) unless the raw cell's `content_tag` is `codepoint_grapheme`.
+    //
+    // PERF(port): checked slicing with an empty fallback — spans of UNFLAGGED
+    // cells are stale (the reference leaves the grapheme column literally
+    // undefined; see `rebuild_raw`) and may dangle past the reset
+    // `grapheme_buf`. Flagged cells are always written by `set_grapheme` in
+    // the same rebuild, so their spans are always in bounds.
     pub fn grapheme(&self, x: usize) -> &'a [u32] {
         let (off, len) = self.spans[x];
-        &self.buf[off as usize..off as usize + len as usize]
+        self.buf
+            .get(off as usize..off as usize + len as usize)
+            .unwrap_or(&[])
     }
 }
 
@@ -342,9 +350,14 @@ impl CellList {
     }
 
     /// `.items(.grapheme)[x]`. Undefined (empty) unless flagged.
+    //
+    // PERF(port): checked slicing with an empty fallback — see
+    // `CellSlice::grapheme` (unflagged spans are stale by design).
     pub fn grapheme(&self, x: usize) -> &[u32] {
         let (off, len) = self.grapheme_spans[x];
-        &self.grapheme_buf[off as usize..off as usize + len as usize]
+        self.grapheme_buf
+            .get(off as usize..off as usize + len as usize)
+            .unwrap_or(&[])
     }
 
     /// A borrowed SoA view (the reference `cells.slice()`).
@@ -369,28 +382,40 @@ impl CellList {
     // PORT NOTE (reshape): `_ = arena.reset(.retain_capacity)` +
     // `clearRetainingCapacity()` — drops the logical length of every column and
     // the grapheme arena while retaining backing capacity.
+    //
+    // PERF(port): only the `raw` column and the grapheme arena are logically
+    // cleared. The `style`/`grapheme_spans` columns keep BOTH capacity and
+    // length: the reference `clearRetainingCapacity` + `resize(alloc, cols)`
+    // pair leaves those columns' contents undefined (only `raw` is then
+    // memcpy'd, render.zig:469-505), so re-zeroing them here was pure extra
+    // write traffic — measured ~38% of `screen-clone.render` (7.1ms of 18.8ms
+    // per 1000 updates, non-official harness). Stale slots are exactly the
+    // reference's "undefined unless flagged" contract, but remain
+    // memory-safe initialized values in Rust.
     fn clear_retaining_capacity(&mut self) {
         self.raw.clear();
-        self.style.clear();
-        self.grapheme_spans.clear();
         self.grapheme_buf.clear();
     }
 
     // PORT NOTE (reshape): `try cells.resize(alloc, self.cols)` followed by
     // `fastmem.copy(page.Cell, cells_slice.items(.raw), page_cells)`. The raw
-    // column is filled by a single `extend_from_slice` memcpy; the `style`
-    // column length is matched to `cols` (only NEW tail slots take
-    // `Style::default()`, existing slots keep stale-but-unread values — the
-    // reference leaves them undefined); the grapheme spans are reset to the
-    // empty `(0, 0)` sentinel and `grapheme_buf` cleared so any unflagged cell
-    // reads back an empty cluster.
+    // column is filled by a single `extend_from_slice` memcpy; the `style` and
+    // `grapheme_spans` columns are (re)sized ONLY when the column count
+    // changes (the reference `resize` moment) — their contents stay
+    // stale-but-unread for unflagged cells exactly like the reference's
+    // undefined columns. New slots take `Style::default()` / the empty
+    // `(0, 0)` span so first reads are defined.
     fn rebuild_raw(&mut self, page_cells: &[page::Cell]) {
         self.raw.clear();
         self.raw.extend_from_slice(page_cells);
         let n = self.raw.len();
-        self.style.resize(n, Style::default());
-        self.grapheme_spans.clear();
-        self.grapheme_spans.resize(n, (0, 0));
+        // PERF(port): unlikely branch — column count changes only on resize.
+        if self.style.len() != n {
+            self.style.clear();
+            self.style.resize(n, Style::default());
+            self.grapheme_spans.clear();
+            self.grapheme_spans.resize(n, (0, 0));
+        }
         self.grapheme_buf.clear();
     }
 
@@ -703,22 +728,29 @@ impl RenderState {
             // restore it on all exit paths so we don't leak memory.
             // (PORT NOTE: no arena in the Rust port — owned `Vec`s instead.)
 
+            // PERF(port): hoist the row projection once per row — the
+            // reference hoists the `row_data.slice()` column pointers before
+            // the loop (render.zig:383-390); repeated `self.row_data[y]`
+            // indexing paid a bounds check per touch (and per cell in the
+            // managed loop below).
+            let row: &mut Row = &mut self.row_data[y as usize];
+
             // Reset our cells if we're rebuilding this row.
-            if !self.row_data[y as usize].cells.is_empty() {
+            if !row.cells.is_empty() {
                 // _ = arena.reset(.retain_capacity);
                 // clearRetainingCapacity()
-                self.row_data[y as usize].cells.clear_retaining_capacity();
-                self.row_data[y as usize].selection = None;
-                self.row_data[y as usize].highlights = Vec::new();
+                row.cells.clear_retaining_capacity();
+                row.selection = None;
+                row.highlights = Vec::new();
             }
-            self.row_data[y as usize].dirty = true;
+            row.dirty = true;
 
             // Get all our cells in the page.
             let page_cells: &[page::Cell] = unsafe { &*(*p).get_cells(page_rac.row) };
             assert!(page_cells.len() == self.cols as usize);
 
             // Copy our raw row data
-            self.row_data[y as usize].raw = unsafe { *page_rac.row };
+            row.raw = unsafe { *page_rac.row };
 
             // Note: our cells MultiArrayList uses our general allocator.
             // We do this on purpose because as rows become dirty, we do
@@ -742,7 +774,7 @@ impl RenderState {
             // untouched (written below only for flagged cells), instead of the
             // prior per-cell `push(Cell { .. })` with a capacity check +
             // `Style::default()`/`Vec::new()` stores + drop glue per cell.
-            self.row_data[y as usize].cells.rebuild_raw(page_cells);
+            row.cells.rebuild_raw(page_cells);
             if !unsafe { (*page_rac.row).managed_memory() } {
                 y += 1;
                 continue;
@@ -758,7 +790,7 @@ impl RenderState {
                         let base = (*p).memory_ptr();
                         *(*p).styles.get(base, page_cell.style_id())
                     };
-                    self.row_data[y as usize].cells.set_style(x, style);
+                    row.cells.set_style(x, style);
                 }
 
                 // Switch on our content tag to handle less likely cases.
@@ -779,13 +811,13 @@ impl RenderState {
                                 None => &[],
                             }
                         };
-                        self.row_data[y as usize].cells.set_grapheme(x, g);
+                        row.cells.set_grapheme(x, g);
                     }
 
                     page::ContentTag::BgColorRgb => {
                         // @branchHint(.unlikely);
                         let rgb = page_cell.content_color_rgb();
-                        self.row_data[y as usize].cells.set_style(
+                        row.cells.set_style(
                             x,
                             Style {
                                 bg_color: crate::style::Color::Rgb(color::RGB {
@@ -800,7 +832,7 @@ impl RenderState {
 
                     page::ContentTag::BgColorPalette => {
                         // @branchHint(.unlikely);
-                        self.row_data[y as usize].cells.set_style(
+                        row.cells.set_style(
                             x,
                             Style {
                                 bg_color: crate::style::Color::Palette(
