@@ -41,6 +41,73 @@ here:
 In addition, all Rust code should be formatted with `cargo fmt` and linted with
 `cargo clippy` before you commit (see [Linting](#linting)).
 
+## Build Methods and Artifacts
+
+**`cargo` is the foundation; everything else wraps it.** There is no `zig` in
+Rustty — the `xtask` crate (`cargo run -p xtask -- <cmd>`) replaces Ghostty's
+`src/build/` and orchestrates the multi-step builds (C headers, the resource
+tree, the macOS xcframework, source tarballs). `CMake`, `Doxygen`, the
+`Makefile`, `macos/build.nu`, and the Nix flake are consumers or packagers
+layered on top of those two.
+
+| Method | Command | Produces | Lands in | Use it for |
+| ------ | ------- | -------- | -------- | ---------- |
+| **cargo** | `cargo build [--release]` | all workspace crates | `target/{debug,release}/` | day-to-day development |
+| | `cargo run -p rustty` | the `rustty` binary | `target/<profile>/rustty` | running Rustty locally |
+| | `cargo test [-p <crate>]` | — | — | tests (memory-safety gate: [Checking for Memory Leaks](#checking-for-memory-leaks)) |
+| | `cargo build -p rustty-vt-c --release [--features simd]` | the VT C library | `target/release/librustty_vt_c.{a,dylib}` | the headless `librustty-vt` C library |
+| **xtask** | `cargo run -p xtask -- header-gen` | `include/rustty.h` (+ `rustty/vt/*`) via cbindgen | `include/` | regenerating the VT C headers |
+| | `… -- header-gen-apprt` | `include/rustty-apprt.h` | `include/` | the embedding-API header |
+| | `… -- xcframework` | `RusttyKit.xcframework` (SIMD-on) | `dist/RusttyKit.xcframework` | the macOS Swift-app library |
+| | `… -- resources` | terminfo, shell-integration, themes, man pages, completions, locale | `zig-out/share/` | the macOS Copy-Resources tree |
+| | `… -- dist` | the source tarball | `dist/rustty-<version>.tar.gz` | packaging / release source |
+| | `… -- distcheck` | (extracts + builds the tarball) | — | validating the tarball is self-contained |
+| **CMake** | `cmake -B build && cmake --build build` | `librustty_vt_c` for C/CMake consumers | `target/<profile>/` | C/CMake projects consuming the VT library (FetchContent / `find_package(rustty-vt)`) |
+| | `cmake --install build --prefix P` | library + headers + pkg-config config | `P/{lib,include,lib/cmake/rustty-vt}` | installing the VT library to a prefix |
+| **Doxygen** | `doxygen Doxyfile` | the C-API docs (HTML + man pages) | `doc/librustty/`, `doc/man/` | the `librustty` C-API reference |
+| **Makefile** | `make clean` | removes `target`, the xcframework, `build-cmake`, `doc` | — | quick cleanup |
+| **macOS app** | `cargo run -p xtask -- xcframework` then `macos/build.nu` | `Rustty.app` (two-phase: library → Swift app via xcodebuild) | `macos/build/<config>/Rustty.app` | the macOS GUI app |
+| **Nix** | `nix build .#librustty-vt` / `.#rustty`; `nix develop` | C library / GTK app / dev shell / VMs | the Nix store | reproducible builds, Linux packaging, dev shell |
+
+### Where the artifacts live
+
+- **CLI/app binary:** `target/{debug,release}/rustty`
+- **C libraries:** `target/release/librustty_vt_c.{a,dylib}` (VT engine), `librustty_apprt_c.a` (embedding API)
+- **C headers (checked in):** `include/rustty/vt.h` + `include/rustty/vt/*` (curated), `include/rustty.h` + `include/rustty-apprt.h` (cbindgen-generated)
+- **macOS xcframework:** `dist/RusttyKit.xcframework`
+- **macOS app:** `macos/build/<config>/Rustty.app`
+- **Runtime resources:** `zig-out/share/` (terminfo, shell-integration, themes, man, completions, locale)
+- **Source tarball:** `dist/rustty-<version>.tar.gz`
+- **C-API docs:** `doc/librustty/` (HTML), `doc/man/` (man3)
+- **Packaging _source_ assets (checked in):** `dist/{cmake,doxygen,linux,windows,macos}`
+
+`target/`, `zig-out/`, `dist/RusttyKit.xcframework`, `dist/*.tar.gz`, `doc/`, and
+`build-cmake/` are all git-ignored (regenerable). The
+`dist/{cmake,doxygen,linux,windows,macos}` **source** assets are tracked.
+
+### Releasing
+
+- **Source release:** `cargo run -p xtask -- dist` produces the tarball; sign it
+  with the project's minisign key and host it at `rustty.sh` (see
+  [PACKAGING.md](PACKAGING.md)).
+- **macOS app + auto-update:** `xtask xcframework` → `macos/build.nu` →
+  `Rustty.app`; sign it, then `dist/macos/update_appcast_{tag,tip}.py` generates
+  the Sparkle `appcast.xml` (release host `rustty.sh`, tip host `tip.rustty.sh`).
+- **Linux distro packages:** `dist/linux/` (desktop / metainfo / dbus / systemd)
+  feed flatpak and snap builds.
+
+> [!NOTE]
+>
+> Some methods above are **forward references** while the port is brought up:
+> the **Nix** flake and VMs land in Batch 4 (see
+> `docs/superpowers/specs/2026-07-15-batch4-nix-flake-design.md`); the automated
+> **release / flatpak / snap** GitHub workflows land with it (Phase C); the
+> translation `.mo` compilation and runtime loading land with the i18n batch;
+> and the **GTK Linux app** (`nix build .#rustty`, flatpak/snap) is gated on the
+> GTK apprt going live. Everything under **cargo**, the wired **xtask**
+> subcommands, **CMake**, **Doxygen**, the **Makefile**, and the **macOS app**
+> works today.
+
 ## Extra Dependencies
 
 Building the GTK (Linux) application from a Git checkout requires some
