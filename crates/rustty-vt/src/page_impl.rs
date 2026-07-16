@@ -1134,12 +1134,18 @@ impl Page {
                         other, same_page, dst_row, dst_cell, src_cell,
                     )?;
                 }
-                if src.hyperlink()
-                    && self.clone_cell_hyperlink_from(
+                if src.hyperlink() {
+                    // PORT FIX (parity): the reference's `break :hyperlink`
+                    // (page.zig:926) exits only the labeled hyperlink block —
+                    // the style/kitty arms below still run for the same cell.
+                    // A prior port `continue`d here on the same-page fast
+                    // path, skipping them and dropping the style copy/refcount
+                    // for a cell carrying BOTH a hyperlink and a style. The
+                    // helper's bool (true = fast path taken) is informational
+                    // only.
+                    let _ = self.clone_cell_hyperlink_from(
                         other, same_page, dst_row, dst_cell, src_cell,
-                    )?
-                {
-                    continue;
+                    )?;
                 }
                 if src.style_id() != stylepkg::DEFAULT_ID {
                     unsafe { (*dst_row).set_styled(true) };
@@ -1249,7 +1255,10 @@ impl Page {
 
     /// The hyperlink arm of `clone_partial_row_from_inner`'s managed-copy
     /// loop (one cell). Returns `true` when the same-page fast path was
-    /// taken (the caller `continue`s, preserving the existing control flow).
+    /// taken — informational only: it mirrors the reference's
+    /// `break :hyperlink` (page.zig:926), which exits just the labeled
+    /// hyperlink block, so the caller falls through to the style/kitty arms
+    /// either way.
     #[cold]
     #[inline(never)]
     fn clone_cell_hyperlink_from(

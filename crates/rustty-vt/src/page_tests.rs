@@ -1386,6 +1386,107 @@ mod tests {
         page.deinit();
     }
 
+    /// Regression test (rustty-only, parity): a same-page cell carrying BOTH
+    /// a hyperlink and a style must keep its style through
+    /// `clone_partial_row_from`. The reference's `break :hyperlink`
+    /// (page.zig:926) exits only the labeled hyperlink block, so the style
+    /// arm still runs for that cell; a prior port `continue`d past it on the
+    /// same-page fast path, dropping the style copy/refcount.
+    #[test]
+    fn page_cloneRowFrom_partial_hyperlink_and_style_in_same_page() {
+        let mut page = Page::init(Capacity {
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+
+        // We need to create a hyperlink.
+        let hyperlink_id = {
+            let page_ptr: *mut Page = &mut page;
+            page.hyperlink_set.context.set_page(page_ptr);
+            page.hyperlink_set.context.set_src_page(None);
+            unsafe {
+                page.hyperlink_set.add(
+                    page.memory_ptr(),
+                    hyperlink::PageEntry {
+                        id: hyperlink::PageEntryId::Implicit(0),
+                        uri: OffsetSlice::default(),
+                    },
+                )
+            }
+            .unwrap()
+        };
+
+        // And a style.
+        let style_id = {
+            let base = page.memory_ptr();
+            unsafe {
+                page.styles.add(
+                    base,
+                    Style {
+                        flags: stylepkg::Flags {
+                            bold: true,
+                            ..stylepkg::Flags::default()
+                        },
+                        ..Style::default()
+                    },
+                )
+            }
+            .unwrap()
+        };
+
+        // Write, with the hyperlink AND the style on the same cell.
+        {
+            let y = 0;
+            for x in 0..page.size.cols as usize {
+                let rac = page.get_row_and_cell(x, y);
+                unsafe {
+                    *rac.cell = cell_codepoint((x + 1) as u21);
+                }
+            }
+            {
+                let rac = page.get_row_and_cell(7, y);
+                page.set_hyperlink(
+                    unsafe { &mut *rac.row },
+                    unsafe { &mut *rac.cell },
+                    hyperlink_id,
+                )
+                .unwrap();
+                let base = page.memory_ptr();
+                unsafe {
+                    (*rac.row).set_styled(true);
+                    (*rac.cell).set_style_id(style_id);
+                    page.styles.use_id(base, style_id);
+                }
+            }
+        }
+        assert_eq!(1usize, page.hyperlink_count());
+
+        // Clone into the same page
+        {
+            let dst: *mut Row = page.get_row(1);
+            let src: *const Row = page.get_row(0);
+            let page_ptr: *mut Page = &mut page;
+            unsafe {
+                (*page_ptr)
+                    .clone_partial_row_from(page_ptr, &mut *dst, &*src, 2, 8)
+                    .unwrap();
+            }
+        }
+
+        // The cloned cell must carry BOTH the hyperlink and the style.
+        {
+            let rac = page.get_row_and_cell(7, 1);
+            assert!(unsafe { (*rac.row).hyperlink() });
+            assert!(unsafe { (*rac.cell).hyperlink() });
+            assert!(unsafe { (*rac.row).styled() });
+            assert_eq!(style_id, unsafe { (*rac.cell).style_id() });
+        }
+        assert_eq!(2usize, page.hyperlink_count());
+
+        page.deinit();
+    }
+
     #[test]
     fn page_cloneRowFrom_partial_hyperlink_in_same_page_omit() {
         let mut page = Page::init(Capacity::new(10, 10)).unwrap();
