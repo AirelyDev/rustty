@@ -247,7 +247,8 @@ impl CodepointWidth {
                     // const cp_, const consumed = d.next(c);
                     let (cp_, consumed) = d.next(c);
                     // assert(consumed);
-                    assert!(consumed);
+                    // PERF(port): std.debug.assert tier — live in Debug, absent in release.
+                    debug_assert!(consumed);
                     // if (cp_) |cp| {
                     if let Some(cp) = cp_ {
                         // std.mem.doNotOptimizeAway(wcwidth(cp));
@@ -288,7 +289,8 @@ impl CodepointWidth {
 
             for &c in &buf.0[..n] {
                 let (cp_, consumed) = d.next(c);
-                assert!(consumed);
+                // PERF(port): std.debug.assert tier — live in Debug, absent in release.
+                debug_assert!(consumed);
                 if let Some(cp) = cp_ {
                     // This is the same trick we do in terminal.zig so we
                     // keep it here.
@@ -333,7 +335,8 @@ impl CodepointWidth {
 
             for &c in &buf.0[..n] {
                 let (cp_, consumed) = d.next(c);
-                assert!(consumed);
+                // PERF(port): std.debug.assert tier — live in Debug, absent in release.
+                debug_assert!(consumed);
                 if let Some(cp) = cp_ {
                     // std.mem.doNotOptimizeAway(simd.codepointWidth(cp));
                     black_box(simd::codepointWidth(cp));

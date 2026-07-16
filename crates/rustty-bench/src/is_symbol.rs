@@ -181,7 +181,8 @@ impl IsSymbol {
 
             for &c in &buf.0[..n] {
                 let (cp_, consumed) = d.next(c);
-                assert!(consumed);
+                // PERF(port): std.debug.assert tier — live in Debug, absent in release.
+                debug_assert!(consumed);
                 if let Some(cp) = cp_ {
                     // std.mem.doNotOptimizeAway(uucode.get(.is_symbol, cp));
                     //
@@ -229,7 +230,8 @@ impl IsSymbol {
 
             for &c in &buf.0[..n] {
                 let (cp_, consumed) = d.next(c);
-                assert!(consumed);
+                // PERF(port): std.debug.assert tier — live in Debug, absent in release.
+                debug_assert!(consumed);
                 if let Some(cp) = cp_ {
                     // std.mem.doNotOptimizeAway(symbols_table.get(cp));
                     black_box(symbols_table().get(cp));

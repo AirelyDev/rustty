@@ -225,7 +225,8 @@ impl GraphemeBreak {
 
             for &c in &buf.0[..n] {
                 let (cp_, consumed) = d.next(c);
-                assert!(consumed);
+                // PERF(port): std.debug.assert tier — live in Debug, absent in release.
+                debug_assert!(consumed);
                 // if (cp_) |cp2| {
                 if let Some(cp2) = cp_ {
                     // std.mem.doNotOptimizeAway(unicode.graphemeBreak(cp1, @intCast(cp2), &state));
