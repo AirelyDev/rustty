@@ -32,6 +32,8 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use allocator_api2::alloc::{AllocError, Allocator};
 
+use crate::arena_allocator::ResizeInPlace;
+
 /// The shared counter state behind a [`TrackingAllocator`].
 ///
 /// Split out from the wrapper so it can be `&'static`-installed where a wrapper
@@ -80,6 +82,25 @@ impl TrackerState {
             .fetch_sub(layout.size(), Ordering::Relaxed);
         self.outstanding_allocs.fetch_sub(1, Ordering::Relaxed);
         self.total_frees.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a successful IN-PLACE resize of a live block from `old_size` to
+    /// `new_size` bytes: the block count is unchanged (a resize is not an
+    /// alloc/free event), only the outstanding byte total moves by the delta.
+    /// The matching [`on_free`](Self::on_free) must then be recorded with the
+    /// NEW size (the resized block's true size) — exactly how the arena frees a
+    /// resized node by its updated `data`. Without this adjustment a forwarded
+    /// resize would desynchronize the byte ledger (alloc(old)…free(new)) and
+    /// the leak gates would see a phantom byte leak.
+    #[inline]
+    pub fn on_resize(&self, old_size: usize, new_size: usize) {
+        if new_size >= old_size {
+            self.outstanding_bytes
+                .fetch_add(new_size - old_size, Ordering::Relaxed);
+        } else {
+            self.outstanding_bytes
+                .fetch_sub(old_size - new_size, Ordering::Relaxed);
+        }
     }
 
     /// Bytes that have been allocated but not yet freed.
@@ -280,6 +301,22 @@ unsafe impl<A: Allocator> Allocator for TrackingAllocator<'_, A> {
     }
 }
 
+/// Forward the in-place resize seam to the child and, on success, adjust the
+/// recorded byte total by the size delta ([`TrackerState::on_resize`]) so the
+/// eventual `deallocate` with the NEW size balances the ledger. Observation
+/// only — the child performs (or refuses) the actual resize.
+impl<A: ResizeInPlace> ResizeInPlace for TrackingAllocator<'_, A> {
+    unsafe fn resize_in_place(&self, ptr: NonNull<u8>, old_layout: Layout, new_len: usize) -> bool {
+        // SAFETY: forwarded verbatim under the same preconditions (live block
+        // of this allocator — allocations are served by `self.child`).
+        let ok = unsafe { self.child.resize_in_place(ptr, old_layout, new_len) };
+        if ok {
+            self.state.get().on_resize(old_layout.size(), new_len);
+        }
+        ok
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,6 +393,29 @@ mod tests {
         let p = unsafe { t.shrink(p.cast::<u8>(), big, small).unwrap() };
         assert_eq!(t.outstanding_bytes(), 32);
         unsafe { t.deallocate(p.cast::<u8>(), small) };
+        t.assert_no_leak();
+    }
+
+    /// The resize seam forwards to the child: `Global` refuses (default), so
+    /// nothing changes on the counters; a successful resize (modeled by calling
+    /// `on_resize` directly, as the forwarding impl does) moves ONLY the byte
+    /// total by the delta so a free with the NEW size balances the ledger.
+    #[test]
+    fn resize_seam_tracks_byte_delta() {
+        let t = TrackingAllocator::new(Global);
+        let old = Layout::from_size_align(4096, 8).unwrap();
+        let p = t.allocate(old).unwrap();
+        // Global refuses in-place resize (default impl): counters untouched.
+        assert!(!unsafe { t.resize_in_place(p.cast::<u8>(), old, 1024) });
+        assert_eq!(t.outstanding_allocs(), 1);
+        assert_eq!(t.outstanding_bytes(), 4096);
+        // A successful in-place shrink adjusts bytes only (no alloc/free event),
+        // and the matching free with the NEW size returns the ledger to zero.
+        t.state().on_resize(4096, 1024);
+        assert_eq!(t.outstanding_allocs(), 1);
+        assert_eq!(t.outstanding_bytes(), 1024);
+        t.state().on_resize(1024, 4096); // undo so the real free balances
+        unsafe { t.deallocate(p.cast::<u8>(), old) };
         t.assert_no_leak();
     }
 

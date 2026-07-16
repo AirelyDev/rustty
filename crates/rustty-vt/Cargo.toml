@@ -39,6 +39,23 @@ identity-oracle = ["rustty-identity/identity-oracle"]
 # GUI-glue dependency (R3) DEFERRED to apprt — see DEFERRALS.md. Off by default so
 # the VT crate has no GUI dependency.
 imgui = []
+# OFF-BY-DEFAULT bench instrumentation: compiles the PageList page-allocation
+# tracking seam (`pagelist::page_tracking` + the `TrackingAllocator` child of the
+# page pool) into a NON-test build, so the standalone `alloc_bench` example can
+# count page allocs/bytes with production page geometry (`std_capacity`'s
+# `cfg!(test)` stays false => grapheme_bytes 8192, std_size 589824) and without
+# libtest overhead. The seam sites are `cfg(any(test, feature = "alloc-bench"))`;
+# with the feature OFF a production build compiles exactly the code it always
+# did (the tracker is observation-only even when compiled in). Never enable for
+# published artifacts.
+alloc-bench = ["rustty-zigstd/tracking"]
+
+# The standalone equal-scope PageList allocation bench (see the Zig twin at
+# .port/phase-1/bench-zig-pagelist). `required-features` makes cargo skip it
+# entirely unless the alloc-bench seam is compiled in.
+[[example]]
+name = "alloc_bench"
+required-features = ["alloc-bench"]
 
 [dependencies]
 # R2 identity source of truth: provides the vt LIBRARY version consumed by

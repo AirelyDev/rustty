@@ -827,6 +827,7 @@ dependencies = [
  "rustty-identity",
  "rustty-util",
  "rustty-xev",
+ "rustty-zigstd",
 ]
 
 [[package]]

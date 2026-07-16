@@ -45,6 +45,7 @@ use core::alloc::Layout;
 use core::ptr::NonNull;
 
 use allocator_api2::alloc::{AllocError, Allocator};
+use rustty_zigstd::arena_allocator::ResizeInPlace;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::mach::VMTag;
@@ -199,6 +200,46 @@ mod miri_alloc {
     pub unsafe fn deallocate(ptr: NonNull<u8>, layout: Layout) {
         let al = aligned_layout(layout);
         unsafe { Global.deallocate(ptr, al) };
+    }
+}
+
+/// The in-place resize seam — the faithful map of the `resize` entry of the
+/// reference allocator vtable (`TaggedPageAllocator.vtable.resize`, mach.zig /
+/// Zig 0.15.2 `std.heap.PageAllocator.realloc`): an mmap'd region can be shrunk
+/// in place by `munmap`ing its page-rounded tail (and a same-page-count resize
+/// is a no-op success). Growth fails on Darwin (no `mremap`), so the arena falls
+/// back to its manual realloc exactly like the reference.
+//
+// PERF(port): un-deadens the ALREADY-PORTED `TaggedPageAllocator::resize` so
+// `ArenaAllocator::reset` (PageList::reset's retain-with-limit) shrinks the
+// retained arena node in place instead of alloc+free'ing a replacement — the
+// reference's `child_allocator.rawResize` succeeding (arena_allocator.zig:154).
+impl ResizeInPlace for PageAllocator {
+    // Real mmap path (Darwin): delegate to the ported tagged allocator's
+    // `resize` vtable entry. The generic (non-Darwin) unix path keeps the
+    // default refusal for now — its Zig counterpart supports the same tail
+    // munmap, but only the Darwin path is wired per the macOS-first plan (the
+    // arena's manual-realloc fallback remains correct there). Under Miri/wasm
+    // the backing is the std heap (no mmap), which cannot resize in place, so
+    // those builds keep the default refusal too.
+    #[cfg(all(not(miri), any(target_os = "macos", target_os = "ios")))]
+    unsafe fn resize_in_place(&self, ptr: NonNull<u8>, old_layout: Layout, new_len: usize) -> bool {
+        // The reference vtable `resize` asserts nothing about zero sizes; our
+        // `allocate` maps a zero-size request as one byte (see above), so
+        // mirror that accounting to keep the pair consistent. `new_len == 0`
+        // is excluded by the trait contract.
+        let old_len = if old_layout.size() == 0 {
+            1
+        } else {
+            old_layout.size()
+        };
+        // PORT NOTE: `resize(memory, alignment, new_len, ra)` takes the full
+        // handed-out slice; it page-rounds both lengths internally. The slice
+        // is rebuilt transiently here (raw ptr + recorded length), exactly the
+        // `alloc_buf = @as([*]u8, @ptrCast(node))[0..node.data]` the arena
+        // passes to `rawResize`.
+        let memory = unsafe { core::slice::from_raw_parts_mut(ptr.as_ptr(), old_len) };
+        crate::mach::taggedPageAllocator(self.tag).resize(memory, old_layout.align(), new_len, 0)
     }
 }
 
@@ -370,6 +411,59 @@ mod tests {
 
         // Freeing works (munmap). No leak; nothing should fault.
         unsafe { alloc.deallocate(region.cast::<u8>(), layout) };
+    }
+
+    /// The resize seam: an mmap'd region shrinks IN PLACE (tail munmap'd, same
+    /// address), growth is refused (no `mremap` on Darwin), and the shrunk
+    /// region frees cleanly with its NEW size — the exact contract
+    /// `ArenaAllocator::reset` relies on for the retained node.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn resize_in_place_shrinks_and_refuses_growth() {
+        use rustty_zigstd::arena_allocator::ResizeInPlace;
+
+        let alloc = page_allocator();
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+        let old_layout = Layout::from_size_align(3 * page, page).unwrap();
+
+        let region = alloc.allocate(old_layout).expect("mmap failed");
+        let ptr = region.cast::<u8>();
+        // Touch the first page so we can prove the retained mapping survives.
+        unsafe { ptr.as_ptr().write(0x5A) };
+
+        // Growth must fail on Darwin (no mremap) — nothing changed.
+        assert!(!unsafe { alloc.resize_in_place(ptr, old_layout, 4 * page) });
+
+        // Shrink to one page: succeeds in place (same address by contract).
+        let new_len = page;
+        assert!(unsafe { alloc.resize_in_place(ptr, old_layout, new_len) });
+
+        // The retained page is still mapped, readable, and holds our byte.
+        assert_eq!(unsafe { ptr.as_ptr().read() }, 0x5A);
+        unsafe { ptr.as_ptr().add(page - 1).write(0xCD) };
+
+        // Free with the NEW size (the post-resize contract).
+        let new_layout = Layout::from_size_align(new_len, page).unwrap();
+        unsafe { alloc.deallocate(ptr, new_layout) };
+    }
+
+    /// A same-page-count resize is a no-op success (the reference's
+    /// `new_size_aligned == page_aligned_len` fast path).
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn resize_in_place_same_page_count_succeeds() {
+        use rustty_zigstd::arena_allocator::ResizeInPlace;
+
+        let alloc = page_allocator();
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+        let old_layout = Layout::from_size_align(page, page).unwrap();
+        let region = alloc.allocate(old_layout).expect("mmap failed");
+        let ptr = region.cast::<u8>();
+        // Fewer bytes, same page count: in-place success, mapping untouched.
+        let new_len = page / 2;
+        assert!(unsafe { alloc.resize_in_place(ptr, old_layout, new_len) });
+        let new_layout = Layout::from_size_align(new_len, page).unwrap();
+        unsafe { alloc.deallocate(ptr, new_layout) };
     }
 
     /// An over-aligned request (alignment greater than the page size) still comes

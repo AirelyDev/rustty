@@ -233,25 +233,35 @@ use crate::page::PAGE_SIZE_MIN;
 // observable about the memory; it only counts. The non-`cfg(test)` library never
 // references the tracker, exactly as the reference only swaps the allocator under
 // `is_test`.
-#[cfg(not(test))]
+//
+// PORT NOTE (alloc-bench seam): the OFF-BY-DEFAULT `alloc-bench` cargo feature
+// compiles this same tracking seam into a NON-test build so the standalone
+// `examples/alloc_bench.rs` can count page allocations with PRODUCTION page
+// geometry (no libtest, `cfg!(test)` false => std_size 589824) — the equal-scope
+// twin of the Zig standalone bench (.port/phase-1/bench-zig-pagelist). With the
+// feature off (every production build) the `cfg(any(test, feature =
+// "alloc-bench"))` sites reduce to the original `cfg(test)` split: the tracker
+// is not compiled and the backing allocator is the bare `PageAllocator`.
+#[cfg(not(any(test, feature = "alloc-bench")))]
 type PageBackingAlloc = PageAllocator;
-#[cfg(test)]
+#[cfg(any(test, feature = "alloc-bench"))]
 type PageBackingAlloc =
     rustty_zigstd::tracking_allocator::TrackingAllocator<'static, PageAllocator>;
 
 type PagePool = DynamicMemoryPoolAligned<PageBackingAlloc>;
 
 /// Construct the page pool's backing (child) allocator. In a normal build this is
-/// just `page_allocator()`; under test it is the same `page_allocator()` wrapped
-/// in a `TrackingAllocator` that records into the global [`page_tracking`] tracker
-/// (the faithful map of `pageAllocator()` returning `std.testing.allocator`).
+/// just `page_allocator()`; under test (or the off-by-default `alloc-bench`
+/// feature) it is the same `page_allocator()` wrapped in a `TrackingAllocator`
+/// that records into the global [`page_tracking`] tracker (the faithful map of
+/// `pageAllocator()` returning `std.testing.allocator`).
 #[inline]
 fn page_backing_alloc() -> PageBackingAlloc {
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "alloc-bench")))]
     {
         page_allocator()
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "alloc-bench"))]
     {
         rustty_zigstd::tracking_allocator::TrackingAllocator::with_state(
             page_allocator(),
@@ -260,12 +270,14 @@ fn page_backing_alloc() -> PageBackingAlloc {
     }
 }
 
-/// TEST-ONLY page-allocation tracker — the scoped faithful equivalent of Zig's
-/// `std.testing.allocator` leak check on the page path (R6). Every page the pool
-/// (standard pages) AND the direct non-standard path allocate/free is counted
-/// here, so a test can assert ZERO outstanding after `deinit`/`reset`.
-#[cfg(test)]
-pub(crate) mod page_tracking {
+/// TEST-ONLY (and `alloc-bench`-feature) page-allocation tracker — the scoped
+/// faithful equivalent of Zig's `std.testing.allocator` leak check on the page
+/// path (R6). Every page the pool (standard pages) AND the direct non-standard
+/// path allocate/free is counted here, so a test can assert ZERO outstanding
+/// after `deinit`/`reset` — and the standalone `alloc_bench` example can read
+/// deterministic page-alloc counts outside the test harness.
+#[cfg(any(test, feature = "alloc-bench"))]
+pub mod page_tracking {
     use rustty_zigstd::tracking_allocator::TrackerState;
 
     thread_local! {
@@ -282,7 +294,10 @@ pub(crate) mod page_tracking {
     }
 
     /// Run `f` with a borrow of the current thread's page tracker.
-    pub(crate) fn with_tracker<R>(f: impl FnOnce(&TrackerState) -> R) -> R {
+    ///
+    /// `pub` (not `pub(crate)`) so the feature-gated `alloc_bench` example —
+    /// compiled as an external crate — can read the counters.
+    pub fn with_tracker<R>(f: impl FnOnce(&TrackerState) -> R) -> R {
         PAGE_TRACKER.with(|t| f(t))
     }
 
@@ -312,11 +327,17 @@ pub(crate) mod page_tracking {
     /// allocated during the scope was freed). A baseline delta (rather than
     /// absolute zero) tolerates any page allocations that pre-existed the scope on
     /// this thread; the thread-local isolation means no OTHER test perturbs it.
+    //
+    // `cfg(test)` within the `any(test, feature = "alloc-bench")` module: the
+    // scope guard is a TEST helper only (the standalone bench reads the tracker
+    // directly), so a feature-only build does not compile it.
+    #[cfg(test)]
     pub(crate) struct PageLeakScope {
         base_allocs: usize,
         base_bytes: usize,
     }
 
+    #[cfg(test)]
     impl PageLeakScope {
         pub(crate) fn new() -> PageLeakScope {
             with_tracker(|t| PageLeakScope {

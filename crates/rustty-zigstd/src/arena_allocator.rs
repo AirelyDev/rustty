@@ -38,6 +38,48 @@
 use allocator_api2::alloc::{Allocator, Global, Layout};
 use core::ptr::NonNull;
 
+/// In-place resize seam for arena child allocators — the faithful map of the
+/// `rawResize` entry of Zig's `std.mem.Allocator` vtable, which `reset` calls
+/// before falling back to a manual realloc (`arena_allocator.zig:154`).
+///
+/// Zig's `Allocator` interface carries `resize` on every allocator; most
+/// children simply `return false` (refuse). Rust's `allocator-api2` trait has
+/// no non-moving resize, so this extension trait supplies one, with the
+/// default implementation refusing — exactly the Zig children that always fail
+/// `rawResize` (e.g. the general-purpose heap path, our [`Global`]).
+///
+/// A child that CAN resize a mapping in place (the OS page allocator's
+/// munmap-the-tail shrink) overrides [`resize_in_place`](Self::resize_in_place).
+/// The contract is Zig's `rawResize`: on `true` the allocation now has size
+/// `new_len` at the SAME address (the tail beyond `new_len` is gone and the
+/// eventual `deallocate` must use the new size); on `false` nothing changed.
+//
+// PERF(port): wires the ALREADY-PORTED `TaggedPageAllocator::resize` shrink
+// path into `ArenaAllocator::reset` so a `PageList::reset` retains its arena
+// node in place (1 fewer page alloc + free per reset) instead of always taking
+// the manual-realloc fallback. See `PageAllocator`'s impl in rustty-os.
+pub trait ResizeInPlace: Allocator {
+    /// Attempt to resize the allocation at `ptr` (allocated with `old_layout`
+    /// from this allocator) to `new_len` bytes WITHOUT moving it. Returns
+    /// whether the resize happened; on `false` the allocation is untouched.
+    ///
+    /// # Safety
+    /// `ptr` must denote a live allocation of this allocator with layout
+    /// `old_layout`, and `new_len` must be non-zero. On success the caller must
+    /// treat the allocation as having size `new_len` (same alignment) from now
+    /// on — in particular `deallocate` must be called with the new size.
+    unsafe fn resize_in_place(&self, ptr: NonNull<u8>, old_layout: Layout, new_len: usize) -> bool {
+        // Default: refuse, like Zig children whose `resize` always fails.
+        let _ = (ptr, old_layout, new_len);
+        false
+    }
+}
+
+/// `Global` (the system heap) cannot resize in place through the stable
+/// allocator API — `grow`/`shrink` may move. Faithful to the Zig children that
+/// refuse `rawResize`; the arena then takes its manual-realloc fallback.
+impl ResizeInPlace for Global {}
+
 /// Header stored at the front of every backing allocation, exactly like Zig's
 /// `BufNode`. `data` is the total size (in bytes) of the backing allocation,
 /// i.e. `size_of::<BufNode>() + usable_len`. `next` is the LIFO singly-linked
@@ -339,7 +381,16 @@ impl<A: Allocator> ArenaAllocator<A> {
     /// failed, `false` is returned; the arena is still fully functional (all
     /// memory released), future allocations might just be slower. If `mode` is
     /// `FreeAll`, this always returns `true`.
-    pub fn reset(&mut self, mode: ResetMode) -> bool {
+    ///
+    /// PORT NOTE (resize seam): faithful to Zig, `reset` first attempts the
+    /// child's `rawResize` on the retained node ([`ResizeInPlace`]) and only
+    /// falls back to the manual realloc when the child refuses. `A:
+    /// ResizeInPlace` is required here (and only here) because this is the one
+    /// arena operation that consults the child's resize entry.
+    pub fn reset(&mut self, mode: ResetMode) -> bool
+    where
+        A: ResizeInPlace,
+    {
         let requested_capacity = match mode {
             ResetMode::RetainCapacity => self.query_capacity(),
             ResetMode::RetainWithLimit(limit) => limit.min(self.query_capacity()),
@@ -385,12 +436,37 @@ impl<A: Allocator> ArenaAllocator<A> {
             // Zig tries `rawResize` first and, if that fails (the general case
             // for an arbitrary child allocator), does a "manual realloc":
             // `rawAlloc(total_size) orelse return false`, then `rawFree(old)`.
-            // The `allocator-api2` `Allocator::grow` is not guaranteed in-place
-            // and may move the block; since the retained node has NO live
-            // allocations carved from it (we reset `end_index` to 0 and, by the
-            // arena contract, outstanding references die at reset), the faithful
-            // map is exactly Zig's manual-realloc fallback: allocate a fresh
-            // node from the child and free the old one.
+            //
+            // PERF(port): the `rawResize` attempt is now faithful too, via the
+            // [`ResizeInPlace`] seam (default false — children that refuse,
+            // like `Global`, still take the manual-realloc fallback below; the
+            // OS page allocator shrinks the mapping in place by unmapping the
+            // tail, exactly Zig's `child_allocator.rawResize` succeeding). The
+            // in-place shrink is sound here because the retained node has NO
+            // live allocations carved from it: `end_index` was reset to 0
+            // above and, by the arena contract, outstanding references die at
+            // reset — the invariant Zig relies on (arena_allocator.zig:154).
+            {
+                // Layout the node was allocated with (validated at alloc time).
+                let old_layout = Self::node_layout(cur_total)
+                    .expect("live backing node has a valid layout (validated at alloc)");
+                // SAFETY: `first_node` is the live retained node allocated from
+                // `self.child` with `old_layout`; `total_size` is non-zero
+                // (requested_capacity > 0 plus the header). On success we
+                // record the new size in `data`, so the eventual free uses it.
+                if unsafe {
+                    self.child
+                        .resize_in_place(first_node.cast::<u8>(), old_layout, total_size)
+                } {
+                    // successful resize
+                    unsafe { first_node.as_mut().data = total_size };
+                    return true;
+                }
+            }
+            // manual realloc: the `allocator-api2` `Allocator::grow` is not
+            // guaranteed in-place and may move the block; the faithful map of
+            // Zig's fallback is exactly this: allocate a fresh node from the
+            // child and free the old one.
             match self.raw_alloc_node(total_size) {
                 Some(new_node) => {
                     // SAFETY: `first_node` is the live retained node, allocated
@@ -651,6 +727,113 @@ mod tests {
         // The rolled-back space is reused by the next allocation.
         let c = arena.alloc_bytes(64, 8).unwrap();
         assert_eq!(b.as_ptr(), c.as_ptr());
+    }
+
+    /// A child allocator that CAN resize in place: every allocation is backed
+    /// by a fixed `CAP`-byte block from `Global`, so any resize within `CAP`
+    /// succeeds at the same address (a faithful stand-in for the OS page
+    /// allocator's munmap-the-tail shrink, testable without `mmap`). Counts
+    /// allocations so the test can prove `reset` took the resize path (NO fresh
+    /// node allocation) instead of the manual-realloc fallback.
+    struct ResizableChild {
+        allocs: core::sync::atomic::AtomicUsize,
+        frees: core::sync::atomic::AtomicUsize,
+    }
+
+    const CHILD_CAP: usize = 1 << 20;
+
+    impl ResizableChild {
+        fn new() -> ResizableChild {
+            ResizableChild {
+                allocs: core::sync::atomic::AtomicUsize::new(0),
+                frees: core::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+        fn backing(align: usize) -> Layout {
+            Layout::from_size_align(CHILD_CAP, align).unwrap()
+        }
+    }
+
+    unsafe impl Allocator for &ResizableChild {
+        fn allocate(
+            &self,
+            layout: Layout,
+        ) -> Result<NonNull<[u8]>, allocator_api2::alloc::AllocError> {
+            if layout.size() > CHILD_CAP {
+                return Err(allocator_api2::alloc::AllocError);
+            }
+            let full = Global.allocate(ResizableChild::backing(layout.align()))?;
+            self.allocs
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            Ok(NonNull::slice_from_raw_parts(
+                full.cast::<u8>(),
+                layout.size(),
+            ))
+        }
+        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+            // Every block is CAP bytes under the hood regardless of the
+            // reported layout size (resizes never move or shrink the backing).
+            unsafe { Global.deallocate(ptr, ResizableChild::backing(layout.align())) };
+            self.frees
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    impl ResizeInPlace for &ResizableChild {
+        unsafe fn resize_in_place(
+            &self,
+            _ptr: NonNull<u8>,
+            _old_layout: Layout,
+            new_len: usize,
+        ) -> bool {
+            // Anything within the fixed backing block resizes in place.
+            new_len <= CHILD_CAP
+        }
+    }
+
+    /// reset(RetainWithLimit) over a resize-capable child takes Zig's
+    /// `rawResize` path: the retained node is resized IN PLACE (its `data`
+    /// updated), with NO fresh node allocation and NO free — the seam this
+    /// port adds (`arena_allocator.zig:154`). The arena stays fully usable.
+    #[test]
+    fn reset_uses_child_resize_in_place() {
+        let child = ResizableChild::new();
+        let mut arena = ArenaAllocator::with_child(&child);
+        // Force at least two backing nodes.
+        let _ = arena.alloc_bytes(1000, 8).unwrap();
+        let _ = arena.alloc_bytes(200_000, 8).unwrap();
+        assert!(arena.node_count() >= 2);
+        let nodes_before = arena.node_count();
+        let allocs_before = child.allocs.load(core::sync::atomic::Ordering::Relaxed);
+        let frees_before = child.frees.load(core::sync::atomic::Ordering::Relaxed);
+
+        // Shrink-retain: the retained (tail) node is resized in place.
+        let limit = 2000usize;
+        assert!(arena.reset(ResetMode::RetainWithLimit(limit)));
+        assert_eq!(arena.node_count(), 1);
+        assert_eq!(arena.end_index(), 0);
+        // The retained capacity is exactly the limit (node.data was updated).
+        assert_eq!(arena.query_capacity(), limit);
+        // The resize path allocated NOTHING new; only the non-retained node(s)
+        // were freed (manual realloc would have done +1 alloc AND +1 free).
+        let allocs_after = child.allocs.load(core::sync::atomic::Ordering::Relaxed);
+        let frees_after = child.frees.load(core::sync::atomic::Ordering::Relaxed);
+        assert_eq!(allocs_after, allocs_before, "reset must not allocate");
+        assert_eq!(
+            frees_after - frees_before,
+            nodes_before - 1,
+            "reset frees only the non-retained nodes"
+        );
+        // Still fully usable within the retained node.
+        let q = arena.alloc_bytes(limit, 1).unwrap();
+        unsafe { core::ptr::write_bytes(q.as_ptr(), 3, limit) };
+        assert_eq!(arena.node_count(), 1);
+        drop(arena);
+        // Everything returned to the child.
+        assert_eq!(
+            child.allocs.load(core::sync::atomic::Ordering::Relaxed),
+            child.frees.load(core::sync::atomic::Ordering::Relaxed)
+        );
     }
 
     /// resize() grows/shrinks the most-recent allocation in place.
