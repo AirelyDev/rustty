@@ -873,8 +873,15 @@ impl PageList {
             // Remap our tracked pins by changing the page and
             // offsetting the Y position based on the chunk start.
             if let Some(remap) = opts.tracked_pins.as_mut() {
-                let pin_keys: Vec<*mut Pin> = self.tracked_pins.keys().copied().collect();
+                // PERF(port): the reference `const pin_keys =
+                // self.tracked_pins.keys();` (PageList.zig:866) is a free borrow
+                // of the keys array; the port collected an owned Vec per chunk.
+                // `self` is `&self` here and the loop mutates only the local
+                // pool/remap/tracked_pins, so iterate the keys directly like the
+                // sibling sites in grow.rs/erase.rs.
+                let pin_keys = self.tracked_pins.keys();
                 for p in pin_keys {
+                    let p: *mut Pin = *p;
                     // We're only interested in pins that were within the chunk.
                     if !core::ptr::eq(unsafe { (*p).node }, chunk.node)
                         || unsafe { (*p).y } < chunk.start
