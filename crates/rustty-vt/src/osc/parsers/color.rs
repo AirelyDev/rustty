@@ -416,102 +416,10 @@ fn parse_reset_dynamic_color(color: DynamicColor, it: &mut TokenizeScalar<'_>) -
 /// typical values we can switch to that.
 // pub const List = std.SegmentedList(Request, 2);
 // PORT NOTE: `std.SegmentedList(Request, 2)` is a segmented list with 2 prealloc
-// slots. `std.SegmentedList` is not ported; the storage is modeled as a small
-// vector carrying the same elements in the same order.
-// PERF(port): restore SegmentedList(Request,2) prealloc (color.zig:332) — the
-// first two requests live inline (no heap allocation), matching the reference's
-// "a large majority of the time there will be only one operation per OSC"
-// tuning; only a third request spills to a heap `Vec`.
-#[derive(Clone)]
-pub enum List {
-    /// Up to two requests stored inline (the `SegmentedList` prealloc buffer).
-    /// Slots at index >= the recorded length are unused filler, never observed.
-    Inline([Request; 2], u8),
-    /// Three or more requests, spilled to the heap (`SegmentedList` growth).
-    Heap(Vec<Request>),
-}
-
-impl List {
-    pub fn new() -> List {
-        List::Inline([Request::ResetPalette; 2], 0)
-    }
-
-    pub fn push(&mut self, req: Request) {
-        match self {
-            List::Inline(buf, len) => {
-                let n = *len as usize;
-                if n < buf.len() {
-                    buf[n] = req;
-                    *len += 1;
-                } else {
-                    let mut vec = Vec::with_capacity(n + 1);
-                    vec.extend_from_slice(buf);
-                    vec.push(req);
-                    *self = List::Heap(vec);
-                }
-            }
-            List::Heap(vec) => vec.push(req),
-        }
-    }
-
-    pub fn as_slice(&self) -> &[Request] {
-        match self {
-            List::Inline(buf, len) => &buf[..*len as usize],
-            List::Heap(vec) => vec.as_slice(),
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.as_slice().len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub fn iter(&self) -> std::slice::Iter<'_, Request> {
-        self.as_slice().iter()
-    }
-}
-
-impl Default for List {
-    fn default() -> List {
-        List::new()
-    }
-}
-
-impl std::ops::Index<usize> for List {
-    type Output = Request;
-
-    fn index(&self, index: usize) -> &Request {
-        &self.as_slice()[index]
-    }
-}
-
-impl<'a> IntoIterator for &'a List {
-    type Item = &'a Request;
-    type IntoIter = std::slice::Iter<'a, Request>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
-
-// Equality is over the carried request sequence (the inline filler slots and
-// the inline/heap representation split are storage details, never observed).
-impl PartialEq for List {
-    fn eq(&self, other: &List) -> bool {
-        self.as_slice() == other.as_slice()
-    }
-}
-
-impl Eq for List {}
-
-impl std::fmt::Debug for List {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list().entries(self.as_slice()).finish()
-    }
-}
+// slots. `std.SegmentedList` is not ported; the storage is modeled as a
+// `Vec<Request>` carrying the same elements. The prealloc-count tuning (2) is a
+// perf detail with no observable behavior.
+pub type List = Vec<Request>;
 
 /// A single operation related to the terminal color palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
