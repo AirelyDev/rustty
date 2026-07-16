@@ -352,7 +352,7 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'
         };
 
         // const data = cap.trailing();
-        cap.trailing()
+        cap.trailing(&parser.buffer)
     };
 
     let (metadata, payload): (&[u8], Option<&[u8]>) = 'result: {

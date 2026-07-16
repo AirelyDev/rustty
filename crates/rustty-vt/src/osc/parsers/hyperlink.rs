@@ -18,11 +18,11 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         parser.state = crate::osc::State::Invalid;
         return None;
     };
-    if !cap.write_byte(0) {
+    if !cap.write_byte(&mut parser.buffer, 0) {
         parser.state = crate::osc::State::Invalid;
         return None;
     }
-    let data = cap.trailing_mut();
+    let data = cap.trailing_mut(&mut parser.buffer);
     let s = if let Some(s) = data.iter().position(|&b| b == b';') {
         s
     } else {

@@ -19,11 +19,11 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         return None;
     };
     // ensure that we are sentinel terminated
-    if !cap.write_byte(0) {
+    if !cap.write_byte(&mut parser.buffer, 0) {
         parser.state = crate::osc::State::Invalid;
         return None;
     }
-    let data = cap.trailing_mut();
+    let data = cap.trailing_mut(&mut parser.buffer);
     let k = if let Some(k) = data.iter().position(|&b| b == b';') {
         k
     } else {

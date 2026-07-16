@@ -118,7 +118,7 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         parser.state = State::Invalid;
         return None;
     };
-    if !cap.write_byte(0) {
+    if !cap.write_byte(&mut parser.buffer, 0) {
         parser.state = State::Invalid;
         return None;
     }
@@ -128,7 +128,7 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
     // `[:0]u8` sentinel-terminated slices into the capture buffer. We operate
     // over the mutable capture bytes and compute the key/value byte ranges,
     // mirroring the trailing-`0` (and middle-`0`) sentinel handling exactly.
-    let data = cap.trailing_mut();
+    let data = cap.trailing_mut(&mut parser.buffer);
 
     let (key_str, value_): (&[u8], Option<Vec<u8>>) = {
         match data.iter().position(|&b| b == b'=') {

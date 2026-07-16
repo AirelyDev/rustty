@@ -83,7 +83,7 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'
     // If we've collected any extra data parse that, otherwise use an empty
     // string.
     let data: &[u8] = match parser.capture.as_ref() {
-        Some(c) => c.trailing(),
+        Some(c) => c.trailing(&parser.buffer),
         None => b"",
     };
     // Check and make sure that we're parsing the correct OSCs

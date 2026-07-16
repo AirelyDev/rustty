@@ -560,15 +560,23 @@ pub enum State {
 }
 
 /// PORT NOTE: the capture backing. The reference uses `std.Io.Writer` over
-/// either a fixed buffer or an allocating buffer. The skeleton models the
-/// captured bytes as an owned byte vector; the filled parser path threads the
-/// fixed/allocating distinction through `CaptureMode`.
+/// either a fixed buffer or an allocating buffer. The filled parser path
+/// threads the fixed/allocating distinction through `CaptureMode`.
+// PERF(port): restore Zig fixed-writer-over-self.buffer capture
+// (osc.zig:462-512, `Capture.fixed(&self.capture, &self.buffer)`); the
+// Vec-per-record downgrade is removed. The fixed backing stores only a running
+// length into the Parser's inline `buffer: [u8; MAX_BUF]` (it cannot hold
+// `&mut Parser.buffer` — self-referential), so the accessors below take the
+// Parser's buffer as an argument and the per-byte write happens in
+// `Parser::next` — zero allocation, exactly like `std.Io.Writer.fixed`.
 pub struct Capture {
     pub backing: CaptureBacking,
 }
 
 pub enum CaptureBacking {
-    Fixed(Vec<u8>),
+    /// The count of bytes captured so far into `Parser.buffer` — the Zig fixed
+    /// writer's `end` index over `&self.buffer` (osc.zig:462-467).
+    Fixed(usize),
     Allocating(Vec<u8>),
 }
 
@@ -590,9 +598,14 @@ impl Capture {
 
     /// Return the captured trailing data. This is the data from the
     /// point that trailing data capture was requested.
-    pub fn trailing(&self) -> &[u8] {
+    // PERF(port): `pub inline fn trailing(self: *Capture) []u8` returns
+    // `self.writer.buffered()` — for the fixed writer that is the front of the
+    // Parser's own `buffer` (osc.zig:491-493). The buffer is threaded in from
+    // the Parser because the fixed backing stores only the running length.
+    #[inline]
+    pub fn trailing<'b>(&'b self, buffer: &'b [u8; MAX_BUF]) -> &'b [u8] {
         match &self.backing {
-            CaptureBacking::Fixed(w) => w,
+            CaptureBacking::Fixed(len) => &buffer[..*len],
             CaptureBacking::Allocating(w) => w,
         }
     }
@@ -600,9 +613,13 @@ impl Capture {
     /// Return a mutable view of the captured trailing data. Used by parsers
     /// that need to overwrite a separator byte with a sentinel in place
     /// (e.g. OSC 777 rxvt).
-    pub fn trailing_mut(&mut self) -> &mut [u8] {
+    // PERF(port): fixed-backing variant of `trailing()` — the mutable view is
+    // `&mut Parser.buffer[..len]`, the same in-place bytes the Zig `[]u8`
+    // slice aliases (osc.zig:491-493).
+    #[inline]
+    pub fn trailing_mut<'b>(&'b mut self, buffer: &'b mut [u8; MAX_BUF]) -> &'b mut [u8] {
         match &mut self.backing {
-            CaptureBacking::Fixed(w) => w,
+            CaptureBacking::Fixed(len) => &mut buffer[..*len],
             CaptureBacking::Allocating(w) => w,
         }
     }
@@ -616,14 +633,17 @@ impl Capture {
     // PERF(port): the Zig fixed writer's `writeByte` (osc.zig:543-549 via
     // std.Io.Writer.fixed) is a bounds check + store that inlines under
     // ReleaseFast; #[inline] restores cross-crate inlinability without LTO.
+    // The fixed arm stores directly into the Parser's inline buffer (threaded
+    // in), restoring the zero-alloc single-bounds-check idiom.
     #[inline]
-    pub fn write_byte(&mut self, c: u8) -> bool {
+    pub fn write_byte(&mut self, buffer: &mut [u8; MAX_BUF], c: u8) -> bool {
         match &mut self.backing {
-            CaptureBacking::Fixed(w) => {
-                if w.len() >= MAX_BUF {
+            CaptureBacking::Fixed(len) => {
+                if *len >= MAX_BUF {
                     false
                 } else {
-                    w.push(c);
+                    buffer[*len] = c;
+                    *len += 1;
                     true
                 }
             }
@@ -751,9 +771,13 @@ impl<'a> Parser<'a> {
         // assert(self.capture == null);
         debug_assert!(self.capture.is_none());
         match mode {
+            // .fixed => Capture.fixed(&self.capture, &self.buffer),
+            // PERF(port): restore Zig fixed-writer-over-self.buffer capture
+            // (osc.zig:509-512); the running length starts at 0 and the bytes
+            // land in `self.buffer` inside `next` — no allocation.
             CaptureMode::Fixed => {
                 self.capture = Some(Capture {
-                    backing: CaptureBacking::Fixed(Vec::new()),
+                    backing: CaptureBacking::Fixed(0),
                 });
             }
 
@@ -791,14 +815,19 @@ impl<'a> Parser<'a> {
         // OSC sequence in the writer's buffer and skip the state machine.
         if let Some(cap) = self.capture.as_mut() {
             // cap.writer.writeByte(c) catch ... => self.state = .invalid;
+            // PERF(port): the fixed arm is the Zig fixed writer's `writeByte`
+            // (bounds check + store into `self.buffer`, osc.zig:543-549);
+            // no Vec, no grow check — the `len < MAX_BUF` guard also lets the
+            // indexing bounds check fold away.
             match &mut cap.backing {
-                CaptureBacking::Fixed(w) => {
+                CaptureBacking::Fixed(len) => {
                     // We have overflowed our buffer or had some other error, set the
                     // state to invalid so that we discard any further input.
-                    if w.len() >= MAX_BUF {
+                    if *len >= MAX_BUF {
                         self.state = State::Invalid;
                     } else {
-                        w.push(c);
+                        self.buffer[*len] = c;
+                        *len += 1;
                     }
                 }
                 CaptureBacking::Allocating(w) => {

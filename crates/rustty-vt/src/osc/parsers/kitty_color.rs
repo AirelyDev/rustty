@@ -37,7 +37,12 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'
     // PORT NOTE: `data = cap.trailing()` is borrowed up front; in Rust we take
     // an owned copy so the mutable `parser.command` borrow below does not alias
     // the capture buffer.
-    let data: Vec<u8> = parser.capture.as_ref().unwrap().trailing().to_vec();
+    let data: Vec<u8> = parser
+        .capture
+        .as_ref()
+        .unwrap()
+        .trailing(&parser.buffer)
+        .to_vec();
     let list = match &mut parser.command {
         Command::KittyColorProtocol(osc) => &mut osc.list,
         _ => unreachable!(),

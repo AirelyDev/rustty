@@ -14,11 +14,11 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         parser.state = crate::osc::State::Invalid;
         return None;
     };
-    if !cap.write_byte(0) {
+    if !cap.write_byte(&mut parser.buffer, 0) {
         parser.state = crate::osc::State::Invalid;
         return None;
     }
-    let data = cap.trailing();
+    let data = cap.trailing(&parser.buffer);
     if data.len() == 1 {
         parser.state = crate::osc::State::Invalid;
         return None;

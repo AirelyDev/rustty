@@ -19,7 +19,7 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
     // Check first to see if this is a ConEmu OSC
     // https://conemu.github.io/en/AnsiEscapeCodes.html#ConEmu_specific_OSC
     'conemu: {
-        let data = parser.capture.as_ref().unwrap().trailing();
+        let data = parser.capture.as_ref().unwrap().trailing(&parser.buffer);
         if data.is_empty() {
             break 'conemu;
         }
@@ -98,11 +98,16 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                         if data[2] != b';' {
                             break 'conemu;
                         }
-                        if !parser.capture.as_mut().unwrap().write_byte(0) {
+                        if !parser
+                            .capture
+                            .as_mut()
+                            .unwrap()
+                            .write_byte(&mut parser.buffer, 0)
+                        {
                             parser.state = State::Invalid;
                             return None;
                         }
-                        let data = parser.capture.as_ref().unwrap().trailing();
+                        let data = parser.capture.as_ref().unwrap().trailing(&parser.buffer);
                         parser.command = Command::ConemuComment(
                             // data[3 .. data.len - 1 :0]
                             // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
@@ -128,11 +133,16 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 if data[1] != b';' {
                     break 'conemu;
                 }
-                if !parser.capture.as_mut().unwrap().write_byte(0) {
+                if !parser
+                    .capture
+                    .as_mut()
+                    .unwrap()
+                    .write_byte(&mut parser.buffer, 0)
+                {
                     parser.state = State::Invalid;
                     return None;
                 }
-                let data = parser.capture.as_ref().unwrap().trailing();
+                let data = parser.capture.as_ref().unwrap().trailing(&parser.buffer);
                 parser.command = Command::ConemuShowMessageBox(
                     // data[2 .. data.len - 1 :0]
                     // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
@@ -152,11 +162,16 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                     parser.command = Command::ConemuChangeTabTitle(ConemuChangeTabTitle::Reset);
                     return Some(&mut parser.command);
                 }
-                if !parser.capture.as_mut().unwrap().write_byte(0) {
+                if !parser
+                    .capture
+                    .as_mut()
+                    .unwrap()
+                    .write_byte(&mut parser.buffer, 0)
+                {
                     parser.state = State::Invalid;
                     return None;
                 }
-                let data = parser.capture.as_ref().unwrap().trailing();
+                let data = parser.capture.as_ref().unwrap().trailing(&parser.buffer);
                 parser.command = Command::ConemuChangeTabTitle(ConemuChangeTabTitle::Value(
                     // data[2 .. data.len - 1 :0]
                     // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
@@ -253,11 +268,16 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 if data[1] != b';' {
                     break 'conemu;
                 }
-                if !parser.capture.as_mut().unwrap().write_byte(0) {
+                if !parser
+                    .capture
+                    .as_mut()
+                    .unwrap()
+                    .write_byte(&mut parser.buffer, 0)
+                {
                     parser.state = State::Invalid;
                     return None;
                 }
-                let data = parser.capture.as_ref().unwrap().trailing();
+                let data = parser.capture.as_ref().unwrap().trailing(&parser.buffer);
                 parser.command = Command::ConemuGuimacro(
                     // data[2 .. data.len - 1 :0]
                     // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
@@ -273,11 +293,16 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 if data[1] != b';' {
                     break 'conemu;
                 }
-                if !parser.capture.as_mut().unwrap().write_byte(0) {
+                if !parser
+                    .capture
+                    .as_mut()
+                    .unwrap()
+                    .write_byte(&mut parser.buffer, 0)
+                {
                     parser.state = State::Invalid;
                     return None;
                 }
-                let data = parser.capture.as_ref().unwrap().trailing();
+                let data = parser.capture.as_ref().unwrap().trailing(&parser.buffer);
                 parser.command = Command::ConemuRunProcess(
                     // data[2 .. data.len - 1 :0]
                     // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
@@ -293,11 +318,16 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 if data[1] != b';' {
                     break 'conemu;
                 }
-                if !parser.capture.as_mut().unwrap().write_byte(0) {
+                if !parser
+                    .capture
+                    .as_mut()
+                    .unwrap()
+                    .write_byte(&mut parser.buffer, 0)
+                {
                     parser.state = State::Invalid;
                     return None;
                 }
-                let data = parser.capture.as_ref().unwrap().trailing();
+                let data = parser.capture.as_ref().unwrap().trailing(&parser.buffer);
                 parser.command = Command::ConemuOutputEnvironmentVariable(
                     // data[2 .. data.len - 1 :0]
                     // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
@@ -313,11 +343,16 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 if data[1] != b';' {
                     break 'conemu;
                 }
-                if !parser.capture.as_mut().unwrap().write_byte(0) {
+                if !parser
+                    .capture
+                    .as_mut()
+                    .unwrap()
+                    .write_byte(&mut parser.buffer, 0)
+                {
                     parser.state = State::Invalid;
                     return None;
                 }
-                let data = parser.capture.as_ref().unwrap().trailing();
+                let data = parser.capture.as_ref().unwrap().trailing(&parser.buffer);
                 parser.command = Command::ReportPwd {
                     // data[2 .. data.len - 1 :0]
                     // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
@@ -331,11 +366,16 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
 
     // If it's not a ConEmu OSC, it's an iTerm2 notification
 
-    if !parser.capture.as_mut().unwrap().write_byte(0) {
+    if !parser
+        .capture
+        .as_mut()
+        .unwrap()
+        .write_byte(&mut parser.buffer, 0)
+    {
         parser.state = State::Invalid;
         return None;
     }
-    let data = parser.capture.as_ref().unwrap().trailing();
+    let data = parser.capture.as_ref().unwrap().trailing(&parser.buffer);
     parser.command = Command::ShowDesktopNotification {
         title: Vec::new(),
         // data[0 .. data.len - 1 :0]

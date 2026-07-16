@@ -163,11 +163,11 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
     };
 
     // Write a NUL byte to ensure that `text` is NUL-terminated
-    if !cap.write_byte(0) {
+    if !cap.write_byte(&mut parser.buffer, 0) {
         parser.state = crate::osc::State::Invalid;
         return None;
     }
-    let data = cap.trailing();
+    let data = cap.trailing(&parser.buffer);
 
     let payload_start = if let Some(s) = data.iter().position(|&b| b == b';') {
         s

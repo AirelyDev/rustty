@@ -13,11 +13,11 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         return None;
     };
     // cap.writer.writeByte(0) catch { ... };
-    if !cap.write_byte(0) {
+    if !cap.write_byte(&mut parser.buffer, 0) {
         parser.state = crate::osc::State::Invalid;
         return None;
     }
-    let data = cap.trailing();
+    let data = cap.trailing(&parser.buffer);
     parser.command = Command::ChangeWindowTitle(
         // data[0 .. data.len() - 1 :0]
         // PORT NOTE (fidelity): reference keeps this as `[:0]const u8` RAW bytes

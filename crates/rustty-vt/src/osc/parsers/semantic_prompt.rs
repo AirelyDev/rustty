@@ -441,7 +441,7 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut OSCCom
         parser.state = State::Invalid;
         return None;
     };
-    let data = cap.trailing();
+    let data = cap.trailing(&parser.buffer);
     if data.is_empty() {
         parser.state = State::Invalid;
         return None;
