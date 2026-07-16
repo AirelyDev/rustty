@@ -41,6 +41,13 @@ rustty-identity = { workspace = true }
 # `pageAllocator()` (PageList.zig) implements this trait so it can be threaded as
 # a real `Allocator` parameter exactly as the reference threads a `std.mem.Allocator`.
 allocator-api2 = { workspace = true }
+# The `ResizeInPlace` seam (rustty-zigstd::arena_allocator) — the faithful map of
+# the `rawResize` entry of Zig's `std.mem.Allocator` vtable. `PageAllocator`
+# implements it by delegating to the ported `TaggedPageAllocator::resize`
+# (mach.zig / Zig 0.15.2 PageAllocator), so `ArenaAllocator::reset` can shrink a
+# retained arena node in place exactly like the reference. Acyclic: rustty-zigstd
+# depends only on rustty-util + allocator-api2 — strictly below rustty-os.
+rustty-zigstd = { workspace = true }
 
 # Raw FFI bindings to the platform libc (syscalls/constants used across os/*).
 # R3: `libc` binds the SAME system library the reference's Zig `std.c`/`std.posix`

@@ -42,7 +42,7 @@ use core::ptr::NonNull;
 
 use allocator_api2::alloc::{Allocator, Global};
 
-use crate::arena_allocator::{ArenaAllocator, ResetMode};
+use crate::arena_allocator::{ArenaAllocator, ResetMode, ResizeInPlace};
 
 /// The free-list node. Zig: `struct { next: ?*align(item_alignment) Node }`.
 /// A single pointer; its alignment requirement is `align_of::<*Node>()`, which
@@ -146,7 +146,12 @@ impl<T, const ALIGN: usize, const GROWABLE: bool, A: Allocator>
     /// Returns whether the reset was successful (mirrors arena `reset`); if the
     /// reallocation failed, `false` is returned but the pool stays functional.
     /// If `mode` is `FreeAll`, this always returns `true`.
-    pub fn reset(&mut self, mode: ResetMode) -> bool {
+    // PORT NOTE (resize seam): `A: ResizeInPlace` — the arena `reset` consults
+    // the child's `rawResize` entry (see `arena_allocator::ResizeInPlace`).
+    pub fn reset(&mut self, mode: ResetMode) -> bool
+    where
+        A: ResizeInPlace,
+    {
         // TODO (from Zig): Potentially store all allocated objects in a list as
         // well, allowing to just move them into the free list instead of
         // actually releasing the memory.
@@ -321,7 +326,13 @@ impl<A: Allocator> DynamicMemoryPoolAligned<A> {
     }
 
     /// Faithful port of `reset(mode)`: reset the arena and clear the free-list.
-    pub fn reset(&mut self, mode: ResetMode) -> bool {
+    //
+    // PORT NOTE (resize seam): `A: ResizeInPlace` — the arena `reset` consults
+    // the child's `rawResize` entry (see `arena_allocator::ResizeInPlace`).
+    pub fn reset(&mut self, mode: ResetMode) -> bool
+    where
+        A: ResizeInPlace,
+    {
         let reset_successful = self.arena.reset(mode);
         self.free_list = None;
         reset_successful
