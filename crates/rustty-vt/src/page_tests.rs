@@ -133,6 +133,70 @@ mod tests {
         );
     }
 
+    // PERF(port) gate: `Cell::copy_with_managed_reset` is a masked-store form
+    // of the three sequential managed-memory resets in `clone_partial_row_from`
+    // (page.zig:905-909). Prove bit-for-bit equivalence with the sequential
+    // setter form on a corner lattice plus seeded-random u64 bit patterns
+    // (the setters are pure bit-ops, valid on arbitrary bits, so we can probe
+    // padding/extreme patterns directly).
+    #[test]
+    fn cell_copy_with_managed_reset_equivalence() {
+        fn sequential_reset(mut c: Cell) -> Cell {
+            c.set_hyperlink(false);
+            c.set_style_id(stylepkg::DEFAULT_ID);
+            if c.content_tag() == ContentTag::CodepointGrapheme {
+                c.set_content_tag(ContentTag::Codepoint);
+            }
+            c
+        }
+        fn check(bits: u64) {
+            assert_eq!(
+                Cell::from_bits(bits).copy_with_managed_reset().to_bits(),
+                sequential_reset(Cell::from_bits(bits)).to_bits(),
+                "bits = {bits:#018x}"
+            );
+        }
+
+        // Corner lattice: all 4 content tags x hyperlink 0/1 x style_id
+        // {0, 1, 0xFFFF} x wide/protected/semantic extremes x padding bits.
+        for tag in 0..4u64 {
+            for hyperlink in 0..2u64 {
+                for style_id in [0u64, 1, 0xFFFF] {
+                    for wide in [0u64, 0b11] {
+                        for protected in 0..2u64 {
+                            for semantic in [0u64, 0b10] {
+                                for padding in [0u64, 0xFFFF] {
+                                    for content in [0u64, 0x1F_FFFF, 0xFF_FFFF] {
+                                        let bits = (tag << CELL_CONTENT_TAG_SHIFT)
+                                            | (content << CELL_CONTENT_SHIFT)
+                                            | (style_id << CELL_STYLE_ID_SHIFT)
+                                            | (wide << CELL_WIDE_SHIFT)
+                                            | (protected << CELL_PROTECTED_SHIFT)
+                                            | (hyperlink << CELL_HYPERLINK_SHIFT)
+                                            | (semantic << CELL_SEMANTIC_CONTENT_SHIFT)
+                                            | (padding << CELL_PADDING_SHIFT);
+                                        check(bits);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ~10k seeded-random u64 bit patterns (splitmix64, fixed seed).
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        for _ in 0..10_000 {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^= z >> 31;
+            check(z);
+        }
+    }
+
     #[test]
     fn row_field_bit_offsets() {
         // cells offset occupies bits 0..31.

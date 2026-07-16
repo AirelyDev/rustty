@@ -110,11 +110,25 @@ impl Flags {
     }
 }
 
+// The byte-equality in `Flags::eq` below transmutes `Flags` to `[u8; 9]`;
+// this compile-time gate keeps the transmute honest if a field is ever added.
+const _: () = assert!(core::mem::size_of::<Flags>() == 9);
+
 impl PartialEq for Flags {
     // PORT NOTE: `self.flags == other.flags` in the reference is packed-struct
     // (integer) equality; we compare the packed representation.
+    // PERF(port): byte equality == packed (to_u16) equality; was a ~50-insn
+    // repack per compare, 45% of screen-clone.clone. All 9 fields are 1-byte
+    // (8 bools + fieldless #[repr(u8)] sgr::Underline), so the struct has zero
+    // padding regardless of field order and every field has a unique
+    // representation (bool 0/1, distinct enum discriminants 0..=5): byte-eq
+    // <=> field-eq <=> to_u16-eq (to_u16 is injective on valid values). The
+    // `flags_eq_matches_packed_eq` test machine-checks this exhaustively.
+    #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
-        self.to_u16() == other.to_u16()
+        let a: [u8; 9] = unsafe { core::mem::transmute(*self) };
+        let b: [u8; 9] = unsafe { core::mem::transmute(*other) };
+        a == b
     }
 }
 impl Eq for Flags {}
@@ -149,20 +163,37 @@ impl Color {
         }
     }
 
-    /// True if the color is equal to another color.
-    pub fn eql(self, other: Color) -> bool {
-        self.tag() == other.tag()
-            && match self {
-                Color::None => true,
-                Color::Palette(p) => match other {
-                    Color::Palette(op) => p == op,
-                    _ => unreachable!(),
-                },
-                Color::Rgb(rgb) => match other {
-                    Color::Rgb(orgb) => rgb == orgb,
-                    _ => unreachable!(),
-                },
+    /// Normalization of a `Color` into a single comparable integer: the low
+    /// byte is the tag (`ColorTag`: none=0, palette=1, rgb=2) and the upper 24
+    /// bits are exactly `PackedStyle::data_from_color`'s payload normalization
+    /// (none => 0, palette => idx, rgb => r|g<<8|b<<16), shifted past the tag
+    /// byte. The key is injective across variants, so key equality is exactly
+    /// the reference relation (tag equal && payload equal).
+    // PERF(port): branch-free comparable key; the previous nested-match compare
+    // carried `unreachable!()` panic paths into `Style::eql`'s hot loop.
+    #[inline(always)]
+    fn color_key(c: Color) -> u32 {
+        match c {
+            Color::None => 0,
+            Color::Palette(p) => 1 | ((p as u32) << 8),
+            Color::Rgb(rgb) => {
+                2 | ((rgb.r as u32) << 8) | ((rgb.g as u32) << 16) | ((rgb.b as u32) << 24)
             }
+        }
+    }
+
+    /// True if the color is equal to another color.
+    // PORT NOTE (reshape): the reference is
+    //   return @as(Tag, self) == @as(Tag, other) and switch (self) {
+    //       .none => true,
+    //       .palette => self.palette == other.palette,
+    //       .rgb => self.rgb == other.rgb,
+    //   };
+    // (style.zig Color.eql). Comparing normalized keys is the same relation;
+    // the `color_eql_matches_reference` test machine-checks the equivalence.
+    #[inline(always)]
+    pub fn eql(self, other: Color) -> bool {
+        Color::color_key(self) == Color::color_key(other)
     }
 
     /// Formatting to make debug logs easier to read
@@ -186,6 +217,11 @@ impl Style {
     }
 
     /// True if the style is equal to another style.
+    // PERF(port): inline(always) so the probe compare lands inside
+    // `RefCountedSet::add_with_id`'s hot branch (screen-clone.clone spent 45%
+    // of its self-time in an out-of-line `Style::eql`; plain #[inline] was
+    // measured insufficient to inline it there).
+    #[inline(always)]
     pub fn eql(&self, other: &Style) -> bool {
         self.flags == other.flags
             && self.fg_color.eql(other.fg_color)
@@ -741,11 +777,15 @@ impl PackedStyle {
 pub struct SetContext;
 
 impl crate::ref_counted_set::RefCountedSetContext<Style> for SetContext {
+    // PERF(port): inline the trait trampolines so `Style::eql`/`Style::hash`
+    // reach the `RefCountedSet` probe loops without a call (see Style::eql).
+    #[inline]
     fn hash(&self, style: Style) -> u64 {
         // _ = self; return style.hash();
         style.hash()
     }
 
+    #[inline(always)]
     fn eql(&self, a: Style, b: Style) -> bool {
         // _ = self; return a.eql(b);
         a.eql(&b)
@@ -776,6 +816,113 @@ fn hash_int_u64(input: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // PERF(port) gate: `Flags::eq` compares raw bytes; prove byte equality is
+    // exactly packed (to_u16) equality, exhaustively over BOTH sides of the
+    // compare (256 bool combos x 6 underline values per side).
+    #[test]
+    fn flags_eq_matches_packed_eq() {
+        fn flags_from(bits: u8, underline: sgr::Underline) -> Flags {
+            Flags {
+                bold: bits & 1 != 0,
+                italic: bits & 2 != 0,
+                faint: bits & 4 != 0,
+                blink: bits & 8 != 0,
+                inverse: bits & 16 != 0,
+                invisible: bits & 32 != 0,
+                strikethrough: bits & 64 != 0,
+                overline: bits & 128 != 0,
+                underline,
+            }
+        }
+        const UNDERLINES: [sgr::Underline; 6] = [
+            sgr::Underline::None,
+            sgr::Underline::Single,
+            sgr::Underline::Double,
+            sgr::Underline::Curly,
+            sgr::Underline::Dotted,
+            sgr::Underline::Dashed,
+        ];
+
+        let mut all: Vec<Flags> = Vec::with_capacity(256 * UNDERLINES.len());
+        for bits in 0..=255u8 {
+            for ul in UNDERLINES {
+                all.push(flags_from(bits, ul));
+            }
+        }
+        for &a in &all {
+            for &b in &all {
+                assert_eq!(a == b, a.to_u16() == b.to_u16());
+            }
+        }
+    }
+
+    // PERF(port) gate: `Color::eql` compares normalized keys; prove key
+    // equality is exactly the reference relation (tag equal && payload equal)
+    // over all tag pairs, all 256x256 palette pairs, and an RGB corner
+    // lattice ({0,1,127,255}^3 per side).
+    #[test]
+    fn color_eql_matches_reference() {
+        // The reference relation, verbatim:
+        //   @as(Tag, self) == @as(Tag, other) and switch (self) {
+        //       .none => true,
+        //       .palette => self.palette == other.palette,
+        //       .rgb => self.rgb == other.rgb,
+        //   }
+        fn reference_eql(a: Color, b: Color) -> bool {
+            a.tag() == b.tag()
+                && match (a, b) {
+                    (Color::None, Color::None) => true,
+                    (Color::Palette(p), Color::Palette(op)) => p == op,
+                    (Color::Rgb(rgb), Color::Rgb(orgb)) => rgb == orgb,
+                    _ => unreachable!(),
+                }
+        }
+
+        const LATTICE: [u8; 4] = [0, 1, 127, 255];
+        let mut rgbs: Vec<Color> = Vec::new();
+        for r in LATTICE {
+            for g in LATTICE {
+                for b in LATTICE {
+                    rgbs.push(Color::Rgb(color::RGB { r, g, b }));
+                }
+            }
+        }
+
+        // All tag pairs (representatives of each variant), including
+        // cross-variant pairs which must always be unequal.
+        let reps = [
+            Color::None,
+            Color::Palette(0),
+            Color::Palette(255),
+            Color::Rgb(color::RGB { r: 0, g: 0, b: 0 }),
+            Color::Rgb(color::RGB {
+                r: 255,
+                g: 255,
+                b: 255,
+            }),
+        ];
+        for &a in &reps {
+            for &b in &reps {
+                assert_eq!(a.eql(b), reference_eql(a, b));
+            }
+        }
+
+        // All 256x256 palette pairs.
+        for p in 0..=255u8 {
+            for op in 0..=255u8 {
+                let (a, b) = (Color::Palette(p), Color::Palette(op));
+                assert_eq!(a.eql(b), reference_eql(a, b));
+            }
+        }
+
+        // RGB corner-lattice pairs.
+        for &a in &rgbs {
+            for &b in &rgbs {
+                assert_eq!(a.eql(b), reference_eql(a, b));
+            }
+        }
+    }
 
     #[test]
     fn packed_style_layout() {

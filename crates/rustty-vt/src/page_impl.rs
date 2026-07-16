@@ -1105,20 +1105,31 @@ impl Page {
             for i in 0..span {
                 let dst_cell: *mut Cell = unsafe { dst_cells_off_ptr.add(i) };
                 let src_cell: *const Cell = unsafe { other_cells_ptr.add(i) };
-                unsafe { *dst_cell = *src_cell };
 
                 // Reset any managed memory markers on the cell so that we don't
                 // hit an integrity check if we have to return an error because
                 // the page can't fit the new memory.
-                unsafe {
-                    (*dst_cell).set_hyperlink(false);
-                    (*dst_cell).set_style_id(stylepkg::DEFAULT_ID);
-                    if (*dst_cell).content_tag() == ContentTag::CodepointGrapheme {
-                        (*dst_cell).set_content_tag(ContentTag::Codepoint);
-                    }
-                }
+                // PERF(port): `copy_with_managed_reset` is the single masked
+                // store form of `*dst = *src` + the three sequential setter
+                // resets (see its PORT NOTE in page.rs).
+                unsafe { *dst_cell = (*src_cell).copy_with_managed_reset() };
 
-                if unsafe { (*src_cell).has_grapheme() } {
+                // PORT NOTE (reshape): the reference reads `src_cell`
+                // field-by-field AFTER the dst resets. If `dst_cell` aliases
+                // `src_cell`, the resets have already cleared the hyperlink/
+                // style_id/grapheme-tag markers, so every branch test below is
+                // false under BOTH read schedules and no branch body (the only
+                // writers between the tests) executes — and when they don't
+                // alias, nothing below writes `*src_cell`. Hence this
+                // post-store snapshot is observably identical to the
+                // reference's per-branch reloads, while letting LLVM drop the
+                // reloads it must otherwise assume clobbered by the dst
+                // stores. (The raw `src_cell` pointer is kept for the
+                // lookup_grapheme/lookup_hyperlink calls, which key off the
+                // cell's address.)
+                let src = unsafe { *src_cell };
+
+                if src.has_grapheme() {
                     // Copy the grapheme codepoints
                     // When `other` aliases `self`, read through the receiver to
                     // avoid a stale-tag access to `self` (see method PORT NOTE).
@@ -1146,7 +1157,7 @@ impl Page {
                         },
                     )?;
                 }
-                if unsafe { (*src_cell).hyperlink() } {
+                if src.hyperlink() {
                     let id = if same_page {
                         self.lookup_hyperlink(src_cell).unwrap()
                     } else {
@@ -1226,20 +1237,20 @@ impl Page {
                     self.set_hyperlink(dst_row, dst_cell, dst_id)
                         .map_err(|_| CloneFromError::HyperlinkMapOutOfMemory)?;
                 }
-                if unsafe { (*src_cell).style_id() } != stylepkg::DEFAULT_ID {
+                if src.style_id() != stylepkg::DEFAULT_ID {
                     unsafe { (*dst_row).set_styled(true) };
 
                     if same_page {
                         // If it's the same page we don't have to worry about
                         // copying the style, we can use the style ID directly.
                         unsafe {
-                            (*dst_cell).set_style_id((*src_cell).style_id());
+                            (*dst_cell).set_style_id(src.style_id());
                             self.styles.use_id(self_base, (*dst_cell).style_id());
                         }
                     } else {
                         // Slow path: Get the style from the other
                         // page and add it to this page's style set.
-                        let src_style_id = unsafe { (*src_cell).style_id() };
+                        let src_style_id = src.style_id();
                         let other_style =
                             unsafe { Page::style_get_of(other, src_style_id) };
                         let added = unsafe {
@@ -1258,7 +1269,7 @@ impl Page {
                         unsafe { (*dst_cell).set_style_id(added.unwrap_or(src_style_id)) };
                     }
                 }
-                if KITTY_GRAPHICS && unsafe { (*src_cell).codepoint() } == KITTY_PLACEHOLDER {
+                if KITTY_GRAPHICS && src.codepoint() == KITTY_PLACEHOLDER {
                     unsafe { (*dst_row).set_kitty_virtual_placeholder(true) };
                 }
             }

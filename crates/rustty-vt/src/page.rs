@@ -785,6 +785,30 @@ impl Cell {
         self.content_tag() == ContentTag::CodepointGrapheme
     }
 
+    /// Copy of this cell with the managed-memory markers reset.
+    // PERF(port): masked-store form of the three sequential resets in
+    // `clonePartialRowFrom` (page.zig:905-909):
+    //   dst_cell.hyperlink = false;
+    //   dst_cell.style_id = stylepkg.default_id;
+    //   if (dst_cell.content_tag == .codepoint_grapheme) {
+    //       dst_cell.content_tag = .codepoint;
+    //   }
+    // Zig's packed-struct writes fold to exactly this under ReleaseFast; the
+    // Rust bitfield setters were 3 separate read-modify-write stores. Note
+    // `stylepkg::DEFAULT_ID == 0` so clearing the style_id bits IS the reset,
+    // and `CodepointGrapheme == 1` -> `Codepoint == 0`, so clearing the 2 tag
+    // bits IS the retag. Machine-checked against the sequential setter form
+    // by `cell_copy_with_managed_reset_equivalence`.
+    #[inline(always)]
+    pub(crate) fn copy_with_managed_reset(self) -> Cell {
+        let mut v = self.0;
+        v &= !((1u64 << CELL_HYPERLINK_SHIFT) | (mask(CELL_STYLE_ID_BITS) << CELL_STYLE_ID_SHIFT));
+        if v & mask(CELL_CONTENT_TAG_BITS) == ContentTag::CodepointGrapheme as u64 {
+            v &= !mask(CELL_CONTENT_TAG_BITS);
+        }
+        Cell(v)
+    }
+
     /// Returns true if the set of cells has text in it.
     #[inline]
     pub fn has_text_any(cells: &[Cell]) -> bool {
