@@ -1,0 +1,266 @@
+//! xtask translations — the `update-translations` subcommand.
+//!
+//! PORTS: the `createUpdateStep` half of ghostty's
+//! `src/build/GhosttyI18n.zig`. That build step regenerates the gettext
+//! template (`po/<domain>.pot`) from the current GTK-apprt source tree and the
+//! Nautilus integration script, then `msgmerge`s every locale catalog in `po/`
+//! against the fresh template so translators pick up added/removed strings.
+//!
+//! Retargeted for rustty identity (R2):
+//!   * package-name        `com.mitchellh.ghostty`   -> `io.airely.rustty`
+//!   * msgid-bugs-address  `m@mitchellh.com`         -> `gael@airely.io`
+//!   * template output     `po/com.mitchellh.ghostty.pot` -> `po/io.airely.rustty.pot`
+//!   * Nautilus script     `dist/linux/ghostty_nautilus.py` -> `dist/linux/rustty_nautilus.py`
+//!   * GTK sources: ghostty walks the hardcoded `.blp` blueprint list plus
+//!     every `.zig` under `src/apprt/gtk`. rustty's GTK apprt is not live yet,
+//!     so we glob whatever GTK source exists under `crates/rustty-apprt`
+//!     (`*.blp` + `*.rs`). The gettext keywords `_` and `C_:1c,2` match
+//!     rustty-os's `_()` / `C_()` wrappers exactly as upstream.
+//!
+//! ── DEFERRED-REGENERATION REALITY (read before running) ──────────────────
+//! rustty's GTK apprt is a placeholder: none of the translatable UI call sites
+//! (`.blp` widgets, `_()`-wrapped labels) exist yet, so `xgettext` over the
+//! current tree finds essentially no strings. Running THIS command now would
+//! therefore overwrite `po/io.airely.rustty.pot` with a near-empty template
+//! and then `msgmerge` would mark every already-translated message in all 31
+//! catalogs as obsolete (`#~`), effectively gutting the ported translations.
+//!
+//! The 31 catalogs + template were ported directly (rebranded, msgfmt-clean)
+//! and must be preserved AS-IS until the GTK UI is live. Regeneration only
+//! becomes meaningful once the GTK apprt grows real translatable widgets and
+//! `_()` call sites. Until then this subcommand exists and is proven to build
+//! and invoke the right tools, but should NOT be run against the tracked `po/`.
+//! To exercise the pipeline safely, run it against a throwaway copy of `po/`.
+//!
+//! ── TOOLS ────────────────────────────────────────────────────────────────
+//! `xgettext` and `msgmerge` are resolved from `PATH`. On macOS the Homebrew
+//! gettext keg is keg-only, so prepend it first:
+//!     export PATH="/opt/homebrew/opt/gettext/bin:$PATH"
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use crate::workspace_root;
+
+/// gettext domain == rustty bundle id (matches `po/io.airely.rustty.pot` and
+/// the compiled `io.airely.rustty.mo` filename).
+const DOMAIN: &str = "io.airely.rustty";
+const MSGID_BUGS_ADDRESS: &str = "gael@airely.io";
+const COPYRIGHT_HOLDER: &str = "Mitchell Hashimoto, Ghostty contributors, Rustty contributors";
+
+/// The list of locale catalogs to merge, kept in lockstep with the `po/`
+/// directory. Mirrors `rustty-os`'s `i18n_locales::locales` (the reference
+/// `GhosttyI18n.zig` imports the same `locales` array).
+const LOCALES: &[&str] = &[
+    "zh_CN", "de", "fr", "ja", "nl", "nb", "ru", "uk", "pl", "ko_KR", "mk", "tr", "id", "es_BO",
+    "es_AR", "es_ES", "pt_BR", "ca", "it", "bg", "ga", "hu", "he", "zh_TW", "hr", "lt", "lv", "vi",
+    "kk", "be", "eu",
+];
+
+/// Recursively collect GTK-apprt source files (`.blp` + `.rs`) as paths
+/// RELATIVE to the workspace root, sorted for determinism.
+///
+/// Faithful to upstream's rationale: the arguments handed to `xgettext` must be
+/// repo-relative (not absolute) or the generated `.pot` embeds each developer's
+/// checkout path and churns on every commit. Sorting mirrors ghostty's explicit
+/// sort of the directory walk (walk order is not guaranteed).
+fn collect_gtk_sources(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let apprt = root.join("crates/rustty-apprt");
+    let mut out: Vec<PathBuf> = Vec::new();
+    if apprt.is_dir() {
+        collect_recursive(&apprt, &mut out)?;
+    }
+    // Make relative to the workspace root.
+    let mut rel: Vec<PathBuf> = out
+        .iter()
+        .map(|p| {
+            p.strip_prefix(root)
+                .map(|r| r.to_path_buf())
+                .unwrap_or_else(|_| p.clone())
+        })
+        .collect();
+    rel.sort();
+    Ok(rel)
+}
+
+fn collect_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("read_dir {}: {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("dir entry in {}: {e}", dir.display()))?;
+        let path = entry.path();
+        let kind = entry
+            .file_type()
+            .map_err(|e| format!("file_type {}: {e}", path.display()))?;
+        if kind.is_dir() {
+            // Skip build output dirs.
+            if path.file_name().and_then(|s| s.to_str()) == Some("target") {
+                continue;
+            }
+            collect_recursive(&path, out)?;
+        } else if kind.is_file() {
+            match path.extension().and_then(|s| s.to_str()) {
+                Some("blp") | Some("rs") => out.push(path),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Write a minimal, valid empty gettext template (header-only). Used when the
+/// GTK-apprt leg has zero source files, so the merge step still has a
+/// well-formed `gtk.pot` to consume (rather than erroring on "no input file").
+fn write_empty_pot(path: &Path) -> Result<(), String> {
+    let body = "\
+# SOME DESCRIPTIVE TITLE.\n\
+msgid \"\"\n\
+msgstr \"\"\n\
+\"MIME-Version: 1.0\\n\"\n\
+\"Content-Type: text/plain; charset=UTF-8\\n\"\n\
+\"Content-Transfer-Encoding: 8bit\\n\"\n";
+    std::fs::write(path, body).map_err(|e| format!("write empty pot {}: {e}", path.display()))
+}
+
+/// Port of `GhosttyI18n.createUpdateStep`: regenerate `po/<DOMAIN>.pot` from
+/// the GTK-apprt sources + the Nautilus Python script, then `msgmerge` every
+/// locale catalog against it.
+///
+/// SEE the module-level "DEFERRED-REGENERATION REALITY" note: while the GTK UI
+/// is a placeholder this will gut the ported catalogs. Returns the path to the
+/// regenerated template on success.
+pub fn update_translations() -> Result<PathBuf, String> {
+    let root = workspace_root();
+    let po_dir = root.join("po");
+    if !po_dir.is_dir() {
+        return Err(format!("po/ dir not found at {}", po_dir.display()));
+    }
+
+    // Intermediate .pot files live in a throwaway temp dir; only the final
+    // merged template + the per-locale catalogs are written into po/.
+    let tmp = std::env::temp_dir().join(format!("rustty-i18n-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).map_err(|e| format!("create temp dir: {e}"))?;
+    let gtk_pot = tmp.join("gtk.pot");
+    let py_pot = tmp.join("py.pot");
+
+    // ── (1) GTK leg: xgettext --language=C over the .blp + .rs sources. ──
+    //
+    // --language=C silences xgettext's "unknown extension" errors on .blp/.rs;
+    // --keyword=_ / --keyword=C_:1c,2 match rustty-os's `_()` / `C_()` gettext
+    // wrappers (`C_` = pgettext: arg 1 is the context `c`, arg 2 the msgid).
+    //
+    // --force-po is a rustty adaptation NOT in upstream: with the placeholder
+    // GTK apprt the scanned .rs files contain zero recognized `_()` call sites,
+    // and without --force-po xgettext writes NO output file when it extracts no
+    // messages — which would then break the merge step below on a missing
+    // gtk.pot. --force-po forces a valid header-only .pot to always be written.
+    // (Upstream never hits this because ghostty's live .blp/.zig always yield
+    // messages.) It is harmless once real strings exist.
+    let gtk_sources = collect_gtk_sources(&root)?;
+    if gtk_sources.is_empty() {
+        // No GTK source files at all: xgettext would error "no input file
+        // given", so emit a valid empty template directly. EXPECTED today if
+        // crates/rustty-apprt has no .blp/.rs.
+        write_empty_pot(&gtk_pot)?;
+    } else {
+        let mut xg = Command::new("xgettext");
+        xg.arg("--language=C")
+            .arg("--from-code=UTF-8")
+            .arg("--force-po")
+            .arg("--keyword=_")
+            .arg("--keyword=C_:1c,2")
+            .arg("-o")
+            .arg(&gtk_pot);
+        for src in &gtk_sources {
+            // Repo-relative paths (run from `root`) keep the .pot free of
+            // absolute checkout paths.
+            xg.arg(src);
+        }
+        run(xg.current_dir(&root), "xgettext (gtk)")?;
+    }
+
+    // ── (2) Python leg: xgettext --language=Python over the Nautilus script. ──
+    // --force-po for the same robustness reason as the GTK leg above.
+    let nautilus_rel = PathBuf::from("dist/linux/rustty_nautilus.py");
+    if root.join(&nautilus_rel).is_file() {
+        let mut xg = Command::new("xgettext");
+        xg.arg("--language=Python")
+            .arg("--from-code=UTF-8")
+            .arg("--force-po")
+            .arg("-o")
+            .arg(&py_pot)
+            .arg(&nautilus_rel);
+        run(xg.current_dir(&root), "xgettext (python)")?;
+    } else {
+        write_empty_pot(&py_pot)?;
+    }
+
+    // ── (3) Merge py.pot + gtk.pot into the final template. ──
+    //
+    // py.pot MUST come first on the merge command line: xgettext derives the
+    // merged charset from the first input, and the Python catalog is reliably
+    // UTF-8 (upstream comment). Output is captured from stdout (`-o -`) and
+    // written to po/<DOMAIN>.pot.
+    let pot_out = po_dir.join(format!("{DOMAIN}.pot"));
+    let mut merge = Command::new("xgettext");
+    merge
+        .arg("--add-comments=Translators")
+        .arg(format!("--package-name={DOMAIN}"))
+        .arg(format!("--msgid-bugs-address={MSGID_BUGS_ADDRESS}"))
+        .arg(format!("--copyright-holder={COPYRIGHT_HOLDER}"))
+        .arg("-o")
+        .arg("-")
+        .arg(&py_pot)
+        .arg(&gtk_pot);
+    let merged = capture(merge.current_dir(&root), "xgettext (merge)")?;
+    std::fs::write(&pot_out, &merged).map_err(|e| format!("write {}: {e}", pot_out.display()))?;
+
+    // ── (4) msgmerge every locale catalog against the fresh template. ──
+    //
+    // --quiet silences per-file stats; --no-fuzzy-matching keeps msgmerge from
+    // inventing fuzzy guesses (matches upstream). Output captured from stdout
+    // and written back over the catalog.
+    for locale in LOCALES {
+        let po = po_dir.join(format!("{locale}.po"));
+        if !po.is_file() {
+            return Err(format!("missing catalog {}", po.display()));
+        }
+        let mut mm = Command::new("msgmerge");
+        mm.arg("--quiet")
+            .arg("--no-fuzzy-matching")
+            .arg(&po)
+            .arg(&pot_out);
+        let merged = capture(mm.current_dir(&root), &format!("msgmerge {locale}"))?;
+        std::fs::write(&po, &merged).map_err(|e| format!("write {}: {e}", po.display()))?;
+    }
+
+    let _ = std::fs::remove_dir_all(&tmp);
+    Ok(pot_out)
+}
+
+/// Run a command to completion, mapping spawn/exit failures to a `String`
+/// error. The macOS PATH hint points at the keg-only Homebrew gettext.
+fn run(cmd: &mut Command, what: &str) -> Result<(), String> {
+    let status = cmd.status().map_err(|e| {
+        format!("spawn {what}: {e} (on macOS: export PATH=\"/opt/homebrew/opt/gettext/bin:$PATH\")")
+    })?;
+    if !status.success() {
+        return Err(format!("{what} exited with {status}"));
+    }
+    Ok(())
+}
+
+/// Run a command and capture stdout as bytes (the gettext `-o -` idiom), so we
+/// never lose non-UTF-8 catalog bytes to a lossy String conversion.
+fn capture(cmd: &mut Command, what: &str) -> Result<Vec<u8>, String> {
+    let output = cmd.output().map_err(|e| {
+        format!("spawn {what}: {e} (on macOS: export PATH=\"/opt/homebrew/opt/gettext/bin:$PATH\")")
+    })?;
+    if !output.status.success() {
+        return Err(format!(
+            "{what} exited with {} — {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(output.stdout)
+}

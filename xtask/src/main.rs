@@ -21,6 +21,7 @@ mod res_shell;
 mod res_shell_integration;
 mod res_terminfo;
 mod res_themes;
+mod translations;
 
 /// Single source of truth for the resource-tree OUTPUT name (rebrand Task 14):
 /// `rustty` by default, `ghostty` under this crate's own `identity-oracle`
@@ -61,6 +62,12 @@ SUBCOMMANDS:
     header-gen-apprt   Generate include/rustty-apprt.h from rustty-apprt-c via cbindgen (R2)
     xcframework        Package rustty-apprt-c into dist/RusttyKit.xcframework (macOS Swift-app tier)
     resources          Generate zig-out/share/{terminfo,<app>,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase (<app> = rustty by default, ghostty under identity-oracle)
+    update-translations
+                       Regenerate po/io.airely.rustty.pot from the GTK-apprt + Nautilus
+                       sources and msgmerge every po/*.po catalog (needs xgettext+msgmerge
+                       on PATH; on macOS prepend /opt/homebrew/opt/gettext/bin). NOTE: the
+                       GTK apprt is a placeholder, so running this now would gut the ported
+                       catalogs — deferred until the GTK UI is live (see translations.rs).
     dist               Build the source tarball at dist/rustty-<version>.tar.gz (git archive)
     distcheck          Build the source tarball, extract it, and build it to validate self-containment
     wasm-patch-growable-table <in.wasm> <out.wasm>
@@ -108,6 +115,16 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("xtask: resources failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("update-translations") => match translations::update_translations() {
+            Ok(out) => {
+                println!("wrote {}", out.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("xtask: update-translations failed: {e}");
                 ExitCode::FAILURE
             }
         },
