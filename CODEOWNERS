@@ -1,0 +1,45 @@
+# This file documents the crate/subsystem ownership of the Rustty project.
+#
+# Rustty (https://github.com/AirelyDev/rustty) is a full-fidelity port of
+# Ghostty (https://github.com/ghostty-org/ghostty) to Rust. Every path is
+# currently owned by @AirelyDev.
+#
+# The catch-all rule below is the source of truth and guarantees complete
+# coverage. The subsystem blocks that follow are documentary only — they map
+# crates to subsystems for when ownership is split out as the project grows.
+# CODEOWNERS uses last-match-wins, so the blocks can reassign a subsystem
+# independently once other maintainers join.
+
+# Default owner for everything.
+*   @AirelyDev
+
+# --- Subsystem map (documentary; all currently @AirelyDev) ---------------
+
+# Font
+/crates/rustty-font/            @AirelyDev
+/crates/rustty-font-shaper/     @AirelyDev
+
+# Renderer
+/crates/rustty-renderer/        @AirelyDev
+/crates/rustty-render-types/    @AirelyDev
+
+# Terminal
+/crates/rustty-vt/              @AirelyDev
+/crates/rustty-vt-c/            @AirelyDev
+/crates/rustty-input/           @AirelyDev
+/crates/rustty-terminfo/        @AirelyDev
+/crates/rustty-termio/          @AirelyDev
+/crates/rustty-unicode/         @AirelyDev
+/crates/rustty-simd/            @AirelyDev
+
+# Shell
+/crates/rustty-extra/shell-integration/   @AirelyDev
+
+# macOS
+#
+# This includes librustty because the macOS apprt is built on top of
+# librustty and often requires or is impacted by changes to librustty.
+/crates/rustty-apprt-c/         @AirelyDev
+/crates/rustty-os/              @AirelyDev
+/macos/                         @AirelyDev
+/include/rustty/                @AirelyDev

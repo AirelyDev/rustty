@@ -1,0 +1,6 @@
+# rustty .mailmap
+#
+# Canonicalizes the port's own author identities to a single name + email.
+# This is intentionally minimal: it covers rustty authorship only.
+# Upstream Ghostty author provenance is recorded in NOTICE, not here.
+Gael Hatchue <gael@airely.io> <ghatchue@gmail.com>

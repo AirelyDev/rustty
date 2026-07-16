@@ -1,0 +1,23 @@
+# Docs: https://prettier.io/docs/en/ignore.html
+vendor/
+crates-sys/*/vendor/
+**/*.html
+target/
+
+# jujutsu
+.jj/
+
+# macos is managed by XCode GUI
+macos/
+
+# Xcode asset catalogs
+**/*.xcassets/
+
+# produced by Icon Composer on macOS
+images/Rustty.icon/icon.json
+
+# shaders
+*.frag
+
+# port scaffolding & phase-0 goldens
+.port/

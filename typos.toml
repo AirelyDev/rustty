@@ -1,0 +1,83 @@
+[files]
+extend-exclude = [
+  # Build
+  "Cargo.lock",
+  # Build artifacts
+  "macos/build/*",
+  "target/*",
+  # vendored code
+  "vendor/*",
+  "crates-sys/*/vendor/*",
+  # "grey" color names are valid
+  "crates/rustty-vt/src/res/rgb.txt",
+  # Do not self-check
+  "typos.toml",
+  # Fonts
+  "*.ttf",
+  "*.otf",
+  "*.bdf",
+  # Images
+  "*.png",
+  "*.ico",
+  "*.icns",
+  # Valgrind nonsense
+  "valgrind.supp",
+  # Port scaffolding & phase-0 goldens (binary/generated test inputs)
+  ".port/phase-0/**",
+  # Other
+  "*.pdf",
+  "*.data",
+  "*.xib",
+  "crates/rustty-cli/src/lorem_ipsum.txt",
+]
+
+[default]
+extend-ignore-re = [
+  # Ignore typos in test expectations
+  "assert[_a-z]*!\\([^;]*",
+  "kHOM\\d*",
+  # Ignore "typos" in sprite font draw fn names
+  "draw[0-9A-F]+(_[0-9A-F]+)?\\(",
+  # Ignore test data in the paste input module
+  "\"hel\\\\x",
+  # Ignore long hex-like IDs such as 815E26BA2EF1E00F005C67B1
+  "[0-9A-F]{12,}",
+  # Ignore base64-encoded strings
+  "[A-Za-z0-9+/]{8,}={0,2}",
+  # Ignore Apple four char codes
+  'code="[A-Za-z]{4,8}"',
+  '"[A-Za-z]{4}"\.fourCharCode',
+]
+
+[default.extend-words]
+Pn = "Pn"
+thr = "thr"
+# Swift oddities
+Requestor = "Requestor"
+iterm = "iterm"
+ACCES = "ACCES"
+wdth = "wdth"
+Strat = "Strat"
+grey = "gray"
+greyscale = "grayscale"
+DECID = "DECID"
+flate = "flate"
+typ = "typ"
+kend = "kend"
+# Tai Tham is a script/writing system
+Tham = "Tham"
+# GTK
+GIR = "GIR"
+# terminfo
+rin = "rin"
+# sprites
+ower = "ower"
+# OpenType table names
+loca = "loca"
+
+[type.po]
+extend-glob = ["*.po"]
+check-file = false
+
+[type.swift.extend-words]
+inout = "inout"

@@ -1,11 +1,13 @@
 # macOS Rustty Application
 
 - Use `swiftlint` for formatting and linting Swift code.
-- If code outside of `macos/` directory is modified, use
-  `zig build -Demit-macos-app=false` before building the macOS app to update
-  the underlying Rustty library.
-- Use `macos/build.nu` to build the macOS app, do not use `zig build`
-  (except to build the underlying library as mentioned above).
+- If code outside of `macos/` directory is modified, run
+  `cargo run -p xtask -- xcframework` before building the macOS app to
+  regenerate the underlying Rustty library (produces
+  `dist/RusttyKit.xcframework`).
+- Use `macos/build.nu` to build the macOS app, do not build it directly with
+  `cargo`/`xcodebuild` (except to regenerate the underlying library as
+  mentioned above).
   - Build: `macos/build.nu [--scheme Rustty] [--configuration Debug] [--action build]`
   - Output: `macos/build/<configuration>/Rustty.app` (e.g. `macos/build/Debug/Rustty.app`)
 - Run unit tests directly with `macos/build.nu --action test`
