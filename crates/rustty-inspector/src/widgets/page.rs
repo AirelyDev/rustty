@@ -504,10 +504,7 @@ pub fn managedMemory(page: &Page) {
         let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(3) };
         // cimgui.c.ImGui_Text("%d", page.string_alloc.capacityBytes());
         unsafe {
-            dcimgui_sys::ImGui_Text(
-                c"%d".as_ptr(),
-                page.string_alloc.capacity_bytes() as c_int,
-            )
+            dcimgui_sys::ImGui_Text(c"%d".as_ptr(), page.string_alloc.capacity_bytes() as c_int)
         };
 
         // const hyperlink_map = page.hyperlink_map.map(page.memory);
@@ -551,9 +548,7 @@ pub fn managedMemory(page: &Page) {
         // _ = cimgui.c.ImGui_TableSetColumnIndex(3);
         let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(3) };
         // cimgui.c.ImGui_Text("%d", page.hyperlink_set.layout.cap);
-        unsafe {
-            dcimgui_sys::ImGui_Text(c"%d".as_ptr(), page.hyperlink_set.layout.cap as c_int)
-        };
+        unsafe { dcimgui_sys::ImGui_Text(c"%d".as_ptr(), page.hyperlink_set.layout.cap as c_int) };
     }
 }
 

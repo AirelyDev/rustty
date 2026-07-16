@@ -376,7 +376,10 @@ fn summaryTable(pages: &PageList) {
     );
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(2) };
     unsafe {
-        dcimgui_sys::ImGui_Text(c"%d KiB".as_ptr(), units::toKibiBytes(pages.max_size()) as c_int)
+        dcimgui_sys::ImGui_Text(
+            c"%d KiB".as_ptr(),
+            units::toKibiBytes(pages.max_size()) as c_int,
+        )
     };
 
     // cimgui.c.ImGui_TableNextRow();
@@ -609,11 +612,7 @@ fn regionRow(pages: &PageList, tag: Tag) {
     if let Some(pt) = pages.point_from_pin(tag, tl_pin) {
         let coord = pt.coord();
         unsafe {
-            dcimgui_sys::ImGui_Text(
-                c"(%d, %d)".as_ptr(),
-                coord.x as c_int,
-                coord.y as c_int,
-            )
+            dcimgui_sys::ImGui_Text(c"(%d, %d)".as_ptr(), coord.x as c_int, coord.y as c_int)
         };
     } else {
         unsafe { dcimgui_sys::ImGui_TextDisabled(c"(n/a)".as_ptr()) };
@@ -635,11 +634,7 @@ fn regionRow(pages: &PageList, tag: Tag) {
         if let Some(pt) = pages.point_from_pin(tag, br) {
             let coord = pt.coord();
             unsafe {
-                dcimgui_sys::ImGui_Text(
-                    c"(%d, %d)".as_ptr(),
-                    coord.x as c_int,
-                    coord.y as c_int,
-                )
+                dcimgui_sys::ImGui_Text(c"(%d, %d)".as_ptr(), coord.x as c_int, coord.y as c_int)
             };
         } else {
             unsafe { dcimgui_sys::ImGui_TextDisabled(c"(n/a)".as_ptr()) };
@@ -776,11 +771,7 @@ fn trackedPinsTable(pages: &PageList) {
             };
         } else {
             unsafe {
-                dcimgui_sys::ImGui_Text(
-                    c"(%d, %d)".as_ptr(),
-                    pin.x as c_int,
-                    pin.y as c_int,
-                )
+                dcimgui_sys::ImGui_Text(c"(%d, %d)".as_ptr(), pin.x as c_int, pin.y as c_int)
             };
         }
 
@@ -1323,10 +1314,10 @@ impl CellChooser {
         if unsafe { (*cell.cell).style_id() } != stylepkg::DEFAULT_ID {
             unsafe { dcimgui_sys::ImGui_SeparatorText(c"Style".as_ptr()) };
             let style = unsafe {
-                *(*cell.node).data.styles.get(
-                    (*cell.node).data.memory_ptr(),
-                    (*cell.cell).style_id(),
-                )
+                *(*cell.node)
+                    .data
+                    .styles
+                    .get((*cell.node).data.memory_ptr(), (*cell.cell).style_id())
             };
             super::style::table(style, None);
         }
@@ -1670,11 +1661,7 @@ impl CellInfo {
             let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(2) };
             let coord = point.coord();
             unsafe {
-                dcimgui_sys::ImGui_Text(
-                    c"(%d, %d)".as_ptr(),
-                    coord.x as c_int,
-                    coord.y as c_int,
-                )
+                dcimgui_sys::ImGui_Text(c"(%d, %d)".as_ptr(), coord.x as c_int, coord.y as c_int)
             };
         }
 

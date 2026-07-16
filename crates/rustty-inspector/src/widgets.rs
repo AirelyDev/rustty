@@ -7,6 +7,10 @@
 //! (Task 7). The remaining widget sub-modules fill in as their own Phase-3
 //! tasks land, in place.
 
+// PARITY: the `DetachableHeaderState` Default mirrors the reference's explicit
+// field defaults (kept manual to carry the Zig struct comment verbatim).
+#![allow(clippy::derivable_impls)]
+
 // const cimgui = @import("dcimgui");
 use core::ffi::CStr;
 
@@ -416,9 +420,7 @@ pub fn detachableHeader<Ctx>(
                     )
                 };
                 // cimgui.ImGui_DockBuilderDockWindow(label, dock_id_right);
-                unsafe {
-                    dcimgui_sys::ImGui_DockBuilderDockWindow(label.as_ptr(), dock_id_right)
-                };
+                unsafe { dcimgui_sys::ImGui_DockBuilderDockWindow(label.as_ptr(), dock_id_right) };
                 // cimgui.ImGui_DockBuilderFinish(current_dock_id);
                 unsafe { dcimgui_sys::ImGui_DockBuilderFinish(current_dock_id) };
             }

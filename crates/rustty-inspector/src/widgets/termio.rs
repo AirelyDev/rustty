@@ -52,12 +52,12 @@ use allocator_api2::alloc::Global as Allocator;
 use rustty_datastruct::circ_buf::{CircBuf, Direction};
 use rustty_vt::color::Palette;
 use rustty_vt::osc::Command as OscCommand;
+use rustty_vt::page::SemanticContent;
 use rustty_vt::parser::Action;
 use rustty_vt::screen::{Cursor, CursorStyle};
 use rustty_vt::stream::{Handler, Stream as VtStream};
-use rustty_vt::terminal::{ScrollingRegion, Terminal};
-use rustty_vt::page::SemanticContent;
 use rustty_vt::style;
+use rustty_vt::terminal::{ScrollingRegion, Terminal};
 
 use super::screen;
 
@@ -204,14 +204,18 @@ impl Stream {
 
             // cimgui.c.ImGui_SameLineEx(0, cimgui.c.ImGui_GetStyle().*.ItemInnerSpacing.x);
             unsafe {
-                dcimgui_sys::ImGui_SameLineEx(0.0, (*dcimgui_sys::ImGui_GetStyle()).ItemInnerSpacing.x)
+                dcimgui_sys::ImGui_SameLineEx(
+                    0.0,
+                    (*dcimgui_sys::ImGui_GetStyle()).ItemInnerSpacing.x,
+                )
             };
             // if (cimgui.c.ImGui_Button("Filter")) cimgui.c.ImGui_OpenPopup(popup_filter, .None);
             if unsafe { dcimgui_sys::ImGui_Button(c"Filter".as_ptr()) } {
                 unsafe {
                     dcimgui_sys::ImGui_OpenPopup(
                         popup_filter.as_ptr(),
-                        dcimgui_sys::ImGuiPopupFlags__ImGuiPopupFlags_None as dcimgui_sys::ImGuiPopupFlags,
+                        dcimgui_sys::ImGuiPopupFlags__ImGuiPopupFlags_None
+                            as dcimgui_sys::ImGuiPopupFlags,
                     )
                 };
             }
@@ -321,8 +325,7 @@ impl Stream {
             for i in 0..n {
                 // reverse order: newest (tail_idx = len-1) first.
                 let tail_idx = n - 1 - i;
-                let storage_idx =
-                    (self.events.tail + tail_idx) % self.events.capacity();
+                let storage_idx = (self.events.tail + tail_idx) % self.events.capacity();
                 let ev: &mut VTEvent = &mut self.events.storage[storage_idx];
 
                 // Need to push an ID so that our selectable is unique.
@@ -377,13 +380,19 @@ impl Stream {
                 let _ = unsafe { dcimgui_sys::ImGui_TableNextColumn() };
                 // cimgui.c.ImGui_Text("%s", @tagName(ev.kind).ptr);
                 unsafe {
-                    dcimgui_sys::ImGui_Text(c"%s".as_ptr(), ev.kind.tag_name().as_ptr() as *const c_char)
+                    dcimgui_sys::ImGui_Text(
+                        c"%s".as_ptr(),
+                        ev.kind.tag_name().as_ptr() as *const c_char,
+                    )
                 };
                 // _ = cimgui.c.ImGui_TableNextColumn();
                 let _ = unsafe { dcimgui_sys::ImGui_TableNextColumn() };
                 // cimgui.c.ImGui_Text("%s", ev.raw_description.ptr);
                 unsafe {
-                    dcimgui_sys::ImGui_Text(c"%s".as_ptr(), ev.raw_description.as_ptr() as *const c_char)
+                    dcimgui_sys::ImGui_Text(
+                        c"%s".as_ptr(),
+                        ev.raw_description.as_ptr() as *const c_char,
+                    )
                 };
 
                 // If the event is selected, we render info about it.
@@ -446,7 +455,10 @@ impl Stream {
                             let _ = unsafe { dcimgui_sys::ImGui_TableNextColumn() };
                             // cimgui.c.ImGui_Text("%s", key.ptr);
                             unsafe {
-                                dcimgui_sys::ImGui_Text(c"%s".as_ptr(), key_z.as_ptr() as *const c_char)
+                                dcimgui_sys::ImGui_Text(
+                                    c"%s".as_ptr(),
+                                    key_z.as_ptr() as *const c_char,
+                                )
                             };
                             // _ = cimgui.c.ImGui_TableNextColumn();
                             let _ = unsafe { dcimgui_sys::ImGui_TableNextColumn() };
@@ -505,7 +517,8 @@ impl Stream {
                     dcimgui_sys::ImGui_BeginTable(
                         c"table_filter_kind".as_ptr(),
                         3,
-                        dcimgui_sys::ImGuiTableFlags__ImGuiTableFlags_None as dcimgui_sys::ImGuiTableFlags,
+                        dcimgui_sys::ImGuiTableFlags__ImGuiTableFlags_None
+                            as dcimgui_sys::ImGuiTableFlags,
                     )
                 };
                 // defer cimgui.c.ImGui_EndTable();
@@ -527,7 +540,10 @@ impl Stream {
                     let mut value = !self.parser_stream.handler.filter_exclude.contains(tag);
                     // if (cimgui.c.ImGui_Checkbox(@tagName(tag).ptr, &value)) { ... }
                     if unsafe {
-                        dcimgui_sys::ImGui_Checkbox(tag.tag_name().as_ptr() as *const c_char, &mut value)
+                        dcimgui_sys::ImGui_Checkbox(
+                            tag.tag_name().as_ptr() as *const c_char,
+                            &mut value,
+                        )
                     } {
                         // if (value) handler.filter_exclude.remove(tag) else handler.filter_exclude.insert(tag);
                         if value {
@@ -647,10 +663,22 @@ fn get_key_action() -> KeyAction {
     // const keys = .{ {J,down}, {DownArrow,down}, {K,up}, {UpArrow,up} };
     // inline for (keys) |k| if (cimgui.c.ImGui_IsKeyPressed(k.key)) return k.action;
     let keys: [(dcimgui_sys::ImGuiKey, KeyAction); 4] = [
-        (dcimgui_sys::ImGuiKey_J as dcimgui_sys::ImGuiKey, KeyAction::Down),
-        (dcimgui_sys::ImGuiKey_DownArrow as dcimgui_sys::ImGuiKey, KeyAction::Down),
-        (dcimgui_sys::ImGuiKey_K as dcimgui_sys::ImGuiKey, KeyAction::Up),
-        (dcimgui_sys::ImGuiKey_UpArrow as dcimgui_sys::ImGuiKey, KeyAction::Up),
+        (
+            dcimgui_sys::ImGuiKey_J as dcimgui_sys::ImGuiKey,
+            KeyAction::Down,
+        ),
+        (
+            dcimgui_sys::ImGuiKey_DownArrow as dcimgui_sys::ImGuiKey,
+            KeyAction::Down,
+        ),
+        (
+            dcimgui_sys::ImGuiKey_K as dcimgui_sys::ImGuiKey,
+            KeyAction::Up,
+        ),
+        (
+            dcimgui_sys::ImGuiKey_UpArrow as dcimgui_sys::ImGuiKey,
+            KeyAction::Up,
+        ),
     ];
     for (key, action) in keys {
         if unsafe { dcimgui_sys::ImGui_IsKeyPressed(key) } {
@@ -714,7 +742,9 @@ struct Metadata {
 
 impl Metadata {
     fn new() -> Metadata {
-        Metadata { entries: Vec::new() }
+        Metadata {
+            entries: Vec::new(),
+        }
     }
 
     /// `md.put(key, value)` — `key` bytes and an already-NUL-terminated `value_z`.
@@ -818,7 +848,12 @@ impl VTEvent {
             kind: Kind::Print,
             raw_description: dupe_z(b""),
             cursor: default_cursor(),
-            scrolling_region: ScrollRegionSnapshot { top: 0, bottom: 0, left: 0, right: 0 },
+            scrolling_region: ScrollRegionSnapshot {
+                top: 0,
+                bottom: 0,
+                left: 0,
+                right: 0,
+            },
             metadata: Metadata::new(),
             imgui_selected: false,
         }
@@ -1134,17 +1169,30 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
         OscCommand::MouseShape { value } => md.put(b"value", dupe_z(value)),
 
         // color_operation: struct { op: Operation(enum), requests: color.List(struct), terminator: Terminator(enum) }
-        OscCommand::ColorOperation { op, requests: _, terminator } => {
+        OscCommand::ColorOperation {
+            op,
+            requests: _,
+            terminator,
+        } => {
             md.put(b"op", dupe_z(color_op_tag(*op).as_bytes()));
             // requests: a struct (SegmentedList) ⇒ @typeName(Value). See single_struct.
             md.put(b"requests", single_struct::<rustty_vt::osc::color::List>());
-            md.put(b"terminator", dupe_z(terminator_tag(*terminator).as_bytes()));
+            md.put(
+                b"terminator",
+                dupe_z(terminator_tag(*terminator).as_bytes()),
+            );
         }
 
         // kitty_color_protocol: OSC { list: ArrayList(Request)(struct), terminator: Terminator(enum) }
         OscCommand::KittyColorProtocol(o) => {
-            md.put(b"list", single_struct::<Vec<rustty_vt::kitty::color::Request>>());
-            md.put(b"terminator", dupe_z(terminator_tag(o.terminator).as_bytes()));
+            md.put(
+                b"list",
+                single_struct::<Vec<rustty_vt::kitty::color::Request>>(),
+            );
+            md.put(
+                b"terminator",
+                dupe_z(terminator_tag(o.terminator).as_bytes()),
+            );
         }
 
         // show_desktop_notification: struct { title: [:0]const u8, body: [:0]const u8 }
@@ -1209,7 +1257,10 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
                 Some(bytes) => md.put(b"payload", dupe_z(bytes)),
                 None => md.put(b"payload", dupe_z(b"(unset)")),
             }
-            md.put(b"terminator", dupe_z(terminator_tag(o.terminator).as_bytes()));
+            md.put(
+                b"terminator",
+                dupe_z(terminator_tag(o.terminator).as_bytes()),
+            );
         }
 
         // context_signal: Command { action: Action(enum), id: []const u8, metadata: []const u8 }
@@ -1728,7 +1779,10 @@ mod tests {
     #[test]
     fn metadata_struct_payload_per_field() {
         // clipboard_contents: struct { kind: u8, data: [:0]const u8 }
-        let md = osc_md(&C::ClipboardContents { kind: b'c', data: b"xyz".to_vec() });
+        let md = osc_md(&C::ClipboardContents {
+            kind: b'c',
+            data: b"xyz".to_vec(),
+        });
         assert_eq!(
             md,
             vec![("kind".into(), "99".into()), ("data".into(), "xyz".into())]
@@ -1746,7 +1800,10 @@ mod tests {
             some,
             vec![("id".into(), "7".into()), ("uri".into(), "http://x".into())]
         );
-        let none = osc_md(&C::HyperlinkStart { id: None, uri: b"u".to_vec() });
+        let none = osc_md(&C::HyperlinkStart {
+            id: None,
+            uri: b"u".to_vec(),
+        });
         assert_eq!(
             none,
             vec![("id".into(), "(unset)".into()), ("uri".into(), "u".into())]
@@ -1772,7 +1829,10 @@ mod tests {
     #[test]
     fn metadata_optional_bool_fields() {
         // conemu_xterm_emulation: struct { keyboard: ?bool, output: ?bool }
-        let md = osc_md(&C::ConemuXtermEmulation { keyboard: Some(true), output: None });
+        let md = osc_md(&C::ConemuXtermEmulation {
+            keyboard: Some(true),
+            output: None,
+        });
         assert_eq!(
             md,
             vec![
@@ -1800,9 +1860,6 @@ mod tests {
         assert!(!s.contains(ActionTag::Print));
         // activeTag mapping
         assert_eq!(ActionTag::of(&Action::Print(0)), ActionTag::Print);
-        assert_eq!(
-            ActionTag::of(&Action::DcsUnhook),
-            ActionTag::DcsUnhook
-        );
+        assert_eq!(ActionTag::of(&Action::DcsUnhook), ActionTag::DcsUnhook);
     }
 }

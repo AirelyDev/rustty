@@ -19,8 +19,8 @@ use allocator_api2::alloc::Global as Allocator;
 // (binding.rs).
 use rustty_vt::input::key::{Action as KeyAction, Key, KeyEvent, Mods};
 // const CircBuf = @import("../../datastruct/main.zig").CircBuf;
-use rustty_datastruct::CircBuf;
 use rustty_datastruct::circ_buf::Direction;
+use rustty_datastruct::CircBuf;
 // const cimgui = @import("dcimgui");
 // PORT NOTE (Task 8): `dcimgui` is the vendored Dear ImGui C API; the port
 // calls it through `dcimgui-sys` (full `dcimgui_sys::` paths, matching
@@ -337,7 +337,8 @@ impl Event {
             let height: f32 = {
                 let item_count: f32 = self.binding.len().min(5) as f32;
                 let padding = unsafe { (*dcimgui_sys::ImGui_GetStyle()).FramePadding.y } * 2.0;
-                (unsafe { dcimgui_sys::ImGui_GetTextLineHeightWithSpacing() }) * item_count + padding
+                (unsafe { dcimgui_sys::ImGui_GetTextLineHeightWithSpacing() }) * item_count
+                    + padding
             };
             // if (cimgui.c.ImGui_BeginListBox("##bindings", .{ .x = 0, .y = height })) {
             if unsafe {
@@ -639,7 +640,9 @@ fn modsTooltip<'a>(mods: &Mods, buf: &'a mut [u8]) -> Result<&'a [u8], Error> {
         //     first = false;
         // }
         if mods.shift {
-            stream.write_all(b"Shift").map_err(|()| Error::NoSpaceLeft)?;
+            stream
+                .write_all(b"Shift")
+                .map_err(|()| Error::NoSpaceLeft)?;
             first = false;
         }
         // if (mods.ctrl) {
@@ -674,7 +677,9 @@ fn modsTooltip<'a>(mods: &Mods, buf: &'a mut [u8]) -> Result<&'a [u8], Error> {
             if !first {
                 stream.write_all(b"+").map_err(|()| Error::NoSpaceLeft)?;
             }
-            stream.write_all(b"Super").map_err(|()| Error::NoSpaceLeft)?;
+            stream
+                .write_all(b"Super")
+                .map_err(|()| Error::NoSpaceLeft)?;
         }
         // try writer.writeByte(0);
         stream.write_byte(0).map_err(|()| Error::NoSpaceLeft)?;
@@ -1196,10 +1201,7 @@ impl Stream {
                 }
                 // cimgui.c.ImGui_Text("%s", &binding_buf);
                 unsafe {
-                    dcimgui_sys::ImGui_Text(
-                        c"%s".as_ptr(),
-                        binding_buf.as_ptr() as *const c_char,
-                    )
+                    dcimgui_sys::ImGui_Text(c"%s".as_ptr(), binding_buf.as_ptr() as *const c_char)
                 };
             }
 

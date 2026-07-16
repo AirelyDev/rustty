@@ -508,7 +508,10 @@ fn screensTable(t: &mut Terminal, map: &mut ScreenMap) {
             unsafe { dcimgui_sys::ImGui_PopStyleVar() };
             // cimgui.c.ImGui_SameLineEx(0.0, cimgui.c.ImGui_GetStyle().*.ItemInnerSpacing.x);
             unsafe {
-                dcimgui_sys::ImGui_SameLineEx(0.0, (*dcimgui_sys::ImGui_GetStyle()).ItemInnerSpacing.x)
+                dcimgui_sys::ImGui_SameLineEx(
+                    0.0,
+                    (*dcimgui_sys::ImGui_GetStyle()).ItemInnerSpacing.x,
+                )
             };
             // cimgui.c.ImGui_TableHeader("Screen");
             unsafe { dcimgui_sys::ImGui_TableHeader(c"Screen".as_ptr()) };
@@ -540,9 +543,7 @@ fn screensTable(t: &mut Terminal, map: &mut ScreenMap) {
             // _ = cimgui.c.ImGui_TableSetColumnIndex(0);
             let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(0) };
             // cimgui.c.ImGui_Text("%s", @tagName(key).ptr);
-            unsafe {
-                dcimgui_sys::ImGui_Text(c"%s".as_ptr(), screen_key_name_c(key).as_ptr())
-            };
+            unsafe { dcimgui_sys::ImGui_Text(c"%s".as_ptr(), screen_key_name_c(key).as_ptr()) };
         }
         {
             // _ = cimgui.c.ImGui_TableSetColumnIndex(1);
@@ -555,7 +556,12 @@ fn screensTable(t: &mut Terminal, map: &mut ScreenMap) {
                 //     );
                 unsafe {
                     dcimgui_sys::ImGui_TextColored(
-                        dcimgui_sys::ImVec4 { x: 0.4, y: 1.0, z: 0.4, w: 1.0 },
+                        dcimgui_sys::ImVec4 {
+                            x: 0.4,
+                            y: 1.0,
+                            z: 0.4,
+                            w: 1.0,
+                        },
                         c"active".as_ptr(),
                     )
                 };
@@ -567,7 +573,12 @@ fn screensTable(t: &mut Terminal, map: &mut ScreenMap) {
                 //     );
                 unsafe {
                     dcimgui_sys::ImGui_TextColored(
-                        dcimgui_sys::ImVec4 { x: 0.6, y: 0.6, z: 0.6, w: 1.0 },
+                        dcimgui_sys::ImVec4 {
+                            x: 0.6,
+                            y: 0.6,
+                            z: 0.6,
+                            w: 1.0,
+                        },
                         c"initialized".as_ptr(),
                     )
                 };
@@ -579,7 +590,12 @@ fn screensTable(t: &mut Terminal, map: &mut ScreenMap) {
                 //     );
                 unsafe {
                     dcimgui_sys::ImGui_TextColored(
-                        dcimgui_sys::ImVec4 { x: 0.4, y: 0.4, z: 0.4, w: 1.0 },
+                        dcimgui_sys::ImVec4 {
+                            x: 0.4,
+                            y: 0.4,
+                            z: 0.4,
+                            w: 1.0,
+                        },
                         c"(not initialized)".as_ptr(),
                     )
                 };
@@ -773,11 +789,7 @@ pub fn layoutTable(t: &mut Terminal) {
             let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
             // cimgui.c.ImGui_Text("%dc x %dr", t.cols, t.rows);
             unsafe {
-                dcimgui_sys::ImGui_Text(
-                    c"%dc x %dr".as_ptr(),
-                    t.cols as c_int,
-                    t.rows as c_int,
-                )
+                dcimgui_sys::ImGui_Text(c"%dc x %dr".as_ptr(), t.cols as c_int, t.rows as c_int)
             };
         }
     }
@@ -944,10 +956,7 @@ pub fn layoutTable(t: &mut Terminal) {
             // PORT NOTE (INV-3): the SOLE inspector -> live terminal-state
             // write-back in the entire inspector. Guarded so a partial/invalid
             // edit never corrupts the region.
-            if changed
-                && override_.top < override_.bottom
-                && override_.left < override_.right
-            {
+            if changed && override_.top < override_.bottom && override_.left < override_.right {
                 t.scrolling_region = override_;
             }
         }
@@ -987,7 +996,10 @@ pub fn mouseTable(t: &Terminal) {
             let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
             // cimgui.c.ImGui_Text("%s", @tagName(t.flags.mouse_event).ptr);
             unsafe {
-                dcimgui_sys::ImGui_Text(c"%s".as_ptr(), mouse_event_name(t.flags.mouse_event).as_ptr())
+                dcimgui_sys::ImGui_Text(
+                    c"%s".as_ptr(),
+                    mouse_event_name(t.flags.mouse_event).as_ptr(),
+                )
             };
         }
     }
@@ -1010,7 +1022,10 @@ pub fn mouseTable(t: &Terminal) {
             let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
             // cimgui.c.ImGui_Text("%s", @tagName(t.flags.mouse_format).ptr);
             unsafe {
-                dcimgui_sys::ImGui_Text(c"%s".as_ptr(), mouse_format_name(t.flags.mouse_format).as_ptr())
+                dcimgui_sys::ImGui_Text(
+                    c"%s".as_ptr(),
+                    mouse_format_name(t.flags.mouse_format).as_ptr(),
+                )
             };
         }
     }
@@ -1224,7 +1239,10 @@ const MODES: &[(Mode, &CStr)] = &[
     (Mode::AltScreenLegacy, c"alt_screen_legacy"),
     (Mode::KeypadKeys, c"keypad_keys"),
     (Mode::BackarrowKeyMode, c"backarrow_key_mode"),
-    (Mode::EnableLeftAndRightMargin, c"enable_left_and_right_margin"),
+    (
+        Mode::EnableLeftAndRightMargin,
+        c"enable_left_and_right_margin",
+    ),
     (Mode::MouseEventNormal, c"mouse_event_normal"),
     (Mode::MouseEventButton, c"mouse_event_button"),
     (Mode::MouseEventAny, c"mouse_event_any"),
@@ -1240,7 +1258,10 @@ const MODES: &[(Mode, &CStr)] = &[
     (Mode::ReverseWrapExtended, c"reverse_wrap_extended"),
     (Mode::AltScreen, c"alt_screen"),
     (Mode::SaveCursor, c"save_cursor"),
-    (Mode::AltScreenSaveCursorClearEnter, c"alt_screen_save_cursor_clear_enter"),
+    (
+        Mode::AltScreenSaveCursorClearEnter,
+        c"alt_screen_save_cursor_clear_enter",
+    ),
     (Mode::BracketedPaste, c"bracketed_paste"),
     (Mode::SynchronizedOutput, c"synchronized_output"),
     (Mode::GraphemeCluster, c"grapheme_cluster"),
@@ -1338,7 +1359,11 @@ pub fn modesTable(t: &Terminal) {
             unsafe {
                 dcimgui_sys::ImGui_Text(
                     c"%s%d".as_ptr(),
-                    if tag.ansi { c"".as_ptr() } else { c"?".as_ptr() },
+                    if tag.ansi {
+                        c"".as_ptr()
+                    } else {
+                        c"?".as_ptr()
+                    },
                     tag.value as c_int,
                 )
             };
@@ -1419,11 +1444,7 @@ pub fn dynamicRGB(label: &CStr, rgb: &DynamicRGB) -> bool {
         // _ = cimgui.c.ImGui_TableSetColumnIndex(1);
         let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
         // var col = [3]f32{ c.r/255.0, c.g/255.0, c.b/255.0 };
-        let mut col = [
-            c.r as f32 / 255.0,
-            c.g as f32 / 255.0,
-            c.b as f32 / 255.0,
-        ];
+        let mut col = [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0];
         // _ = cimgui.c.ImGui_ColorEdit3("##override", &col, cimgui.c.ImGuiColorEditFlags_None);
         let _ = unsafe {
             dcimgui_sys::ImGui_ColorEdit3(
@@ -1455,11 +1476,7 @@ pub fn dynamicRGB(label: &CStr, rgb: &DynamicRGB) -> bool {
         }
 
         // var col = [3]f32{ c.r/255.0, c.g/255.0, c.b/255.0 };
-        let mut col = [
-            c.r as f32 / 255.0,
-            c.g as f32 / 255.0,
-            c.b as f32 / 255.0,
-        ];
+        let mut col = [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0];
         // _ = cimgui.c.ImGui_ColorEdit3("##default", &col, cimgui.c.ImGuiColorEditFlags_None);
         let _ = unsafe {
             dcimgui_sys::ImGui_ColorEdit3(

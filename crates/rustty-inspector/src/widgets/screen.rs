@@ -345,13 +345,9 @@ impl Info {
 
             // Dock windows into the space
             // cimgui.ImGui_DockBuilderDockWindow(window_info, dockspace_id);
-            unsafe {
-                dcimgui_sys::ImGui_DockBuilderDockWindow(WINDOW_INFO.as_ptr(), dockspace_id)
-            };
+            unsafe { dcimgui_sys::ImGui_DockBuilderDockWindow(WINDOW_INFO.as_ptr(), dockspace_id) };
             // cimgui.ImGui_DockBuilderDockWindow(window_cell, dockspace_id);
-            unsafe {
-                dcimgui_sys::ImGui_DockBuilderDockWindow(WINDOW_CELL.as_ptr(), dockspace_id)
-            };
+            unsafe { dcimgui_sys::ImGui_DockBuilderDockWindow(WINDOW_CELL.as_ptr(), dockspace_id) };
             // cimgui.ImGui_DockBuilderDockWindow(window_pagelist, dockspace_id);
             unsafe {
                 dcimgui_sys::ImGui_DockBuilderDockWindow(WINDOW_PAGELIST.as_ptr(), dockspace_id)
@@ -424,9 +420,7 @@ pub fn cursorTable(cursor: &Cursor) {
     // _ = cimgui.c.ImGui_TableSetColumnIndex(1);
     let _ = unsafe { dcimgui_sys::ImGui_TableSetColumnIndex(1) };
     // cimgui.c.ImGui_Text("(%d, %d)", cursor.x, cursor.y);
-    unsafe {
-        dcimgui_sys::ImGui_Text(c"(%d, %d)".as_ptr(), cursor.x as c_int, cursor.y as c_int)
-    };
+    unsafe { dcimgui_sys::ImGui_Text(c"(%d, %d)".as_ptr(), cursor.x as c_int, cursor.y as c_int) };
 
     // cimgui.c.ImGui_TableNextRow();
     unsafe { dcimgui_sys::ImGui_TableNextRow() };
@@ -626,7 +620,11 @@ pub fn keyboardTable(screen: &Screen, modify_other_keys_2: bool) {
                     unsafe {
                         dcimgui_sys::ImGui_Text(
                             c"%s".as_ptr(),
-                            if value { c"true".as_ptr() } else { c"false".as_ptr() },
+                            if value {
+                                c"true".as_ptr()
+                            } else {
+                                c"false".as_ptr()
+                            },
                         )
                     };
                 }
@@ -936,18 +934,14 @@ pub fn semanticPromptTable(semantic_prompt: &SemanticPrompt) {
         // conservative_vertical/smart_vertical).
         match semantic_prompt.click {
             // .none => cimgui.c.ImGui_TextDisabled("(none)"),
-            SemanticClick::None => unsafe {
-                dcimgui_sys::ImGui_TextDisabled(c"(none)".as_ptr())
-            },
+            SemanticClick::None => unsafe { dcimgui_sys::ImGui_TextDisabled(c"(none)".as_ptr()) },
             // .click_events => |click_events| cimgui.c.ImGui_Text("click_events=%s", @tagName(click_events).ptr),
             SemanticClick::ClickEvents(click_events) => {
                 let name: &CStr = match click_events {
                     ClickEvents::Absolute => c"absolute",
                     ClickEvents::Relative => c"relative",
                 };
-                unsafe {
-                    dcimgui_sys::ImGui_Text(c"click_events=%s".as_ptr(), name.as_ptr())
-                };
+                unsafe { dcimgui_sys::ImGui_Text(c"click_events=%s".as_ptr(), name.as_ptr()) };
             }
             // .cl => |cl| cimgui.c.ImGui_Text("cl=%s", @tagName(cl).ptr),
             SemanticClick::Cl(cl) => {

@@ -86,10 +86,12 @@ use rustty_vt::terminal::Terminal;
 // already use, one tier up: `rustty_core::Surface` cannot be named from this
 // crate without an inspector -> core dependency cycle (core already depends on
 // inspector).
-use rustty_renderer::size::{Coordinate as RenderCoordinate, CoordinateSurface, CoordinateTag, Size};
+use rustty_renderer::size::{
+    Coordinate as RenderCoordinate, CoordinateSurface, CoordinateTag, Size,
+};
 use rustty_renderer::state::State as RendererState;
 
-use super::{key, renderer, termio, terminal};
+use super::{key, renderer, terminal, termio};
 
 /// This is discovered via the hardcoded string in the ImGui demo window.
 // const window_imgui_demo = "Dear ImGui Demo";
@@ -764,9 +766,7 @@ fn fontTable(data: &SurfaceData) {
             //     "%.2f pt",
             //     surface.font_size.points,
             // );
-            unsafe {
-                dcimgui_sys::ImGui_Text(c"%.2f pt".as_ptr(), data.font_size_points as f64)
-            };
+            unsafe { dcimgui_sys::ImGui_Text(c"%.2f pt".as_ptr(), data.font_size_points as f64) };
         }
     }
 
@@ -787,9 +787,7 @@ fn fontTable(data: &SurfaceData) {
             //     "%.2f px",
             //     surface.font_size.pixels(),
             // );
-            unsafe {
-                dcimgui_sys::ImGui_Text(c"%.2f px".as_ptr(), data.font_size_pixels as f64)
-            };
+            unsafe { dcimgui_sys::ImGui_Text(c"%.2f px".as_ptr(), data.font_size_pixels as f64) };
         }
     }
 }

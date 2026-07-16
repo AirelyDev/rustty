@@ -172,19 +172,43 @@ pub fn table(st: Style, palette: Option<&Palette>) {
             };
         }
         // .{ "bold", "Text will be rendered with bold weight." },
-        style_row!(st.flags.bold, c"bold", c"Text will be rendered with bold weight.");
+        style_row!(
+            st.flags.bold,
+            c"bold",
+            c"Text will be rendered with bold weight."
+        );
         // .{ "italic", "Text will be rendered in italic style." },
-        style_row!(st.flags.italic, c"italic", c"Text will be rendered in italic style.");
+        style_row!(
+            st.flags.italic,
+            c"italic",
+            c"Text will be rendered in italic style."
+        );
         // .{ "faint", "Text will be rendered with reduced intensity." },
-        style_row!(st.flags.faint, c"faint", c"Text will be rendered with reduced intensity.");
+        style_row!(
+            st.flags.faint,
+            c"faint",
+            c"Text will be rendered with reduced intensity."
+        );
         // .{ "blink", "Text will blink." },
         style_row!(st.flags.blink, c"blink", c"Text will blink.");
         // .{ "inverse", "Foreground and background colors are swapped." },
-        style_row!(st.flags.inverse, c"inverse", c"Foreground and background colors are swapped.");
+        style_row!(
+            st.flags.inverse,
+            c"inverse",
+            c"Foreground and background colors are swapped."
+        );
         // .{ "invisible", "Text will be invisible (hidden)." },
-        style_row!(st.flags.invisible, c"invisible", c"Text will be invisible (hidden).");
+        style_row!(
+            st.flags.invisible,
+            c"invisible",
+            c"Text will be invisible (hidden)."
+        );
         // .{ "strikethrough", "Text will have a line through it." },
-        style_row!(st.flags.strikethrough, c"strikethrough", c"Text will have a line through it.");
+        style_row!(
+            st.flags.strikethrough,
+            c"strikethrough",
+            c"Text will have a line through it."
+        );
     }
 
     // cimgui.c.ImGui_TextDisabled("(Any styles not shown are not currently set)");

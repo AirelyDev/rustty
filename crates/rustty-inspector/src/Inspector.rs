@@ -66,8 +66,8 @@
 // acyclic seam — see the module doc). `widgets` is `crate::widgets`.
 use crate::widgets;
 
-/// Extra mouse state the inspector tracks per-surface (`widgets.surface.Mouse`).
-/// LIVE — the R3-proven live half of `widgets/surface.rs`.
+// Extra mouse state the inspector tracks per-surface (`widgets.surface.Mouse`).
+// LIVE — the R3-proven live half of `widgets/surface.rs`.
 //
 // mouse: widgets.surface.Mouse = .{},
 //
