@@ -589,6 +589,30 @@ impl<'a> Parser<'a> {
         // 2. transition action
         // 3. entry action to new state
 
+        // PERF(port): state-equal fast path. When `state == next_state` the
+        // reference's own guards make BOTH the exit and entry actions `null`
+        // (each arm is inside `if (self.state == next_state) null else ...`,
+        // Parser.zig:267/280), so the result is exactly
+        // `[None, doAction(action, c), None]`; the deferred
+        // `self.state = next_state` write stores the value already there and
+        // is unobservable through `&mut self`, so it is skipped. The
+        // Print/Execute arms are duplicated verbatim from `do_action`
+        // (Parser.zig:330-331) as separate return sites so the per-byte
+        // discarded `[Option<Action>;3]` is STATICALLY drop-free on the hot
+        // Ground print/execute path — the reference gets the same effect from
+        // its payloads being drop-free slices. Observable behavior identical
+        // for every input byte: same action values, same order, same `self`
+        // mutations (the delegated arm calls the same `do_action`).
+        if state == next_state {
+            return match action {
+                // .print => Action{ .print = c },
+                TransitionAction::Print => [None, Some(Action::Print(c as u32)), None],
+                // .execute => Action{ .execute = c },
+                TransitionAction::Execute => [None, Some(Action::Execute(c)), None],
+                _ => [None, self.do_action(action, c), None],
+            };
+        }
+
         // Exit depends on current state
         let exit: Option<Action> = if state == next_state {
             None
