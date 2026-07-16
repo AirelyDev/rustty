@@ -695,6 +695,37 @@ where
         unsafe { core::ptr::addr_of_mut!((*item).value) }
     }
 
+    // PERF(port): `get` split in two for callers that resolve MANY ids against
+    // one set in a loop (the render managed-cell walk): `items_ptr` hoists the
+    // base resolution once, `get_at` is the per-id remainder with `get`'s
+    // exact asserts. `get(base, id)` == `get_at(items_ptr(base), id)`.
+
+    /// The resolved items base pointer (the hoistable half of `get`).
+    ///
+    /// # Safety: `base` must be the true base of the backing buffer.
+    pub unsafe fn items_ptr<B: IntFromBase + Copy>(&self, base: B) -> *mut Item<T, Id, RefCount> {
+        unsafe { self.items.ptr(base) }
+    }
+
+    /// Get an item by its ID from a pre-resolved `items_ptr`, without
+    /// incrementing its reference count.
+    ///
+    /// Asserts that the item's reference count is greater than 0.
+    ///
+    /// # Safety: `items` must be `self.items_ptr(base)` for this set's true
+    /// backing buffer base.
+    pub unsafe fn get_at(&self, items: *mut Item<T, Id, RefCount>, id: Id) -> *mut T {
+        assert(id > Id::ZERO);
+        assert(id.to_usize() < self.layout.cap);
+
+        // SB: raw `*mut Item` — see `get`.
+        let item = unsafe { items.add(id.to_usize()) };
+
+        assert(unsafe { (*item).meta.ref_count } > RefCount::ZERO);
+
+        unsafe { core::ptr::addr_of_mut!((*item).value) }
+    }
+
     /// Releases a reference to an item by its ID.
     ///
     /// Asserts that the item's reference count is greater than 0.

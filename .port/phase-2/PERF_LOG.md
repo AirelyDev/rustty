@@ -368,3 +368,96 @@ vs 157.2 MB, sc.render 8.04 vs 9.18 MB); only osc-parser higher (7.50 vs
 - LTO remains banned (round-1 finding stands; re-verify t-parser if ever
   revisited).
 - Raw data: `.port/phase-2/perf-v3/` (round-2 sweeps + `r3_*` sweeps).
+
+# Round 4
+
+## r4-render-win — screen-clone.render (mandate: decisive WIN, >= 5% vs Zig)
+
+Target: screen-clone.render zig 15.7 vs rust 16.1 official (post-r3,
+statistical parity). Round 3 documented the residual as parity-locked ONLY
+for the then-current loop structure; round 4 hunted STRUCTURAL reshapes,
+including optimizations Zig itself does not do (sanctioned per PORT_RULES
+R10: internal reshape, byte-identical observable behavior).
+
+Files: `crates/rustty-vt/src/ref_counted_set.rs`,
+`crates/rustty-vt/src/render.rs`.
+
+Diagnosis (xctrace leaf-PC histogram diff of BOTH binaries): BOTH engines
+re-load `p.memory` + the style set's items offset per STYLED cell — the
+grapheme arm's `extend_from_slice` call clobbers memory, so LLVM (and Zig's
+backend, disasm: reloads at `[x19,#0x10]` / `[x19,#0x7c]`) cannot hoist
+them. Rust additionally paid a per-styled-cell bounds check on the indexed
+`cells_style[x]` store (`cmp x24,x23 / b.hs`, 771 leaf samples) — the r3
+"residual register-only cmp/b.hs (harmless)" note was WRONG; it was hot.
+
+Fix (r4-render-win):
+
+1. `RefCountedSet::get` split into two additive pub unsafe methods (`get`
+   itself unchanged): `items_ptr(base)` = the hoistable
+   `self.items.ptr(base)` half, and `get_at(items, id)` = the per-id
+   remainder carrying `get`'s EXACT asserts (id > 0, id < layout.cap,
+   ref_count > 0; same inlineAssert tier, same raw-`*mut Item` SB
+   discipline). Identity: `get(base, id) == get_at(items_ptr(base), id)`.
+2. `RenderState::update` managed loop: hoist `addr_of!((*p).styles)` +
+   `items_ptr((*p).memory_ptr())` once per row (sound: nothing in the loop
+   writes through `p` — only the row's own SoA columns and `grapheme_buf`
+   are written; `lookup_grapheme` is read-only); replace the indexed
+   `enumerate` walk with `page_cells.iter().zip(cells_style.iter_mut())
+   .zip(cells_spans.iter_mut())` so the per-write bounds checks fold into
+   the shared loop bound (all three slices are exactly `page_cells.len()`,
+   proven by `rebuild_raw` + the r3 `[..n]` pre-slices).
+
+Styled path is now 16 instructions with ZERO per-cell set-base loads and
+ZERO bounds checks, vs zig's 17 + 2 per-cell base reloads (disasm-verified
+on the final binary). Zig does NOT do this hoist — a sanctioned R10 win
+over the reference.
+
+Killed candidates (measured/audited, for the record):
+
+- #1 last-style memoization (VALUE cache): +42% REGRESSION (22.64 vs
+  15.94) — LLVM SROAs the cached 21-byte Style into ~7 scalar GPRs; the
+  hit-path store explodes into 15 scalar stores (disasm-verified).
+- #1b memoization (POINTER cache): -6.8% vs zig on official corpus BUT
+  regressed the all-miss adversarial corpus +6%; with items_ptr hoisted it
+  became strictly worse than no-memo on BOTH corpora. Dominated; killed.
+- #2 styled-span batching: killed by analysis + #1 — the per-cell
+  content_tag dispatch is semantically required either way.
+- #3 fuse memcpy + walk / row flag bitset: no such bitset exists in the
+  reference (new state = forbidden); fusing loses the memcpy advantage the
+  reference's own comment values at ~300%.
+- #4 cross-update invariants: audited, no-op — capacity retained
+  everywhere, nothing rebuilt per update.
+- #6 layout: stride 28B in both engines; rust copies 21 value bytes vs zig
+  28 — equal cost, no action.
+
+Parity: pure loop-invariant hoist + iteration reshape; identical writes to
+identical slots in identical order for ANY input; no public-contract change
+(RenderState read API untouched; set methods additive); no new unsafe
+discipline beyond the pre-existing raw-pointer walk. Regression guards
+added (written against the PRE-reshape loop first, pass both sides):
+`render::tests::mixed_styles_adjacent_cells` and
+`mixed_styles_alternating_per_cell` (two ids alternating EVERY cell + a
+mid-row ZWJ grapheme so `extend_from_slice` runs between style
+resolutions — the exact clobber the hoist reasons about).
+
+Measured (NON-OFFICIAL, interleaved 20-run batches x8 reps, rep 1 discarded
+as binary-cold, medians of 7; commit-day sweep):
+
+- official corpus (ascii-small.bin): zig 15.822 / r3-SHIP 16.248 /
+  r4 14.518 ms = -8.2% vs zig, -10.6% vs pre; ranges disjoint (r4 worst
+  15.07 < zig best 15.56). Hunt-phase sweeps agreed: -8.3%, -7.5%, -6.1%.
+- adversarial corpus (`.perf-bins/corpus-alt-style.bin`, two bg styles
+  alternating EVERY cell, 80 full rows — memoization/hoist worst case):
+  zig 14.940 / r3 15.258 / r4 14.131 = -5.4% vs zig. No regression.
+- canary screen-clone.clone (shares RefCountedSet): r3 50.98 / r4 50.75
+  (flat, still beats zig 51.91; hunt-phase numbers).
+
+Gates: rustty-vt 2042 passed / 0 failed (default AND --features
+alloc-bench; the round-3 search_thread flake did not fire);
+rustty-renderer 64 passed / 0 failed; clippy --no-deps -D warnings clean;
+fmt --check clean.
+
+Verified binary: `.perf-bins/rustty-bench-r4-render` (untracked stash, RF
+profile) — bit-identical (sha efed4a8f) to the hunt's validated
+`rustty-bench-r4-render-hoist-RF`. Official idle-gated N=7 sweep still
+owed per protocol.

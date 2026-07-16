@@ -801,16 +801,28 @@ impl RenderState {
             let (cells_style, cells_spans, grapheme_buf) = row.cells.slice_mut();
             let cells_style = &mut cells_style[..n];
             let cells_spans = &mut cells_spans[..n];
-            for (x, page_cell) in page_cells.iter().enumerate() {
+            // PERF(port): hoist the style-set base resolution once per row —
+            // `(*p).memory_ptr()` and the set's items offset are loop-invariant
+            // (nothing in this loop writes through `p`), but the grapheme arm's
+            // `extend_from_slice` call clobbers memory, so LLVM re-loads both
+            // per styled cell unless they live in pre-loop locals. The zip
+            // iteration replaces indexed column writes (`cells_style[x]`),
+            // folding the per-write bounds checks into the shared loop bound.
+            // `get(base, id)` == `get_at(items_ptr(base), id)` — see
+            // `RefCountedSet::items_ptr` / `get_at`.
+            let styles: *const crate::style::Set = unsafe { core::ptr::addr_of!((*p).styles) };
+            let style_items = unsafe { (*styles).items_ptr((*p).memory_ptr()) };
+            for ((page_cell, style_slot), span_slot) in page_cells
+                .iter()
+                .zip(cells_style.iter_mut())
+                .zip(cells_spans.iter_mut())
+            {
                 // Append assuming its a single-codepoint, styled cell
                 // (most common by far).
                 if page_cell.style_id() > 0 {
                     // cells_style[x] = p.styles.get(p.memory, page_cell.style_id).*;
-                    let style = unsafe {
-                        let base = (*p).memory_ptr();
-                        *(*p).styles.get(base, page_cell.style_id())
-                    };
-                    cells_style[x] = style;
+                    let style = unsafe { *(*styles).get_at(style_items, page_cell.style_id()) };
+                    *style_slot = style;
                 }
 
                 // Switch on our content tag to handle less likely cases.
@@ -837,14 +849,14 @@ impl RenderState {
                         };
                         let off = grapheme_buf.len() as u32;
                         grapheme_buf.extend_from_slice(g);
-                        cells_spans[x] = (off, g.len() as u32);
+                        *span_slot = (off, g.len() as u32);
                     }
 
                     page::ContentTag::BgColorRgb => {
                         // @branchHint(.unlikely);
                         // cells_style[x] = .{ .bg_color = .{ .rgb = ... } };
                         let rgb = page_cell.content_color_rgb();
-                        cells_style[x] = Style {
+                        *style_slot = Style {
                             bg_color: crate::style::Color::Rgb(color::RGB {
                                 r: rgb.r,
                                 g: rgb.g,
@@ -857,7 +869,7 @@ impl RenderState {
                     page::ContentTag::BgColorPalette => {
                         // @branchHint(.unlikely);
                         // cells_style[x] = .{ .bg_color = .{ .palette = ... } };
-                        cells_style[x] = Style {
+                        *style_slot = Style {
                             bg_color: crate::style::Color::Palette(
                                 page_cell.content_color_palette(),
                             ),
@@ -1432,6 +1444,127 @@ mod tests {
         }
         assert_eq!('C' as u32, state.row_data[0].cells.get(2).raw.codepoint());
         assert_eq!(0, state.row_data[0].cells.get(3).raw.codepoint());
+
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    // PORT NOTE: port-only regression guard (no reference counterpart) for the
+    // r4-render-win managed-loop reshape (hoisted style-set base + zip
+    // iteration): adjacent cells with DIFFERENT style ids must each resolve to
+    // their own style. Written against the pre-reshape loop first; outputs
+    // must be identical pre/post.
+    #[test]
+    fn mixed_styles_adjacent_cells() {
+        let alloc = Global;
+
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[41mA"); // bg palette 1
+            s.next_slice(b"\x1b[42mB"); // bg palette 2
+            s.next_slice(b"\x1b[43mC"); // bg palette 3
+            s.next_slice(b"\x1b[0mD"); // default
+            s.deinit();
+        }
+
+        let mut state: RenderState = RenderState::empty();
+        state.update(alloc, &mut t).unwrap();
+
+        assert_eq!(3, state.row_data.len());
+        assert_eq!(10, state.row_data[0].cells.len());
+
+        {
+            let cell = &state.row_data[0].cells.get(0);
+            assert_eq!('A' as u32, cell.raw.codepoint());
+            assert!(cell.style.bg_color.eql(crate::style::Color::Palette(1)));
+        }
+        {
+            let cell = &state.row_data[0].cells.get(1);
+            assert_eq!('B' as u32, cell.raw.codepoint());
+            assert!(cell.style.bg_color.eql(crate::style::Color::Palette(2)));
+        }
+        {
+            let cell = &state.row_data[0].cells.get(2);
+            assert_eq!('C' as u32, cell.raw.codepoint());
+            assert!(cell.style.bg_color.eql(crate::style::Color::Palette(3)));
+        }
+        {
+            let cell = &state.row_data[0].cells.get(3);
+            assert_eq!('D' as u32, cell.raw.codepoint());
+            assert!(cell.style.default_style());
+        }
+
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    // PORT NOTE: port-only regression guard (no reference counterpart), the
+    // memoization worst case: two style ids ALTERNATING every cell, with a
+    // multi-codepoint grapheme mid-row so the grapheme arm's
+    // `extend_from_slice` runs between style resolutions (the call whose
+    // memory clobber motivates the hoisted style-set base pointer). Outputs
+    // must be identical pre/post reshape.
+    #[test]
+    fn mixed_styles_alternating_per_cell() {
+        let alloc = Global;
+
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[41mA"); // x=0: bg palette 1
+            s.next_slice(b"\x1b[42mB"); // x=1: bg palette 2
+            s.next_slice(b"\x1b[41m"); // x=2..3: bg palette 1, wide grapheme
+            s.next_slice("👨\u{200D}".as_bytes()); // ZWJ grapheme
+            s.next_slice(b"\x1b[42mC"); // x=4: bg palette 2
+            s.next_slice(b"\x1b[41mD"); // x=5: bg palette 1
+            s.deinit();
+        }
+
+        let mut state: RenderState = RenderState::empty();
+        state.update(alloc, &mut t).unwrap();
+
+        assert_eq!(3, state.row_data.len());
+        assert_eq!(10, state.row_data[0].cells.len());
+
+        {
+            let cell = &state.row_data[0].cells.get(0);
+            assert_eq!('A' as u32, cell.raw.codepoint());
+            assert!(cell.style.bg_color.eql(crate::style::Color::Palette(1)));
+        }
+        {
+            let cell = &state.row_data[0].cells.get(1);
+            assert_eq!('B' as u32, cell.raw.codepoint());
+            assert!(cell.style.bg_color.eql(crate::style::Color::Palette(2)));
+        }
+        {
+            let cell = &state.row_data[0].cells.get(2);
+            assert_eq!(0x1F468, cell.raw.codepoint());
+            assert_eq!(page::Wide::Wide, cell.raw.wide());
+            assert_eq!(&[0x200Du32][..], cell.grapheme);
+            assert!(cell.style.bg_color.eql(crate::style::Color::Palette(1)));
+        }
+        {
+            let cell = &state.row_data[0].cells.get(3);
+            assert_eq!(page::Wide::SpacerTail, cell.raw.wide());
+        }
+        {
+            let cell = &state.row_data[0].cells.get(4);
+            assert_eq!('C' as u32, cell.raw.codepoint());
+            assert!(cell.style.bg_color.eql(crate::style::Color::Palette(2)));
+        }
+        {
+            let cell = &state.row_data[0].cells.get(5);
+            assert_eq!('D' as u32, cell.raw.codepoint());
+            assert!(cell.style.bg_color.eql(crate::style::Color::Palette(1)));
+        }
+        {
+            let cell = &state.row_data[0].cells.get(6);
+            assert_eq!(0, cell.raw.codepoint());
+            assert!(cell.style.default_style());
+        }
 
         state.deinit(alloc);
         t.deinit(alloc);
