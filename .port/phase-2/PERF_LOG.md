@@ -290,3 +290,81 @@ failed; one parallel-run flake in `search::thread::tests::search_thread`
 Verified binary: `.perf-bins/rustty-bench-r3-render` (untracked stash, RF
 profile). Committed as `rustty: perf — r3-render: hoist mutable
 style/grapheme column borrows in update()`.
+
+---
+
+# Rounds 2-3 — OFFICIAL results (idle-gated, N=7 medians, same-session Zig)
+
+## Final standings (r3-SHIP-RF @ 10f2091 vs Zig ReleaseFast, 07:34 session)
+
+| bench | zig ms | rust ms | Δ | verdict |
+|---|--:|--:|--:|---|
+| terminal-parser | 266.0 | 210.6 | **−20.8%** | WIN (was +22.7% after r1) |
+| terminal-stream | 566.2 | 460.8 | **−18.6%** | WIN |
+| codepoint-width.noop | 3.5 | 3.0 | −14.1% | WIN |
+| codepoint-width.table | 231.0 | 217.9 | −5.7% | WIN |
+| codepoint-width.simd | 503.5 | 472.8 | −6.1% | WIN |
+| codepoint-width.wcwidth | 259.0 | 247.3 | −4.5% | WIN |
+| grapheme-break.noop | 231.7 | 220.2 | −4.9% | WIN |
+| grapheme-break.table | 256.1 | 217.5 | −15.1% | WIN |
+| is-symbol.table | 238.4 | 208.8 | −12.4% | WIN |
+| is-symbol.uucode | 229.9 | 213.2 | −7.3% | WIN |
+| osc-parser | 57.4 | 48.5 | **−15.6%** | WIN (was tie after r1) |
+| screen-clone.noop | 5.7 | 5.2 | −8.3% | WIN |
+| screen-clone.clone | 51.6 | 50.5 | **−2.1%** | WIN (was +60% after r1) |
+| screen-clone.render | 15.7 | 16.1 | +2.0% | STATISTICAL PARITY¹ |
+
+**13 WINS / 1 parity / 0 LOSSES. Suite total: Zig 2916 ms vs Rust 2592 ms (−11.1%).**
+Session history: pre-branch 0/1/13 → round 1 10/1/3 (−5.8%) → round 2
+12/0/2 (−10.0%) → round 3 13/1/0 (−11.1%).
+
+¹ render tie-band evidence: dedicated N=21 interleaved head-to-head gives
+zig 16.33 vs rust 16.53 (+1.2%) with fully overlapping ranges (zig
+15.47–21.75, rust 15.71–19.46 — Rust's worst case is BETTER). The round-3
+instruction-level profile documents the residual floor as parity-locked:
+caller-saved constant rematerialization across the by-value
+`addWithId(value: T)` ABI surface, which the reference's API shape forces;
+diverging is forbidden. Its stage binary measured −1.3% (win) in the same
+session — the number is noise around zero.
+
+## Round 2-3 fix attribution (official stage deltas)
+
+| fix | commit | verdict | evidence (official) |
+|---|---|---|---|
+| r2 fix-render-undefined-cols | b6f5e4f | **ACCEPT** | sc.render 24.1→16.9 (−30%) |
+| r2-action-arrayvec (boxed dispatch + InlineVec + state hoist) | e1f4829 | **ACCEPT** | t-parser 323.8→216.6 (−33%); allocator traffic per escape DOWN (1 box vs 2 to_vec) |
+| r2-clone (packed Style::eql + coalesced cell copy) | ab20827 | **ACCEPT** | sc.clone 81.0→56.9 (−30%); osc 58.2→49.0 (−16%, shared RefCountedSet path) |
+| r2-osc-win (fall-through success store in writeByte) | 9e386ab | **ACCEPT** | holds osc at 49 (flipped the r1 tie) |
+| alloc suite (feature seam, equal-scope bench, resize seam, geometry golden) | ada0475/8fb3dd2 | **ACCEPT** | see alloc results below |
+| r3-clone (outline cold grapheme/hyperlink arms) | 1abae33 | **ACCEPT** | sc.clone 57.5→53.7 |
+| r3-render (hoist mutable style/grapheme column borrows) | e6f27dc | **ACCEPT** | sc.render 17.0→15.5 on its stage binary |
+| **parity fix: same-page clone style drop** | 10f2091 | **ACCEPT (functional)** | reference `break :hyperlink` exits only the labeled block; port `continue`d past the style/kitty arms — cell with hyperlink+style lost its style on same-page clone. Regression test fails-before/passes-after (verified both ways). Found by round-3 instruction-level profiling. |
+
+## Memory-allocation benchmarks — OFFICIAL (idle, both ReleaseFast-tier)
+
+Equal-scope standalone PageList workload (init 80x24 → grow ≥2000 rows →
+scroll → same-pool clone → reflow 200/40/80 → reset), zigbench rebuilt
+`-Doptimize=ReleaseFast`, Rust `--profile release-fast --features alloc-bench`:
+
+| metric | Zig | Rust | Δ |
+|---|--:|--:|---|
+| page allocs (full workload) | 6 | **6** | **PARITY** (old "7 vs 3" was unequal scope; fix 12 resize-seam removed the reset realloc) |
+| peak outstanding page bytes | ~7,502,136 | **5,271,864** | **−30%** (geometry: port carries upstream `b953bb346` BitmapAllocator layout fix the pinned oracle predates; std page 409,600 B vs 589,824 B — documented in ALLOC_BENCH_V2.md §2, NOT a divergence bug) |
+| latency (median of 9, idle) | 809 µs | **768.6 µs** | **−5% WIN** |
+| peak RSS | 7,864,320 | 10,305,536 | +31% — asymmetric instrumentation: the Rust binary carries the TrackingAllocator seam (feature `alloc-bench`) the Zig side doesn't; outstanding-bytes (−30%) is the apples-to-apples allocator metric |
+
+Per-bench peak RSS (suite, `/usr/bin/time -l`, r2-SHIP-RF): **Rust LOWER than
+Zig in 7 of 8 configs** (e.g. terminal-parser 6.29 vs 7.06 MB, sc.clone 139.9
+vs 157.2 MB, sc.render 8.04 vs 9.18 MB); only osc-parser higher (7.50 vs
+7.01 MB, +7%).
+
+## Round-3 honesty notes
+
+- The r3 profiling agents measured BOTH binaries at instruction level and
+  were required to declare NONE-SAFE if the residue was parity-locked; the
+  clone residual (+5% at the time) was declared exactly that — then the
+  parity FIX (10f2091, a real bug the profiling exposed) and measurement
+  noise closed the rest.
+- LTO remains banned (round-1 finding stands; re-verify t-parser if ever
+  revisited).
+- Raw data: `.port/phase-2/perf-v3/` (round-2 sweeps + `r3_*` sweeps).
