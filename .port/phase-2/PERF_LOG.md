@@ -588,3 +588,56 @@ Verified binary: `.perf-bins/rustty-bench-r5-clone-style-run-RF`
 (untracked stash, RF profile, sha256 22196702d5f3ea0c...). Note: the
 shared disk filled to 0 mid-round; the lane worktree's target/ was
 sacrificed — rebuild from the lane branch reproduces the binary.
+
+---
+
+# Rounds 4-5 — OFFICIAL results (idle-gated, N=7, same-session Zig, 10:39 session)
+
+## FINAL STANDINGS (r5-SHIP-RF @ a3a2b23 vs Zig ReleaseFast)
+
+| bench | zig ms | rust ms | Δ |
+|---|--:|--:|--:|
+| terminal-parser | 263.8 | 92.5 | **−64.9%** (2.9×) |
+| terminal-stream | 551.5 | 343.3 | **−37.7%** |
+| screen-clone.clone | 50.6 | 20.9 | **−58.7%** (2.4×) |
+| screen-clone.render | 15.4 | 13.8 | **−10.1%** |
+| grapheme-break.table | 256.4 | 211.4 | −17.5% |
+| is-symbol.table | 238.6 | 200.5 | −16.0% |
+| screen-clone.noop | 5.5 | 4.6 | −16.9% |
+| osc-parser | 57.1 | 49.4 | −13.6% |
+| codepoint-width.table | 234.3 | 207.9 | −11.3% |
+| is-symbol.uucode | 229.9 | 206.1 | −10.3% |
+| codepoint-width.wcwidth | 258.4 | 237.6 | −8.0% |
+| grapheme-break.noop | 231.0 | 211.8 | −8.3% |
+| codepoint-width.simd | 501.1 | 466.4 | −6.9% |
+| codepoint-width.noop | 3.7 | 3.0 | −18.3% |
+
+**14 WINS / 0 ties / 0 LOSSES. Suite: Zig 2897 ms vs Rust 2269 ms (−21.7%).**
+Session history: pre-branch 0/1/13 → r1 10/1/3 (−5.8%) → r2 12/0/2 (−10.0%)
+→ r3 13/1/0 (−11.1%) → **r4+r5 14/0/0 (−21.7%)**.
+
+## Round 4-5 accepted fixes
+
+| fix | commit | official evidence |
+|---|---|---|
+| r4-render-win (style-set base hoist + zip walk) | a26a4b1 | render 15.9→13.8, now −10.1% vs zig; adversarial mixed-style corpus also wins |
+| r5-parser-fastpath (state-equal fast path; discarded action array statically drop-free on ~89% of bytes) | be02801 | t-parser 207→92.5 |
+| r5-print-outline (cold grapheme/zero-width/wide arms) | 6ca1015 | t-stream −12% share |
+| r5-stream-simd (FAIRNESS FIX: ghostty-bench builds simd=true; our bench binary ran the scalar fallback — feature enabled bench-binary-scoped) | 52116f3 | t-stream 450→343 |
+| r5-utf8-dfa-pad (panic-free 512-entry pad + per-arm state stores; exhaustive differential test) | ca714e0 | decode family −3…−4% further |
+| r5-clone-style-run (same-style run batching + by-pointer set adds) | 745b3c9 | sc.clone 49.9→20.9; adversarial run-length-1 corpus −9% vs pre (was already a pre-existing loss there, improved) |
+
+## Round 5 honest outcomes
+
+- **Lane C (osc): NONE-SAFE** — per-byte loop sits on a measured M4
+  store-forward-renaming floor; four variants (hot-word, repr(C),
+  state-first, cold-alloc-arm) all measured WORSE (evidence in the lane
+  report). osc stays −13.6% vs zig from earlier rounds.
+- **Lane B floor documented**: the ≥10% decode target is only reachable via
+  a branchless DFA that LLVM DCEs in the noop lane (−94%!) but which
+  serializes the loop-carried state chain in every real lane (+12…+22%
+  measured) — disqualified by the no-regression rule.
+- r4 negative results recorded: style value-memoization +42% (SROA store
+  explosion); pointer-memoization dominated by the plain hoist.
+- Lane worktrees merged and removed (A/B/D); lane C worktree left (no commits).
+- Raw sweeps: `.port/phase-2/perf-v5/` (+ per-lane raw in d812712).
