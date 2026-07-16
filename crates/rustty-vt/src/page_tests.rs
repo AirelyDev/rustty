@@ -197,6 +197,96 @@ mod tests {
         }
     }
 
+    // PERF(port) gate: `Cell::is_style_run_cell` guards the different-page
+    // style-run bulk copy in `clone_partial_row_from_inner`. Prove, on the
+    // same corner lattice + seeded-random patterns as the reset-equivalence
+    // gate:
+    //   (1) the predicate is EXACTLY "neither the grapheme arm nor the
+    //       hyperlink arm of the reference managed-copy loop
+    //       (page.zig:895-984) fires";
+    //   (2) for every such cell, `copy_with_managed_reset` followed by
+    //       `set_style_id(style_id)` reproduces the cell verbatim — so a
+    //       run-mate cell whose per-cell handling would be
+    //       `dst = reset(src); dst.set_style_id(src.style_id())` can be
+    //       bulk-copied;
+    //   (3) in particular with `style_id == DEFAULT_ID` the reset alone is
+    //       the identity (the plain-run special case).
+    #[test]
+    fn cell_style_run_facts() {
+        fn check(bits: u64) {
+            let c = Cell::from_bits(bits);
+            // (1) predicate == negation of the two managed arm guards.
+            assert_eq!(
+                c.is_style_run_cell(),
+                !(c.has_grapheme() || c.hyperlink()),
+                "predicate mismatch, bits = {bits:#018x}"
+            );
+            if c.is_style_run_cell() {
+                // (2) reset-then-restore-style-id is the identity.
+                let mut d = c.copy_with_managed_reset();
+                d.set_style_id(c.style_id());
+                assert_eq!(
+                    d.to_bits(),
+                    bits,
+                    "reset+restore not identity on run cell, bits = {bits:#018x}"
+                );
+                // (3) with the default style id the reset alone is identity.
+                if c.style_id() == stylepkg::DEFAULT_ID {
+                    assert_eq!(
+                        c.copy_with_managed_reset().to_bits(),
+                        bits,
+                        "reset not identity on plain run cell, bits = {bits:#018x}"
+                    );
+                }
+            }
+        }
+
+        // Corner lattice (same axes as the reset-equivalence gate, plus the
+        // kitty placeholder codepoint).
+        for tag in 0..4u64 {
+            for hyperlink in 0..2u64 {
+                for style_id in [0u64, 1, 0xFFFF] {
+                    for wide in [0u64, 0b11] {
+                        for protected in 0..2u64 {
+                            for semantic in [0u64, 0b10] {
+                                for padding in [0u64, 0xFFFF] {
+                                    for content in [
+                                        0u64,
+                                        KITTY_PLACEHOLDER as u64,
+                                        0x1F_FFFF,
+                                        0xFF_FFFF,
+                                    ] {
+                                        let bits = (tag << CELL_CONTENT_TAG_SHIFT)
+                                            | (content << CELL_CONTENT_SHIFT)
+                                            | (style_id << CELL_STYLE_ID_SHIFT)
+                                            | (wide << CELL_WIDE_SHIFT)
+                                            | (protected << CELL_PROTECTED_SHIFT)
+                                            | (hyperlink << CELL_HYPERLINK_SHIFT)
+                                            | (semantic << CELL_SEMANTIC_CONTENT_SHIFT)
+                                            | (padding << CELL_PADDING_SHIFT);
+                                        check(bits);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ~10k seeded-random u64 bit patterns (splitmix64, distinct seed from
+        // the reset gate).
+        let mut state: u64 = 0x0DDB_1A5E_5BAD_5EED;
+        for _ in 0..10_000 {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^= z >> 31;
+            check(z);
+        }
+    }
+
     #[test]
     fn row_field_bit_offsets() {
         // cells offset occupies bits 0..31.
@@ -818,6 +908,198 @@ mod tests {
                 ..Style::default()
             })
             .eql(style));
+        }
+
+        page2.deinit();
+        page.deinit();
+    }
+
+    // =====================================================================
+    // PERF(port) (reshape) regression guards for the style-run batch in the
+    // different-page clone (`clone_partial_row_from_inner`): assert the EXACT
+    // per-style reference counts and id mappings the reference's per-cell
+    // `add_with_id` loop produces, across all three routes — the batched
+    // `use_multiple` path, the non-batchable fallback (live non-equal item at
+    // the source id), and the dead-item resurrection path. Written to pass
+    // against the pre-reshape per-cell loop as well (verified both ways).
+    // =====================================================================
+
+    fn test_style(bold: bool, italic: bool) -> Style {
+        Style {
+            flags: stylepkg::Flags {
+                bold,
+                italic,
+                ..stylepkg::Flags::default()
+            },
+            ..Style::default()
+        }
+    }
+
+    /// Fill row `y` of `page` with `cols` cells; cell x gets `styles[x %
+    /// styles.len()]` (an id of 0 = unstyled).
+    fn write_styled_row(page: &mut Page, y: usize, style_ids: &[u16]) {
+        let base = page.memory_ptr();
+        for x in 0..page.size.cols as usize {
+            let id = style_ids[x % style_ids.len()];
+            let rac = page.get_row_and_cell(x, y);
+            unsafe {
+                let mut c = cell_codepoint((x + 1) as u21);
+                if id != 0 {
+                    c.set_style_id(id);
+                    (*rac.row).set_styled(true);
+                    page.styles.use_id(base, id);
+                }
+                *rac.cell = c;
+            }
+        }
+    }
+
+    #[test]
+    fn page_cloneFrom_style_run_refcounts_batched() {
+        let mut page = Page::init(Capacity {
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+
+        let base = page.memory_ptr();
+        let style_a = test_style(true, false);
+        let style_b = test_style(false, true);
+        let id_a = unsafe { page.styles.add(base, style_a) }.unwrap();
+        let id_b = unsafe { page.styles.add(base, style_b) }.unwrap();
+
+        // Row 0: one full-width run of style A (10 cells).
+        write_styled_row(&mut page, 0, &[id_a]);
+        // Row 1: alternating A/B per cell (10 runs of length 1).
+        write_styled_row(&mut page, 1, &[id_a, id_b]);
+        // Row 2: A for the first half, unstyled for the second
+        // (run then plain run).
+        write_styled_row(&mut page, 2, &[id_a, id_a, id_a, id_a, id_a, 0, 0, 0, 0, 0]);
+
+        // Clone to a fresh page (all adds route through the clone chain).
+        let mut page2 = Page::init(Capacity {
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+        page2.clone_from(&page, 0, page.size.rows as usize).unwrap();
+
+        let base2 = page2.memory_ptr();
+        let id_a2 = unsafe { page2.styles.lookup(base2, style_a) }.expect("style A cloned");
+        let id_b2 = unsafe { page2.styles.lookup(base2, style_b) }.expect("style B cloned");
+
+        // Exactly one ref per styled destination cell:
+        // A: 10 (row 0) + 5 (row 1) + 5 (row 2) = 20; B: 5 (row 1).
+        assert_eq!(20, unsafe { page2.styles.ref_count(base2, id_a2) });
+        assert_eq!(5, unsafe { page2.styles.ref_count(base2, id_b2) });
+        assert_eq!(2, page2.styles.count());
+
+        // Cell-level mapping + content.
+        for y in 0..3usize {
+            for x in 0..page2.size.cols as usize {
+                let rac = page2.get_row_and_cell(x, y);
+                let cell = unsafe { *rac.cell };
+                assert_eq!((x + 1) as u21, cell.content_codepoint());
+                let src_rac = page.get_row_and_cell(x, y);
+                let src_id = unsafe { (*src_rac.cell).style_id() };
+                let expect = if src_id == id_a {
+                    id_a2
+                } else if src_id == id_b {
+                    id_b2
+                } else {
+                    stylepkg::DEFAULT_ID
+                };
+                assert_eq!(expect, cell.style_id(), "x={x} y={y}");
+            }
+        }
+
+        page2.deinit();
+        page.deinit();
+    }
+
+    #[test]
+    fn page_cloneFrom_style_run_refcounts_conflicting_dst_id() {
+        let mut page = Page::init(Capacity {
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+
+        let base = page.memory_ptr();
+        let style_a = test_style(true, false);
+        let id_a = unsafe { page.styles.add(base, style_a) }.unwrap();
+        // Row 0: one full-width run of style A.
+        write_styled_row(&mut page, 0, &[id_a]);
+
+        // Destination already has a LIVE, different style at the same id, so
+        // `add_with_id` cannot take its fast path for any cell of the run
+        // (the non-batchable fallback route).
+        let mut page2 = Page::init(Capacity {
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+        let base2 = page2.memory_ptr();
+        let style_c = test_style(false, true);
+        let id_c = unsafe { page2.styles.add(base2, style_c) }.unwrap();
+        assert_eq!(id_a, id_c); // both are the first id — the conflict
+
+        page2.clone_from(&page, 0, page.size.rows as usize).unwrap();
+
+        // A landed on a fresh id; C is untouched.
+        let id_a2 = unsafe { page2.styles.lookup(base2, style_a) }.expect("style A cloned");
+        assert_ne!(id_a2, id_c);
+        assert_eq!(10, unsafe { page2.styles.ref_count(base2, id_a2) });
+        assert_eq!(1, unsafe { page2.styles.ref_count(base2, id_c) });
+        assert_eq!(2, page2.styles.count());
+        for x in 0..page2.size.cols as usize {
+            let rac = page2.get_row_and_cell(x, 0);
+            assert_eq!(id_a2, unsafe { (*rac.cell).style_id() }, "x={x}");
+        }
+
+        page2.deinit();
+        page.deinit();
+    }
+
+    #[test]
+    fn page_cloneFrom_style_run_refcounts_dead_dst_id() {
+        let mut page = Page::init(Capacity {
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+
+        let base = page.memory_ptr();
+        let style_a = test_style(true, false);
+        let id_a = unsafe { page.styles.add(base, style_a) }.unwrap();
+        // Row 0: one full-width run of style A.
+        write_styled_row(&mut page, 0, &[id_a]);
+
+        // Destination has a DEAD (released, not yet reaped) style at the
+        // same id: the first cell resurrects the id via the dead-item branch,
+        // after which the remaining cells are pure ref bumps.
+        let mut page2 = Page::init(Capacity {
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+        let base2 = page2.memory_ptr();
+        let style_c = test_style(false, true);
+        let id_c = unsafe { page2.styles.add(base2, style_c) }.unwrap();
+        assert_eq!(id_a, id_c);
+        unsafe { page2.styles.release(base2, id_c) }; // ref -> 0, item stays
+
+        page2.clone_from(&page, 0, page.size.rows as usize).unwrap();
+
+        // A reused the dead id; C is gone.
+        let id_a2 = unsafe { page2.styles.lookup(base2, style_a) }.expect("style A cloned");
+        assert_eq!(id_a, id_a2);
+        assert_eq!(10, unsafe { page2.styles.ref_count(base2, id_a2) });
+        assert_eq!(None, unsafe { page2.styles.lookup(base2, style_c) });
+        assert_eq!(1, page2.styles.count());
+        for x in 0..page2.size.cols as usize {
+            let rac = page2.get_row_and_cell(x, 0);
+            assert_eq!(id_a2, unsafe { (*rac.cell).style_id() }, "x={x}");
         }
 
         page2.deinit();

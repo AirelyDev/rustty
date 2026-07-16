@@ -87,6 +87,8 @@ pub trait RefCountIntTrait: Copy + PartialEq + PartialOrd + Eq + Ord {
     const ONE: Self;
     fn add(self, other: Self) -> Self;
     fn sub(self, other: Self) -> Self;
+    /// `@intCast` from a usize the caller guarantees fits.
+    fn from_usize(v: usize) -> Self;
 }
 
 macro_rules! impl_refcount_int {
@@ -96,6 +98,7 @@ macro_rules! impl_refcount_int {
             const ONE: Self = 1;
             #[inline] fn add(self, other: Self) -> Self { self + other }
             #[inline] fn sub(self, other: Self) -> Self { self - other }
+            #[inline] fn from_usize(v: usize) -> Self { v as $t }
         }
     )*};
 }
@@ -476,16 +479,31 @@ where
     /// If the set has no more room, then an OutOfMemory error is returned.
     ///
     /// # Safety: `base` must be the true base of the backing buffer.
+    // PERF(port) (reshape): the internal bodies (`add_context`,
+    // `lookup_context`, `upsert`, `insert`) and the `_ptr` entry points take
+    // `value: *const T` instead of `T`. Zig passes big parameters by const
+    // reference (its `addWithId(value: T)` compiles to a pointer with no
+    // defensive copy); the Rust by-value ABI for a >16-byte `T` instead
+    // marshals a fresh stack copy at EVERY call site (measured: the 28-byte
+    // `Style` q-register store/reload per `add_with_id` call was part of the
+    // screen-clone residual floor, PERF_LOG round 3). The public by-value
+    // surface is preserved as `#[inline]` shims that pass `&raw const value`,
+    // so the observable API and behavior are byte-identical. A raw pointer
+    // (not `&T`) carries exactly Zig's parameter aliasing semantics: no
+    // `noalias`/protector is asserted for the pointee. LIFETIMES: the pointee
+    // is only ever read, never written, for the duration of each call; every
+    // `*value` read below is a plain copy-out.
+    #[inline]
     pub unsafe fn add<B: IntFromBase + Copy>(&mut self, base: B, value: T) -> Result<Id, AddError> {
         // PORT NOTE: the reference calls `addContext(base, value, self.context)`;
         // since `self.context` would alias `self` here, we route through a private
         // helper that takes the context by reference, matching semantics.
-        unsafe { self.add_context(base, value) }
+        unsafe { self.add_context(base, &raw const value) }
     }
     unsafe fn add_context<B: IntFromBase + Copy>(
         &mut self,
         base: B,
-        value: T,
+        value: *const T,
     ) -> Result<Id, AddError> {
         let items = unsafe { self.items.ptr(base) };
 
@@ -506,7 +524,7 @@ where
             // Notify the context that the value is "deleted" because
             // we're reusing the existing value in the set. This allows
             // callers to clean up any resources associated with the value.
-            self.context.deleted(value);
+            self.context.deleted(unsafe { *value });
 
             unsafe {
                 (*items.add(id.to_usize())).meta.ref_count = (*items.add(id.to_usize()))
@@ -574,10 +592,28 @@ where
     /// If the set has no more room, then an OutOfMemory error is returned.
     ///
     /// # Safety: `base` must be the true base of the backing buffer.
+    #[inline]
     pub unsafe fn add_with_id<B: IntFromBase + Copy>(
         &mut self,
         base: B,
         value: T,
+        id: Id,
+    ) -> Result<Option<Id>, AddError> {
+        unsafe { self.add_with_id_ptr(base, &raw const value, id) }
+    }
+
+    /// `add_with_id` with the value passed by const pointer (see the
+    /// PERF(port) reshape note above `add`): identical body, no per-call
+    /// marshal of `T`. Hot callers that already hold a stable pointer to the
+    /// value (the page clone chain) use this directly.
+    ///
+    /// # Safety: `base` must be the true base of the backing buffer; `value`
+    /// must be valid for reads for the duration of the call (it is never
+    /// written through).
+    pub(crate) unsafe fn add_with_id_ptr<B: IntFromBase + Copy>(
+        &mut self,
+        base: B,
+        value: *const T,
         id: Id,
     ) -> Result<Option<Id>, AddError> {
         let items = unsafe { self.items.ptr(base) };
@@ -606,14 +642,13 @@ where
                 self.living += 1;
 
                 return Ok(if added_id == id { None } else { Some(added_id) });
-            } else if self
-                .context
-                .eql(value, unsafe { (*items.add(id.to_usize())).value })
-            {
+            } else if self.context.eql(unsafe { *value }, unsafe {
+                (*items.add(id.to_usize())).value
+            }) {
                 // Notify the context that the value is "deleted" because
                 // we're reusing the existing value in the set. This allows
                 // callers to clean up any resources associated with the value.
-                self.context.deleted(value);
+                self.context.deleted(unsafe { *value });
 
                 unsafe {
                     (*items.add(id.to_usize())).meta.ref_count = (*items.add(id.to_usize()))
@@ -628,6 +663,40 @@ where
 
         // return try self.addContext(base, value, ctx); — `Id` coerces to `?Id`.
         unsafe { self.add_context(base, value) }.map(Some)
+    }
+
+    /// True iff `add_with_id(base, *value, id)` would take its pure
+    /// "existing live equal item" fast path: `id` is in range, the item at
+    /// `id` is alive, and it compares equal to `*value`. On that path the
+    /// call's ONLY effects are `context.deleted(*value)` and a +1 on the
+    /// item's ref count, and it returns `Ok(None)` — and since none of those
+    /// change this predicate, it stays true for any number of repeated
+    /// identical calls.
+    ///
+    /// Callers use this to batch a run of identical `add_with_id` calls into
+    /// a single `use_multiple` (PERF(port) (reshape), see the clone chain in
+    /// `page_impl.rs`). That is only behavior-preserving when
+    /// `Context::deleted` is a no-op (true for the style set context, whose
+    /// `deleted` is the trait default) — a context with a real `deleted`
+    /// (e.g. the hyperlink set) would observe the skipped callbacks.
+    ///
+    /// # Safety: `base` must be the true base of the backing buffer; `value`
+    /// must be valid for reads.
+    pub(crate) unsafe fn add_with_id_is_pure_ref_bump<B: IntFromBase + Copy>(
+        &self,
+        base: B,
+        value: *const T,
+        id: Id,
+    ) -> bool {
+        if !(id > Id::ZERO && id < self.next_id) {
+            return false;
+        }
+        let items = unsafe { self.items.ptr(base) };
+        let item = unsafe { items.add(id.to_usize()) };
+        let live = unsafe { (*item).meta.ref_count } > RefCount::ZERO;
+        live && self
+            .context
+            .eql(unsafe { *value }, unsafe { (*item).value })
     }
 
     /// Increment an item's reference count by 1.
@@ -848,10 +917,11 @@ where
     /// If the item does not exist in the table, null is returned.
     ///
     /// # Safety: `base` must be the true base of the backing buffer.
+    #[inline]
     pub unsafe fn lookup<B: IntFromBase + Copy>(&self, base: B, value: T) -> Option<Id> {
-        unsafe { self.lookup_context(base, value) }
+        unsafe { self.lookup_context(base, &raw const value) }
     }
-    unsafe fn lookup_context<B: IntFromBase + Copy>(&self, base: B, value: T) -> Option<Id> {
+    unsafe fn lookup_context<B: IntFromBase + Copy>(&self, base: B, value: *const T) -> Option<Id> {
         // A zero-capacity set (a valid special case of Layout.init)
         // contains nothing and has a zero-size table, so we can't
         // probe it: table[0] would read whatever memory follows the
@@ -866,7 +936,7 @@ where
         let table = unsafe { self.table.ptr(base) };
         let items = unsafe { self.items.ptr(base) };
 
-        let hash: u64 = self.context.hash(value);
+        let hash: u64 = self.context.hash(unsafe { *value });
 
         // for (0..self.max_psl + 1) |i| {
         for i in 0..self.max_psl.to_usize() + 1 {
@@ -898,7 +968,7 @@ where
             // if it matches the value we're looking for.
             if item.meta.psl.to_usize() == i
                 && item.meta.ref_count > RefCount::ZERO
-                && self.context.eql(value, item.value)
+                && self.context.eql(unsafe { *value }, item.value)
             {
                 return Some(id);
             }
@@ -913,13 +983,13 @@ where
     /// is ignored and the existing item's ID is returned.
     ///
     /// # Safety: `base` must be the true base of the backing buffer.
-    unsafe fn upsert<B: IntFromBase + Copy>(&mut self, base: B, value: T, new_id: Id) -> Id {
+    unsafe fn upsert<B: IntFromBase + Copy>(&mut self, base: B, value: *const T, new_id: Id) -> Id {
         // If the item already exists, return it.
         if let Some(id) = unsafe { self.lookup_context(base, value) } {
             // Notify the context that the value is "deleted" because
             // we're reusing the existing value in the set. This allows
             // callers to clean up any resources associated with the value.
-            self.context.deleted(value);
+            self.context.deleted(unsafe { *value });
 
             return id;
         }
@@ -933,7 +1003,7 @@ where
     /// the value is not already present in the table.
     ///
     /// # Safety: `base` must be the true base of the backing buffer.
-    unsafe fn insert<B: IntFromBase + Copy>(&mut self, base: B, value: T, new_id: Id) -> Id {
+    unsafe fn insert<B: IntFromBase + Copy>(&mut self, base: B, value: *const T, new_id: Id) -> Id {
         // if (comptime std.debug.runtime_safety)
         //     assert(self.lookupContext(base, value, ctx) == null);
         if cfg!(debug_assertions) {
@@ -944,8 +1014,10 @@ where
         let items = unsafe { self.items.ptr(base) };
 
         // The new item that we'll put in to the table.
+        // PERF(port) (reshape): `*value` here is the single copy of `T` into
+        // the new item — the same one copy the by-value reference performs.
         let mut new_item: Item<T, Id, RefCount> = Item {
-            value,
+            value: unsafe { *value },
             meta: Metadata {
                 bucket: Id::MAX,
                 psl: Id::ZERO,
@@ -953,7 +1025,7 @@ where
             },
         };
 
-        let hash: u64 = self.context.hash(value);
+        let hash: u64 = self.context.hash(new_item.value);
 
         let mut held_id: Id = new_id;
         // PORT NOTE: `held_item` is a `*Item` that may point either at the local

@@ -79,6 +79,9 @@ use rustty_util::fastmem;
 use crate::bitmap_allocator::BitmapAllocator;
 use crate::hash_map::{AutoContext, AutoOffsetHashMap};
 use crate::hyperlink;
+// PERF(port) (reshape): for the style-run `use_multiple` batch in the clone
+// chain (see `clone_partial_row_from_inner`).
+use crate::ref_counted_set::RefCountIntTrait;
 use crate::style as stylepkg;
 use crate::style::Id as StyleId;
 use crate::style::Set as StyleSet;
@@ -807,6 +810,24 @@ impl Cell {
             v &= !mask(CELL_CONTENT_TAG_BITS);
         }
         Cell(v)
+    }
+
+    /// True if, in the managed-copy loop of `clonePartialRowFrom`
+    /// (page.zig:895-984), the grapheme and hyperlink arms are both dormant
+    /// for this source cell — i.e. the only per-cell work is the reset copy
+    /// plus (possibly) the style arm and the kitty row flag.
+    // PERF(port) (reshape): guards the style-run bulk path on the
+    // different-page clone: for such a cell,
+    // `copy_with_managed_reset` reduces to "clear the style_id field"
+    // (the hyperlink bit is already 0 and the tag is not
+    // codepoint_grapheme), so a run of consecutive such cells sharing one
+    // style_id can be copied wholesale and its style refcounts bumped in one
+    // `use_multiple`. Machine-checked by `cell_style_run_facts`.
+    #[inline(always)]
+    pub(crate) fn is_style_run_cell(self) -> bool {
+        let v = self.0;
+        (v & (1u64 << CELL_HYPERLINK_SHIFT)) == 0
+            && (v & mask(CELL_CONTENT_TAG_BITS)) != ContentTag::CodepointGrapheme as u64
     }
 
     /// Returns true if the set of cells has text in it.

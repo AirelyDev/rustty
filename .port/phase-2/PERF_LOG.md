@@ -494,3 +494,97 @@ owed per protocol.
   zig 18.618 / r4-SHIP-RF 17.315 ms = **-7.0% vs zig**, ranges
   disjoint (r4 worst 17.494 < zig best 18.560). Consistent with the
   hunt's -8.2%. Official idle-gated sweep remains the parent's job.
+
+# Round 5 — Lane D (clone chain)
+
+## r5-clone-style-run — screen-clone.clone (thinnest win -> decisive)
+
+Target: screen-clone.clone zig 51.6 / rust 50.5 official (-2.1%, the
+thinnest win). Files: `crates/rustty-vt/src/ref_counted_set.rs`,
+`crates/rustty-vt/src/page.rs`, `crates/rustty-vt/src/page_impl.rs`,
+`crates/rustty-vt/src/page_tests.rs`. Branch base: a26a4b1 (post
+r4-render-win).
+
+Workload reality (official corpus `ascii-small.bin`): the bench setup sets
+one SGR bg style then streams plain ascii, so nearly every printed cell in
+every cloned row carries the SAME style id — the different-page managed
+copy loop runs `add_with_id` per styled cell (~equal zig/rust cost, the
+round-3 "wash"), and both engines were paying ~50 ms for what is
+structurally one refcount bump per run.
+
+Two coupled reshapes (PERF(port), byte-identical observable behavior for
+ALL inputs; the same-page loop is untouched):
+
+1. `RefCountedSet` internals by pointer: `add_context` / `lookup_context` /
+   `upsert` / `insert` and new `pub(crate)` entry `add_with_id_ptr` take
+   `value: *const T` (Zig passes big params by const reference; the Rust
+   by-value ABI marshaled a 28-byte `Style` stack copy per call —
+   the round-3 documented "parity-locked" floor, now unlocked WITHOUT
+   changing the public by-value surface: `add`/`add_with_id`/`lookup` stay
+   as `#[inline]` shims passing `&raw const value`). Raw pointer (not
+   `&T`) so no noalias/protector is asserted (rust-mut-args discipline).
+   Disasm-verified: the q-register store/reload at the clone call site is
+   gone (`x2 = other_page_item_addr + 6` passed directly).
+2. Style-run batching in `clone_partial_row_from_inner`'s different-page
+   managed path (dst/src are distinct allocations): scan maximal runs of
+   consecutive cells with no grapheme + no hyperlink (`is_style_run_cell`)
+   sharing one style_id. First cell of a run = the reference loop body
+   verbatim (same calls/order/error mapping -> identical error-prefix
+   state). The k-1 run-mates collapse into ONE
+   `use_multiple(id, k-1)` iff `add_with_id_is_pure_ref_bump` proves each
+   per-cell call would take the pure "live equal item at id" fast path
+   (only then is per-cell behavior exactly "+1 ref, deleted() no-op" — the
+   style context's `deleted` is the trait default; the dead-item and
+   foreign-item paths, which also mutate `living`/`next_id` and run the
+   dead-trim, fall back to the verbatim per-cell body). The run-mate cell
+   writes are then a straight `fastmem::copy` — per cell they would be
+   `reset(src)` + `set_style_id(src.style_id())` which reproduces the
+   source bits verbatim; machine-checked by `cell_style_run_facts`
+   (corner lattice + 10k seeded-random patterns). Default-style runs are
+   the degenerate no-set-calls case. Kitty placeholder row flag
+   accumulated per run (write-only idempotent bit; batched portion cannot
+   error). Zig does NOT do this (sanctioned structural reshape).
+
+Regression guards (pass on BOTH the pre-reshape per-cell loop and the
+reshape — verified both ways by reverting src and re-running):
+`page_cloneFrom_style_run_refcounts_batched` (exact per-style refcounts =
+one per destination cell, across full-row / alternating / half-row runs),
+`..._conflicting_dst_id` (live non-equal item at the source id -> fallback
+route, exact refcounts + untouched conflicting style),
+`..._dead_dst_id` (released item at the source id -> resurrection branch
+then batch, exact refcounts + `count()`).
+
+Negative result (measured, reverted): a first-cut "plain-run memcpy +
+outlined per-cell handler for every interesting cell" REGRESSED the
+official corpus +28% (pre 52.5 -> 67 ms): with ~every cell styled, the
+per-cell outlined call + scan overhead swamped the plain-run savings. The
+style-RUN formulation is what wins.
+
+Measured (NON-OFFICIAL, machine-shared-lock, interleaved 10-run batches,
+medians; same session):
+
+- official corpus: zig 51.3 / pre(r3-SHIP) 50.2 / r5 22.3 ms
+  (**-55.6% vs pre, -56.5% vs zig**); second confirmation sweep
+  zig 51.6 / pre 50.6 / r5 22.4.
+- adversarial `corpus-alt-style.bin` (style alternates EVERY cell — runs
+  of length 1, batching never fires): zig 155.2 / pre 184.4 / r5 167.6
+  (-9.1% vs pre; the ptr-based add + run scan still pay off; remains
+  behind zig on this non-official corpus as before).
+- no-data (hello rows): pre 22.1 / r5 20.1 (-9%).
+- siblings: screen-clone.render pre(r3) 16.5 / r5 14.9 (r4's win, present
+  in base); screen-clone.noop flat.
+- canaries: terminal-parser flat (206-213 both), osc-parser flat
+  (49.1/49.2), terminal-stream base(a26a4b1) 447.8 / r5 452.9 (+1.1%,
+  overlapping ranges; symbol-size diff shows only COLD stream handlers
+  moved/shrank — `device_attributes`, `kitty_keyboard_*`, `apc_end` — the
+  per-byte path is byte-identical, so this is code-layout noise for the
+  official N=7 to arbitrate).
+
+Gates: rustty-vt 2046 passed / 0 failed (default AND --features
+alloc-bench); cargo check --workspace clean (20 dependent crates
+re-checked); clippy --no-deps --all-targets -D warnings clean; fmt clean.
+
+Verified binary: `.perf-bins/rustty-bench-r5-clone-style-run-RF`
+(untracked stash, RF profile, sha256 22196702d5f3ea0c...). Note: the
+shared disk filled to 0 mid-round; the lane worktree's target/ was
+sacrificed — rebuild from the lane branch reproduces the binary.
